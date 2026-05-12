@@ -62,8 +62,10 @@ Exit criteria:
 
 - Expose the core operations as MCP tools.
 - Keep transport types separate from core AX model types.
-- Implement the MCP facade as a mode of the same `axon` binary, using the local daemon socket behind the scenes if needed.
-- Add structured errors for missing app, missing permissions, ambiguous locator, stale handle, unsupported action, and failed fallback.
+- Implement the MCP facade as a stdio mode of the same `axon` binary.
+- Return successful tool data as `structuredContent` plus a JSON text content block.
+- Report command execution errors as MCP tool errors with structured error content.
+- Keep tool names plain because MCP clients already namespace tools by server.
 
 Exit criteria:
 

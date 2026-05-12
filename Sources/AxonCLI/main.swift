@@ -19,6 +19,9 @@ do {
         fflush(stdout)
         try SocketServer(path: socketPath).run()
 
+    case "mcp":
+        try MCPStdioServer().run()
+
     case "health":
         let response = try SocketClient(path: socketPath)
             .send(JSONRPCRequest(id: .string("health"), method: "health"))
@@ -106,6 +109,7 @@ do {
         commands:
           doctor   check local permissions
           serve    run the local daemon socket server
+          mcp      run an MCP stdio server
           health   request daemon health over the local socket
           apps     list running apps
           snapshot <app>    print an indexed AX tree for a running app

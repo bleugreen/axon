@@ -1,6 +1,6 @@
 import Foundation
 
-public struct JSONRPCRequest: Codable, Equatable {
+public struct JSONRPCRequest: Codable, Equatable, Sendable {
     public let jsonrpc: String
     public let id: JSONRPCID?
     public let method: String
@@ -14,7 +14,7 @@ public struct JSONRPCRequest: Codable, Equatable {
     }
 }
 
-public struct JSONRPCResponse: Codable, Equatable {
+public struct JSONRPCResponse: Codable, Equatable, Sendable {
     public let jsonrpc: String
     public let id: JSONRPCID?
     public let result: [String: JSONValue]?
@@ -35,7 +35,7 @@ public struct JSONRPCResponse: Codable, Equatable {
     }
 }
 
-public enum JSONRPCID: Codable, Equatable {
+public enum JSONRPCID: Codable, Equatable, Sendable {
     case string(String)
     case int(Int)
 
@@ -66,7 +66,7 @@ public enum JSONRPCID: Codable, Equatable {
     }
 }
 
-public struct JSONRPCError: Codable, Equatable, Error {
+public struct JSONRPCError: Codable, Equatable, Error, Sendable {
     public let code: Int
     public let message: String
 
@@ -87,7 +87,7 @@ public struct JSONRPCError: Codable, Equatable, Error {
     }
 }
 
-public enum JSONValue: Codable, Equatable {
+public enum JSONValue: Codable, Equatable, Sendable {
     case string(String)
     case int(Int)
     case double(Double)

@@ -19,6 +19,12 @@ This repo uses Swift 6.3.1 through Swiftly. The repository `.swift-version` pins
 ~/.swiftly/bin/swift run axon doctor
 ```
 
+Run the MCP stdio facade:
+
+```sh
+~/.swiftly/bin/swift run axon mcp
+```
+
 Run a local daemon and resolve a locator:
 
 ```sh

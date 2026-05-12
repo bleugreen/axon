@@ -161,15 +161,13 @@ Initial tools:
 ```text
 list_apps()
 get_app_state(app)
-get_screenshot(app | window | snapshot)
-resolve(locator)
+get_screenshot(app)
+resolve(app, locator)
 click(target)
 set_value(target, value)
 perform_action(target, action)
 type_text(app, text)
 press_key(app, key)
-scroll(target, direction, pages)
-drag(app, from, to)
 ```
 
 Where `target` can be either:
@@ -179,6 +177,8 @@ snapshot:<snapshot-id>:<index>
 ```
 
 or a locator object.
+
+Tool names should stay plain. MCP clients already namespace tools by server, so Axon exposes `click`, not `axon_click` or `axon_mcp_click`.
 
 Screenshot-returning tools should embed image data in their response. File output can exist as a CLI/debug convenience later, but clients should not need filesystem coordination to inspect the visual state.
 

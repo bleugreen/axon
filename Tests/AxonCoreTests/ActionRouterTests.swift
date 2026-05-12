@@ -109,6 +109,19 @@ import Testing
     #expect(response.error?.message == "Locator did not resolve uniquely: ambiguous")
 }
 
+@Test func clickRequestReportsStaleSnapshotHandleAsInvalidParams() {
+    let router = CommandRouter(elementStore: AXElementStore())
+
+    let response = router.handle(JSONRPCRequest(
+        id: .string("click-stale"),
+        method: "click",
+        params: .object(["target": .string("snapshot:missing:0")])
+    ))
+
+    #expect(response.error?.code == -32602)
+    #expect(response.error?.message == "Snapshot is not retained: missing")
+}
+
 @Test func performActionRequestPassesActionName() {
     let router = CommandRouter(
         actions: PrimitiveActionHandlers(

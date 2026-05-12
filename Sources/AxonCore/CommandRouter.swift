@@ -190,6 +190,8 @@ public struct CommandRouter {
             return JSONRPCResponse(id: id, result: ["action": try body().jsonValue])
         } catch let error as JSONRPCError {
             return JSONRPCResponse(id: id, error: error)
+        } catch let error as AXElementStoreError {
+            return JSONRPCResponse(id: id, error: .invalidParams(error.description))
         } catch {
             return JSONRPCResponse(id: id, error: .internalError(String(describing: error)))
         }
