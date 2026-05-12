@@ -1,0 +1,12 @@
+# Axon
+
+Axon is a local macOS accessibility service that gives agents a typed nerve path into running apps.
+
+The goal is to expose macOS Accessibility as a composable automation substrate: observe app state, resolve durable locators against live UI trees, perform actions, and verify the result.
+
+This repository is currently in planning mode. Start with:
+
+- [Design](docs/design.md)
+- [Implementation plan](docs/implementation-plan.md)
+- [Open questions](docs/open-questions.md)
+
