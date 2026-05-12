@@ -9,3 +9,12 @@ This repository is currently in planning mode. Start with:
 - [Design](docs/design.md)
 - [Implementation plan](docs/implementation-plan.md)
 - [Decision log](docs/decision-log.md)
+
+## Development
+
+This repo uses Swift 6.3.1 through Swiftly. The repository `.swift-version` pins that toolchain.
+
+```sh
+~/.swiftly/bin/swift test
+~/.swiftly/bin/swift run axon doctor
+```
