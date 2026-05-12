@@ -8,5 +8,4 @@ This repository is currently in planning mode. Start with:
 
 - [Design](docs/design.md)
 - [Implementation plan](docs/implementation-plan.md)
-- [Open questions](docs/open-questions.md)
-
+- [Decision log](docs/decision-log.md)

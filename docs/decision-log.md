@@ -1,4 +1,4 @@
-# Axon Decision Log And Open Questions
+# Axon Decision Log
 
 ## Transport
 
@@ -53,7 +53,9 @@ Decision: Cairn should have good accessibility labels, but not as an Axon-specif
 
 Axon should work against arbitrary apps. Cairn can still be a high-quality fixture app because it should expose good AX labels for its own sake, not because Axon requires special treatment.
 
-## Open Questions
+## Deferred Design Notes
 
-- What versioning and compatibility policy should the JSON-RPC daemon protocol use?
-- What fixture app design gives us the best coverage through simplicity: small enough to reason about, rich enough to exercise real AX behavior?
+These are not blocking questions. They are details that should be decided when implementation reaches the relevant layer.
+
+- Protocol versioning and compatibility should be designed when the JSON-RPC message schema starts to stabilize.
+- Fixture app design should be chosen when integration tests begin, aiming for the best coverage through simplicity: small enough to reason about, rich enough to exercise real AX behavior.
