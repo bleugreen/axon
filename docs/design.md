@@ -6,7 +6,7 @@ Axon is a background macOS service for local UI automation. It should let an age
 
 The immediate target is an MCP-facing service with primitives similar to Computer Use:
 
-- list running and recently used apps
+- list running apps
 - capture app/window state
 - resolve element locators
 - click, set values, type, scroll, drag, and perform accessibility actions
@@ -37,9 +37,17 @@ MCP client / local agent
 
 ### Background Service
 
-Axon should run as a local background service, likely installed through a user LaunchAgent. It needs Accessibility permission and should fail loudly when permission is missing.
+Axon should run as a local background service from the start, installed through a user LaunchAgent. Persistent service state matters because Axon should be able to observe UI changes between requests, invalidate stale snapshots, and eventually report that the user changed something since the last agent observation.
 
-The service should support at least one local transport for MCP clients. Stdio is the easiest first target for MCP integration. A local HTTP or Unix socket transport can come later if multiple clients need to share one long-lived daemon.
+The service needs Accessibility permission and should fail loudly when permission is missing.
+
+The preferred transport is a local Unix domain socket owned by the daemon. MCP can be exposed by the same binary in a facade mode if stdio compatibility is needed:
+
+```text
+MCP client -> `axon mcp` stdio facade -> local socket -> `axon serve` daemon
+```
+
+This keeps the install surface to one binary while allowing the observer/cache layer to stay alive independently of any single MCP session.
 
 ### Snapshot Engine
 
@@ -48,7 +56,7 @@ The snapshot engine captures the active state for a target app or window:
 - app identity: bundle id, localized name, pid
 - window identity: title, role, subrole, frame, focus/main status
 - accessibility tree: roles, labels, values, descriptions, help text, actions, frames, children
-- optional screenshot metadata for coordinate fallback and visual debugging
+- screenshot or screenshot reference for coordinate fallback, visual debugging, and human inspection
 
 Every snapshot receives an opaque id. Tree indexes are scoped to that snapshot only.
 
@@ -63,6 +71,8 @@ That handle is valid only while the referenced snapshot is still retained.
 ### Locator Resolver
 
 Durable operation should be based on locators, not indexes.
+
+Locators should be AX-native and honest about macOS semantics. They can borrow useful ideas from browser automation, but they should not imitate Playwright where the mapping is misleading.
 
 ```json
 {
@@ -125,6 +135,8 @@ Axon should use `AXObserver` where practical to track:
 
 Observers should invalidate stale handles and reduce polling, but the service must still work with direct snapshots when observer coverage is incomplete.
 
+Observer state should also support a "changed since snapshot" query. The initial version can be coarse-grained at the app/window level, then grow toward element-level invalidation as the model proves out.
+
 ### Public MCP Surface
 
 Initial tools:
@@ -132,6 +144,7 @@ Initial tools:
 ```text
 list_apps()
 get_app_state(app)
+get_screenshot(app | window | snapshot)
 resolve(locator)
 click(target)
 set_value(target, value)
@@ -152,13 +165,15 @@ or a locator object.
 
 ### Technology Direction
 
-The likely implementation path is Swift first:
+The implementation path is Swift first:
 
 - direct access to Accessibility and CoreGraphics APIs
 - good fit for a long-running macOS service
 - simpler permission and app lifecycle integration than Python
 
-AXSwift is worth evaluating as a bootstrap wrapper, but the core API should not depend on wrapper-specific concepts. If AXSwift leaks too much or is under-maintained, Axon can use `ApplicationServices` directly.
+The default implementation should use `ApplicationServices` directly unless an early spike proves the wrapper saves enough work to justify the dependency. Direct `ApplicationServices` is more verbose than AXSwift, but the extra work is bounded: the hardest parts are still tree modeling, locator resolution, daemon lifecycle, screenshots, and action verification. The direct API likely adds some boilerplate in Phase 1, not a fundamentally different project.
+
+AXSwift remains a useful reference and possible spike input, but the core API should not depend on wrapper-specific concepts.
 
 ## Non-Goals For The First Version
 
@@ -166,6 +181,7 @@ AXSwift is worth evaluating as a bootstrap wrapper, but the core API should not 
 - cloud sync
 - multi-user remote control
 - app-specific workflow packs
+- recently used app tracking beyond currently running apps
 - guaranteed stable identity for every arbitrary UI element
 - bypassing macOS security prompts or app sandboxing
 
@@ -176,4 +192,3 @@ AXSwift is worth evaluating as a bootstrap wrapper, but the core API should not 
 - AX permissions and TCC behavior can make setup confusing
 - locator scoring can become opaque if not designed with explanations from the start
 - multiple clients may need shared service state sooner than expected
-

@@ -1,38 +1,54 @@
-# Axon Open Questions
+# Axon Decision Log And Open Questions
 
 ## Transport
 
-Should the first MCP implementation run over stdio, or should Axon start as a long-lived local daemon with MCP exposed through a local socket?
+Decision: Axon should be daemon-first.
 
-Stdio is simpler and closer to common MCP server setups. A daemon is more aligned with "set it up and forget about it" and can maintain observers/caches across clients.
+A long-lived service is needed for observer state, cache invalidation, and "user changed X since last checked" behavior. Use one binary with multiple modes instead of multiple installable components:
+
+```text
+axon serve
+axon doctor
+axon snapshot <app>
+axon mcp
+```
+
+The daemon should own the persistent state. The MCP facade can speak to the daemon through a local Unix domain socket if stdio compatibility is required.
 
 ## Wrapper Strategy
 
-Should the first Swift version use AXSwift or call `ApplicationServices` directly?
+Decision: Prefer direct `ApplicationServices` unless a spike proves AXSwift saves enough work to justify the dependency.
 
-AXSwift may speed up early development, but direct APIs reduce dependency risk and make permission/action behavior easier to reason about.
+Direct `ApplicationServices` is more verbose, but not a large conceptual expansion. The additional work is mostly typed wrappers, error normalization, and attribute/action helpers. The project complexity still lives in daemon lifecycle, snapshots, locator scoring, screenshots, observers, and action verification.
+
+Working estimate: AXSwift may save early boilerplate in Phase 1, but direct APIs likely add days, not weeks, and reduce long-term dependency risk.
 
 ## Screenshot Support
 
-Should screenshots be part of the first snapshot API?
+Decision: Screenshots are required.
 
-Accessibility-only operation is cleaner, but screenshots help debugging and make coordinate fallback much easier to inspect.
+Snapshots should include either screenshot data or a screenshot reference/path. Screenshots are needed for coordinate fallback, visual debugging, and human inspection of failures.
 
 ## App Identity
 
-How much should Axon remember about recently used apps?
+Decision: Keep app identity simple at first.
 
-The service can list running apps immediately. A richer "recent apps" list requires persistence or LaunchServices usage.
+The first version should list running apps and resolve apps by bundle id, name, and pid. Recently used app tracking is not important enough to justify extra persistence or LaunchServices complexity yet.
 
 ## Locator Schema
 
-Should locator objects be intentionally close to Playwright-style locators, or should they be AX-native from the start?
+Decision: Locators should be AX-native, honest, and intuitive.
 
-Playwright-style concepts are familiar, but AX-native locators may expose the real constraints more honestly.
+Borrow useful ideas from browser automation only where they map cleanly. Do not force Playwright concepts onto macOS Accessibility if they hide important constraints.
 
 ## Cairn Integration
 
-Should Cairn add explicit accessibility labels and identifiers as part of the Axon effort?
+Decision: Cairn should have good accessibility labels, but not as an Axon-specific dependency.
 
-General-purpose automation should work without app changes, but Cairn can become a high-quality fixture app if its controls expose stable semantic labels.
+Axon should work against arbitrary apps. Cairn can still be a high-quality fixture app because it should expose good AX labels for its own sake, not because Axon requires special treatment.
 
+## Open Questions
+
+- Should screenshot output be embedded in MCP responses, written to local files, or both?
+- Should the first daemon socket protocol be JSON-RPC, a tiny custom protocol, or MCP directly over the socket?
+- What is the minimum useful fixture app for deterministic integration tests?

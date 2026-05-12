@@ -5,11 +5,14 @@
 - Create a Swift package with a small CLI entrypoint.
 - Add formatting, linting, and a basic test target.
 - Add a permission check that reports whether Accessibility access is available.
-- Decide whether the first transport is MCP over stdio or a local daemon socket.
+- Establish one binary with daemon and client modes.
+- Add a LaunchAgent-friendly `axon serve` mode.
+- Add a local Unix domain socket transport between client commands and the daemon.
 
 Exit criteria:
 
 - `axon doctor` reports Accessibility permission status.
+- `axon serve` can start locally and answer a health check.
 - The package builds and tests run locally.
 
 ## Phase 1: Accessibility Tree Capture
@@ -19,11 +22,13 @@ Exit criteria:
 - Recursively serialize accessibility nodes.
 - Include role, subrole, title/name, value, description, help, actions, frame, enabled/focused state, and child indexes.
 - Return a stable snapshot id plus transient per-snapshot element indexes.
+- Capture screenshots or screenshot references with snapshots.
 
 Exit criteria:
 
 - `axon snapshot com.apple.finder` prints a useful tree.
 - `axon snapshot com.cairn.desktop.dev` can see Tauri/WebView controls.
+- `axon screenshot com.cairn.desktop.dev` returns a usable image artifact or path.
 - Snapshot handles are scoped and invalidated intentionally.
 
 ## Phase 2: Primitive Actions
@@ -56,6 +61,7 @@ Exit criteria:
 
 - Expose the core operations as MCP tools.
 - Keep transport types separate from core AX model types.
+- Implement the MCP facade as a mode of the same `axon` binary, using the local daemon socket behind the scenes if needed.
 - Add structured errors for missing app, missing permissions, ambiguous locator, stale handle, unsupported action, and failed fallback.
 
 Exit criteria:
@@ -65,15 +71,16 @@ Exit criteria:
 
 ## Phase 5: Observer And Service Mode
 
-- Add a LaunchAgent-friendly service mode.
 - Use `AXObserver` for focus, window, title, and value changes.
 - Maintain app/window caches with explicit invalidation.
+- Add coarse `changed_since(snapshotId)` support for app/window changes.
 - Add `axon install-service`, `axon start`, `axon stop`, and `axon status` if they prove useful.
 
 Exit criteria:
 
 - Axon can run in the background and serve repeated requests.
 - Stale snapshots are detected rather than reused silently.
+- A client can tell that an app/window changed since a prior snapshot.
 
 ## Phase 6: Safety And Workflow Layer
 
@@ -92,4 +99,4 @@ Exit criteria:
 - Integration tests against simple local fixture apps where AX metadata is controlled.
 - Manual smoke tests against Finder, System Settings, Safari/Chrome, and Cairn.
 - Regression snapshots for representative native and WebView trees.
-
+- Screenshot capture tests that verify dimensions and non-empty image output.
