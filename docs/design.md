@@ -41,7 +41,7 @@ Axon should run as a local background service from the start, installed through 
 
 The service needs Accessibility permission and should fail loudly when permission is missing.
 
-The preferred transport is a local Unix domain socket owned by the daemon. MCP can be exposed by the same binary in a facade mode if stdio compatibility is needed:
+The preferred transport is JSON-RPC over a local Unix domain socket owned by the daemon. MCP can be exposed by the same binary in a facade mode if stdio compatibility is needed:
 
 ```text
 MCP client -> `axon mcp` stdio facade -> local socket -> `axon serve` daemon
@@ -56,7 +56,7 @@ The snapshot engine captures the active state for a target app or window:
 - app identity: bundle id, localized name, pid
 - window identity: title, role, subrole, frame, focus/main status
 - accessibility tree: roles, labels, values, descriptions, help text, actions, frames, children
-- screenshot or screenshot reference for coordinate fallback, visual debugging, and human inspection
+- embedded screenshot data for coordinate fallback, visual debugging, and human inspection
 
 Every snapshot receives an opaque id. Tree indexes are scoped to that snapshot only.
 
@@ -162,6 +162,8 @@ snapshot:<snapshot-id>:<index>
 ```
 
 or a locator object.
+
+Screenshot-returning tools should embed image data in their response. File output can exist as a CLI/debug convenience later, but clients should not need filesystem coordination to inspect the visual state.
 
 ### Technology Direction
 

@@ -13,7 +13,13 @@ axon snapshot <app>
 axon mcp
 ```
 
-The daemon should own the persistent state. The MCP facade can speak to the daemon through a local Unix domain socket if stdio compatibility is required.
+The daemon should own the persistent state. The MCP facade can speak to the daemon through JSON-RPC over a local Unix domain socket if stdio compatibility is required.
+
+## Daemon Socket Protocol
+
+Decision: Use JSON-RPC first.
+
+JSON-RPC is simple, debuggable, and maps cleanly to request/response commands without inventing a bespoke protocol. It is also neutral enough that the daemon protocol can stay separate from MCP transport details.
 
 ## Wrapper Strategy
 
@@ -27,7 +33,7 @@ Working estimate: AXSwift may save early boilerplate in Phase 1, but direct APIs
 
 Decision: Screenshots are required.
 
-Snapshots should include either screenshot data or a screenshot reference/path. Screenshots are needed for coordinate fallback, visual debugging, and human inspection of failures.
+Snapshots and screenshot tools should return embedded image data. Screenshots are needed for coordinate fallback, visual debugging, and human inspection of failures. File output can be added later as a CLI/debug convenience, but embedded responses are the primary API.
 
 ## App Identity
 
@@ -49,6 +55,5 @@ Axon should work against arbitrary apps. Cairn can still be a high-quality fixtu
 
 ## Open Questions
 
-- Should screenshot output be embedded in MCP responses, written to local files, or both?
-- Should the first daemon socket protocol be JSON-RPC, a tiny custom protocol, or MCP directly over the socket?
-- What is the minimum useful fixture app for deterministic integration tests?
+- What versioning and compatibility policy should the JSON-RPC daemon protocol use?
+- What fixture app design gives us the best coverage through simplicity: small enough to reason about, rich enough to exercise real AX behavior?

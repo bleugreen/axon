@@ -7,7 +7,7 @@
 - Add a permission check that reports whether Accessibility access is available.
 - Establish one binary with daemon and client modes.
 - Add a LaunchAgent-friendly `axon serve` mode.
-- Add a local Unix domain socket transport between client commands and the daemon.
+- Add a JSON-RPC local Unix domain socket transport between client commands and the daemon.
 
 Exit criteria:
 
@@ -22,13 +22,13 @@ Exit criteria:
 - Recursively serialize accessibility nodes.
 - Include role, subrole, title/name, value, description, help, actions, frame, enabled/focused state, and child indexes.
 - Return a stable snapshot id plus transient per-snapshot element indexes.
-- Capture screenshots or screenshot references with snapshots.
+- Capture embedded screenshots with snapshots.
 
 Exit criteria:
 
 - `axon snapshot com.apple.finder` prints a useful tree.
 - `axon snapshot com.cairn.desktop.dev` can see Tauri/WebView controls.
-- `axon screenshot com.cairn.desktop.dev` returns a usable image artifact or path.
+- `axon screenshot com.cairn.desktop.dev` returns usable embedded image data.
 - Snapshot handles are scoped and invalidated intentionally.
 
 ## Phase 2: Primitive Actions
@@ -96,7 +96,7 @@ Exit criteria:
 ## Test Strategy
 
 - Unit tests for locator scoring and ambiguity behavior using saved synthetic trees.
-- Integration tests against simple local fixture apps where AX metadata is controlled.
+- Integration tests against excellent local fixture apps that keep the surface simple while covering meaningful AX behavior.
 - Manual smoke tests against Finder, System Settings, Safari/Chrome, and Cairn.
 - Regression snapshots for representative native and WebView trees.
 - Screenshot capture tests that verify dimensions and non-empty image output.
