@@ -26,11 +26,18 @@ public protocol VisualOverlay: AnyObject {
 }
 
 public struct VisualOverlayConfiguration: Equatable, Sendable {
+    public static let defaultPlannedDuration: TimeInterval = 0.25
+    public static let defaultResultDuration: TimeInterval = 1.10
+
     public let enabled: Bool
     public let plannedDuration: TimeInterval
     public let resultDuration: TimeInterval
 
-    public init(enabled: Bool, plannedDuration: TimeInterval = 0.12, resultDuration: TimeInterval = 0.20) {
+    public init(
+        enabled: Bool,
+        plannedDuration: TimeInterval = Self.defaultPlannedDuration,
+        resultDuration: TimeInterval = Self.defaultResultDuration
+    ) {
         self.enabled = enabled
         self.plannedDuration = plannedDuration
         self.resultDuration = resultDuration
@@ -42,11 +49,11 @@ public struct VisualOverlayConfiguration: Equatable, Sendable {
             enabled: enabled,
             plannedDuration: duration(
                 milliseconds: environment["AXON_VISUAL_OVERLAY_PLANNED_MS"],
-                fallback: 0.12
+                fallback: Self.defaultPlannedDuration
             ),
             resultDuration: duration(
                 milliseconds: environment["AXON_VISUAL_OVERLAY_RESULT_MS"],
-                fallback: 0.20
+                fallback: Self.defaultResultDuration
             )
         )
     }

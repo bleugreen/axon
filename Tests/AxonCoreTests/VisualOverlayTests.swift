@@ -5,8 +5,8 @@ import Testing
     let configuration = VisualOverlayConfiguration.fromEnvironment([:])
 
     #expect(configuration.enabled == false)
-    #expect(configuration.plannedDuration == 0.12)
-    #expect(configuration.resultDuration == 0.20)
+    #expect(configuration.plannedDuration == 0.25)
+    #expect(configuration.resultDuration == 1.10)
 }
 
 @Test func visualOverlayConfigurationReadsEnvironment() {

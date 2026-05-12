@@ -41,6 +41,8 @@ The LaunchAgent runs the same binary in `serve` mode, keeps it alive, and writes
 AXON_VISUAL_OVERLAY=1 ~/.swiftly/bin/swift run axon daemon start
 ```
 
+When `AXON_VISUAL_OVERLAY=1` is set, target badges default to a 250ms planned flash and a 1.1s result linger. Override with `AXON_VISUAL_OVERLAY_PLANNED_MS` and `AXON_VISUAL_OVERLAY_RESULT_MS`.
+
 Run the MCP stdio facade:
 
 ```sh
