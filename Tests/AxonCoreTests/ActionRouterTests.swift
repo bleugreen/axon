@@ -21,6 +21,94 @@ import Testing
     #expect(response.result?["action"]?["strategy"] == .string("AXPress"))
 }
 
+@Test func resolveRequestReturnsLocatorResolution() {
+    let router = CommandRouter(
+        captureSnapshot: { app, includeScreenshot in
+            #expect(app == "com.example.App")
+            #expect(includeScreenshot == false)
+            return actionLocatorFixtureSnapshot(buttons: ["NEW"])
+        }
+    )
+
+    let response = router.handle(JSONRPCRequest(
+        id: .string("resolve-1"),
+        method: "resolve",
+        params: .object([
+            "app": .string("com.example.App"),
+            "locator": .object([
+                "role": .string("AXButton"),
+                "title": .object(["exact": .string("NEW")]),
+                "actions": .array([.string("AXPress")])
+            ])
+        ])
+    ))
+
+    #expect(response.error == nil)
+    #expect(response.result?["resolution"]?["status"] == .string("unique"))
+    #expect(response.result?["resolution"]?["best"]?["handle"] == .string("snapshot:action-locator-fixture:2"))
+}
+
+@Test func clickRequestAcceptsLocatorTarget() {
+    let router = CommandRouter(
+        captureSnapshot: { _, includeScreenshot in
+            #expect(includeScreenshot == false)
+            return actionLocatorFixtureSnapshot(buttons: ["NEW"])
+        },
+        actions: PrimitiveActionHandlers(
+            click: { target in
+                #expect(target == "snapshot:action-locator-fixture:2")
+                return PrimitiveActionResult(action: "click", target: target, strategy: "AXPress", success: true)
+            }
+        )
+    )
+
+    let response = router.handle(JSONRPCRequest(
+        id: .string("click-locator-1"),
+        method: "click",
+        params: .object([
+            "target": .object([
+                "app": .string("com.example.App"),
+                "locator": .object([
+                    "role": .string("AXButton"),
+                    "title": .object(["exact": .string("NEW")])
+                ])
+            ])
+        ])
+    ))
+
+    #expect(response.error == nil)
+    #expect(response.result?["action"]?["target"] == .string("snapshot:action-locator-fixture:2"))
+}
+
+@Test func clickRequestRejectsAmbiguousLocatorTarget() {
+    let router = CommandRouter(
+        captureSnapshot: { _, _ in actionLocatorFixtureSnapshot(buttons: ["NEW", "NEW"]) },
+        actions: PrimitiveActionHandlers(
+            click: { _ in
+                Issue.record("ambiguous locator should not dispatch a click")
+                return PrimitiveActionResult(action: "click", target: "bad", strategy: "bad", success: false)
+            }
+        )
+    )
+
+    let response = router.handle(JSONRPCRequest(
+        id: .string("click-locator-ambiguous"),
+        method: "click",
+        params: .object([
+            "target": .object([
+                "app": .string("com.example.App"),
+                "locator": .object([
+                    "role": .string("AXButton"),
+                    "title": .object(["exact": .string("NEW")])
+                ])
+            ])
+        ])
+    ))
+
+    #expect(response.error?.code == -32602)
+    #expect(response.error?.message == "Locator did not resolve uniquely: ambiguous")
+}
+
 @Test func performActionRequestPassesActionName() {
     let router = CommandRouter(
         actions: PrimitiveActionHandlers(
@@ -117,3 +205,25 @@ import Testing
     #expect(response.result?["action"]?["target"] == .string("com.example.App"))
 }
 
+private func actionLocatorFixtureSnapshot(buttons: [String]) -> AppSnapshot {
+    AppSnapshot(
+        id: SnapshotID("action-locator-fixture"),
+        app: AppIdentity(bundleIdentifier: "com.example.App", name: "Example", processIdentifier: 42),
+        windows: [
+            AXNode(
+                role: "AXWindow",
+                title: "Main",
+                children: [
+                    AXNode(
+                        role: "AXGroup",
+                        title: "Toolbar",
+                        children: buttons.map { title in
+                            AXNode(role: "AXButton", title: title, actions: ["AXPress"])
+                        }
+                    )
+                ]
+            )
+        ],
+        screenshot: nil
+    )
+}

@@ -69,21 +69,38 @@ public struct CommandRouter {
             } catch {
                 return JSONRPCResponse(id: request.id, error: .internalError(String(describing: error)))
             }
+        case "resolve":
+            do {
+                let app = try requiredStringParam("app", in: request)
+                let locator = try requiredLocatorParam(in: request)
+                let snapshot = try captureSnapshot(app, false)
+                let resolution = LocatorResolver().resolve(locator, in: snapshot)
+                return JSONRPCResponse(
+                    id: request.id,
+                    result: [
+                        "resolution": resolution.jsonValue
+                    ]
+                )
+            } catch let error as JSONRPCError {
+                return JSONRPCResponse(id: request.id, error: error)
+            } catch {
+                return JSONRPCResponse(id: request.id, error: .internalError(String(describing: error)))
+            }
         case "click":
             return actionResponse(id: request.id) {
-                try actions.click(requiredStringParam("target", in: request))
+                try actions.click(resolveTargetParam(in: request))
             }
         case "perform_action":
             return actionResponse(id: request.id) {
                 try actions.performAction(
-                    requiredStringParam("target", in: request),
+                    resolveTargetParam(in: request),
                     requiredStringParam("action", in: request)
                 )
             }
         case "set_value":
             return actionResponse(id: request.id) {
                 try actions.setValue(
-                    requiredStringParam("target", in: request),
+                    resolveTargetParam(in: request),
                     requiredStringParam("value", in: request)
                 )
             }
@@ -109,11 +126,56 @@ public struct CommandRouter {
         }
     }
 
+    private func paramsObject(in request: JSONRPCRequest) throws -> [String: JSONValue] {
+        guard case let .object(params) = request.params else {
+            throw JSONRPCError.invalidParams("params must be an object")
+        }
+        return params
+    }
+
     private func requiredStringParam(_ key: String, in request: JSONRPCRequest) throws -> String {
-        guard case let .object(params) = request.params, case let .string(value) = params[key] else {
+        let params = try paramsObject(in: request)
+        guard case let .string(value) = params[key] else {
             throw JSONRPCError.invalidParams("Missing string parameter: \(key)")
         }
         return value
+    }
+
+    private func requiredLocatorParam(in request: JSONRPCRequest) throws -> AXLocator {
+        let params = try paramsObject(in: request)
+        guard let locator = params["locator"] else {
+            throw JSONRPCError.invalidParams("Missing locator parameter")
+        }
+        return try AXLocator(jsonValue: locator)
+    }
+
+    private func resolveTargetParam(in request: JSONRPCRequest) throws -> String {
+        let params = try paramsObject(in: request)
+        guard let target = params["target"] else {
+            throw JSONRPCError.invalidParams("Missing target parameter")
+        }
+
+        if case let .string(handle) = target {
+            return handle
+        }
+
+        guard case let .object(object) = target else {
+            throw JSONRPCError.invalidParams("target must be a handle string or locator object")
+        }
+        guard case let .string(app) = object["app"] else {
+            throw JSONRPCError.invalidParams("Locator target must include string app")
+        }
+        guard let locatorValue = object["locator"] else {
+            throw JSONRPCError.invalidParams("Locator target must include locator")
+        }
+
+        let locator = try AXLocator(jsonValue: locatorValue)
+        let snapshot = try captureSnapshot(app, false)
+        let resolution = LocatorResolver().resolve(locator, in: snapshot)
+        guard resolution.status == .unique, let handle = resolution.best?.handle else {
+            throw JSONRPCError.invalidParams("Locator did not resolve uniquely: \(resolution.status.rawValue)")
+        }
+        return handle.rawValue
     }
 
     private func boolParam(_ key: String, in request: JSONRPCRequest) -> Bool? {

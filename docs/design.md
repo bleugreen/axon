@@ -76,15 +76,13 @@ Locators should be AX-native and honest about macOS semantics. They can borrow u
 
 ```json
 {
-  "app": { "bundleId": "com.cairn.desktop.dev" },
-  "window": { "title": "cairn-dev" },
   "role": "AXButton",
-  "name": { "contains": "Profile concurrent batch exploration" },
+  "title": { "contains": "Profile concurrent batch exploration" },
   "actions": ["AXPress"],
-  "context": {
-    "nearText": "ACTIVE  (1)",
-    "ancestorRoles": ["AXWindow", "AXScrollArea", "AXGroup"]
-  },
+  "ancestors": [
+    { "role": "AXWindow", "title": { "contains": "cairn" } },
+    { "role": "AXScrollArea" }
+  ],
   "geometryHint": {
     "xPct": 0.42,
     "yPct": 0.31,
@@ -108,6 +106,25 @@ The resolver should return one of:
 - `unique`: one high-confidence match
 - `ambiguous`: multiple plausible matches with explanations
 - `missing`: no reasonable match, optionally with recovery hints
+
+The implemented Phase 3 locator subset is intentionally AX-native:
+
+```json
+{
+  "role": "AXButton",
+  "subrole": "AXStandardButton",
+  "title": { "exact": "NEW" },
+  "value": { "contains": "draft" },
+  "description": { "contains": "Issue" },
+  "identifier": "new-issue-button",
+  "actions": ["AXPress"],
+  "ancestors": [
+    { "role": "AXWindow", "title": { "contains": "cairn" } }
+  ]
+}
+```
+
+Text fields accept either a string, which means exact case-insensitive match, or `{ "exact": "..." }` / `{ "contains": "..." }` with optional `"caseSensitive": true`. Geometry and nearby-text signals remain future scoring inputs, not hidden behavior.
 
 ### Action Executor
 

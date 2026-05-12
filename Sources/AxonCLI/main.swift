@@ -5,6 +5,7 @@ let arguments = Array(CommandLine.arguments.dropFirst())
 let command = arguments.first ?? "help"
 let socketPath = ProcessInfo.processInfo.environment["AXON_SOCKET_PATH"] ?? "/tmp/axon.sock"
 let jsonEncoder = JSONEncoder()
+let jsonDecoder = JSONDecoder()
 
 do {
     switch command {
@@ -41,6 +42,22 @@ do {
             ?? EncodedScreenshot(mediaType: "image/png", base64Data: "", width: 0, height: 0)
         let data = try jsonEncoder.encode(screenshot.jsonValue)
         print(String(decoding: data, as: UTF8.self))
+
+    case "resolve":
+        guard arguments.count >= 3 else {
+            throw CLIError.missingArguments("resolve requires an app and locator JSON")
+        }
+        let locator = try decodeJSONValue(arguments.dropFirst(2).joined(separator: " "))
+        let response = try SocketClient(path: socketPath)
+            .send(JSONRPCRequest(
+                id: .string("resolve"),
+                method: "resolve",
+                params: .object([
+                    "app": .string(arguments[1]),
+                    "locator": locator
+                ])
+            ))
+        try printResponse(response)
 
     case "click":
         let target = try requiredArgument(after: command, in: arguments)
@@ -93,6 +110,7 @@ do {
           apps     list running apps
           snapshot <app>    print an indexed AX tree for a running app
           screenshot <app>  print embedded screenshot JSON for a running app
+          resolve <app> <locator-json>
           click <handle>    click a retained snapshot element through the daemon
           perform-action <handle> <action>
           set-value <handle> <value>
@@ -116,6 +134,10 @@ private func sendAction(method: String, params: [String: JSONValue]) throws {
     let response = try SocketClient(path: socketPath)
         .send(JSONRPCRequest(id: .string(method), method: method, params: .object(params)))
     try printResponse(response)
+}
+
+private func decodeJSONValue(_ rawValue: String) throws -> JSONValue {
+    try jsonDecoder.decode(JSONValue.self, from: Data(rawValue.utf8))
 }
 
 private func printResponse(_ response: JSONRPCResponse) throws {

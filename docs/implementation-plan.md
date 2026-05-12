@@ -48,9 +48,10 @@ Exit criteria:
 ## Phase 3: Locator Model
 
 - Define locator JSON schema.
-- Implement candidate scoring for role, name, actions, ancestry, nearby text, and geometry hints.
-- Return `unique`, `ambiguous`, or `missing` with confidence and candidate explanations.
+- Implement candidate matching for role, subrole, title, value, description, identifier, actions, and ancestry.
+- Return `unique`, `ambiguous`, or `missing` with candidate explanations.
 - Allow all primitive actions to accept either a snapshot handle or locator.
+- Keep nearby text and geometry hints explicit future scoring signals until they can be implemented honestly.
 
 Exit criteria:
 

@@ -25,8 +25,8 @@ The first live capturer called `AXUIElementCopyAttributeValue(... kAXChildrenAtt
 
 - `axon screenshot Codex` returned an embedded PNG without AX traversal.
 - `axon snapshot com.cairn.desktop` completed under a 10-second subprocess timeout and returned an indexed AX tree with truncation metadata.
-- Finder should remain a later stress test, not a Phase 1 smoke target.
+- `axon snapshot com.apple.finder` completed under a 10-second subprocess timeout after the ranged-read fix. The captured tree included Finder outline truncation such as `children limited to 50 of 1642`, which verifies the capturer did not materialize the full child array before applying limits.
 
 ## Follow-Up
 
-Before broader live app testing, add a fixture app or a low-risk controlled target and expose capture budgets in CLI output.
+Before broader live app testing, add a fixture app and expose capture budgets in CLI output.
