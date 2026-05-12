@@ -3,7 +3,7 @@ import AxonCore
 
 let arguments = Array(CommandLine.arguments.dropFirst())
 let command = arguments.first ?? "help"
-let socketPath = ProcessInfo.processInfo.environment["AXON_SOCKET_PATH"] ?? "/tmp/axon.sock"
+let socketPath = AxonEnvironment.socketPath()
 let jsonEncoder = JSONEncoder()
 let jsonDecoder = JSONDecoder()
 
@@ -21,6 +21,9 @@ do {
 
     case "mcp":
         try MCPStdioServer().run()
+
+    case "daemon":
+        try handleDaemonCommand(arguments: arguments)
 
     case "health":
         let response = try SocketClient(path: socketPath)
@@ -117,7 +120,8 @@ do {
         commands:
           doctor   check local permissions
           serve    run the local daemon socket server
-          mcp      run an MCP stdio server
+          mcp      run an MCP stdio facade backed by the daemon socket
+          daemon <install|start|stop|status|uninstall>
           health   request daemon health over the local socket
           apps     list running apps
           snapshot <app>    print an indexed AX tree for a running app
@@ -156,6 +160,62 @@ private func decodeJSONValue(_ rawValue: String) throws -> JSONValue {
 private func printResponse(_ response: JSONRPCResponse) throws {
     let data = try jsonEncoder.encode(response)
     print(String(decoding: data, as: UTF8.self))
+}
+
+private func handleDaemonCommand(arguments: [String]) throws {
+    let subcommand = arguments.dropFirst().first ?? "status"
+    let manager = LaunchAgentManager(configuration: try launchAgentConfiguration())
+    switch subcommand {
+    case "install":
+        try manager.install()
+        print("installed \(manager.configuration.label) at \(manager.plistPath.path)")
+    case "start":
+        try manager.start()
+        print("started \(manager.configuration.label)")
+    case "stop":
+        try manager.stop()
+        print("stopped \(manager.configuration.label)")
+    case "status":
+        let status = try manager.status()
+        print(status)
+    case "uninstall":
+        try manager.uninstall()
+        print("uninstalled \(manager.configuration.label)")
+    default:
+        throw CLIError.missingArguments("daemon requires install, start, stop, status, or uninstall")
+    }
+}
+
+private func launchAgentConfiguration() throws -> LaunchAgentConfiguration {
+    LaunchAgentConfiguration(
+        executablePath: try resolvedExecutablePath(),
+        socketPath: socketPath,
+        environment: ProcessInfo.processInfo.environment
+    )
+}
+
+private func resolvedExecutablePath() throws -> String {
+    let rawPath = CommandLine.arguments[0]
+    if rawPath.hasPrefix("/") {
+        return rawPath
+    }
+    if !rawPath.contains("/"), let pathExecutable = executablePathFromPATH(rawPath) {
+        return pathExecutable
+    }
+    let currentDirectory = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+    return currentDirectory.appendingPathComponent(rawPath).standardizedFileURL.path
+}
+
+private func executablePathFromPATH(_ executableName: String) -> String? {
+    let fileManager = FileManager.default
+    let pathDirectories = ProcessInfo.processInfo.environment["PATH"]?.split(separator: ":").map(String.init) ?? []
+    for directory in pathDirectories {
+        let candidate = URL(fileURLWithPath: directory).appendingPathComponent(executableName).path
+        if fileManager.isExecutableFile(atPath: candidate) {
+            return candidate
+        }
+    }
+    return nil
 }
 
 private enum CLIError: Error, CustomStringConvertible {

@@ -3,10 +3,14 @@ import Foundation
 public struct MCPRouter {
     public static let protocolVersion = "2025-11-25"
 
-    private let commandRouter: CommandRouter
+    private let commandHandler: any JSONRPCCommandHandling
 
-    public init(commandRouter: CommandRouter = CommandRouter()) {
-        self.commandRouter = commandRouter
+    public init(commandHandler: any JSONRPCCommandHandling = SocketCommandRouter()) {
+        self.commandHandler = commandHandler
+    }
+
+    public init(commandRouter: CommandRouter) {
+        self.commandHandler = commandRouter
     }
 
     public func handle(_ request: JSONRPCRequest) -> JSONRPCResponse? {
@@ -60,7 +64,7 @@ public struct MCPRouter {
                 arguments = Self.argumentsWithMCPDefaults(for: name, arguments: [:])
             }
 
-            let commandResponse = commandRouter.handle(JSONRPCRequest(
+            let commandResponse = commandHandler.handle(JSONRPCRequest(
                 id: request.id,
                 method: method,
                 params: .object(arguments)

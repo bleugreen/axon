@@ -77,7 +77,8 @@ Exit criteria:
 - Use `AXObserver` for focus, window, title, and value changes.
 - Maintain app/window caches with explicit invalidation.
 - Add coarse `changed_since(snapshotId)` support for app/window changes.
-- Add `axon install-service`, `axon start`, `axon stop`, and `axon status` if they prove useful.
+- Add `axon daemon install`, `axon daemon start`, `axon daemon stop`, `axon daemon status`, and `axon daemon uninstall`.
+- Make `axon mcp` a socket-backed facade so the daemon owns snapshots, retained handles, observer state, and overlay configuration.
 
 Exit criteria:
 

@@ -4,7 +4,7 @@ Axon is a local macOS accessibility service that gives agents a typed nerve path
 
 The goal is to expose macOS Accessibility as a composable automation substrate: observe app state, resolve durable locators against live UI trees, perform actions, and verify the result.
 
-This repository is currently in planning mode. Start with:
+Start with:
 
 - [Design](docs/design.md)
 - [Implementation plan](docs/implementation-plan.md)
@@ -19,18 +19,39 @@ This repo uses Swift 6.3.1 through Swiftly. The repository `.swift-version` pins
 ~/.swiftly/bin/swift run axon doctor
 ```
 
+Run the daemon in the foreground while developing:
+
+```sh
+AXON_SOCKET_PATH=/tmp/axon.sock ~/.swiftly/bin/swift run axon serve
+```
+
+Install and manage the user LaunchAgent:
+
+```sh
+~/.swiftly/bin/swift run axon daemon install
+~/.swiftly/bin/swift run axon daemon start
+~/.swiftly/bin/swift run axon daemon status
+~/.swiftly/bin/swift run axon daemon stop
+~/.swiftly/bin/swift run axon daemon uninstall
+```
+
+The LaunchAgent runs the same binary in `serve` mode, keeps it alive, and writes logs under `~/Library/Logs/Axon/`. It preserves `AXON_SOCKET_PATH` plus visual overlay environment values when installed:
+
+```sh
+AXON_VISUAL_OVERLAY=1 ~/.swiftly/bin/swift run axon daemon start
+```
+
 Run the MCP stdio facade:
 
 ```sh
 ~/.swiftly/bin/swift run axon mcp
 ```
 
-Codex MCP config points at `.build/debug/axon`. After changing Axon code, run `~/.swiftly/bin/swift build` and restart the Codex session so its MCP server process picks up the rebuilt binary.
+The MCP facade forwards tool calls to the daemon over `AXON_SOCKET_PATH`; it does not own snapshots, handles, observer state, or overlay configuration itself. Codex MCP config points at `.build/debug/axon`. After changing Axon code, run `~/.swiftly/bin/swift build` and restart the Codex session so its MCP server process picks up the rebuilt binary.
 
-Run a local daemon and resolve a locator:
+Resolve a locator through the daemon:
 
 ```sh
-AXON_SOCKET_PATH=/tmp/axon.sock ~/.swiftly/bin/swift run axon serve
 ~/.swiftly/bin/swift run axon resolve com.cairn.desktop.dev '{"role":"AXButton","title":{"contains":"Issues"},"actions":["AXPress"]}'
 ```
 
