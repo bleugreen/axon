@@ -33,3 +33,5 @@ Run a local daemon and resolve a locator:
 AXON_SOCKET_PATH=/tmp/axon.sock ~/.swiftly/bin/swift run axon serve
 ~/.swiftly/bin/swift run axon resolve com.cairn.desktop.dev '{"role":"AXButton","title":{"contains":"Issues"},"actions":["AXPress"]}'
 ```
+
+For MCP, `get_app_state` defaults to compact output: `indexedNodes` with handles and useful metadata, no full nested `windows` tree, and no screenshot unless requested. Pass `includeTree: true` or `includeScreenshot: true` when the client needs those heavier fields.

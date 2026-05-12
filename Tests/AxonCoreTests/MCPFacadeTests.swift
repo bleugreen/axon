@@ -68,6 +68,40 @@ import Testing
     #expect(response?.result?["structuredContent"]?["error"]?["code"] == .int(-32602))
 }
 
+@Test func mcpGetAppStateDefaultsToCompactStateWithoutScreenshot() {
+    let commandRouter = CommandRouter(
+        captureSnapshot: { app, includeScreenshot in
+            #expect(app == "com.example.App")
+            #expect(includeScreenshot == false)
+            return AppSnapshot(
+                id: SnapshotID("mcp-compact"),
+                app: AppIdentity(bundleIdentifier: "com.example.App", name: "Example", processIdentifier: 7),
+                windows: [
+                    AXNode(role: "AXWindow", title: "Main", children: [
+                        AXNode(role: "AXButton", title: "Run", actions: ["AXPress"])
+                    ])
+                ],
+                screenshot: nil
+            )
+        }
+    )
+
+    let response = MCPRouter(commandRouter: commandRouter).handle(JSONRPCRequest(
+        id: .string("compact-state"),
+        method: "tools/call",
+        params: .object([
+            "name": .string("get_app_state"),
+            "arguments": .object(["app": .string("com.example.App")])
+        ])
+    ))
+
+    let snapshot = response?.result?["structuredContent"]?["snapshot"]
+    #expect(response?.error == nil)
+    #expect(snapshot?["windows"] == nil)
+    #expect(snapshot?["indexedNodes"]?[1]?["title"] == .string("Run"))
+    #expect(snapshot?["indexedNodes"]?[1]?["actions"]?[0] == .string("AXPress"))
+}
+
 @Test func mcpNotificationDoesNotProduceResponse() {
     let response = MCPRouter(commandRouter: CommandRouter()).handle(JSONRPCRequest(
         id: nil,

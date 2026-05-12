@@ -55,9 +55,9 @@ public struct MCPRouter {
                 guard case let .object(object) = rawArguments else {
                     throw JSONRPCError.invalidParams("tools/call arguments must be an object")
                 }
-                arguments = object
+                arguments = Self.argumentsWithMCPDefaults(for: name, arguments: object)
             } else {
-                arguments = [:]
+                arguments = Self.argumentsWithMCPDefaults(for: name, arguments: [:])
             }
 
             let commandResponse = commandRouter.handle(JSONRPCRequest(
@@ -124,6 +124,23 @@ public struct MCPRouter {
         }
     }
 
+    private static func argumentsWithMCPDefaults(
+        for toolName: String,
+        arguments: [String: JSONValue]
+    ) -> [String: JSONValue] {
+        guard toolName == "get_app_state" else {
+            return arguments
+        }
+        var updated = arguments
+        if updated["includeScreenshot"] == nil {
+            updated["includeScreenshot"] = .bool(false)
+        }
+        if updated["includeTree"] == nil {
+            updated["includeTree"] = .bool(false)
+        }
+        return updated
+    }
+
     private static let tools: [MCPTool] = [
         MCPTool(
             name: "list_apps",
@@ -135,7 +152,8 @@ public struct MCPRouter {
             description: "Capture an accessibility snapshot for a running app, optionally including an embedded screenshot.",
             inputSchema: objectSchema(properties: [
                 "app": stringSchema("Bundle id, pid, exact app name, or partial app name."),
-                "includeScreenshot": boolSchema("Whether to include embedded ScreenCaptureKit screenshot data.")
+                "includeScreenshot": boolSchema("Whether to include embedded ScreenCaptureKit screenshot data. Defaults to false for MCP."),
+                "includeTree": boolSchema("Whether to include the full nested AX tree. Defaults to false for MCP; indexedNodes are always returned.")
             ], required: ["app"])
         ),
         MCPTool(

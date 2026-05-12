@@ -38,6 +38,14 @@ do {
         let snapshot = try AXSnapshotCapturer().capture(app: app, includeScreenshot: true)
         print(SnapshotTextFormatter().format(snapshot))
 
+    case "snapshot-json":
+        let app = try requiredArgument(after: command, in: arguments)
+        let includeTree = !arguments.contains("--compact")
+        let includeScreenshot = !arguments.contains("--no-screenshot")
+        let snapshot = try AXSnapshotCapturer().capture(app: app, includeScreenshot: includeScreenshot)
+        let data = try jsonEncoder.encode(snapshot.jsonValue(includeTree: includeTree))
+        print(String(decoding: data, as: UTF8.self))
+
     case "screenshot":
         let app = try requiredArgument(after: command, in: arguments)
         let identity = try AppResolver().resolveIdentity(app)
@@ -113,6 +121,7 @@ do {
           health   request daemon health over the local socket
           apps     list running apps
           snapshot <app>    print an indexed AX tree for a running app
+          snapshot-json <app> [--compact] [--no-screenshot]
           screenshot <app>  print embedded screenshot JSON for a running app
           resolve <app> <locator-json>
           click <handle>    click a retained snapshot element through the daemon

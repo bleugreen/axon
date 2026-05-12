@@ -43,11 +43,12 @@ public struct CommandRouter {
             do {
                 let app = try requiredStringParam("app", in: request)
                 let includeScreenshot = boolParam("includeScreenshot", in: request) ?? true
+                let includeTree = boolParam("includeTree", in: request) ?? true
                 let snapshot = try captureSnapshot(app, includeScreenshot)
                 return JSONRPCResponse(
                     id: request.id,
                     result: [
-                        "snapshot": snapshot.jsonValue
+                        "snapshot": snapshot.jsonValue(includeTree: includeTree)
                     ]
                 )
             } catch let error as JSONRPCError {

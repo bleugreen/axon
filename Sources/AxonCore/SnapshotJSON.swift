@@ -1,19 +1,32 @@
 public extension AppSnapshot {
     var jsonValue: JSONValue {
-        .object([
+        jsonValue(includeTree: true)
+    }
+
+    func jsonValue(includeTree: Bool) -> JSONValue {
+        var object: [String: JSONValue] = [
             "id": .string(id.rawValue),
             "app": app.jsonValue,
-            "windows": .array(windows.map(\.jsonValue)),
             "indexedNodes": .array(indexedNodes.map { indexed in
                 .object([
                     "index": .int(indexed.index),
                     "role": .string(indexed.node.role),
+                    "subrole": indexed.node.subrole.map(JSONValue.string) ?? .null,
                     "title": indexed.node.title.map(JSONValue.string) ?? .null,
+                    "value": indexed.node.value.map(JSONValue.string) ?? .null,
+                    "description": indexed.node.description.map(JSONValue.string) ?? .null,
+                    "actions": .array(indexed.node.actions.map(JSONValue.string)),
+                    "frame": indexed.node.frame.map(\.jsonValue) ?? .null,
+                    "truncationReason": indexed.node.truncationReason.map(JSONValue.string) ?? .null,
                     "handle": handle(for: indexed.index).map { .string($0.rawValue) } ?? .null
                 ])
             }),
             "screenshot": screenshot.map(\.jsonValue) ?? .null
-        ])
+        ]
+        if includeTree {
+            object["windows"] = .array(windows.map(\.jsonValue))
+        }
+        return .object(object)
     }
 }
 
