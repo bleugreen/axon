@@ -66,7 +66,7 @@ public enum JSONRPCID: Codable, Equatable {
     }
 }
 
-public struct JSONRPCError: Codable, Equatable {
+public struct JSONRPCError: Codable, Equatable, Error {
     public let code: Int
     public let message: String
 
@@ -77,11 +77,20 @@ public struct JSONRPCError: Codable, Equatable {
     public static func parseError(_ message: String) -> JSONRPCError {
         JSONRPCError(code: -32700, message: message)
     }
+
+    public static func invalidParams(_ message: String) -> JSONRPCError {
+        JSONRPCError(code: -32602, message: message)
+    }
+
+    public static func internalError(_ message: String) -> JSONRPCError {
+        JSONRPCError(code: -32603, message: message)
+    }
 }
 
 public enum JSONValue: Codable, Equatable {
     case string(String)
     case int(Int)
+    case double(Double)
     case bool(Bool)
     case object([String: JSONValue])
     case array([JSONValue])
@@ -95,6 +104,8 @@ public enum JSONValue: Codable, Equatable {
             self = .string(value)
         } else if let value = try? container.decode(Int.self) {
             self = .int(value)
+        } else if let value = try? container.decode(Double.self) {
+            self = .double(value)
         } else if let value = try? container.decode(Bool.self) {
             self = .bool(value)
         } else if let value = try? container.decode([String: JSONValue].self) {
@@ -116,6 +127,8 @@ public enum JSONValue: Codable, Equatable {
             try container.encode(value)
         case let .int(value):
             try container.encode(value)
+        case let .double(value):
+            try container.encode(value)
         case let .bool(value):
             try container.encode(value)
         case let .object(value):
@@ -128,3 +141,18 @@ public enum JSONValue: Codable, Equatable {
     }
 }
 
+public extension JSONValue {
+    subscript(key: String) -> JSONValue? {
+        guard case let .object(values) = self else {
+            return nil
+        }
+        return values[key]
+    }
+
+    subscript(index: Int) -> JSONValue? {
+        guard case let .array(values) = self, values.indices.contains(index) else {
+            return nil
+        }
+        return values[index]
+    }
+}
