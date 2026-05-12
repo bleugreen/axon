@@ -5,10 +5,19 @@ import Foundation
 public final class AXPrimitiveActionExecutor {
     private let elementStore: AXElementStore
     private let appResolver: AppResolver
+    private let overlay: VisualOverlay?
+    private let overlayConfiguration: VisualOverlayConfiguration
 
-    public init(elementStore: AXElementStore, appResolver: AppResolver = AppResolver()) {
+    public init(
+        elementStore: AXElementStore,
+        appResolver: AppResolver = AppResolver(),
+        overlay: VisualOverlay? = VisualOverlayFactory.makeFromEnvironment(),
+        overlayConfiguration: VisualOverlayConfiguration = .fromEnvironment()
+    ) {
         self.elementStore = elementStore
         self.appResolver = appResolver
+        self.overlay = overlay
+        self.overlayConfiguration = overlayConfiguration
     }
 
     public func handlers() -> PrimitiveActionHandlers {
@@ -37,32 +46,41 @@ public final class AXPrimitiveActionExecutor {
             )
         }
 
+        showTarget(element, label: "CGClick", state: .planned)
         postMouseClick(at: point)
-        return PrimitiveActionResult(action: "click", target: target, strategy: "CGEvent", success: true)
+        let result = PrimitiveActionResult(action: "click", target: target, strategy: "CGEvent", success: true)
+        showTarget(element, label: "CGClick", state: .succeeded)
+        return result
     }
 
     public func performAction(target: String, action: String) throws -> PrimitiveActionResult {
         let element = try elementStore.element(for: target)
+        showTarget(element, label: action, state: .planned)
         let result = AXUIElementPerformAction(element, action as CFString)
-        return PrimitiveActionResult(
+        let actionResult = PrimitiveActionResult(
             action: action,
             target: target,
             strategy: "AXAction",
             success: result == .success,
             message: result == .success ? nil : "AXUIElementPerformAction returned \(result.rawValue)"
         )
+        showTarget(element, label: action, state: actionResult.success ? .succeeded : .failed)
+        return actionResult
     }
 
     public func setValue(target: String, value: String) throws -> PrimitiveActionResult {
         let element = try elementStore.element(for: target)
+        showTarget(element, label: "AXValue", state: .planned)
         let result = AXUIElementSetAttributeValue(element, kAXValueAttribute as CFString, value as CFTypeRef)
-        return PrimitiveActionResult(
+        let actionResult = PrimitiveActionResult(
             action: "set_value",
             target: target,
             strategy: "AXValue",
             success: result == .success,
             message: result == .success ? nil : "AXUIElementSetAttributeValue returned \(result.rawValue)"
         )
+        showTarget(element, label: "AXValue", state: actionResult.success ? .succeeded : .failed)
+        return actionResult
     }
 
     public func typeText(app: String, text: String) throws -> PrimitiveActionResult {
@@ -111,6 +129,13 @@ public final class AXPrimitiveActionExecutor {
     }
 
     private func centerPoint(of element: AXUIElement) -> CGPoint? {
+        guard let frame = frame(of: element) else {
+            return nil
+        }
+        return CGPoint(x: frame.x + frame.width / 2, y: frame.y + frame.height / 2)
+    }
+
+    private func frame(of element: AXUIElement) -> AXFrame? {
         guard
             let position: AXValue = copyAttribute(kAXPositionAttribute, from: element),
             let size: AXValue = copyAttribute(kAXSizeAttribute, from: element)
@@ -125,7 +150,15 @@ public final class AXPrimitiveActionExecutor {
         else {
             return nil
         }
-        return CGPoint(x: point.x + cgSize.width / 2, y: point.y + cgSize.height / 2)
+        return AXFrame(x: point.x, y: point.y, width: cgSize.width, height: cgSize.height)
+    }
+
+    private func showTarget(_ element: AXUIElement, label: String, state: VisualTargetState) {
+        guard let overlay, overlayConfiguration.enabled, let frame = frame(of: element) else {
+            return
+        }
+        let duration = state == .planned ? overlayConfiguration.plannedDuration : overlayConfiguration.resultDuration
+        overlay.showTarget(VisualTarget(frame: frame, label: label, state: state, duration: duration))
     }
 
     private func copyAttribute<T>(_ attribute: String, from element: AXUIElement) -> T? {
