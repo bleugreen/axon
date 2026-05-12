@@ -19,6 +19,7 @@ public enum SnapshotCaptureError: Error, CustomStringConvertible {
 public struct AXSnapshotCapturer {
     private let appResolver: AppResolver
     private let screenshotCapturer: ScreenshotCapturer
+    private let elementStore: AXElementStore?
     private let maxDepth: Int
     private let maxChildrenPerNode: Int
     private let maxNodes: Int
@@ -28,6 +29,7 @@ public struct AXSnapshotCapturer {
     public init(
         appResolver: AppResolver = AppResolver(),
         screenshotCapturer: ScreenshotCapturer = ScreenshotCapturer(),
+        elementStore: AXElementStore? = nil,
         maxDepth: Int = 5,
         maxChildrenPerNode: Int = 50,
         maxNodes: Int = 400,
@@ -36,6 +38,7 @@ public struct AXSnapshotCapturer {
     ) {
         self.appResolver = appResolver
         self.screenshotCapturer = screenshotCapturer
+        self.elementStore = elementStore
         self.maxDepth = maxDepth
         self.maxChildrenPerNode = maxChildrenPerNode
         self.maxNodes = maxNodes
@@ -52,14 +55,16 @@ public struct AXSnapshotCapturer {
         let appElement = AXUIElementCreateApplication(app.processIdentifier)
         AXUIElementSetMessagingTimeout(appElement, messagingTimeout)
         var remainingNodes = maxNodes
+        var retainedElements: [AXUIElement] = []
+        let snapshotID = SnapshotID(UUID().uuidString)
         let windows = windowElements(from: appElement)
             .prefix(maxWindows)
             .compactMap { window -> AXNode? in
                 guard remainingNodes > 0 else {
                     return nil
                 }
-                return serialize(window, depth: 0, remainingNodes: &remainingNodes)
-        }
+                return serialize(window, depth: 0, remainingNodes: &remainingNodes, retainedElements: &retainedElements)
+            }
         let windowCount = windowCount(from: appElement)
         let truncationReason = windowCount > windows.count ? "windows limited to \(maxWindows) of \(windowCount)" : nil
         let annotatedWindows = windows.enumerated().map { index, window in
@@ -74,9 +79,10 @@ public struct AXSnapshotCapturer {
             processIdentifier: app.processIdentifier
         )
         let screenshot = includeScreenshot ? screenshotCapturer.capture(app: appIdentity, axWindows: annotatedWindows) : nil
+        elementStore?.store(snapshotID: snapshotID, elements: retainedElements)
 
         return AppSnapshot(
-            id: SnapshotID(UUID().uuidString),
+            id: snapshotID,
             app: appIdentity,
             windows: annotatedWindows,
             screenshot: screenshot
@@ -91,8 +97,14 @@ public struct AXSnapshotCapturer {
         attributeValueCount(kAXWindowsAttribute, from: appElement)
     }
 
-    private func serialize(_ element: AXUIElement, depth: Int, remainingNodes: inout Int) -> AXNode {
+    private func serialize(
+        _ element: AXUIElement,
+        depth: Int,
+        remainingNodes: inout Int,
+        retainedElements: inout [AXUIElement]
+    ) -> AXNode {
         AXUIElementSetMessagingTimeout(element, messagingTimeout)
+        retainedElements.append(element)
         remainingNodes -= 1
 
         let role: String = copyAttribute(kAXRoleAttribute, from: element) ?? "AXUnknown"
@@ -125,7 +137,7 @@ public struct AXSnapshotCapturer {
                 guard remainingNodes > 0 else {
                     return nil
                 }
-                return serialize(child, depth: depth + 1, remainingNodes: &remainingNodes)
+                return serialize(child, depth: depth + 1, remainingNodes: &remainingNodes, retainedElements: &retainedElements)
             }
         }
 

@@ -17,6 +17,22 @@ public struct SocketServer {
             unlink(path)
         }
 
+        try acceptOneClient(on: descriptor)
+    }
+
+    public func run() throws {
+        let descriptor = try makeListeningSocket()
+        defer {
+            close(descriptor)
+            unlink(path)
+        }
+
+        while true {
+            try acceptOneClient(on: descriptor)
+        }
+    }
+
+    private func acceptOneClient(on descriptor: Int32) throws {
         let client = accept(descriptor, nil, nil)
         guard client >= 0 else {
             throw SocketError.operationFailed("accept")

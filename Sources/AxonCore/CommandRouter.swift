@@ -1,15 +1,25 @@
 public struct CommandRouter {
     private let listApps: () -> [AppIdentity]
     private let captureSnapshot: (String, Bool) throws -> AppSnapshot
+    private let captureScreenshot: (String) throws -> EncodedScreenshot?
+    private let actions: PrimitiveActionHandlers
 
     public init(
         listApps: @escaping () -> [AppIdentity] = { AppResolver().runningApps() },
-        captureSnapshot: @escaping (String, Bool) throws -> AppSnapshot = { app, includeScreenshot in
-            try AXSnapshotCapturer().capture(app: app, includeScreenshot: includeScreenshot)
-        }
+        captureSnapshot: ((String, Bool) throws -> AppSnapshot)? = nil,
+        captureScreenshot: ((String) throws -> EncodedScreenshot?)? = nil,
+        actions: PrimitiveActionHandlers? = nil,
+        elementStore: AXElementStore = AXElementStore()
     ) {
         self.listApps = listApps
-        self.captureSnapshot = captureSnapshot
+        self.captureSnapshot = captureSnapshot ?? { app, includeScreenshot in
+            try AXSnapshotCapturer(elementStore: elementStore).capture(app: app, includeScreenshot: includeScreenshot)
+        }
+        self.captureScreenshot = captureScreenshot ?? { app in
+            let identity = try AppResolver().resolveIdentity(app)
+            return ScreenshotCapturer().capture(app: identity)
+        }
+        self.actions = actions ?? AXPrimitiveActionExecutor(elementStore: elementStore).handlers()
     }
 
     public func handle(_ request: JSONRPCRequest) -> JSONRPCResponse {
@@ -48,17 +58,48 @@ public struct CommandRouter {
         case "screenshot":
             do {
                 let app = try requiredStringParam("app", in: request)
-                let snapshot = try captureSnapshot(app, true)
                 return JSONRPCResponse(
                     id: request.id,
                     result: [
-                        "screenshot": snapshot.screenshot.map(\.jsonValue) ?? .null
+                        "screenshot": try captureScreenshot(app).map(\.jsonValue) ?? .null
                     ]
                 )
             } catch let error as JSONRPCError {
                 return JSONRPCResponse(id: request.id, error: error)
             } catch {
                 return JSONRPCResponse(id: request.id, error: .internalError(String(describing: error)))
+            }
+        case "click":
+            return actionResponse(id: request.id) {
+                try actions.click(requiredStringParam("target", in: request))
+            }
+        case "perform_action":
+            return actionResponse(id: request.id) {
+                try actions.performAction(
+                    requiredStringParam("target", in: request),
+                    requiredStringParam("action", in: request)
+                )
+            }
+        case "set_value":
+            return actionResponse(id: request.id) {
+                try actions.setValue(
+                    requiredStringParam("target", in: request),
+                    requiredStringParam("value", in: request)
+                )
+            }
+        case "type_text":
+            return actionResponse(id: request.id) {
+                try actions.typeText(
+                    requiredStringParam("app", in: request),
+                    requiredStringParam("text", in: request)
+                )
+            }
+        case "press_key":
+            return actionResponse(id: request.id) {
+                try actions.pressKey(
+                    requiredStringParam("app", in: request),
+                    requiredStringParam("key", in: request)
+                )
             }
         default:
             return JSONRPCResponse(
@@ -80,5 +121,15 @@ public struct CommandRouter {
             return nil
         }
         return value
+    }
+
+    private func actionResponse(id: JSONRPCID?, _ body: () throws -> PrimitiveActionResult) -> JSONRPCResponse {
+        do {
+            return JSONRPCResponse(id: id, result: ["action": try body().jsonValue])
+        } catch let error as JSONRPCError {
+            return JSONRPCResponse(id: id, error: error)
+        } catch {
+            return JSONRPCResponse(id: id, error: .internalError(String(describing: error)))
+        }
     }
 }
