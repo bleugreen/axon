@@ -11,7 +11,7 @@ The first live capturer called `AXUIElementCopyAttributeValue(... kAXChildrenAtt
 ## Immediate Changes
 
 - Added default capture limits:
-  - max depth: 5
+  - max depth: 8
   - max children per node: 50
   - max nodes: 400
   - max windows: 8
@@ -26,6 +26,7 @@ The first live capturer called `AXUIElementCopyAttributeValue(... kAXChildrenAtt
 - `axon screenshot Codex` returned an embedded PNG without AX traversal.
 - `axon snapshot com.cairn.desktop` completed under a 10-second subprocess timeout and returned an indexed AX tree with truncation metadata.
 - `axon snapshot com.apple.finder` completed under a 10-second subprocess timeout after the ranged-read fix. The captured tree included Finder outline truncation such as `children limited to 50 of 1642`, which verifies the capturer did not materialize the full child array before applying limits.
+- After raising the default depth from 5 to 8, Finder still completed under a 10-second subprocess timeout and exhausted the 400-node budget instead of walking the full outline.
 
 ## Follow-Up
 

@@ -35,6 +35,10 @@ import Testing
     #expect(node.jsonValue["truncationReason"] == .string("children limited to 25"))
 }
 
+@Test func defaultCaptureDepthReachesTypicalWebViewContent() {
+    #expect(AXSnapshotCapturer.defaultMaxDepth >= 8)
+}
+
 @Test func snapshotHandleParsesSnapshotIdAndNodeIndex() throws {
     let handle = try SnapshotHandle("snapshot:snap-test:42")
 

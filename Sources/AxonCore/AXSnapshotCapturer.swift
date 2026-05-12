@@ -17,6 +17,12 @@ public enum SnapshotCaptureError: Error, CustomStringConvertible {
 }
 
 public struct AXSnapshotCapturer {
+    public static let defaultMaxDepth = 8
+    public static let defaultMaxChildrenPerNode = 50
+    public static let defaultMaxNodes = 400
+    public static let defaultMaxWindows = 8
+    public static let defaultMessagingTimeout: Float = 0.2
+
     private let appResolver: AppResolver
     private let screenshotCapturer: ScreenshotCapturer
     private let elementStore: AXElementStore?
@@ -30,11 +36,11 @@ public struct AXSnapshotCapturer {
         appResolver: AppResolver = AppResolver(),
         screenshotCapturer: ScreenshotCapturer = ScreenshotCapturer(),
         elementStore: AXElementStore? = nil,
-        maxDepth: Int = 5,
-        maxChildrenPerNode: Int = 50,
-        maxNodes: Int = 400,
-        maxWindows: Int = 8,
-        messagingTimeout: Float = 0.2
+        maxDepth: Int = Self.defaultMaxDepth,
+        maxChildrenPerNode: Int = Self.defaultMaxChildrenPerNode,
+        maxNodes: Int = Self.defaultMaxNodes,
+        maxWindows: Int = Self.defaultMaxWindows,
+        messagingTimeout: Float = Self.defaultMessagingTimeout
     ) {
         self.appResolver = appResolver
         self.screenshotCapturer = screenshotCapturer

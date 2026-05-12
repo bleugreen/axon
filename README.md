@@ -25,6 +25,8 @@ Run the MCP stdio facade:
 ~/.swiftly/bin/swift run axon mcp
 ```
 
+Codex MCP config points at `.build/debug/axon`. After changing Axon code, run `~/.swiftly/bin/swift build` and restart the Codex session so its MCP server process picks up the rebuilt binary.
+
 Run a local daemon and resolve a locator:
 
 ```sh
