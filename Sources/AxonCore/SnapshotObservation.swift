@@ -145,7 +145,7 @@ public struct SnapshotObservationFormatter {
         }
 
         var line = "  - \(yamlString(text))"
-        if let confidence = object["confidence"]?.scalarText {
+        if let confidence = object["confidence"]?.doubleValue, confidence < 1 {
             line += " confidence=\(confidence)"
         }
         if let frame = object["frame"]?.objectValue {

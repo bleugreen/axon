@@ -342,7 +342,7 @@ import Testing
                 RecognizedTextObservation(
                     text: "First line",
                     boundingBox: NormalizedTextBoundingBox(x: 0.10, y: 0.80, width: 0.20, height: 0.05),
-                    confidence: 0.97
+                    confidence: 1
                 )
             ]
         }
@@ -367,13 +367,16 @@ import Testing
     #expect(response?.error == nil)
     #expect(result?["isError"] == .bool(false))
     #expect(snapshot?["screenText"]?[0]?["text"] == .string("First line"))
-    #expect(snapshot?["screenText"]?[0]?["confidence"] == .double(0.97))
+    #expect(snapshot?["screenText"]?[0]?["confidence"] == .double(1))
     #expect(snapshot?["screenText"]?[0]?["frame"] == nil)
     #expect(snapshot?["screenText"]?[1]?["text"] == .string("Second line"))
+    #expect(snapshot?["screenText"]?[1]?["confidence"] == .double(0.91))
     #expect(snapshot?["screenshot"] == nil)
     #expect(imageContent(in: result) == nil)
     #expect(text?.contains("screenText:") == true)
-    #expect(text?.contains("- \"First line\" confidence=0.97") == true)
+    #expect(text?.contains("- \"First line\"") == true)
+    #expect(text?.contains("- \"First line\" confidence=1") == false)
+    #expect(text?.contains("- \"Second line\" confidence=0.91") == true)
     #expect(text?.contains("internal-image-payload") == false)
 }
 
