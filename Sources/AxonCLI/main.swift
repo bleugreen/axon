@@ -175,7 +175,9 @@ private func handleDaemonCommand(arguments: [String]) throws {
     case "start":
         try installer.install()
         try manager.start()
-        print("started \(manager.configuration.label)")
+        let health = try waitForDaemonHealth(socketPath: socketPath)
+        let accessibility = health.result?["accessibility"].flatMap(stringValue) ?? "unknown"
+        print("started \(manager.configuration.label) (accessibility: \(accessibility))")
     case "stop":
         try manager.stop()
         print("stopped \(manager.configuration.label)")
@@ -225,6 +227,33 @@ private func executablePathFromPATH(_ executableName: String) -> String? {
         }
     }
     return nil
+}
+
+private func waitForDaemonHealth(socketPath: String) throws -> JSONRPCResponse {
+    let deadline = Date().addingTimeInterval(3)
+    var lastError: Error?
+
+    while Date() < deadline {
+        do {
+            return try SocketClient(path: socketPath)
+                .send(JSONRPCRequest(id: .string("health"), method: "health"))
+        } catch {
+            lastError = error
+            Thread.sleep(forTimeInterval: 0.05)
+        }
+    }
+
+    if let lastError {
+        throw lastError
+    }
+    throw SocketError.connectionClosed
+}
+
+private func stringValue(_ value: JSONValue) -> String? {
+    guard case let .string(string) = value else {
+        return nil
+    }
+    return string
 }
 
 private enum CLIError: Error, CustomStringConvertible {

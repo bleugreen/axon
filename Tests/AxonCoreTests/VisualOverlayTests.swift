@@ -1,12 +1,20 @@
 import Testing
 @testable import AxonCore
 
-@Test func visualOverlayConfigurationDefaultsDisabled() {
+@Test func visualOverlayConfigurationDefaultsEnabled() {
     let configuration = VisualOverlayConfiguration.fromEnvironment([:])
 
-    #expect(configuration.enabled == false)
+    #expect(configuration.enabled)
     #expect(configuration.plannedDuration == 0.25)
     #expect(configuration.resultDuration == 1.10)
+}
+
+@Test func visualOverlayConfigurationCanBeDisabled() {
+    let configuration = VisualOverlayConfiguration.fromEnvironment([
+        "AXON_VISUAL_OVERLAY": "0"
+    ])
+
+    #expect(configuration.enabled == false)
 }
 
 @Test func visualOverlayConfigurationReadsEnvironment() {

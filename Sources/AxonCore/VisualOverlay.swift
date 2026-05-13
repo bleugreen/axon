@@ -44,7 +44,7 @@ public struct VisualOverlayConfiguration: Equatable, Sendable {
     }
 
     public static func fromEnvironment(_ environment: [String: String] = ProcessInfo.processInfo.environment) -> VisualOverlayConfiguration {
-        let enabled = environment["AXON_VISUAL_OVERLAY"] == "1" || environment["AXON_VISUAL_OVERLAY"] == "true"
+        let enabled = enabledFlag(environment["AXON_VISUAL_OVERLAY"])
         return VisualOverlayConfiguration(
             enabled: enabled,
             plannedDuration: duration(
@@ -63,6 +63,18 @@ public struct VisualOverlayConfiguration: Equatable, Sendable {
             return fallback
         }
         return milliseconds / 1000
+    }
+
+    private static func enabledFlag(_ rawValue: String?) -> Bool {
+        guard let rawValue else {
+            return true
+        }
+        switch rawValue.lowercased() {
+        case "0", "false", "no", "off":
+            return false
+        default:
+            return true
+        }
     }
 }
 
