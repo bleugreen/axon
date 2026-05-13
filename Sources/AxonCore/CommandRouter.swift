@@ -6,6 +6,7 @@ public struct CommandRouter {
     private let actions: PrimitiveActionHandlers
     private let elementStore: AXElementStore
     private let changeObserver: AppChangeObserving
+    private let history: ActionHistoryStore
 
     public init(
         listApps: @escaping () -> [AppIdentity] = { AppResolver().runningApps() },
@@ -14,10 +15,12 @@ public struct CommandRouter {
         requestAccessibility: @escaping () -> Bool = AccessibilityPermission.requestTrustPrompt,
         actions: PrimitiveActionHandlers? = nil,
         elementStore: AXElementStore = AXElementStore(),
-        changeObserver: AppChangeObserving = AXAppChangeObserverRegistry()
+        changeObserver: AppChangeObserving = AXAppChangeObserverRegistry(),
+        history: ActionHistoryStore = .shared
     ) {
         self.elementStore = elementStore
         self.changeObserver = changeObserver
+        self.history = history
         self.listApps = listApps
         self.captureSnapshot = captureSnapshot ?? { app, screenshot in
             try AXSnapshotCapturer(elementStore: elementStore).capture(app: app, screenshot: screenshot)
@@ -31,6 +34,13 @@ public struct CommandRouter {
     }
 
     public func handle(_ request: JSONRPCRequest) -> JSONRPCResponse {
+        let context = history.context(for: request)
+        let response = handleCommand(context.request)
+        history.record(request: context.request, response: response, sessionID: context.sessionID)
+        return response
+    }
+
+    private func handleCommand(_ request: JSONRPCRequest) -> JSONRPCResponse {
         switch request.method {
         case "health":
             let doctor = Doctor.run()
@@ -94,6 +104,25 @@ public struct CommandRouter {
             } catch {
                 return JSONRPCResponse(id: request.id, error: .internalError(String(describing: error)))
             }
+        case "get_children":
+            do {
+                let params = try paramsObject(in: request)
+                let target = try requiredString("target", in: params)
+                let offset = intParam("offset", in: params) ?? 0
+                let limit = intParam("limit", in: params) ?? AXSnapshotCapturer.defaultMaxChildrenPerNode
+                let children = try AXSnapshotCapturer(elementStore: elementStore).captureChildren(
+                    parentHandle: target,
+                    offset: offset,
+                    limit: limit
+                )
+                return JSONRPCResponse(id: request.id, result: ["children": children.jsonValue])
+            } catch let error as JSONRPCError {
+                return JSONRPCResponse(id: request.id, error: error)
+            } catch let error as AXElementStoreError {
+                return JSONRPCResponse(id: request.id, error: .invalidParams(error.description))
+            } catch {
+                return JSONRPCResponse(id: request.id, error: .internalError(String(describing: error)))
+            }
         case "changed_since":
             do {
                 let snapshotID = SnapshotID(try requiredStringParam("snapshotId", in: request))
@@ -152,6 +181,39 @@ public struct CommandRouter {
                 return JSONRPCResponse(id: request.id, result: ["plan": plan])
             } catch let error as AutomationPlanError {
                 return JSONRPCResponse(id: request.id, error: .invalidParams(error.description))
+            } catch {
+                return JSONRPCResponse(id: request.id, error: .internalError(String(describing: error)))
+            }
+        case "run_batch":
+            do {
+                let params = try paramsObject(in: request)
+                let batch = try ActionBatchExecutor(commandHandler: handle).run(params: params)
+                return JSONRPCResponse(id: request.id, result: ["batch": batch])
+            } catch let error as ActionBatchError {
+                return JSONRPCResponse(id: request.id, error: .invalidParams(error.description))
+            } catch {
+                return JSONRPCResponse(id: request.id, error: .internalError(String(describing: error)))
+            }
+        case "export_script":
+            do {
+                let params = try paramsObject(in: request)
+                let sessionID = try optionalStringParam("sessionId", in: params) ?? "default"
+                let includeReads = boolParam("includeReads", in: request) ?? false
+                let from = try optionalStringParam("from", in: params)
+                let to = try optionalStringParam("to", in: params)
+                let exported = try history.exportScript(sessionID: sessionID, includeReads: includeReads, from: from, to: to)
+                var result: [String: JSONValue] = [
+                    "script": .string(exported.script),
+                    "actionCount": .int(exported.actionCount),
+                    "recordCount": .int(exported.recordCount)
+                ]
+                if let path = try optionalStringParam("path", in: params) {
+                    try exported.script.write(toFile: path, atomically: true, encoding: .utf8)
+                    result["path"] = .string(path)
+                }
+                return JSONRPCResponse(id: request.id, result: result)
+            } catch let error as JSONRPCError {
+                return JSONRPCResponse(id: request.id, error: error)
             } catch {
                 return JSONRPCResponse(id: request.id, error: .internalError(String(describing: error)))
             }
@@ -259,6 +321,13 @@ public struct CommandRouter {
             throw JSONRPCError.invalidParams("\(key) must be a string")
         }
         return string
+    }
+
+    private func requiredString(_ key: String, in params: [String: JSONValue]) throws -> String {
+        guard case let .string(value) = params[key] else {
+            throw JSONRPCError.invalidParams("Missing string parameter: \(key)")
+        }
+        return value
     }
 
     private func requiredLocatorParam(in request: JSONRPCRequest) throws -> AXLocator {

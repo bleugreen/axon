@@ -60,6 +60,32 @@ import Testing
     #expect(json["indexedNodes"]?[1]?["frame"]?["width"] == .double(30))
 }
 
+@Test func childrenPageJSONStartsHandlesAtRetainedBaseIndex() {
+    let children = AXChildrenPage(
+        snapshotID: SnapshotID("s12"),
+        parentHandle: "s12:4",
+        offset: 24,
+        limit: 2,
+        total: 30,
+        baseIndex: 42,
+        children: [
+            AXNode(role: "AXButton", title: "Tab 25", children: [
+                AXNode(role: "AXStaticText", title: "Selected")
+            ]),
+            AXNode(role: "AXButton", title: "Tab 26")
+        ]
+    )
+
+    let json = children.jsonValue
+
+    #expect(json["snapshot"] == .string("s12"))
+    #expect(json["parent"] == .string("s12:4"))
+    #expect(json["nextOffset"] == .int(26))
+    #expect(json["children"]?[0]?["handle"] == .string("s12:42"))
+    #expect(json["children"]?[0]?["children"]?[0]?["handle"] == .string("s12:43"))
+    #expect(json["children"]?[1]?["handle"] == .string("s12:44"))
+}
+
 @Test func sensitiveSnapshotRedactsValuesAndSecretLikeTextWithPrefixes() throws {
     let rawSecret = "sk-proj-abcdef1234567890SECRET"
     let snapshot = AppSnapshot(

@@ -32,6 +32,26 @@ public struct SnapshotObservationFormatter {
         return .object(observation)
     }
 
+    public func children(from childrenPage: JSONValue, frames: Bool) -> JSONValue {
+        guard case let .object(object) = childrenPage else {
+            return childrenPage
+        }
+
+        let snapshotID = string("snapshot", in: object) ?? "unknown"
+        let baseIndex = object["baseIndex"]?.intValue ?? 0
+        let observation: [String: JSONValue] = [
+            "format": .string("children"),
+            "snapshot": .string(snapshotID),
+            "parent": object["parent"] ?? .null,
+            "offset": object["offset"] ?? .int(0),
+            "limit": object["limit"] ?? .int(0),
+            "total": object["total"] ?? .int(0),
+            "nextOffset": object["nextOffset"] ?? .null,
+            "items": .array(compactForest(from: object["children"], snapshotID: snapshotID, frames: frames, baseIndex: baseIndex))
+        ]
+        return .object(observation)
+    }
+
     public func text(from observation: JSONValue) -> String {
         guard case let .object(object) = observation else {
             let data = (try? JSONEncoder().encode(observation)) ?? Data("null".utf8)
@@ -58,8 +78,24 @@ public struct SnapshotObservationFormatter {
             let height = screenshot["height"]?.scalarText ?? "?"
             lines.append("screenshot: \(width)x\(height)")
         }
-        lines.append("tree:")
         if case let .array(nodes)? = object["tree"] {
+            lines.append("tree:")
+            for node in nodes {
+                appendText(node, depth: 1, lines: &lines)
+            }
+        } else if case let .array(nodes)? = object["items"] {
+            if let parent = object["parent"]?.scalarText {
+                lines.append("parent: \(parent)")
+            }
+            if let offset = object["offset"]?.intValue,
+               let limit = object["limit"]?.intValue,
+               let total = object["total"]?.intValue {
+                lines.append("range: \(offset)..<\(min(offset + limit, total)) of \(total)")
+            }
+            if let nextOffset = object["nextOffset"]?.scalarText {
+                lines.append("nextOffset: \(nextOffset)")
+            }
+            lines.append("children:")
             for node in nodes {
                 appendText(node, depth: 1, lines: &lines)
             }
@@ -68,10 +104,14 @@ public struct SnapshotObservationFormatter {
     }
 
     private func compactForest(from value: JSONValue?, snapshotID: String, frames: Bool) -> [JSONValue] {
+        compactForest(from: value, snapshotID: snapshotID, frames: frames, baseIndex: 0)
+    }
+
+    private func compactForest(from value: JSONValue?, snapshotID: String, frames: Bool, baseIndex: Int) -> [JSONValue] {
         guard case let .array(nodes)? = value else {
             return []
         }
-        var nextIndex = 0
+        var nextIndex = baseIndex
         return nodes.flatMap { compactNodes(from: $0, snapshotID: snapshotID, frames: frames, nextIndex: &nextIndex) }
     }
 
@@ -101,19 +141,31 @@ public struct SnapshotObservationFormatter {
             truncationReasons.append(truncation)
         }
         coalesceTextChildren(&compactChildren, parentRole: role, parentLabel: &label)
+        label = meaningfulLabel(label)
 
-        guard shouldInclude(object, role: role, label: label, actions: actions, truncationReasons: truncationReasons) else {
+        guard shouldInclude(
+            object,
+            role: role,
+            label: label,
+            actions: actions,
+            truncationReasons: truncationReasons,
+            hasChildren: !compactChildren.isEmpty,
+            childCount: compactChildren.count
+        ) else {
             return compactChildren
         }
 
-        if compactChildren.count > Self.maxObservedChildren {
+        let outputRole = outputRole(for: role, label: label)
+        let handle = "\(snapshotID):\(index)"
+        let more = continuation(from: truncationReasons, handle: handle)
+        if compactChildren.count > Self.maxObservedChildren, more != nil {
             truncationReasons.append("showing \(Self.maxObservedChildren) of \(compactChildren.count) children")
             compactChildren = Array(compactChildren.prefix(Self.maxObservedChildren))
         }
 
         var compact: [String: JSONValue] = [
-            "handle": .string("\(snapshotID):\(index)"),
-            "role": .string(role),
+            "handle": .string(handle),
+            "role": .string(outputRole),
             "children": .array(compactChildren)
         ]
         if let label {
@@ -124,6 +176,9 @@ public struct SnapshotObservationFormatter {
         }
         if !truncationReasons.isEmpty {
             compact["truncated"] = .string(truncationReasons.joined(separator: "; "))
+        }
+        if let more {
+            compact["more"] = more
         }
         if frames, let frame = object["frame"], frame != .null {
             compact["frame"] = frame
@@ -139,7 +194,9 @@ public struct SnapshotObservationFormatter {
         role: String,
         label: String?,
         actions: [String],
-        truncationReasons: [String]
+        truncationReasons: [String],
+        hasChildren: Bool,
+        childCount: Int
     ) -> Bool {
         if isFarOffscreen(object["frame"]) {
             return false
@@ -150,15 +207,72 @@ public struct SnapshotObservationFormatter {
         if label != nil {
             return true
         }
-        if !isStructural(role), (actions.contains("click") || actions.contains("set_value")) {
+        if actions.contains("set_value") {
             return true
         }
+        if actions.contains("click"), isClickAffordance(role) {
+            return role != "link" || label != nil || hasChildren
+        }
+        if role == "row" {
+            return hasChildren
+        }
+        if role == "cell" {
+            return childCount > 1
+        }
         switch role {
-        case "window", "field", "button", "link", "menu", "list", "row", "cell", "heading", "text", "tabgroup", "radiobutton", "checkbox", "menubutton":
+        case "window", "field", "button", "link", "menu", "heading", "tabgroup", "radiobutton", "checkbox", "menubutton":
             return true
+        case "list":
+            return hasChildren
         default:
             return false
         }
+    }
+
+    private func outputRole(for role: String, label: String?) -> String {
+        if role == "row" {
+            return "item"
+        }
+        if (role == "row" || role == "cell"), label != nil {
+            return "group"
+        }
+        return role
+    }
+
+    private func continuation(from truncationReasons: [String], handle: String) -> JSONValue? {
+        for reason in truncationReasons {
+            if let range = reason.range(of: #"children limited to ([0-9]+) of ([0-9]+)"#, options: .regularExpression) {
+                let match = String(reason[range])
+                let values = match
+                    .split(whereSeparator: { !$0.isNumber })
+                    .compactMap { Int($0) }
+                guard values.count >= 2 else {
+                    continue
+                }
+                return .object([
+                    "tool": .string("get_children"),
+                    "target": .string(handle),
+                    "offset": .int(values[0]),
+                    "limit": .int(values[0]),
+                    "total": .int(values[1])
+                ])
+            }
+        }
+        return nil
+    }
+
+    private func meaningfulLabel(_ label: String?) -> String? {
+        guard let label else {
+            return nil
+        }
+        let trimmed = label.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            return nil
+        }
+        if trimmed.unicodeScalars.allSatisfy({ CharacterSet.alphanumerics.inverted.contains($0) }) {
+            return nil
+        }
+        return trimmed
     }
 
     private func coalesceTextChildren(
@@ -235,8 +349,7 @@ public struct SnapshotObservationFormatter {
             return false
         }
         let x = frame["x"]?.doubleValue
-        let y = frame["y"]?.doubleValue
-        return (x != nil && x! < -100) || (y != nil && y! < -100)
+        return x != nil && x! < -1_000
     }
 
     private func label(in object: [String: JSONValue]) -> String? {
@@ -373,10 +486,22 @@ public struct SnapshotObservationFormatter {
                 line += " [\(actionText)]"
             }
         }
-        if let truncated = string("truncated", in: object) {
+        let hasContinuation = object["more"]?.objectValue != nil
+        if !hasContinuation, let truncated = string("truncated", in: object) {
             line += " # \(truncated)"
         }
         lines.append(line)
+        if let more = object["more"]?.objectValue {
+            let target = more["target"]?.scalarText ?? handle
+            let offset = more["offset"]?.scalarText ?? "?"
+            let limit = more["limit"]?.scalarText ?? "?"
+            let total = more["total"]?.scalarText
+            var moreLine = "\(indent)  more: get_children target=\(target) offset=\(offset) limit=\(limit)"
+            if let total {
+                moreLine += " total=\(total)"
+            }
+            lines.append(moreLine)
+        }
 
         if case let .array(children)? = object["children"] {
             for child in children {
@@ -439,5 +564,12 @@ private extension JSONValue {
         case .string, .bool, .object, .array, .null:
             return nil
         }
+    }
+
+    var intValue: Int? {
+        guard case let .int(value) = self else {
+            return nil
+        }
+        return value
     }
 }

@@ -93,6 +93,34 @@ public struct AppSnapshot: Codable, Equatable, Sendable {
     }
 }
 
+public struct AXChildrenPage: Codable, Equatable, Sendable {
+    public let snapshotID: SnapshotID
+    public let parentHandle: String
+    public let offset: Int
+    public let limit: Int
+    public let total: Int
+    public let baseIndex: Int
+    public let children: [AXNode]
+
+    public init(
+        snapshotID: SnapshotID,
+        parentHandle: String,
+        offset: Int,
+        limit: Int,
+        total: Int,
+        baseIndex: Int,
+        children: [AXNode]
+    ) {
+        self.snapshotID = snapshotID
+        self.parentHandle = parentHandle
+        self.offset = offset
+        self.limit = limit
+        self.total = total
+        self.baseIndex = baseIndex
+        self.children = children
+    }
+}
+
 public struct IndexedAXNode: Codable, Equatable, Sendable {
     public let index: Int
     public let node: AXNode

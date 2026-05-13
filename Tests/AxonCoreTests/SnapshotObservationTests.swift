@@ -28,8 +28,8 @@ import Testing
     let tabGroup = window?["children"]?[0]
 
     #expect(tabGroup?["role"] == .string("tabgroup"))
-    #expect(tabGroup?["children"]?.arrayValue?.count == 24)
-    #expect(tabGroup?["truncated"] == .string("showing 24 of 30 children"))
+    #expect(tabGroup?["children"]?.arrayValue?.count == 30)
+    #expect(tabGroup?["truncated"] == nil)
     #expect(window?["children"]?[1]?["role"] == .string("heading"))
     #expect(window?["children"]?[1]?["label"] == .string("Front page story"))
 }
@@ -88,6 +88,50 @@ import Testing
     #expect(row?["children"]?[0]?["label"] == .string("Story title"))
 }
 
+@Test func observationDropsEmptyRowsCellsAndDecorativeLabels() {
+    let snapshot = AppSnapshot(
+        id: SnapshotID("obs"),
+        app: AppIdentity(bundleIdentifier: "com.example.App", name: "Example", processIdentifier: 7),
+        windows: [
+            AXNode(role: "AXWindow", title: "Main", children: [
+                AXNode(role: "AXList", children: [
+                    AXNode(role: "AXRow"),
+                    AXNode(role: "AXRow", children: [
+                        AXNode(role: "AXCell"),
+                        AXNode(role: "AXCell", title: "( )"),
+                        AXNode(role: "AXCell", children: [
+                            AXNode(role: "AXLink", title: "Story title", actions: ["AXPress"])
+                        ]),
+                        AXNode(role: "AXCell", children: [
+                            AXNode(role: "AXStaticText", title: "|"),
+                            AXNode(role: "AXLink", title: "[–]", actions: ["AXPress"])
+                        ]),
+                        AXNode(role: "AXCell", children: [
+                            AXNode(role: "AXStaticText", title: "42 points"),
+                            AXNode(role: "AXStaticText", title: "by alice"),
+                            AXNode(role: "AXLink", title: "13 comments", actions: ["AXPress"])
+                        ])
+                    ])
+                ])
+            ])
+        ],
+        screenshot: nil
+    )
+
+    let observation = SnapshotObservationFormatter().observation(from: snapshot.jsonValue, frames: false)
+    let text = SnapshotObservationFormatter().text(from: observation)
+
+    #expect(text.contains("link \"Story title\" [click]"))
+    #expect(text.contains("item"))
+    #expect(text.contains("group \"42 points by alice\""))
+    #expect(text.contains("link \"13 comments\" [click]"))
+    #expect(!text.contains("row"))
+    #expect(!text.contains("cell"))
+    #expect(!text.contains("\"( )\""))
+    #expect(!text.contains("text"))
+    #expect(!text.contains("\"[–]\""))
+}
+
 @Test func observationIgnoresAXUIElementPointerLabels() {
     let snapshot = AppSnapshot(
         id: SnapshotID("obs"),
@@ -112,6 +156,37 @@ import Testing
     #expect(tabGroup?["truncated"] == .string("children limited to 24 of 92"))
 }
 
+@Test func observationShowsContinuationDoorForCaptureTruncation() {
+    let snapshot = AppSnapshot(
+        id: SnapshotID("obs"),
+        app: AppIdentity(bundleIdentifier: "org.mozilla.firefox", name: "Firefox", processIdentifier: 7),
+        windows: [
+            AXNode(role: "AXWindow", title: "Firefox", children: [
+                AXNode(
+                    role: "AXGroup",
+                    title: "Comment thread",
+                    truncationReason: "children limited to 24 of 154",
+                    children: [
+                        AXNode(role: "AXLink", title: "reply", actions: ["AXPress"])
+                    ]
+                )
+            ])
+        ],
+        screenshot: nil
+    )
+
+    let observation = SnapshotObservationFormatter().observation(from: snapshot.jsonValue, frames: false)
+    let thread = observation["tree"]?[0]?["children"]?[0]
+    let text = SnapshotObservationFormatter().text(from: observation)
+
+    #expect(thread?["more"]?["tool"] == .string("get_children"))
+    #expect(thread?["more"]?["target"] == .string("obs:1"))
+    #expect(thread?["more"]?["offset"] == .int(24))
+    #expect(thread?["more"]?["total"] == .int(154))
+    #expect(text.contains("more: get_children target=obs:1 offset=24 limit=24 total=154"))
+    #expect(!text.contains("children limited to 24 of 154"))
+}
+
 @Test func observationDoesNotExposeClickOnHeadings() {
     let snapshot = AppSnapshot(
         id: SnapshotID("obs"),
@@ -130,6 +205,36 @@ import Testing
     #expect(heading?["role"] == .string("heading"))
     #expect(heading?["label"] == .string("Overview"))
     #expect(heading?["actions"] == nil)
+}
+
+@Test func childListObservationContainsOnlyRequestedChildrenAndPagingCursor() {
+    let children = AXChildrenPage(
+        snapshotID: SnapshotID("s12"),
+        parentHandle: "s12:4",
+        offset: 24,
+        limit: 2,
+        total: 30,
+        baseIndex: 42,
+        children: [
+            AXNode(role: "AXButton", title: "Tab 25", actions: ["AXPress"]),
+            AXNode(role: "AXButton", title: "Tab 26", actions: ["AXPress"])
+        ]
+    )
+
+    let observation = SnapshotObservationFormatter().children(from: children.jsonValue, frames: false)
+    let text = SnapshotObservationFormatter().text(from: observation)
+
+    #expect(observation["format"] == .string("children"))
+    #expect(observation["parent"] == .string("s12:4"))
+    #expect(observation["offset"] == .int(24))
+    #expect(observation["nextOffset"] == .int(26))
+    #expect(observation["items"]?[0]?["handle"] == .string("s12:42"))
+    #expect(observation["items"]?[1]?["handle"] == .string("s12:43"))
+    #expect(observation["tree"] == nil)
+    #expect(text.contains("children:"))
+    #expect(text.contains("range: 24..<26 of 30"))
+    #expect(text.contains("nextOffset: 26"))
+    #expect(text.contains("s12:42 button \"Tab 25\""))
 }
 
 private extension JSONValue {

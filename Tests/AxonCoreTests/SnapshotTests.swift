@@ -36,10 +36,6 @@ import ApplicationServices
     #expect(node.jsonValue["truncationReason"] == .string("children limited to 25"))
 }
 
-@Test func defaultCaptureDepthReachesTypicalBrowserContent() {
-    #expect(AXSnapshotCapturer.defaultMaxDepth >= 14)
-}
-
 @Test func defaultCaptureSiblingBudgetPagesBroadContainers() {
     #expect(AXSnapshotCapturer.defaultMaxChildrenPerNode >= 20)
     #expect(AXSnapshotCapturer.defaultMaxChildrenPerNode <= 24)

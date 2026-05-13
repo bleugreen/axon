@@ -1,17 +1,19 @@
 # Tool Surface
 
-Axon exposes the same core commands through the CLI, the daemon JSON-RPC socket, and MCP. MCP tool names are plain because clients already namespace by server.
+Axon exposes the same core commands through the daemon JSON-RPC socket, the CLI, and MCP. The CLI and MCP are clients of the daemon command surface; they should not maintain separate accessibility or screenshot implementations. MCP tool names are plain because clients already namespace by server.
 
 ## MCP Tools
 
 ```text
-list_apps()
+list_apps(format?)
 request_accessibility()
 get_app_state(app, screenshot?, sensitive?, format?, frames?)
+get_children(target, offset?, limit?, format?, frames?)
 get_screenshot(app)
 resolve(app, locator)
 changed_since(snapshotId, sensitive?)
-run_plan(source? | path? | plan?, args?, dryRun?)
+run_batch(actions? | source? | path? | batch?, continueOnError?, dryRun?)
+export_script(sessionId?, from?, to?, path?, includeReads?)
 click(target)
 scroll(target?, app?, deltaX?, deltaY?)
 drag(from, to, app?, durationMs?)
@@ -24,13 +26,15 @@ press_key(app, key)
 ## CLI Commands
 
 ```sh
-axon apps
-axon snapshot <app> [--screenshot]
+axon apps [--details]
+axon snapshot <app> [--screenshot] [--sensitive] [--frames]
 axon snapshot-json <app> [--compact] [--screenshot] [--sensitive]
 axon screenshot <app>
 axon resolve <app> '<locator-json>'
 axon changed-since <snapshot-id>
-axon run <path>|--source '<yaml-or-json>' [--dry-run] [--arg key=value]
+axon children <handle> [--offset n] [--limit n] [--frames]
+axon run <path.axn>|--source '<yaml-or-json>' [--dry-run] [--continue-on-error]
+axon export-script [--session id] [--from call] [--to call] [--path file.axn] [--include-reads]
 axon click '<handle-or-target-json>'
 axon scroll [--app app] [--target '<target-json-or-handle>'] [--dx n] [--dy n]
 axon drag [--app app] [--duration-ms n] '<from-json-or-handle>' '<to-json-or-handle>'
@@ -41,6 +45,16 @@ axon press-key <app> <key>
 ```
 
 ## App Queries
+
+`list_apps` is compact by default. It returns app names rather than full bundle/pid records:
+
+```text
+apps: 3 running, 2 names
+- Example (2)
+- Example Helper
+```
+
+Use `format: debug` in MCP or `axon apps --details` in the CLI when bundle identifiers or process ids are needed.
 
 `app` can be a bundle id, pid, exact app name, or partial app name.
 
@@ -85,6 +99,16 @@ Observation output omits frame rectangles by default. Set `frames: true` only wh
 
 Observation output is planned around useful leaves, not raw AX traversal order. Axon collapses anonymous wrapper chains, coalesces adjacent static text into parent summaries, omits pointer-like AX debug labels, and pages broad sibling sets such as browser tab lists. The default capture sibling page is 24 children per node.
 
+When a node is truncated, fetch the next slice of that node with `get_children`. This returns only that node's child list, not a whole app snapshot:
+
+```yaml
+target: s12:4
+offset: 24
+limit: 24
+```
+
+The result has `items` and `nextOffset`. Call again with `offset: nextOffset` to continue.
+
 ## Screenshots
 
 Screenshots are opt-in. In MCP responses, Axon moves PNG bytes into MCP image content blocks and redacts `base64Data` from structured JSON. Structured screenshot fields still include width, height, media type, and `contentTransport: "mcp_image"`.
@@ -122,6 +146,8 @@ role: AXButton
 subrole: AXStandardButton
 title:
   contains: Issues
+label:
+  contains: Issues
 value:
   exact: Draft
 description:
@@ -131,11 +157,24 @@ actions:
   - AXPress
 ancestors:
   - role: AXWindow
-    title:
+    label:
       contains: cairn
 ```
 
-Text fields can be a string for case-insensitive exact match:
+`title`, `value`, `description`, `identifier`, and `help` match raw AX attributes. `label` matches the same display label Axon shows in observations, trying title, value, description, identifier, then help. Prefer `label` when writing plans from observed output, especially for ancestors.
+
+Ancestor matching is transitive and ordered. This matches a URL bar nested below Firefox's Navigation toolbar even if intermediate groups exist:
+
+```yaml
+role: AXComboBox
+label:
+  contains: example.com
+ancestors:
+  - role: AXToolbar
+    label: Navigation
+```
+
+Text matchers can be a string for case-insensitive exact match:
 
 ```yaml
 title: Issues
@@ -184,17 +223,66 @@ Point targets are screen coordinates and should be treated as an escape hatch. T
 
 `perform_action` runs a named AX action such as `AXPress` or `AXShowMenu`.
 
-`set_value` sets the AX value for a settable element.
+`set_value` sets the AX value for a settable element. Prefer it for writable fields such as URL bars and text fields because it uses AXValue directly and avoids keyboard timing/focus races.
 
-`type_text` and `press_key` activate the app and post keyboard events.
+`type_text` and `press_key` activate the app and post keyboard events. Use them when AXValue is not writable or when the workflow specifically needs keystrokes.
 
 `scroll` does not post wheel events. It resolves a scroll surface from the target or app, finds an offscreen descendant in the requested direction, and requests `AXScrollToVisible`. A successful result means the AX action succeeded, not that a specific pixel delta was applied.
 
-`drag` currently posts pointer events between resolved points. It reports dispatch success, not semantic success. Use plan assertions or fresh snapshots around drag until visual target resolution and postconditions are implemented.
+Primitive action success means dispatch success, not goal success. Use plan assertions or fresh snapshots around actions whose result matters, especially drag and keyboard-heavy flows.
+
+## Batches
+
+`run_batch` executes a sequence of existing tool calls. Each action uses the same shape as the standalone tool:
+
+```yaml
+actions:
+  - tool: set_value
+    target: s12:19
+    value: Mitch
+  - tool: click
+    target:
+      app: cairn
+      locator:
+        role: AXButton
+        label: Save
+```
+
+The same schema can be saved as a `.axn` file and run with:
+
+```sh
+axon run ./workflow.axn
+```
+
+Use batches for simple ordered composition. History/export generates these files from observed calls rather than expecting agents to hand-author scripts from scratch.
+
+## History Export
+
+Axon records recent tool calls in daemon memory. Calls in the same session form a parent chain, so an interaction can be exported later as an editable `.axn` batch.
+
+Export the default session:
+
+```sh
+axon export-script --path ./workflow.axn
+```
+
+Export over MCP:
+
+```json
+{
+  "sessionId": "default",
+  "from": "c12",
+  "to": "c18",
+  "path": "/Users/mitch/projects/app/workflow.axn",
+  "includeReads": false
+}
+```
+
+History may include reads such as `get_app_state`, `resolve`, and `get_children`, but export omits read/context calls by default. Use `includeReads: true` or `--include-reads` only when the reads should become part of the replayed script.
 
 ## Change Detection
 
-`changed_since(snapshotId)` asks whether the app/window surface changed since a retained snapshot. It uses observer events when available and always compares a fresh coarse app/window signature.
+`changed_since(snapshotId)` asks whether the app/window surface changed since a retained snapshot. It uses observer events when available and always compares a fresh coarse app/window signature. It is not a navigation-settled signal; for navigation, prefer waiting on a stable URL/value locator such as an `AXComboBox` value or a page-specific heading.
 
 Focus-only interaction should not count as a meaningful layout change unless the app/window signature changes.
 

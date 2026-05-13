@@ -177,14 +177,16 @@ public struct AutomationPlanExecutor {
                 try screenshot(params, state: state)
             case "resolve":
                 try resolve(params, state: state)
-        case "click":
-            try action(op: "click", params: params, state: state)
-        case "scroll":
-            try action(op: "scroll", params: params, state: state)
-        case "drag":
-            try action(op: "drag", params: params, state: state)
-        case "perform_action":
-            try action(op: "perform_action", params: params, state: state)
+            case "get_children":
+                try getChildren(params, state: state)
+            case "click":
+                try action(op: "click", params: params, state: state)
+            case "scroll":
+                try action(op: "scroll", params: params, state: state)
+            case "drag":
+                try action(op: "drag", params: params, state: state)
+            case "perform_action":
+                try action(op: "perform_action", params: params, state: state)
             case "set_value":
                 try action(op: "set_value", params: params, state: state)
             case "type_text":
@@ -260,6 +262,42 @@ public struct AutomationPlanExecutor {
             "op": .string("resolve"),
             "success": .bool(true),
             "status": resolution["status"] ?? .null
+        ]))
+    }
+
+    private func getChildren(_ params: [String: JSONValue], state: AutomationPlanState) throws {
+        let target: JSONValue
+        if let rawTarget = params["target"] {
+            target = state.resolved(rawTarget)
+        } else if let rawHandle = params["handle"] {
+            target = state.resolved(rawHandle)
+        } else {
+            throw AutomationPlanError.invalidParams("get_children requires target")
+        }
+        guard case let .string(handle) = target else {
+            throw AutomationPlanError.invalidParams("get_children target must be a snapshot handle string")
+        }
+
+        var requestParams: [String: JSONValue] = ["target": .string(handle)]
+        if let offset = int("offset", in: params) {
+            requestParams["offset"] = .int(offset)
+        }
+        if let limit = int("limit", in: params) {
+            requestParams["limit"] = .int(limit)
+        }
+        let response = commandHandler(JSONRPCRequest(
+            id: .string("plan.get_children"),
+            method: "get_children",
+            params: .object(requestParams)
+        ))
+        let children = try resultValue("children", in: response)
+        bindOutput(params, value: children, state: state)
+        state.record(.object([
+            "op": .string("get_children"),
+            "success": .bool(true),
+            "target": .string(handle),
+            "offset": children["offset"] ?? requestParams["offset"] ?? .int(0),
+            "nextOffset": children["nextOffset"] ?? .null
         ]))
     }
 

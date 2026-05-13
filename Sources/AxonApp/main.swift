@@ -13,7 +13,7 @@ final class AxonAppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendabl
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
-        statusItem.button?.title = "Axon"
+        configureStatusItem()
         ScreenCaptureRuntime.bootstrapSynchronously()
         startServer()
         installMenu()
@@ -26,6 +26,23 @@ final class AxonAppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendabl
 
     func applicationWillTerminate(_ notification: Notification) {
         refreshTimer?.invalidate()
+    }
+
+    private func configureStatusItem() {
+        statusItem.length = NSStatusItem.squareLength
+        guard let button = statusItem.button else {
+            return
+        }
+        guard let image = NSImage(named: "AxonMenuBarTemplate") else {
+            button.title = "Axon"
+            return
+        }
+        image.isTemplate = true
+        image.size = NSSize(width: 22, height: 22)
+        button.title = ""
+        button.image = image
+        button.imagePosition = .imageOnly
+        button.toolTip = "Axon"
     }
 
     private func startServer() {

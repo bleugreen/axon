@@ -541,6 +541,53 @@ import Testing
     #expect(error?["resolution"]?["candidates"]?[1]?["handle"] == .string("plan-ambiguous:2"))
 }
 
+@Test func runPlanGetsChildrenForRetainedHandle() throws {
+    var requests: [JSONRPCRequest] = []
+    let children = AXChildrenPage(
+        snapshotID: SnapshotID("s12"),
+        parentHandle: "s12:4",
+        offset: 24,
+        limit: 2,
+        total: 30,
+        baseIndex: 42,
+        children: [
+            AXNode(role: "AXButton", title: "Tab 25", actions: ["AXPress"])
+        ]
+    )
+    let executor = AutomationPlanExecutor { request in
+        requests.append(request)
+        return JSONRPCResponse(id: request.id, result: ["children": children.jsonValue])
+    }
+
+    let result = try executor.run(params: [
+        "source": .string("""
+        version: 1
+        steps:
+          - get_children:
+              target: s12:4
+              offset: 24
+              limit: 2
+              as: tabs
+        """)
+    ])
+
+    #expect(requests == [
+        JSONRPCRequest(
+            id: .string("plan.get_children"),
+            method: "get_children",
+            params: .object([
+                "target": .string("s12:4"),
+                "offset": .int(24),
+                "limit": .int(2)
+            ])
+        )
+    ])
+    #expect(result["success"] == .bool(true))
+    #expect(result["trace"]?[0]?["op"] == .string("get_children"))
+    #expect(result["trace"]?[0]?["nextOffset"] == .int(26))
+    #expect(result["outputs"]?["tabs"]?["children"]?[0]?["handle"] == .string("s12:42"))
+}
+
 @Test func documentationPlanExamplesParse() throws {
     let packageRoot = URL(fileURLWithPath: #filePath)
         .deletingLastPathComponent()

@@ -32,6 +32,7 @@ public extension AXLocator {
             role: try optionalString("role", in: object),
             subrole: try optionalString("subrole", in: object),
             title: try optionalTextMatch("title", in: object),
+            label: try optionalTextMatch("label", in: object),
             value: try optionalTextMatch("value", in: object),
             description: try optionalTextMatch("description", in: object),
             identifier: try optionalTextMatch("identifier", in: object),
@@ -86,7 +87,8 @@ private func ancestorArray(_ key: String, in object: [String: JSONValue]) throws
         }
         return AXAncestorLocator(
             role: try optionalString("role", in: ancestor),
-            title: try optionalTextMatch("title", in: ancestor)
+            title: try optionalTextMatch("title", in: ancestor),
+            label: try optionalTextMatch("label", in: ancestor)
         )
     }
 }

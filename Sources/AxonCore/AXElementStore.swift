@@ -62,6 +62,22 @@ public final class AXElementStore: @unchecked Sendable {
         pruneOldSnapshots()
     }
 
+    public func append(snapshotID: SnapshotID, elements newElements: [AXUIElement]) throws -> Int {
+        lock.lock()
+        defer { lock.unlock() }
+
+        guard var elements = elementsBySnapshot[snapshotID] else {
+            throw AXElementStoreError.missingSnapshot(snapshotID)
+        }
+        let baseIndex = elements.count
+        elements.append(contentsOf: newElements)
+        elementsBySnapshot[snapshotID] = elements
+        snapshotOrder.removeAll { $0 == snapshotID }
+        snapshotOrder.append(snapshotID)
+        pruneOldSnapshots()
+        return baseIndex
+    }
+
     public func element(for target: String) throws -> AXUIElement {
         let handle: SnapshotHandle
         do {

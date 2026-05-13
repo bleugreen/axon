@@ -17,18 +17,14 @@ public enum SnapshotCaptureError: Error, CustomStringConvertible {
 }
 
 public struct AXSnapshotCapturer {
-    public static let defaultMaxDepth = 14
     public static let defaultMaxChildrenPerNode = 24
-    public static let defaultMaxNodes = 400
     public static let defaultMaxWindows = 8
     public static let defaultMessagingTimeout: Float = 0.2
 
     private let appResolver: AppResolver
     private let screenshotCapturer: ScreenshotCapturer
     private let elementStore: AXElementStore?
-    private let maxDepth: Int
     private let maxChildrenPerNode: Int
-    private let maxNodes: Int
     private let maxWindows: Int
     private let messagingTimeout: Float
 
@@ -36,18 +32,14 @@ public struct AXSnapshotCapturer {
         appResolver: AppResolver = AppResolver(),
         screenshotCapturer: ScreenshotCapturer = ScreenshotCapturer(),
         elementStore: AXElementStore? = nil,
-        maxDepth: Int = Self.defaultMaxDepth,
         maxChildrenPerNode: Int = Self.defaultMaxChildrenPerNode,
-        maxNodes: Int = Self.defaultMaxNodes,
         maxWindows: Int = Self.defaultMaxWindows,
         messagingTimeout: Float = Self.defaultMessagingTimeout
     ) {
         self.appResolver = appResolver
         self.screenshotCapturer = screenshotCapturer
         self.elementStore = elementStore
-        self.maxDepth = maxDepth
         self.maxChildrenPerNode = maxChildrenPerNode
-        self.maxNodes = maxNodes
         self.maxWindows = maxWindows
         self.messagingTimeout = messagingTimeout
     }
@@ -60,16 +52,12 @@ public struct AXSnapshotCapturer {
         let app = try appResolver.resolve(query)
         let appElement = AXUIElementCreateApplication(app.processIdentifier)
         AXUIElementSetMessagingTimeout(appElement, messagingTimeout)
-        var remainingNodes = maxNodes
         var retainedElements: [AXUIElement] = []
         let snapshotID = SnapshotID.next()
         let windows = windowElements(from: appElement)
             .prefix(maxWindows)
-            .compactMap { window -> AXNode? in
-                guard remainingNodes > 0 else {
-                    return nil
-                }
-                return serialize(window, depth: 0, remainingNodes: &remainingNodes, retainedElements: &retainedElements)
+            .map { window -> AXNode in
+                serialize(window, retainedElements: &retainedElements)
             }
         let windowCount = windowCount(from: appElement)
         let truncationReason = windowCount > windows.count ? "windows limited to \(maxWindows) of \(windowCount)" : nil
@@ -95,8 +83,36 @@ public struct AXSnapshotCapturer {
         return snapshot
     }
 
+    public func captureChildren(parentHandle: String, offset: Int, limit: Int) throws -> AXChildrenPage {
+        guard let elementStore else {
+            throw AXElementStoreError.missingSnapshot(SnapshotID("unknown"))
+        }
+        let handle = try SnapshotHandle(parentHandle)
+        let parent = try elementStore.element(for: handle)
+        AXUIElementSetMessagingTimeout(parent, messagingTimeout)
+
+        let total = attributeValueCount(kAXChildrenAttribute, from: parent)
+        let offset = min(max(0, offset), total)
+        let limit = min(max(1, limit), maxChildrenPerNode)
+        let childElements = rangedElements(kAXChildrenAttribute, from: parent, start: offset, limit: min(limit, total - offset))
+        var retainedElements: [AXUIElement] = []
+        let children = childElements.map { child -> AXNode in
+            serialize(child, retainedElements: &retainedElements)
+        }
+        let baseIndex = try elementStore.append(snapshotID: handle.snapshotID, elements: retainedElements)
+        return AXChildrenPage(
+            snapshotID: handle.snapshotID,
+            parentHandle: parentHandle,
+            offset: offset,
+            limit: limit,
+            total: total,
+            baseIndex: baseIndex,
+            children: children
+        )
+    }
+
     private func windowElements(from appElement: AXUIElement) -> [AXUIElement] {
-        rangedElements(kAXWindowsAttribute, from: appElement, limit: maxWindows)
+        rangedElements(kAXWindowsAttribute, from: appElement, start: 0, limit: maxWindows)
     }
 
     private func windowCount(from appElement: AXUIElement) -> Int {
@@ -105,13 +121,10 @@ public struct AXSnapshotCapturer {
 
     private func serialize(
         _ element: AXUIElement,
-        depth: Int,
-        remainingNodes: inout Int,
         retainedElements: inout [AXUIElement]
     ) -> AXNode {
         AXUIElementSetMessagingTimeout(element, messagingTimeout)
         retainedElements.append(element)
-        remainingNodes -= 1
 
         let role: String = copyAttribute(kAXRoleAttribute, from: element) ?? "AXUnknown"
         let subrole: String? = copyAttribute(kAXSubroleAttribute, from: element)
@@ -124,27 +137,13 @@ public struct AXSnapshotCapturer {
         let focused: Bool? = copyAttribute(kAXFocusedAttribute, from: element)
         let frame = frame(from: element)
         let actions = actionNames(for: element)
-        let children: [AXNode]
         var truncationReasons: [String] = []
-        if depth >= maxDepth || remainingNodes <= 0 {
-            children = []
-            if depth >= maxDepth {
-                truncationReasons.append("max depth \(maxDepth) reached")
-            }
-            if remainingNodes <= 0 {
-                truncationReasons.append("node budget \(maxNodes) exhausted")
-            }
-        } else {
-            let childCount = attributeValueCount(kAXChildrenAttribute, from: element)
-            if childCount > maxChildrenPerNode {
-                truncationReasons.append("children limited to \(maxChildrenPerNode) of \(childCount)")
-            }
-            children = childElements(from: element).compactMap { child in
-                guard remainingNodes > 0 else {
-                    return nil
-                }
-                return serialize(child, depth: depth + 1, remainingNodes: &remainingNodes, retainedElements: &retainedElements)
-            }
+        let childCount = attributeValueCount(kAXChildrenAttribute, from: element)
+        if childCount > maxChildrenPerNode {
+            truncationReasons.append("children limited to \(maxChildrenPerNode) of \(childCount)")
+        }
+        let children = childElements(from: element).map { child in
+            serialize(child, retainedElements: &retainedElements)
         }
 
         return AXNode(
@@ -165,7 +164,7 @@ public struct AXSnapshotCapturer {
     }
 
     private func childElements(from element: AXUIElement) -> [AXUIElement] {
-        rangedElements(kAXChildrenAttribute, from: element, limit: maxChildrenPerNode)
+        rangedElements(kAXChildrenAttribute, from: element, start: 0, limit: maxChildrenPerNode)
     }
 
     private func attributeValueCount(_ attribute: String, from element: AXUIElement) -> Int {
@@ -176,14 +175,15 @@ public struct AXSnapshotCapturer {
         return max(0, count)
     }
 
-    private func rangedElements(_ attribute: String, from element: AXUIElement, limit: Int) -> [AXUIElement] {
-        let count = min(attributeValueCount(attribute, from: element), limit)
+    private func rangedElements(_ attribute: String, from element: AXUIElement, start: Int, limit: Int) -> [AXUIElement] {
+        let available = max(0, attributeValueCount(attribute, from: element) - start)
+        let count = min(available, limit)
         guard count > 0 else {
             return []
         }
 
         var values: CFArray?
-        guard AXUIElementCopyAttributeValues(element, attribute as CFString, 0, count, &values) == .success else {
+        guard AXUIElementCopyAttributeValues(element, attribute as CFString, start, count, &values) == .success else {
             return []
         }
         return (values as? [AXUIElement]) ?? []

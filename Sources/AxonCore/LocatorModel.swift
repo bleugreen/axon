@@ -35,10 +35,12 @@ public enum TextMatch: Codable, Equatable, Sendable {
 public struct AXAncestorLocator: Codable, Equatable, Sendable {
     public let role: String?
     public let title: TextMatch?
+    public let label: TextMatch?
 
-    public init(role: String? = nil, title: TextMatch? = nil) {
+    public init(role: String? = nil, title: TextMatch? = nil, label: TextMatch? = nil) {
         self.role = role
         self.title = title
+        self.label = label
     }
 
     func matches(_ node: AXNode) -> Bool {
@@ -46,6 +48,9 @@ public struct AXAncestorLocator: Codable, Equatable, Sendable {
             return false
         }
         if let title, !title.matches(node.title) {
+            return false
+        }
+        if let label, !label.matches(node.displayLabel) {
             return false
         }
         return true
@@ -56,6 +61,7 @@ public struct AXLocator: Codable, Equatable, Sendable {
     public let role: String?
     public let subrole: String?
     public let title: TextMatch?
+    public let label: TextMatch?
     public let value: TextMatch?
     public let description: TextMatch?
     public let identifier: TextMatch?
@@ -66,6 +72,7 @@ public struct AXLocator: Codable, Equatable, Sendable {
         role: String? = nil,
         subrole: String? = nil,
         title: TextMatch? = nil,
+        label: TextMatch? = nil,
         value: TextMatch? = nil,
         description: TextMatch? = nil,
         identifier: TextMatch? = nil,
@@ -75,6 +82,7 @@ public struct AXLocator: Codable, Equatable, Sendable {
         self.role = role
         self.subrole = subrole
         self.title = title
+        self.label = label
         self.value = value
         self.description = description
         self.identifier = identifier
@@ -163,6 +171,7 @@ public struct LocatorResolver: Sendable {
         guard matchesExact(locator.role, actual: node.role, label: "role", reasons: &reasons),
               matchesExact(locator.subrole, actual: node.subrole, label: "subrole", reasons: &reasons),
               matches(locator.title, actual: node.title, label: "title", reasons: &reasons),
+              matches(locator.label, actual: node.displayLabel, label: "label", reasons: &reasons),
               matches(locator.value, actual: node.value, label: "value", reasons: &reasons),
               matches(locator.description, actual: node.description, label: "description", reasons: &reasons),
               matches(locator.identifier, actual: node.identifier, label: "identifier", reasons: &reasons),
@@ -231,6 +240,9 @@ public struct LocatorResolver: Sendable {
             if let title = locator.title {
                 reasons.append("ancestor title \(title.reasonFragment)")
             }
+            if let label = locator.label {
+                reasons.append("ancestor label \(label.reasonFragment)")
+            }
         }
         return true
     }
@@ -258,5 +270,16 @@ public struct LocatorResolver: Sendable {
         for child in node.children {
             append(child, ancestors: childAncestors, nextIndex: &nextIndex, to: &result)
         }
+    }
+}
+
+private extension AXNode {
+    var displayLabel: String? {
+        for value in [title, value, description, identifier, help] {
+            if let value, !value.isEmpty {
+                return value
+            }
+        }
+        return nil
     }
 }

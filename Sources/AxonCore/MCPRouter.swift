@@ -75,8 +75,14 @@ public struct MCPRouter {
                 ], isError: true)
             }
             let result = commandResponse.result ?? [:]
+            if name == "list_apps", Self.outputFormat(in: arguments) != "debug" {
+                return appListObservationResult(id: request.id, result: result)
+            }
             if name == "get_app_state", Self.outputFormat(in: arguments) != "debug" {
                 return appStateObservationResult(id: request.id, result: result, arguments: arguments)
+            }
+            if name == "get_children", Self.outputFormat(in: arguments) != "debug" {
+                return childrenObservationResult(id: request.id, result: result, arguments: arguments)
             }
             return toolResult(id: request.id, structuredContent: result, isError: false)
         } catch let error as JSONRPCError {
@@ -124,6 +130,48 @@ public struct MCPRouter {
         ])
     }
 
+    private func appListObservationResult(
+        id: JSONRPCID?,
+        result: [String: JSONValue]
+    ) -> JSONRPCResponse {
+        let formatter = AppListFormatter()
+        let observation = formatter.observation(from: result)
+        return JSONRPCResponse(id: id, result: [
+            "content": .array([
+                .object([
+                    "type": .string("text"),
+                    "text": .string(formatter.text(from: observation))
+                ])
+            ]),
+            "structuredContent": .object(["apps": observation]),
+            "isError": .bool(false)
+        ])
+    }
+
+    private func childrenObservationResult(
+        id: JSONRPCID?,
+        result: [String: JSONValue],
+        arguments: [String: JSONValue]
+    ) -> JSONRPCResponse {
+        guard let children = result["children"] else {
+            return toolResult(id: id, structuredContent: result, isError: false)
+        }
+
+        let formatter = SnapshotObservationFormatter()
+        let observation = formatter.children(from: children, frames: Self.bool("frames", in: arguments) ?? false)
+        let content = MCPContent.normalize(.object(["children": observation]))
+        return JSONRPCResponse(id: id, result: [
+            "content": .array([
+                .object([
+                    "type": .string("text"),
+                    "text": .string(formatter.text(from: content.structured["children"] ?? observation))
+                ])
+            ] + content.images),
+            "structuredContent": content.structured,
+            "isError": .bool(false)
+        ])
+    }
+
     private func objectParams(in request: JSONRPCRequest) throws -> [String: JSONValue] {
         guard case let .object(params) = request.params else {
             throw JSONRPCError.invalidParams("params must be an object")
@@ -139,12 +187,18 @@ public struct MCPRouter {
             return "request_accessibility"
         case "get_app_state":
             return "snapshot"
+        case "get_children":
+            return "get_children"
         case "get_screenshot":
             return "screenshot"
         case "resolve":
             return "resolve"
         case "changed_since":
             return "changed_since"
+        case "run_batch":
+            return "run_batch"
+        case "export_script":
+            return "export_script"
         case "run_plan":
             return "run_plan"
         case "click":
@@ -204,8 +258,10 @@ public struct MCPRouter {
     private static let tools: [MCPTool] = [
         MCPTool(
             name: "list_apps",
-            description: "List currently running macOS applications visible to Axon.",
-            inputSchema: objectSchema()
+            description: "List currently running macOS app names visible to Axon. Use format=debug only when bundle ids or pids are needed.",
+            inputSchema: objectSchema(properties: [
+                "format": stringSchema("Defaults to observation, a compact app-name list. Use debug for full bundle id and pid objects.")
+            ])
         ),
         MCPTool(
             name: "request_accessibility",
@@ -223,6 +279,17 @@ public struct MCPRouter {
                 "format": stringSchema("Defaults to observation. Use debug only when diagnosing Axon internals."),
                 "frames": boolSchema("Include frames in observation output. Defaults to false.")
             ], required: ["app"])
+        ),
+        MCPTool(
+            name: "get_children",
+            description: "Fetch only the retained children for a snapshot handle. Use nextOffset from the previous result to continue paging broad sibling lists.",
+            inputSchema: objectSchema(properties: [
+                "target": stringSchema("Retained snapshot handle for the parent node, for example s12:4."),
+                "offset": numberSchema("Zero-based child offset to fetch. Defaults to 0."),
+                "limit": numberSchema("Maximum children to fetch. Defaults to Axon's sibling page size."),
+                "format": stringSchema("Defaults to observation. Use debug only when diagnosing Axon internals."),
+                "frames": boolSchema("Include frames in observation output. Defaults to false.")
+            ], required: ["target"])
         ),
         MCPTool(
             name: "get_screenshot",
@@ -248,22 +315,37 @@ public struct MCPRouter {
             ], required: ["snapshotId"])
         ),
         MCPTool(
-            name: "run_plan",
-            description: "Execute an invocation-scoped Axon automation plan. YAML source is the preferred compact format; JSON plan objects are also accepted.",
+            name: "run_batch",
+            description: "Run a sequence of existing Axon tool calls. Each action is an object with tool plus that tool's normal arguments.",
             inputSchema: objectSchema(properties: [
-                "source": stringSchema("YAML or JSON automation plan source."),
-                "path": stringSchema("Local plan file path for the Axon daemon to read."),
-                "plan": .object([
+                "actions": .object([
+                    "type": .string("array"),
+                    "description": .string("Ordered action objects, each with a tool field and that tool's normal arguments."),
+                    "items": .object([
+                        "type": .string("object"),
+                        "additionalProperties": .bool(true)
+                    ])
+                ]),
+                "source": stringSchema("YAML or JSON .axn batch source."),
+                "path": stringSchema("Local .axn batch file path for the Axon daemon to read."),
+                "batch": .object([
                     "type": .string("object"),
-                    "description": .string("Automation plan object when not using source."),
+                    "description": .string("Batch object when not using actions, source, or path."),
                     "additionalProperties": .bool(true)
                 ]),
-                "args": .object([
-                    "type": .string("object"),
-                    "description": .string("Invocation arguments available as $args.* in the plan."),
-                    "additionalProperties": .bool(true)
-                ]),
-                "dryRun": boolSchema("Resolve and trace the plan without dispatching mutating actions.")
+                "continueOnError": boolSchema("Continue after an action fails. Defaults to false."),
+                "dryRun": boolSchema("Trace the batch without dispatching actions.")
+            ])
+        ),
+        MCPTool(
+            name: "export_script",
+            description: "Export recent recorded Axon calls as an editable .axn action batch. Read calls are omitted unless includeReads is true.",
+            inputSchema: objectSchema(properties: [
+                "sessionId": stringSchema("History session to export. Defaults to the daemon's default session."),
+                "from": stringSchema("Optional starting call id, inclusive."),
+                "to": stringSchema("Optional ending call id, inclusive."),
+                "path": stringSchema("Optional local path to write the .axn file."),
+                "includeReads": boolSchema("Include read/context tools such as get_app_state and resolve. Defaults to false.")
             ])
         ),
         MCPTool(
@@ -303,7 +385,7 @@ public struct MCPRouter {
         ),
         MCPTool(
             name: "set_value",
-            description: "Set an accessibility value on a target specified by snapshot handle or locator object.",
+            description: "Preferred text-entry primitive for writable fields. Sets AXValue directly on a target, avoiding focus and keystroke timing races.",
             inputSchema: objectSchema(properties: [
                 "target": targetSchema(),
                 "value": stringSchema("New string value.")
@@ -311,7 +393,7 @@ public struct MCPRouter {
         ),
         MCPTool(
             name: "type_text",
-            description: "Activate an app and type text with CoreGraphics keyboard events.",
+            description: "Fallback text-entry primitive. Activates an app and posts keyboard events; use only when set_value is unavailable or keystroke semantics are required.",
             inputSchema: objectSchema(properties: [
                 "app": stringSchema("Bundle id, pid, exact app name, or partial app name."),
                 "text": stringSchema("Text to type.")
@@ -379,7 +461,7 @@ private func numberSchema(_ description: String) -> JSONValue {
 private func locatorSchema() -> JSONValue {
     .object([
         "type": .string("object"),
-        "description": .string("AX locator with role, subrole, title, value, description, identifier, actions, and ancestors."),
+        "description": .string("AX locator with role, subrole, label, title, value, description, identifier, actions, and ancestors."),
         "additionalProperties": .bool(true)
     ])
 }
@@ -393,7 +475,7 @@ private func targetSchema() -> JSONValue {
             ]),
             .object([
                 "type": .string("object"),
-                "description": .string("Locator target object with app and locator fields."),
+                "description": .string("Locator target object with app and locator fields. Locator may use label, title, value, description, identifier, actions, and ancestors."),
                 "additionalProperties": .bool(true)
             ]),
             .object([

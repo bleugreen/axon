@@ -18,6 +18,10 @@ CONTENTS_DIR="$APP_DIR/Contents"
 MACOS_DIR="$CONTENTS_DIR/MacOS"
 RESOURCES_DIR="$CONTENTS_DIR/Resources"
 CLI_DIR="$RESOURCES_DIR/bin"
+ICON_SOURCE="$ROOT/Assets/Axon.icns"
+MENU_BAR_ICON_SOURCE="$ROOT/Assets/AxonMenuBarTemplate.png"
+ICON_NAME="Axon"
+MENU_BAR_ICON_NAME="AxonMenuBarTemplate"
 
 cd "$ROOT"
 
@@ -30,6 +34,12 @@ mkdir -p "$MACOS_DIR" "$CLI_DIR"
 cp "$ROOT/.build/release/AxonApp" "$MACOS_DIR/$APP_NAME"
 cp "$ROOT/.build/release/axon" "$CLI_DIR/axon"
 chmod 755 "$MACOS_DIR/$APP_NAME" "$CLI_DIR/axon"
+if [[ -f "$ICON_SOURCE" ]]; then
+  cp "$ICON_SOURCE" "$RESOURCES_DIR/$ICON_NAME.icns"
+fi
+if [[ -f "$MENU_BAR_ICON_SOURCE" ]]; then
+  cp "$MENU_BAR_ICON_SOURCE" "$RESOURCES_DIR/$MENU_BAR_ICON_NAME.png"
+fi
 
 cat > "$CONTENTS_DIR/Info.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
@@ -44,6 +54,8 @@ cat > "$CONTENTS_DIR/Info.plist" <<PLIST
   <string>$BUNDLE_ID</string>
   <key>CFBundleInfoDictionaryVersion</key>
   <string>6.0</string>
+  <key>CFBundleIconFile</key>
+  <string>$ICON_NAME</string>
   <key>CFBundleName</key>
   <string>$APP_NAME</string>
   <key>CFBundlePackageType</key>

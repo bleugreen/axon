@@ -62,15 +62,56 @@ do {
         try printResponse(response)
 
     case "apps":
-        for app in AppResolver().runningApps() {
-            let bundle = app.bundleIdentifier.map { " \($0)" } ?? ""
-            print("\(app.processIdentifier)\t\(app.name)\(bundle)")
+        let response = try SocketClient(path: socketPath)
+            .send(JSONRPCRequest(id: .string("list_apps"), method: "list_apps"))
+        if let error = response.error {
+            throw CLIError.invalidArguments(error.message)
+        }
+        guard case let .array(apps)? = response.result?["apps"] else {
+            throw CLIError.invalidArguments("list_apps response missing apps")
+        }
+        if arguments.contains("--details") || arguments.contains("--debug") {
+            for app in apps {
+                let pid = app["processIdentifier"].flatMap(stringValue) ?? "?"
+                let name = app["name"].flatMap(stringValue) ?? "unknown"
+                let bundle = app["bundleIdentifier"].flatMap(stringValue).map { " \($0)" } ?? ""
+                print("\(pid)\t\(name)\(bundle)")
+            }
+        } else {
+            let formatter = AppListFormatter()
+            print(formatter.text(from: formatter.observation(from: response.result ?? [:])))
         }
 
     case "snapshot":
         let app = try requiredArgument(after: command, in: arguments)
-        let snapshot = try AXSnapshotCapturer().capture(app: app, screenshot: arguments.contains("--screenshot"))
-        print(SnapshotTextFormatter().format(snapshot))
+        let screenshot = arguments.contains("--screenshot")
+        let sensitive = arguments.contains("--sensitive")
+        if sensitive && screenshot {
+            throw CLIError.invalidArguments("snapshot --sensitive cannot be combined with --screenshot")
+        }
+        let response = try SocketClient(path: socketPath)
+            .send(JSONRPCRequest(
+                id: .string("snapshot"),
+                method: "snapshot",
+                params: .object([
+                    "app": .string(app),
+                    "screenshot": .bool(screenshot),
+                    "sensitive": .bool(sensitive),
+                    "includeTree": .bool(true)
+                ])
+            ))
+        if let error = response.error {
+            throw CLIError.invalidArguments(error.message)
+        }
+        guard let snapshot = response.result?["snapshot"] else {
+            throw CLIError.invalidArguments("snapshot response missing snapshot")
+        }
+        let formatter = SnapshotObservationFormatter()
+        let observation = formatter.observation(
+            from: snapshot,
+            frames: arguments.contains("--frames")
+        )
+        print(formatter.text(from: observation))
 
     case "snapshot-json":
         let app = try requiredArgument(after: command, in: arguments)
@@ -80,16 +121,35 @@ do {
         if sensitive && screenshot {
             throw CLIError.invalidArguments("snapshot-json --sensitive cannot be combined with --screenshot")
         }
-        let snapshot = try AXSnapshotCapturer().capture(app: app, screenshot: screenshot)
-        let data = try jsonEncoder.encode(snapshot.jsonValue(includeTree: includeTree, sensitive: sensitive))
+        let response = try SocketClient(path: socketPath)
+            .send(JSONRPCRequest(
+                id: .string("snapshot-json"),
+                method: "snapshot",
+                params: .object([
+                    "app": .string(app),
+                    "screenshot": .bool(screenshot),
+                    "sensitive": .bool(sensitive),
+                    "includeTree": .bool(includeTree)
+                ])
+            ))
+        if let error = response.error {
+            throw CLIError.invalidArguments(error.message)
+        }
+        let data = try jsonEncoder.encode(response.result?["snapshot"] ?? .null)
         print(String(decoding: data, as: UTF8.self))
 
     case "screenshot":
         let app = try requiredArgument(after: command, in: arguments)
-        let identity = try AppResolver().resolveIdentity(app)
-        let screenshot = ScreenshotCapturer().capture(app: identity)
-            ?? EncodedScreenshot(mediaType: "image/png", base64Data: "", width: 0, height: 0)
-        let data = try jsonEncoder.encode(screenshot.jsonValue)
+        let response = try SocketClient(path: socketPath)
+            .send(JSONRPCRequest(
+                id: .string("screenshot"),
+                method: "screenshot",
+                params: .object(["app": .string(app)])
+            ))
+        if let error = response.error {
+            throw CLIError.invalidArguments(error.message)
+        }
+        let data = try jsonEncoder.encode(response.result?["screenshot"] ?? .null)
         print(String(decoding: data, as: UTF8.self))
 
     case "resolve":
@@ -118,13 +178,43 @@ do {
             ))
         try printResponse(response)
 
-    case "run":
-        let params = try runPlanParams(arguments: arguments)
+    case "children":
+        let params = try childrenParams(arguments: arguments)
         let response = try SocketClient(path: socketPath)
             .send(JSONRPCRequest(
-                id: .string("run_plan"),
-                method: "run_plan",
+                id: .string("get_children"),
+                method: "get_children",
                 params: .object(params)
+            ))
+        if let error = response.error {
+            throw CLIError.invalidArguments(error.message)
+        }
+        guard let children = response.result?["children"] else {
+            throw CLIError.invalidArguments("get_children response missing children")
+        }
+        let formatter = SnapshotObservationFormatter()
+        let observation = formatter.children(
+            from: children,
+            frames: arguments.contains("--frames")
+        )
+        print(formatter.text(from: observation))
+
+    case "run":
+        let command = try runCommand(arguments: arguments)
+        let response = try SocketClient(path: socketPath)
+            .send(JSONRPCRequest(
+                id: .string(command.method),
+                method: command.method,
+                params: .object(command.params)
+            ))
+        try printResponse(response)
+
+    case "export-script":
+        let response = try SocketClient(path: socketPath)
+            .send(JSONRPCRequest(
+                id: .string("export_script"),
+                method: "export_script",
+                params: .object(try exportScriptParams(arguments: arguments))
             ))
         try printResponse(response)
 
@@ -192,13 +282,15 @@ do {
           daemon <install|start|stop|status|uninstall>
           health   request daemon health over the local socket
           request-accessibility   ask macOS to approve the running daemon identity
-          apps     list running apps
-          snapshot <app> [--screenshot]    print an indexed AX tree for a running app
+          apps [--details]  list running app names
+          snapshot <app> [--screenshot] [--sensitive] [--frames]
           snapshot-json <app> [--compact] [--screenshot] [--sensitive]
           screenshot <app>  print embedded screenshot JSON for a running app
           resolve <app> <locator-json>
           changed-since <snapshot-id>
-          run <path>|--source <yaml-or-json> [--dry-run] [--arg key=value]
+          children <handle> [--offset n] [--limit n] [--frames]
+          run <path.axn>|--source <yaml-or-json> [--dry-run]
+          export-script [--session id] [--from call] [--to call] [--path file.axn] [--include-reads]
           click <handle|target-json>
           scroll [--app app] [--target target-json] [--dx n] [--dy n]
           drag [--app app] [--duration-ms n] <from-json> <to-json>
@@ -297,6 +389,74 @@ private func dragParams(arguments: [String]) throws -> [String: JSONValue] {
     }
     params["from"] = endpoints[0]
     params["to"] = endpoints[1]
+    return params
+}
+
+private func childrenParams(arguments: [String]) throws -> [String: JSONValue] {
+    guard arguments.count >= 2 else {
+        throw CLIError.missingArguments("children requires a snapshot handle")
+    }
+    var params: [String: JSONValue] = ["target": .string(arguments[1])]
+    var index = 2
+    while index < arguments.count {
+        switch arguments[index] {
+        case "--offset":
+            guard index + 1 < arguments.count, let value = Int(arguments[index + 1]) else {
+                throw CLIError.missingArguments("children --offset requires an integer")
+            }
+            params["offset"] = .int(value)
+            index += 2
+        case "--limit":
+            guard index + 1 < arguments.count, let value = Int(arguments[index + 1]) else {
+                throw CLIError.missingArguments("children --limit requires an integer")
+            }
+            params["limit"] = .int(value)
+            index += 2
+        case "--frames":
+            index += 1
+        default:
+            throw CLIError.missingArguments("unexpected children argument: \(arguments[index])")
+        }
+    }
+    return params
+}
+
+private func exportScriptParams(arguments: [String]) throws -> [String: JSONValue] {
+    var params: [String: JSONValue] = [:]
+    var index = 1
+    while index < arguments.count {
+        switch arguments[index] {
+        case "--session":
+            guard index + 1 < arguments.count else {
+                throw CLIError.missingArguments("export-script --session requires an id")
+            }
+            params["sessionId"] = .string(arguments[index + 1])
+            index += 2
+        case "--from":
+            guard index + 1 < arguments.count else {
+                throw CLIError.missingArguments("export-script --from requires a call id")
+            }
+            params["from"] = .string(arguments[index + 1])
+            index += 2
+        case "--to":
+            guard index + 1 < arguments.count else {
+                throw CLIError.missingArguments("export-script --to requires a call id")
+            }
+            params["to"] = .string(arguments[index + 1])
+            index += 2
+        case "--path":
+            guard index + 1 < arguments.count else {
+                throw CLIError.missingArguments("export-script --path requires a file path")
+            }
+            params["path"] = .string(arguments[index + 1])
+            index += 2
+        case "--include-reads":
+            params["includeReads"] = .bool(true)
+            index += 1
+        default:
+            throw CLIError.missingArguments("unexpected export-script argument: \(arguments[index])")
+        }
+    }
     return params
 }
 
@@ -407,21 +567,26 @@ private func bundledAxonAppURL() -> URL? {
     return nil
 }
 
-private func runPlanParams(arguments: [String]) throws -> [String: JSONValue] {
+private func runCommand(arguments: [String]) throws -> (method: String, params: [String: JSONValue]) {
     var params: [String: JSONValue] = [:]
     var args: [String: JSONValue] = [:]
     var index = 1
     var path: String?
+    var source: String?
 
     while index < arguments.count {
         let argument = arguments[index]
         switch argument {
         case "--source":
             guard index + 1 < arguments.count else {
-                throw CLIError.missingArguments("run --source requires plan source")
+                throw CLIError.missingArguments("run --source requires source")
             }
+            source = arguments[index + 1]
             params["source"] = .string(arguments[index + 1])
             index += 2
+        case "--continue-on-error":
+            params["continueOnError"] = .bool(true)
+            index += 1
         case "--dry-run":
             params["dryRun"] = .bool(true)
             index += 1
@@ -449,14 +614,29 @@ private func runPlanParams(arguments: [String]) throws -> [String: JSONValue] {
 
     if params["source"] == nil {
         guard let path else {
-            throw CLIError.missingArguments("run requires a plan path or --source")
+            throw CLIError.missingArguments("run requires a path or --source")
         }
         params["path"] = .string(path)
     }
     if !args.isEmpty {
         params["args"] = .object(args)
     }
-    return params
+
+    if let path, URL(fileURLWithPath: path).pathExtension.lowercased() == "axn" {
+        return ("run_batch", params)
+    }
+    if let source, sourceLooksLikeBatch(source) {
+        return ("run_batch", params)
+    }
+    return ("run_plan", params)
+}
+
+private func sourceLooksLikeBatch(_ source: String) -> Bool {
+    guard let value = try? AutomationPlanExecutor.parseSource(source),
+          case let .object(object) = value else {
+        return false
+    }
+    return object["actions"] != nil
 }
 
 private func handleDaemonCommand(arguments: [String]) throws {
@@ -547,10 +727,18 @@ private func waitForDaemonHealth(socketPath: String, timeoutSeconds: TimeInterva
 }
 
 private func stringValue(_ value: JSONValue) -> String? {
-    guard case let .string(string) = value else {
+    switch value {
+    case let .string(string):
+        return string
+    case let .int(int):
+        return String(int)
+    case let .double(double):
+        return String(double)
+    case let .bool(bool):
+        return String(bool)
+    case .object, .array, .null:
         return nil
     }
-    return string
 }
 
 private enum CLIError: Error, CustomStringConvertible {

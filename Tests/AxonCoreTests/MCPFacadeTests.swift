@@ -30,7 +30,10 @@ import Testing
     #expect(toolNames(in: tools).contains("list_apps"))
     #expect(toolNames(in: tools).contains("request_accessibility"))
     #expect(toolNames(in: tools).contains("get_app_state"))
-    #expect(toolNames(in: tools).contains("run_plan"))
+    #expect(toolNames(in: tools).contains("get_children"))
+    #expect(toolNames(in: tools).contains("run_batch"))
+    #expect(toolNames(in: tools).contains("export_script"))
+    #expect(!toolNames(in: tools).contains("run_plan"))
     #expect(toolNames(in: tools).contains("changed_since"))
     #expect(toolNames(in: tools).contains("click"))
     #expect(toolNames(in: tools).contains("scroll"))
@@ -42,10 +45,69 @@ import Testing
     #expect(tool(named: "click", in: tools)?["inputSchema"]?["properties"]?["target"]?["anyOf"]?[2] != nil)
 }
 
+@Test func mcpGetChildrenReturnsOnlyRequestedChildListObservation() {
+    let handler = MCPRecordingCommandHandler(result: [
+        "children": .object([
+            "snapshot": .string("s12"),
+            "parent": .string("s12:4"),
+            "offset": .int(24),
+            "limit": .int(2),
+            "total": .int(30),
+            "baseIndex": .int(42),
+            "nextOffset": .int(26),
+            "children": .array([
+                .object([
+                    "index": .int(42),
+                    "handle": .string("s12:42"),
+                    "role": .string("AXButton"),
+                    "title": .string("Tab 25"),
+                    "actions": .array([.string("AXPress")]),
+                    "children": .array([])
+                ])
+            ])
+        ])
+    ])
+    let response = MCPRouter(commandHandler: handler).handle(JSONRPCRequest(
+        id: .string("children"),
+        method: "tools/call",
+        params: .object([
+            "name": .string("get_children"),
+            "arguments": .object([
+                "target": .string("s12:4"),
+                "offset": .int(24),
+                "limit": .int(2)
+            ])
+        ])
+    ))
+
+    #expect(response?.error == nil)
+    #expect(handler.requests == [
+        JSONRPCRequest(
+            id: .string("children"),
+            method: "get_children",
+            params: .object([
+                "target": .string("s12:4"),
+                "offset": .int(24),
+                "limit": .int(2)
+            ])
+        )
+    ])
+    #expect(response?.result?["structuredContent"]?["children"]?["format"] == .string("children"))
+    #expect(response?.result?["structuredContent"]?["children"]?["parent"] == .string("s12:4"))
+    #expect(response?.result?["structuredContent"]?["children"]?["items"]?[0]?["handle"] == .string("s12:42"))
+    #expect(response?.result?["structuredContent"]?["children"]?["tree"] == nil)
+    #expect(textContent(in: response?.result)?.contains("children:") == true)
+    #expect(textContent(in: response?.result)?.contains("s12:42 button \"Tab 25\"") == true)
+}
+
 @Test func mcpToolsCallReturnsStructuredContentFromCommandRouter() {
     let commandRouter = CommandRouter(
         listApps: {
-            [AppIdentity(bundleIdentifier: "com.example.App", name: "Example", processIdentifier: 7)]
+            [
+                AppIdentity(bundleIdentifier: "com.example.App", name: "Example", processIdentifier: 7),
+                AppIdentity(bundleIdentifier: "com.example.Helper", name: "Example Helper", processIdentifier: 8),
+                AppIdentity(bundleIdentifier: "com.example.App", name: "Example", processIdentifier: 9)
+            ]
         }
     )
     let response = MCPRouter(commandRouter: commandRouter).handle(JSONRPCRequest(
@@ -59,29 +121,61 @@ import Testing
 
     #expect(response?.error == nil)
     #expect(response?.result?["isError"] == .bool(false))
-    #expect(response?.result?["structuredContent"]?["apps"]?[0]?["name"] == .string("Example"))
+    #expect(response?.result?["structuredContent"]?["apps"]?["format"] == .string("app_list"))
+    #expect(response?.result?["structuredContent"]?["apps"]?["count"] == .int(3))
+    #expect(response?.result?["structuredContent"]?["apps"]?["uniqueCount"] == .int(2))
+    #expect(response?.result?["structuredContent"]?["apps"]?["apps"]?[0]?["name"] == .string("Example"))
+    #expect(response?.result?["structuredContent"]?["apps"]?["apps"]?[0]?["count"] == .int(2))
     #expect(response?.result?["content"]?[0]?["type"] == .string("text"))
+    #expect(textContent(in: response?.result)?.contains("apps: 3 running, 2 names") == true)
+    #expect(textContent(in: response?.result)?.contains("- Example (2)") == true)
+    #expect(textContent(in: response?.result)?.contains("bundleIdentifier") == false)
 }
 
-@Test func mcpRunPlanForwardsSourceArgsAndDryRun() {
+@Test func mcpListAppsDebugReturnsFullAppObjects() {
+    let commandRouter = CommandRouter(
+        listApps: {
+            [AppIdentity(bundleIdentifier: "com.example.App", name: "Example", processIdentifier: 7)]
+        }
+    )
+    let response = MCPRouter(commandRouter: commandRouter).handle(JSONRPCRequest(
+        id: .string("call"),
+        method: "tools/call",
+        params: .object([
+            "name": .string("list_apps"),
+            "arguments": .object(["format": .string("debug")])
+        ])
+    ))
+
+    #expect(response?.error == nil)
+    #expect(response?.result?["structuredContent"]?["apps"]?[0]?["name"] == .string("Example"))
+    #expect(response?.result?["structuredContent"]?["apps"]?[0]?["bundleIdentifier"] == .string("com.example.App"))
+    #expect(textContent(in: response?.result)?.contains("bundleIdentifier") == true)
+}
+
+@Test func mcpRunBatchForwardsActionsAndDryRun() {
     let handler = MCPRecordingCommandHandler(result: [
-        "plan": .object([
+        "batch": .object([
             "success": .bool(true),
             "dryRun": .bool(true),
-            "trace": .array([]),
-            "outputs": .object([:])
+            "trace": .array([])
         ])
     ])
     let router = MCPRouter(commandHandler: handler)
     let response = router.handle(JSONRPCRequest(
-        id: .string("plan"),
+        id: .string("batch"),
         method: "tools/call",
         params: .object([
-            "name": .string("run_plan"),
+            "name": .string("run_batch"),
             "arguments": .object([
-                "source": .string("version: 1\nsteps: []"),
+                "actions": .array([
+                    .object([
+                        "tool": .string("click"),
+                        "target": .string("s1:2")
+                    ])
+                ]),
                 "dryRun": .bool(true),
-                "args": .object(["project": .string("axon")])
+                "continueOnError": .bool(true)
             ])
         ])
     ))
@@ -89,16 +183,61 @@ import Testing
     #expect(response?.error == nil)
     #expect(handler.requests == [
         JSONRPCRequest(
-            id: .string("plan"),
-            method: "run_plan",
+            id: .string("batch"),
+            method: "run_batch",
             params: .object([
-                "source": .string("version: 1\nsteps: []"),
+                "actions": .array([
+                    .object([
+                        "tool": .string("click"),
+                        "target": .string("s1:2")
+                    ])
+                ]),
                 "dryRun": .bool(true),
-                "args": .object(["project": .string("axon")])
+                "continueOnError": .bool(true)
             ])
         )
     ])
-    #expect(response?.result?["structuredContent"]?["plan"]?["success"] == .bool(true))
+    #expect(response?.result?["structuredContent"]?["batch"]?["success"] == .bool(true))
+}
+
+@Test func mcpExportScriptForwardsSessionRangeAndPath() {
+    let handler = MCPRecordingCommandHandler(result: [
+        "script": .string("version: 1\nactions: []\n"),
+        "path": .string("/tmp/example.axn"),
+        "actionCount": .int(0),
+        "recordCount": .int(3)
+    ])
+    let router = MCPRouter(commandHandler: handler)
+    let response = router.handle(JSONRPCRequest(
+        id: .string("export"),
+        method: "tools/call",
+        params: .object([
+            "name": .string("export_script"),
+            "arguments": .object([
+                "sessionId": .string("thread-a"),
+                "from": .string("c1"),
+                "to": .string("c3"),
+                "path": .string("/tmp/example.axn"),
+                "includeReads": .bool(true)
+            ])
+        ])
+    ))
+
+    #expect(response?.error == nil)
+    #expect(handler.requests == [
+        JSONRPCRequest(
+            id: .string("export"),
+            method: "export_script",
+            params: .object([
+                "sessionId": .string("thread-a"),
+                "from": .string("c1"),
+                "to": .string("c3"),
+                "path": .string("/tmp/example.axn"),
+                "includeReads": .bool(true)
+            ])
+        )
+    ])
+    #expect(response?.result?["structuredContent"]?["script"] == .string("version: 1\nactions: []\n"))
 }
 
 @Test func mcpToolsCallReportsCommandErrorsAsToolErrors() {

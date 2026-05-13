@@ -50,6 +50,49 @@ public extension AppIdentity {
     }
 }
 
+public extension AXChildrenPage {
+    var jsonValue: JSONValue {
+        var nextIndex = baseIndex
+        return .object([
+            "snapshot": .string(snapshotID.rawValue),
+            "parent": .string(parentHandle),
+            "offset": .int(offset),
+            "limit": .int(limit),
+            "total": .int(total),
+            "baseIndex": .int(baseIndex),
+            "nextOffset": offset + limit < total ? .int(offset + limit) : .null,
+            "children": .array(children.map { child in
+                child.jsonValue(snapshotID: snapshotID, nextIndex: &nextIndex)
+            })
+        ])
+    }
+}
+
+private extension AXNode {
+    func jsonValue(snapshotID: SnapshotID, nextIndex: inout Int) -> JSONValue {
+        let index = nextIndex
+        nextIndex += 1
+        var object: [String: JSONValue] = [
+            "index": .int(index),
+            "handle": .string(SnapshotHandle(snapshotID: snapshotID, nodeIndex: index).rawValue),
+            "role": .string(role),
+            "enabled": enabled.map(JSONValue.bool) ?? .null,
+            "focused": focused.map(JSONValue.bool) ?? .null,
+            "actions": .array(actions.map(JSONValue.string)),
+            "truncationReason": truncationReason.map(JSONValue.string) ?? .null,
+            "children": .array(children.map { $0.jsonValue(snapshotID: snapshotID, nextIndex: &nextIndex) })
+        ]
+        object.addRedactedString("subrole", subrole, sensitive: false)
+        object.addRedactedString("title", title, sensitive: false)
+        object.addRedactedString("value", value, sensitive: false)
+        object.addRedactedString("description", description, sensitive: false)
+        object.addRedactedString("help", help, sensitive: false)
+        object.addRedactedString("identifier", identifier, sensitive: false)
+        object["frame"] = frame.map(\.jsonValue) ?? .null
+        return .object(object)
+    }
+}
+
 public extension EncodedScreenshot {
     var jsonValue: JSONValue {
         .object([
