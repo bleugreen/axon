@@ -153,6 +153,58 @@ import Testing
     #expect(response.result?["action"]?["point"]?["x"] == .double(140))
 }
 
+@Test func clickRequestAcceptsScreenshotTextLocationTarget() {
+    let router = CommandRouter(
+        captureSnapshot: { _, screenshot in
+            #expect(screenshot == true)
+            return actionTextLocationFixtureSnapshot(labels: [], screenshot: EncodedScreenshot(
+                mediaType: "image/png",
+                base64Data: "fake",
+                width: 800,
+                height: 600
+            ))
+        },
+        actions: PrimitiveActionHandlers(
+            clickPoint: { point in
+                #expect(point == ActionPoint(x: 225, y: 200))
+                return PrimitiveActionResult(
+                    action: "click",
+                    target: point.targetDescription,
+                    strategy: "CGEvent",
+                    success: true,
+                    details: ["point": point.jsonValue]
+                )
+            }
+        ),
+        recognizeText: { _ in
+            [
+                RecognizedTextObservation(
+                    text: "Backlog",
+                    boundingBox: NormalizedTextBoundingBox(x: 0.25, y: 0.60, width: 0.20, height: 0.10),
+                    confidence: 0.95
+                )
+            ]
+        }
+    )
+
+    let response = router.handle(JSONRPCRequest(
+        id: .string("click-screenshot-location"),
+        method: "click",
+        params: .object([
+            "target": .object([
+                "location": .object([
+                    "app": .string("com.example.App"),
+                    "text": .string("Backlog"),
+                    "source": .string("screenshot")
+                ])
+            ])
+        ])
+    ))
+
+    #expect(response.error == nil)
+    #expect(response.result?["action"]?["locationResolutions"]?[0]?["best"]?["source"] == .string("screenshot"))
+}
+
 @Test func clickRequestRejectsAmbiguousTextLocationTarget() {
     let router = CommandRouter(
         captureSnapshot: { _, _ in actionTextLocationFixtureSnapshot(labels: ["Backlog", "Backlog"]) },
@@ -492,7 +544,10 @@ private func actionLocatorFixtureSnapshot(buttons: [String]) -> AppSnapshot {
     )
 }
 
-private func actionTextLocationFixtureSnapshot(labels: [String]) -> AppSnapshot {
+private func actionTextLocationFixtureSnapshot(
+    labels: [String],
+    screenshot: EncodedScreenshot? = nil
+) -> AppSnapshot {
     AppSnapshot(
         id: SnapshotID("action-text-location-fixture"),
         app: AppIdentity(bundleIdentifier: "com.example.App", name: "Example", processIdentifier: 42),
@@ -500,6 +555,7 @@ private func actionTextLocationFixtureSnapshot(labels: [String]) -> AppSnapshot 
             AXNode(
                 role: "AXWindow",
                 title: "Main",
+                frame: AXFrame(x: 50, y: 60, width: 500, height: 400),
                 children: labels.enumerated().map { index, label in
                     AXNode(
                         role: "AXStaticText",
@@ -509,6 +565,6 @@ private func actionTextLocationFixtureSnapshot(labels: [String]) -> AppSnapshot 
                 }
             )
         ],
-        screenshot: nil
+        screenshot: screenshot
     )
 }

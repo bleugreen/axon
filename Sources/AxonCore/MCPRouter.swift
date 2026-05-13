@@ -499,7 +499,7 @@ private func pointerTargetSchema() -> JSONValue {
             ]),
             .object([
                 "type": .string("object"),
-                "description": .string("Text location target object: { location: { app, text, source? } }. Resolves visible text to a click/drag/scroll point without callers providing coordinates."),
+                "description": .string("Text location target object: { location: { app, text, source? } }. Resolves visible text to a click/drag/scroll point using AX text or screenshot OCR without callers providing coordinates."),
                 "additionalProperties": .bool(true)
             ])
         ])

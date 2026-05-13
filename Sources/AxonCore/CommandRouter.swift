@@ -7,6 +7,7 @@ public struct CommandRouter {
     private let elementStore: AXElementStore
     private let changeObserver: AppChangeObserving
     private let history: ActionHistoryStore
+    private let recognizeText: TextRecognitionHandler
 
     public init(
         listApps: @escaping () -> [AppIdentity] = { AppResolver().runningApps() },
@@ -16,11 +17,13 @@ public struct CommandRouter {
         actions: PrimitiveActionHandlers? = nil,
         elementStore: AXElementStore = AXElementStore(),
         changeObserver: AppChangeObserving = AXAppChangeObserverRegistry(),
-        history: ActionHistoryStore = .shared
+        history: ActionHistoryStore = .shared,
+        recognizeText: @escaping TextRecognitionHandler = VisionTextRecognizer.recognizeText(in:)
     ) {
         self.elementStore = elementStore
         self.changeObserver = changeObserver
         self.history = history
+        self.recognizeText = recognizeText
         self.listApps = listApps
         self.captureSnapshot = captureSnapshot ?? { app, screenshot in
             try AXSnapshotCapturer(elementStore: elementStore).capture(app: app, screenshot: screenshot)
@@ -408,11 +411,21 @@ public struct CommandRouter {
     }
 
     private func resolveTextLocationTarget(_ target: TextLocationTarget) throws -> TextLocationResolvedPoint {
-        guard target.source != .screenshot else {
-            throw JSONRPCError.invalidParams("Text location source is not supported yet: screenshot")
+        let resolution: TextLocationResolution
+        switch target.source {
+        case .ax, .screenshot:
+            let snapshot = try captureSnapshot(target.app, target.source == .screenshot)
+            resolution = TextLocationResolver(recognizeText: recognizeText).resolve(target, in: snapshot)
+        case .auto:
+            let axSnapshot = try captureSnapshot(target.app, false)
+            let axResolution = TextLocationResolver(recognizeText: recognizeText).resolve(target, in: axSnapshot)
+            if axResolution.status != .missing {
+                resolution = axResolution
+            } else {
+                let screenshotSnapshot = try captureSnapshot(target.app, true)
+                resolution = TextLocationResolver(recognizeText: recognizeText).resolve(target, in: screenshotSnapshot)
+            }
         }
-        let snapshot = try captureSnapshot(target.app, false)
-        let resolution = TextLocationResolver().resolve(target, in: snapshot)
         guard resolution.status == .unique, let point = resolution.point else {
             throw JSONRPCError.invalidParams(textLocationFailureMessage(resolution))
         }

@@ -35,7 +35,7 @@ public struct ScreenshotCapturer {
         configuration.queueDepth = 1
         configuration.scalesToFit = false
         configuration.preservesAspectRatio = true
-        configuration.ignoreShadowsSingleWindow = false
+        configuration.ignoreShadowsSingleWindow = true
 
         guard let image = captureImage(filter: filter, configuration: configuration) else {
             return nil

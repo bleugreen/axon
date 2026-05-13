@@ -225,7 +225,7 @@ Pointer actions (`click`, `scroll`, and `drag`) accept four target shapes:
 }
 ```
 
-Location targets are point-producing text targets. They let callers say "the visible text Backlog" without providing raw screen coordinates. `source: auto` currently resolves through AX text geometry and returns the center of the matched text node; `source: ax` forces that behavior. `source: screenshot` is reserved for OCR and fails honestly until screenshot text recognition exists.
+Location targets are point-producing text targets. They let callers say "the visible text Backlog" without providing raw screen coordinates. `source: auto` first tries AX text geometry and falls back to screenshot OCR when AX text is missing. `source: ax` forces AX text geometry. `source: screenshot` captures the app window, recognizes visible text with OCR, and returns the center of the matched text bounding box.
 
 Location text uses the same matcher shape as locators: a string means case-insensitive exact match, and matcher objects may use `exact`, `contains`, and `caseSensitive`.
 
