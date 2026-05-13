@@ -31,6 +31,14 @@ jobs:
       - name: Check out Axon
         uses: actions/checkout@v4
 
+      - name: Set up Swift
+        uses: swift-actions/setup-swift@v2
+        with:
+          swift-version: "6.2"
+
+      - name: Show Swift version
+        run: swift --version
+
       - name: Resolve release version
         id: release
         env:
@@ -93,7 +101,6 @@ jobs:
           AXON_VERSION: ${{ steps.release.outputs.version }}
           AXON_NOTARY_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
           AXON_NOTARY_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
-          SWIFT: /usr/bin/swift
         run: |
           set -euo pipefail
           ./scripts/package-app
