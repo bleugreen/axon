@@ -2,7 +2,13 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-SWIFT="${SWIFT:-$HOME/.swiftly/bin/swift}"
+if [[ -n "${SWIFT:-}" ]]; then
+  SWIFT="$SWIFT"
+elif [[ -x "$HOME/.swiftly/bin/swift" ]]; then
+  SWIFT="$HOME/.swiftly/bin/swift"
+else
+  SWIFT="$(command -v swift)"
+fi
 APP_NAME="${AXON_APP_NAME:-Axon}"
 BUNDLE_ID="${AXON_BUNDLE_ID:-com.bleugreen.axon}"
 VERSION="${AXON_VERSION:-0.1.0}"
@@ -63,14 +69,36 @@ if [[ -z "$SIGN_IDENTITY" ]]; then
   SIGN_IDENTITY="-"
 fi
 
-/usr/bin/codesign --force --deep --options runtime --sign "$SIGN_IDENTITY" "$APP_DIR"
+SIGN_ARGS=(--force --options runtime --sign "$SIGN_IDENTITY")
+if [[ "$SIGN_IDENTITY" != "-" ]]; then
+  SIGN_ARGS+=(--timestamp)
+fi
+
+/usr/bin/codesign "${SIGN_ARGS[@]}" "$CLI_DIR/axon"
+/usr/bin/codesign "${SIGN_ARGS[@]}" "$MACOS_DIR/$APP_NAME"
+/usr/bin/codesign "${SIGN_ARGS[@]}" "$APP_DIR"
 
 ZIP_PATH="$DIST_DIR/$APP_NAME-$VERSION.zip"
 rm -f "$ZIP_PATH"
 (cd "$DIST_DIR" && /usr/bin/ditto -c -k --norsrc --noextattr --keepParent "$APP_NAME.app" "$ZIP_PATH")
 
 if [[ -n "${AXON_NOTARY_PROFILE:-}" ]]; then
-  /usr/bin/xcrun notarytool submit "$ZIP_PATH" --keychain-profile "$AXON_NOTARY_PROFILE" --wait
+  /usr/bin/xcrun notarytool submit "$ZIP_PATH" \
+    --keychain-profile "$AXON_NOTARY_PROFILE" \
+    --wait
+  /usr/bin/xcrun stapler staple "$APP_DIR"
+  rm -f "$ZIP_PATH"
+  (cd "$DIST_DIR" && /usr/bin/ditto -c -k --norsrc --noextattr --keepParent "$APP_NAME.app" "$ZIP_PATH")
+elif [[ -n "${AXON_NOTARY_KEY_PATH:-}" || -n "${AXON_NOTARY_KEY_ID:-}" || -n "${AXON_NOTARY_ISSUER:-}" ]]; then
+  if [[ -z "${AXON_NOTARY_KEY_PATH:-}" || -z "${AXON_NOTARY_KEY_ID:-}" || -z "${AXON_NOTARY_ISSUER:-}" ]]; then
+    printf 'AXON_NOTARY_KEY_PATH, AXON_NOTARY_KEY_ID, and AXON_NOTARY_ISSUER must be set together\n' >&2
+    exit 1
+  fi
+  /usr/bin/xcrun notarytool submit "$ZIP_PATH" \
+    --key "$AXON_NOTARY_KEY_PATH" \
+    --key-id "$AXON_NOTARY_KEY_ID" \
+    --issuer "$AXON_NOTARY_ISSUER" \
+    --wait
   /usr/bin/xcrun stapler staple "$APP_DIR"
   rm -f "$ZIP_PATH"
   (cd "$DIST_DIR" && /usr/bin/ditto -c -k --norsrc --noextattr --keepParent "$APP_NAME.app" "$ZIP_PATH")
