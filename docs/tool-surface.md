@@ -1,0 +1,181 @@
+# Tool Surface
+
+Axon exposes the same core commands through the CLI, the daemon JSON-RPC socket, and MCP. MCP tool names are plain because clients already namespace by server.
+
+## MCP Tools
+
+```text
+list_apps()
+request_accessibility()
+get_app_state(app, screenshot?, includeTree?)
+get_screenshot(app)
+resolve(app, locator)
+changed_since(snapshotId)
+run_plan(source? | path? | plan?, args?, dryRun?)
+click(target)
+scroll(target?, app?, deltaX?, deltaY?)
+drag(from, to, app?, durationMs?)
+perform_action(target, action)
+set_value(target, value)
+type_text(app, text)
+press_key(app, key)
+```
+
+## CLI Commands
+
+```sh
+axon apps
+axon snapshot <app> [--screenshot]
+axon snapshot-json <app> [--compact] [--screenshot]
+axon screenshot <app>
+axon resolve <app> '<locator-json>'
+axon changed-since <snapshot-id>
+axon run <path>|--source '<yaml-or-json>' [--dry-run] [--arg key=value]
+axon click '<handle-or-target-json>'
+axon scroll [--app app] [--target '<target-json-or-handle>'] [--dx n] [--dy n]
+axon drag [--app app] [--duration-ms n] '<from-json-or-handle>' '<to-json-or-handle>'
+axon perform-action <handle> <action>
+axon set-value <handle> <value>
+axon type-text <app> <text>
+axon press-key <app> <key>
+```
+
+## App Queries
+
+`app` can be a bundle id, pid, exact app name, or partial app name.
+
+Examples:
+
+```text
+com.cairn.desktop.dev
+85900
+cairn
+System Settings
+```
+
+Prefer bundle id when available. Partial names are convenient but can become ambiguous.
+
+## Snapshots and Handles
+
+`get_app_state` captures an app snapshot and returns:
+
+- `id`: opaque snapshot id
+- `app`: resolved app identity
+- `indexedNodes`: depth-first flattened AX nodes
+- `windows`: nested tree when `includeTree: true`
+- `screenshot`: embedded screenshot when `screenshot: true`
+
+MCP defaults are compact:
+
+```json
+{ "app": "cairn", "includeTree": false, "screenshot": false }
+```
+
+Each node in `indexedNodes` has a snapshot-scoped handle:
+
+```text
+snapshot:<snapshot-id>:<index>
+```
+
+Handles are convenient within a short observe/action loop, but they are not durable identity. Use locators in reusable plans.
+
+## Screenshots
+
+Screenshots are opt-in. In MCP responses, Axon moves PNG bytes into MCP image content blocks and redacts `base64Data` from structured JSON. Structured screenshot fields still include width, height, media type, and `contentTransport: "mcp_image"`.
+
+Use:
+
+```json
+{ "app": "cairn", "screenshot": true }
+```
+
+or:
+
+```text
+get_screenshot(app)
+```
+
+## Locator Targets
+
+Locator targets are AX-native. Supported fields today:
+
+```yaml
+role: AXButton
+subrole: AXStandardButton
+title:
+  contains: Issues
+value:
+  exact: Draft
+description:
+  contains: issue
+identifier: new-issue-button
+actions:
+  - AXPress
+ancestors:
+  - role: AXWindow
+    title:
+      contains: cairn
+```
+
+Text fields can be a string for case-insensitive exact match:
+
+```yaml
+title: Issues
+```
+
+or an object:
+
+```yaml
+title:
+  contains: Issue
+  caseSensitive: true
+```
+
+`resolve` returns `unique`, `ambiguous`, or `missing` with candidate summaries. Actions that receive locator targets resolve against a fresh snapshot before dispatching.
+
+## Target Shapes
+
+Primitive actions accept three target shapes:
+
+```json
+"snapshot:<snapshot-id>:<index>"
+```
+
+```json
+{
+  "app": "cairn",
+  "locator": {
+    "role": "AXButton",
+    "title": { "contains": "Issues" },
+    "actions": ["AXPress"]
+  }
+}
+```
+
+```json
+{
+  "point": { "x": 320, "y": 240 }
+}
+```
+
+Point targets are screen coordinates and should be treated as an escape hatch. The current drag follow-up is tracked in `docs/issues/2026-05-12-drag-targeting-and-verification.md`.
+
+## Action Semantics
+
+`click` prefers `AXPress` when the element exposes it, then falls back to a CoreGraphics click at the element frame center.
+
+`perform_action` runs a named AX action such as `AXPress` or `AXShowMenu`.
+
+`set_value` sets the AX value for a settable element.
+
+`type_text` and `press_key` activate the app and post keyboard events.
+
+`scroll` does not post wheel events. It resolves a scroll surface from the target or app, finds an offscreen descendant in the requested direction, and requests `AXScrollToVisible`. A successful result means the AX action succeeded, not that a specific pixel delta was applied.
+
+`drag` currently posts pointer events between resolved points. It reports dispatch success, not semantic success. Use plan assertions or fresh snapshots around drag until visual target resolution and postconditions are implemented.
+
+## Change Detection
+
+`changed_since(snapshotId)` asks whether the app/window surface changed since a retained snapshot. It uses observer events when available and always compares a fresh coarse app/window signature.
+
+Focus-only interaction should not count as a meaningful layout change unless the app/window signature changes.

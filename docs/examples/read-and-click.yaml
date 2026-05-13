@@ -1,0 +1,17 @@
+app: cairn
+result:
+  outputs: compact
+steps:
+  - read:
+      as: before
+  - click:
+      target:
+        locator:
+          role: AXButton
+          title:
+            contains: $args.button
+          actions:
+            - AXPress
+  - changed_since:
+      snapshotId: $before.snapshotId
+      as: changed

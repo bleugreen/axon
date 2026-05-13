@@ -1,0 +1,11 @@
+app: cairn
+result:
+  outputs: compact
+steps:
+  - read:
+      as: before
+  - scroll:
+      deltaY: -600
+  - changed_since:
+      snapshotId: $before.snapshotId
+      as: changed

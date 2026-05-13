@@ -261,7 +261,7 @@ import Testing
                 #expect(app == "com.example.App")
                 #expect(deltaX == 0)
                 #expect(deltaY == -480)
-                return PrimitiveActionResult(action: "scroll", target: "point:10,20", strategy: "CGEventScroll", success: true)
+                return PrimitiveActionResult(action: "scroll", target: "point:10,20", strategy: "AXScrollToVisible", success: true)
             }
         )
     )
@@ -286,7 +286,7 @@ import Testing
         actions: PrimitiveActionHandlers(
             scroll: { target, _, _, _ in
                 #expect(target == .handle("snapshot:action-locator-fixture:2"))
-                return PrimitiveActionResult(action: "scroll", target: "snapshot:action-locator-fixture:2", strategy: "CGEventScroll", success: true)
+                return PrimitiveActionResult(action: "scroll", target: "snapshot:action-locator-fixture:2", strategy: "AXScrollToVisible", success: true)
             }
         )
     )

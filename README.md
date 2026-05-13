@@ -2,95 +2,49 @@
 
 Axon is a local macOS accessibility service that gives agents a typed, composable path into running apps.
 
-The goal is to expose macOS Accessibility as a composable automation substrate: observe app state, resolve durable locators against live UI trees, perform actions, and verify the result.
+It runs as a background daemon, exposes a small JSON-RPC command surface over a Unix socket, and provides an MCP stdio facade for agent clients. The core loop is:
 
-Start with:
+1. capture app state
+2. resolve an honest target
+3. perform a primitive action
+4. verify or continue with an invocation-scoped plan
 
-- [Design](docs/design.md)
-- [Implementation plan](docs/implementation-plan.md)
-- [Decision log](docs/decision-log.md)
-
-## Development
-
-This repo uses Swift 6.3.1 through Swiftly. The repository `.swift-version` pins that toolchain.
+## Quick Start
 
 ```sh
-~/.swiftly/bin/swift test
-~/.swiftly/bin/swift run axon doctor
+make build
+make test
+make install-daemon
+make start-daemon
+make health
 ```
 
-Run the daemon in the foreground while developing:
+If `health` reports `accessibility: denied`, approve the installed Axon daemon in System Settings > Privacy & Security > Accessibility, or ask the daemon to trigger the prompt:
 
 ```sh
-AXON_SOCKET_PATH=/tmp/axon.sock ~/.swiftly/bin/swift run axon serve
+make request-accessibility
 ```
 
-Install and manage the user LaunchAgent:
+## Documentation
 
-```sh
-~/.swiftly/bin/swift run axon daemon install
-~/.swiftly/bin/swift run axon daemon start
-~/.swiftly/bin/swift run axon daemon status
-~/.swiftly/bin/swift run axon daemon stop
-~/.swiftly/bin/swift run axon daemon uninstall
-```
+- [Install and Operations](docs/install.md): build, daemon lifecycle, Codex MCP config, logs, and troubleshooting.
+- [Tool Surface](docs/tool-surface.md): MCP/CLI commands, target shapes, screenshots, action semantics, and current caveats.
+- [Automation Plans](docs/plans.md): YAML plan schema, control flow, output modes, failure behavior, and examples.
+- [Design](docs/design.md): architecture and long-term direction.
+- [Decision Log](docs/decision-log.md): durable decisions made while shaping the project.
+- [Implementation Plan](docs/implementation-plan.md): phase map and test strategy.
+- [Issues](docs/issues): continuity notes for known gaps and follow-up work.
 
-The daemon installer copies the current executable into `~/Library/Application Support/Axon/Axon Daemon.app`, signs that app bundle with the stable identifier `dev.axon.daemon`, and points the LaunchAgent at the bundled executable instead of `.build/debug/axon`. The LaunchAgent runs that binary in `serve` mode, keeps it alive, and writes logs under `~/Library/Logs/Axon/`.
+## Current Shape
 
-After the first daemon install, macOS may require approving the installed daemon identity in Privacy & Security > Accessibility. Check the daemon process, not only the terminal process:
+Axon currently supports:
 
-```sh
-~/.swiftly/bin/swift run axon health
-```
+- running as a signed local LaunchAgent with a stable bundle id, `dev.axon.daemon`
+- compact app snapshots with per-snapshot handles
+- opt-in embedded screenshots returned as MCP image content
+- locator resolution over role, subrole, title, value, description, identifier, actions, and ancestors
+- primitive actions: click, scroll, drag, perform AX action, set value, type text, press key
+- coarse `changed_since(snapshotId)` checks backed by observer hints plus fresh app/window signatures
+- invocation-scoped YAML or JSON automation plans with conditionals, waits, repeat loops, assertions, args, dry runs, and compact outputs
 
-If health still reports `accessibility: denied`, ask the running daemon identity to prompt macOS directly:
-
-```sh
-~/.swiftly/bin/swift run axon request-accessibility
-```
-
-Target badges are enabled by default with a 250ms planned flash and a 1.1s result linger. Set `AXON_VISUAL_OVERLAY=0` to disable them, or override timing with `AXON_VISUAL_OVERLAY_PLANNED_MS` and `AXON_VISUAL_OVERLAY_RESULT_MS`.
-
-Run the MCP stdio facade:
-
-```sh
-~/.swiftly/bin/swift run axon mcp
-```
-
-The MCP facade forwards tool calls to the daemon over `AXON_SOCKET_PATH`; it does not own snapshots, handles, observer state, or overlay configuration itself. Codex MCP config points at `.build/debug/axon`. After changing Axon code, run `~/.swiftly/bin/swift build` and restart the Codex session so its MCP server process picks up the rebuilt binary.
-
-Resolve a locator through the daemon:
-
-```sh
-~/.swiftly/bin/swift run axon resolve com.cairn.desktop.dev '{"role":"AXButton","title":{"contains":"Issues"},"actions":["AXPress"]}'
-```
-
-Check whether coarse app/window state changed since a retained snapshot:
-
-```sh
-~/.swiftly/bin/swift run axon changed-since <snapshot-id>
-```
-
-`changed-since` uses observer events when Axon has seen them for the app, and falls back to a fresh app/window signature comparison when it has not.
-
-Pointer actions accept snapshot handles, locator targets, and point targets:
-
-```sh
-~/.swiftly/bin/swift run axon click '{"point":{"x":320,"y":240}}'
-~/.swiftly/bin/swift run axon scroll --app cairn --dy -480
-~/.swiftly/bin/swift run axon drag --app cairn '{"point":{"x":320,"y":240}}' '{"point":{"x":320,"y":120}}'
-```
-
-For MCP, `get_app_state` defaults to compact output: `indexedNodes` with handles and useful metadata, no full nested `windows` tree, and no screenshot unless requested. Pass `includeTree: true` or `screenshot: true` when the client needs those heavier fields.
-
-Composable automation plans run through the daemon without installing persistent recipes:
-
-```sh
-~/.swiftly/bin/swift run axon run ./plan.yaml --dry-run --arg button=Issues
-```
-
-Plans can be supplied as a local path, inline `--source`, or MCP `run_plan` `source`. YAML is the preferred compact authoring format for agent-generated plans.
-
-Plan results compact bound snapshot outputs by default so multi-step plans do not return an entire app tree after every read. Use `result.outputs: full` for debugging or `result.outputs: none` when only the trace matters.
-
-When a plan step fails, the MCP call still returns normally and `plan.success` is `false`. The failure trace includes the failing `stepIndex`, `stepPath`, `stepOp`, and, for locator target failures, the locator plus resolution status and candidate summaries.
+Scroll is intentionally AX-native today: Axon resolves an offscreen descendant in the requested direction and requests `AXScrollToVisible`. Drag is still an escape-hatch pointer primitive; see [Drag Targeting and Verification](docs/issues/2026-05-12-drag-targeting-and-verification.md) for the next shape.

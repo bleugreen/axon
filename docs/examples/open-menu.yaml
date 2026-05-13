@@ -1,0 +1,18 @@
+app: cairn
+result:
+  outputs: compact
+steps:
+  - perform_action:
+      target:
+        locator:
+          role: AXButton
+          title:
+            contains: Issue menu
+      action: AXShowMenu
+  - wait_until:
+      timeoutMs: 3000
+      intervalMs: 150
+      condition:
+        exists:
+          locator:
+            role: AXMenu

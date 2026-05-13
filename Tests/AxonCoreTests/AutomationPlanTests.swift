@@ -374,7 +374,7 @@ import Testing
                 #expect(app == "com.example.App")
                 #expect(deltaX == 0)
                 #expect(deltaY == -300)
-                return PrimitiveActionResult(action: "scroll", target: "point:50,60", strategy: "CGEventScroll", success: true)
+                return PrimitiveActionResult(action: "scroll", target: "point:50,60", strategy: "AXScrollToVisible", success: true)
             },
             drag: { from, to, app, durationMs in
                 dragged = true
@@ -506,6 +506,20 @@ import Testing
     #expect(error?["resolution"]?["candidateCount"] == .int(2))
     #expect(error?["resolution"]?["candidates"]?[0]?["handle"] == .string("snapshot:plan-ambiguous:1"))
     #expect(error?["resolution"]?["candidates"]?[1]?["handle"] == .string("snapshot:plan-ambiguous:2"))
+}
+
+@Test func documentationPlanExamplesParse() throws {
+    let packageRoot = URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+    let examplesDirectory = packageRoot.appendingPathComponent("docs/examples")
+
+    for name in ["open-menu.yaml", "read-and-click.yaml", "scroll.yaml"] {
+        let source = try String(contentsOf: examplesDirectory.appendingPathComponent(name), encoding: .utf8)
+        let plan = try AutomationPlanExecutor.parseSource(source)
+        #expect(plan["steps"] != nil)
+    }
 }
 
 private func planFixtureSnapshot(id: String, controls: [AXNode]) -> AppSnapshot {

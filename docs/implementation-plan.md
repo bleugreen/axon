@@ -1,5 +1,17 @@
 # Axon Implementation Plan
 
+## Current Status
+
+Phases 0 through 6 have working first implementations in `main`. The remaining work is not "finish the phase checklist"; it is to harden the current surface through live use, better install packaging, richer verification, and sharper target resolution.
+
+Active follow-up areas:
+
+- visual target resolution and honest drag verification
+- packaging that does not require remembering Swiftly commands
+- fixture apps and integration tests for real AX behavior
+- locator scoring signals beyond the initial AX-native subset
+- observer invalidation at finer granularity than coarse app/window signatures
+
 ## Phase 0: Project Foundation
 
 - Create a Swift package with a small CLI entrypoint.
