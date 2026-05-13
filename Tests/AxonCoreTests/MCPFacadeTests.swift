@@ -126,7 +126,11 @@ import Testing
                 app: AppIdentity(bundleIdentifier: "com.example.App", name: "Example", processIdentifier: 7),
                 windows: [
                     AXNode(role: "AXWindow", title: "Main", children: [
-                        AXNode(role: "AXButton", title: "Run", actions: ["AXPress"])
+                        AXNode(role: "AXGroup", children: [
+                            AXNode(role: "AXButton", title: "Run", actions: ["AXPress"]),
+                            AXNode(role: "AXStaticText", title: "Ready")
+                        ]),
+                        AXNode(role: "AXButton", title: "Hidden Tab", frame: AXFrame(x: -5000, y: 10, width: 80, height: 30), actions: ["AXPress"])
                     ])
                 ],
                 screenshot: nil
@@ -144,10 +148,22 @@ import Testing
     ))
 
     let snapshot = response?.result?["structuredContent"]?["snapshot"]
+    let text = textContent(in: response?.result)
     #expect(response?.error == nil)
+    #expect(snapshot?["format"] == .string("observation"))
+    #expect(snapshot?["snapshot"] == .string("mcp-compact"))
+    #expect(snapshot?["tree"]?[0]?["handle"] == .string("mcp-compact:0"))
+    #expect(snapshot?["tree"]?[0]?["children"]?[0]?["handle"] == .string("mcp-compact:2"))
+    #expect(snapshot?["tree"]?[0]?["children"]?[0]?["role"] == .string("button"))
+    #expect(snapshot?["tree"]?[0]?["children"]?[0]?["label"] == .string("Run"))
+    #expect(snapshot?["tree"]?[0]?["children"]?[0]?["actions"]?[0] == .string("click"))
+    #expect(snapshot?["indexedNodes"] == nil)
     #expect(snapshot?["windows"] == nil)
-    #expect(snapshot?["indexedNodes"]?[1]?["title"] == .string("Run"))
-    #expect(snapshot?["indexedNodes"]?[1]?["actions"]?[0] == .string("AXPress"))
+    #expect(text?.contains("snapshot: mcp-compact") == true)
+    #expect(text?.contains("mcp-compact:2 button \"Run\"") == true)
+    #expect(text?.contains("snapshot:") == true)
+    #expect(text?.contains("snapshot:mcp-compact") == false)
+    #expect(text?.contains("Hidden Tab") == false)
 }
 
 @Test func mcpSensitiveAppStateDoesNotLeakSecretsInTextOrStructuredContent() throws {
@@ -188,7 +204,8 @@ import Testing
     #expect(response?.error == nil)
     #expect(result?["isError"] == .bool(false))
     #expect(snapshot?["redaction"]?["sensitive"] == .bool(true))
-    #expect(snapshot?["indexedNodes"]?[1]?["value"] == .string("sk-proj-abcd...[redacted]"))
+    #expect(snapshot?["indexedNodes"] == nil)
+    #expect(snapshot?["tree"]?[0]?["children"]?[0]?["label"] == .string("sk-proj-abcd...[redacted]"))
     #expect(textContent(in: result)?.contains("SECRET") == false)
     #expect(encoded.contains("SECRET") == false)
 }

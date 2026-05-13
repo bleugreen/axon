@@ -83,7 +83,22 @@ import Testing
 @Test func mcpToolsCallForwardsCommandRequestsToInjectedHandler() {
     let handler = RecordingCommandHandler(response: JSONRPCResponse(
         id: .string("state"),
-        result: ["snapshot": .object(["id": .string("snapshot-1")])]
+        result: [
+            "snapshot": .object([
+                "id": .string("snapshot-1"),
+                "app": .object([
+                    "name": .string("Example"),
+                    "pid": .int(123)
+                ]),
+                "windows": .array([
+                    .object([
+                        "handle": .string("snapshot-1:0"),
+                        "role": .string("AXWindow"),
+                        "title": .string("Main")
+                    ])
+                ])
+            ])
+        ]
     ))
     let router = MCPRouter(commandHandler: handler)
 
@@ -104,12 +119,13 @@ import Testing
             params: .object([
                 "app": .string("com.example.App"),
                 "screenshot": .bool(false),
-                "includeTree": .bool(false),
+                "includeTree": .bool(true),
                 "sensitive": .bool(false)
             ])
         )
     ])
-    #expect(response?.result?["structuredContent"]?["snapshot"]?["id"] == .string("snapshot-1"))
+    #expect(response?.result?["structuredContent"]?["snapshot"]?["format"] == .string("observation"))
+    #expect(response?.result?["structuredContent"]?["snapshot"]?["snapshot"] == .string("snapshot-1"))
 }
 
 @Test func launchAgentConfigurationBuildsDaemonPlist() throws {

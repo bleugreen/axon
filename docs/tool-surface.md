@@ -7,7 +7,7 @@ Axon exposes the same core commands through the CLI, the daemon JSON-RPC socket,
 ```text
 list_apps()
 request_accessibility()
-get_app_state(app, screenshot?, includeTree?, sensitive?)
+get_app_state(app, screenshot?, sensitive?, format?, frames?)
 get_screenshot(app)
 resolve(app, locator)
 changed_since(snapshotId, sensitive?)
@@ -57,28 +57,31 @@ Prefer bundle id when available. Partial names are convenient but can become amb
 
 ## Snapshots and Handles
 
-`get_app_state` captures an app snapshot and returns:
+`get_app_state` captures an app snapshot and returns an agent-facing observation by default:
 
-- `id`: opaque snapshot id
-- `app`: resolved app identity
-- `indexedNodes`: depth-first flattened AX nodes
-- `windows`: nested tree when `includeTree: true`
-- `screenshot`: embedded screenshot when `screenshot: true`
+- `format: observation`
+- `snapshot`: short snapshot id
+- `app`, `pid`, and `bundle` when available
+- `tree`: compact visible AX tree with short handles
+- `screenshot`: screenshot metadata when `screenshot: true`
 - `redaction`: sensitive-mode metadata when `sensitive: true`
 
-MCP defaults are compact:
+MCP defaults are tree-first and screenshot-free:
 
-```json
-{ "app": "cairn", "includeTree": false, "screenshot": false }
+```yaml
+app: cairn
+screenshot: false
 ```
 
-Each node in `indexedNodes` has a snapshot-scoped handle:
+Each tree node has a snapshot-scoped handle:
 
 ```text
-snapshot:<snapshot-id>:<index>
+s12:19
 ```
 
-Handles are convenient within a short observe/action loop, but they are not durable identity. Use locators in reusable plans.
+Handles are convenient within a short observe/action loop, but they are not durable identity. Use locators in reusable plans. Legacy prefixed handles are not supported.
+
+Observation output omits frame rectangles by default. Set `frames: true` only when coordinates matter. Set `format: debug` only when diagnosing Axon internals; debug output returns the raw snapshot JSON with `indexedNodes` and accepts `includeTree`.
 
 ## Screenshots
 
@@ -151,7 +154,7 @@ title:
 Primitive actions accept three target shapes:
 
 ```json
-"snapshot:<snapshot-id>:<index>"
+"s12:19"
 ```
 
 ```json

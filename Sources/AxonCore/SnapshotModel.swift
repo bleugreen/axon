@@ -1,6 +1,8 @@
 import Foundation
 
 public struct SnapshotID: RawRepresentable, Codable, Equatable, Hashable, Sendable {
+    private static let sequence = SnapshotIDSequence()
+
     public let rawValue: String
 
     public init(_ rawValue: String) {
@@ -9,6 +11,22 @@ public struct SnapshotID: RawRepresentable, Codable, Equatable, Hashable, Sendab
 
     public init(rawValue: String) {
         self.rawValue = rawValue
+    }
+
+    public static func next() -> SnapshotID {
+        SnapshotID("s\(sequence.next())")
+    }
+}
+
+private final class SnapshotIDSequence: @unchecked Sendable {
+    private let lock = NSLock()
+    private var value = 0
+
+    func next() -> Int {
+        lock.lock()
+        defer { lock.unlock() }
+        value += 1
+        return value
     }
 }
 
@@ -177,7 +195,7 @@ public struct SnapshotHandle: Codable, Equatable, Sendable {
     public let nodeIndex: Int
 
     public var rawValue: String {
-        "snapshot:\(snapshotID.rawValue):\(nodeIndex)"
+        "\(snapshotID.rawValue):\(nodeIndex)"
     }
 
     public init(snapshotID: SnapshotID, nodeIndex: Int) {
@@ -187,13 +205,13 @@ public struct SnapshotHandle: Codable, Equatable, Sendable {
 
     public init(_ rawValue: String) throws {
         let parts = rawValue.split(separator: ":", omittingEmptySubsequences: false)
-        guard parts.count == 3, parts[0] == "snapshot", !parts[1].isEmpty else {
+        guard parts.count == 2, !parts[0].isEmpty else {
             throw ParseError.invalidFormat
         }
-        guard let index = Int(parts[2]) else {
+        guard let index = Int(parts[1]) else {
             throw ParseError.invalidIndex
         }
-        self.snapshotID = SnapshotID(String(parts[1]))
+        self.snapshotID = SnapshotID(String(parts[0]))
         self.nodeIndex = index
     }
 }

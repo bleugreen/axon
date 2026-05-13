@@ -68,7 +68,7 @@ steps:
 References can traverse objects and arrays:
 
 ```yaml
-$before.snapshot.indexedNodes.0.handle
+$before.snapshot.windows.0.handle
 $args.title
 ```
 

@@ -5,7 +5,7 @@ import Testing
     let router = CommandRouter(
         actions: PrimitiveActionHandlers(
             click: { target in
-                #expect(target == "snapshot:snap:1")
+                #expect(target == "snap:1")
                 return PrimitiveActionResult(action: "click", target: target, strategy: "AXPress", success: true)
             }
         )
@@ -14,7 +14,7 @@ import Testing
     let response = router.handle(JSONRPCRequest(
         id: .string("click-1"),
         method: "click",
-        params: .object(["target": .string("snapshot:snap:1")])
+        params: .object(["target": .string("snap:1")])
     ))
 
     #expect(response.error == nil)
@@ -80,7 +80,7 @@ import Testing
 
     #expect(response.error == nil)
     #expect(response.result?["resolution"]?["status"] == .string("unique"))
-    #expect(response.result?["resolution"]?["best"]?["handle"] == .string("snapshot:action-locator-fixture:2"))
+    #expect(response.result?["resolution"]?["best"]?["handle"] == .string("action-locator-fixture:2"))
 }
 
 @Test func clickRequestAcceptsLocatorTarget() {
@@ -91,7 +91,7 @@ import Testing
         },
         actions: PrimitiveActionHandlers(
             click: { target in
-                #expect(target == "snapshot:action-locator-fixture:2")
+                #expect(target == "action-locator-fixture:2")
                 return PrimitiveActionResult(action: "click", target: target, strategy: "AXPress", success: true)
             }
         )
@@ -112,7 +112,7 @@ import Testing
     ))
 
     #expect(response.error == nil)
-    #expect(response.result?["action"]?["target"] == .string("snapshot:action-locator-fixture:2"))
+    #expect(response.result?["action"]?["target"] == .string("action-locator-fixture:2"))
 }
 
 @Test func clickRequestRejectsAmbiguousLocatorTarget() {
@@ -150,7 +150,7 @@ import Testing
     let response = router.handle(JSONRPCRequest(
         id: .string("click-stale"),
         method: "click",
-        params: .object(["target": .string("snapshot:missing:0")])
+        params: .object(["target": .string("missing:0")])
     ))
 
     #expect(response.error?.code == -32602)
@@ -161,7 +161,7 @@ import Testing
     let router = CommandRouter(
         actions: PrimitiveActionHandlers(
             performAction: { target, action in
-                #expect(target == "snapshot:snap:2")
+                #expect(target == "snap:2")
                 #expect(action == "AXShowMenu")
                 return PrimitiveActionResult(action: action, target: target, strategy: "AXAction", success: true)
             }
@@ -172,7 +172,7 @@ import Testing
         id: .string("action-1"),
         method: "perform_action",
         params: .object([
-            "target": .string("snapshot:snap:2"),
+            "target": .string("snap:2"),
             "action": .string("AXShowMenu")
         ])
     ))
@@ -185,7 +185,7 @@ import Testing
     let router = CommandRouter(
         actions: PrimitiveActionHandlers(
             setValue: { target, value in
-                #expect(target == "snapshot:snap:3")
+                #expect(target == "snap:3")
                 #expect(value == "hello")
                 return PrimitiveActionResult(action: "set_value", target: target, strategy: "AXValue", success: true)
             }
@@ -196,7 +196,7 @@ import Testing
         id: .string("set-1"),
         method: "set_value",
         params: .object([
-            "target": .string("snapshot:snap:3"),
+            "target": .string("snap:3"),
             "value": .string("hello")
         ])
     ))
@@ -285,8 +285,8 @@ import Testing
         captureSnapshot: { _, _ in actionLocatorFixtureSnapshot(buttons: ["List"]) },
         actions: PrimitiveActionHandlers(
             scroll: { target, _, _, _ in
-                #expect(target == .handle("snapshot:action-locator-fixture:2"))
-                return PrimitiveActionResult(action: "scroll", target: "snapshot:action-locator-fixture:2", strategy: "AXScrollToVisible", success: true)
+                #expect(target == .handle("action-locator-fixture:2"))
+                return PrimitiveActionResult(action: "scroll", target: "action-locator-fixture:2", strategy: "AXScrollToVisible", success: true)
             }
         )
     )

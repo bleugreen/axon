@@ -63,7 +63,7 @@ Every snapshot receives an opaque id. Tree indexes are scoped to that snapshot o
 Example handle:
 
 ```text
-snapshot:01HZAXON:19
+01HZAXON:19
 ```
 
 That handle is valid only while the referenced snapshot is still retained.
@@ -176,7 +176,7 @@ run_plan(source | path | plan, args?, dryRun?)
 Where `target` can be:
 
 ```text
-snapshot:<snapshot-id>:<index>
+s12:19
 ```
 
 a locator object, or a point object such as `{ "point": { "x": 320, "y": 240 } }`.

@@ -26,7 +26,7 @@ import ApplicationServices
     )
 
     #expect(snapshot.indexedNodes.map(\.node.role) == ["AXWindow", "AXButton", "AXGroup", "AXStaticText"])
-    #expect(snapshot.handle(for: 3)?.rawValue == "snapshot:snap-test:3")
+    #expect(snapshot.handle(for: 3)?.rawValue == "snap-test:3")
 }
 
 @Test func nodeCanReportTruncationReason() {
@@ -41,15 +41,18 @@ import ApplicationServices
 }
 
 @Test func snapshotHandleParsesSnapshotIdAndNodeIndex() throws {
-    let handle = try SnapshotHandle("snapshot:snap-test:42")
+    let handle = try SnapshotHandle("snap-test:42")
 
     #expect(handle.snapshotID == SnapshotID("snap-test"))
     #expect(handle.nodeIndex == 42)
 }
 
-@Test func snapshotHandleRejectsMalformedValues() {
+@Test func snapshotHandleRejectsMalformedAndLegacyValues() {
     #expect(throws: SnapshotHandle.ParseError.self) {
-        try SnapshotHandle("snap-test:42")
+        try SnapshotHandle("42")
+    }
+    #expect(throws: SnapshotHandle.ParseError.self) {
+        try SnapshotHandle("snapshot:snap-test:42")
     }
 }
 

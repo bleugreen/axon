@@ -74,7 +74,11 @@ public struct MCPRouter {
                     "error": error.jsonValue
                 ], isError: true)
             }
-            return toolResult(id: request.id, structuredContent: commandResponse.result ?? [:], isError: false)
+            let result = commandResponse.result ?? [:]
+            if name == "get_app_state", Self.outputFormat(in: arguments) != "debug" {
+                return appStateObservationResult(id: request.id, result: result, arguments: arguments)
+            }
+            return toolResult(id: request.id, structuredContent: result, isError: false)
         } catch let error as JSONRPCError {
             return JSONRPCResponse(id: request.id, error: error)
         } catch {
@@ -93,6 +97,30 @@ public struct MCPRouter {
             ] + content.images),
             "structuredContent": content.structured,
             "isError": .bool(isError)
+        ])
+    }
+
+    private func appStateObservationResult(
+        id: JSONRPCID?,
+        result: [String: JSONValue],
+        arguments: [String: JSONValue]
+    ) -> JSONRPCResponse {
+        guard let snapshot = result["snapshot"] else {
+            return toolResult(id: id, structuredContent: result, isError: false)
+        }
+
+        let formatter = SnapshotObservationFormatter()
+        let observation = formatter.observation(from: snapshot, frames: Self.bool("frames", in: arguments) ?? false)
+        let content = MCPContent.normalize(.object(["snapshot": observation]))
+        return JSONRPCResponse(id: id, result: [
+            "content": .array([
+                .object([
+                    "type": .string("text"),
+                    "text": .string(formatter.text(from: content.structured["snapshot"] ?? observation))
+                ])
+            ] + content.images),
+            "structuredContent": content.structured,
+            "isError": .bool(false)
         ])
     }
 
@@ -146,16 +174,31 @@ public struct MCPRouter {
             return arguments
         }
         var updated = arguments
+        let format = outputFormat(in: arguments)
         if updated["screenshot"] == nil {
             updated["screenshot"] = .bool(false)
         }
         if updated["includeTree"] == nil {
-            updated["includeTree"] = .bool(false)
+            updated["includeTree"] = .bool(format != "debug")
         }
         if updated["sensitive"] == nil {
             updated["sensitive"] = .bool(false)
         }
         return updated
+    }
+
+    private static func outputFormat(in arguments: [String: JSONValue]) -> String {
+        guard case let .string(format)? = arguments["format"] else {
+            return "observation"
+        }
+        return format == "debug" ? "debug" : "observation"
+    }
+
+    private static func bool(_ key: String, in object: [String: JSONValue]) -> Bool? {
+        guard case let .bool(value)? = object[key] else {
+            return nil
+        }
+        return value
     }
 
     private static let tools: [MCPTool] = [
@@ -175,8 +218,10 @@ public struct MCPRouter {
             inputSchema: objectSchema(properties: [
                 "app": stringSchema("Bundle id, pid, exact app name, or partial app name."),
                 "screenshot": boolSchema("Whether to include embedded ScreenCaptureKit screenshot data. Defaults to false for MCP."),
-                "includeTree": boolSchema("Whether to include the full nested AX tree. Defaults to false for MCP; indexedNodes are always returned."),
-                "sensitive": boolSchema("Redact values and secret-like text while preserving short safe prefixes. Sensitive snapshots cannot include screenshots.")
+                "includeTree": boolSchema("Debug-only escape hatch for returning the nested raw AX tree."),
+                "sensitive": boolSchema("Redact values and secret-like text while preserving short safe prefixes. Sensitive snapshots cannot include screenshots."),
+                "format": stringSchema("Defaults to observation. Use debug only when diagnosing Axon internals."),
+                "frames": boolSchema("Include frames in observation output. Defaults to false.")
             ], required: ["app"])
         ),
         MCPTool(
@@ -344,7 +389,7 @@ private func targetSchema() -> JSONValue {
         "anyOf": .array([
             .object([
                 "type": .string("string"),
-                "description": .string("Snapshot handle like snapshot:<id>:<index>.")
+                "description": .string("Snapshot handle like s12:19.")
             ]),
             .object([
                 "type": .string("object"),

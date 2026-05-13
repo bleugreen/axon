@@ -52,7 +52,7 @@ import Testing
     let json = snapshot.jsonValue(includeTree: false)
 
     #expect(json["windows"] == nil)
-    #expect(json["indexedNodes"]?[1]?["handle"] == .string("snapshot:snap-compact:1"))
+    #expect(json["indexedNodes"]?[1]?["handle"] == .string("snap-compact:1"))
     #expect(json["indexedNodes"]?[1]?["title"] == .string("Run"))
     #expect(json["indexedNodes"]?[1]?["value"] == .string("ready"))
     #expect(json["indexedNodes"]?[1]?["description"] == .string("Run task"))

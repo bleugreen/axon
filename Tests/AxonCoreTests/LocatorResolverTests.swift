@@ -16,7 +16,7 @@ import Testing
 
     #expect(resolution.status == .unique)
     #expect(resolution.best?.index == 2)
-    #expect(resolution.best?.handle?.rawValue == "snapshot:locator-fixture:2")
+    #expect(resolution.best?.handle?.rawValue == "locator-fixture:2")
     #expect(resolution.best?.reasons.contains("title exact NEW") == true)
 }
 

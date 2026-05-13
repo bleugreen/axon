@@ -13,7 +13,7 @@ import Testing
         },
         actions: PrimitiveActionHandlers(
             click: { target in
-                #expect(target == "snapshot:plan-read-click:1")
+                #expect(target == "plan-read-click:1")
                 return PrimitiveActionResult(action: "click", target: target, strategy: "AXPress", success: true)
             }
         )
@@ -130,7 +130,7 @@ import Testing
     #expect(response.result?["plan"]?["success"] == .bool(true))
     #expect(response.result?["plan"]?["trace"]?[0]?["op"] == .string("if"))
     #expect(response.result?["plan"]?["trace"]?[0]?["branch"] == .string("then"))
-    #expect(clickedTargets == ["snapshot:plan-if:1"])
+    #expect(clickedTargets == ["plan-if:1"])
 }
 
 @Test func runPlanWaitUntilPollsUntilConditionExists() {
@@ -261,7 +261,7 @@ import Testing
     #expect(response.result?["plan"]?["dryRun"] == .bool(true))
     #expect(response.result?["plan"]?["trace"]?[0]?["op"] == .string("click"))
     #expect(response.result?["plan"]?["trace"]?[0]?["dryRun"] == .bool(true))
-    #expect(response.result?["plan"]?["trace"]?[0]?["target"] == .string("snapshot:plan-dry-run:1"))
+    #expect(response.result?["plan"]?["trace"]?[0]?["target"] == .string("plan-dry-run:1"))
 }
 
 @Test func runPlanResolvesArgsInLocators() {
@@ -300,7 +300,7 @@ import Testing
 
     #expect(response.error == nil)
     #expect(response.result?["plan"]?["success"] == .bool(true))
-    #expect(clickedTargets == ["snapshot:plan-args:1"])
+    #expect(clickedTargets == ["plan-args:1"])
 }
 
 @Test func runPlanAcceptsPlanFilePath() throws {
@@ -537,8 +537,8 @@ import Testing
     #expect(error?["stepOp"] == .string("click"))
     #expect(error?["resolution"]?["status"] == .string("ambiguous"))
     #expect(error?["resolution"]?["candidateCount"] == .int(2))
-    #expect(error?["resolution"]?["candidates"]?[0]?["handle"] == .string("snapshot:plan-ambiguous:1"))
-    #expect(error?["resolution"]?["candidates"]?[1]?["handle"] == .string("snapshot:plan-ambiguous:2"))
+    #expect(error?["resolution"]?["candidates"]?[0]?["handle"] == .string("plan-ambiguous:1"))
+    #expect(error?["resolution"]?["candidates"]?[1]?["handle"] == .string("plan-ambiguous:2"))
 }
 
 @Test func documentationPlanExamplesParse() throws {

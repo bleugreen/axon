@@ -62,7 +62,7 @@ public struct AXSnapshotCapturer {
         AXUIElementSetMessagingTimeout(appElement, messagingTimeout)
         var remainingNodes = maxNodes
         var retainedElements: [AXUIElement] = []
-        let snapshotID = SnapshotID(UUID().uuidString)
+        let snapshotID = SnapshotID.next()
         let windows = windowElements(from: appElement)
             .prefix(maxWindows)
             .compactMap { window -> AXNode? in
