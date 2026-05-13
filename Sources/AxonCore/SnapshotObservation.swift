@@ -3,6 +3,7 @@ import Foundation
 public struct SnapshotObservationFormatter {
     private static let maxObservedChildren = 24
     private static let maxCoalescedLabelLength = 240
+    private static let maxScreenTextItems = 100
 
     public init() {}
 
@@ -25,6 +26,9 @@ public struct SnapshotObservationFormatter {
         }
         if let screenshot = object["screenshot"], screenshot != .null {
             observation["screenshot"] = screenshot
+        }
+        if let screenText = compactScreenText(from: object["screenText"], frames: frames) {
+            observation["screenText"] = screenText
         }
         if let redaction = object["redaction"] {
             observation["redaction"] = redaction
@@ -78,6 +82,12 @@ public struct SnapshotObservationFormatter {
             let height = screenshot["height"]?.scalarText ?? "?"
             lines.append("screenshot: \(width)x\(height)")
         }
+        if case let .array(items)? = object["screenText"], !items.isEmpty {
+            lines.append("screenText:")
+            for item in items {
+                appendScreenText(item, lines: &lines)
+            }
+        }
         if case let .array(nodes)? = object["tree"] {
             lines.append("tree:")
             for node in nodes {
@@ -101,6 +111,47 @@ public struct SnapshotObservationFormatter {
             }
         }
         return lines.joined(separator: "\n")
+    }
+
+    private func compactScreenText(from value: JSONValue?, frames: Bool) -> JSONValue? {
+        guard case let .array(items)? = value else {
+            return nil
+        }
+        let compactItems = items.prefix(Self.maxScreenTextItems).compactMap { item -> JSONValue? in
+            guard case let .object(object) = item,
+                  let text = string("text", in: object),
+                  !text.isEmpty
+            else {
+                return nil
+            }
+
+            var compact: [String: JSONValue] = ["text": .string(text)]
+            if let confidence = object["confidence"] {
+                compact["confidence"] = confidence
+            }
+            if frames, let frame = object["frame"], frame != .null {
+                compact["frame"] = frame
+            }
+            return .object(compact)
+        }
+        return .array(compactItems)
+    }
+
+    private func appendScreenText(_ value: JSONValue, lines: inout [String]) {
+        guard case let .object(object) = value,
+              let text = string("text", in: object)
+        else {
+            return
+        }
+
+        var line = "  - \(yamlString(text))"
+        if let confidence = object["confidence"]?.scalarText {
+            line += " confidence=\(confidence)"
+        }
+        if let frame = object["frame"]?.objectValue {
+            line += " frame=\(compactFrame(frame))"
+        }
+        lines.append(line)
     }
 
     private func compactForest(from value: JSONValue?, snapshotID: String, frames: Bool) -> [JSONValue] {
@@ -522,6 +573,14 @@ public struct SnapshotObservationFormatter {
             .replacingOccurrences(of: "\\", with: "\\\\")
             .replacingOccurrences(of: "\"", with: "\\\"")
         return "\"\(escaped)\""
+    }
+
+    private func compactFrame(_ frame: [String: JSONValue]) -> String {
+        let x = frame["x"]?.scalarText ?? "?"
+        let y = frame["y"]?.scalarText ?? "?"
+        let width = frame["width"]?.scalarText ?? "?"
+        let height = frame["height"]?.scalarText ?? "?"
+        return "{x:\(x),y:\(y),width:\(width),height:\(height)}"
     }
 }
 

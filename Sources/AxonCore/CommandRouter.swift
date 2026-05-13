@@ -75,17 +75,28 @@ public struct CommandRouter {
             do {
                 let app = try requiredStringParam("app", in: request)
                 let screenshot = boolParam("screenshot", in: request) ?? false
+                let screenText = boolParam("screenText", in: request) ?? false
                 let includeTree = boolParam("includeTree", in: request) ?? true
                 let sensitive = boolParam("sensitive", in: request) ?? false
                 if sensitive && screenshot {
                     throw JSONRPCError.invalidParams("sensitive snapshots cannot include screenshots")
                 }
-                let snapshot = try captureSnapshot(app, screenshot)
+                if sensitive && screenText {
+                    throw JSONRPCError.invalidParams("sensitive snapshots cannot include screenText")
+                }
+                let snapshot = try captureSnapshot(app, screenshot || screenText)
                 elementStore.store(summary: observedSummary(for: snapshot))
+                var snapshotJSON = snapshot.jsonValue(includeTree: includeTree, sensitive: sensitive)
+                if screenText {
+                    snapshotJSON = snapshotJSON.addingScreenText(
+                        ScreenTextExtractor(recognizeText: recognizeText).extract(in: snapshot),
+                        includeScreenshot: screenshot
+                    )
+                }
                 return JSONRPCResponse(
                     id: request.id,
                     result: [
-                        "snapshot": snapshot.jsonValue(includeTree: includeTree, sensitive: sensitive)
+                        "snapshot": snapshotJSON
                     ]
                 )
             } catch let error as JSONRPCError {
@@ -569,4 +580,17 @@ private struct ResolvedPointerTarget {
 private struct TextLocationResolvedPoint {
     let point: ActionPoint
     let resolution: TextLocationResolution
+}
+
+private extension JSONValue {
+    func addingScreenText(_ items: [ScreenTextItem], includeScreenshot: Bool) -> JSONValue {
+        guard case var .object(object) = self else {
+            return self
+        }
+        object["screenText"] = .array(items.map(\.jsonValue))
+        if !includeScreenshot {
+            object["screenshot"] = .null
+        }
+        return .object(object)
+    }
 }

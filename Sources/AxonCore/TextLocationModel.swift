@@ -180,49 +180,28 @@ public struct TextLocationResolver: Sendable {
     }
 
     private func screenshotCandidates(matching text: TextMatch, in snapshot: AppSnapshot) -> [TextLocationCandidate] {
-        guard let screenshot = snapshot.screenshot,
-              let windowFrame = screenshotFrame(in: snapshot)
-        else {
-            return []
-        }
-
-        return recognizeText(screenshot).enumerated().compactMap { index, observation in
-            guard text.matches(observation.text) else {
+        ScreenTextExtractor(recognizeText: recognizeText).extract(in: snapshot).enumerated().compactMap { index, item in
+            guard text.matches(item.text) else {
                 return nil
             }
 
-            let frame = screenFrame(from: observation.boundingBox, in: windowFrame)
-            guard frame.width > 0, frame.height > 0 else {
-                return nil
-            }
+            let frame = item.frame
             let point = ActionPoint(x: frame.x + frame.width / 2, y: frame.y + frame.height / 2)
             var reasons = ["ocr \(text.reasonFragment)"]
-            if let confidence = observation.confidence {
+            if let confidence = item.confidence {
                 reasons.append("confidence \(confidence)")
             }
             return TextLocationCandidate(
                 index: index,
                 handle: nil,
                 role: "OCRText",
-                matchedText: observation.text,
+                matchedText: item.text,
                 source: .screenshot,
                 frame: frame,
                 point: point,
                 reasons: reasons
             )
         }
-    }
-
-    private func screenshotFrame(in snapshot: AppSnapshot) -> AXFrame? {
-        snapshot.windows.compactMap(\.frame).first
-    }
-
-    private func screenFrame(from boundingBox: NormalizedTextBoundingBox, in windowFrame: AXFrame) -> AXFrame {
-        let x = windowFrame.x + boundingBox.x * windowFrame.width
-        let y = windowFrame.y + (1 - boundingBox.y - boundingBox.height) * windowFrame.height
-        let width = boundingBox.width * windowFrame.width
-        let height = boundingBox.height * windowFrame.height
-        return AXFrame(x: x, y: y, width: width, height: height)
     }
 }
 

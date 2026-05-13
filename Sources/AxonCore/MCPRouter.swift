@@ -272,8 +272,9 @@ public struct MCPRouter {
             inputSchema: objectSchema(properties: [
                 "app": stringSchema("Bundle id, pid, exact app name, or partial app name."),
                 "screenshot": boolSchema("Whether to include embedded ScreenCaptureKit screenshot data. Defaults to false for MCP."),
+                "screenText": boolSchema("Whether to OCR visible text from the app window screenshot and include it as organized screenText. Defaults to false."),
                 "includeTree": boolSchema("Debug-only escape hatch for returning the nested raw AX tree."),
-                "sensitive": boolSchema("Redact values and secret-like text while preserving short safe prefixes. Sensitive snapshots cannot include screenshots."),
+                "sensitive": boolSchema("Redact values and secret-like text while preserving short safe prefixes. Sensitive snapshots cannot include screenshots or screenText."),
                 "format": stringSchema("Defaults to observation. Use debug only when diagnosing Axon internals."),
                 "frames": boolSchema("Include frames in observation output. Defaults to false.")
             ], required: ["app"])

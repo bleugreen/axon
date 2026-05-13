@@ -7,7 +7,7 @@ Axon exposes the same core commands through the daemon JSON-RPC socket, the CLI,
 ```text
 list_apps(format?)
 request_accessibility()
-get_app_state(app, screenshot?, sensitive?, format?, frames?)
+get_app_state(app, screenshot?, screenText?, sensitive?, format?, frames?)
 get_children(target, offset?, limit?, format?, frames?)
 get_screenshot(app)
 resolve(app, locator)
@@ -78,6 +78,7 @@ Prefer bundle id when available. Partial names are convenient but can become amb
 - `app`, `pid`, and `bundle` when available
 - `tree`: compact visible AX tree with short handles
 - `screenshot`: screenshot metadata when `screenshot: true`
+- `screenText`: OCR-recognized visible text when `screenText: true`
 - `redaction`: sensitive-mode metadata when `sensitive: true`
 
 MCP defaults are tree-first and screenshot-free:
@@ -98,6 +99,14 @@ Handles are convenient within a short observe/action loop, but they are not dura
 Observation output omits frame rectangles by default. Set `frames: true` only when coordinates matter. Set `format: debug` only when diagnosing Axon internals; debug output returns the raw snapshot JSON with `indexedNodes` and accepts `includeTree`.
 
 Observation output is planned around useful leaves, not raw AX traversal order. Axon collapses anonymous wrapper chains, coalesces adjacent static text into parent summaries, omits pointer-like AX debug labels, and pages broad sibling sets such as browser tab lists. The default capture sibling page is 24 children per node.
+
+For apps with sparse AX trees, set `screenText: true` to add an OCR-derived `screenText` list to the app-state observation. This internally captures a screenshot but does not return screenshot image bytes unless `screenshot: true` is also set:
+
+```json
+{ "app": "cairn", "screenText": true }
+```
+
+Screen text is ordered top-to-bottom, left-to-right, and includes OCR confidence when available. It omits frames by default; set `frames: true` to include the OCR text rectangles.
 
 When a node is truncated, fetch the next slice of that node with `get_children`. This returns only that node's child list, not a whole app snapshot:
 
@@ -135,7 +144,7 @@ Sensitive reads are opt-in and text-only:
 
 When `sensitive: true`, Axon redacts AX `value` fields and secret-like text before returning JSON. Redaction preserves a short prefix, such as `sk-proj-abcd...[redacted]`, so the agent can distinguish nearby controls without receiving the full generated key or token. Node-level `redaction` metadata lists the fields that were changed.
 
-Sensitive snapshots reject `screenshot: true`. Image/OCR redaction is a separate capability; until that exists, screenshots and sensitive mode do not overlap.
+Sensitive snapshots reject `screenshot: true` and `screenText: true`. Image/OCR redaction is a separate capability; until that exists, screenshots, OCR, and sensitive mode do not overlap.
 
 ## Locator Targets
 

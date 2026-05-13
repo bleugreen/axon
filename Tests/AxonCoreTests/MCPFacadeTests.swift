@@ -40,6 +40,7 @@ import Testing
     #expect(toolNames(in: tools).contains("drag"))
     #expect(toolNames(in: tools).allSatisfy { !$0.contains("mcp") })
     #expect(tool(named: "get_app_state", in: tools)?["inputSchema"]?["properties"]?["screenshot"] != nil)
+    #expect(tool(named: "get_app_state", in: tools)?["inputSchema"]?["properties"]?["screenText"] != nil)
     #expect(tool(named: "get_app_state", in: tools)?["inputSchema"]?["properties"]?["sensitive"] != nil)
     #expect(tool(named: "get_app_state", in: tools)?["inputSchema"]?["properties"]?["includeScreenshot"] == nil)
     #expect(tool(named: "click", in: tools)?["inputSchema"]?["properties"]?["target"]?["anyOf"]?[2] != nil)
@@ -308,6 +309,125 @@ import Testing
     #expect(text?.contains("Hidden Tab") == false)
 }
 
+@Test func mcpGetAppStateScreenTextAddsOCRWithoutScreenshotPayload() {
+    let commandRouter = CommandRouter(
+        captureSnapshot: { app, screenshot in
+            #expect(app == "com.example.App")
+            #expect(screenshot == true)
+            return AppSnapshot(
+                id: SnapshotID("mcp-ocr"),
+                app: AppIdentity(bundleIdentifier: "com.example.App", name: "Example", processIdentifier: 7),
+                windows: [
+                    AXNode(
+                        role: "AXWindow",
+                        title: "Main",
+                        frame: AXFrame(x: 100, y: 200, width: 800, height: 600)
+                    )
+                ],
+                screenshot: EncodedScreenshot(
+                    mediaType: "image/png",
+                    base64Data: "internal-image-payload",
+                    width: 800,
+                    height: 600
+                )
+            )
+        },
+        recognizeText: { _ in
+            [
+                RecognizedTextObservation(
+                    text: "Second line",
+                    boundingBox: NormalizedTextBoundingBox(x: 0.20, y: 0.50, width: 0.20, height: 0.05),
+                    confidence: 0.91
+                ),
+                RecognizedTextObservation(
+                    text: "First line",
+                    boundingBox: NormalizedTextBoundingBox(x: 0.10, y: 0.80, width: 0.20, height: 0.05),
+                    confidence: 0.97
+                )
+            ]
+        }
+    )
+
+    let response = MCPRouter(commandRouter: commandRouter).handle(JSONRPCRequest(
+        id: .string("screen-text"),
+        method: "tools/call",
+        params: .object([
+            "name": .string("get_app_state"),
+            "arguments": .object([
+                "app": .string("com.example.App"),
+                "screenText": .bool(true)
+            ])
+        ])
+    ))
+
+    let result = response?.result
+    let snapshot = result?["structuredContent"]?["snapshot"]
+    let text = textContent(in: result)
+
+    #expect(response?.error == nil)
+    #expect(result?["isError"] == .bool(false))
+    #expect(snapshot?["screenText"]?[0]?["text"] == .string("First line"))
+    #expect(snapshot?["screenText"]?[0]?["confidence"] == .double(0.97))
+    #expect(snapshot?["screenText"]?[0]?["frame"] == nil)
+    #expect(snapshot?["screenText"]?[1]?["text"] == .string("Second line"))
+    #expect(snapshot?["screenshot"] == nil)
+    #expect(imageContent(in: result) == nil)
+    #expect(text?.contains("screenText:") == true)
+    #expect(text?.contains("- \"First line\" confidence=0.97") == true)
+    #expect(text?.contains("internal-image-payload") == false)
+}
+
+@Test func mcpGetAppStateScreenTextCanIncludeFramesWhenRequested() {
+    let commandRouter = CommandRouter(
+        captureSnapshot: { _, screenshot in
+            #expect(screenshot == true)
+            return AppSnapshot(
+                id: SnapshotID("mcp-ocr-frames"),
+                app: AppIdentity(bundleIdentifier: "com.example.App", name: "Example", processIdentifier: 7),
+                windows: [
+                    AXNode(
+                        role: "AXWindow",
+                        title: "Main",
+                        frame: AXFrame(x: 100, y: 200, width: 800, height: 600)
+                    )
+                ],
+                screenshot: EncodedScreenshot(mediaType: "image/png", base64Data: "internal-image-payload", width: 800, height: 600)
+            )
+        },
+        recognizeText: { _ in
+            [
+                RecognizedTextObservation(
+                    text: "Framed text",
+                    boundingBox: NormalizedTextBoundingBox(x: 0.25, y: 0.60, width: 0.20, height: 0.10),
+                    confidence: nil
+                )
+            ]
+        }
+    )
+
+    let response = MCPRouter(commandRouter: commandRouter).handle(JSONRPCRequest(
+        id: .string("screen-text-frames"),
+        method: "tools/call",
+        params: .object([
+            "name": .string("get_app_state"),
+            "arguments": .object([
+                "app": .string("com.example.App"),
+                "screenText": .bool(true),
+                "frames": .bool(true)
+            ])
+        ])
+    ))
+
+    let snapshot = response?.result?["structuredContent"]?["snapshot"]
+
+    #expect(response?.error == nil)
+    #expect(snapshot?["screenText"]?[0]?["text"] == .string("Framed text"))
+    #expect(snapshot?["screenText"]?[0]?["frame"]?["x"] == .double(300))
+    #expect(snapshot?["screenText"]?[0]?["frame"]?["y"] == .double(380))
+    #expect(snapshot?["screenText"]?[0]?["frame"]?["width"] == .double(160))
+    #expect(snapshot?["screenText"]?[0]?["frame"]?["height"] == .double(60))
+}
+
 @Test func mcpSensitiveAppStateDoesNotLeakSecretsInTextOrStructuredContent() throws {
     let secret = "sk-proj-abcdef1234567890SECRET"
     let commandRouter = CommandRouter(
@@ -369,6 +489,25 @@ import Testing
     #expect(response?.error == nil)
     #expect(response?.result?["isError"] == .bool(true))
     #expect(response?.result?["structuredContent"]?["error"]?["message"] == .string("sensitive snapshots cannot include screenshots"))
+}
+
+@Test func mcpSensitiveAppStateRejectsScreenText() {
+    let response = MCPRouter(commandRouter: CommandRouter()).handle(JSONRPCRequest(
+        id: .string("sensitive-screen-text"),
+        method: "tools/call",
+        params: .object([
+            "name": .string("get_app_state"),
+            "arguments": .object([
+                "app": .string("com.example.App"),
+                "sensitive": .bool(true),
+                "screenText": .bool(true)
+            ])
+        ])
+    ))
+
+    #expect(response?.error == nil)
+    #expect(response?.result?["isError"] == .bool(true))
+    #expect(response?.result?["structuredContent"]?["error"]?["message"] == .string("sensitive snapshots cannot include screenText"))
 }
 
 @Test func mcpScreenshotUsesImageContentInsteadOfTextualBase64() {
