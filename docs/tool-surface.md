@@ -192,7 +192,7 @@ title:
 
 ## Target Shapes
 
-Primitive actions accept three target shapes:
+Pointer actions (`click`, `scroll`, and `drag`) accept four target shapes:
 
 ```json
 "s12:19"
@@ -215,7 +215,33 @@ Primitive actions accept three target shapes:
 }
 ```
 
+```json
+{
+  "location": {
+    "app": "cairn",
+    "text": "Backlog",
+    "source": "auto"
+  }
+}
+```
+
+Location targets are point-producing text targets. They let callers say "the visible text Backlog" without providing raw screen coordinates. `source: auto` currently resolves through AX text geometry and returns the center of the matched text node; `source: ax` forces that behavior. `source: screenshot` is reserved for OCR and fails honestly until screenshot text recognition exists.
+
+Location text uses the same matcher shape as locators: a string means case-insensitive exact match, and matcher objects may use `exact`, `contains`, and `caseSensitive`.
+
+```yaml
+target:
+  location:
+    app: cairn
+    text:
+      contains: Back
+```
+
+Missing or ambiguous location targets fail before dispatch. Successful action results include `locationResolutions` with the matched text, source, frame, point, and candidates for auditability; callers normally should not feed those coordinates back into later actions.
+
 Point targets are screen coordinates and should be treated as an escape hatch. The current drag follow-up is tracked in `docs/issues/2026-05-12-drag-targeting-and-verification.md`.
+
+AX element actions (`perform_action` and `set_value`) accept only snapshot handles and locator targets because they require an accessibility element, not a screen point.
 
 ## Action Semantics
 

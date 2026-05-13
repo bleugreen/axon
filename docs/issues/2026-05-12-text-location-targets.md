@@ -1,5 +1,8 @@
 # Text Location Targets
 
+Status: AX-backed location targets implemented for primitive actions. OCR-backed
+`source: screenshot` remains future work.
+
 ## Context
 
 Agents should be able to say "location of Backlog" and use the center point of that text as an action target. This is different from a normal AX locator:
@@ -39,6 +42,6 @@ Missing or ambiguous text should be reported honestly. The tool should not click
 
 ## Next Steps
 
-- Implement AX-backed text location first because frames are already available in snapshots.
+- Implemented: AX-backed text location first because frames are already available in snapshots.
 - Add OCR-backed screenshot text once image recognition infrastructure exists.
-- Allow `click`, `scroll`, `drag`, and plans to accept text-location targets anywhere they accept point targets.
+- Implemented: Allow `click`, `scroll`, `drag`, and plans to accept text-location targets anywhere they accept point targets.
