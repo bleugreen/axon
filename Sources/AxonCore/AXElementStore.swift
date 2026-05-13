@@ -19,15 +19,29 @@ public enum AXElementStoreError: Error, CustomStringConvertible {
 }
 
 public final class AXElementStore: @unchecked Sendable {
-    private let lock = NSLock()
-    private var elementsBySnapshot: [SnapshotID: [AXUIElement]] = [:]
+    public static let defaultMaxSnapshots = 32
 
-    public init() {}
+    private let lock = NSLock()
+    private let maxSnapshots: Int
+    private var elementsBySnapshot: [SnapshotID: [AXUIElement]] = [:]
+    private var snapshotOrder: [SnapshotID] = []
+
+    public convenience init() {
+        self.init(maxSnapshots: AXElementStore.defaultMaxSnapshots)
+    }
+
+    public init(maxSnapshots: Int) {
+        self.maxSnapshots = max(1, maxSnapshots)
+    }
 
     public func store(snapshotID: SnapshotID, elements: [AXUIElement]) {
         lock.lock()
+        defer { lock.unlock() }
+
         elementsBySnapshot[snapshotID] = elements
-        lock.unlock()
+        snapshotOrder.removeAll { $0 == snapshotID }
+        snapshotOrder.append(snapshotID)
+        pruneOldSnapshots()
     }
 
     public func element(for target: String) throws -> AXUIElement {
@@ -52,5 +66,11 @@ public final class AXElementStore: @unchecked Sendable {
         }
         return elements[handle.nodeIndex]
     }
-}
 
+    private func pruneOldSnapshots() {
+        while snapshotOrder.count > maxSnapshots {
+            let evicted = snapshotOrder.removeFirst()
+            elementsBySnapshot.removeValue(forKey: evicted)
+        }
+    }
+}

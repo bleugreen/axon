@@ -1,4 +1,5 @@
 import Testing
+import ApplicationServices
 @testable import AxonCore
 
 @Test func snapshotIndexesTreeDepthFirstAndCreatesHandles() {
@@ -50,4 +51,35 @@ import Testing
     #expect(throws: SnapshotHandle.ParseError.self) {
         try SnapshotHandle("snap-test:42")
     }
+}
+
+@Test func elementStoreEvictsOldestSnapshotsWhenCapacityIsExceeded() throws {
+    let store = AXElementStore(maxSnapshots: 2)
+    let element = AXUIElementCreateSystemWide()
+
+    store.store(snapshotID: SnapshotID("one"), elements: [element])
+    store.store(snapshotID: SnapshotID("two"), elements: [element])
+    store.store(snapshotID: SnapshotID("three"), elements: [element])
+
+    #expect(throws: AXElementStoreError.self) {
+        try store.element(for: SnapshotHandle(snapshotID: SnapshotID("one"), nodeIndex: 0))
+    }
+    _ = try store.element(for: SnapshotHandle(snapshotID: SnapshotID("two"), nodeIndex: 0))
+    _ = try store.element(for: SnapshotHandle(snapshotID: SnapshotID("three"), nodeIndex: 0))
+}
+
+@Test func elementStoreRefreshesSnapshotRetentionOrder() throws {
+    let store = AXElementStore(maxSnapshots: 2)
+    let element = AXUIElementCreateSystemWide()
+
+    store.store(snapshotID: SnapshotID("one"), elements: [element])
+    store.store(snapshotID: SnapshotID("two"), elements: [element])
+    store.store(snapshotID: SnapshotID("one"), elements: [element])
+    store.store(snapshotID: SnapshotID("three"), elements: [element])
+
+    _ = try store.element(for: SnapshotHandle(snapshotID: SnapshotID("one"), nodeIndex: 0))
+    #expect(throws: AXElementStoreError.self) {
+        try store.element(for: SnapshotHandle(snapshotID: SnapshotID("two"), nodeIndex: 0))
+    }
+    _ = try store.element(for: SnapshotHandle(snapshotID: SnapshotID("three"), nodeIndex: 0))
 }
