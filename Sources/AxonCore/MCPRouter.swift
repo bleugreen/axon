@@ -27,7 +27,7 @@ public struct MCPRouter {
                 ]),
                 "serverInfo": .object([
                     "name": .string("axon"),
-                    "version": .string("0.1.0")
+                    "version": .string(AxonVersion.current)
                 ]),
                 "instructions": .string("Use plain Axon tool names. Targets may be snapshot handles or locator objects.")
             ])
@@ -199,8 +199,6 @@ public struct MCPRouter {
             return "run_batch"
         case "export_script":
             return "export_script"
-        case "run_plan":
-            return "run_plan"
         case "click":
             return "click"
         case "scroll":

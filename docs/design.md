@@ -11,6 +11,7 @@ The immediate target is an MCP-facing service with primitives similar to Compute
 - resolve element locators
 - click, set values, type, scroll, drag, and perform accessibility actions
 - verify UI state after actions
+- record sequences of actions as replayable `.axn` files
 
 ## Design Principles
 
@@ -107,7 +108,7 @@ The resolver should return one of:
 - `ambiguous`: multiple plausible matches with explanations
 - `missing`: no reasonable match, optionally with recovery hints
 
-The implemented Phase 3 locator subset is intentionally AX-native:
+The implemented locator subset is intentionally AX-native:
 
 ```json
 {
@@ -161,8 +162,10 @@ Initial tools:
 ```text
 list_apps()
 get_app_state(app)
+get_children(target)
 get_screenshot(app)
 resolve(app, locator)
+changed_since(snapshotId)
 click(target)
 scroll(target?, app?, deltaX?, deltaY?)
 drag(from, to, app?, durationMs?)
@@ -170,7 +173,8 @@ set_value(target, value)
 perform_action(target, action)
 type_text(app, text)
 press_key(app, key)
-run_plan(source | path | plan, args?, dryRun?)
+run_batch(actions? | source? | path? | batch?)
+export_script(sessionId?, from?, to?, path?, includeReads?)
 ```
 
 Where `target` can be:
@@ -185,17 +189,19 @@ Tool names should stay plain. MCP clients already namespace tools by server, so 
 
 Screenshot-returning tools should embed image data in their response. File output can exist as a CLI/debug convenience later, but clients should not need filesystem coordination to inspect the visual state.
 
-### Automation Plans
+### Action Batches and `.axn` Files
 
-`run_plan` is an invocation-scoped composition layer over the primitive commands. The daemon accepts a submitted plan, executes it, returns structured trace/output data, and forgets it. It does not own a recipe registry.
+`run_batch` is an invocation-scoped composition layer. A batch is an ordered list of tool calls — each action is just `tool:` plus that tool's normal arguments. There is no separate plan language to learn, and no separate semantics for batched actions vs. standalone calls.
 
-Plans should be comfortable for agents to emit repeatedly. YAML is the preferred source format because it is compact, but the daemon protocol still accepts JSON values over JSON-RPC. Plans can also be loaded from a path when a repository wants to colocate reusable automation with the code it operates.
+`.axn` files (axon // action) are batches saved to disk. They are the project's primary persisted artifact: a recorded sequence of past tool calls that can be replayed, edited, and shared. History/export generates them from observed sessions rather than expecting agents to hand-author scripts. The file shape mirrors `run_batch` exactly, so `axon run path.axn` and an inline batch are interchangeable.
 
-The plan language should compose existing primitives rather than inventing alternate action semantics. Initial operations include `read`, `screenshot`, `resolve`, `click`, `scroll`, `drag`, `perform_action`, `set_value`, `type_text`, `press_key`, `changed_since`, `if`, `wait_until`, `repeat_until`, and `assert`.
+The daemon executes a submitted batch, traces it, and forgets it. It does not own a recipe registry or persistent script cache. Reusable `.axn` files live wherever the user or repo wants them.
 
-Plan results should be compact by default. Bound outputs remain available internally for later plan steps, but the returned result should summarize heavy values like snapshots unless the caller explicitly requests `result.outputs: full`. This keeps plans useful for reducing agent round-trips and token-heavy observe/action loops.
+YAML is the preferred on-disk format because it is compact and human-editable. JSON-RPC remains the daemon transport, and structured JSON batch objects remain acceptable when a caller already has data in memory.
 
-Failures are part of the plan result rather than MCP transport failures. A failed plan should stop at the first failing step, preserve completed trace/output data, and return `plan.success: false` with a trace error that identifies the failing step path and operation. Locator failures should include the target locator, resolution status, snapshot id, candidate count, and candidate summaries so an agent can repair the plan without another broad state read.
+Failures are part of the batch trace, not MCP transport failures. A failed batch stops at the first failing action unless `continueOnError: true`, preserves completed trace entries, and returns `success: false` with the failing action's index, tool, and error. Locator failures preserve the resolution status, snapshot id, candidate count, and candidate summaries so an agent can repair the batch without another broad state read.
+
+Higher-order control flow (conditionals, polling waits, repeat loops, assertions, output binding) is intentionally not part of the batch surface. If those primitives prove necessary, they should be added to the underlying tool set so that batches remain a flat sequence of normal tool calls.
 
 ### Technology Direction
 
@@ -205,7 +211,7 @@ The implementation path is Swift first:
 - good fit for a long-running macOS service
 - simpler permission and app lifecycle integration than Python
 
-The default implementation should use `ApplicationServices` directly unless an early spike proves the wrapper saves enough work to justify the dependency. Direct `ApplicationServices` is more verbose than AXSwift, but the extra work is bounded: the hardest parts are still tree modeling, locator resolution, daemon lifecycle, screenshots, and action verification. The direct API likely adds some boilerplate in Phase 1, not a fundamentally different project.
+The default implementation uses `ApplicationServices` directly. Direct `ApplicationServices` is more verbose than AXSwift, but the extra work is bounded: the hardest parts are still tree modeling, locator resolution, daemon lifecycle, screenshots, and action verification.
 
 AXSwift remains a useful reference and possible spike input, but the core API should not depend on wrapper-specific concepts.
 

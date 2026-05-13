@@ -1,17 +1,18 @@
-app: cairn
-result:
-  outputs: compact
-steps:
-  - read:
-      as: before
-  - click:
-      target:
-        locator:
-          role: AXButton
-          title:
-            contains: $args.button
-          actions:
-            - AXPress
-  - changed_since:
-      snapshotId: $before.snapshotId
-      as: changed
+version: 1
+actions:
+  - tool: set_value
+    target:
+      app: cairn
+      locator:
+        role: AXTextField
+        label:
+          contains: Title
+    value: Draft issue title
+  - tool: click
+    target:
+      app: cairn
+      locator:
+        role: AXButton
+        label: Save
+        actions:
+          - AXPress

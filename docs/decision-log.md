@@ -27,7 +27,7 @@ Decision: Prefer direct `ApplicationServices` unless a spike proves AXSwift save
 
 Direct `ApplicationServices` is more verbose, but not a large conceptual expansion. The additional work is mostly typed wrappers, error normalization, and attribute/action helpers. The project complexity still lives in daemon lifecycle, snapshots, locator scoring, screenshots, observers, and action verification.
 
-Working estimate: AXSwift may save early boilerplate in Phase 1, but direct APIs likely add days, not weeks, and reduce long-term dependency risk.
+Working estimate: AXSwift may save early boilerplate, but direct APIs likely add days, not weeks, and reduce long-term dependency risk.
 
 ## Screenshot Support
 
@@ -47,19 +47,15 @@ Decision: Locators should be AX-native, honest, and intuitive.
 
 Borrow useful ideas from browser automation only where they map cleanly. Do not force Playwright concepts onto macOS Accessibility if they hide important constraints.
 
-## Cairn Integration
+## Action Batches and `.axn` Files
 
-Decision: Cairn should have good accessibility labels, but not as an Axon-specific dependency.
+Decision: composable automation is an invocation-scoped batch of normal tool calls, not a separate plan language.
 
-Axon should work against arbitrary apps. Cairn can still be a high-quality fixture app because it should expose good AX labels for its own sake, not because Axon requires special treatment.
+The daemon should remain a stable local accessibility service. It can execute a submitted multi-step batch because that is just composition over its primitives, but it should not own a persistent recipe registry, cache, or app-specific workflow pack. Reusable batches live on disk as `.axn` files beside the codebase or task context that gives them meaning, and are passed to the daemon by path or source.
 
-## Automation Plans
+A batch is a flat list of `{ tool, ...args }` objects using the same shape as the standalone tool calls. Earlier sketches included a richer plan language with `if`, `wait_until`, `repeat_until`, `assert`, and bound outputs. That language has been removed: if a missing capability is needed for composition, the right move is to add it to the underlying tool set so that batches stay a flat sequence of real tool calls. Two ways of doing the same thing is worse than either one alone.
 
-Decision: composable automation belongs in invocation-scoped plans, not daemon-owned recipes.
-
-The daemon should remain a stable local accessibility service. It can execute a submitted multi-step plan because that is just composition over its primitives, but it should not own a persistent recipe registry, cache, or app-specific workflow pack. Reusable plans can live beside the codebase or task context that gives them meaning and be passed to the daemon by path or source.
-
-YAML is the preferred plan source format for agent-authored plans because it is compact and easy to edit. JSON-RPC remains the daemon transport, and structured JSON plan objects remain acceptable when a caller already has data in memory.
+YAML is the preferred on-disk format for `.axn` files because it is compact and easy to edit. JSON-RPC remains the daemon transport, and structured JSON batch objects remain acceptable when a caller already has data in memory.
 
 ## Deferred Design Notes
 

@@ -6,20 +6,14 @@ Axon's deployed shape is a menu bar app plus a bundled CLI:
 - `axon` is the CLI and MCP entrypoint installed on `PATH`.
 - MCP clients run `axon mcp`, which forwards to the app-owned socket.
 
-The target user install is:
+## Install
 
 ```sh
 brew install --cask bleugreen/tap/axon
 axon
 ```
 
-With no arguments, `axon` launches `Axon.app`, checks the local socket, requests Accessibility permission, and prints Codex MCP config:
-
-```toml
-[mcp_servers.axon]
-command = "axon"
-args = ["mcp"]
-```
+With no arguments, `axon` launches `Axon.app`, checks the local socket, and requests Accessibility permission only when it is missing.
 
 ## Product Layout
 
@@ -58,7 +52,7 @@ The script writes:
 
 ```text
 dist/Axon.app
-dist/Axon-0.1.0.zip
+dist/Axon-0.1.1.zip
 ```
 
 It also prints the SHA-256 and a Homebrew cask stanza for `bleugreen/tap`.
@@ -91,7 +85,7 @@ The cask shape:
 
 ```ruby
 cask "axon" do
-  version "0.1.0"
+  version "0.1.1"
   sha256 "<printed by scripts/package-app>"
 
   url "https://github.com/bleugreen/axon/releases/download/v#{version}/Axon-#{version}.zip"
@@ -117,7 +111,7 @@ end
 axon
 axon start
 axon status
-axon mcp-config
+axon mcp
 axon restart
 axon quit
 ```
@@ -156,26 +150,6 @@ axon status
 
 ScreenCaptureKit may also prompt when screenshot capture is first used.
 
-## Development Fallback
-
-Source checkout development still works:
-
-```sh
-make build
-make test
-AXON_SOCKET_PATH=/tmp/axon.sock ~/.swiftly/bin/swift run axon serve
-```
-
-The older LaunchAgent installer remains available for daemon experiments:
-
-```sh
-~/.swiftly/bin/swift run axon daemon install
-~/.swiftly/bin/swift run axon daemon start
-~/.swiftly/bin/swift run axon daemon stop
-```
-
-Prefer `Axon.app` for the installed product because it gives the user a visible service to inspect, quit, restart, and approve.
-
 ## Troubleshooting
 
 `Socket: unreachable` means `Axon.app` is not running or could not bind `/tmp/axon.sock`. Run `axon start`, then `axon status`.
@@ -185,5 +159,25 @@ Prefer `Axon.app` for the installed product because it gives the user a visible 
 If an old development LaunchAgent is still running, stop it before testing `Axon.app`:
 
 ```sh
-~/.swiftly/bin/swift run axon daemon stop
+swift run axon daemon stop
 ```
+
+## Development
+
+Source checkout development uses Swift directly against the socket:
+
+```sh
+make build
+make test
+AXON_SOCKET_PATH=/tmp/axon.sock swift run axon serve
+```
+
+A legacy LaunchAgent installer remains for daemon experiments. It is not the deployed product path, but is useful for short-loop development without rebuilding the app bundle:
+
+```sh
+swift run axon daemon install
+swift run axon daemon start
+swift run axon daemon stop
+```
+
+For the installed product, prefer `Axon.app` — it gives the user a visible service to inspect, quit, restart, and approve.

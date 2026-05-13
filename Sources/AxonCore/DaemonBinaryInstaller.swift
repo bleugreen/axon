@@ -92,8 +92,8 @@ public struct DaemonBinaryInstaller {
             "CFBundleInfoDictionaryVersion": "6.0",
             "CFBundleName": "Axon Daemon",
             "CFBundlePackageType": "APPL",
-            "CFBundleShortVersionString": "0.1.0",
-            "CFBundleVersion": "1",
+            "CFBundleShortVersionString": AxonVersion.current,
+            "CFBundleVersion": AxonVersion.current,
             "LSBackgroundOnly": true
         ]
         let data = try PropertyListSerialization.data(

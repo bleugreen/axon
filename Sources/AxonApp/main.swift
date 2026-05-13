@@ -4,12 +4,22 @@ import Foundation
 
 @MainActor
 final class AxonAppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
+    private enum UpdateMenuState {
+        case idle
+        case checking
+        case upToDate(version: String)
+        case available(ReleaseUpdate)
+        case failed(String)
+    }
+
     private let socketPath = AxonEnvironment.socketPath()
     private let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
     private let serverQueue = DispatchQueue(label: "com.bleugreen.axon.socket-server", qos: .userInitiated)
+    private let updateChecker = ReleaseUpdateChecker()
     private var serverState = "starting"
     private var serverError: String?
     private var refreshTimer: Timer?
+    private var updateMenuState: UpdateMenuState = .idle
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
@@ -64,38 +74,33 @@ final class AxonAppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendabl
     private func installMenu() {
         let menu = NSMenu()
         menu.addItem(disabledItem("Axon"))
-        menu.addItem(disabledItem("Service: \(serviceStatus())"))
-        menu.addItem(disabledItem("Accessibility: \(accessibilityStatus())"))
-        menu.addItem(disabledItem("Socket: \(socketPath)"))
         if let serverError {
             menu.addItem(disabledItem("Error: \(serverError)"))
         }
         menu.addItem(.separator())
-        menu.addItem(NSMenuItem(title: "Request Accessibility", action: #selector(requestAccessibility), keyEquivalent: ""))
-        menu.addItem(NSMenuItem(title: "Copy Codex MCP Config", action: #selector(copyMCPConfig), keyEquivalent: ""))
+        if !AccessibilityPermission.isTrusted() {
+            menu.addItem(NSMenuItem(title: "Request Accessibility", action: #selector(requestAccessibility), keyEquivalent: ""))
+        }
+        addUpdateItem(to: menu)
         menu.addItem(.separator())
-        menu.addItem(NSMenuItem(title: "Quit Axon", action: #selector(quit), keyEquivalent: "q"))
+        menu.addItem(NSMenuItem(title: "Quit", action: #selector(quit), keyEquivalent: "q"))
         statusItem.menu = menu
     }
 
-    private func serviceStatus() -> String {
-        guard serverState == "running" else {
-            return serverState
+    private func addUpdateItem(to menu: NSMenu) {
+        switch updateMenuState {
+        case .idle:
+            menu.addItem(NSMenuItem(title: "Check for Updates...", action: #selector(checkForUpdates), keyEquivalent: ""))
+        case .checking:
+            menu.addItem(disabledItem("Checking for Updates..."))
+        case let .upToDate(version):
+            menu.addItem(disabledItem("Up to Date (\(version))"))
+        case let .available(update):
+            menu.addItem(NSMenuItem(title: "Update to \(update.latestVersion)...", action: #selector(openAvailableUpdate), keyEquivalent: ""))
+        case .failed:
+            menu.addItem(disabledItem("Update Check Failed"))
+            menu.addItem(NSMenuItem(title: "Check Again", action: #selector(checkForUpdates), keyEquivalent: ""))
         }
-        do {
-            let response = try SocketClient(path: socketPath, responseTimeoutSeconds: 1)
-                .send(JSONRPCRequest(id: .string("menu-health"), method: "health"))
-            if response.error == nil {
-                return "running"
-            }
-            return "error"
-        } catch {
-            return "starting"
-        }
-    }
-
-    private func accessibilityStatus() -> String {
-        AccessibilityPermission.isTrusted() ? "trusted" : "denied"
     }
 
     private func disabledItem(_ title: String) -> NSMenuItem {
@@ -109,14 +114,29 @@ final class AxonAppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendabl
         installMenu()
     }
 
-    @objc private func copyMCPConfig() {
-        let config = """
-        [mcp_servers.axon]
-        command = "axon"
-        args = ["mcp"]
-        """
-        NSPasteboard.general.clearContents()
-        NSPasteboard.general.setString(config, forType: .string)
+    @objc private func checkForUpdates() {
+        updateMenuState = .checking
+        installMenu()
+        Task { @MainActor in
+            do {
+                let update = try await updateChecker.check(currentVersion: currentVersion())
+                updateMenuState = update.isUpdateAvailable ? .available(update) : .upToDate(version: update.currentVersion)
+            } catch {
+                updateMenuState = .failed(String(describing: error))
+            }
+            installMenu()
+        }
+    }
+
+    @objc private func openAvailableUpdate() {
+        guard case let .available(update) = updateMenuState else {
+            return
+        }
+        NSWorkspace.shared.open(update.releaseURL)
+    }
+
+    private func currentVersion() -> String {
+        Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? AxonVersion.current
     }
 
     @objc private func quit() {

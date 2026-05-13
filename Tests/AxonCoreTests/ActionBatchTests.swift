@@ -130,6 +130,27 @@ import Testing
     #expect(clicked == ["s1:2"])
 }
 
+@Test func documentationBatchExamplesParse() throws {
+    let packageRoot = URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+        .deletingLastPathComponent()
+    let examplesDirectory = packageRoot.appendingPathComponent("docs/examples")
+
+    for name in ["open-menu.yaml", "read-and-click.yaml", "scroll.yaml"] {
+        let source = try String(contentsOf: examplesDirectory.appendingPathComponent(name), encoding: .utf8)
+        let batch = try ActionBatchExecutor.parseSource(source)
+        guard case let .array(actions)? = batch["actions"] else {
+            Issue.record("Batch \(name) is missing actions array")
+            continue
+        }
+        #expect(!actions.isEmpty)
+        for action in actions {
+            #expect(action["tool"] != nil)
+        }
+    }
+}
+
 private extension JSONValue {
     var arrayValue: [JSONValue]? {
         guard case let .array(values) = self else {

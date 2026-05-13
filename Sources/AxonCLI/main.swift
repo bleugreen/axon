@@ -45,9 +45,6 @@ do {
         try launchAxonApp()
         print("restarted Axon.app")
 
-    case "mcp-config":
-        printMCPConfig()
-
     case "daemon":
         try handleDaemonCommand(arguments: arguments)
 
@@ -269,16 +266,15 @@ do {
         usage: axon [command]
 
         commands:
-          axon     launch Axon.app, request permissions, and print MCP config
+          axon     launch Axon.app and request permissions when needed
           doctor   check local permissions
           serve    run the local daemon socket server
           mcp      run an MCP stdio facade backed by the daemon socket
           start    launch the installed Axon.app menu bar service
           status   print app-backed daemon status
-          setup    launch Axon.app, request permissions, and print MCP config
+          setup    launch Axon.app and request permissions when needed
           quit     quit the installed Axon.app service
           restart  restart the installed Axon.app service
-          mcp-config  print Codex MCP config for an installed axon CLI
           daemon <install|start|stop|status|uninstall>
           health   request daemon health over the local socket
           request-accessibility   ask macOS to approve the running daemon identity
@@ -289,7 +285,7 @@ do {
           resolve <app> <locator-json>
           changed-since <snapshot-id>
           children <handle> [--offset n] [--limit n] [--frames]
-          run <path.axn>|--source <yaml-or-json> [--dry-run]
+          run <path.axn>|--source <yaml-or-json> [--dry-run] [--continue-on-error]
           export-script [--session id] [--from call] [--to call] [--path file.axn] [--include-reads]
           click <handle|target-json>
           scroll [--app app] [--target target-json] [--dx n] [--dy n]
@@ -472,9 +468,13 @@ private func printResponse(_ response: JSONRPCResponse) throws {
 private func runSetup() throws {
     try launchAxonApp()
     _ = try? waitForDaemonHealth(socketPath: socketPath, timeoutSeconds: 5)
-    let response = try SocketClient(path: socketPath)
-        .send(JSONRPCRequest(id: .string("request_accessibility"), method: "request_accessibility"))
-    try printSetupStatus(accessibilityResponse: response)
+    let health = try SocketClient(path: socketPath, responseTimeoutSeconds: 2)
+        .send(JSONRPCRequest(id: .string("setup-health"), method: "health"))
+    if health.result?["accessibility"].flatMap(stringValue) != PermissionStatus.trusted.rawValue {
+        _ = try SocketClient(path: socketPath)
+            .send(JSONRPCRequest(id: .string("request_accessibility"), method: "request_accessibility"))
+    }
+    try printSetupStatus()
 }
 
 private func printHumanStatus() throws {
@@ -493,25 +493,14 @@ private func printHumanStatus() throws {
     }
 }
 
-private func printSetupStatus(accessibilityResponse: JSONRPCResponse) throws {
+private func printSetupStatus() throws {
     let health = try SocketClient(path: socketPath, responseTimeoutSeconds: 2)
         .send(JSONRPCRequest(id: .string("setup-health"), method: "health"))
     let accessibility = health.result?["accessibility"].flatMap(stringValue)
-        ?? accessibilityResponse.result?["accessibility"].flatMap(stringValue)
         ?? "unknown"
     print("Axon.app: \(isAxonAppRunning() ? "running" : "not running")")
     print("Socket: \(socketPath)")
     print("Accessibility: \(accessibility)")
-    print("")
-    printMCPConfig()
-}
-
-private func printMCPConfig() {
-    print("""
-    [mcp_servers.axon]
-    command = "axon"
-    args = ["mcp"]
-    """)
 }
 
 private func launchAxonApp() throws {
@@ -569,10 +558,8 @@ private func bundledAxonAppURL() -> URL? {
 
 private func runCommand(arguments: [String]) throws -> (method: String, params: [String: JSONValue]) {
     var params: [String: JSONValue] = [:]
-    var args: [String: JSONValue] = [:]
     var index = 1
     var path: String?
-    var source: String?
 
     while index < arguments.count {
         let argument = arguments[index]
@@ -581,7 +568,6 @@ private func runCommand(arguments: [String]) throws -> (method: String, params: 
             guard index + 1 < arguments.count else {
                 throw CLIError.missingArguments("run --source requires source")
             }
-            source = arguments[index + 1]
             params["source"] = .string(arguments[index + 1])
             index += 2
         case "--continue-on-error":
@@ -590,18 +576,6 @@ private func runCommand(arguments: [String]) throws -> (method: String, params: 
         case "--dry-run":
             params["dryRun"] = .bool(true)
             index += 1
-        case "--arg":
-            guard index + 1 < arguments.count else {
-                throw CLIError.missingArguments("run --arg requires key=value")
-            }
-            let pair = arguments[index + 1]
-            guard let equals = pair.firstIndex(of: "="), equals != pair.startIndex else {
-                throw CLIError.missingArguments("run --arg requires key=value")
-            }
-            let key = String(pair[..<equals])
-            let value = String(pair[pair.index(after: equals)...])
-            args[key] = .string(value)
-            index += 2
         default:
             if path == nil {
                 path = argument
@@ -618,25 +592,8 @@ private func runCommand(arguments: [String]) throws -> (method: String, params: 
         }
         params["path"] = .string(path)
     }
-    if !args.isEmpty {
-        params["args"] = .object(args)
-    }
 
-    if let path, URL(fileURLWithPath: path).pathExtension.lowercased() == "axn" {
-        return ("run_batch", params)
-    }
-    if let source, sourceLooksLikeBatch(source) {
-        return ("run_batch", params)
-    }
-    return ("run_plan", params)
-}
-
-private func sourceLooksLikeBatch(_ source: String) -> Bool {
-    guard let value = try? AutomationPlanExecutor.parseSource(source),
-          case let .object(object) = value else {
-        return false
-    }
-    return object["actions"] != nil
+    return ("run_batch", params)
 }
 
 private func handleDaemonCommand(arguments: [String]) throws {
