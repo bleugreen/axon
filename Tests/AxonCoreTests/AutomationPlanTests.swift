@@ -363,6 +363,66 @@ import Testing
     #expect(response.result?["plan"]?["outputs"]?["state"]?["snapshot"]?["indexedNodes"]?[0]?["role"] == .string("AXWindow"))
 }
 
+@Test func runPlanExecutesScrollAndDrag() {
+    var scrolled = false
+    var dragged = false
+    let router = CommandRouter(
+        actions: PrimitiveActionHandlers(
+            scroll: { target, app, deltaX, deltaY in
+                scrolled = true
+                #expect(target == .point(ActionPoint(x: 50, y: 60)))
+                #expect(app == "com.example.App")
+                #expect(deltaX == 0)
+                #expect(deltaY == -300)
+                return PrimitiveActionResult(action: "scroll", target: "point:50,60", strategy: "CGEventScroll", success: true)
+            },
+            drag: { from, to, app, durationMs in
+                dragged = true
+                #expect(from == .point(ActionPoint(x: 50, y: 60)))
+                #expect(to == .point(ActionPoint(x: 90, y: 120)))
+                #expect(app == "com.example.App")
+                #expect(durationMs == 100)
+                return PrimitiveActionResult(action: "drag", target: "point:50,60->point:90,120", strategy: "CGEventDrag", success: true)
+            }
+        )
+    )
+
+    let response = router.handle(JSONRPCRequest(
+        id: .string("plan-pointer"),
+        method: "run_plan",
+        params: .object([
+            "source": .string("""
+            version: 1
+            app: com.example.App
+            steps:
+              - scroll:
+                  target:
+                    point:
+                      x: 50
+                      y: 60
+                  deltaY: -300
+              - drag:
+                  from:
+                    point:
+                      x: 50
+                      y: 60
+                  to:
+                    point:
+                      x: 90
+                      y: 120
+                  durationMs: 100
+            """)
+        ])
+    ))
+
+    #expect(response.error == nil)
+    #expect(response.result?["plan"]?["success"] == .bool(true))
+    #expect(response.result?["plan"]?["trace"]?[0]?["op"] == .string("scroll"))
+    #expect(response.result?["plan"]?["trace"]?[1]?["op"] == .string("drag"))
+    #expect(scrolled)
+    #expect(dragged)
+}
+
 @Test func runPlanFailureReportsStepAndMissingLocatorDetails() {
     let router = CommandRouter(
         captureSnapshot: { _, _ in

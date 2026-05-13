@@ -177,10 +177,14 @@ public struct AutomationPlanExecutor {
                 try screenshot(params, state: state)
             case "resolve":
                 try resolve(params, state: state)
-            case "click":
-                try action(op: "click", params: params, state: state)
-            case "perform_action":
-                try action(op: "perform_action", params: params, state: state)
+        case "click":
+            try action(op: "click", params: params, state: state)
+        case "scroll":
+            try action(op: "scroll", params: params, state: state)
+        case "drag":
+            try action(op: "drag", params: params, state: state)
+        case "perform_action":
+            try action(op: "perform_action", params: params, state: state)
             case "set_value":
                 try action(op: "set_value", params: params, state: state)
             case "type_text":
@@ -465,6 +469,30 @@ public struct AutomationPlanExecutor {
         switch op {
         case "click":
             return ["target": try actionTargetValue(in: params, state: state)]
+        case "scroll":
+            var request: [String: JSONValue] = [
+                "deltaX": .double(double("deltaX", in: params) ?? 0),
+                "deltaY": .double(double("deltaY", in: params) ?? -120)
+            ]
+            if let target = params["target"] {
+                request["target"] = try actionTargetValue(rawTarget: target, params: params, state: state)
+            }
+            if let app = try optionalString("app", in: params) ?? state.context.app {
+                request["app"] = .string(app)
+            }
+            return request
+        case "drag":
+            var request: [String: JSONValue] = [
+                "from": try actionTargetValue(rawTarget: try requiredValue("from", in: params), params: params, state: state),
+                "to": try actionTargetValue(rawTarget: try requiredValue("to", in: params), params: params, state: state)
+            ]
+            if let app = try optionalString("app", in: params) ?? state.context.app {
+                request["app"] = .string(app)
+            }
+            if let durationMs = int("durationMs", in: params) {
+                request["durationMs"] = .int(durationMs)
+            }
+            return request
         case "perform_action":
             return [
                 "target": try actionTargetValue(in: params, state: state),
@@ -500,6 +528,9 @@ public struct AutomationPlanExecutor {
         guard case let .object(targetObject) = target else {
             throw AutomationPlanError.invalidParams("target must be a handle string or object")
         }
+        if let point = try pointTargetDescription(from: .object(targetObject)) {
+            return point
+        }
         let response = try resolveResponse(targetObject, state: state)
         let resolution = try resultValue("resolution", in: response)
         guard resolution["status"] == .string("unique"),
@@ -511,6 +542,15 @@ public struct AutomationPlanExecutor {
 
     private func actionTargetValue(in params: [String: JSONValue], state: AutomationPlanState) throws -> JSONValue {
         let target = try targetValue(in: params, state: state)
+        return try actionTargetValue(rawTarget: target, params: params, state: state)
+    }
+
+    private func actionTargetValue(
+        rawTarget: JSONValue,
+        params: [String: JSONValue],
+        state: AutomationPlanState
+    ) throws -> JSONValue {
+        let target = try targetValue(rawTarget: rawTarget, params: params, state: state)
         guard case let .object(targetObject) = target, targetObject["locator"] != nil else {
             return target
         }
@@ -521,12 +561,19 @@ public struct AutomationPlanExecutor {
         guard let rawTarget = params["target"] else {
             throw AutomationPlanError.invalidParams("action requires target")
         }
+        return try targetValue(rawTarget: rawTarget, params: params, state: state)
+    }
+
+    private func targetValue(rawTarget: JSONValue, params: [String: JSONValue], state: AutomationPlanState) throws -> JSONValue {
         let resolvedTarget = state.resolved(rawTarget)
         if case .string = resolvedTarget {
             return resolvedTarget
         }
         guard case var .object(object) = resolvedTarget else {
             throw AutomationPlanError.invalidParams("target must be a handle string or object")
+        }
+        if try pointTargetDescription(from: .object(object)) != nil {
+            return .object(object)
         }
         if object["app"] == nil {
             object["app"] = .string(try app(in: params, state: state))
@@ -562,6 +609,42 @@ public struct AutomationPlanExecutor {
             summary["candidateCount"] = .int(0)
         }
         return .object(summary)
+    }
+
+    private func requiredValue(_ key: String, in params: [String: JSONValue]) throws -> JSONValue {
+        guard let value = params[key] else {
+            throw AutomationPlanError.invalidParams("\(key) is required")
+        }
+        return value
+    }
+
+    private func pointTargetDescription(from value: JSONValue) throws -> String? {
+        guard let point = try pointValue(from: value) else {
+            return nil
+        }
+        return point.targetDescription
+    }
+
+    private func pointValue(from value: JSONValue) throws -> ActionPoint? {
+        guard case let .object(object) = value else {
+            return nil
+        }
+        if let point = object["point"] {
+            return try concretePointValue(point)
+        }
+        if object["x"] != nil || object["y"] != nil {
+            return try concretePointValue(value)
+        }
+        return nil
+    }
+
+    private func concretePointValue(_ value: JSONValue) throws -> ActionPoint {
+        guard case let .object(object) = value,
+              let x = numeric("x", in: object),
+              let y = numeric("y", in: object) else {
+            throw AutomationPlanError.invalidParams("point requires numeric x and y")
+        }
+        return ActionPoint(x: x, y: y)
     }
 
     private func locatorValue(in params: [String: JSONValue]) throws -> JSONValue {
@@ -800,6 +883,21 @@ private func int(_ key: String, in object: [String: JSONValue]) -> Int? {
         return nil
     }
     return value
+}
+
+private func double(_ key: String, in object: [String: JSONValue]) -> Double? {
+    numeric(key, in: object)
+}
+
+private func numeric(_ key: String, in object: [String: JSONValue]) -> Double? {
+    switch object[key] {
+    case let .double(value):
+        return value
+    case let .int(value):
+        return Double(value)
+    default:
+        return nil
+    }
 }
 
 private func string(_ key: String, in object: [String: JSONValue]) throws -> String {

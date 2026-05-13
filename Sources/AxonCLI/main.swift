@@ -101,7 +101,13 @@ do {
 
     case "click":
         let target = try requiredArgument(after: command, in: arguments)
-        try sendAction(method: "click", params: ["target": .string(target)])
+        try sendAction(method: "click", params: ["target": targetArgument(target)])
+
+    case "scroll":
+        try sendAction(method: "scroll", params: scrollParams(arguments: arguments))
+
+    case "drag":
+        try sendAction(method: "drag", params: dragParams(arguments: arguments))
 
     case "perform-action":
         guard arguments.count >= 3 else {
@@ -157,7 +163,9 @@ do {
           resolve <app> <locator-json>
           changed-since <snapshot-id>
           run <path>|--source <yaml-or-json> [--dry-run] [--arg key=value]
-          click <handle>    click a retained snapshot element through the daemon
+          click <handle|target-json>
+          scroll [--app app] [--target target-json] [--dx n] [--dy n]
+          drag [--app app] [--duration-ms n] <from-json> <to-json>
           perform-action <handle> <action>
           set-value <handle> <value>
           type-text <app> <text>
@@ -180,6 +188,77 @@ private func sendAction(method: String, params: [String: JSONValue]) throws {
     let response = try SocketClient(path: socketPath)
         .send(JSONRPCRequest(id: .string(method), method: method, params: .object(params)))
     try printResponse(response)
+}
+
+private func targetArgument(_ argument: String) -> JSONValue {
+    (try? decodeJSONValue(argument)) ?? .string(argument)
+}
+
+private func scrollParams(arguments: [String]) throws -> [String: JSONValue] {
+    var params: [String: JSONValue] = [:]
+    var index = 1
+    while index < arguments.count {
+        switch arguments[index] {
+        case "--app":
+            guard index + 1 < arguments.count else {
+                throw CLIError.missingArguments("scroll --app requires an app")
+            }
+            params["app"] = .string(arguments[index + 1])
+            index += 2
+        case "--target":
+            guard index + 1 < arguments.count else {
+                throw CLIError.missingArguments("scroll --target requires target JSON or handle")
+            }
+            params["target"] = targetArgument(arguments[index + 1])
+            index += 2
+        case "--dx":
+            guard index + 1 < arguments.count, let value = Double(arguments[index + 1]) else {
+                throw CLIError.missingArguments("scroll --dx requires a number")
+            }
+            params["deltaX"] = .double(value)
+            index += 2
+        case "--dy":
+            guard index + 1 < arguments.count, let value = Double(arguments[index + 1]) else {
+                throw CLIError.missingArguments("scroll --dy requires a number")
+            }
+            params["deltaY"] = .double(value)
+            index += 2
+        default:
+            throw CLIError.missingArguments("unexpected scroll argument: \(arguments[index])")
+        }
+    }
+    return params
+}
+
+private func dragParams(arguments: [String]) throws -> [String: JSONValue] {
+    var params: [String: JSONValue] = [:]
+    var endpoints: [JSONValue] = []
+    var index = 1
+    while index < arguments.count {
+        switch arguments[index] {
+        case "--app":
+            guard index + 1 < arguments.count else {
+                throw CLIError.missingArguments("drag --app requires an app")
+            }
+            params["app"] = .string(arguments[index + 1])
+            index += 2
+        case "--duration-ms":
+            guard index + 1 < arguments.count, let value = Int(arguments[index + 1]) else {
+                throw CLIError.missingArguments("drag --duration-ms requires an integer")
+            }
+            params["durationMs"] = .int(value)
+            index += 2
+        default:
+            endpoints.append(targetArgument(arguments[index]))
+            index += 1
+        }
+    }
+    guard endpoints.count == 2 else {
+        throw CLIError.missingArguments("drag requires from-json and to-json")
+    }
+    params["from"] = endpoints[0]
+    params["to"] = endpoints[1]
+    return params
 }
 
 private func decodeJSONValue(_ rawValue: String) throws -> JSONValue {

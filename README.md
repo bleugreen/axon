@@ -1,6 +1,6 @@
 # Axon
 
-Axon is a local macOS accessibility service that gives agents a typed nerve path into running apps.
+Axon is a local macOS accessibility service that gives agents a typed, composable path into running apps.
 
 The goal is to expose macOS Accessibility as a composable automation substrate: observe app state, resolve durable locators against live UI trees, perform actions, and verify the result.
 
@@ -72,6 +72,14 @@ Check whether coarse app/window state changed since a retained snapshot:
 ```
 
 `changed-since` uses observer events when Axon has seen them for the app, and falls back to a fresh app/window signature comparison when it has not.
+
+Pointer actions accept snapshot handles, locator targets, and point targets:
+
+```sh
+~/.swiftly/bin/swift run axon click '{"point":{"x":320,"y":240}}'
+~/.swiftly/bin/swift run axon scroll --app cairn --dy -480
+~/.swiftly/bin/swift run axon drag --app cairn '{"point":{"x":320,"y":240}}' '{"point":{"x":320,"y":120}}'
+```
 
 For MCP, `get_app_state` defaults to compact output: `indexedNodes` with handles and useful metadata, no full nested `windows` tree, and no screenshot unless requested. Pass `includeTree: true` or `screenshot: true` when the client needs those heavier fields.
 

@@ -164,6 +164,8 @@ get_app_state(app)
 get_screenshot(app)
 resolve(app, locator)
 click(target)
+scroll(target?, app?, deltaX?, deltaY?)
+drag(from, to, app?, durationMs?)
 set_value(target, value)
 perform_action(target, action)
 type_text(app, text)
@@ -171,13 +173,13 @@ press_key(app, key)
 run_plan(source | path | plan, args?, dryRun?)
 ```
 
-Where `target` can be either:
+Where `target` can be:
 
 ```text
 snapshot:<snapshot-id>:<index>
 ```
 
-or a locator object.
+a locator object, or a point object such as `{ "point": { "x": 320, "y": 240 } }`.
 
 Tool names should stay plain. MCP clients already namespace tools by server, so Axon exposes `click`, not `axon_click` or `axon_mcp_click`.
 
@@ -189,7 +191,7 @@ Screenshot-returning tools should embed image data in their response. File outpu
 
 Plans should be comfortable for agents to emit repeatedly. YAML is the preferred source format because it is compact, but the daemon protocol still accepts JSON values over JSON-RPC. Plans can also be loaded from a path when a repository wants to colocate reusable automation with the code it operates.
 
-The plan language should compose existing primitives rather than inventing alternate action semantics. Initial operations include `read`, `screenshot`, `resolve`, `click`, `perform_action`, `set_value`, `type_text`, `press_key`, `changed_since`, `if`, `wait_until`, `repeat_until`, and `assert`.
+The plan language should compose existing primitives rather than inventing alternate action semantics. Initial operations include `read`, `screenshot`, `resolve`, `click`, `scroll`, `drag`, `perform_action`, `set_value`, `type_text`, `press_key`, `changed_since`, `if`, `wait_until`, `repeat_until`, and `assert`.
 
 Plan results should be compact by default. Bound outputs remain available internally for later plan steps, but the returned result should summarize heavy values like snapshots unless the caller explicitly requests `result.outputs: full`. This keeps plans useful for reducing agent round-trips and token-heavy observe/action loops.
 

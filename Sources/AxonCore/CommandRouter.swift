@@ -168,7 +168,11 @@ public struct CommandRouter {
             }
         case "click":
             return actionResponse(id: request.id) {
-                try actions.click(resolveTargetParam(in: request))
+                let params = try paramsObject(in: request)
+                if let target = params["target"], let point = try pointTarget(from: target) {
+                    return try actions.clickPoint(point)
+                }
+                return try actions.click(resolveTargetParam(in: request))
             }
         case "perform_action":
             return actionResponse(id: request.id) {
@@ -198,6 +202,26 @@ public struct CommandRouter {
                     requiredStringParam("key", in: request)
                 )
             }
+        case "scroll":
+            return actionResponse(id: request.id) {
+                let params = try paramsObject(in: request)
+                return try actions.scroll(
+                    optionalPointerTarget("target", in: params),
+                    optionalStringParam("app", in: params),
+                    doubleParam("deltaX", in: params) ?? 0,
+                    doubleParam("deltaY", in: params) ?? -120
+                )
+            }
+        case "drag":
+            return actionResponse(id: request.id) {
+                let params = try paramsObject(in: request)
+                return try actions.drag(
+                    requiredPointerTarget("from", in: params),
+                    requiredPointerTarget("to", in: params),
+                    optionalStringParam("app", in: params),
+                    intParam("durationMs", in: params)
+                )
+            }
         default:
             return JSONRPCResponse(
                 id: request.id,
@@ -221,6 +245,16 @@ public struct CommandRouter {
         return value
     }
 
+    private func optionalStringParam(_ key: String, in params: [String: JSONValue]) throws -> String? {
+        guard let value = params[key], value != .null else {
+            return nil
+        }
+        guard case let .string(string) = value else {
+            throw JSONRPCError.invalidParams("\(key) must be a string")
+        }
+        return string
+    }
+
     private func requiredLocatorParam(in request: JSONRPCRequest) throws -> AXLocator {
         let params = try paramsObject(in: request)
         guard let locator = params["locator"] else {
@@ -238,9 +272,59 @@ public struct CommandRouter {
         if case let .string(handle) = target {
             return handle
         }
+        return try resolveLocatorTarget(target)
+    }
 
+    private func requiredPointerTarget(_ key: String, in params: [String: JSONValue]) throws -> PointerTarget {
+        guard let value = params[key] else {
+            throw JSONRPCError.invalidParams("Missing target parameter: \(key)")
+        }
+        return try pointerTarget(from: value)
+    }
+
+    private func optionalPointerTarget(_ key: String, in params: [String: JSONValue]) throws -> PointerTarget? {
+        guard let value = params[key], value != .null else {
+            return nil
+        }
+        return try pointerTarget(from: value)
+    }
+
+    private func pointerTarget(from value: JSONValue) throws -> PointerTarget {
+        if case let .string(handle) = value {
+            return .handle(handle)
+        }
+        if let point = try pointTarget(from: value) {
+            return .point(point)
+        }
+        return .handle(try resolveLocatorTarget(value))
+    }
+
+    private func pointTarget(from value: JSONValue) throws -> ActionPoint? {
+        guard case let .object(object) = value else {
+            return nil
+        }
+        if let point = object["point"] {
+            return try pointValue(point)
+        }
+        if object["x"] != nil || object["y"] != nil {
+            return try pointValue(value)
+        }
+        return nil
+    }
+
+    private func pointValue(_ value: JSONValue) throws -> ActionPoint {
+        guard case let .object(object) = value else {
+            throw JSONRPCError.invalidParams("point must be an object")
+        }
+        guard let x = numericValue("x", in: object), let y = numericValue("y", in: object) else {
+            throw JSONRPCError.invalidParams("point requires numeric x and y")
+        }
+        return ActionPoint(x: x, y: y)
+    }
+
+    private func resolveLocatorTarget(_ target: JSONValue) throws -> String {
         guard case let .object(object) = target else {
-            throw JSONRPCError.invalidParams("target must be a handle string or locator object")
+            throw JSONRPCError.invalidParams("target must be a handle string, point object, or locator object")
         }
         guard case let .string(app) = object["app"] else {
             throw JSONRPCError.invalidParams("Locator target must include string app")
@@ -263,6 +347,28 @@ public struct CommandRouter {
             return nil
         }
         return value
+    }
+
+    private func doubleParam(_ key: String, in params: [String: JSONValue]) -> Double? {
+        numericValue(key, in: params)
+    }
+
+    private func intParam(_ key: String, in params: [String: JSONValue]) -> Int? {
+        guard case let .int(value) = params[key] else {
+            return nil
+        }
+        return value
+    }
+
+    private func numericValue(_ key: String, in params: [String: JSONValue]) -> Double? {
+        switch params[key] {
+        case let .double(value):
+            return value
+        case let .int(value):
+            return Double(value)
+        default:
+            return nil
+        }
     }
 
     private func actionResponse(id: JSONRPCID?, _ body: () throws -> PrimitiveActionResult) -> JSONRPCResponse {

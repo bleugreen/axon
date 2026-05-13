@@ -32,9 +32,12 @@ import Testing
     #expect(toolNames(in: tools).contains("run_plan"))
     #expect(toolNames(in: tools).contains("changed_since"))
     #expect(toolNames(in: tools).contains("click"))
+    #expect(toolNames(in: tools).contains("scroll"))
+    #expect(toolNames(in: tools).contains("drag"))
     #expect(toolNames(in: tools).allSatisfy { !$0.contains("mcp") })
     #expect(tool(named: "get_app_state", in: tools)?["inputSchema"]?["properties"]?["screenshot"] != nil)
     #expect(tool(named: "get_app_state", in: tools)?["inputSchema"]?["properties"]?["includeScreenshot"] == nil)
+    #expect(tool(named: "click", in: tools)?["inputSchema"]?["properties"]?["target"]?["anyOf"]?[2] != nil)
 }
 
 @Test func mcpToolsCallReturnsStructuredContentFromCommandRouter() {

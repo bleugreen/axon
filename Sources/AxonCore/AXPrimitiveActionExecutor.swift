@@ -23,10 +23,13 @@ public final class AXPrimitiveActionExecutor {
     public func handlers() -> PrimitiveActionHandlers {
         PrimitiveActionHandlers(
             click: click(target:),
+            clickPoint: click(point:),
             performAction: performAction(target:action:),
             setValue: setValue(target:value:),
             typeText: typeText(app:text:),
-            pressKey: pressKey(app:key:)
+            pressKey: pressKey(app:key:),
+            scroll: scroll(target:app:deltaX:deltaY:),
+            drag: drag(from:to:app:durationMs:)
         )
     }
 
@@ -51,6 +54,18 @@ public final class AXPrimitiveActionExecutor {
         let result = PrimitiveActionResult(action: "click", target: target, strategy: "CGEvent", success: true)
         showTarget(element, label: "CGClick", state: .succeeded)
         return result
+    }
+
+    public func click(point: ActionPoint) throws -> PrimitiveActionResult {
+        let cgPoint = CGPoint(x: point.x, y: point.y)
+        postMouseClick(at: cgPoint)
+        return PrimitiveActionResult(
+            action: "click",
+            target: point.targetDescription,
+            strategy: "CGEvent",
+            success: true,
+            details: ["point": point.jsonValue]
+        )
     }
 
     public func performAction(target: String, action: String) throws -> PrimitiveActionResult {
@@ -115,6 +130,61 @@ public final class AXPrimitiveActionExecutor {
         return PrimitiveActionResult(action: "press_key", target: app, strategy: "CGEventKeyboard", success: true)
     }
 
+    public func scroll(
+        target: PointerTarget?,
+        app: String?,
+        deltaX: Double,
+        deltaY: Double
+    ) throws -> PrimitiveActionResult {
+        if let app {
+            try activate(app: app)
+        }
+        let point = try target.flatMap(point(for:))
+        postScroll(deltaX: deltaX, deltaY: deltaY, at: point)
+        var details: [String: JSONValue] = [
+            "deltaX": .double(deltaX),
+            "deltaY": .double(deltaY)
+        ]
+        if let point {
+            details["point"] = ActionPoint(x: point.x, y: point.y).jsonValue
+        }
+        if let target {
+            details["targetSpec"] = target.jsonValue
+        }
+        return PrimitiveActionResult(
+            action: "scroll",
+            target: target?.targetDescription ?? app ?? "frontmost",
+            strategy: "CGEventScroll",
+            success: true,
+            details: details
+        )
+    }
+
+    public func drag(
+        from: PointerTarget,
+        to: PointerTarget,
+        app: String?,
+        durationMs: Int?
+    ) throws -> PrimitiveActionResult {
+        if let app {
+            try activate(app: app)
+        }
+        let start = try point(for: from)
+        let end = try point(for: to)
+        postMouseDrag(from: start, to: end, durationMs: durationMs)
+        return PrimitiveActionResult(
+            action: "drag",
+            target: "\(from.targetDescription)->\(to.targetDescription)",
+            strategy: "CGEventDrag",
+            success: true,
+            details: [
+                "from": ActionPoint(x: start.x, y: start.y).jsonValue,
+                "to": ActionPoint(x: end.x, y: end.y).jsonValue,
+                "durationMs": durationMs.map(JSONValue.int) ?? .null
+            ]
+        )
+    }
+
     private func activate(app query: String) throws {
         let app = try appResolver.resolve(query)
         app.activate()
@@ -133,6 +203,19 @@ public final class AXPrimitiveActionExecutor {
             return nil
         }
         return CGPoint(x: frame.x + frame.width / 2, y: frame.y + frame.height / 2)
+    }
+
+    private func point(for target: PointerTarget) throws -> CGPoint {
+        switch target {
+        case let .point(point):
+            return CGPoint(x: point.x, y: point.y)
+        case let .handle(handle):
+            let element = try elementStore.element(for: handle)
+            guard let point = centerPoint(of: element) else {
+                throw JSONRPCError.invalidParams("Element has no usable frame: \(handle)")
+            }
+            return point
+        }
     }
 
     private func frame(of element: AXUIElement) -> AXFrame? {
@@ -173,6 +256,33 @@ public final class AXPrimitiveActionExecutor {
         let down = CGEvent(mouseEventSource: nil, mouseType: .leftMouseDown, mouseCursorPosition: point, mouseButton: .left)
         let up = CGEvent(mouseEventSource: nil, mouseType: .leftMouseUp, mouseCursorPosition: point, mouseButton: .left)
         down?.post(tap: .cghidEventTap)
+        up?.post(tap: .cghidEventTap)
+    }
+
+    private func postScroll(deltaX: Double, deltaY: Double, at point: CGPoint?) {
+        let event = CGEvent(
+            scrollWheelEvent2Source: nil,
+            units: .pixel,
+            wheelCount: 2,
+            wheel1: Int32(deltaY),
+            wheel2: Int32(deltaX),
+            wheel3: 0
+        )
+        if let point {
+            event?.location = point
+        }
+        event?.post(tap: .cghidEventTap)
+    }
+
+    private func postMouseDrag(from start: CGPoint, to end: CGPoint, durationMs: Int?) {
+        let down = CGEvent(mouseEventSource: nil, mouseType: .leftMouseDown, mouseCursorPosition: start, mouseButton: .left)
+        let drag = CGEvent(mouseEventSource: nil, mouseType: .leftMouseDragged, mouseCursorPosition: end, mouseButton: .left)
+        let up = CGEvent(mouseEventSource: nil, mouseType: .leftMouseUp, mouseCursorPosition: end, mouseButton: .left)
+        down?.post(tap: .cghidEventTap)
+        if let durationMs, durationMs > 0 {
+            Thread.sleep(forTimeInterval: Double(durationMs) / 1_000)
+        }
+        drag?.post(tap: .cghidEventTap)
         up?.post(tap: .cghidEventTap)
     }
 

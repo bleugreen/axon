@@ -121,6 +121,10 @@ public struct MCPRouter {
             return "run_plan"
         case "click":
             return "click"
+        case "scroll":
+            return "scroll"
+        case "drag":
+            return "drag"
         case "perform_action":
             return "perform_action"
         case "set_value":
@@ -214,10 +218,30 @@ public struct MCPRouter {
         ),
         MCPTool(
             name: "click",
-            description: "Click a target specified by snapshot handle or locator object.",
+            description: "Click a target specified by snapshot handle, locator object, or point.",
             inputSchema: objectSchema(properties: [
                 "target": targetSchema()
             ], required: ["target"])
+        ),
+        MCPTool(
+            name: "scroll",
+            description: "Scroll at a target, point, or active app using CoreGraphics wheel events.",
+            inputSchema: objectSchema(properties: [
+                "app": stringSchema("Optional app to activate before scrolling."),
+                "target": targetSchema(),
+                "deltaX": numberSchema("Horizontal scroll delta in pixels. Defaults to 0."),
+                "deltaY": numberSchema("Vertical scroll delta in pixels. Defaults to -120.")
+            ])
+        ),
+        MCPTool(
+            name: "drag",
+            description: "Drag from one point, snapshot handle, or locator target to another.",
+            inputSchema: objectSchema(properties: [
+                "app": stringSchema("Optional app to activate before dragging."),
+                "from": targetSchema(),
+                "to": targetSchema(),
+                "durationMs": numberSchema("Optional drag hold duration in milliseconds.")
+            ], required: ["from", "to"])
         ),
         MCPTool(
             name: "perform_action",
@@ -295,6 +319,13 @@ private func boolSchema(_ description: String) -> JSONValue {
     ])
 }
 
+private func numberSchema(_ description: String) -> JSONValue {
+    .object([
+        "type": .string("number"),
+        "description": .string(description)
+    ])
+}
+
 private func locatorSchema() -> JSONValue {
     .object([
         "type": .string("object"),
@@ -313,6 +344,11 @@ private func targetSchema() -> JSONValue {
             .object([
                 "type": .string("object"),
                 "description": .string("Locator target object with app and locator fields."),
+                "additionalProperties": .bool(true)
+            ]),
+            .object([
+                "type": .string("object"),
+                "description": .string("Point target object: { point: { x, y } } or { x, y } in screen coordinates."),
                 "additionalProperties": .bool(true)
             ])
         ])

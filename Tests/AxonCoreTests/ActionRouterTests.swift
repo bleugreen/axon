@@ -21,6 +21,41 @@ import Testing
     #expect(response.result?["action"]?["strategy"] == .string("AXPress"))
 }
 
+@Test func clickRequestAcceptsPointTarget() {
+    let router = CommandRouter(
+        actions: PrimitiveActionHandlers(
+            clickPoint: { point in
+                #expect(point.x == 25)
+                #expect(point.y == 40)
+                return PrimitiveActionResult(
+                    action: "click",
+                    target: "point:25,40",
+                    strategy: "CGEvent",
+                    success: true,
+                    details: ["point": point.jsonValue]
+                )
+            }
+        )
+    )
+
+    let response = router.handle(JSONRPCRequest(
+        id: .string("click-point"),
+        method: "click",
+        params: .object([
+            "target": .object([
+                "point": .object([
+                    "x": .int(25),
+                    "y": .int(40)
+                ])
+            ])
+        ])
+    ))
+
+    #expect(response.error == nil)
+    #expect(response.result?["action"]?["target"] == .string("point:25,40"))
+    #expect(response.result?["action"]?["point"]?["x"] == .double(25))
+}
+
 @Test func resolveRequestReturnsLocatorResolution() {
     let router = CommandRouter(
         captureSnapshot: { app, screenshot in
@@ -216,6 +251,90 @@ import Testing
 
     #expect(response.error == nil)
     #expect(response.result?["action"]?["target"] == .string("com.example.App"))
+}
+
+@Test func scrollRequestPassesPointTargetAndDeltas() {
+    let router = CommandRouter(
+        actions: PrimitiveActionHandlers(
+            scroll: { target, app, deltaX, deltaY in
+                #expect(target == .point(ActionPoint(x: 10, y: 20)))
+                #expect(app == "com.example.App")
+                #expect(deltaX == 0)
+                #expect(deltaY == -480)
+                return PrimitiveActionResult(action: "scroll", target: "point:10,20", strategy: "CGEventScroll", success: true)
+            }
+        )
+    )
+
+    let response = router.handle(JSONRPCRequest(
+        id: .string("scroll-point"),
+        method: "scroll",
+        params: .object([
+            "app": .string("com.example.App"),
+            "target": .object(["point": .object(["x": .int(10), "y": .int(20)])]),
+            "deltaY": .int(-480)
+        ])
+    ))
+
+    #expect(response.error == nil)
+    #expect(response.result?["action"]?["action"] == .string("scroll"))
+}
+
+@Test func scrollRequestResolvesLocatorTarget() {
+    let router = CommandRouter(
+        captureSnapshot: { _, _ in actionLocatorFixtureSnapshot(buttons: ["List"]) },
+        actions: PrimitiveActionHandlers(
+            scroll: { target, _, _, _ in
+                #expect(target == .handle("snapshot:action-locator-fixture:2"))
+                return PrimitiveActionResult(action: "scroll", target: "snapshot:action-locator-fixture:2", strategy: "CGEventScroll", success: true)
+            }
+        )
+    )
+
+    let response = router.handle(JSONRPCRequest(
+        id: .string("scroll-locator"),
+        method: "scroll",
+        params: .object([
+            "target": .object([
+                "app": .string("com.example.App"),
+                "locator": .object([
+                    "role": .string("AXButton"),
+                    "title": .string("List")
+                ])
+            ]),
+            "deltaY": .int(-120)
+        ])
+    ))
+
+    #expect(response.error == nil)
+}
+
+@Test func dragRequestPassesPointEndpoints() {
+    let router = CommandRouter(
+        actions: PrimitiveActionHandlers(
+            drag: { from, to, app, durationMs in
+                #expect(from == .point(ActionPoint(x: 10, y: 20)))
+                #expect(to == .point(ActionPoint(x: 90, y: 120)))
+                #expect(app == "com.example.App")
+                #expect(durationMs == 250)
+                return PrimitiveActionResult(action: "drag", target: "point:10,20->point:90,120", strategy: "CGEventDrag", success: true)
+            }
+        )
+    )
+
+    let response = router.handle(JSONRPCRequest(
+        id: .string("drag-points"),
+        method: "drag",
+        params: .object([
+            "app": .string("com.example.App"),
+            "from": .object(["point": .object(["x": .int(10), "y": .int(20)])]),
+            "to": .object(["point": .object(["x": .int(90), "y": .int(120)])]),
+            "durationMs": .int(250)
+        ])
+    ))
+
+    #expect(response.error == nil)
+    #expect(response.result?["action"]?["action"] == .string("drag"))
 }
 
 private func actionLocatorFixtureSnapshot(buttons: [String]) -> AppSnapshot {
