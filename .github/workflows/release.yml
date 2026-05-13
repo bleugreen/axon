@@ -55,6 +55,15 @@ jobs:
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
 
+      - name: Create or update manual release tag
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          set -euo pipefail
+          git tag -f "$TAG" "$GITHUB_SHA"
+          git push --force origin "refs/tags/$TAG"
+
       - name: Check release secrets
         run: |
           set -euo pipefail
