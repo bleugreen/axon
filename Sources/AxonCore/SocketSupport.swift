@@ -24,6 +24,11 @@ public enum SocketError: Error, CustomStringConvertible {
     }
 }
 
+func setNoSigPipe(_ descriptor: Int32) {
+    var value: Int32 = 1
+    setsockopt(descriptor, SOL_SOCKET, SO_NOSIGPIPE, &value, socklen_t(MemoryLayout.size(ofValue: value)))
+}
+
 func withSocketAddress<T>(
     path: String,
     _ body: (UnsafePointer<sockaddr>, socklen_t) throws -> T

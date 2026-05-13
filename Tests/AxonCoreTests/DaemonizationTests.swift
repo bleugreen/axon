@@ -51,6 +51,11 @@ import Testing
     #expect(String(decoding: data, as: UTF8.self) == "hello")
 }
 
+@Test func socketClientAllowsLongerDaemonResponsesThanRequestReads() {
+    #expect(SocketClient.defaultResponseTimeoutSeconds > SocketServer.defaultClientReadTimeoutSeconds)
+    #expect(SocketClient.defaultMaxResponseBytes > SocketServer.defaultMaxRequestBytes)
+}
+
 @Test func socketCommandRouterForwardsRequestsToSocketClient() throws {
     let request = JSONRPCRequest(id: .string("health"), method: "health")
     let router = SocketCommandRouter(path: "/tmp/axon-test.sock") { received in

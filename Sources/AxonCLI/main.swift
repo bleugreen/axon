@@ -15,6 +15,7 @@ do {
         exit(report.isReady ? 0 : 1)
 
     case "serve":
+        ScreenCaptureRuntime.bootstrapSynchronously()
         print("axon serving on \(socketPath)")
         fflush(stdout)
         try SocketServer(path: socketPath).run()

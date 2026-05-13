@@ -6,16 +6,21 @@ import ImageIO
 import UniformTypeIdentifiers
 
 public struct ScreenshotCapturer {
-    private let timeoutSeconds: TimeInterval
+    public static let defaultMaxEncodedDimension = 1600
 
-    public init(timeoutSeconds: TimeInterval = 5.0) {
+    private let timeoutSeconds: TimeInterval
+    private let maxEncodedDimension: Int
+
+    public init(
+        timeoutSeconds: TimeInterval = 5.0,
+        maxEncodedDimension: Int = Self.defaultMaxEncodedDimension
+    ) {
         self.timeoutSeconds = timeoutSeconds
+        self.maxEncodedDimension = max(1, maxEncodedDimension)
     }
 
     public func capture(app: AppIdentity, axWindows: [AXNode] = []) -> EncodedScreenshot? {
-        MainActor.assumeIsolated {
-            ScreenCaptureRuntime.bootstrap()
-        }
+        ScreenCaptureRuntime.bootstrapSynchronously()
         guard let window = matchingWindow(for: app, axWindows: axWindows) else {
             return nil
         }
@@ -36,7 +41,7 @@ public struct ScreenshotCapturer {
             return nil
         }
 
-        return encode(image)
+        return encode(scaledImage(image, maxDimension: maxEncodedDimension) ?? image)
     }
 
     private func matchingWindow(for app: AppIdentity, axWindows: [AXNode]) -> SCWindow? {
@@ -120,6 +125,46 @@ public struct ScreenshotCapturer {
             height: image.height
         )
     }
+
+    private func scaledImage(_ image: CGImage, maxDimension: Int) -> CGImage? {
+        let targetSize = Self.targetPixelSize(
+            width: image.width,
+            height: image.height,
+            maxDimension: maxDimension
+        )
+        guard targetSize.width != image.width || targetSize.height != image.height else {
+            return image
+        }
+
+        guard let context = CGContext(
+            data: nil,
+            width: targetSize.width,
+            height: targetSize.height,
+            bitsPerComponent: image.bitsPerComponent,
+            bytesPerRow: 0,
+            space: image.colorSpace ?? CGColorSpaceCreateDeviceRGB(),
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        ) else {
+            return nil
+        }
+
+        context.interpolationQuality = .medium
+        context.draw(image, in: CGRect(x: 0, y: 0, width: targetSize.width, height: targetSize.height))
+        return context.makeImage()
+    }
+
+    static func targetPixelSize(width: Int, height: Int, maxDimension: Int) -> (width: Int, height: Int) {
+        let maxSourceDimension = max(width, height)
+        guard maxSourceDimension > maxDimension else {
+            return (width, height)
+        }
+
+        let scale = Double(maxDimension) / Double(maxSourceDimension)
+        return (
+            width: max(1, Int((Double(width) * scale).rounded())),
+            height: max(1, Int((Double(height) * scale).rounded()))
+        )
+    }
 }
 
 private final class AsyncResult<Value>: @unchecked Sendable {
@@ -139,7 +184,28 @@ private final class AsyncResult<Value>: @unchecked Sendable {
     }
 }
 
-@MainActor private enum ScreenCaptureRuntime {
+public enum ScreenCaptureRuntime {
+    private static let state = ScreenCaptureRuntimeState()
+
+    public static func bootstrapSynchronously() {
+        if state.isBootstrapped {
+            return
+        }
+
+        // Never wait on the main queue from a daemon worker; the main thread is in accept().
+        guard Thread.isMainThread else {
+            return
+        }
+
+        MainActor.assumeIsolated {
+            MainActorScreenCaptureRuntime.bootstrap()
+        }
+
+        state.markBootstrapped()
+    }
+}
+
+@MainActor private enum MainActorScreenCaptureRuntime {
     private static let didBootstrap: Void = {
         let application = NSApplication.shared
         application.setActivationPolicy(.accessory)
@@ -147,6 +213,23 @@ private final class AsyncResult<Value>: @unchecked Sendable {
 
     static func bootstrap() {
         _ = didBootstrap
+    }
+}
+
+private final class ScreenCaptureRuntimeState: @unchecked Sendable {
+    private let lock = NSLock()
+    private var didBootstrap = false
+
+    var isBootstrapped: Bool {
+        lock.lock()
+        defer { lock.unlock() }
+        return didBootstrap
+    }
+
+    func markBootstrapped() {
+        lock.lock()
+        didBootstrap = true
+        lock.unlock()
     }
 }
 

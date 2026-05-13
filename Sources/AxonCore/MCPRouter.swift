@@ -83,15 +83,15 @@ public struct MCPRouter {
     }
 
     private func toolResult(id: JSONRPCID?, structuredContent: [String: JSONValue], isError: Bool) -> JSONRPCResponse {
-        let structured = JSONValue.object(structuredContent)
+        let content = MCPContent.normalize(JSONValue.object(structuredContent))
         return JSONRPCResponse(id: id, result: [
             "content": .array([
                 .object([
                     "type": .string("text"),
-                    "text": .string(structured.compactJSONString)
+                    "text": .string(content.structured.compactJSONString)
                 ])
-            ]),
-            "structuredContent": structured,
+            ] + content.images),
+            "structuredContent": content.structured,
             "isError": .bool(isError)
         ])
     }
@@ -307,9 +307,47 @@ private extension JSONRPCError {
     }
 }
 
+private struct MCPContent {
+    let structured: JSONValue
+    let images: [JSONValue]
+
+    static func normalize(_ value: JSONValue) -> MCPContent {
+        var images: [JSONValue] = []
+        let structured = value.redactingMCPImagePayloads(into: &images)
+        return MCPContent(structured: structured, images: images)
+    }
+}
+
 private extension JSONValue {
     var compactJSONString: String {
         let data = (try? JSONEncoder().encode(self)) ?? Data("null".utf8)
         return String(decoding: data, as: UTF8.self)
+    }
+
+    func redactingMCPImagePayloads(into images: inout [JSONValue]) -> JSONValue {
+        switch self {
+        case var .object(object):
+            if case let .string(base64Data)? = object["base64Data"],
+               case let .string(mediaType)? = object["mediaType"] {
+                images.append(.object([
+                    "type": .string("image"),
+                    "data": .string(base64Data),
+                    "mimeType": .string(mediaType)
+                ]))
+                object.removeValue(forKey: "base64Data")
+                object["contentTransport"] = .string("mcp_image")
+            }
+
+            var redacted: [String: JSONValue] = [:]
+            redacted.reserveCapacity(object.count)
+            for (key, value) in object {
+                redacted[key] = value.redactingMCPImagePayloads(into: &images)
+            }
+            return .object(redacted)
+        case let .array(values):
+            return .array(values.map { $0.redactingMCPImagePayloads(into: &images) })
+        case .string, .int, .double, .bool, .null:
+            return self
+        }
     }
 }

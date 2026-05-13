@@ -143,3 +143,27 @@ import ApplicationServices
         ObservedAppChange(sequence: token + 1, reason: "AXFocusedWindowChanged")
     ])
 }
+
+@Test func screenCaptureRuntimeDoesNotBlockFromBackgroundThread() {
+    let done = DispatchSemaphore(value: 0)
+    DispatchQueue.global().async {
+        ScreenCaptureRuntime.bootstrapSynchronously()
+        done.signal()
+    }
+
+    #expect(done.wait(timeout: .now() + 2.0) == .success)
+}
+
+@Test func screenshotTargetPixelSizeDownscalesLongEdge() {
+    let size = ScreenshotCapturer.targetPixelSize(width: 3262, height: 2018, maxDimension: 1600)
+
+    #expect(size.width == 1600)
+    #expect(size.height == 990)
+}
+
+@Test func screenshotTargetPixelSizeDoesNotUpscaleSmallImages() {
+    let size = ScreenshotCapturer.targetPixelSize(width: 800, height: 600, maxDimension: 1600)
+
+    #expect(size.width == 800)
+    #expect(size.height == 600)
+}

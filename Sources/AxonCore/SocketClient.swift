@@ -2,10 +2,21 @@ import Darwin
 import Foundation
 
 public struct SocketClient {
-    private let path: String
+    public static let defaultResponseTimeoutSeconds: TimeInterval = 30.0
+    public static let defaultMaxResponseBytes = 64 * 1_048_576
 
-    public init(path: String) {
+    private let path: String
+    private let responseTimeoutSeconds: TimeInterval
+    private let maxResponseBytes: Int
+
+    public init(
+        path: String,
+        responseTimeoutSeconds: TimeInterval = Self.defaultResponseTimeoutSeconds,
+        maxResponseBytes: Int = Self.defaultMaxResponseBytes
+    ) {
         self.path = path
+        self.responseTimeoutSeconds = responseTimeoutSeconds
+        self.maxResponseBytes = maxResponseBytes
     }
 
     public func send(_ request: JSONRPCRequest) throws -> JSONRPCResponse {
@@ -13,6 +24,7 @@ public struct SocketClient {
         guard descriptor >= 0 else {
             throw SocketError.operationFailed("socket")
         }
+        setNoSigPipe(descriptor)
         defer { close(descriptor) }
 
         try withSocketAddress(path: path) { pointer, length in
@@ -24,7 +36,11 @@ public struct SocketClient {
         let payload = try JSONEncoder().encode(request) + Data([0x0A])
         try writeAll(payload, to: descriptor)
 
-        let responseData = try readLineData(from: descriptor)
+        let responseData = try readLineData(
+            from: descriptor,
+            timeoutSeconds: responseTimeoutSeconds,
+            maxBytes: maxResponseBytes
+        )
         return try JSONDecoder().decode(JSONRPCResponse.self, from: responseData)
     }
 }

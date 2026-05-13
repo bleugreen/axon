@@ -57,6 +57,7 @@ public struct SocketServer: @unchecked Sendable {
         guard client >= 0 else {
             throw SocketError.operationFailed("accept")
         }
+        setNoSigPipe(client)
         return client
     }
 
@@ -86,6 +87,7 @@ public struct SocketServer: @unchecked Sendable {
         guard descriptor >= 0 else {
             throw SocketError.operationFailed("socket")
         }
+        setNoSigPipe(descriptor)
 
         do {
             try withSocketAddress(path: path) { pointer, length in
