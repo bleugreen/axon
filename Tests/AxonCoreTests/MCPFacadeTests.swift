@@ -43,6 +43,9 @@ import Testing
     #expect(tool(named: "get_app_state", in: tools)?["inputSchema"]?["properties"]?["sensitive"] != nil)
     #expect(tool(named: "get_app_state", in: tools)?["inputSchema"]?["properties"]?["includeScreenshot"] == nil)
     #expect(tool(named: "click", in: tools)?["inputSchema"]?["properties"]?["target"]?["anyOf"]?[2] != nil)
+    #expect(tool(named: "click", in: tools)?["inputSchema"]?["properties"]?["target"]?["anyOf"]?[3] != nil)
+    #expect(tool(named: "perform_action", in: tools)?["inputSchema"]?["properties"]?["target"]?["anyOf"]?[2] == nil)
+    #expect(tool(named: "set_value", in: tools)?["inputSchema"]?["properties"]?["target"]?["anyOf"]?[2] == nil)
 }
 
 @Test func mcpGetChildrenReturnsOnlyRequestedChildListObservation() {

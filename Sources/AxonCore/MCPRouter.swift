@@ -348,9 +348,9 @@ public struct MCPRouter {
         ),
         MCPTool(
             name: "click",
-            description: "Click a target specified by snapshot handle, locator object, or point.",
+            description: "Click a target specified by snapshot handle, locator object, point, or text location.",
             inputSchema: objectSchema(properties: [
-                "target": targetSchema()
+                "target": pointerTargetSchema()
             ], required: ["target"])
         ),
         MCPTool(
@@ -358,7 +358,7 @@ public struct MCPRouter {
             description: "Scroll an accessibility surface by resolving an offscreen descendant and requesting AXScrollToVisible.",
             inputSchema: objectSchema(properties: [
                 "app": stringSchema("Optional app used to resolve a scroll surface without activating it."),
-                "target": targetSchema(),
+                "target": pointerTargetSchema(),
                 "deltaX": numberSchema("Horizontal scroll delta in pixels. Defaults to 0."),
                 "deltaY": numberSchema("Vertical scroll delta in pixels. Defaults to -120.")
             ])
@@ -368,8 +368,8 @@ public struct MCPRouter {
             description: "Drag from one point, snapshot handle, or locator target to another.",
             inputSchema: objectSchema(properties: [
                 "app": stringSchema("Optional app to activate before dragging."),
-                "from": targetSchema(),
-                "to": targetSchema(),
+                "from": pointerTargetSchema(),
+                "to": pointerTargetSchema(),
                 "durationMs": numberSchema("Optional drag hold duration in milliseconds.")
             ], required: ["from", "to"])
         ),
@@ -377,7 +377,7 @@ public struct MCPRouter {
             name: "perform_action",
             description: "Perform a named AX action on a target specified by snapshot handle or locator object.",
             inputSchema: objectSchema(properties: [
-                "target": targetSchema(),
+                "target": elementTargetSchema(),
                 "action": stringSchema("Accessibility action name, for example AXPress or AXShowMenu.")
             ], required: ["target", "action"])
         ),
@@ -385,7 +385,7 @@ public struct MCPRouter {
             name: "set_value",
             description: "Preferred text-entry primitive for writable fields. Sets AXValue directly on a target, avoiding focus and keystroke timing races.",
             inputSchema: objectSchema(properties: [
-                "target": targetSchema(),
+                "target": elementTargetSchema(),
                 "value": stringSchema("New string value.")
             ], required: ["target", "value"])
         ),
@@ -464,7 +464,23 @@ private func locatorSchema() -> JSONValue {
     ])
 }
 
-private func targetSchema() -> JSONValue {
+private func elementTargetSchema() -> JSONValue {
+    .object([
+        "anyOf": .array([
+            .object([
+                "type": .string("string"),
+                "description": .string("Snapshot handle like s12:19.")
+            ]),
+            .object([
+                "type": .string("object"),
+                "description": .string("Locator target object with app and locator fields. Locator may use label, title, value, description, identifier, actions, and ancestors."),
+                "additionalProperties": .bool(true)
+            ])
+        ])
+    ])
+}
+
+private func pointerTargetSchema() -> JSONValue {
     .object([
         "anyOf": .array([
             .object([
@@ -479,6 +495,11 @@ private func targetSchema() -> JSONValue {
             .object([
                 "type": .string("object"),
                 "description": .string("Point target object: { point: { x, y } } or { x, y } in screen coordinates."),
+                "additionalProperties": .bool(true)
+            ]),
+            .object([
+                "type": .string("object"),
+                "description": .string("Text location target object: { location: { app, text, source? } }. Resolves visible text to a click/drag/scroll point without callers providing coordinates."),
                 "additionalProperties": .bool(true)
             ])
         ])

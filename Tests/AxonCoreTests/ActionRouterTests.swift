@@ -115,6 +115,73 @@ import Testing
     #expect(response.result?["action"]?["target"] == .string("action-locator-fixture:2"))
 }
 
+@Test func clickRequestAcceptsTextLocationTarget() {
+    let router = CommandRouter(
+        captureSnapshot: { _, screenshot in
+            #expect(screenshot == false)
+            return actionTextLocationFixtureSnapshot(labels: ["Backlog"])
+        },
+        actions: PrimitiveActionHandlers(
+            clickPoint: { point in
+                #expect(point == ActionPoint(x: 140, y: 60))
+                return PrimitiveActionResult(
+                    action: "click",
+                    target: point.targetDescription,
+                    strategy: "CGEvent",
+                    success: true,
+                    details: ["point": point.jsonValue]
+                )
+            }
+        )
+    )
+
+    let response = router.handle(JSONRPCRequest(
+        id: .string("click-location"),
+        method: "click",
+        params: .object([
+            "target": .object([
+                "location": .object([
+                    "app": .string("com.example.App"),
+                    "text": .string("Backlog")
+                ])
+            ])
+        ])
+    ))
+
+    #expect(response.error == nil)
+    #expect(response.result?["action"]?["target"] == .string("point:140,60"))
+    #expect(response.result?["action"]?["point"]?["x"] == .double(140))
+}
+
+@Test func clickRequestRejectsAmbiguousTextLocationTarget() {
+    let router = CommandRouter(
+        captureSnapshot: { _, _ in actionTextLocationFixtureSnapshot(labels: ["Backlog", "Backlog"]) },
+        actions: PrimitiveActionHandlers(
+            clickPoint: { _ in
+                Issue.record("ambiguous text location should not dispatch a click")
+                return PrimitiveActionResult(action: "click", target: "bad", strategy: "bad", success: false)
+            }
+        )
+    )
+
+    let response = router.handle(JSONRPCRequest(
+        id: .string("click-location-ambiguous"),
+        method: "click",
+        params: .object([
+            "target": .object([
+                "location": .object([
+                    "app": .string("com.example.App"),
+                    "text": .string("Backlog")
+                ])
+            ])
+        ])
+    ))
+
+    #expect(response.error?.code == -32602)
+    #expect(response.error?.message.contains("Text location did not resolve uniquely: ambiguous") == true)
+    #expect(response.error?.message.contains("2 candidates") == true)
+}
+
 @Test func clickRequestRejectsAmbiguousLocatorTarget() {
     let router = CommandRouter(
         captureSnapshot: { _, _ in actionLocatorFixtureSnapshot(buttons: ["NEW", "NEW"]) },
@@ -309,6 +376,35 @@ import Testing
     #expect(response.error == nil)
 }
 
+@Test func scrollRequestAcceptsTextLocationTarget() {
+    let router = CommandRouter(
+        captureSnapshot: { _, _ in actionTextLocationFixtureSnapshot(labels: ["Backlog"]) },
+        actions: PrimitiveActionHandlers(
+            scroll: { target, _, _, _ in
+                #expect(target == .point(ActionPoint(x: 140, y: 60)))
+                return PrimitiveActionResult(action: "scroll", target: "point:140,60", strategy: "AXScrollToVisible", success: true)
+            }
+        )
+    )
+
+    let response = router.handle(JSONRPCRequest(
+        id: .string("scroll-location"),
+        method: "scroll",
+        params: .object([
+            "target": .object([
+                "location": .object([
+                    "app": .string("com.example.App"),
+                    "text": .string("Backlog")
+                ])
+            ]),
+            "deltaY": .int(-120)
+        ])
+    ))
+
+    #expect(response.error == nil)
+    #expect(response.result?["action"]?["locationResolutions"]?[0]?["best"]?["matchedText"] == .string("Backlog"))
+}
+
 @Test func dragRequestPassesPointEndpoints() {
     let router = CommandRouter(
         actions: PrimitiveActionHandlers(
@@ -337,6 +433,42 @@ import Testing
     #expect(response.result?["action"]?["action"] == .string("drag"))
 }
 
+@Test func dragRequestAcceptsTextLocationEndpoints() {
+    let router = CommandRouter(
+        captureSnapshot: { _, _ in actionTextLocationFixtureSnapshot(labels: ["Backlog", "Done"]) },
+        actions: PrimitiveActionHandlers(
+            drag: { from, to, _, _ in
+                #expect(from == .point(ActionPoint(x: 140, y: 60)))
+                #expect(to == .point(ActionPoint(x: 240, y: 60)))
+                return PrimitiveActionResult(action: "drag", target: "point:140,60->point:240,60", strategy: "CGEventDrag", success: true)
+            }
+        )
+    )
+
+    let response = router.handle(JSONRPCRequest(
+        id: .string("drag-locations"),
+        method: "drag",
+        params: .object([
+            "from": .object([
+                "location": .object([
+                    "app": .string("com.example.App"),
+                    "text": .string("Backlog")
+                ])
+            ]),
+            "to": .object([
+                "location": .object([
+                    "app": .string("com.example.App"),
+                    "text": .string("Done")
+                ])
+            ])
+        ])
+    ))
+
+    #expect(response.error == nil)
+    #expect(response.result?["action"]?["locationResolutions"]?[0]?["best"]?["matchedText"] == .string("Backlog"))
+    #expect(response.result?["action"]?["locationResolutions"]?[1]?["best"]?["matchedText"] == .string("Done"))
+}
+
 private func actionLocatorFixtureSnapshot(buttons: [String]) -> AppSnapshot {
     AppSnapshot(
         id: SnapshotID("action-locator-fixture"),
@@ -354,6 +486,27 @@ private func actionLocatorFixtureSnapshot(buttons: [String]) -> AppSnapshot {
                         }
                     )
                 ]
+            )
+        ],
+        screenshot: nil
+    )
+}
+
+private func actionTextLocationFixtureSnapshot(labels: [String]) -> AppSnapshot {
+    AppSnapshot(
+        id: SnapshotID("action-text-location-fixture"),
+        app: AppIdentity(bundleIdentifier: "com.example.App", name: "Example", processIdentifier: 42),
+        windows: [
+            AXNode(
+                role: "AXWindow",
+                title: "Main",
+                children: labels.enumerated().map { index, label in
+                    AXNode(
+                        role: "AXStaticText",
+                        title: label,
+                        frame: AXFrame(x: Double(100 + index * 100), y: 50, width: 80, height: 20)
+                    )
+                }
             )
         ],
         screenshot: nil

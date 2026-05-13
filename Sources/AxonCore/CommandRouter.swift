@@ -230,6 +230,10 @@ public struct CommandRouter {
                 if let target = params["target"], let point = try pointTarget(from: target) {
                     return try actions.clickPoint(point)
                 }
+                if let target = params["target"], let location = try textLocationTarget(from: target) {
+                    let resolution = try resolveTextLocationTarget(location)
+                    return try withLocationResolution(actions.clickPoint(resolution.point), resolution: resolution)
+                }
                 return try actions.click(resolveTargetParam(in: request))
             }
         case "perform_action":
@@ -263,22 +267,27 @@ public struct CommandRouter {
         case "scroll":
             return actionResponse(id: request.id) {
                 let params = try paramsObject(in: request)
-                return try actions.scroll(
-                    optionalPointerTarget("target", in: params),
+                let target = try optionalResolvedPointerTarget("target", in: params)
+                let result = try actions.scroll(
+                    target?.target,
                     optionalStringParam("app", in: params),
                     doubleParam("deltaX", in: params) ?? 0,
                     doubleParam("deltaY", in: params) ?? -120
                 )
+                return withLocationResolution(result, resolution: target?.locationResolution)
             }
         case "drag":
             return actionResponse(id: request.id) {
                 let params = try paramsObject(in: request)
-                return try actions.drag(
-                    requiredPointerTarget("from", in: params),
-                    requiredPointerTarget("to", in: params),
+                let from = try requiredResolvedPointerTarget("from", in: params)
+                let to = try requiredResolvedPointerTarget("to", in: params)
+                let result = try actions.drag(
+                    from.target,
+                    to.target,
                     optionalStringParam("app", in: params),
                     intParam("durationMs", in: params)
                 )
+                return withLocationResolutions(result, resolutions: [from.locationResolution, to.locationResolution])
             }
         default:
             return JSONRPCResponse(
@@ -340,28 +349,32 @@ public struct CommandRouter {
         return try resolveLocatorTarget(target)
     }
 
-    private func requiredPointerTarget(_ key: String, in params: [String: JSONValue]) throws -> PointerTarget {
+    private func requiredResolvedPointerTarget(_ key: String, in params: [String: JSONValue]) throws -> ResolvedPointerTarget {
         guard let value = params[key] else {
             throw JSONRPCError.invalidParams("Missing target parameter: \(key)")
         }
-        return try pointerTarget(from: value)
+        return try resolvedPointerTarget(from: value)
     }
 
-    private func optionalPointerTarget(_ key: String, in params: [String: JSONValue]) throws -> PointerTarget? {
+    private func optionalResolvedPointerTarget(_ key: String, in params: [String: JSONValue]) throws -> ResolvedPointerTarget? {
         guard let value = params[key], value != .null else {
             return nil
         }
-        return try pointerTarget(from: value)
+        return try resolvedPointerTarget(from: value)
     }
 
-    private func pointerTarget(from value: JSONValue) throws -> PointerTarget {
+    private func resolvedPointerTarget(from value: JSONValue) throws -> ResolvedPointerTarget {
         if case let .string(handle) = value {
-            return .handle(handle)
+            return ResolvedPointerTarget(target: .handle(handle), locationResolution: nil)
         }
         if let point = try pointTarget(from: value) {
-            return .point(point)
+            return ResolvedPointerTarget(target: .point(point), locationResolution: nil)
         }
-        return .handle(try resolveLocatorTarget(value))
+        if let location = try textLocationTarget(from: value) {
+            let resolution = try resolveTextLocationTarget(location)
+            return ResolvedPointerTarget(target: .point(resolution.point), locationResolution: resolution)
+        }
+        return ResolvedPointerTarget(target: .handle(try resolveLocatorTarget(value)), locationResolution: nil)
     }
 
     private func pointTarget(from value: JSONValue) throws -> ActionPoint? {
@@ -385,6 +398,50 @@ public struct CommandRouter {
             throw JSONRPCError.invalidParams("point requires numeric x and y")
         }
         return ActionPoint(x: x, y: y)
+    }
+
+    private func textLocationTarget(from value: JSONValue) throws -> TextLocationTarget? {
+        guard case let .object(object) = value, let location = object["location"] else {
+            return nil
+        }
+        return try TextLocationTarget(jsonValue: location)
+    }
+
+    private func resolveTextLocationTarget(_ target: TextLocationTarget) throws -> TextLocationResolvedPoint {
+        guard target.source != .screenshot else {
+            throw JSONRPCError.invalidParams("Text location source is not supported yet: screenshot")
+        }
+        let snapshot = try captureSnapshot(target.app, false)
+        let resolution = TextLocationResolver().resolve(target, in: snapshot)
+        guard resolution.status == .unique, let point = resolution.point else {
+            throw JSONRPCError.invalidParams(textLocationFailureMessage(resolution))
+        }
+        return TextLocationResolvedPoint(point: point, resolution: resolution)
+    }
+
+    private func textLocationFailureMessage(_ resolution: TextLocationResolution) -> String {
+        var message = "Text location did not resolve uniquely: \(resolution.status.rawValue)"
+        guard !resolution.candidates.isEmpty else {
+            return message
+        }
+
+        let summaries = resolution.candidates.prefix(5).map { candidate in
+            "[\(candidate.index)] \(candidate.role) \"\(candidate.matchedText)\" frame=\(frameDescription(candidate.frame))"
+        }
+        message += " (\(resolution.candidates.count) candidates: \(summaries.joined(separator: "; "))"
+        if resolution.candidates.count > summaries.count {
+            message += "; ..."
+        }
+        message += ")"
+        return message
+    }
+
+    private func frameDescription(_ frame: AXFrame) -> String {
+        "{x:\(formatNumber(frame.x)),y:\(formatNumber(frame.y)),width:\(formatNumber(frame.width)),height:\(formatNumber(frame.height))}"
+    }
+
+    private func formatNumber(_ value: Double) -> String {
+        value.rounded() == value ? String(Int(value)) : String(value)
     }
 
     private func resolveLocatorTarget(_ target: JSONValue) throws -> String {
@@ -436,6 +493,36 @@ public struct CommandRouter {
         }
     }
 
+    private func withLocationResolution(
+        _ result: PrimitiveActionResult,
+        resolution resolved: TextLocationResolvedPoint?
+    ) -> PrimitiveActionResult {
+        guard let resolved else {
+            return result
+        }
+        return withLocationResolutions(result, resolutions: [resolved])
+    }
+
+    private func withLocationResolutions(
+        _ result: PrimitiveActionResult,
+        resolutions: [TextLocationResolvedPoint?]
+    ) -> PrimitiveActionResult {
+        let values = resolutions.compactMap { $0?.resolution.jsonValue }
+        guard !values.isEmpty else {
+            return result
+        }
+        var details = result.details
+        details["locationResolutions"] = .array(values)
+        return PrimitiveActionResult(
+            action: result.action,
+            target: result.target,
+            strategy: result.strategy,
+            success: result.success,
+            message: result.message,
+            details: details
+        )
+    }
+
     private func actionResponse(id: JSONRPCID?, _ body: () throws -> PrimitiveActionResult) -> JSONRPCResponse {
         do {
             return JSONRPCResponse(id: id, result: ["action": try body().jsonValue])
@@ -459,4 +546,14 @@ public struct CommandRouter {
         }
         return changeObserver.changes(since: token, app: previous.app)
     }
+}
+
+private struct ResolvedPointerTarget {
+    let target: PointerTarget
+    let locationResolution: TextLocationResolvedPoint?
+}
+
+private struct TextLocationResolvedPoint {
+    let point: ActionPoint
+    let resolution: TextLocationResolution
 }
