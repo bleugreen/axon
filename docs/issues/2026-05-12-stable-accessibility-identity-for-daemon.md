@@ -23,9 +23,9 @@ Give Axon a stable local identity before relying on LaunchAgent mode as the norm
 
 Implemented first pass:
 
-- `axon daemon install/start` copies the current executable to `~/Library/Application Support/Axon/bin/axon`.
-- The installed copy is ad-hoc signed with fixed identifier `dev.axon.daemon`.
-- The LaunchAgent plist points at the installed copy instead of `.build/debug/axon`.
+- `axon daemon install/start` copies the current executable into `~/Library/Application Support/Axon/Axon Daemon.app`.
+- The installed app bundle is ad-hoc signed with fixed bundle identifier `dev.axon.daemon`.
+- The LaunchAgent plist points at the bundled executable instead of `.build/debug/axon`.
 - `health` reports the daemon process Accessibility status over the socket.
 
 Remaining options if TCC is still unstable:

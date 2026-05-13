@@ -5,6 +5,18 @@ public struct DaemonBinaryInstaller {
 
     public static var defaultInstallURL: URL {
         URL(fileURLWithPath: NSHomeDirectory())
+            .appendingPathComponent("Library/Application Support/Axon/Axon Daemon.app/Contents/MacOS/axon")
+    }
+
+    public static var defaultBundleURL: URL {
+        defaultInstallURL
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+    }
+
+    private static var legacyInstallURL: URL {
+        URL(fileURLWithPath: NSHomeDirectory())
             .appendingPathComponent("Library/Application Support/Axon/bin/axon")
     }
 
@@ -35,19 +47,19 @@ public struct DaemonBinaryInstaller {
             at: installURL.deletingLastPathComponent(),
             withIntermediateDirectories: true
         )
+        try writeInfoPlist()
         if fileManager.fileExists(atPath: installURL.path) {
             try fileManager.removeItem(at: installURL)
         }
         try fileManager.copyItem(at: sourceURL, to: installURL)
         try fileManager.setAttributes([.posixPermissions: 0o755], ofItemAtPath: installURL.path)
+        try removeLegacyInstallIfNeeded()
 
         let result = try runCodesign([
             "--force",
             "--sign",
             "-",
-            "--identifier",
-            signingIdentifier,
-            installURL.path
+            bundleURL.path
         ])
         guard result.exitCode == 0 else {
             throw DaemonBinaryInstallError.signingFailed(result)
@@ -56,8 +68,48 @@ public struct DaemonBinaryInstaller {
     }
 
     public func uninstall() throws {
-        if fileManager.fileExists(atPath: installURL.path) {
-            try fileManager.removeItem(at: installURL)
+        if fileManager.fileExists(atPath: bundleURL.path) {
+            try fileManager.removeItem(at: bundleURL)
+        }
+        try removeLegacyInstallIfNeeded()
+    }
+
+    private func writeInfoPlist() throws {
+        let contentsURL = installURL.deletingLastPathComponent().deletingLastPathComponent()
+        try fileManager.createDirectory(
+            at: contentsURL,
+            withIntermediateDirectories: true
+        )
+        let plist: [String: Any] = [
+            "CFBundleDevelopmentRegion": "en",
+            "CFBundleExecutable": "axon",
+            "CFBundleIdentifier": signingIdentifier,
+            "CFBundleInfoDictionaryVersion": "6.0",
+            "CFBundleName": "Axon Daemon",
+            "CFBundlePackageType": "APPL",
+            "CFBundleShortVersionString": "0.1.0",
+            "CFBundleVersion": "1",
+            "LSBackgroundOnly": true
+        ]
+        let data = try PropertyListSerialization.data(
+            fromPropertyList: plist,
+            format: .xml,
+            options: 0
+        )
+        try data.write(to: contentsURL.appendingPathComponent("Info.plist"), options: .atomic)
+    }
+
+    private var bundleURL: URL {
+        installURL
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+    }
+
+    private func removeLegacyInstallIfNeeded() throws {
+        let legacyURL = Self.legacyInstallURL
+        if legacyURL.path != installURL.path, fileManager.fileExists(atPath: legacyURL.path) {
+            try fileManager.removeItem(at: legacyURL)
         }
     }
 

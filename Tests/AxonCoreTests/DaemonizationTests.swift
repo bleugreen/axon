@@ -81,6 +81,8 @@ import Testing
     #expect(arguments == ["/Users/mitch/projects/axon/.build/debug/axon", "serve"])
     #expect(plist?["RunAtLoad"] as? Bool == true)
     #expect(plist?["KeepAlive"] as? Bool == true)
+    #expect(plist?["LimitLoadToSessionType"] as? String == "Aqua")
+    #expect(plist?["ProcessType"] as? String == "Interactive")
     #expect(environment?["AXON_SOCKET_PATH"] == "/tmp/axon-test.sock")
     #expect(environment?["AXON_VISUAL_OVERLAY"] == "1")
     #expect(environment?["AXON_VISUAL_OVERLAY_RESULT_MS"] == "500")
@@ -91,7 +93,8 @@ import Testing
     let root = FileManager.default.temporaryDirectory
         .appendingPathComponent("axon-daemon-installer-\(UUID().uuidString)")
     let source = root.appendingPathComponent("source/axon")
-    let installURL = root.appendingPathComponent("install/bin/axon")
+    let bundleURL = root.appendingPathComponent("install/Axon Daemon.app")
+    let installURL = bundleURL.appendingPathComponent("Contents/MacOS/axon")
     defer {
         try? FileManager.default.removeItem(at: root)
     }
@@ -119,13 +122,19 @@ import Testing
     #expect(installedURL == installURL)
     #expect(try String(contentsOf: installURL, encoding: .utf8) == "binary")
     #expect(FileManager.default.isExecutableFile(atPath: installURL.path))
+    let plist = try PropertyListSerialization.propertyList(
+        from: Data(contentsOf: bundleURL.appendingPathComponent("Contents/Info.plist")),
+        options: [],
+        format: nil
+    ) as? [String: Any]
+    #expect(plist?["CFBundleIdentifier"] as? String == "dev.axon.test")
+    #expect(plist?["CFBundleExecutable"] as? String == "axon")
+    #expect(plist?["LSBackgroundOnly"] as? Bool == true)
     #expect(codesignArguments == [[
         "--force",
         "--sign",
         "-",
-        "--identifier",
-        "dev.axon.test",
-        installURL.path
+        bundleURL.path
     ]])
 }
 

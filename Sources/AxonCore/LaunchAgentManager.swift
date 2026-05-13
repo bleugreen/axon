@@ -48,6 +48,8 @@ public struct LaunchAgentConfiguration: Equatable, Sendable {
             "EnvironmentVariables": environmentVariables,
             "RunAtLoad": true,
             "KeepAlive": true,
+            "LimitLoadToSessionType": "Aqua",
+            "ProcessType": "Interactive",
             "StandardOutPath": standardOutPath,
             "StandardErrorPath": standardErrorPath
         ]

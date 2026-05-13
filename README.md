@@ -35,7 +35,7 @@ Install and manage the user LaunchAgent:
 ~/.swiftly/bin/swift run axon daemon uninstall
 ```
 
-The daemon installer copies the current executable to `~/Library/Application Support/Axon/bin/axon`, signs that installed copy with the stable identifier `dev.axon.daemon`, and points the LaunchAgent at the installed copy instead of `.build/debug/axon`. The LaunchAgent runs that binary in `serve` mode, keeps it alive, and writes logs under `~/Library/Logs/Axon/`. It preserves `AXON_SOCKET_PATH` plus visual overlay environment values when installed:
+The daemon installer copies the current executable into `~/Library/Application Support/Axon/Axon Daemon.app`, signs that app bundle with the stable identifier `dev.axon.daemon`, and points the LaunchAgent at the bundled executable instead of `.build/debug/axon`. The LaunchAgent runs that binary in `serve` mode, keeps it alive, and writes logs under `~/Library/Logs/Axon/`. It preserves `AXON_SOCKET_PATH` plus visual overlay environment values when installed:
 
 ```sh
 AXON_VISUAL_OVERLAY=1 ~/.swiftly/bin/swift run axon daemon start
