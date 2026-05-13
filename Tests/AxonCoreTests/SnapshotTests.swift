@@ -40,6 +40,11 @@ import ApplicationServices
     #expect(AXSnapshotCapturer.defaultMaxDepth >= 14)
 }
 
+@Test func defaultCaptureSiblingBudgetPagesBroadContainers() {
+    #expect(AXSnapshotCapturer.defaultMaxChildrenPerNode >= 20)
+    #expect(AXSnapshotCapturer.defaultMaxChildrenPerNode <= 24)
+}
+
 @Test func snapshotHandleParsesSnapshotIdAndNodeIndex() throws {
     let handle = try SnapshotHandle("snap-test:42")
 

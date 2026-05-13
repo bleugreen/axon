@@ -83,6 +83,8 @@ Handles are convenient within a short observe/action loop, but they are not dura
 
 Observation output omits frame rectangles by default. Set `frames: true` only when coordinates matter. Set `format: debug` only when diagnosing Axon internals; debug output returns the raw snapshot JSON with `indexedNodes` and accepts `includeTree`.
 
+Observation output is planned around useful leaves, not raw AX traversal order. Axon collapses anonymous wrapper chains, coalesces adjacent static text into parent summaries, omits pointer-like AX debug labels, and pages broad sibling sets such as browser tab lists. The default capture sibling page is 24 children per node.
+
 ## Screenshots
 
 Screenshots are opt-in. In MCP responses, Axon moves PNG bytes into MCP image content blocks and redacts `base64Data` from structured JSON. Structured screenshot fields still include width, height, media type, and `contentTransport: "mcp_image"`.

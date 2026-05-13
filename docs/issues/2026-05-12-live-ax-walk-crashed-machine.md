@@ -12,7 +12,7 @@ The first live capturer called `AXUIElementCopyAttributeValue(... kAXChildrenAtt
 
 - Added default capture limits:
   - max depth: 14
-  - max children per node: 50
+  - max children per node: 24
   - max nodes: 400
   - max windows: 8
   - AX messaging timeout: 0.2 seconds
@@ -25,9 +25,10 @@ The first live capturer called `AXUIElementCopyAttributeValue(... kAXChildrenAtt
 
 - `axon screenshot Codex` returned an embedded PNG without AX traversal.
 - `axon snapshot com.cairn.desktop` completed under a 10-second subprocess timeout and returned an indexed AX tree with truncation metadata.
-- `axon snapshot com.apple.finder` completed under a 10-second subprocess timeout after the ranged-read fix. The captured tree included Finder outline truncation such as `children limited to 50 of 1642`, which verifies the capturer did not materialize the full child array before applying limits.
+- `axon snapshot com.apple.finder` completed under a 10-second subprocess timeout after the ranged-read fix. The captured tree included Finder outline truncation such as `children limited to 50 of 1642`, which verified the capturer did not materialize the full child array before applying limits.
 - After raising the default depth from 5 to 8, Finder still completed under a 10-second subprocess timeout and exhausted the 400-node budget instead of walking the full outline.
 - After later raising the default depth from 8 to 14, browser snapshots reached past common chrome and anonymous wrapper stacks while retaining the same per-child, node, window, and timeout guardrails.
+- After later lowering the default sibling page from 50 to 24, broad containers such as browser tabs consume less raw capture budget before page content.
 
 ## Follow-Up
 

@@ -18,7 +18,7 @@ public enum SnapshotCaptureError: Error, CustomStringConvertible {
 
 public struct AXSnapshotCapturer {
     public static let defaultMaxDepth = 14
-    public static let defaultMaxChildrenPerNode = 50
+    public static let defaultMaxChildrenPerNode = 24
     public static let defaultMaxNodes = 400
     public static let defaultMaxWindows = 8
     public static let defaultMessagingTimeout: Float = 0.2

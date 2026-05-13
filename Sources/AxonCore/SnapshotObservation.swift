@@ -1,6 +1,9 @@
 import Foundation
 
 public struct SnapshotObservationFormatter {
+    private static let maxObservedChildren = 24
+    private static let maxCoalescedLabelLength = 240
+
     public init() {}
 
     public func observation(from snapshot: JSONValue, frames: Bool) -> JSONValue {
@@ -85,29 +88,42 @@ public struct SnapshotObservationFormatter {
         let index = nextIndex
         nextIndex += 1
 
-        let children = object["children"]?.arrayValue ?? []
-        let compactChildren = children.flatMap {
+        let rawChildren = object["children"]?.arrayValue ?? []
+        var compactChildren = rawChildren.flatMap {
             compactNodes(from: $0, snapshotID: snapshotID, frames: frames, nextIndex: &nextIndex)
         }
 
-        guard shouldInclude(object) else {
+        let role = normalizedRole(string("role", in: object))
+        var label = label(in: object)
+        let actions = exposedActions(compactActions(from: object["actions"]), role: role)
+        var truncationReasons: [String] = []
+        if let truncation = string("truncationReason", in: object) {
+            truncationReasons.append(truncation)
+        }
+        coalesceTextChildren(&compactChildren, parentRole: role, parentLabel: &label)
+
+        guard shouldInclude(object, role: role, label: label, actions: actions, truncationReasons: truncationReasons) else {
             return compactChildren
+        }
+
+        if compactChildren.count > Self.maxObservedChildren {
+            truncationReasons.append("showing \(Self.maxObservedChildren) of \(compactChildren.count) children")
+            compactChildren = Array(compactChildren.prefix(Self.maxObservedChildren))
         }
 
         var compact: [String: JSONValue] = [
             "handle": .string("\(snapshotID):\(index)"),
-            "role": .string(normalizedRole(string("role", in: object))),
+            "role": .string(role),
             "children": .array(compactChildren)
         ]
-        if let label = label(in: object) {
+        if let label {
             compact["label"] = .string(label)
         }
-        let actions = compactActions(from: object["actions"])
         if !actions.isEmpty {
             compact["actions"] = .array(actions.map(JSONValue.string))
         }
-        if let truncation = string("truncationReason", in: object) {
-            compact["truncated"] = .string(truncation)
+        if !truncationReasons.isEmpty {
+            compact["truncated"] = .string(truncationReasons.joined(separator: "; "))
         }
         if frames, let frame = object["frame"], frame != .null {
             compact["frame"] = frame
@@ -118,22 +134,100 @@ public struct SnapshotObservationFormatter {
         return [.object(compact)]
     }
 
-    private func shouldInclude(_ object: [String: JSONValue]) -> Bool {
+    private func shouldInclude(
+        _ object: [String: JSONValue],
+        role: String,
+        label: String?,
+        actions: [String],
+        truncationReasons: [String]
+    ) -> Bool {
         if isFarOffscreen(object["frame"]) {
             return false
         }
-        if string("truncationReason", in: object) != nil {
+        if !truncationReasons.isEmpty {
             return true
         }
-        if label(in: object) != nil {
+        if label != nil {
             return true
         }
-        switch normalizedRole(string("role", in: object)) {
-        case "window", "web", "field", "button", "link", "menu", "list", "row", "cell":
+        if !isStructural(role), (actions.contains("click") || actions.contains("set_value")) {
+            return true
+        }
+        switch role {
+        case "window", "field", "button", "link", "menu", "list", "row", "cell", "heading", "text", "tabgroup", "radiobutton", "checkbox", "menubutton":
             return true
         default:
-            return !compactActions(from: object["actions"]).isEmpty
+            return false
         }
+    }
+
+    private func coalesceTextChildren(
+        _ children: inout [JSONValue],
+        parentRole: String,
+        parentLabel: inout String?
+    ) {
+        guard parentRole != "window" else {
+            return
+        }
+
+        var remaining: [JSONValue] = []
+        var textParts: [(label: String, value: JSONValue)] = []
+        for child in children {
+            guard case let .object(object) = child,
+                  case .string("text")? = object["role"],
+                  isCoalescibleTextLeaf(object),
+                  let childLabel = string("label", in: object)
+            else {
+                remaining.append(child)
+                continue
+            }
+
+            if let parentLabel, label(parentLabel, alreadyContains: childLabel) {
+                continue
+            }
+            textParts.append((childLabel, child))
+        }
+
+        if textParts.count >= 2, parentLabel == nil {
+            parentLabel = coalescedLabel(from: textParts.map(\.label))
+            children = remaining
+        } else {
+            children = remaining + textParts.map(\.value)
+        }
+    }
+
+    private func isCoalescibleTextLeaf(_ object: [String: JSONValue]) -> Bool {
+        guard string("label", in: object) != nil else {
+            return false
+        }
+        if case let .array(actions)? = object["actions"], actions.contains(where: { $0 == .string("set_value") }) {
+            return false
+        }
+        if case let .array(children)? = object["children"], !children.isEmpty {
+            return false
+        }
+        if object["truncated"] != nil {
+            return false
+        }
+        return true
+    }
+
+    private func label(_ parent: String, alreadyContains child: String) -> Bool {
+        let normalizedParent = parent.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let normalizedChild = child.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return normalizedParent == normalizedChild || normalizedParent.contains(normalizedChild)
+    }
+
+    private func coalescedLabel(from parts: [String]) -> String {
+        let joined = parts
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+            .joined(separator: " ")
+        guard joined.count > Self.maxCoalescedLabelLength else {
+            return joined
+        }
+        let endIndex = joined.index(joined.startIndex, offsetBy: Self.maxCoalescedLabelLength)
+        return "\(joined[..<endIndex])..."
     }
 
     private func isFarOffscreen(_ value: JSONValue?) -> Bool {
@@ -147,11 +241,15 @@ public struct SnapshotObservationFormatter {
 
     private func label(in object: [String: JSONValue]) -> String? {
         for key in ["title", "value", "description", "identifier", "help"] {
-            if let value = string(key, in: object), !value.isEmpty {
+            if let value = string(key, in: object), !value.isEmpty, !isAXPointerDescription(value) {
                 return value
             }
         }
         return nil
+    }
+
+    private func isAXPointerDescription(_ value: String) -> Bool {
+        value.hasPrefix("<AXUIElement ") && value.contains("> {pid=")
     }
 
     private func normalizedRole(_ role: String?) -> String {
@@ -214,6 +312,43 @@ public struct SnapshotObservationFormatter {
             }
         }
         return actions
+    }
+
+    private func exposedActions(_ actions: [String], role: String) -> [String] {
+        if isStructural(role) || role == "text" || role == "heading" {
+            return []
+        }
+
+        var exposed: [String] = []
+        if actions.contains("set_value") {
+            exposed.append("set_value")
+        }
+        if actions.contains("click"), isClickAffordance(role) {
+            exposed.append("click")
+        }
+        if (role == "menu" || role == "menubutton"), actions.contains("menu") {
+            exposed.append("menu")
+        }
+        return exposed
+    }
+
+    private func isStructural(_ role: String) -> Bool {
+        ["group", "scroll", "web", "toolbar", "splitter"].contains(role)
+    }
+
+    private func isClickAffordance(_ role: String) -> Bool {
+        [
+            "button",
+            "link",
+            "checkbox",
+            "radiobutton",
+            "menubutton",
+            "menu",
+            "field",
+            "popupbutton",
+            "incrementor",
+            "image"
+        ].contains(role)
     }
 
     private func appendText(_ value: JSONValue, depth: Int, lines: inout [String]) {
