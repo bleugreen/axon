@@ -83,3 +83,51 @@ import ApplicationServices
     }
     _ = try store.element(for: SnapshotHandle(snapshotID: SnapshotID("three"), nodeIndex: 0))
 }
+
+@Test func snapshotSummaryReportsUnchangedMatchingWindowSignatures() {
+    let before = AppSnapshot(
+        id: SnapshotID("before"),
+        app: AppIdentity(bundleIdentifier: "com.example.App", name: "Example", processIdentifier: 1),
+        windows: [
+            AXNode(role: "AXWindow", title: "Main", frame: AXFrame(x: 10.2, y: 20.7, width: 300.1, height: 200.9))
+        ],
+        screenshot: nil
+    )
+    let current = AppSnapshot(
+        id: SnapshotID("current"),
+        app: before.app,
+        windows: [
+            AXNode(role: "AXWindow", title: "Main", frame: AXFrame(x: 10.4, y: 20.2, width: 300.4, height: 200.5))
+        ],
+        screenshot: nil
+    )
+
+    let change = SnapshotSummary(snapshot: before).change(comparedTo: SnapshotSummary(snapshot: current))
+
+    #expect(change.changed == false)
+    #expect(change.reason == "unchanged")
+}
+
+@Test func snapshotSummaryReportsChangedWindowSignatures() {
+    let before = AppSnapshot(
+        id: SnapshotID("before"),
+        app: AppIdentity(bundleIdentifier: "com.example.App", name: "Example", processIdentifier: 1),
+        windows: [
+            AXNode(role: "AXWindow", title: "Main")
+        ],
+        screenshot: nil
+    )
+    let current = AppSnapshot(
+        id: SnapshotID("current"),
+        app: before.app,
+        windows: [
+            AXNode(role: "AXWindow", title: "Settings")
+        ],
+        screenshot: nil
+    )
+
+    let change = SnapshotSummary(snapshot: before).change(comparedTo: SnapshotSummary(snapshot: current))
+
+    #expect(change.changed)
+    #expect(change.reason == "window_signature_changed")
+}

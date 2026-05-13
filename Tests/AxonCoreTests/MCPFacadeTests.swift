@@ -29,6 +29,7 @@ import Testing
     #expect(toolNames(in: tools).contains("list_apps"))
     #expect(toolNames(in: tools).contains("request_accessibility"))
     #expect(toolNames(in: tools).contains("get_app_state"))
+    #expect(toolNames(in: tools).contains("changed_since"))
     #expect(toolNames(in: tools).contains("click"))
     #expect(toolNames(in: tools).allSatisfy { !$0.contains("mcp") })
 }

@@ -65,4 +65,10 @@ Resolve a locator through the daemon:
 ~/.swiftly/bin/swift run axon resolve com.cairn.desktop.dev '{"role":"AXButton","title":{"contains":"Issues"},"actions":["AXPress"]}'
 ```
 
+Check whether coarse app/window state changed since a retained snapshot:
+
+```sh
+~/.swiftly/bin/swift run axon changed-since <snapshot-id>
+```
+
 For MCP, `get_app_state` defaults to compact output: `indexedNodes` with handles and useful metadata, no full nested `windows` tree, and no screenshot unless requested. Pass `includeTree: true` or `includeScreenshot: true` when the client needs those heavier fields.

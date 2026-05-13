@@ -75,6 +75,16 @@ do {
                     "app": .string(arguments[1]),
                     "locator": locator
                 ])
+        ))
+        try printResponse(response)
+
+    case "changed-since":
+        let snapshotID = try requiredArgument(after: command, in: arguments)
+        let response = try SocketClient(path: socketPath)
+            .send(JSONRPCRequest(
+                id: .string("changed_since"),
+                method: "changed_since",
+                params: .object(["snapshotId": .string(snapshotID)])
             ))
         try printResponse(response)
 
@@ -134,6 +144,7 @@ do {
           snapshot-json <app> [--compact] [--no-screenshot]
           screenshot <app>  print embedded screenshot JSON for a running app
           resolve <app> <locator-json>
+          changed-since <snapshot-id>
           click <handle>    click a retained snapshot element through the daemon
           perform-action <handle> <action>
           set-value <handle> <value>

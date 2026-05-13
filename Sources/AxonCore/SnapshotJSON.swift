@@ -82,3 +82,45 @@ public extension AXFrame {
         ])
     }
 }
+
+public extension SnapshotSummary {
+    var jsonValue: JSONValue {
+        .object([
+            "id": .string(id.rawValue),
+            "app": app.jsonValue,
+            "windows": .array(windows.map(\.jsonValue))
+        ])
+    }
+}
+
+public extension WindowSignature {
+    var jsonValue: JSONValue {
+        .object([
+            "role": .string(role),
+            "subrole": subrole.map(JSONValue.string) ?? .null,
+            "title": title.map(JSONValue.string) ?? .null,
+            "frame": frame.map(\.jsonValue) ?? .null,
+            "childCount": .int(childCount)
+        ])
+    }
+}
+
+public extension FrameSignature {
+    var jsonValue: JSONValue {
+        .object([
+            "x": .int(x),
+            "y": .int(y),
+            "width": .int(width),
+            "height": .int(height)
+        ])
+    }
+}
+
+public extension SnapshotChange {
+    var jsonValue: JSONValue {
+        .object([
+            "changed": .bool(changed),
+            "reason": .string(reason)
+        ])
+    }
+}

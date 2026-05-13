@@ -197,3 +197,105 @@ public struct SnapshotHandle: Codable, Equatable, Sendable {
         self.nodeIndex = index
     }
 }
+
+public struct SnapshotSummary: Codable, Equatable, Sendable {
+    public let id: SnapshotID
+    public let app: AppIdentity
+    public let windows: [WindowSignature]
+
+    public init(id: SnapshotID, app: AppIdentity, windows: [WindowSignature]) {
+        self.id = id
+        self.app = app
+        self.windows = windows
+    }
+
+    public init(snapshot: AppSnapshot) {
+        self.init(
+            id: snapshot.id,
+            app: snapshot.app,
+            windows: snapshot.windows.map(WindowSignature.init(node:))
+        )
+    }
+
+    public var appQuery: String {
+        app.bundleIdentifier ?? "pid:\(app.processIdentifier)"
+    }
+
+    public func change(comparedTo current: SnapshotSummary) -> SnapshotChange {
+        if app.bundleIdentifier != current.app.bundleIdentifier || app.processIdentifier != current.app.processIdentifier {
+            return SnapshotChange(changed: true, reason: "app_identity_changed")
+        }
+        if windows != current.windows {
+            return SnapshotChange(changed: true, reason: "window_signature_changed")
+        }
+        return SnapshotChange(changed: false, reason: "unchanged")
+    }
+}
+
+public struct WindowSignature: Codable, Equatable, Sendable {
+    public let role: String
+    public let subrole: String?
+    public let title: String?
+    public let frame: FrameSignature?
+    public let childCount: Int
+
+    public init(role: String, subrole: String?, title: String?, frame: FrameSignature?, childCount: Int) {
+        self.role = role
+        self.subrole = subrole
+        self.title = title
+        self.frame = frame
+        self.childCount = childCount
+    }
+
+    public init(node: AXNode) {
+        self.init(
+            role: node.role,
+            subrole: node.subrole,
+            title: node.title,
+            frame: node.frame.map(FrameSignature.init(frame:)),
+            childCount: node.children.count
+        )
+    }
+}
+
+public struct FrameSignature: Codable, Equatable, Sendable {
+    private static let tolerance = 2
+
+    public let x: Int
+    public let y: Int
+    public let width: Int
+    public let height: Int
+
+    public init(x: Int, y: Int, width: Int, height: Int) {
+        self.x = x
+        self.y = y
+        self.width = width
+        self.height = height
+    }
+
+    public init(frame: AXFrame) {
+        self.init(
+            x: Int(frame.x.rounded()),
+            y: Int(frame.y.rounded()),
+            width: Int(frame.width.rounded()),
+            height: Int(frame.height.rounded())
+        )
+    }
+
+    public static func == (lhs: FrameSignature, rhs: FrameSignature) -> Bool {
+        abs(lhs.x - rhs.x) <= tolerance &&
+            abs(lhs.y - rhs.y) <= tolerance &&
+            abs(lhs.width - rhs.width) <= tolerance &&
+            abs(lhs.height - rhs.height) <= tolerance
+    }
+}
+
+public struct SnapshotChange: Codable, Equatable, Sendable {
+    public let changed: Bool
+    public let reason: String
+
+    public init(changed: Bool, reason: String) {
+        self.changed = changed
+        self.reason = reason
+    }
+}

@@ -24,6 +24,7 @@ public final class AXElementStore: @unchecked Sendable {
     private let lock = NSLock()
     private let maxSnapshots: Int
     private var elementsBySnapshot: [SnapshotID: [AXUIElement]] = [:]
+    private var summariesBySnapshot: [SnapshotID: SnapshotSummary] = [:]
     private var snapshotOrder: [SnapshotID] = []
 
     public convenience init() {
@@ -35,12 +36,29 @@ public final class AXElementStore: @unchecked Sendable {
     }
 
     public func store(snapshotID: SnapshotID, elements: [AXUIElement]) {
+        store(snapshotID: snapshotID, elements: elements, summary: nil)
+    }
+
+    public func store(snapshotID: SnapshotID, elements: [AXUIElement], summary: SnapshotSummary?) {
         lock.lock()
         defer { lock.unlock() }
 
         elementsBySnapshot[snapshotID] = elements
+        if let summary {
+            summariesBySnapshot[snapshotID] = summary
+        }
         snapshotOrder.removeAll { $0 == snapshotID }
         snapshotOrder.append(snapshotID)
+        pruneOldSnapshots()
+    }
+
+    public func store(summary: SnapshotSummary) {
+        lock.lock()
+        defer { lock.unlock() }
+
+        summariesBySnapshot[summary.id] = summary
+        snapshotOrder.removeAll { $0 == summary.id }
+        snapshotOrder.append(summary.id)
         pruneOldSnapshots()
     }
 
@@ -67,10 +85,21 @@ public final class AXElementStore: @unchecked Sendable {
         return elements[handle.nodeIndex]
     }
 
+    public func summary(for snapshotID: SnapshotID) throws -> SnapshotSummary {
+        lock.lock()
+        defer { lock.unlock() }
+
+        guard let summary = summariesBySnapshot[snapshotID] else {
+            throw AXElementStoreError.missingSnapshot(snapshotID)
+        }
+        return summary
+    }
+
     private func pruneOldSnapshots() {
         while snapshotOrder.count > maxSnapshots {
             let evicted = snapshotOrder.removeFirst()
             elementsBySnapshot.removeValue(forKey: evicted)
+            summariesBySnapshot.removeValue(forKey: evicted)
         }
     }
 }

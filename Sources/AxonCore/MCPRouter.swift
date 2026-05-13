@@ -115,6 +115,8 @@ public struct MCPRouter {
             return "screenshot"
         case "resolve":
             return "resolve"
+        case "changed_since":
+            return "changed_since"
         case "click":
             return "click"
         case "perform_action":
@@ -181,6 +183,13 @@ public struct MCPRouter {
                 "app": stringSchema("Bundle id, pid, exact app name, or partial app name."),
                 "locator": locatorSchema()
             ], required: ["app", "locator"])
+        ),
+        MCPTool(
+            name: "changed_since",
+            description: "Recapture the app for a retained snapshot and report whether coarse app/window state changed.",
+            inputSchema: objectSchema(properties: [
+                "snapshotId": stringSchema("Snapshot id returned by get_app_state.")
+            ], required: ["snapshotId"])
         ),
         MCPTool(
             name: "click",

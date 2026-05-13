@@ -89,6 +89,71 @@ import Testing
     #expect(response.error == nil)
 }
 
+@Test func changedSinceReportsCoarseWindowChanges() {
+    let elementStore = AXElementStore()
+    var snapshots = [
+        AppSnapshot(
+            id: SnapshotID("initial"),
+            app: AppIdentity(bundleIdentifier: "com.example.App", name: "Example", processIdentifier: 7),
+            windows: [AXNode(role: "AXWindow", title: "Main")],
+            screenshot: nil
+        ),
+        AppSnapshot(
+            id: SnapshotID("current"),
+            app: AppIdentity(bundleIdentifier: "com.example.App", name: "Example", processIdentifier: 7),
+            windows: [AXNode(role: "AXWindow", title: "Settings")],
+            screenshot: nil
+        )
+    ]
+    let router = CommandRouter(
+        captureSnapshot: { _, _ in snapshots.removeFirst() },
+        elementStore: elementStore
+    )
+
+    let snapshotResponse = router.handle(JSONRPCRequest(
+        id: .string("snapshot"),
+        method: "snapshot",
+        params: .object(["app": .string("com.example.App"), "includeScreenshot": .bool(false)])
+    ))
+    let changedResponse = router.handle(JSONRPCRequest(
+        id: .string("changed"),
+        method: "changed_since",
+        params: .object(["snapshotId": .string("initial")])
+    ))
+
+    #expect(snapshotResponse.error == nil)
+    #expect(changedResponse.error == nil)
+    #expect(changedResponse.result?["changed"] == .bool(true))
+    #expect(changedResponse.result?["reason"] == .string("window_signature_changed"))
+    #expect(changedResponse.result?["currentSnapshotId"] == .string("current"))
+}
+
+@Test func changedSinceReportsMissingAppAsChanged() {
+    let elementStore = AXElementStore()
+    let snapshot = AppSnapshot(
+        id: SnapshotID("initial"),
+        app: AppIdentity(bundleIdentifier: "com.example.Missing", name: "Missing", processIdentifier: 9),
+        windows: [AXNode(role: "AXWindow", title: "Main")],
+        screenshot: nil
+    )
+    elementStore.store(summary: SnapshotSummary(snapshot: snapshot))
+    let router = CommandRouter(
+        captureSnapshot: { app, _ in throw AppResolverError.notFound(app) },
+        elementStore: elementStore
+    )
+
+    let changedResponse = router.handle(JSONRPCRequest(
+        id: .string("changed"),
+        method: "changed_since",
+        params: .object(["snapshotId": .string("initial")])
+    ))
+
+    #expect(changedResponse.error == nil)
+    #expect(changedResponse.result?["changed"] == .bool(true))
+    #expect(changedResponse.result?["reason"] == .string("app_missing"))
+    #expect(changedResponse.result?["current"] == .null)
+}
+
 private let emptySnapshot = AppSnapshot(
     id: SnapshotID("empty"),
     app: AppIdentity(bundleIdentifier: nil, name: "Empty", processIdentifier: 0),

@@ -4,6 +4,7 @@ public struct CommandRouter {
     private let captureScreenshot: (String) throws -> EncodedScreenshot?
     private let requestAccessibility: () -> Bool
     private let actions: PrimitiveActionHandlers
+    private let elementStore: AXElementStore
 
     public init(
         listApps: @escaping () -> [AppIdentity] = { AppResolver().runningApps() },
@@ -13,6 +14,7 @@ public struct CommandRouter {
         actions: PrimitiveActionHandlers? = nil,
         elementStore: AXElementStore = AXElementStore()
     ) {
+        self.elementStore = elementStore
         self.listApps = listApps
         self.captureSnapshot = captureSnapshot ?? { app, includeScreenshot in
             try AXSnapshotCapturer(elementStore: elementStore).capture(app: app, includeScreenshot: includeScreenshot)
@@ -59,6 +61,7 @@ public struct CommandRouter {
                 let includeScreenshot = boolParam("includeScreenshot", in: request) ?? true
                 let includeTree = boolParam("includeTree", in: request) ?? true
                 let snapshot = try captureSnapshot(app, includeScreenshot)
+                elementStore.store(summary: SnapshotSummary(snapshot: snapshot))
                 return JSONRPCResponse(
                     id: request.id,
                     result: [
@@ -81,6 +84,50 @@ public struct CommandRouter {
                 )
             } catch let error as JSONRPCError {
                 return JSONRPCResponse(id: request.id, error: error)
+            } catch {
+                return JSONRPCResponse(id: request.id, error: .internalError(String(describing: error)))
+            }
+        case "changed_since":
+            do {
+                let snapshotID = SnapshotID(try requiredStringParam("snapshotId", in: request))
+                let previous = try elementStore.summary(for: snapshotID)
+                let currentSnapshot = try captureSnapshot(previous.appQuery, false)
+                let current = SnapshotSummary(snapshot: currentSnapshot)
+                elementStore.store(summary: current)
+                let change = previous.change(comparedTo: current)
+                return JSONRPCResponse(
+                    id: request.id,
+                    result: [
+                        "changed": .bool(change.changed),
+                        "reason": .string(change.reason),
+                        "snapshotId": .string(previous.id.rawValue),
+                        "currentSnapshotId": .string(current.id.rawValue),
+                        "previous": previous.jsonValue,
+                        "current": current.jsonValue
+                    ]
+                )
+            } catch let error as JSONRPCError {
+                return JSONRPCResponse(id: request.id, error: error)
+            } catch let error as AXElementStoreError {
+                return JSONRPCResponse(id: request.id, error: .invalidParams(error.description))
+            } catch AppResolverError.notFound {
+                do {
+                    let snapshotID = SnapshotID(try requiredStringParam("snapshotId", in: request))
+                    let previous = try elementStore.summary(for: snapshotID)
+                    return JSONRPCResponse(
+                        id: request.id,
+                        result: [
+                            "changed": .bool(true),
+                            "reason": .string("app_missing"),
+                            "snapshotId": .string(previous.id.rawValue),
+                            "currentSnapshotId": .null,
+                            "previous": previous.jsonValue,
+                            "current": .null
+                        ]
+                    )
+                } catch {
+                    return JSONRPCResponse(id: request.id, error: .internalError(String(describing: error)))
+                }
             } catch {
                 return JSONRPCResponse(id: request.id, error: .internalError(String(describing: error)))
             }

@@ -85,14 +85,14 @@ public struct AXSnapshotCapturer {
             processIdentifier: app.processIdentifier
         )
         let screenshot = includeScreenshot ? screenshotCapturer.capture(app: appIdentity, axWindows: annotatedWindows) : nil
-        elementStore?.store(snapshotID: snapshotID, elements: retainedElements)
-
-        return AppSnapshot(
+        let snapshot = AppSnapshot(
             id: snapshotID,
             app: appIdentity,
             windows: annotatedWindows,
             screenshot: screenshot
         )
+        elementStore?.store(snapshotID: snapshotID, elements: retainedElements, summary: SnapshotSummary(snapshot: snapshot))
+        return snapshot
     }
 
     private func windowElements(from appElement: AXUIElement) -> [AXUIElement] {

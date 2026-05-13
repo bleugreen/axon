@@ -17,6 +17,9 @@ The next MCP-facing tools should be added only after the underlying primitives e
 - `scroll(target, direction, pages)`
 - `drag(app, from, to)` or `drag(target, to)`
 - `verify(app, locator | predicate)` for post-action checks
-- `changed_since(snapshotId)` after observer state exists
+
+Implemented since this note was opened:
+
+- `changed_since(snapshotId)` now performs a coarse recapture and compares app/window signatures for retained snapshots. It does not yet use AXObserver event history or element-level invalidation.
 
 Do not add MCP tools that only mimic future behavior. The facade should stay a thin protocol adapter over real core capabilities.
