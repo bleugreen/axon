@@ -154,6 +154,46 @@ import Testing
     #expect(changedResponse.result?["current"] == .null)
 }
 
+@Test func changedSinceUsesObservedEventsBeforeRecapturing() {
+    let elementStore = AXElementStore()
+    let tracker = AppChangeTracker()
+    let app = AppIdentity(bundleIdentifier: "com.example.App", name: "Example", processIdentifier: 7)
+    var captureCount = 0
+    let router = CommandRouter(
+        captureSnapshot: { _, _ in
+            captureCount += 1
+            return AppSnapshot(
+                id: SnapshotID("initial"),
+                app: app,
+                windows: [AXNode(role: "AXWindow", title: "Main")],
+                screenshot: nil
+            )
+        },
+        elementStore: elementStore,
+        changeObserver: tracker
+    )
+
+    let snapshotResponse = router.handle(JSONRPCRequest(
+        id: .string("snapshot"),
+        method: "snapshot",
+        params: .object(["app": .string("com.example.App"), "includeScreenshot": .bool(false)])
+    ))
+    tracker.recordChange(app: app, reason: "AXFocusedWindowChanged")
+    let changedResponse = router.handle(JSONRPCRequest(
+        id: .string("changed"),
+        method: "changed_since",
+        params: .object(["snapshotId": .string("initial")])
+    ))
+
+    #expect(snapshotResponse.error == nil)
+    #expect(captureCount == 1)
+    #expect(changedResponse.error == nil)
+    #expect(changedResponse.result?["changed"] == .bool(true))
+    #expect(changedResponse.result?["reason"] == .string("observer_event"))
+    #expect(changedResponse.result?["current"] == .null)
+    #expect(changedResponse.result?["observedChanges"]?[0]?["reason"] == .string("AXFocusedWindowChanged"))
+}
+
 private let emptySnapshot = AppSnapshot(
     id: SnapshotID("empty"),
     app: AppIdentity(bundleIdentifier: nil, name: "Empty", processIdentifier: 0),

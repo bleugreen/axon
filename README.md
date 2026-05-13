@@ -71,4 +71,6 @@ Check whether coarse app/window state changed since a retained snapshot:
 ~/.swiftly/bin/swift run axon changed-since <snapshot-id>
 ```
 
+`changed-since` uses observer events when Axon has seen them for the app, and falls back to a fresh app/window signature comparison when it has not.
+
 For MCP, `get_app_state` defaults to compact output: `indexedNodes` with handles and useful metadata, no full nested `windows` tree, and no screenshot unless requested. Pass `includeTree: true` or `includeScreenshot: true` when the client needs those heavier fields.

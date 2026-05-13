@@ -5,6 +5,7 @@ public struct CommandRouter {
     private let requestAccessibility: () -> Bool
     private let actions: PrimitiveActionHandlers
     private let elementStore: AXElementStore
+    private let changeObserver: AppChangeObserving
 
     public init(
         listApps: @escaping () -> [AppIdentity] = { AppResolver().runningApps() },
@@ -12,9 +13,11 @@ public struct CommandRouter {
         captureScreenshot: ((String) throws -> EncodedScreenshot?)? = nil,
         requestAccessibility: @escaping () -> Bool = AccessibilityPermission.requestTrustPrompt,
         actions: PrimitiveActionHandlers? = nil,
-        elementStore: AXElementStore = AXElementStore()
+        elementStore: AXElementStore = AXElementStore(),
+        changeObserver: AppChangeObserving = AXAppChangeObserverRegistry()
     ) {
         self.elementStore = elementStore
+        self.changeObserver = changeObserver
         self.listApps = listApps
         self.captureSnapshot = captureSnapshot ?? { app, includeScreenshot in
             try AXSnapshotCapturer(elementStore: elementStore).capture(app: app, includeScreenshot: includeScreenshot)
@@ -61,7 +64,7 @@ public struct CommandRouter {
                 let includeScreenshot = boolParam("includeScreenshot", in: request) ?? true
                 let includeTree = boolParam("includeTree", in: request) ?? true
                 let snapshot = try captureSnapshot(app, includeScreenshot)
-                elementStore.store(summary: SnapshotSummary(snapshot: snapshot))
+                elementStore.store(summary: observedSummary(for: snapshot))
                 return JSONRPCResponse(
                     id: request.id,
                     result: [
@@ -91,8 +94,11 @@ public struct CommandRouter {
             do {
                 let snapshotID = SnapshotID(try requiredStringParam("snapshotId", in: request))
                 let previous = try elementStore.summary(for: snapshotID)
+                if let observerResponse = observedChangeResponse(id: request.id, previous: previous) {
+                    return observerResponse
+                }
                 let currentSnapshot = try captureSnapshot(previous.appQuery, false)
-                let current = SnapshotSummary(snapshot: currentSnapshot)
+                let current = observedSummary(for: currentSnapshot)
                 elementStore.store(summary: current)
                 let change = previous.change(comparedTo: current)
                 return JSONRPCResponse(
@@ -257,5 +263,32 @@ public struct CommandRouter {
         } catch {
             return JSONRPCResponse(id: id, error: .internalError(String(describing: error)))
         }
+    }
+
+    private func observedSummary(for snapshot: AppSnapshot) -> SnapshotSummary {
+        changeObserver.startObserving(app: snapshot.app)
+        return SnapshotSummary(snapshot: snapshot, observationToken: changeObserver.token(for: snapshot.app))
+    }
+
+    private func observedChangeResponse(id: JSONRPCID?, previous: SnapshotSummary) -> JSONRPCResponse? {
+        guard let token = previous.observationToken else {
+            return nil
+        }
+        let changes = changeObserver.changes(since: token, app: previous.app)
+        guard !changes.isEmpty else {
+            return nil
+        }
+        return JSONRPCResponse(
+            id: id,
+            result: [
+                "changed": .bool(true),
+                "reason": .string("observer_event"),
+                "snapshotId": .string(previous.id.rawValue),
+                "currentSnapshotId": .null,
+                "previous": previous.jsonValue,
+                "current": .null,
+                "observedChanges": .array(changes.map(\.jsonValue))
+            ]
+        )
     }
 }

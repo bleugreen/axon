@@ -131,3 +131,15 @@ import ApplicationServices
     #expect(change.changed)
     #expect(change.reason == "window_signature_changed")
 }
+
+@Test func appChangeTrackerReportsChangesAfterToken() {
+    let tracker = AppChangeTracker()
+    let app = AppIdentity(bundleIdentifier: "com.example.App", name: "Example", processIdentifier: 10)
+    let token = tracker.token(for: app)
+
+    tracker.recordChange(app: app, reason: "AXFocusedWindowChanged")
+
+    #expect(tracker.changes(since: token, app: app) == [
+        ObservedAppChange(sequence: token + 1, reason: "AXFocusedWindowChanged")
+    ])
+}

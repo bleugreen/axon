@@ -88,7 +88,8 @@ public extension SnapshotSummary {
         .object([
             "id": .string(id.rawValue),
             "app": app.jsonValue,
-            "windows": .array(windows.map(\.jsonValue))
+            "windows": .array(windows.map(\.jsonValue)),
+            "observationToken": observationToken.map(JSONValue.int) ?? .null
         ])
     }
 }
@@ -120,6 +121,15 @@ public extension SnapshotChange {
     var jsonValue: JSONValue {
         .object([
             "changed": .bool(changed),
+            "reason": .string(reason)
+        ])
+    }
+}
+
+public extension ObservedAppChange {
+    var jsonValue: JSONValue {
+        .object([
+            "sequence": .int(sequence),
             "reason": .string(reason)
         ])
     }

@@ -202,18 +202,21 @@ public struct SnapshotSummary: Codable, Equatable, Sendable {
     public let id: SnapshotID
     public let app: AppIdentity
     public let windows: [WindowSignature]
+    public let observationToken: Int?
 
-    public init(id: SnapshotID, app: AppIdentity, windows: [WindowSignature]) {
+    public init(id: SnapshotID, app: AppIdentity, windows: [WindowSignature], observationToken: Int? = nil) {
         self.id = id
         self.app = app
         self.windows = windows
+        self.observationToken = observationToken
     }
 
-    public init(snapshot: AppSnapshot) {
+    public init(snapshot: AppSnapshot, observationToken: Int? = nil) {
         self.init(
             id: snapshot.id,
             app: snapshot.app,
-            windows: snapshot.windows.map(WindowSignature.init(node:))
+            windows: snapshot.windows.map(WindowSignature.init(node:)),
+            observationToken: observationToken
         )
     }
 
