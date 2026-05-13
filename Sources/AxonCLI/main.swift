@@ -76,8 +76,12 @@ do {
         let app = try requiredArgument(after: command, in: arguments)
         let includeTree = !arguments.contains("--compact")
         let screenshot = arguments.contains("--screenshot")
+        let sensitive = arguments.contains("--sensitive")
+        if sensitive && screenshot {
+            throw CLIError.invalidArguments("snapshot-json --sensitive cannot be combined with --screenshot")
+        }
         let snapshot = try AXSnapshotCapturer().capture(app: app, screenshot: screenshot)
-        let data = try jsonEncoder.encode(snapshot.jsonValue(includeTree: includeTree))
+        let data = try jsonEncoder.encode(snapshot.jsonValue(includeTree: includeTree, sensitive: sensitive))
         print(String(decoding: data, as: UTF8.self))
 
     case "screenshot":
@@ -190,7 +194,7 @@ do {
           request-accessibility   ask macOS to approve the running daemon identity
           apps     list running apps
           snapshot <app> [--screenshot]    print an indexed AX tree for a running app
-          snapshot-json <app> [--compact] [--screenshot]
+          snapshot-json <app> [--compact] [--screenshot] [--sensitive]
           screenshot <app>  print embedded screenshot JSON for a running app
           resolve <app> <locator-json>
           changed-since <snapshot-id>
@@ -552,12 +556,15 @@ private func stringValue(_ value: JSONValue) -> String? {
 private enum CLIError: Error, CustomStringConvertible {
     case missingArgument(String)
     case missingArguments(String)
+    case invalidArguments(String)
 
     var description: String {
         switch self {
         case let .missingArgument(command):
             return "\(command) requires an app argument"
         case let .missingArguments(message):
+            return message
+        case let .invalidArguments(message):
             return message
         }
     }

@@ -152,6 +152,9 @@ public struct MCPRouter {
         if updated["includeTree"] == nil {
             updated["includeTree"] = .bool(false)
         }
+        if updated["sensitive"] == nil {
+            updated["sensitive"] = .bool(false)
+        }
         return updated
     }
 
@@ -168,11 +171,12 @@ public struct MCPRouter {
         ),
         MCPTool(
             name: "get_app_state",
-            description: "Capture an accessibility snapshot for a running app, optionally including an embedded screenshot.",
+            description: "Capture an accessibility snapshot for a running app, optionally including an embedded screenshot or sensitive redaction.",
             inputSchema: objectSchema(properties: [
                 "app": stringSchema("Bundle id, pid, exact app name, or partial app name."),
                 "screenshot": boolSchema("Whether to include embedded ScreenCaptureKit screenshot data. Defaults to false for MCP."),
-                "includeTree": boolSchema("Whether to include the full nested AX tree. Defaults to false for MCP; indexedNodes are always returned.")
+                "includeTree": boolSchema("Whether to include the full nested AX tree. Defaults to false for MCP; indexedNodes are always returned."),
+                "sensitive": boolSchema("Redact values and secret-like text while preserving short safe prefixes. Sensitive snapshots cannot include screenshots.")
             ], required: ["app"])
         ),
         MCPTool(
@@ -194,7 +198,8 @@ public struct MCPRouter {
             name: "changed_since",
             description: "Recapture the app for a retained snapshot and report whether coarse app/window state changed.",
             inputSchema: objectSchema(properties: [
-                "snapshotId": stringSchema("Snapshot id returned by get_app_state.")
+                "snapshotId": stringSchema("Snapshot id returned by get_app_state."),
+                "sensitive": boolSchema("Redact secret-like summary text while preserving short safe prefixes.")
             ], required: ["snapshotId"])
         ),
         MCPTool(

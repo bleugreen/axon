@@ -113,6 +113,61 @@ import Testing
     #expect(response.result?["snapshot"]?["screenshot"] == .null)
 }
 
+@Test func snapshotRequestRejectsSensitiveScreenshot() {
+    let router = CommandRouter(
+        captureSnapshot: { _, _ in
+            Issue.record("snapshot capture should not run for invalid sensitive screenshot request")
+            return emptySnapshot
+        }
+    )
+
+    let response = router.handle(JSONRPCRequest(
+        id: .string("sensitive-shot"),
+        method: "snapshot",
+        params: .object([
+            "app": .string("com.example.App"),
+            "sensitive": .bool(true),
+            "screenshot": .bool(true)
+        ])
+    ))
+
+    #expect(response.result == nil)
+    #expect(response.error?.code == -32602)
+    #expect(response.error?.message == "sensitive snapshots cannot include screenshots")
+}
+
+@Test func snapshotRequestReturnsSensitiveRedactedSnapshot() {
+    let router = CommandRouter(
+        captureSnapshot: { _, screenshot in
+            #expect(screenshot == false)
+            return AppSnapshot(
+                id: SnapshotID("snap-sensitive-router"),
+                app: AppIdentity(bundleIdentifier: "com.example.App", name: "Example", processIdentifier: 7),
+                windows: [
+                    AXNode(role: "AXWindow", title: "Main", children: [
+                        AXNode(role: "AXTextField", value: "sk-proj-abcdef1234567890SECRET")
+                    ])
+                ],
+                screenshot: nil
+            )
+        }
+    )
+
+    let response = router.handle(JSONRPCRequest(
+        id: .string("sensitive"),
+        method: "snapshot",
+        params: .object([
+            "app": .string("com.example.App"),
+            "sensitive": .bool(true),
+            "includeTree": .bool(false)
+        ])
+    ))
+
+    #expect(response.error == nil)
+    #expect(response.result?["snapshot"]?["redaction"]?["sensitive"] == .bool(true))
+    #expect(response.result?["snapshot"]?["indexedNodes"]?[1]?["value"] == .string("sk-proj-abcd...[redacted]"))
+}
+
 @Test func changedSinceReportsCoarseWindowChanges() {
     let elementStore = AXElementStore()
     var snapshots = [

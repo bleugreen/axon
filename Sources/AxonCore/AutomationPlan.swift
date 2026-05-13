@@ -212,6 +212,7 @@ public struct AutomationPlanExecutor {
     private func read(_ params: [String: JSONValue], state: AutomationPlanState) throws {
         let app = try app(in: params, state: state)
         let screenshot = bool("screenshot", in: params) ?? false
+        let sensitive = bool("sensitive", in: params) ?? false
         let tree = bool("tree", in: params) ?? false
         let response = commandHandler(JSONRPCRequest(
             id: .string("plan.read"),
@@ -219,6 +220,7 @@ public struct AutomationPlanExecutor {
             params: .object([
                 "app": .string(app),
                 "screenshot": .bool(screenshot),
+                "sensitive": .bool(sensitive),
                 "includeTree": .bool(tree)
             ])
         ))
@@ -311,7 +313,10 @@ public struct AutomationPlanExecutor {
         let response = commandHandler(JSONRPCRequest(
             id: .string("plan.changed_since"),
             method: "changed_since",
-            params: .object(["snapshotId": .string(snapshotID)])
+            params: .object([
+                "snapshotId": .string(snapshotID),
+                "sensitive": .bool(bool("sensitive", in: params) ?? false)
+            ])
         ))
         let result = try responseResult(response)
         bindOutput(params, value: .object(result), state: state)

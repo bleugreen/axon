@@ -63,12 +63,16 @@ public struct CommandRouter {
                 let app = try requiredStringParam("app", in: request)
                 let screenshot = boolParam("screenshot", in: request) ?? false
                 let includeTree = boolParam("includeTree", in: request) ?? true
+                let sensitive = boolParam("sensitive", in: request) ?? false
+                if sensitive && screenshot {
+                    throw JSONRPCError.invalidParams("sensitive snapshots cannot include screenshots")
+                }
                 let snapshot = try captureSnapshot(app, screenshot)
                 elementStore.store(summary: observedSummary(for: snapshot))
                 return JSONRPCResponse(
                     id: request.id,
                     result: [
-                        "snapshot": snapshot.jsonValue(includeTree: includeTree)
+                        "snapshot": snapshot.jsonValue(includeTree: includeTree, sensitive: sensitive)
                     ]
                 )
             } catch let error as JSONRPCError {
@@ -93,6 +97,7 @@ public struct CommandRouter {
         case "changed_since":
             do {
                 let snapshotID = SnapshotID(try requiredStringParam("snapshotId", in: request))
+                let sensitive = boolParam("sensitive", in: request) ?? false
                 let previous = try elementStore.summary(for: snapshotID)
                 let observedChanges = observedChanges(since: previous)
                 let currentSnapshot = try captureSnapshot(previous.appQuery, false)
@@ -104,8 +109,8 @@ public struct CommandRouter {
                     "reason": .string(change.reason),
                     "snapshotId": .string(previous.id.rawValue),
                     "currentSnapshotId": .string(current.id.rawValue),
-                    "previous": previous.jsonValue,
-                    "current": current.jsonValue
+                    "previous": previous.jsonValue(sensitive: sensitive),
+                    "current": current.jsonValue(sensitive: sensitive)
                 ]
                 if !observedChanges.isEmpty {
                     result["observedChanges"] = .array(observedChanges.map(\.jsonValue))
@@ -121,6 +126,7 @@ public struct CommandRouter {
             } catch AppResolverError.notFound {
                 do {
                     let snapshotID = SnapshotID(try requiredStringParam("snapshotId", in: request))
+                    let sensitive = boolParam("sensitive", in: request) ?? false
                     let previous = try elementStore.summary(for: snapshotID)
                     return JSONRPCResponse(
                         id: request.id,
@@ -129,7 +135,7 @@ public struct CommandRouter {
                             "reason": .string("app_missing"),
                             "snapshotId": .string(previous.id.rawValue),
                             "currentSnapshotId": .null,
-                            "previous": previous.jsonValue,
+                            "previous": previous.jsonValue(sensitive: sensitive),
                             "current": .null
                         ]
                     )

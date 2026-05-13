@@ -82,9 +82,21 @@ Read current state:
 - read:
     app: cairn
     screenshot: false
+    sensitive: false
     tree: false
     as: state
 ```
+
+Use `sensitive: true` when the surface may contain generated keys, tokens, passwords, or other values Axon should not return verbatim:
+
+```yaml
+- read:
+    app: cairn
+    sensitive: true
+    as: state
+```
+
+Sensitive reads redact AX values and secret-like text with short safe prefixes. They cannot include screenshots.
 
 Capture screenshot only:
 

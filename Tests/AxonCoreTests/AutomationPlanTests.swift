@@ -47,6 +47,39 @@ import Testing
     #expect(response.result?["plan"]?["outputs"]?["state"]?["snapshotId"] == .string("plan-read-click"))
 }
 
+@Test func runPlanReadSupportsSensitiveSnapshots() {
+    let router = CommandRouter(
+        captureSnapshot: { _, screenshot in
+            #expect(screenshot == false)
+            return planFixtureSnapshot(id: "plan-sensitive", controls: [
+                AXNode(role: "AXTextField", value: "sk-proj-abcdef1234567890SECRET")
+            ])
+        }
+    )
+
+    let response = router.handle(JSONRPCRequest(
+        id: .string("plan-sensitive"),
+        method: "run_plan",
+        params: .object([
+            "source": .string("""
+            version: 1
+            app: com.example.App
+            result:
+              outputs: full
+            steps:
+              - read:
+                  sensitive: true
+                  as: state
+            """)
+        ])
+    ))
+
+    let snapshot = response.result?["plan"]?["outputs"]?["state"]?["snapshot"]
+    #expect(response.error == nil)
+    #expect(snapshot?["redaction"]?["sensitive"] == .bool(true))
+    #expect(snapshot?["indexedNodes"]?[1]?["value"] == .string("sk-proj-abcd...[redacted]"))
+}
+
 @Test func runPlanIfExecutesOnlyMatchingBranch() {
     var clickedTargets: [String] = []
     let router = CommandRouter(

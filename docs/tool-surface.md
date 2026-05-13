@@ -7,10 +7,10 @@ Axon exposes the same core commands through the CLI, the daemon JSON-RPC socket,
 ```text
 list_apps()
 request_accessibility()
-get_app_state(app, screenshot?, includeTree?)
+get_app_state(app, screenshot?, includeTree?, sensitive?)
 get_screenshot(app)
 resolve(app, locator)
-changed_since(snapshotId)
+changed_since(snapshotId, sensitive?)
 run_plan(source? | path? | plan?, args?, dryRun?)
 click(target)
 scroll(target?, app?, deltaX?, deltaY?)
@@ -26,7 +26,7 @@ press_key(app, key)
 ```sh
 axon apps
 axon snapshot <app> [--screenshot]
-axon snapshot-json <app> [--compact] [--screenshot]
+axon snapshot-json <app> [--compact] [--screenshot] [--sensitive]
 axon screenshot <app>
 axon resolve <app> '<locator-json>'
 axon changed-since <snapshot-id>
@@ -64,6 +64,7 @@ Prefer bundle id when available. Partial names are convenient but can become amb
 - `indexedNodes`: depth-first flattened AX nodes
 - `windows`: nested tree when `includeTree: true`
 - `screenshot`: embedded screenshot when `screenshot: true`
+- `redaction`: sensitive-mode metadata when `sensitive: true`
 
 MCP defaults are compact:
 
@@ -94,6 +95,18 @@ or:
 ```text
 get_screenshot(app)
 ```
+
+## Sensitive Reads
+
+Sensitive reads are opt-in and text-only:
+
+```json
+{ "app": "cairn", "sensitive": true }
+```
+
+When `sensitive: true`, Axon redacts AX `value` fields and secret-like text before returning JSON. Redaction preserves a short prefix, such as `sk-proj-abcd...[redacted]`, so the agent can distinguish nearby controls without receiving the full generated key or token. Node-level `redaction` metadata lists the fields that were changed.
+
+Sensitive snapshots reject `screenshot: true`. Image/OCR redaction is a separate capability; until that exists, screenshots and sensitive mode do not overlap.
 
 ## Locator Targets
 

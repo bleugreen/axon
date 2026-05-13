@@ -104,7 +104,8 @@ import Testing
             params: .object([
                 "app": .string("com.example.App"),
                 "screenshot": .bool(false),
-                "includeTree": .bool(false)
+                "includeTree": .bool(false),
+                "sensitive": .bool(false)
             ])
         )
     ])

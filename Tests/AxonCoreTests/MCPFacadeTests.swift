@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 @testable import AxonCore
 
@@ -36,6 +37,7 @@ import Testing
     #expect(toolNames(in: tools).contains("drag"))
     #expect(toolNames(in: tools).allSatisfy { !$0.contains("mcp") })
     #expect(tool(named: "get_app_state", in: tools)?["inputSchema"]?["properties"]?["screenshot"] != nil)
+    #expect(tool(named: "get_app_state", in: tools)?["inputSchema"]?["properties"]?["sensitive"] != nil)
     #expect(tool(named: "get_app_state", in: tools)?["inputSchema"]?["properties"]?["includeScreenshot"] == nil)
     #expect(tool(named: "click", in: tools)?["inputSchema"]?["properties"]?["target"]?["anyOf"]?[2] != nil)
 }
@@ -148,6 +150,68 @@ import Testing
     #expect(snapshot?["indexedNodes"]?[1]?["actions"]?[0] == .string("AXPress"))
 }
 
+@Test func mcpSensitiveAppStateDoesNotLeakSecretsInTextOrStructuredContent() throws {
+    let secret = "sk-proj-abcdef1234567890SECRET"
+    let commandRouter = CommandRouter(
+        captureSnapshot: { app, screenshot in
+            #expect(app == "com.example.App")
+            #expect(screenshot == false)
+            return AppSnapshot(
+                id: SnapshotID("mcp-sensitive"),
+                app: AppIdentity(bundleIdentifier: "com.example.App", name: "Example", processIdentifier: 7),
+                windows: [
+                    AXNode(role: "AXWindow", title: "Main", children: [
+                        AXNode(role: "AXTextField", value: secret)
+                    ])
+                ],
+                screenshot: nil
+            )
+        }
+    )
+
+    let response = MCPRouter(commandRouter: commandRouter).handle(JSONRPCRequest(
+        id: .string("sensitive-state"),
+        method: "tools/call",
+        params: .object([
+            "name": .string("get_app_state"),
+            "arguments": .object([
+                "app": .string("com.example.App"),
+                "sensitive": .bool(true)
+            ])
+        ])
+    ))
+
+    let result = response?.result
+    let snapshot = result?["structuredContent"]?["snapshot"]
+    let encoded = try encodedJSONString(.object(result ?? [:]))
+
+    #expect(response?.error == nil)
+    #expect(result?["isError"] == .bool(false))
+    #expect(snapshot?["redaction"]?["sensitive"] == .bool(true))
+    #expect(snapshot?["indexedNodes"]?[1]?["value"] == .string("sk-proj-abcd...[redacted]"))
+    #expect(textContent(in: result)?.contains("SECRET") == false)
+    #expect(encoded.contains("SECRET") == false)
+}
+
+@Test func mcpSensitiveAppStateRejectsScreenshots() {
+    let response = MCPRouter(commandRouter: CommandRouter()).handle(JSONRPCRequest(
+        id: .string("sensitive-shot"),
+        method: "tools/call",
+        params: .object([
+            "name": .string("get_app_state"),
+            "arguments": .object([
+                "app": .string("com.example.App"),
+                "sensitive": .bool(true),
+                "screenshot": .bool(true)
+            ])
+        ])
+    ))
+
+    #expect(response?.error == nil)
+    #expect(response?.result?["isError"] == .bool(true))
+    #expect(response?.result?["structuredContent"]?["error"]?["message"] == .string("sensitive snapshots cannot include screenshots"))
+}
+
 @Test func mcpScreenshotUsesImageContentInsteadOfTextualBase64() {
     let commandRouter = CommandRouter(
         captureScreenshot: { app in
@@ -258,6 +322,11 @@ private func imageContent(in result: [String: JSONValue]?) -> JSONValue? {
     return content.first { item in
         item["type"] == .string("image")
     }
+}
+
+private func encodedJSONString(_ value: JSONValue) throws -> String {
+    let data = try JSONEncoder().encode(value)
+    return String(decoding: data, as: UTF8.self)
 }
 
 private func toolNames(in value: JSONValue?) -> [String] {
