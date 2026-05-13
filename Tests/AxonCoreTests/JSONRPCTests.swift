@@ -10,6 +10,7 @@ import Testing
     #expect(response.id == .string("health-1"))
     #expect(response.error == nil)
     #expect(response.result?["status"] == .string("ok"))
+    #expect(response.result?["accessibility"] != nil)
 }
 
 @Test func unknownMethodReturnsMethodNotFoundError() {

@@ -25,11 +25,13 @@ public struct CommandRouter {
     public func handle(_ request: JSONRPCRequest) -> JSONRPCResponse {
         switch request.method {
         case "health":
+            let doctor = Doctor.run()
             return JSONRPCResponse(
                 id: request.id,
                 result: [
                     "status": .string("ok"),
-                    "service": .string("axon")
+                    "service": .string("axon"),
+                    "accessibility": .string(doctor.accessibility.status.rawValue)
                 ]
             )
         case "list_apps":

@@ -165,11 +165,15 @@ private func printResponse(_ response: JSONRPCResponse) throws {
 private func handleDaemonCommand(arguments: [String]) throws {
     let subcommand = arguments.dropFirst().first ?? "status"
     let manager = LaunchAgentManager(configuration: try launchAgentConfiguration())
+    let installer = try daemonBinaryInstaller()
     switch subcommand {
     case "install":
+        let installedURL = try installer.install()
         try manager.install()
         print("installed \(manager.configuration.label) at \(manager.plistPath.path)")
+        print("installed daemon binary at \(installedURL.path)")
     case "start":
+        try installer.install()
         try manager.start()
         print("started \(manager.configuration.label)")
     case "stop":
@@ -180,6 +184,7 @@ private func handleDaemonCommand(arguments: [String]) throws {
         print(status)
     case "uninstall":
         try manager.uninstall()
+        try installer.uninstall()
         print("uninstalled \(manager.configuration.label)")
     default:
         throw CLIError.missingArguments("daemon requires install, start, stop, status, or uninstall")
@@ -188,10 +193,14 @@ private func handleDaemonCommand(arguments: [String]) throws {
 
 private func launchAgentConfiguration() throws -> LaunchAgentConfiguration {
     LaunchAgentConfiguration(
-        executablePath: try resolvedExecutablePath(),
+        executablePath: DaemonBinaryInstaller.defaultInstallURL.path,
         socketPath: socketPath,
         environment: ProcessInfo.processInfo.environment
     )
+}
+
+private func daemonBinaryInstaller() throws -> DaemonBinaryInstaller {
+    DaemonBinaryInstaller(sourcePath: try resolvedExecutablePath())
 }
 
 private func resolvedExecutablePath() throws -> String {

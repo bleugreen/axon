@@ -100,9 +100,14 @@ public struct LaunchAgentManager {
         if result.exitCode == 0 {
             return
         }
+        _ = try runProcess(["bootout", "\(launchctlDomain())/\(configuration.label)"])
+        let retry = try runProcess(["bootstrap", launchctlDomain(), plistPath.path])
+        if retry.exitCode == 0 {
+            return
+        }
         let fallback = try runProcess(["kickstart", "-k", "\(launchctlDomain())/\(configuration.label)"])
         guard fallback.exitCode == 0 else {
-            throw LaunchAgentError.commandFailed("launchctl bootstrap", result)
+            throw LaunchAgentError.commandFailed("launchctl bootstrap", retry)
         }
     }
 

@@ -21,15 +21,20 @@ TCC is treating the debug executable as an unstable client identity. Rebuilding 
 
 Give Axon a stable local identity before relying on LaunchAgent mode as the normal path.
 
-Options to investigate:
+Implemented first pass:
 
-- Install a stable built binary outside `.build`, then only replace it intentionally.
-- Ad-hoc or developer-id sign the installed binary in a consistent post-build step.
+- `axon daemon install/start` copies the current executable to `~/Library/Application Support/Axon/bin/axon`.
+- The installed copy is ad-hoc signed with fixed identifier `dev.axon.daemon`.
+- The LaunchAgent plist points at the installed copy instead of `.build/debug/axon`.
+- `health` reports the daemon process Accessibility status over the socket.
+
+Remaining options if TCC is still unstable:
+
+- Confirm whether a one-time Privacy & Security approval for the installed `~/Library/Application Support/Axon/bin/axon` identity persists across rebuild/reinstall.
 - Wrap the daemon in a small `.app`/helper with a stable bundle identifier if TCC behaves better for bundled apps.
-- Add `axon daemon doctor` that checks Accessibility trust from the daemon process, not only from the invoking terminal.
 
 ## Acceptance
 
 - Rebuilding the development package does not silently break the installed LaunchAgent's Accessibility trust.
-- `axon daemon status` or a daemon health call reports whether the daemon process itself is AX-trusted.
+- A daemon health call reports whether the daemon process itself is AX-trusted.
 - The documented install path makes clear when the user must re-approve Accessibility permissions.

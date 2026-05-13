@@ -87,6 +87,83 @@ import Testing
     #expect(environment?["UNRELATED"] == nil)
 }
 
+@Test func daemonBinaryInstallerCopiesAndSignsInstalledExecutable() throws {
+    let root = FileManager.default.temporaryDirectory
+        .appendingPathComponent("axon-daemon-installer-\(UUID().uuidString)")
+    let source = root.appendingPathComponent("source/axon")
+    let installURL = root.appendingPathComponent("install/bin/axon")
+    defer {
+        try? FileManager.default.removeItem(at: root)
+    }
+
+    try FileManager.default.createDirectory(
+        at: source.deletingLastPathComponent(),
+        withIntermediateDirectories: true
+    )
+    try Data("binary".utf8).write(to: source)
+    try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: source.path)
+
+    var codesignArguments: [[String]] = []
+    let installer = DaemonBinaryInstaller(
+        sourcePath: source.path,
+        installURL: installURL,
+        signingIdentifier: "dev.axon.test",
+        runCodesign: { arguments in
+            codesignArguments.append(arguments)
+            return ProcessResult(exitCode: 0)
+        }
+    )
+
+    let installedURL = try installer.install()
+
+    #expect(installedURL == installURL)
+    #expect(try String(contentsOf: installURL, encoding: .utf8) == "binary")
+    #expect(FileManager.default.isExecutableFile(atPath: installURL.path))
+    #expect(codesignArguments == [[
+        "--force",
+        "--sign",
+        "-",
+        "--identifier",
+        "dev.axon.test",
+        installURL.path
+    ]])
+}
+
+@Test func launchAgentStartReloadsExistingServiceWhenBootstrapFails() throws {
+    let root = FileManager.default.temporaryDirectory
+        .appendingPathComponent("axon-launchagent-reload-\(UUID().uuidString)")
+    defer {
+        try? FileManager.default.removeItem(at: root)
+    }
+    let plistPath = root.appendingPathComponent("dev.axon.test.plist")
+    let configuration = LaunchAgentConfiguration(
+        label: "dev.axon.test",
+        executablePath: "/tmp/axon",
+        socketPath: "/tmp/axon.sock",
+        environment: [:]
+    )
+
+    var commands: [[String]] = []
+    let manager = LaunchAgentManager(
+        configuration: configuration,
+        plistPath: plistPath,
+        runProcess: { command in
+            commands.append(command)
+            if commands.count == 1 {
+                return ProcessResult(exitCode: 5, error: "Service is already loaded")
+            }
+            return ProcessResult(exitCode: 0)
+        }
+    )
+
+    try manager.start()
+
+    #expect(commands.count == 3)
+    #expect(commands[0][0] == "bootstrap")
+    #expect(commands[1][0] == "bootout")
+    #expect(commands[2][0] == "bootstrap")
+}
+
 private final class RecordingCommandHandler: JSONRPCCommandHandling {
     private let response: JSONRPCResponse
     private(set) var requests: [JSONRPCRequest] = []
