@@ -191,6 +191,10 @@ Plans should be comfortable for agents to emit repeatedly. YAML is the preferred
 
 The plan language should compose existing primitives rather than inventing alternate action semantics. Initial operations include `read`, `screenshot`, `resolve`, `click`, `perform_action`, `set_value`, `type_text`, `press_key`, `changed_since`, `if`, `wait_until`, `repeat_until`, and `assert`.
 
+Plan results should be compact by default. Bound outputs remain available internally for later plan steps, but the returned result should summarize heavy values like snapshots unless the caller explicitly requests `result.outputs: full`. This keeps plans useful for reducing agent round-trips and token-heavy observe/action loops.
+
+Failures are part of the plan result rather than MCP transport failures. A failed plan should stop at the first failing step, preserve completed trace/output data, and return `plan.success: false` with a trace error that identifies the failing step path and operation. Locator failures should include the target locator, resolution status, snapshot id, candidate count, and candidate summaries so an agent can repair the plan without another broad state read.
+
 ### Technology Direction
 
 The implementation path is Swift first:

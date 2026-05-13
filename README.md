@@ -82,3 +82,7 @@ Composable automation plans run through the daemon without installing persistent
 ```
 
 Plans can be supplied as a local path, inline `--source`, or MCP `run_plan` `source`. YAML is the preferred compact authoring format for agent-generated plans.
+
+Plan results compact bound snapshot outputs by default so multi-step plans do not return an entire app tree after every read. Use `result.outputs: full` for debugging or `result.outputs: none` when only the trace matters.
+
+When a plan step fails, the MCP call still returns normally and `plan.success` is `false`. The failure trace includes the failing `stepIndex`, `stepPath`, `stepOp`, and, for locator target failures, the locator plus resolution status and candidate summaries.

@@ -4,12 +4,33 @@ import Yams
 public enum AutomationPlanError: Error, CustomStringConvertible {
     case invalidParams(String)
     case executionFailed(String)
+    case detailedExecutionFailed(String, details: [String: JSONValue])
 
     public var description: String {
         switch self {
-        case let .invalidParams(message), let .executionFailed(message):
+        case let .invalidParams(message), let .executionFailed(message), let .detailedExecutionFailed(message, _):
             return message
         }
+    }
+
+    var details: [String: JSONValue] {
+        switch self {
+        case .invalidParams, .executionFailed:
+            return [:]
+        case let .detailedExecutionFailed(_, details):
+            return details
+        }
+    }
+
+    func withStepContext(index: Int, path: String, op: String) -> AutomationPlanError {
+        guard details["stepPath"] == nil else {
+            return self
+        }
+        var updated = details
+        updated["stepIndex"] = .int(index)
+        updated["stepPath"] = .string(path)
+        updated["stepOp"] = .string(op)
+        return .detailedExecutionFailed(description, details: updated)
     }
 }
 
@@ -30,7 +51,8 @@ public struct AutomationPlanExecutor {
         let context = AutomationPlanContext(
             app: try optionalString("app", in: planObject),
             args: params["args"] ?? .object([:]),
-            dryRun: bool("dryRun", in: params) ?? bool("dryRun", in: planObject) ?? false
+            dryRun: bool("dryRun", in: params) ?? bool("dryRun", in: planObject) ?? false,
+            outputMode: try resultOutputMode(in: planObject)
         )
         let steps = try stepArray(in: planObject, key: "steps")
         let state = AutomationPlanState(context: context)
@@ -39,11 +61,13 @@ public struct AutomationPlanExecutor {
             try runSteps(steps, state: state)
             return state.result(success: true)
         } catch let error as AutomationPlanError {
-            state.record(.object([
+            var errorRecord: [String: JSONValue] = [
                 "op": .string("error"),
                 "success": .bool(false),
                 "message": .string(error.description)
-            ]))
+            ]
+            errorRecord.merge(error.details) { _, new in new }
+            state.record(.object(errorRecord))
             return state.result(success: false, error: error.description)
         }
     }
@@ -59,6 +83,31 @@ public struct AutomationPlanExecutor {
             return try Self.parseSource(String(contentsOfFile: path, encoding: .utf8))
         }
         throw AutomationPlanError.invalidParams("run_plan requires source, path, or plan")
+    }
+
+    private func resultOutputMode(in planObject: [String: JSONValue]) throws -> AutomationPlanOutputMode {
+        guard let result = planObject["result"] else {
+            return .compact
+        }
+        guard case let .object(resultObject) = result else {
+            throw AutomationPlanError.invalidParams("result must be an object")
+        }
+        guard let outputs = resultObject["outputs"] else {
+            return .compact
+        }
+        guard case let .string(value) = outputs else {
+            throw AutomationPlanError.invalidParams("result.outputs must be compact, full, or none")
+        }
+        switch value {
+        case "compact":
+            return .compact
+        case "full":
+            return .full
+        case "none":
+            return .none
+        default:
+            throw AutomationPlanError.invalidParams("result.outputs must be compact, full, or none")
+        }
     }
 
     public static func parseSource(_ source: String) throws -> JSONValue {
@@ -96,13 +145,17 @@ public struct AutomationPlanExecutor {
         }
     }
 
-    private func runSteps(_ steps: [JSONValue], state: AutomationPlanState) throws {
-        for step in steps {
-            try runStep(step, state: state)
+    private func runSteps(
+        _ steps: [JSONValue],
+        state: AutomationPlanState,
+        pathPrefix: String = "steps"
+    ) throws {
+        for (index, step) in steps.enumerated() {
+            try runStep(step, state: state, index: index, path: "\(pathPrefix)[\(index)]")
         }
     }
 
-    private func runStep(_ step: JSONValue, state: AutomationPlanState) throws {
+    private func runStep(_ step: JSONValue, state: AutomationPlanState, index: Int, path: String) throws {
         guard case let .object(object) = step, object.count == 1, let (op, rawParams) = object.first else {
             throw AutomationPlanError.invalidParams("each step must be an object with one operation")
         }
@@ -116,35 +169,39 @@ public struct AutomationPlanExecutor {
             throw AutomationPlanError.invalidParams("\(op) step must be an object")
         }
 
-        switch op {
-        case "read":
-            try read(params, state: state)
-        case "screenshot":
-            try screenshot(params, state: state)
-        case "resolve":
-            try resolve(params, state: state)
-        case "click":
-            try action(op: "click", params: params, state: state)
-        case "perform_action":
-            try action(op: "perform_action", params: params, state: state)
-        case "set_value":
-            try action(op: "set_value", params: params, state: state)
-        case "type_text":
-            try action(op: "type_text", params: params, state: state)
-        case "press_key":
-            try action(op: "press_key", params: params, state: state)
-        case "changed_since":
-            try changedSince(params, state: state)
-        case "if":
-            try conditional(params, state: state)
-        case "wait_until":
-            try waitUntil(params, state: state)
-        case "repeat_until":
-            try repeatUntil(params, state: state)
-        case "assert":
-            try assertion(params, state: state)
-        default:
-            throw AutomationPlanError.invalidParams("unknown plan operation: \(op)")
+        do {
+            switch op {
+            case "read":
+                try read(params, state: state)
+            case "screenshot":
+                try screenshot(params, state: state)
+            case "resolve":
+                try resolve(params, state: state)
+            case "click":
+                try action(op: "click", params: params, state: state)
+            case "perform_action":
+                try action(op: "perform_action", params: params, state: state)
+            case "set_value":
+                try action(op: "set_value", params: params, state: state)
+            case "type_text":
+                try action(op: "type_text", params: params, state: state)
+            case "press_key":
+                try action(op: "press_key", params: params, state: state)
+            case "changed_since":
+                try changedSince(params, state: state)
+            case "if":
+                try conditional(params, state: state, path: path)
+            case "wait_until":
+                try waitUntil(params, state: state)
+            case "repeat_until":
+                try repeatUntil(params, state: state, path: path)
+            case "assert":
+                try assertion(params, state: state)
+            default:
+                throw AutomationPlanError.invalidParams("unknown plan operation: \(op)")
+            }
+        } catch let error as AutomationPlanError {
+            throw error.withStepContext(index: index, path: path, op: op)
         }
     }
 
@@ -265,7 +322,7 @@ public struct AutomationPlanExecutor {
         op == "click" || op == "perform_action" || op == "set_value"
     }
 
-    private func conditional(_ params: [String: JSONValue], state: AutomationPlanState) throws {
+    private func conditional(_ params: [String: JSONValue], state: AutomationPlanState, path: String) throws {
         let condition = try conditionValue(in: params)
         let matches = try evaluate(condition: condition, state: state)
         let branch = matches ? "then" : "else"
@@ -275,7 +332,7 @@ public struct AutomationPlanExecutor {
             "branch": .string(branch)
         ]))
         let steps = try stepArray(in: params, key: branch, allowMissing: true)
-        try runSteps(steps, state: state)
+        try runSteps(steps, state: state, pathPrefix: "\(path).\(branch)")
     }
 
     private func waitUntil(_ params: [String: JSONValue], state: AutomationPlanState) throws {
@@ -301,7 +358,7 @@ public struct AutomationPlanExecutor {
         }
     }
 
-    private func repeatUntil(_ params: [String: JSONValue], state: AutomationPlanState) throws {
+    private func repeatUntil(_ params: [String: JSONValue], state: AutomationPlanState, path: String) throws {
         let condition = try conditionValue(in: params)
         let maxIterations = int("maxIterations", in: params)
         let timeoutMs = int("timeoutMs", in: params)
@@ -327,7 +384,7 @@ public struct AutomationPlanExecutor {
             if let deadline, Date() >= deadline {
                 throw AutomationPlanError.executionFailed("repeat_until timed out after \(attempts) attempts")
             }
-            try runSteps(stepArray(in: params, key: "do"), state: state)
+            try runSteps(stepArray(in: params, key: "do"), state: state, pathPrefix: "\(path).do")
         }
     }
 
@@ -407,15 +464,15 @@ public struct AutomationPlanExecutor {
     ) throws -> [String: JSONValue] {
         switch op {
         case "click":
-            return ["target": try targetValue(in: params, state: state)]
+            return ["target": try actionTargetValue(in: params, state: state)]
         case "perform_action":
             return [
-                "target": try targetValue(in: params, state: state),
+                "target": try actionTargetValue(in: params, state: state),
                 "action": .string(try string("action", in: params))
             ]
         case "set_value":
             return [
-                "target": try targetValue(in: params, state: state),
+                "target": try actionTargetValue(in: params, state: state),
                 "value": .string(try string("value", in: params))
             ]
         case "type_text":
@@ -447,9 +504,17 @@ public struct AutomationPlanExecutor {
         let resolution = try resultValue("resolution", in: response)
         guard resolution["status"] == .string("unique"),
               case let .string(handle)? = resolution["best"]?["handle"] else {
-            throw AutomationPlanError.executionFailed("target did not resolve uniquely")
+            throw unresolvedTargetError(target: .object(targetObject), resolution: resolution)
         }
         return handle
+    }
+
+    private func actionTargetValue(in params: [String: JSONValue], state: AutomationPlanState) throws -> JSONValue {
+        let target = try targetValue(in: params, state: state)
+        guard case let .object(targetObject) = target, targetObject["locator"] != nil else {
+            return target
+        }
+        return .string(try targetString(from: target, state: state))
     }
 
     private func targetValue(in params: [String: JSONValue], state: AutomationPlanState) throws -> JSONValue {
@@ -467,6 +532,36 @@ public struct AutomationPlanExecutor {
             object["app"] = .string(try app(in: params, state: state))
         }
         return .object(object)
+    }
+
+    private func unresolvedTargetError(target: JSONValue, resolution: JSONValue) -> AutomationPlanError {
+        let status: String
+        if case let .string(value)? = resolution["status"] {
+            status = value
+        } else {
+            status = "unknown"
+        }
+        var details: [String: JSONValue] = [
+            "target": target,
+            "resolution": resolutionSummary(resolution)
+        ]
+        if case let .array(candidates)? = resolution["candidates"] {
+            details["candidateCount"] = .int(candidates.count)
+        }
+        return .detailedExecutionFailed("Locator did not resolve uniquely: \(status)", details: details)
+    }
+
+    private func resolutionSummary(_ resolution: JSONValue) -> JSONValue {
+        guard case let .object(object) = resolution else {
+            return resolution
+        }
+        var summary = object
+        if case let .array(candidates)? = object["candidates"] {
+            summary["candidateCount"] = .int(candidates.count)
+        } else {
+            summary["candidateCount"] = .int(0)
+        }
+        return .object(summary)
     }
 
     private func locatorValue(in params: [String: JSONValue]) throws -> JSONValue {
@@ -566,12 +661,73 @@ private final class AutomationPlanState {
             "success": .bool(success),
             "dryRun": .bool(context.dryRun),
             "trace": .array(trace),
-            "outputs": .object(outputs)
+            "outputs": .object(resultOutputs())
         ]
         if let error {
             object["error"] = .string(error)
         }
         return .object(object)
+    }
+
+    private func resultOutputs() -> [String: JSONValue] {
+        switch context.outputMode {
+        case .compact:
+            return outputs.mapValues(compactResultValue(_:))
+        case .full:
+            return outputs
+        case .none:
+            return [:]
+        }
+    }
+
+    private func compactResultValue(_ value: JSONValue) -> JSONValue {
+        switch value {
+        case let .object(object):
+            if let compactSnapshot = compactSnapshotValue(object) {
+                return .object(compactSnapshot)
+            }
+            return .object(object.mapValues(compactResultValue(_:)))
+        case let .array(values):
+            return .array(values.map(compactResultValue(_:)))
+        case .string, .int, .double, .bool, .null:
+            return value
+        }
+    }
+
+    private func compactSnapshotValue(_ object: [String: JSONValue]) -> [String: JSONValue]? {
+        guard let id = object["id"],
+              let app = object["app"],
+              case let .array(nodes)? = object["indexedNodes"] else {
+            return nil
+        }
+        var compact: [String: JSONValue] = [
+            "id": id,
+            "app": app,
+            "indexedNodeCount": .int(nodes.count)
+        ]
+        let truncatedCount = nodes.reduce(0) { count, node in
+            node["truncationReason"] != nil && node["truncationReason"] != .null ? count + 1 : count
+        }
+        if truncatedCount > 0 {
+            compact["truncatedNodeCount"] = .int(truncatedCount)
+        }
+        if let screenshot = object["screenshot"], screenshot != .null {
+            compact["screenshot"] = compactScreenshotValue(screenshot)
+        }
+        return compact
+    }
+
+    private func compactScreenshotValue(_ screenshot: JSONValue) -> JSONValue {
+        guard case let .object(object) = screenshot else {
+            return screenshot
+        }
+        var compact: [String: JSONValue] = [:]
+        for key in ["mediaType", "width", "height", "contentTransport"] {
+            if let value = object[key] {
+                compact[key] = value
+            }
+        }
+        return .object(compact)
     }
 
     func resolved(_ object: [String: JSONValue]) -> [String: JSONValue] {
@@ -623,6 +779,13 @@ private struct AutomationPlanContext {
     let app: String?
     let args: JSONValue
     let dryRun: Bool
+    let outputMode: AutomationPlanOutputMode
+}
+
+private enum AutomationPlanOutputMode {
+    case compact
+    case full
+    case none
 }
 
 private func bool(_ key: String, in object: [String: JSONValue]) -> Bool? {

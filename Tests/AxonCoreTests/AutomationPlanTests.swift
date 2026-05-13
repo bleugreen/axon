@@ -303,6 +303,151 @@ import Testing
     #expect(response.result?["plan"]?["outputs"]?["state"]?["snapshotId"] == .string("plan-file"))
 }
 
+@Test func runPlanCompactsSnapshotOutputsByDefault() {
+    let router = CommandRouter(
+        captureSnapshot: { _, _ in
+            planFixtureSnapshot(id: "plan-compact", controls: [
+                AXNode(role: "AXButton", title: "NEW", actions: ["AXPress"])
+            ])
+        }
+    )
+
+    let response = router.handle(JSONRPCRequest(
+        id: .string("plan-compact"),
+        method: "run_plan",
+        params: .object([
+            "source": .string("""
+            version: 1
+            app: com.example.App
+            steps:
+              - read:
+                  as: state
+            """)
+        ])
+    ))
+
+    let output = response.result?["plan"]?["outputs"]?["state"]
+    #expect(response.error == nil)
+    #expect(output?["snapshotId"] == .string("plan-compact"))
+    #expect(output?["snapshot"]?["id"] == .string("plan-compact"))
+    #expect(output?["snapshot"]?["indexedNodeCount"] == .int(2))
+    #expect(output?["snapshot"]?["indexedNodes"] == nil)
+}
+
+@Test func runPlanCanReturnFullOutputsWhenRequested() {
+    let router = CommandRouter(
+        captureSnapshot: { _, _ in
+            planFixtureSnapshot(id: "plan-full", controls: [
+                AXNode(role: "AXButton", title: "NEW", actions: ["AXPress"])
+            ])
+        }
+    )
+
+    let response = router.handle(JSONRPCRequest(
+        id: .string("plan-full"),
+        method: "run_plan",
+        params: .object([
+            "source": .string("""
+            version: 1
+            app: com.example.App
+            result:
+              outputs: full
+            steps:
+              - read:
+                  as: state
+            """)
+        ])
+    ))
+
+    #expect(response.error == nil)
+    #expect(response.result?["plan"]?["outputs"]?["state"]?["snapshot"]?["indexedNodes"]?[0]?["role"] == .string("AXWindow"))
+}
+
+@Test func runPlanFailureReportsStepAndMissingLocatorDetails() {
+    let router = CommandRouter(
+        captureSnapshot: { _, _ in
+            planFixtureSnapshot(id: "plan-missing", controls: [
+                AXNode(role: "AXButton", title: "Existing", actions: ["AXPress"])
+            ])
+        }
+    )
+
+    let response = router.handle(JSONRPCRequest(
+        id: .string("plan-missing"),
+        method: "run_plan",
+        params: .object([
+            "source": .string("""
+            version: 1
+            app: com.example.App
+            steps:
+              - read:
+                  as: before
+              - click:
+                  target:
+                    locator:
+                      role: AXButton
+                      title: Missing
+              - read:
+                  as: after
+            """)
+        ])
+    ))
+
+    let plan = response.result?["plan"]
+    let error = plan?["trace"]?[1]
+    #expect(response.error == nil)
+    #expect(plan?["success"] == .bool(false))
+    #expect(plan?["outputs"]?["before"]?["snapshotId"] == .string("plan-missing"))
+    #expect(plan?["outputs"]?["after"] == nil)
+    #expect(error?["op"] == .string("error"))
+    #expect(error?["stepIndex"] == .int(1))
+    #expect(error?["stepPath"] == .string("steps[1]"))
+    #expect(error?["stepOp"] == .string("click"))
+    #expect(error?["target"]?["locator"]?["title"] == .string("Missing"))
+    #expect(error?["resolution"]?["status"] == .string("missing"))
+    #expect(error?["resolution"]?["snapshotID"] == .string("plan-missing"))
+    #expect(error?["resolution"]?["candidateCount"] == .int(0))
+}
+
+@Test func runPlanFailureReportsAmbiguousLocatorCandidates() {
+    let router = CommandRouter(
+        captureSnapshot: { _, _ in
+            planFixtureSnapshot(id: "plan-ambiguous", controls: [
+                AXNode(role: "AXButton", title: "Delete", actions: ["AXPress"]),
+                AXNode(role: "AXButton", title: "Delete", actions: ["AXPress"])
+            ])
+        }
+    )
+
+    let response = router.handle(JSONRPCRequest(
+        id: .string("plan-ambiguous"),
+        method: "run_plan",
+        params: .object([
+            "source": .string("""
+            version: 1
+            app: com.example.App
+            steps:
+              - click:
+                  target:
+                    locator:
+                      role: AXButton
+                      title: Delete
+            """)
+        ])
+    ))
+
+    let error = response.result?["plan"]?["trace"]?[0]
+    #expect(response.error == nil)
+    #expect(response.result?["plan"]?["success"] == .bool(false))
+    #expect(error?["stepIndex"] == .int(0))
+    #expect(error?["stepPath"] == .string("steps[0]"))
+    #expect(error?["stepOp"] == .string("click"))
+    #expect(error?["resolution"]?["status"] == .string("ambiguous"))
+    #expect(error?["resolution"]?["candidateCount"] == .int(2))
+    #expect(error?["resolution"]?["candidates"]?[0]?["handle"] == .string("snapshot:plan-ambiguous:1"))
+    #expect(error?["resolution"]?["candidates"]?[1]?["handle"] == .string("snapshot:plan-ambiguous:2"))
+}
+
 private func planFixtureSnapshot(id: String, controls: [AXNode]) -> AppSnapshot {
     AppSnapshot(
         id: SnapshotID(id),
