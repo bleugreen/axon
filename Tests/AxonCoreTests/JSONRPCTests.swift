@@ -154,7 +154,7 @@ import Testing
     #expect(changedResponse.result?["current"] == .null)
 }
 
-@Test func changedSinceUsesObservedEventsBeforeRecapturing() {
+@Test func changedSinceTreatsObservedEventsAsRecaptureHints() {
     let elementStore = AXElementStore()
     let tracker = AppChangeTracker()
     let app = AppIdentity(bundleIdentifier: "com.example.App", name: "Example", processIdentifier: 7)
@@ -186,12 +186,56 @@ import Testing
     ))
 
     #expect(snapshotResponse.error == nil)
-    #expect(captureCount == 1)
+    #expect(captureCount == 2)
+    #expect(changedResponse.error == nil)
+    #expect(changedResponse.result?["changed"] == .bool(false))
+    #expect(changedResponse.result?["reason"] == .string("unchanged"))
+    #expect(changedResponse.result?["current"] != .null)
+    #expect(changedResponse.result?["observedChanges"]?[0]?["reason"] == .string("AXFocusedWindowChanged"))
+}
+
+@Test func changedSinceReportsSurfaceChangesAfterObservedEvents() {
+    let elementStore = AXElementStore()
+    let tracker = AppChangeTracker()
+    let app = AppIdentity(bundleIdentifier: "com.example.App", name: "Example", processIdentifier: 7)
+    var snapshots = [
+        AppSnapshot(
+            id: SnapshotID("initial"),
+            app: app,
+            windows: [AXNode(role: "AXWindow", title: "Main")],
+            screenshot: nil
+        ),
+        AppSnapshot(
+            id: SnapshotID("current"),
+            app: app,
+            windows: [AXNode(role: "AXWindow", title: "Settings")],
+            screenshot: nil
+        )
+    ]
+    let router = CommandRouter(
+        captureSnapshot: { _, _ in snapshots.removeFirst() },
+        elementStore: elementStore,
+        changeObserver: tracker
+    )
+
+    let snapshotResponse = router.handle(JSONRPCRequest(
+        id: .string("snapshot"),
+        method: "snapshot",
+        params: .object(["app": .string("com.example.App"), "includeScreenshot": .bool(false)])
+    ))
+    tracker.recordChange(app: app, reason: "AXWindowCreated")
+    let changedResponse = router.handle(JSONRPCRequest(
+        id: .string("changed"),
+        method: "changed_since",
+        params: .object(["snapshotId": .string("initial")])
+    ))
+
+    #expect(snapshotResponse.error == nil)
     #expect(changedResponse.error == nil)
     #expect(changedResponse.result?["changed"] == .bool(true))
-    #expect(changedResponse.result?["reason"] == .string("observer_event"))
-    #expect(changedResponse.result?["current"] == .null)
-    #expect(changedResponse.result?["observedChanges"]?[0]?["reason"] == .string("AXFocusedWindowChanged"))
+    #expect(changedResponse.result?["reason"] == .string("window_signature_changed"))
+    #expect(changedResponse.result?["currentSnapshotId"] == .string("current"))
+    #expect(changedResponse.result?["observedChanges"]?[0]?["reason"] == .string("AXWindowCreated"))
 }
 
 private let emptySnapshot = AppSnapshot(

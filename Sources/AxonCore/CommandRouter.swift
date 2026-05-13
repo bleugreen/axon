@@ -94,23 +94,25 @@ public struct CommandRouter {
             do {
                 let snapshotID = SnapshotID(try requiredStringParam("snapshotId", in: request))
                 let previous = try elementStore.summary(for: snapshotID)
-                if let observerResponse = observedChangeResponse(id: request.id, previous: previous) {
-                    return observerResponse
-                }
+                let observedChanges = observedChanges(since: previous)
                 let currentSnapshot = try captureSnapshot(previous.appQuery, false)
                 let current = observedSummary(for: currentSnapshot)
                 elementStore.store(summary: current)
                 let change = previous.change(comparedTo: current)
+                var result: [String: JSONValue] = [
+                    "changed": .bool(change.changed),
+                    "reason": .string(change.reason),
+                    "snapshotId": .string(previous.id.rawValue),
+                    "currentSnapshotId": .string(current.id.rawValue),
+                    "previous": previous.jsonValue,
+                    "current": current.jsonValue
+                ]
+                if !observedChanges.isEmpty {
+                    result["observedChanges"] = .array(observedChanges.map(\.jsonValue))
+                }
                 return JSONRPCResponse(
                     id: request.id,
-                    result: [
-                        "changed": .bool(change.changed),
-                        "reason": .string(change.reason),
-                        "snapshotId": .string(previous.id.rawValue),
-                        "currentSnapshotId": .string(current.id.rawValue),
-                        "previous": previous.jsonValue,
-                        "current": current.jsonValue
-                    ]
+                    result: result
                 )
             } catch let error as JSONRPCError {
                 return JSONRPCResponse(id: request.id, error: error)
@@ -270,25 +272,10 @@ public struct CommandRouter {
         return SnapshotSummary(snapshot: snapshot, observationToken: changeObserver.token(for: snapshot.app))
     }
 
-    private func observedChangeResponse(id: JSONRPCID?, previous: SnapshotSummary) -> JSONRPCResponse? {
+    private func observedChanges(since previous: SnapshotSummary) -> [ObservedAppChange] {
         guard let token = previous.observationToken else {
-            return nil
+            return []
         }
-        let changes = changeObserver.changes(since: token, app: previous.app)
-        guard !changes.isEmpty else {
-            return nil
-        }
-        return JSONRPCResponse(
-            id: id,
-            result: [
-                "changed": .bool(true),
-                "reason": .string("observer_event"),
-                "snapshotId": .string(previous.id.rawValue),
-                "currentSnapshotId": .null,
-                "previous": previous.jsonValue,
-                "current": .null,
-                "observedChanges": .array(changes.map(\.jsonValue))
-            ]
-        )
+        return changeObserver.changes(since: token, app: previous.app)
     }
 }
