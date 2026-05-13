@@ -23,9 +23,9 @@ import Testing
 
 @Test func resolveRequestReturnsLocatorResolution() {
     let router = CommandRouter(
-        captureSnapshot: { app, includeScreenshot in
+        captureSnapshot: { app, screenshot in
             #expect(app == "com.example.App")
-            #expect(includeScreenshot == false)
+            #expect(screenshot == false)
             return actionLocatorFixtureSnapshot(buttons: ["NEW"])
         }
     )
@@ -50,8 +50,8 @@ import Testing
 
 @Test func clickRequestAcceptsLocatorTarget() {
     let router = CommandRouter(
-        captureSnapshot: { _, includeScreenshot in
-            #expect(includeScreenshot == false)
+        captureSnapshot: { _, screenshot in
+            #expect(screenshot == false)
             return actionLocatorFixtureSnapshot(buttons: ["NEW"])
         },
         actions: PrimitiveActionHandlers(

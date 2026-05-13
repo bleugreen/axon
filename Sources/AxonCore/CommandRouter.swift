@@ -19,8 +19,8 @@ public struct CommandRouter {
         self.elementStore = elementStore
         self.changeObserver = changeObserver
         self.listApps = listApps
-        self.captureSnapshot = captureSnapshot ?? { app, includeScreenshot in
-            try AXSnapshotCapturer(elementStore: elementStore).capture(app: app, includeScreenshot: includeScreenshot)
+        self.captureSnapshot = captureSnapshot ?? { app, screenshot in
+            try AXSnapshotCapturer(elementStore: elementStore).capture(app: app, screenshot: screenshot)
         }
         self.captureScreenshot = captureScreenshot ?? { app in
             let identity = try AppResolver().resolveIdentity(app)
@@ -61,9 +61,9 @@ public struct CommandRouter {
         case "snapshot":
             do {
                 let app = try requiredStringParam("app", in: request)
-                let includeScreenshot = boolParam("includeScreenshot", in: request) ?? true
+                let screenshot = boolParam("screenshot", in: request) ?? false
                 let includeTree = boolParam("includeTree", in: request) ?? true
-                let snapshot = try captureSnapshot(app, includeScreenshot)
+                let snapshot = try captureSnapshot(app, screenshot)
                 elementStore.store(summary: observedSummary(for: snapshot))
                 return JSONRPCResponse(
                     id: request.id,

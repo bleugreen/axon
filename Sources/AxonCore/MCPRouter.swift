@@ -140,8 +140,8 @@ public struct MCPRouter {
             return arguments
         }
         var updated = arguments
-        if updated["includeScreenshot"] == nil {
-            updated["includeScreenshot"] = .bool(false)
+        if updated["screenshot"] == nil {
+            updated["screenshot"] = .bool(false)
         }
         if updated["includeTree"] == nil {
             updated["includeTree"] = .bool(false)
@@ -165,7 +165,7 @@ public struct MCPRouter {
             description: "Capture an accessibility snapshot for a running app, optionally including an embedded screenshot.",
             inputSchema: objectSchema(properties: [
                 "app": stringSchema("Bundle id, pid, exact app name, or partial app name."),
-                "includeScreenshot": boolSchema("Whether to include embedded ScreenCaptureKit screenshot data. Defaults to false for MCP."),
+                "screenshot": boolSchema("Whether to include embedded ScreenCaptureKit screenshot data. Defaults to false for MCP."),
                 "includeTree": boolSchema("Whether to include the full nested AX tree. Defaults to false for MCP; indexedNodes are always returned.")
             ], required: ["app"])
         ),

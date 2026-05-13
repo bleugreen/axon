@@ -52,7 +52,7 @@ public struct AXSnapshotCapturer {
         self.messagingTimeout = messagingTimeout
     }
 
-    public func capture(app query: String, includeScreenshot: Bool = true) throws -> AppSnapshot {
+    public func capture(app query: String, screenshot: Bool = false) throws -> AppSnapshot {
         guard AccessibilityPermission.isTrusted() else {
             throw SnapshotCaptureError.missingAccessibilityPermission
         }
@@ -84,12 +84,12 @@ public struct AXSnapshotCapturer {
             name: app.localizedName ?? app.bundleIdentifier ?? "pid \(app.processIdentifier)",
             processIdentifier: app.processIdentifier
         )
-        let screenshot = includeScreenshot ? screenshotCapturer.capture(app: appIdentity, axWindows: annotatedWindows) : nil
+        let encodedScreenshot = screenshot ? screenshotCapturer.capture(app: appIdentity, axWindows: annotatedWindows) : nil
         let snapshot = AppSnapshot(
             id: snapshotID,
             app: appIdentity,
             windows: annotatedWindows,
-            screenshot: screenshot
+            screenshot: encodedScreenshot
         )
         elementStore?.store(snapshotID: snapshotID, elements: retainedElements, summary: SnapshotSummary(snapshot: snapshot))
         return snapshot

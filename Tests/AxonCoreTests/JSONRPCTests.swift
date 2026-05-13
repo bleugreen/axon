@@ -65,9 +65,9 @@ import Testing
 @Test func snapshotRequestReturnsCapturedSnapshot() {
     let router = CommandRouter(
         listApps: { [] },
-        captureSnapshot: { app, includeScreenshot in
+        captureSnapshot: { app, screenshot in
             #expect(app == "Finder")
-            #expect(includeScreenshot)
+            #expect(screenshot)
             return AppSnapshot(
                 id: SnapshotID("snap-router"),
                 app: AppIdentity(bundleIdentifier: "com.apple.finder", name: "Finder", processIdentifier: 10),
@@ -80,13 +80,37 @@ import Testing
     let request = JSONRPCRequest(
         id: .string("snapshot"),
         method: "snapshot",
-        params: .object(["app": .string("Finder"), "includeScreenshot": .bool(true)])
+        params: .object(["app": .string("Finder"), "screenshot": .bool(true)])
     )
 
     let response = router.handle(request)
 
     #expect(response.result?["snapshot"]?["id"] == .string("snap-router"))
     #expect(response.error == nil)
+}
+
+@Test func snapshotRequestDefaultsToNoScreenshot() {
+    let router = CommandRouter(
+        captureSnapshot: { app, screenshot in
+            #expect(app == "com.example.App")
+            #expect(screenshot == false)
+            return AppSnapshot(
+                id: SnapshotID("snap-no-image"),
+                app: AppIdentity(bundleIdentifier: "com.example.App", name: "Example", processIdentifier: 7),
+                windows: [AXNode(role: "AXWindow", title: "Main")],
+                screenshot: nil
+            )
+        }
+    )
+
+    let response = router.handle(JSONRPCRequest(
+        id: .string("snapshot-default"),
+        method: "snapshot",
+        params: .object(["app": .string("com.example.App")])
+    ))
+
+    #expect(response.error == nil)
+    #expect(response.result?["snapshot"]?["screenshot"] == .null)
 }
 
 @Test func changedSinceReportsCoarseWindowChanges() {
@@ -113,7 +137,7 @@ import Testing
     let snapshotResponse = router.handle(JSONRPCRequest(
         id: .string("snapshot"),
         method: "snapshot",
-        params: .object(["app": .string("com.example.App"), "includeScreenshot": .bool(false)])
+        params: .object(["app": .string("com.example.App"), "screenshot": .bool(false)])
     ))
     let changedResponse = router.handle(JSONRPCRequest(
         id: .string("changed"),
@@ -176,7 +200,7 @@ import Testing
     let snapshotResponse = router.handle(JSONRPCRequest(
         id: .string("snapshot"),
         method: "snapshot",
-        params: .object(["app": .string("com.example.App"), "includeScreenshot": .bool(false)])
+        params: .object(["app": .string("com.example.App"), "screenshot": .bool(false)])
     ))
     tracker.recordChange(app: app, reason: "AXFocusedWindowChanged")
     let changedResponse = router.handle(JSONRPCRequest(
@@ -221,7 +245,7 @@ import Testing
     let snapshotResponse = router.handle(JSONRPCRequest(
         id: .string("snapshot"),
         method: "snapshot",
-        params: .object(["app": .string("com.example.App"), "includeScreenshot": .bool(false)])
+        params: .object(["app": .string("com.example.App"), "screenshot": .bool(false)])
     ))
     tracker.recordChange(app: app, reason: "AXWindowCreated")
     let changedResponse = router.handle(JSONRPCRequest(

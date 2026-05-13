@@ -103,7 +103,7 @@ import Testing
             method: "snapshot",
             params: .object([
                 "app": .string("com.example.App"),
-                "includeScreenshot": .bool(false),
+                "screenshot": .bool(false),
                 "includeTree": .bool(false)
             ])
         )

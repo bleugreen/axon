@@ -32,6 +32,8 @@ import Testing
     #expect(toolNames(in: tools).contains("changed_since"))
     #expect(toolNames(in: tools).contains("click"))
     #expect(toolNames(in: tools).allSatisfy { !$0.contains("mcp") })
+    #expect(tool(named: "get_app_state", in: tools)?["inputSchema"]?["properties"]?["screenshot"] != nil)
+    #expect(tool(named: "get_app_state", in: tools)?["inputSchema"]?["properties"]?["includeScreenshot"] == nil)
 }
 
 @Test func mcpToolsCallReturnsStructuredContentFromCommandRouter() {
@@ -72,9 +74,9 @@ import Testing
 
 @Test func mcpGetAppStateDefaultsToCompactStateWithoutScreenshot() {
     let commandRouter = CommandRouter(
-        captureSnapshot: { app, includeScreenshot in
+        captureSnapshot: { app, screenshot in
             #expect(app == "com.example.App")
-            #expect(includeScreenshot == false)
+            #expect(screenshot == false)
             return AppSnapshot(
                 id: SnapshotID("mcp-compact"),
                 app: AppIdentity(bundleIdentifier: "com.example.App", name: "Example", processIdentifier: 7),
@@ -145,9 +147,9 @@ import Testing
 
 @Test func mcpAppStateScreenshotUsesImageContentInsteadOfStructuredBase64() {
     let commandRouter = CommandRouter(
-        captureSnapshot: { app, includeScreenshot in
+        captureSnapshot: { app, screenshot in
             #expect(app == "com.example.App")
-            #expect(includeScreenshot == true)
+            #expect(screenshot == true)
             return AppSnapshot(
                 id: SnapshotID("with-image"),
                 app: AppIdentity(bundleIdentifier: "com.example.App", name: "Example", processIdentifier: 7),
@@ -168,7 +170,7 @@ import Testing
             "name": .string("get_app_state"),
             "arguments": .object([
                 "app": .string("com.example.App"),
-                "includeScreenshot": .bool(true)
+                "screenshot": .bool(true)
             ])
         ])
     ))
@@ -225,5 +227,14 @@ private func toolNames(in value: JSONValue?) -> [String] {
             return nil
         }
         return name
+    }
+}
+
+private func tool(named expectedName: String, in value: JSONValue?) -> JSONValue? {
+    guard case let .array(tools) = value else {
+        return nil
+    }
+    return tools.first { tool in
+        tool["name"] == .string(expectedName)
     }
 }
