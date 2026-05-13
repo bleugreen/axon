@@ -30,6 +30,11 @@ do {
             .send(JSONRPCRequest(id: .string("health"), method: "health"))
         try printResponse(response)
 
+    case "request-accessibility":
+        let response = try SocketClient(path: socketPath)
+            .send(JSONRPCRequest(id: .string("request_accessibility"), method: "request_accessibility"))
+        try printResponse(response)
+
     case "apps":
         for app in AppResolver().runningApps() {
             let bundle = app.bundleIdentifier.map { " \($0)" } ?? ""
@@ -123,6 +128,7 @@ do {
           mcp      run an MCP stdio facade backed by the daemon socket
           daemon <install|start|stop|status|uninstall>
           health   request daemon health over the local socket
+          request-accessibility   ask macOS to approve the running daemon identity
           apps     list running apps
           snapshot <app>    print an indexed AX tree for a running app
           snapshot-json <app> [--compact] [--no-screenshot]

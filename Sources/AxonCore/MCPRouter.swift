@@ -107,6 +107,8 @@ public struct MCPRouter {
         switch toolName {
         case "list_apps":
             return "list_apps"
+        case "request_accessibility":
+            return "request_accessibility"
         case "get_app_state":
             return "snapshot"
         case "get_screenshot":
@@ -149,6 +151,11 @@ public struct MCPRouter {
         MCPTool(
             name: "list_apps",
             description: "List currently running macOS applications visible to Axon.",
+            inputSchema: objectSchema()
+        ),
+        MCPTool(
+            name: "request_accessibility",
+            description: "Ask macOS to show the Accessibility permission prompt for the running Axon daemon identity.",
             inputSchema: objectSchema()
         ),
         MCPTool(

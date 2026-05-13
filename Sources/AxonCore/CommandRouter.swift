@@ -2,12 +2,14 @@ public struct CommandRouter {
     private let listApps: () -> [AppIdentity]
     private let captureSnapshot: (String, Bool) throws -> AppSnapshot
     private let captureScreenshot: (String) throws -> EncodedScreenshot?
+    private let requestAccessibility: () -> Bool
     private let actions: PrimitiveActionHandlers
 
     public init(
         listApps: @escaping () -> [AppIdentity] = { AppResolver().runningApps() },
         captureSnapshot: ((String, Bool) throws -> AppSnapshot)? = nil,
         captureScreenshot: ((String) throws -> EncodedScreenshot?)? = nil,
+        requestAccessibility: @escaping () -> Bool = AccessibilityPermission.requestTrustPrompt,
         actions: PrimitiveActionHandlers? = nil,
         elementStore: AXElementStore = AXElementStore()
     ) {
@@ -19,6 +21,7 @@ public struct CommandRouter {
             let identity = try AppResolver().resolveIdentity(app)
             return ScreenshotCapturer().capture(app: identity)
         }
+        self.requestAccessibility = requestAccessibility
         self.actions = actions ?? AXPrimitiveActionExecutor(elementStore: elementStore).handlers()
     }
 
@@ -32,6 +35,15 @@ public struct CommandRouter {
                     "status": .string("ok"),
                     "service": .string("axon"),
                     "accessibility": .string(doctor.accessibility.status.rawValue)
+                ]
+            )
+        case "request_accessibility":
+            let trusted = requestAccessibility()
+            return JSONRPCResponse(
+                id: request.id,
+                result: [
+                    "accessibility": .string(trusted ? PermissionStatus.trusted.rawValue : PermissionStatus.denied.rawValue),
+                    "prompted": .bool(true)
                 ]
             )
         case "list_apps":

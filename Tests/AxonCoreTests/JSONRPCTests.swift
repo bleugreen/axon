@@ -13,6 +13,18 @@ import Testing
     #expect(response.result?["accessibility"] != nil)
 }
 
+@Test func requestAccessibilityReturnsPromptStatus() {
+    let response = CommandRouter(requestAccessibility: { true }).handle(JSONRPCRequest(
+        id: .string("accessibility"),
+        method: "request_accessibility"
+    ))
+
+    #expect(response.id == .string("accessibility"))
+    #expect(response.error == nil)
+    #expect(response.result?["accessibility"] == .string("trusted"))
+    #expect(response.result?["prompted"] == .bool(true))
+}
+
 @Test func unknownMethodReturnsMethodNotFoundError() {
     let request = JSONRPCRequest(id: .int(42), method: "missing_method")
 

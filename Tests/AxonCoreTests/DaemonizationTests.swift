@@ -114,7 +114,8 @@ import Testing
         runCodesign: { arguments in
             codesignArguments.append(arguments)
             return ProcessResult(exitCode: 0)
-        }
+        },
+        resolveSigningIdentity: { "ABCDEF123456" }
     )
 
     let installedURL = try installer.install()
@@ -133,9 +134,57 @@ import Testing
     #expect(codesignArguments == [[
         "--force",
         "--sign",
-        "-",
+        "ABCDEF123456",
         bundleURL.path
     ]])
+}
+
+@Test func daemonBinaryInstallerFallsBackToAdHocSigningWhenNoIdentityExists() throws {
+    let root = FileManager.default.temporaryDirectory
+        .appendingPathComponent("axon-daemon-installer-adhoc-\(UUID().uuidString)")
+    let source = root.appendingPathComponent("source/axon")
+    let bundleURL = root.appendingPathComponent("install/Axon Daemon.app")
+    let installURL = bundleURL.appendingPathComponent("Contents/MacOS/axon")
+    defer {
+        try? FileManager.default.removeItem(at: root)
+    }
+
+    try FileManager.default.createDirectory(
+        at: source.deletingLastPathComponent(),
+        withIntermediateDirectories: true
+    )
+    try Data("binary".utf8).write(to: source)
+    try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: source.path)
+
+    var codesignArguments: [[String]] = []
+    let installer = DaemonBinaryInstaller(
+        sourcePath: source.path,
+        installURL: installURL,
+        runCodesign: { arguments in
+            codesignArguments.append(arguments)
+            return ProcessResult(exitCode: 0)
+        },
+        resolveSigningIdentity: { nil }
+    )
+
+    try installer.install()
+
+    #expect(codesignArguments == [[
+        "--force",
+        "--sign",
+        DaemonBinaryInstaller.adHocSigningIdentity,
+        bundleURL.path
+    ]])
+}
+
+@Test func preferredSigningIdentityChoosesStableDeveloperCertificate() {
+    let output = """
+      1) AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA "Ad Hoc Something"
+      2) BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB "Developer ID Application: Example (TEAMID)"
+         2 valid identities found
+    """
+
+    #expect(DaemonBinaryInstaller.preferredSigningIdentity(fromSecurityFindIdentityOutput: output) == "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB")
 }
 
 @Test func launchAgentStartReloadsExistingServiceWhenBootstrapFails() throws {

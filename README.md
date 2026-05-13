@@ -43,6 +43,12 @@ After the first daemon install, macOS may require approving the installed daemon
 ~/.swiftly/bin/swift run axon health
 ```
 
+If health still reports `accessibility: denied`, ask the running daemon identity to prompt macOS directly:
+
+```sh
+~/.swiftly/bin/swift run axon request-accessibility
+```
+
 Target badges are enabled by default with a 250ms planned flash and a 1.1s result linger. Set `AXON_VISUAL_OVERLAY=0` to disable them, or override timing with `AXON_VISUAL_OVERLAY_PLANNED_MS` and `AXON_VISUAL_OVERLAY_RESULT_MS`.
 
 Run the MCP stdio facade:
