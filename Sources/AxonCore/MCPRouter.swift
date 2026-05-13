@@ -225,9 +225,9 @@ public struct MCPRouter {
         ),
         MCPTool(
             name: "scroll",
-            description: "Scroll at a target, point, or active app using CoreGraphics wheel events.",
+            description: "Scroll an accessibility surface by resolving an offscreen descendant and requesting AXScrollToVisible.",
             inputSchema: objectSchema(properties: [
-                "app": stringSchema("Optional app to activate before scrolling."),
+                "app": stringSchema("Optional app used to resolve a scroll surface without activating it."),
                 "target": targetSchema(),
                 "deltaX": numberSchema("Horizontal scroll delta in pixels. Defaults to 0."),
                 "deltaY": numberSchema("Vertical scroll delta in pixels. Defaults to -120.")

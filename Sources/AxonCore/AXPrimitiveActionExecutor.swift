@@ -136,26 +136,36 @@ public final class AXPrimitiveActionExecutor {
         deltaX: Double,
         deltaY: Double
     ) throws -> PrimitiveActionResult {
-        if let app {
-            try activate(app: app)
+        let resolvedApp = try app.map(appResolver.resolve)
+        let scrollTarget = try scrollToVisibleTarget(target: target, app: resolvedApp, deltaX: deltaX, deltaY: deltaY)
+        guard let scrollTarget else {
+            return PrimitiveActionResult(
+                action: "scroll",
+                target: target?.targetDescription ?? app ?? "frontmost",
+                strategy: "AXScrollToVisible",
+                success: false,
+                message: "No offscreen accessibility descendant found for scroll direction",
+                details: [
+                    "deltaX": .double(deltaX),
+                    "deltaY": .double(deltaY)
+                ]
+            )
         }
-        let point = try target.flatMap(point(for:))
-        postScroll(deltaX: deltaX, deltaY: deltaY, at: point)
+        let result = AXUIElementPerformAction(scrollTarget.element, "AXScrollToVisible" as CFString)
         var details: [String: JSONValue] = [
             "deltaX": .double(deltaX),
             "deltaY": .double(deltaY)
         ]
-        if let point {
-            details["point"] = ActionPoint(x: point.x, y: point.y).jsonValue
-        }
         if let target {
             details["targetSpec"] = target.jsonValue
         }
+        details["scrollTargetFrame"] = scrollTarget.frame.jsonValue
         return PrimitiveActionResult(
             action: "scroll",
             target: target?.targetDescription ?? app ?? "frontmost",
-            strategy: "CGEventScroll",
-            success: true,
+            strategy: "AXScrollToVisible",
+            success: result == .success,
+            message: result == .success ? nil : "AXScrollToVisible returned \(result.rawValue)",
             details: details
         )
     }
@@ -218,6 +228,140 @@ public final class AXPrimitiveActionExecutor {
         }
     }
 
+    private func scrollToVisibleTarget(
+        target: PointerTarget?,
+        app: NSRunningApplication?,
+        deltaX: Double,
+        deltaY: Double
+    ) throws -> ScrollToVisibleTarget? {
+        guard deltaX != 0 || deltaY != 0 else {
+            return nil
+        }
+        let seed = try scrollSeedElement(target: target, app: app)
+        guard let container = nearestScrollContainer(from: seed), let containerFrame = frame(of: container) else {
+            return nil
+        }
+
+        let candidates = descendants(of: container, limit: 5_000).compactMap { element -> ScrollToVisibleTarget? in
+            guard let frame = frame(of: element), isOutside(frame, from: containerFrame, deltaX: deltaX, deltaY: deltaY) else {
+                return nil
+            }
+            return ScrollToVisibleTarget(element: element, frame: frame)
+        }
+        guard !candidates.isEmpty else {
+            return nil
+        }
+
+        let desired = desiredScrollCoordinate(from: containerFrame, deltaX: deltaX, deltaY: deltaY)
+        return candidates.min { lhs, rhs in
+            scrollDistance(lhs.frame, desired: desired, deltaX: deltaX, deltaY: deltaY)
+                < scrollDistance(rhs.frame, desired: desired, deltaX: deltaX, deltaY: deltaY)
+        }
+    }
+
+    private func scrollSeedElement(target: PointerTarget?, app: NSRunningApplication?) throws -> AXUIElement {
+        if let target {
+            switch target {
+            case let .handle(handle):
+                return try elementStore.element(for: handle)
+            case let .point(point):
+                let cgPoint = CGPoint(x: point.x, y: point.y)
+                if let element = element(at: cgPoint) {
+                    return element
+                }
+                throw JSONRPCError.invalidParams("No accessibility element at point: \(point.targetDescription)")
+            }
+        }
+
+        guard let app, let window = firstWindow(for: app) else {
+            throw JSONRPCError.invalidParams("scroll requires a target or app")
+        }
+        return window
+    }
+
+    private func nearestScrollContainer(from element: AXUIElement) -> AXUIElement? {
+        var current: AXUIElement? = element
+        var fallback: AXUIElement?
+        for _ in 0..<30 {
+            guard let candidate = current else {
+                return fallback
+            }
+            let role: String? = copyAttribute(kAXRoleAttribute, from: candidate)
+            if role == kAXScrollAreaRole || role == "AXWebArea" {
+                return candidate
+            }
+            if role == kAXWindowRole, fallback == nil {
+                fallback = firstDescendant(withRole: kAXScrollAreaRole, from: candidate) ?? candidate
+            }
+            current = copyAttribute(kAXParentAttribute, from: candidate)
+        }
+        return fallback
+    }
+
+    private func firstWindow(for app: NSRunningApplication) -> AXUIElement? {
+        let appElement = AXUIElementCreateApplication(app.processIdentifier)
+        let windows: [AXUIElement]? = copyAttribute(kAXWindowsAttribute, from: appElement)
+        return windows?.first
+    }
+
+    private func firstDescendant(withRole targetRole: String, from element: AXUIElement) -> AXUIElement? {
+        for child in children(of: element) {
+            let role: String? = copyAttribute(kAXRoleAttribute, from: child)
+            if role == targetRole {
+                return child
+            }
+            if let found = firstDescendant(withRole: targetRole, from: child) {
+                return found
+            }
+        }
+        return nil
+    }
+
+    private func descendants(of element: AXUIElement, limit: Int) -> [AXUIElement] {
+        var result: [AXUIElement] = []
+        var queue = children(of: element)
+        while !queue.isEmpty, result.count < limit {
+            let next = queue.removeFirst()
+            result.append(next)
+            queue.append(contentsOf: children(of: next))
+        }
+        return result
+    }
+
+    private func children(of element: AXUIElement) -> [AXUIElement] {
+        let children: [AXUIElement]? = copyAttribute(kAXChildrenAttribute, from: element)
+        return children ?? []
+    }
+
+    private func element(at point: CGPoint) -> AXUIElement? {
+        let systemWide = AXUIElementCreateSystemWide()
+        var element: AXUIElement?
+        let result = AXUIElementCopyElementAtPosition(systemWide, Float(point.x), Float(point.y), &element)
+        guard result == .success else {
+            return nil
+        }
+        return element
+    }
+
+    private func isOutside(_ frame: AXFrame, from container: AXFrame, deltaX: Double, deltaY: Double) -> Bool {
+        if abs(deltaY) >= abs(deltaX) {
+            return deltaY < 0 ? frame.y >= container.maxY : frame.maxY <= container.y
+        }
+        return deltaX < 0 ? frame.x >= container.maxX : frame.maxX <= container.x
+    }
+
+    private func desiredScrollCoordinate(from container: AXFrame, deltaX: Double, deltaY: Double) -> Double {
+        if abs(deltaY) >= abs(deltaX) {
+            return deltaY < 0 ? container.maxY + abs(deltaY) : container.y - abs(deltaY)
+        }
+        return deltaX < 0 ? container.maxX + abs(deltaX) : container.x - abs(deltaX)
+    }
+
+    private func scrollDistance(_ frame: AXFrame, desired: Double, deltaX: Double, deltaY: Double) -> Double {
+        let coordinate = abs(deltaY) >= abs(deltaX) ? frame.midY : frame.midX
+        return abs(coordinate - desired)
+    }
+
     private func frame(of element: AXUIElement) -> AXFrame? {
         guard
             let position: AXValue = copyAttribute(kAXPositionAttribute, from: element),
@@ -259,21 +403,6 @@ public final class AXPrimitiveActionExecutor {
         up?.post(tap: .cghidEventTap)
     }
 
-    private func postScroll(deltaX: Double, deltaY: Double, at point: CGPoint?) {
-        let event = CGEvent(
-            scrollWheelEvent2Source: nil,
-            units: .pixel,
-            wheelCount: 2,
-            wheel1: Int32(deltaY),
-            wheel2: Int32(deltaX),
-            wheel3: 0
-        )
-        if let point {
-            event?.location = point
-        }
-        event?.post(tap: .cghidEventTap)
-    }
-
     private func postMouseDrag(from start: CGPoint, to end: CGPoint, durationMs: Int?) {
         let down = CGEvent(mouseEventSource: nil, mouseType: .leftMouseDown, mouseCursorPosition: start, mouseButton: .left)
         let drag = CGEvent(mouseEventSource: nil, mouseType: .leftMouseDragged, mouseCursorPosition: end, mouseButton: .left)
@@ -294,6 +423,18 @@ public final class AXPrimitiveActionExecutor {
         down?.post(tap: .cghidEventTap)
         up?.post(tap: .cghidEventTap)
     }
+}
+
+private struct ScrollToVisibleTarget {
+    let element: AXUIElement
+    let frame: AXFrame
+}
+
+private extension AXFrame {
+    var maxX: Double { x + width }
+    var maxY: Double { y + height }
+    var midX: Double { x + width / 2 }
+    var midY: Double { y + height / 2 }
 }
 
 private struct KeyStroke {

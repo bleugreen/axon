@@ -136,7 +136,7 @@ Action preference order:
 
 1. native AX action such as `AXPress`, `AXShowMenu`, or settable value
 2. keyboard input where the focused element is known
-3. CoreGraphics click/drag/scroll fallback using current frame
+3. CoreGraphics click/drag fallback using current frame; AX-native scroll via `AXScrollToVisible`
 
 After each action, Axon should support explicit verification by re-capturing state and checking a locator, predicate, or expected UI change.
 
