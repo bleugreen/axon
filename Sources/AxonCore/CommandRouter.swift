@@ -139,6 +139,16 @@ public struct CommandRouter {
             } catch {
                 return JSONRPCResponse(id: request.id, error: .internalError(String(describing: error)))
             }
+        case "run_plan":
+            do {
+                let params = try paramsObject(in: request)
+                let plan = try AutomationPlanExecutor(commandHandler: handle).run(params: params)
+                return JSONRPCResponse(id: request.id, result: ["plan": plan])
+            } catch let error as AutomationPlanError {
+                return JSONRPCResponse(id: request.id, error: .invalidParams(error.description))
+            } catch {
+                return JSONRPCResponse(id: request.id, error: .internalError(String(describing: error)))
+            }
         case "resolve":
             do {
                 let app = try requiredStringParam("app", in: request)

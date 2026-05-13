@@ -168,6 +168,7 @@ set_value(target, value)
 perform_action(target, action)
 type_text(app, text)
 press_key(app, key)
+run_plan(source | path | plan, args?, dryRun?)
 ```
 
 Where `target` can be either:
@@ -181,6 +182,14 @@ or a locator object.
 Tool names should stay plain. MCP clients already namespace tools by server, so Axon exposes `click`, not `axon_click` or `axon_mcp_click`.
 
 Screenshot-returning tools should embed image data in their response. File output can exist as a CLI/debug convenience later, but clients should not need filesystem coordination to inspect the visual state.
+
+### Automation Plans
+
+`run_plan` is an invocation-scoped composition layer over the primitive commands. The daemon accepts a submitted plan, executes it, returns structured trace/output data, and forgets it. It does not own a recipe registry.
+
+Plans should be comfortable for agents to emit repeatedly. YAML is the preferred source format because it is compact, but the daemon protocol still accepts JSON values over JSON-RPC. Plans can also be loaded from a path when a repository wants to colocate reusable automation with the code it operates.
+
+The plan language should compose existing primitives rather than inventing alternate action semantics. Initial operations include `read`, `screenshot`, `resolve`, `click`, `perform_action`, `set_value`, `type_text`, `press_key`, `changed_since`, `if`, `wait_until`, `repeat_until`, and `assert`.
 
 ### Technology Direction
 

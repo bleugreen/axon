@@ -89,6 +89,16 @@ do {
             ))
         try printResponse(response)
 
+    case "run":
+        let params = try runPlanParams(arguments: arguments)
+        let response = try SocketClient(path: socketPath)
+            .send(JSONRPCRequest(
+                id: .string("run_plan"),
+                method: "run_plan",
+                params: .object(params)
+            ))
+        try printResponse(response)
+
     case "click":
         let target = try requiredArgument(after: command, in: arguments)
         try sendAction(method: "click", params: ["target": .string(target)])
@@ -146,6 +156,7 @@ do {
           screenshot <app>  print embedded screenshot JSON for a running app
           resolve <app> <locator-json>
           changed-since <snapshot-id>
+          run <path>|--source <yaml-or-json> [--dry-run] [--arg key=value]
           click <handle>    click a retained snapshot element through the daemon
           perform-action <handle> <action>
           set-value <handle> <value>
@@ -178,6 +189,58 @@ private func decodeJSONValue(_ rawValue: String) throws -> JSONValue {
 private func printResponse(_ response: JSONRPCResponse) throws {
     let data = try jsonEncoder.encode(response)
     print(String(decoding: data, as: UTF8.self))
+}
+
+private func runPlanParams(arguments: [String]) throws -> [String: JSONValue] {
+    var params: [String: JSONValue] = [:]
+    var args: [String: JSONValue] = [:]
+    var index = 1
+    var path: String?
+
+    while index < arguments.count {
+        let argument = arguments[index]
+        switch argument {
+        case "--source":
+            guard index + 1 < arguments.count else {
+                throw CLIError.missingArguments("run --source requires plan source")
+            }
+            params["source"] = .string(arguments[index + 1])
+            index += 2
+        case "--dry-run":
+            params["dryRun"] = .bool(true)
+            index += 1
+        case "--arg":
+            guard index + 1 < arguments.count else {
+                throw CLIError.missingArguments("run --arg requires key=value")
+            }
+            let pair = arguments[index + 1]
+            guard let equals = pair.firstIndex(of: "="), equals != pair.startIndex else {
+                throw CLIError.missingArguments("run --arg requires key=value")
+            }
+            let key = String(pair[..<equals])
+            let value = String(pair[pair.index(after: equals)...])
+            args[key] = .string(value)
+            index += 2
+        default:
+            if path == nil {
+                path = argument
+                index += 1
+            } else {
+                throw CLIError.missingArguments("unexpected run argument: \(argument)")
+            }
+        }
+    }
+
+    if params["source"] == nil {
+        guard let path else {
+            throw CLIError.missingArguments("run requires a plan path or --source")
+        }
+        params["path"] = .string(path)
+    }
+    if !args.isEmpty {
+        params["args"] = .object(args)
+    }
+    return params
 }
 
 private func handleDaemonCommand(arguments: [String]) throws {

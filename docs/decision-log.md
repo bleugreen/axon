@@ -53,6 +53,14 @@ Decision: Cairn should have good accessibility labels, but not as an Axon-specif
 
 Axon should work against arbitrary apps. Cairn can still be a high-quality fixture app because it should expose good AX labels for its own sake, not because Axon requires special treatment.
 
+## Automation Plans
+
+Decision: composable automation belongs in invocation-scoped plans, not daemon-owned recipes.
+
+The daemon should remain a stable local accessibility service. It can execute a submitted multi-step plan because that is just composition over its primitives, but it should not own a persistent recipe registry, cache, or app-specific workflow pack. Reusable plans can live beside the codebase or task context that gives them meaning and be passed to the daemon by path or source.
+
+YAML is the preferred plan source format for agent-authored plans because it is compact and easy to edit. JSON-RPC remains the daemon transport, and structured JSON plan objects remain acceptable when a caller already has data in memory.
+
 ## Deferred Design Notes
 
 These are not blocking questions. They are details that should be decided when implementation reaches the relevant layer.

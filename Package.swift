@@ -11,8 +11,16 @@ let package = Package(
         .executable(name: "axon", targets: ["AxonCLI"]),
         .library(name: "AxonCore", targets: ["AxonCore"])
     ],
+    dependencies: [
+        .package(url: "https://github.com/jpsim/Yams.git", from: "6.0.1")
+    ],
     targets: [
-        .target(name: "AxonCore"),
+        .target(
+            name: "AxonCore",
+            dependencies: [
+                .product(name: "Yams", package: "Yams")
+            ]
+        ),
         .executableTarget(
             name: "AxonCLI",
             dependencies: ["AxonCore"]

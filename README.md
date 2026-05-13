@@ -73,4 +73,12 @@ Check whether coarse app/window state changed since a retained snapshot:
 
 `changed-since` uses observer events when Axon has seen them for the app, and falls back to a fresh app/window signature comparison when it has not.
 
-For MCP, `get_app_state` defaults to compact output: `indexedNodes` with handles and useful metadata, no full nested `windows` tree, and no screenshot unless requested. Pass `includeTree: true` or `includeScreenshot: true` when the client needs those heavier fields.
+For MCP, `get_app_state` defaults to compact output: `indexedNodes` with handles and useful metadata, no full nested `windows` tree, and no screenshot unless requested. Pass `includeTree: true` or `screenshot: true` when the client needs those heavier fields.
+
+Composable automation plans run through the daemon without installing persistent recipes:
+
+```sh
+~/.swiftly/bin/swift run axon run ./plan.yaml --dry-run --arg button=Issues
+```
+
+Plans can be supplied as a local path, inline `--source`, or MCP `run_plan` `source`. YAML is the preferred compact authoring format for agent-generated plans.

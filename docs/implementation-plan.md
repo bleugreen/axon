@@ -90,11 +90,15 @@ Exit criteria:
 
 - Add optional policy hooks above primitive actions.
 - Add action metadata for risky operations: delete, upload, send, purchase, permission changes.
-- Support composable workflows as client-side procedures or higher-level MCP tools.
+- Support invocation-scoped automation plans accepted by the daemon as direct source, structured objects, or file paths.
+- Keep plans ephemeral: the daemon executes a submitted plan, traces it, and does not own a recipe registry or cache.
+- Prefer compact YAML source for agent-authored plans while keeping JSON-RPC as the daemon transport.
+- Include basic control flow: conditionals, polling waits, repeat loops with limits, assertions, argument substitution, and dry-run tracing.
 
 Exit criteria:
 
 - The primitive action layer remains simple.
+- Multi-step action sequences can compose existing primitives without introducing a second action system.
 - Safety gates can be enforced by consumers without rewriting the AX core.
 
 ## Test Strategy

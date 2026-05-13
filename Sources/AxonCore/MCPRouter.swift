@@ -117,6 +117,8 @@ public struct MCPRouter {
             return "resolve"
         case "changed_since":
             return "changed_since"
+        case "run_plan":
+            return "run_plan"
         case "click":
             return "click"
         case "perform_action":
@@ -190,6 +192,25 @@ public struct MCPRouter {
             inputSchema: objectSchema(properties: [
                 "snapshotId": stringSchema("Snapshot id returned by get_app_state.")
             ], required: ["snapshotId"])
+        ),
+        MCPTool(
+            name: "run_plan",
+            description: "Execute an invocation-scoped Axon automation plan. YAML source is the preferred compact format; JSON plan objects are also accepted.",
+            inputSchema: objectSchema(properties: [
+                "source": stringSchema("YAML or JSON automation plan source."),
+                "path": stringSchema("Local plan file path for the Axon daemon to read."),
+                "plan": .object([
+                    "type": .string("object"),
+                    "description": .string("Automation plan object when not using source."),
+                    "additionalProperties": .bool(true)
+                ]),
+                "args": .object([
+                    "type": .string("object"),
+                    "description": .string("Invocation arguments available as $args.* in the plan."),
+                    "additionalProperties": .bool(true)
+                ]),
+                "dryRun": boolSchema("Resolve and trace the plan without dispatching mutating actions.")
+            ])
         ),
         MCPTool(
             name: "click",

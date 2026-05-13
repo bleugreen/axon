@@ -29,6 +29,7 @@ import Testing
     #expect(toolNames(in: tools).contains("list_apps"))
     #expect(toolNames(in: tools).contains("request_accessibility"))
     #expect(toolNames(in: tools).contains("get_app_state"))
+    #expect(toolNames(in: tools).contains("run_plan"))
     #expect(toolNames(in: tools).contains("changed_since"))
     #expect(toolNames(in: tools).contains("click"))
     #expect(toolNames(in: tools).allSatisfy { !$0.contains("mcp") })
@@ -55,6 +56,44 @@ import Testing
     #expect(response?.result?["isError"] == .bool(false))
     #expect(response?.result?["structuredContent"]?["apps"]?[0]?["name"] == .string("Example"))
     #expect(response?.result?["content"]?[0]?["type"] == .string("text"))
+}
+
+@Test func mcpRunPlanForwardsSourceArgsAndDryRun() {
+    let handler = MCPRecordingCommandHandler(result: [
+        "plan": .object([
+            "success": .bool(true),
+            "dryRun": .bool(true),
+            "trace": .array([]),
+            "outputs": .object([:])
+        ])
+    ])
+    let router = MCPRouter(commandHandler: handler)
+    let response = router.handle(JSONRPCRequest(
+        id: .string("plan"),
+        method: "tools/call",
+        params: .object([
+            "name": .string("run_plan"),
+            "arguments": .object([
+                "source": .string("version: 1\nsteps: []"),
+                "dryRun": .bool(true),
+                "args": .object(["project": .string("axon")])
+            ])
+        ])
+    ))
+
+    #expect(response?.error == nil)
+    #expect(handler.requests == [
+        JSONRPCRequest(
+            id: .string("plan"),
+            method: "run_plan",
+            params: .object([
+                "source": .string("version: 1\nsteps: []"),
+                "dryRun": .bool(true),
+                "args": .object(["project": .string("axon")])
+            ])
+        )
+    ])
+    #expect(response?.result?["structuredContent"]?["plan"]?["success"] == .bool(true))
 }
 
 @Test func mcpToolsCallReportsCommandErrorsAsToolErrors() {
@@ -236,5 +275,19 @@ private func tool(named expectedName: String, in value: JSONValue?) -> JSONValue
     }
     return tools.first { tool in
         tool["name"] == .string(expectedName)
+    }
+}
+
+private final class MCPRecordingCommandHandler: JSONRPCCommandHandling {
+    private let response: JSONRPCResponse
+    private(set) var requests: [JSONRPCRequest] = []
+
+    init(result: [String: JSONValue]) {
+        self.response = JSONRPCResponse(id: .string("recorded"), result: result)
+    }
+
+    func handle(_ request: JSONRPCRequest) -> JSONRPCResponse {
+        requests.append(request)
+        return JSONRPCResponse(id: request.id, result: response.result ?? [:])
     }
 }
