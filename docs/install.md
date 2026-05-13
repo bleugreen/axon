@@ -118,12 +118,6 @@ axon quit
 
 `axon setup` remains an explicit alias for no-arg `axon` for scripts that prefer named commands.
 
-Agent clients should use:
-
-```sh
-axon mcp
-```
-
 The lower-level development socket server still exists:
 
 ```sh
@@ -131,6 +125,26 @@ axon serve
 ```
 
 That mode is useful for debugging, but it is not the deployed product center.
+
+## Register with an Agent
+
+Agent clients talk to Axon over MCP stdio. `axon mcp` is the stdio entrypoint; it forwards to the running `Axon.app` socket.
+
+For Claude Code:
+
+```sh
+claude mcp add axon -- axon mcp
+```
+
+For Codex:
+
+```sh
+codex mcp add axon -- axon mcp
+```
+
+Other clients accept the same shape. The command to launch is `axon` (an absolute path is fine if `PATH` isn't propagated) with a single argument `mcp`.
+
+After registering, the no-arg `axon` setup output reprints these commands whenever Accessibility is trusted, so it is safe to re-run as a "where do I paste this again" check.
 
 ## Permissions
 

@@ -501,6 +501,12 @@ private func printSetupStatus() throws {
     print("Axon.app: \(isAxonAppRunning() ? "running" : "not running")")
     print("Socket: \(socketPath)")
     print("Accessibility: \(accessibility)")
+    if accessibility == PermissionStatus.trusted.rawValue {
+        print("")
+        print("Register with an MCP client:")
+        print("  claude mcp add axon -- axon mcp")
+        print("  codex mcp add axon -- axon mcp")
+    }
 }
 
 private func launchAxonApp() throws {

@@ -14,9 +14,10 @@ It runs as a menu bar service, exposes a small JSON-RPC command surface over a U
 ```sh
 brew install --cask bleugreen/tap/axon
 axon
+claude mcp add axon -- axon mcp   # or: codex mcp add axon -- axon mcp
 ```
 
-`axon` with no arguments launches `Axon.app`, checks the socket, and requests Accessibility permission if it is missing. Approve `Axon.app` in **System Settings → Privacy & Security → Accessibility**, then point an MCP client at `axon mcp`.
+`axon` with no arguments launches `Axon.app`, checks the socket, and requests Accessibility permission if it is missing. Approve `Axon.app` in **System Settings → Privacy & Security → Accessibility**. Once accessibility is trusted, the setup output prints the register-with-MCP commands shown above.
 
 ## Why Axon
 
