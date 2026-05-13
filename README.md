@@ -2,7 +2,7 @@
 
 Axon is a local macOS accessibility service that gives agents a typed, composable path into running apps.
 
-It runs as a background daemon, exposes a small JSON-RPC command surface over a Unix socket, and provides an MCP stdio facade for agent clients. The core loop is:
+It runs as a menu bar service app, exposes a small JSON-RPC command surface over a Unix socket, and provides an MCP stdio facade for agent clients. The core loop is:
 
 1. capture app state
 2. resolve an honest target
@@ -12,17 +12,16 @@ It runs as a background daemon, exposes a small JSON-RPC command surface over a 
 ## Quick Start
 
 ```sh
-make build
-make test
-make install-daemon
-make start-daemon
-make health
+brew install --cask bleugreen/tap/axon
+axon setup
 ```
 
-If `health` reports `accessibility: denied`, approve the installed Axon daemon in System Settings > Privacy & Security > Accessibility, or ask the daemon to trigger the prompt:
+For source checkout development:
 
 ```sh
-make request-accessibility
+make build
+make test
+make package-app
 ```
 
 ## Documentation
@@ -39,7 +38,8 @@ make request-accessibility
 
 Axon currently supports:
 
-- running as a signed local LaunchAgent with a stable bundle id, `dev.axon.daemon`
+- building a signed `Axon.app` menu bar service with bundled `axon` CLI for Homebrew cask installation
+- a legacy signed local LaunchAgent mode for daemon experiments
 - compact app snapshots with per-snapshot handles
 - opt-in embedded screenshots returned as MCP image content
 - locator resolution over role, subrole, title, value, description, identifier, actions, and ancestors

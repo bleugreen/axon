@@ -1,160 +1,187 @@
 # Install and Operations
 
-Axon is one Swift executable with three important modes:
+Axon's deployed shape is a menu bar app plus a bundled CLI:
 
-- `axon serve`: long-running daemon that owns snapshots, handles, observer state, and visual overlay settings
-- `axon mcp`: stdio MCP facade that forwards tool calls to the daemon socket
-- `axon daemon ...`: user LaunchAgent installer and lifecycle commands
+- `Axon.app` owns the long-running socket service in the user's Aqua session.
+- `axon` is the CLI and MCP entrypoint installed on `PATH`.
+- MCP clients run `axon mcp`, which forwards to the app-owned socket.
 
-## Requirements
-
-- macOS 14 or newer
-- Swift 6.3.1, pinned by `.swift-version`
-- Accessibility permission for the installed daemon identity
-- ScreenCaptureKit permission if macOS prompts while using screenshots
-
-The examples use Swiftly's explicit Swift path:
+The target user install is:
 
 ```sh
-~/.swiftly/bin/swift build
-~/.swiftly/bin/swift test
+brew install --cask bleugreen/tap/axon
+axon setup
 ```
 
-The repo also exposes common commands through `make`:
+`axon setup` launches `Axon.app`, checks the local socket, requests Accessibility permission, and prints Codex MCP config:
+
+```toml
+[mcp_servers.axon]
+command = "axon"
+args = ["mcp"]
+```
+
+## Product Layout
+
+The release artifact is a signed and preferably notarized zip:
+
+```text
+Axon-<version>.zip
+└── Axon.app
+    └── Contents
+        ├── MacOS
+        │   └── Axon
+        └── Resources
+            └── bin
+                └── axon
+```
+
+The Homebrew cask installs `Axon.app` and links `Axon.app/Contents/Resources/bin/axon`.
+
+`Axon.app` uses bundle id:
+
+```text
+com.bleugreen.axon
+```
+
+That bundle id is the stable macOS Accessibility trust identity.
+
+## Building a Release Artifact
+
+Build the app bundle and zip:
+
+```sh
+make package-app
+```
+
+The script writes:
+
+```text
+dist/Axon.app
+dist/Axon-0.1.0.zip
+```
+
+It also prints the SHA-256 and a Homebrew cask stanza for `bleugreen/tap`.
+
+For release signing, provide a Developer ID identity:
+
+```sh
+AXON_CODESIGN_IDENTITY="Developer ID Application: Example, Inc. (TEAMID)" make package-app
+```
+
+For notarization, configure a notarytool keychain profile and pass it during packaging:
+
+```sh
+AXON_CODESIGN_IDENTITY="Developer ID Application: Example, Inc. (TEAMID)" \
+AXON_NOTARY_PROFILE="axon-notary" \
+make package-app
+```
+
+When `AXON_NOTARY_PROFILE` is set, the packager submits the zip to Apple, staples the accepted ticket to `Axon.app`, and recreates the zip.
+
+## Homebrew Cask
+
+The intended tap command is:
+
+```sh
+brew install --cask bleugreen/tap/axon
+```
+
+The cask shape:
+
+```ruby
+cask "axon" do
+  version "0.1.0"
+  sha256 "<printed by scripts/package-app>"
+
+  url "https://github.com/bleugreen/axon/releases/download/v#{version}/Axon-#{version}.zip"
+  name "Axon"
+  desc "Local macOS accessibility service for agents"
+  homepage "https://github.com/bleugreen/axon"
+
+  depends_on macos: ">= :sonoma"
+
+  app "Axon.app"
+  binary "#{appdir}/Axon.app/Contents/Resources/bin/axon"
+
+  zap trash: [
+    "~/Library/Application Support/Axon",
+    "~/Library/Logs/Axon",
+  ]
+end
+```
+
+## Runtime Commands
+
+```sh
+axon start
+axon status
+axon setup
+axon mcp-config
+axon restart
+axon quit
+```
+
+Agent clients should use:
+
+```sh
+axon mcp
+```
+
+The lower-level development socket server still exists:
+
+```sh
+axon serve
+```
+
+That mode is useful for debugging, but it is not the deployed product center.
+
+## Permissions
+
+macOS Accessibility approval cannot be automated. The app can only request the prompt and report status.
+
+Normal first run:
+
+```sh
+axon setup
+```
+
+If Accessibility is denied, approve `Axon.app` in System Settings > Privacy & Security > Accessibility, then run:
+
+```sh
+axon status
+```
+
+ScreenCaptureKit may also prompt when screenshot capture is first used.
+
+## Development Fallback
+
+Source checkout development still works:
 
 ```sh
 make build
 make test
-make check-local
-```
-
-## Foreground Development
-
-Run the socket daemon directly while debugging daemon behavior:
-
-```sh
 AXON_SOCKET_PATH=/tmp/axon.sock ~/.swiftly/bin/swift run axon serve
 ```
 
-In another terminal:
+The older LaunchAgent installer remains available for daemon experiments:
 
 ```sh
-AXON_SOCKET_PATH=/tmp/axon.sock ~/.swiftly/bin/swift run axon health
-AXON_SOCKET_PATH=/tmp/axon.sock ~/.swiftly/bin/swift run axon apps
+~/.swiftly/bin/swift run axon daemon install
+~/.swiftly/bin/swift run axon daemon start
+~/.swiftly/bin/swift run axon daemon stop
 ```
 
-Foreground mode uses the terminal process identity for macOS permissions. LaunchAgent mode uses the installed app bundle identity, so trust can differ between the two.
-
-## LaunchAgent Install
-
-Install and start the background daemon:
-
-```sh
-make install-daemon
-make start-daemon
-make health
-```
-
-`daemon install` copies the current built executable into:
-
-```text
-~/Library/Application Support/Axon/Axon Daemon.app/Contents/MacOS/axon
-```
-
-It writes an app bundle with bundle id `dev.axon.daemon`, signs it with the best available local signing identity or ad-hoc signing, and installs this LaunchAgent:
-
-```text
-~/Library/LaunchAgents/dev.axon.daemon.plist
-```
-
-The LaunchAgent runs the installed app bundle in `serve` mode, keeps it alive, and exposes the daemon socket at `/tmp/axon.sock` unless `AXON_SOCKET_PATH` is set at install/start time.
-
-## Permissions
-
-Check the daemon process, not just the terminal:
-
-```sh
-~/.swiftly/bin/swift run axon health
-```
-
-If it reports `accessibility: denied`, open System Settings > Privacy & Security > Accessibility and approve Axon. You can also ask the running daemon identity to prompt macOS:
-
-```sh
-make request-accessibility
-```
-
-If System Settings shows stale duplicate Axon rows, remove them, restart the daemon, and approve the new `dev.axon.daemon` identity.
-
-## Logs and Status
-
-```sh
-make status
-make logs
-```
-
-Stop, restart, or uninstall:
-
-```sh
-make stop-daemon
-make start-daemon
-make uninstall-daemon
-```
-
-After changing Axon code, rebuild and restart the daemon so the installed app bundle receives the new executable:
-
-```sh
-make build
-make start-daemon
-```
-
-`daemon start` reinstalls the current executable before bootstrapping the service.
-
-## Codex MCP Config
-
-Build Axon before starting a Codex session:
-
-```sh
-~/.swiftly/bin/swift build
-```
-
-Add this MCP server entry to Codex config:
-
-```toml
-[mcp_servers.axon]
-command = "/Users/mitch/projects/axon/.build/debug/axon"
-args = ["mcp"]
-```
-
-Print the same snippet for the current checkout:
-
-```sh
-make codex-mcp-config
-```
-
-The MCP process is intentionally thin. It forwards calls to the daemon at `AXON_SOCKET_PATH` or `/tmp/axon.sock`, and does not own snapshots or observers. Restart the Codex session after rebuilding when you need the MCP facade process to pick up a new `.build/debug/axon` binary.
-
-## Visual Overlay
-
-Target badges are enabled by default:
-
-- planned target flash: 250 ms
-- result linger: 1100 ms
-
-Disable or tune at daemon start/install time:
-
-```sh
-AXON_VISUAL_OVERLAY=0 ~/.swiftly/bin/swift run axon daemon start
-AXON_VISUAL_OVERLAY_PLANNED_MS=400 AXON_VISUAL_OVERLAY_RESULT_MS=1500 ~/.swiftly/bin/swift run axon daemon start
-```
-
-The LaunchAgent preserves only Axon-specific environment keys, not the whole shell environment.
+Prefer `Axon.app` for the installed product because it gives the user a visible service to inspect, quit, restart, and approve.
 
 ## Troubleshooting
 
-`Connection refused` usually means the daemon is not running or has not created `/tmp/axon.sock` yet. Run `make status`, inspect `daemon.err.log`, then `make start-daemon`.
+`Socket: unreachable` means `Axon.app` is not running or could not bind `/tmp/axon.sock`. Run `axon start`, then `axon status`.
 
-`Connection closed before a full response was received` means the daemon accepted the socket and exited or crashed mid-response. Check `daemon.err.log`, rebuild, and restart.
+`Accessibility: denied` means macOS has not approved the `com.bleugreen.axon` app identity.
 
-`accessibility: denied` means the installed daemon identity lacks AX trust. Approving Terminal or Codex is not enough for LaunchAgent mode.
+If an old development LaunchAgent is still running, stop it before testing `Axon.app`:
 
-Empty or missing screenshots usually mean ScreenCaptureKit could not capture the target window. Check macOS screen recording prompts and prefer `get_screenshot` for screenshot-only smoke tests.
+```sh
+~/.swiftly/bin/swift run axon daemon stop
+```

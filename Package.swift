@@ -9,6 +9,7 @@ let package = Package(
     ],
     products: [
         .executable(name: "axon", targets: ["AxonCLI"]),
+        .executable(name: "AxonApp", targets: ["AxonApp"]),
         .library(name: "AxonCore", targets: ["AxonCore"])
     ],
     dependencies: [
@@ -23,6 +24,10 @@ let package = Package(
         ),
         .executableTarget(
             name: "AxonCLI",
+            dependencies: ["AxonCore"]
+        ),
+        .executableTarget(
+            name: "AxonApp",
             dependencies: ["AxonCore"]
         ),
         .testTarget(

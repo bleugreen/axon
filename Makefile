@@ -1,6 +1,6 @@
 SWIFT ?= $(HOME)/.swiftly/bin/swift
 
-.PHONY: build test doctor request-accessibility install-daemon start-daemon stop-daemon restart-daemon status health uninstall-daemon logs codex-mcp-config check-local
+.PHONY: build test doctor request-accessibility package-app install-daemon start-daemon stop-daemon restart-daemon status health uninstall-daemon logs codex-mcp-config check-local
 
 build:
 	$(SWIFT) build
@@ -13,6 +13,9 @@ doctor:
 
 request-accessibility:
 	$(SWIFT) run axon request-accessibility
+
+package-app:
+	./scripts/package-app
 
 install-daemon:
 	$(SWIFT) run axon daemon install

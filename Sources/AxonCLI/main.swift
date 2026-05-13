@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import AxonCore
 
@@ -6,6 +7,7 @@ let command = arguments.first ?? "help"
 let socketPath = AxonEnvironment.socketPath()
 let jsonEncoder = JSONEncoder()
 let jsonDecoder = JSONDecoder()
+let axonAppBundleIdentifier = "com.bleugreen.axon"
 
 do {
     switch command {
@@ -22,6 +24,33 @@ do {
 
     case "mcp":
         try MCPStdioServer().run()
+
+    case "start":
+        try launchAxonApp()
+        print("started Axon.app")
+
+    case "status":
+        try printHumanStatus()
+
+    case "setup":
+        try launchAxonApp()
+        _ = try? waitForDaemonHealth(socketPath: socketPath, timeoutSeconds: 5)
+        let response = try SocketClient(path: socketPath)
+            .send(JSONRPCRequest(id: .string("request_accessibility"), method: "request_accessibility"))
+        try printSetupStatus(accessibilityResponse: response)
+
+    case "quit":
+        quitAxonApp()
+        print("quit Axon.app")
+
+    case "restart":
+        quitAxonApp()
+        Thread.sleep(forTimeInterval: 0.5)
+        try launchAxonApp()
+        print("restarted Axon.app")
+
+    case "mcp-config":
+        printMCPConfig()
 
     case "daemon":
         try handleDaemonCommand(arguments: arguments)
@@ -153,6 +182,12 @@ do {
           doctor   check local permissions
           serve    run the local daemon socket server
           mcp      run an MCP stdio facade backed by the daemon socket
+          start    launch the installed Axon.app menu bar service
+          status   print app-backed daemon status
+          setup    launch Axon.app, request permissions, and print MCP config
+          quit     quit the installed Axon.app service
+          restart  restart the installed Axon.app service
+          mcp-config  print Codex MCP config for an installed axon CLI
           daemon <install|start|stop|status|uninstall>
           health   request daemon health over the local socket
           request-accessibility   ask macOS to approve the running daemon identity
@@ -268,6 +303,96 @@ private func decodeJSONValue(_ rawValue: String) throws -> JSONValue {
 private func printResponse(_ response: JSONRPCResponse) throws {
     let data = try jsonEncoder.encode(response)
     print(String(decoding: data, as: UTF8.self))
+}
+
+private func printHumanStatus() throws {
+    do {
+        let health = try SocketClient(path: socketPath, responseTimeoutSeconds: 2)
+            .send(JSONRPCRequest(id: .string("status"), method: "health"))
+        let accessibility = health.result?["accessibility"].flatMap(stringValue) ?? "unknown"
+        print("Axon.app: \(isAxonAppRunning() ? "running" : "not running")")
+        print("Socket: \(socketPath)")
+        print("Accessibility: \(accessibility)")
+    } catch {
+        print("Axon.app: \(isAxonAppRunning() ? "running" : "not running")")
+        print("Socket: unreachable at \(socketPath)")
+        print("Error: \(error)")
+        exit(1)
+    }
+}
+
+private func printSetupStatus(accessibilityResponse: JSONRPCResponse) throws {
+    let health = try SocketClient(path: socketPath, responseTimeoutSeconds: 2)
+        .send(JSONRPCRequest(id: .string("setup-health"), method: "health"))
+    let accessibility = health.result?["accessibility"].flatMap(stringValue)
+        ?? accessibilityResponse.result?["accessibility"].flatMap(stringValue)
+        ?? "unknown"
+    print("Axon.app: \(isAxonAppRunning() ? "running" : "not running")")
+    print("Socket: \(socketPath)")
+    print("Accessibility: \(accessibility)")
+    print("")
+    printMCPConfig()
+}
+
+private func printMCPConfig() {
+    print("""
+    [mcp_servers.axon]
+    command = "axon"
+    args = ["mcp"]
+    """)
+}
+
+private func launchAxonApp() throws {
+    if isAxonAppRunning() {
+        return
+    }
+    guard let appURL = axonAppURL() else {
+        throw CLIError.missingArguments("Could not find Axon.app. Install with Homebrew cask or run scripts/package-app first.")
+    }
+
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: "/usr/bin/open")
+    process.arguments = [appURL.path]
+    try process.run()
+    process.waitUntilExit()
+    guard process.terminationStatus == 0 else {
+        throw CLIError.missingArguments("Could not open Axon.app at \(appURL.path)")
+    }
+}
+
+private func quitAxonApp() {
+    for app in runningAxonApps() {
+        app.terminate()
+    }
+}
+
+private func isAxonAppRunning() -> Bool {
+    !runningAxonApps().isEmpty
+}
+
+private func runningAxonApps() -> [NSRunningApplication] {
+    NSRunningApplication.runningApplications(withBundleIdentifier: axonAppBundleIdentifier)
+}
+
+private func axonAppURL() -> URL? {
+    if let bundled = bundledAxonAppURL() {
+        return bundled
+    }
+    return NSWorkspace.shared.urlForApplication(withBundleIdentifier: axonAppBundleIdentifier)
+}
+
+private func bundledAxonAppURL() -> URL? {
+    guard let executable = try? resolvedExecutablePath() else {
+        return nil
+    }
+    var url = URL(fileURLWithPath: executable).deletingLastPathComponent()
+    while url.path != "/" {
+        if url.pathExtension == "app" {
+            return url
+        }
+        url.deleteLastPathComponent()
+    }
+    return nil
 }
 
 private func runPlanParams(arguments: [String]) throws -> [String: JSONValue] {
@@ -389,8 +514,8 @@ private func executablePathFromPATH(_ executableName: String) -> String? {
     return nil
 }
 
-private func waitForDaemonHealth(socketPath: String) throws -> JSONRPCResponse {
-    let deadline = Date().addingTimeInterval(3)
+private func waitForDaemonHealth(socketPath: String, timeoutSeconds: TimeInterval = 3) throws -> JSONRPCResponse {
+    let deadline = Date().addingTimeInterval(timeoutSeconds)
     var lastError: Error?
 
     while Date() < deadline {

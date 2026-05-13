@@ -1,0 +1,107 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+SWIFT="${SWIFT:-$HOME/.swiftly/bin/swift}"
+APP_NAME="${AXON_APP_NAME:-Axon}"
+BUNDLE_ID="${AXON_BUNDLE_ID:-com.bleugreen.axon}"
+VERSION="${AXON_VERSION:-0.1.0}"
+DIST_DIR="$ROOT/dist"
+APP_DIR="$DIST_DIR/$APP_NAME.app"
+CONTENTS_DIR="$APP_DIR/Contents"
+MACOS_DIR="$CONTENTS_DIR/MacOS"
+RESOURCES_DIR="$CONTENTS_DIR/Resources"
+CLI_DIR="$RESOURCES_DIR/bin"
+
+cd "$ROOT"
+
+"$SWIFT" build -c release --product axon
+"$SWIFT" build -c release --product AxonApp
+
+rm -rf "$APP_DIR"
+mkdir -p "$MACOS_DIR" "$CLI_DIR"
+
+cp "$ROOT/.build/release/AxonApp" "$MACOS_DIR/$APP_NAME"
+cp "$ROOT/.build/release/axon" "$CLI_DIR/axon"
+chmod 755 "$MACOS_DIR/$APP_NAME" "$CLI_DIR/axon"
+
+cat > "$CONTENTS_DIR/Info.plist" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleDevelopmentRegion</key>
+  <string>en</string>
+  <key>CFBundleExecutable</key>
+  <string>$APP_NAME</string>
+  <key>CFBundleIdentifier</key>
+  <string>$BUNDLE_ID</string>
+  <key>CFBundleInfoDictionaryVersion</key>
+  <string>6.0</string>
+  <key>CFBundleName</key>
+  <string>$APP_NAME</string>
+  <key>CFBundlePackageType</key>
+  <string>APPL</string>
+  <key>CFBundleShortVersionString</key>
+  <string>$VERSION</string>
+  <key>CFBundleVersion</key>
+  <string>$VERSION</string>
+  <key>LSMinimumSystemVersion</key>
+  <string>14.0</string>
+  <key>LSUIElement</key>
+  <true/>
+</dict>
+</plist>
+PLIST
+
+SIGN_IDENTITY="${AXON_CODESIGN_IDENTITY:-}"
+if [[ -z "$SIGN_IDENTITY" ]]; then
+  SIGN_IDENTITY="$(/usr/bin/security find-identity -v -p codesigning 2>/dev/null \
+    | awk '/"Developer ID Application:|"Apple Development:|"Mac Developer:/ { print $2; exit }')"
+fi
+if [[ -z "$SIGN_IDENTITY" ]]; then
+  SIGN_IDENTITY="-"
+fi
+
+/usr/bin/codesign --force --deep --options runtime --sign "$SIGN_IDENTITY" "$APP_DIR"
+
+ZIP_PATH="$DIST_DIR/$APP_NAME-$VERSION.zip"
+rm -f "$ZIP_PATH"
+(cd "$DIST_DIR" && /usr/bin/ditto -c -k --norsrc --noextattr --keepParent "$APP_NAME.app" "$ZIP_PATH")
+
+if [[ -n "${AXON_NOTARY_PROFILE:-}" ]]; then
+  /usr/bin/xcrun notarytool submit "$ZIP_PATH" --keychain-profile "$AXON_NOTARY_PROFILE" --wait
+  /usr/bin/xcrun stapler staple "$APP_DIR"
+  rm -f "$ZIP_PATH"
+  (cd "$DIST_DIR" && /usr/bin/ditto -c -k --norsrc --noextattr --keepParent "$APP_NAME.app" "$ZIP_PATH")
+fi
+
+SHA256="$(/usr/bin/shasum -a 256 "$ZIP_PATH" | awk '{ print $1 }')"
+
+printf 'app: %s\n' "$APP_DIR"
+printf 'zip: %s\n' "$ZIP_PATH"
+printf 'sha256: %s\n' "$SHA256"
+cat <<CASK
+
+Homebrew cask:
+
+cask "axon" do
+  version "$VERSION"
+  sha256 "$SHA256"
+
+  url "https://github.com/bleugreen/axon/releases/download/v#{version}/Axon-#{version}.zip"
+  name "Axon"
+  desc "Local macOS accessibility service for agents"
+  homepage "https://github.com/bleugreen/axon"
+
+  depends_on macos: ">= :sonoma"
+
+  app "Axon.app"
+  binary "#{appdir}/Axon.app/Contents/Resources/bin/axon"
+
+  zap trash: [
+    "~/Library/Application Support/Axon",
+    "~/Library/Logs/Axon",
+  ]
+end
+CASK

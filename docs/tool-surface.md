@@ -179,3 +179,20 @@ Point targets are screen coordinates and should be treated as an escape hatch. T
 `changed_since(snapshotId)` asks whether the app/window surface changed since a retained snapshot. It uses observer events when available and always compares a fresh coarse app/window signature.
 
 Focus-only interaction should not count as a meaningful layout change unless the app/window signature changes.
+
+## Visual Target Badges
+
+`Axon.app` displays target badges for actions so a user can see what the agent is operating on.
+
+Defaults:
+
+- planned target flash: 250 ms
+- result linger: 1100 ms
+
+Environment overrides are read by the service process:
+
+```sh
+AXON_VISUAL_OVERLAY=0
+AXON_VISUAL_OVERLAY_PLANNED_MS=400
+AXON_VISUAL_OVERLAY_RESULT_MS=1500
+```
