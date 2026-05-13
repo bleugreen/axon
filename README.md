@@ -13,7 +13,7 @@ It runs as a menu bar service app, exposes a small JSON-RPC command surface over
 
 ```sh
 brew install --cask bleugreen/tap/axon
-axon setup
+axon
 ```
 
 For source checkout development:

@@ -10,10 +10,10 @@ The target user install is:
 
 ```sh
 brew install --cask bleugreen/tap/axon
-axon setup
+axon
 ```
 
-`axon setup` launches `Axon.app`, checks the local socket, requests Accessibility permission, and prints Codex MCP config:
+With no arguments, `axon` launches `Axon.app`, checks the local socket, requests Accessibility permission, and prints Codex MCP config:
 
 ```toml
 [mcp_servers.axon]
@@ -114,13 +114,15 @@ end
 ## Runtime Commands
 
 ```sh
+axon
 axon start
 axon status
-axon setup
 axon mcp-config
 axon restart
 axon quit
 ```
+
+`axon setup` remains an explicit alias for no-arg `axon` for scripts that prefer named commands.
 
 Agent clients should use:
 
@@ -143,7 +145,7 @@ macOS Accessibility approval cannot be automated. The app can only request the p
 Normal first run:
 
 ```sh
-axon setup
+axon
 ```
 
 If Accessibility is denied, approve `Axon.app` in System Settings > Privacy & Security > Accessibility, then run:

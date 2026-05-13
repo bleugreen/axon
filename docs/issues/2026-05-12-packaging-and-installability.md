@@ -6,7 +6,7 @@ Axon is usable from source, but the product path should be a real Mac install, n
 
 ```sh
 brew install --cask bleugreen/tap/axon
-axon setup
+axon
 ```
 
 `Axon.app` should own the running socket service and macOS trust identity. The bundled `axon` CLI should be the control plane and MCP entrypoint.
@@ -18,7 +18,7 @@ The LaunchAgent installer remains useful for daemon experiments, but it is no lo
 - Build `Axon.app` as a signed, notarizable menu bar service.
 - Bundle `axon` inside the app and let the Homebrew cask link it onto `PATH`.
 - Use `com.bleugreen.axon` as the stable Accessibility trust identity.
-- Make `axon setup` launch the app, check socket health, request Accessibility, and print MCP config.
+- Make no-arg `axon` launch the app, check socket health, request Accessibility, and print MCP config.
 - Publish a release zip that the cask can install directly.
 - Add a smoke command that verifies app health, Accessibility trust, MCP facade startup, and screenshot capture separately.
 

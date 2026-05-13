@@ -3,7 +3,7 @@ import Foundation
 import AxonCore
 
 let arguments = Array(CommandLine.arguments.dropFirst())
-let command = arguments.first ?? "help"
+let command = arguments.first ?? "bootstrap"
 let socketPath = AxonEnvironment.socketPath()
 let jsonEncoder = JSONEncoder()
 let jsonDecoder = JSONDecoder()
@@ -32,12 +32,8 @@ do {
     case "status":
         try printHumanStatus()
 
-    case "setup":
-        try launchAxonApp()
-        _ = try? waitForDaemonHealth(socketPath: socketPath, timeoutSeconds: 5)
-        let response = try SocketClient(path: socketPath)
-            .send(JSONRPCRequest(id: .string("request_accessibility"), method: "request_accessibility"))
-        try printSetupStatus(accessibilityResponse: response)
+    case "bootstrap", "setup":
+        try runSetup()
 
     case "quit":
         quitAxonApp()
@@ -174,11 +170,12 @@ do {
             "key": .string(arguments[2])
         ])
 
-    default:
+    case "help", "--help", "-h":
         print("""
-        usage: axon <command>
+        usage: axon [command]
 
         commands:
+          axon     launch Axon.app, request permissions, and print MCP config
           doctor   check local permissions
           serve    run the local daemon socket server
           mcp      run an MCP stdio facade backed by the daemon socket
@@ -206,6 +203,9 @@ do {
           type-text <app> <text>
           press-key <app> <key>
         """)
+
+    default:
+        throw CLIError.missingArguments("unknown command: \(command)")
     }
 } catch {
     fputs("axon: \(error)\n", stderr)
@@ -303,6 +303,14 @@ private func decodeJSONValue(_ rawValue: String) throws -> JSONValue {
 private func printResponse(_ response: JSONRPCResponse) throws {
     let data = try jsonEncoder.encode(response)
     print(String(decoding: data, as: UTF8.self))
+}
+
+private func runSetup() throws {
+    try launchAxonApp()
+    _ = try? waitForDaemonHealth(socketPath: socketPath, timeoutSeconds: 5)
+    let response = try SocketClient(path: socketPath)
+        .send(JSONRPCRequest(id: .string("request_accessibility"), method: "request_accessibility"))
+    try printSetupStatus(accessibilityResponse: response)
 }
 
 private func printHumanStatus() throws {
