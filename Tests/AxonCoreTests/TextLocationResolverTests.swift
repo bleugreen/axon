@@ -43,6 +43,53 @@ import Testing
     #expect(resolution.candidates.isEmpty)
 }
 
+@Test func textLocationResolverReturnsCenterPointForScreenshotText() {
+    let snapshot = textLocationFixtureSnapshot(
+        [],
+        screenshot: EncodedScreenshot(mediaType: "image/png", base64Data: "fake", width: 800, height: 600)
+    )
+    let target = TextLocationTarget(app: "cairn", text: .exact("Backlog"), source: .screenshot)
+    let resolver = TextLocationResolver(recognizeText: { _ in
+        [
+            RecognizedTextObservation(
+                text: "Backlog",
+                boundingBox: NormalizedTextBoundingBox(x: 0.25, y: 0.60, width: 0.20, height: 0.10),
+                confidence: 0.95
+            )
+        ]
+    })
+
+    let resolution = resolver.resolve(target, in: snapshot)
+
+    #expect(resolution.status == .unique)
+    #expect(resolution.point == ActionPoint(x: 225, y: 200))
+    #expect(resolution.best?.source == .screenshot)
+    #expect(resolution.best?.matchedText == "Backlog")
+    #expect(resolution.best?.frame == AXFrame(x: 175, y: 180, width: 100, height: 40))
+}
+
+@Test func textLocationResolverAutoFallsBackToScreenshotTextWhenAXTextIsMissing() {
+    let snapshot = textLocationFixtureSnapshot(
+        [AXNode(role: "AXStaticText", title: "Inbox", frame: AXFrame(x: 20, y: 20, width: 60, height: 20))],
+        screenshot: EncodedScreenshot(mediaType: "image/png", base64Data: "fake", width: 800, height: 600)
+    )
+    let target = TextLocationTarget(app: "cairn", text: .exact("Backlog"), source: .auto)
+    let resolver = TextLocationResolver(recognizeText: { _ in
+        [
+            RecognizedTextObservation(
+                text: "Backlog",
+                boundingBox: NormalizedTextBoundingBox(x: 0.25, y: 0.60, width: 0.20, height: 0.10),
+                confidence: 0.95
+            )
+        ]
+    })
+
+    let resolution = resolver.resolve(target, in: snapshot)
+
+    #expect(resolution.status == .unique)
+    #expect(resolution.best?.source == .screenshot)
+}
+
 @Test func textLocationJSONParsesLocationTarget() throws {
     let target = try TextLocationTarget(jsonValue: .object([
         "app": .string("cairn"),
@@ -55,7 +102,10 @@ import Testing
     #expect(target.source == .auto)
 }
 
-private func textLocationFixtureSnapshot(_ children: [AXNode]) -> AppSnapshot {
+private func textLocationFixtureSnapshot(
+    _ children: [AXNode],
+    screenshot: EncodedScreenshot? = nil
+) -> AppSnapshot {
     AppSnapshot(
         id: SnapshotID("text-location-fixture"),
         app: AppIdentity(bundleIdentifier: "com.example.App", name: "Example", processIdentifier: 42),
@@ -63,10 +113,10 @@ private func textLocationFixtureSnapshot(_ children: [AXNode]) -> AppSnapshot {
             AXNode(
                 role: "AXWindow",
                 title: "Main",
-                frame: AXFrame(x: 0, y: 0, width: 500, height: 300),
+                frame: AXFrame(x: 50, y: 60, width: 500, height: 400),
                 children: children
             )
         ],
-        screenshot: nil
+        screenshot: screenshot
     )
 }

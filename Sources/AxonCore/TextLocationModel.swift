@@ -1,4 +1,7 @@
+import CoreGraphics
 import Foundation
+import ImageIO
+@preconcurrency import Vision
 
 public enum TextLocationSource: String, Codable, Equatable, Sendable {
     case auto
@@ -15,6 +18,32 @@ public struct TextLocationTarget: Codable, Equatable, Sendable {
         self.app = app
         self.text = text
         self.source = source
+    }
+}
+
+public struct NormalizedTextBoundingBox: Codable, Equatable, Sendable {
+    public let x: Double
+    public let y: Double
+    public let width: Double
+    public let height: Double
+
+    public init(x: Double, y: Double, width: Double, height: Double) {
+        self.x = x
+        self.y = y
+        self.width = width
+        self.height = height
+    }
+}
+
+public struct RecognizedTextObservation: Codable, Equatable, Sendable {
+    public let text: String
+    public let boundingBox: NormalizedTextBoundingBox
+    public let confidence: Double?
+
+    public init(text: String, boundingBox: NormalizedTextBoundingBox, confidence: Double? = nil) {
+        self.text = text
+        self.boundingBox = boundingBox
+        self.confidence = confidence
     }
 }
 
@@ -72,16 +101,25 @@ public struct TextLocationResolution: Codable, Equatable, Sendable {
     }
 }
 
+public typealias TextRecognitionHandler = @Sendable (EncodedScreenshot) -> [RecognizedTextObservation]
+
 public struct TextLocationResolver: Sendable {
-    public init() {}
+    private let recognizeText: TextRecognitionHandler
+
+    public init(recognizeText: @escaping TextRecognitionHandler = VisionTextRecognizer.recognizeText(in:)) {
+        self.recognizeText = recognizeText
+    }
 
     public func resolve(_ target: TextLocationTarget, in snapshot: AppSnapshot) -> TextLocationResolution {
         let candidates: [TextLocationCandidate]
         switch target.source {
-        case .auto, .ax:
+        case .ax:
             candidates = axCandidates(matching: target.text, in: snapshot)
+        case .auto:
+            let axCandidates = axCandidates(matching: target.text, in: snapshot)
+            candidates = axCandidates.isEmpty ? screenshotCandidates(matching: target.text, in: snapshot) : axCandidates
         case .screenshot:
-            candidates = []
+            candidates = screenshotCandidates(matching: target.text, in: snapshot)
         }
 
         let status: LocatorResolutionStatus
@@ -139,6 +177,69 @@ public struct TextLocationResolver: Sendable {
             }
         }
         return nil
+    }
+
+    private func screenshotCandidates(matching text: TextMatch, in snapshot: AppSnapshot) -> [TextLocationCandidate] {
+        ScreenTextExtractor(recognizeText: recognizeText).extract(in: snapshot).enumerated().compactMap { index, item in
+            guard text.matches(item.text) else {
+                return nil
+            }
+
+            let frame = item.frame
+            let point = ActionPoint(x: frame.x + frame.width / 2, y: frame.y + frame.height / 2)
+            var reasons = ["ocr \(text.reasonFragment)"]
+            if let confidence = item.confidence {
+                reasons.append("confidence \(confidence)")
+            }
+            return TextLocationCandidate(
+                index: index,
+                handle: nil,
+                role: "OCRText",
+                matchedText: item.text,
+                source: .screenshot,
+                frame: frame,
+                point: point,
+                reasons: reasons
+            )
+        }
+    }
+}
+
+public enum VisionTextRecognizer {
+    public static func recognizeText(in screenshot: EncodedScreenshot) -> [RecognizedTextObservation] {
+        guard let data = Data(base64Encoded: screenshot.base64Data),
+              let source = CGImageSourceCreateWithData(data as CFData, nil),
+              let image = CGImageSourceCreateImageAtIndex(source, 0, nil)
+        else {
+            return []
+        }
+
+        let request = VNRecognizeTextRequest()
+        request.recognitionLevel = .accurate
+        request.usesLanguageCorrection = true
+
+        let handler = VNImageRequestHandler(cgImage: image, options: [:])
+        do {
+            try handler.perform([request])
+        } catch {
+            return []
+        }
+
+        return (request.results ?? []).compactMap { observation in
+            guard let candidate = observation.topCandidates(1).first else {
+                return nil
+            }
+            return RecognizedTextObservation(
+                text: candidate.string,
+                boundingBox: NormalizedTextBoundingBox(
+                    x: observation.boundingBox.origin.x,
+                    y: observation.boundingBox.origin.y,
+                    width: observation.boundingBox.width,
+                    height: observation.boundingBox.height
+                ),
+                confidence: Double(candidate.confidence)
+            )
+        }
     }
 }
 

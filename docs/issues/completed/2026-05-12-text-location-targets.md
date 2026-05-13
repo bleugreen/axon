@@ -1,7 +1,7 @@
 # Text Location Targets
 
-Status: AX-backed location targets implemented for primitive actions. OCR-backed
-`source: screenshot` remains future work.
+Status: Complete. AX-backed and OCR-backed location targets are implemented for
+primitive pointer actions.
 
 ## Context
 
@@ -43,5 +43,5 @@ Missing or ambiguous text should be reported honestly. The tool should not click
 ## Next Steps
 
 - Implemented: AX-backed text location first because frames are already available in snapshots.
-- Add OCR-backed screenshot text once image recognition infrastructure exists.
+- Implemented: OCR-backed screenshot text using captured app-window images.
 - Implemented: Allow `click`, `scroll`, `drag`, and plans to accept text-location targets anywhere they accept point targets.

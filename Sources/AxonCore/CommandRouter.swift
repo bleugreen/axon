@@ -7,6 +7,7 @@ public struct CommandRouter {
     private let elementStore: AXElementStore
     private let changeObserver: AppChangeObserving
     private let history: ActionHistoryStore
+    private let recognizeText: TextRecognitionHandler
 
     public init(
         listApps: @escaping () -> [AppIdentity] = { AppResolver().runningApps() },
@@ -16,11 +17,13 @@ public struct CommandRouter {
         actions: PrimitiveActionHandlers? = nil,
         elementStore: AXElementStore = AXElementStore(),
         changeObserver: AppChangeObserving = AXAppChangeObserverRegistry(),
-        history: ActionHistoryStore = .shared
+        history: ActionHistoryStore = .shared,
+        recognizeText: @escaping TextRecognitionHandler = VisionTextRecognizer.recognizeText(in:)
     ) {
         self.elementStore = elementStore
         self.changeObserver = changeObserver
         self.history = history
+        self.recognizeText = recognizeText
         self.listApps = listApps
         self.captureSnapshot = captureSnapshot ?? { app, screenshot in
             try AXSnapshotCapturer(elementStore: elementStore).capture(app: app, screenshot: screenshot)
@@ -72,17 +75,28 @@ public struct CommandRouter {
             do {
                 let app = try requiredStringParam("app", in: request)
                 let screenshot = boolParam("screenshot", in: request) ?? false
+                let screenText = boolParam("screenText", in: request) ?? false
                 let includeTree = boolParam("includeTree", in: request) ?? true
                 let sensitive = boolParam("sensitive", in: request) ?? false
                 if sensitive && screenshot {
                     throw JSONRPCError.invalidParams("sensitive snapshots cannot include screenshots")
                 }
-                let snapshot = try captureSnapshot(app, screenshot)
+                if sensitive && screenText {
+                    throw JSONRPCError.invalidParams("sensitive snapshots cannot include screenText")
+                }
+                let snapshot = try captureSnapshot(app, screenshot || screenText)
                 elementStore.store(summary: observedSummary(for: snapshot))
+                var snapshotJSON = snapshot.jsonValue(includeTree: includeTree, sensitive: sensitive)
+                if screenText {
+                    snapshotJSON = snapshotJSON.addingScreenText(
+                        ScreenTextExtractor(recognizeText: recognizeText).extract(in: snapshot),
+                        includeScreenshot: screenshot
+                    )
+                }
                 return JSONRPCResponse(
                     id: request.id,
                     result: [
-                        "snapshot": snapshot.jsonValue(includeTree: includeTree, sensitive: sensitive)
+                        "snapshot": snapshotJSON
                     ]
                 )
             } catch let error as JSONRPCError {
@@ -408,11 +422,21 @@ public struct CommandRouter {
     }
 
     private func resolveTextLocationTarget(_ target: TextLocationTarget) throws -> TextLocationResolvedPoint {
-        guard target.source != .screenshot else {
-            throw JSONRPCError.invalidParams("Text location source is not supported yet: screenshot")
+        let resolution: TextLocationResolution
+        switch target.source {
+        case .ax, .screenshot:
+            let snapshot = try captureSnapshot(target.app, target.source == .screenshot)
+            resolution = TextLocationResolver(recognizeText: recognizeText).resolve(target, in: snapshot)
+        case .auto:
+            let axSnapshot = try captureSnapshot(target.app, false)
+            let axResolution = TextLocationResolver(recognizeText: recognizeText).resolve(target, in: axSnapshot)
+            if axResolution.status != .missing {
+                resolution = axResolution
+            } else {
+                let screenshotSnapshot = try captureSnapshot(target.app, true)
+                resolution = TextLocationResolver(recognizeText: recognizeText).resolve(target, in: screenshotSnapshot)
+            }
         }
-        let snapshot = try captureSnapshot(target.app, false)
-        let resolution = TextLocationResolver().resolve(target, in: snapshot)
         guard resolution.status == .unique, let point = resolution.point else {
             throw JSONRPCError.invalidParams(textLocationFailureMessage(resolution))
         }
@@ -556,4 +580,17 @@ private struct ResolvedPointerTarget {
 private struct TextLocationResolvedPoint {
     let point: ActionPoint
     let resolution: TextLocationResolution
+}
+
+private extension JSONValue {
+    func addingScreenText(_ items: [ScreenTextItem], includeScreenshot: Bool) -> JSONValue {
+        guard case var .object(object) = self else {
+            return self
+        }
+        object["screenText"] = .array(items.map(\.jsonValue))
+        if !includeScreenshot {
+            object["screenshot"] = .null
+        }
+        return .object(object)
+    }
 }
