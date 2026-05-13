@@ -1,6 +1,55 @@
 import Foundation
+import Darwin
 import Testing
 @testable import AxonCore
+
+@Test func socketLineReadTimesOutWhenPeerStalls() throws {
+    let descriptors = try socketPair()
+    defer {
+        close(descriptors.reader)
+        close(descriptors.writer)
+    }
+
+    do {
+        _ = try readLineData(from: descriptors.reader, timeoutSeconds: 0.01, maxBytes: 1024)
+        Issue.record("read should time out without a newline")
+    } catch SocketError.readTimedOut {
+        // Expected.
+    } catch {
+        Issue.record("unexpected error: \(error)")
+    }
+}
+
+@Test func socketLineReadRejectsOversizedMessages() throws {
+    let descriptors = try socketPair()
+    defer {
+        close(descriptors.reader)
+        close(descriptors.writer)
+    }
+    try writeAll(Data("abcdef\n".utf8), to: descriptors.writer)
+
+    do {
+        _ = try readLineData(from: descriptors.reader, timeoutSeconds: 1.0, maxBytes: 3)
+        Issue.record("read should reject oversized messages")
+    } catch SocketError.messageTooLarge {
+        // Expected.
+    } catch {
+        Issue.record("unexpected error: \(error)")
+    }
+}
+
+@Test func socketLineReadReturnsDataBeforeNewline() throws {
+    let descriptors = try socketPair()
+    defer {
+        close(descriptors.reader)
+        close(descriptors.writer)
+    }
+    try writeAll(Data("hello\nignored".utf8), to: descriptors.writer)
+
+    let data = try readLineData(from: descriptors.reader, timeoutSeconds: 1.0, maxBytes: 1024)
+
+    #expect(String(decoding: data, as: UTF8.self) == "hello")
+}
 
 @Test func socketCommandRouterForwardsRequestsToSocketClient() throws {
     let request = JSONRPCRequest(id: .string("health"), method: "health")
@@ -234,4 +283,12 @@ private final class RecordingCommandHandler: JSONRPCCommandHandling {
         requests.append(request)
         return response
     }
+}
+
+private func socketPair() throws -> (reader: Int32, writer: Int32) {
+    var descriptors = [Int32](repeating: 0, count: 2)
+    guard socketpair(AF_UNIX, SOCK_STREAM, 0, &descriptors) == 0 else {
+        throw SocketError.operationFailed("socketpair")
+    }
+    return (descriptors[0], descriptors[1])
 }

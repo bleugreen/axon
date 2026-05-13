@@ -22,20 +22,9 @@ public struct SocketClient {
         }
 
         let payload = try JSONEncoder().encode(request) + Data([0x0A])
-        try payload.withUnsafeBytes { bytes in
-            guard let base = bytes.baseAddress else { return }
-            var sent = 0
-            while sent < payload.count {
-                let count = Darwin.write(descriptor, base.advanced(by: sent), payload.count - sent)
-                guard count > 0 else {
-                    throw SocketError.operationFailed("write")
-                }
-                sent += count
-            }
-        }
+        try writeAll(payload, to: descriptor)
 
         let responseData = try readLineData(from: descriptor)
         return try JSONDecoder().decode(JSONRPCResponse.self, from: responseData)
     }
 }
-

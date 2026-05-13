@@ -5,6 +5,8 @@ public enum SocketError: Error, CustomStringConvertible {
     case pathTooLong(String)
     case operationFailed(String)
     case connectionClosed
+    case readTimedOut
+    case messageTooLarge(Int)
 
     public var description: String {
         switch self {
@@ -14,6 +16,10 @@ public enum SocketError: Error, CustomStringConvertible {
             return "\(operation) failed: \(String(cString: strerror(errno)))"
         case .connectionClosed:
             return "Connection closed before a full response was received"
+        case .readTimedOut:
+            return "Timed out waiting for a newline-delimited socket message"
+        case let .messageTooLarge(maxBytes):
+            return "Socket message exceeded \(maxBytes) bytes"
         }
     }
 }
@@ -45,22 +51,70 @@ func withSocketAddress<T>(
     }
 }
 
-func readLineData(from descriptor: Int32) throws -> Data {
+func readLineData(
+    from descriptor: Int32,
+    timeoutSeconds: TimeInterval = 5.0,
+    maxBytes: Int = 1_048_576
+) throws -> Data {
     var data = Data()
     var byte = UInt8(0)
 
     while true {
+        try waitUntilReadable(descriptor, timeoutSeconds: timeoutSeconds)
         let count = Darwin.read(descriptor, &byte, 1)
         if count == 0 {
             throw SocketError.connectionClosed
         }
         guard count > 0 else {
+            if errno == EINTR {
+                continue
+            }
             throw SocketError.operationFailed("read")
         }
         if byte == 0x0A {
             return data
         }
+        guard data.count < maxBytes else {
+            throw SocketError.messageTooLarge(maxBytes)
+        }
         data.append(byte)
     }
 }
 
+func writeAll(_ data: Data, to descriptor: Int32) throws {
+    try data.withUnsafeBytes { bytes in
+        guard let base = bytes.baseAddress else {
+            return
+        }
+        var sent = 0
+        while sent < data.count {
+            let count = Darwin.write(descriptor, base.advanced(by: sent), data.count - sent)
+            if count < 0, errno == EINTR {
+                continue
+            }
+            guard count > 0 else {
+                throw SocketError.operationFailed("write")
+            }
+            sent += count
+        }
+    }
+}
+
+private func waitUntilReadable(_ descriptor: Int32, timeoutSeconds: TimeInterval) throws {
+    var pollDescriptor = pollfd(fd: descriptor, events: Int16(POLLIN), revents: 0)
+    let timeoutMilliseconds = Int32(max(0, timeoutSeconds * 1000))
+
+    while true {
+        let result = poll(&pollDescriptor, 1, timeoutMilliseconds)
+        if result > 0 {
+            return
+        }
+        if result == 0 {
+            throw SocketError.readTimedOut
+        }
+        if errno == EINTR {
+            continue
+        }
+        throw SocketError.operationFailed("poll")
+    }
+}

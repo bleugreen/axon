@@ -1,13 +1,26 @@
 import Darwin
 import Foundation
 
-public struct SocketServer {
+public struct SocketServer: @unchecked Sendable {
+    public static let defaultClientReadTimeoutSeconds: TimeInterval = 5.0
+    public static let defaultMaxRequestBytes = 1_048_576
+
     private let path: String
     private let router: CommandRouter
+    private let clientReadTimeoutSeconds: TimeInterval
+    private let maxRequestBytes: Int
+    private let clientQueue = DispatchQueue(label: "dev.axon.socket-clients", attributes: .concurrent)
 
-    public init(path: String, router: CommandRouter = CommandRouter()) {
+    public init(
+        path: String,
+        router: CommandRouter = CommandRouter(),
+        clientReadTimeoutSeconds: TimeInterval = Self.defaultClientReadTimeoutSeconds,
+        maxRequestBytes: Int = Self.defaultMaxRequestBytes
+    ) {
         self.path = path
         self.router = router
+        self.clientReadTimeoutSeconds = clientReadTimeoutSeconds
+        self.maxRequestBytes = maxRequestBytes
     }
 
     public func runOnce() throws {
@@ -28,18 +41,33 @@ public struct SocketServer {
         }
 
         while true {
-            try acceptOneClient(on: descriptor)
+            let client = try acceptClient(on: descriptor)
+            clientQueue.async {
+                try? handleClient(client)
+            }
         }
     }
 
     private func acceptOneClient(on descriptor: Int32) throws {
+        try handleClient(try acceptClient(on: descriptor))
+    }
+
+    private func acceptClient(on descriptor: Int32) throws -> Int32 {
         let client = accept(descriptor, nil, nil)
         guard client >= 0 else {
             throw SocketError.operationFailed("accept")
         }
+        return client
+    }
+
+    private func handleClient(_ client: Int32) throws {
         defer { close(client) }
 
-        let requestData = try readLineData(from: client)
+        let requestData = try readLineData(
+            from: client,
+            timeoutSeconds: clientReadTimeoutSeconds,
+            maxBytes: maxRequestBytes
+        )
         let response: JSONRPCResponse
         do {
             let request = try JSONDecoder().decode(JSONRPCRequest.self, from: requestData)
@@ -49,10 +77,7 @@ public struct SocketServer {
         }
 
         let responseData = try JSONEncoder().encode(response) + Data([0x0A])
-        responseData.withUnsafeBytes { bytes in
-            guard let base = bytes.baseAddress else { return }
-            _ = Darwin.write(client, base, responseData.count)
-        }
+        try writeAll(responseData, to: client)
     }
 
     private func makeListeningSocket() throws -> Int32 {
