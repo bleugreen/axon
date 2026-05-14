@@ -1,6 +1,7 @@
 import AppKit
 import AxonCore
 import Foundation
+import SwiftUI
 import UniformTypeIdentifiers
 
 @MainActor
@@ -18,7 +19,7 @@ final class AxonAppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendabl
     nonisolated private static let homebrewCaskName = "axon"
 
     private let socketPath = AxonEnvironment.socketPath()
-    private let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+    private lazy var statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
     private let serverQueue = DispatchQueue(label: "com.bleugreen.axon.socket-server", qos: .userInitiated)
     private let updateChecker = ReleaseUpdateChecker()
     private let homebrewInstaller: HomebrewInstaller? = HomebrewInstaller.locate().map { HomebrewInstaller(brewURL: $0) }
@@ -28,11 +29,17 @@ final class AxonAppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendabl
     private var updateMenuState: UpdateMenuState = .idle
     private var recorder: UserActionRecorder?
     private var recordingScope: UserRecordingScope?
-    private var openFileRuns: [Process] = []
     private let appRecency = RecordingAppRecencyStore()
 
+    func applicationWillFinishLaunching(_ notification: Notification) {
+        NSApp.setActivationPolicy(.regular)
+    }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
-        NSApp.setActivationPolicy(.accessory)
+        NSApp.setActivationPolicy(.regular)
+        DispatchQueue.main.async {
+            NSApp.setActivationPolicy(.regular)
+        }
         appRecency.start()
         configureStatusItem()
         ScreenCaptureRuntime.bootstrapSynchronously()
@@ -48,17 +55,6 @@ final class AxonAppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendabl
     func applicationWillTerminate(_ notification: Notification) {
         refreshTimer?.invalidate()
         appRecency.stop()
-    }
-
-    func application(_ sender: NSApplication, openFile filename: String) -> Bool {
-        runAxnFile(URL(fileURLWithPath: filename))
-        return true
-    }
-
-    func application(_ application: NSApplication, open urls: [URL]) {
-        for url in urls where url.pathExtension.localizedCaseInsensitiveCompare("axn") == .orderedSame {
-            runAxnFile(url)
-        }
     }
 
     private func configureStatusItem() {
@@ -333,50 +329,6 @@ final class AxonAppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendabl
         try source.write(to: url, atomically: true, encoding: .utf8)
     }
 
-    private func runAxnFile(_ url: URL) {
-        guard let cliURL = bundledCLIURL() else {
-            showAlert(title: "Unable to Run Recording", message: "The bundled axon CLI could not be found.")
-            return
-        }
-        let process = Process()
-        process.executableURL = cliURL
-        process.arguments = ["run", url.path]
-        let stdout = Pipe()
-        let stderr = Pipe()
-        process.standardOutput = stdout
-        process.standardError = stderr
-        process.terminationHandler = { [weak self] process in
-            let output = String(data: stdout.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
-            let errorOutput = String(data: stderr.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
-            let message = AxnRunSummary.failureMessage(
-                fileName: url.lastPathComponent,
-                terminationStatus: process.terminationStatus,
-                stdout: output,
-                stderr: errorOutput
-            )
-            Task { @MainActor in
-                guard let self else {
-                    return
-                }
-                self.openFileRuns.removeAll { $0 === process }
-                guard let message else {
-                    return
-                }
-                self.showAlert(title: "Recording Failed", message: message)
-            }
-        }
-        do {
-            try process.run()
-            openFileRuns.append(process)
-        } catch {
-            showAlert(title: "Unable to Run Recording", message: String(describing: error))
-        }
-    }
-
-    private func bundledCLIURL() -> URL? {
-        Bundle.main.url(forResource: "axon", withExtension: nil, subdirectory: "bin")
-    }
-
     private func updateStatusItemAppearance() {
         guard let button = statusItem.button else {
             return
@@ -528,7 +480,17 @@ private final class RecordingAppRecencyStore {
     }
 }
 
-let app = NSApplication.shared
-let delegate = AxonAppDelegate()
-app.delegate = delegate
-app.run()
+@main
+struct AxonAppMain: App {
+    @NSApplicationDelegateAdaptor(AxonAppDelegate.self) private var appDelegate
+
+    var body: some Scene {
+        DocumentGroup(newDocument: AxonDocument()) { file in
+            DocumentView(document: file.$document)
+        }
+
+        Settings {
+            PreferencesView()
+        }
+    }
+}

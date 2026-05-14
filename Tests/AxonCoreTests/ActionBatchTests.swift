@@ -928,6 +928,35 @@ private func articleSnapshot(children: [AXNode]) -> AppSnapshot {
     #expect(batchSnapshotApps == ["Example"])
 }
 
+@Test func runSkipsFirstClassNoteBlocks() throws {
+    var requests: [JSONRPCRequest] = []
+    let executor = ActionBatchExecutor { request in
+        requests.append(request)
+        return JSONRPCResponse(id: request.id, result: ["action": .object(["success": .bool(true)])])
+    }
+
+    let source = """
+    version: 1
+    actions:
+      - id: n001
+        note: Prepare the app state
+      - id: a001
+        tool: type
+        target: s1:2
+        value: Hello
+    """
+    let path = try temporaryAxnFile(source)
+    defer { try? FileManager.default.removeItem(atPath: path) }
+
+    let batch = try executor.run(params: ["path": .string(path)])
+
+    #expect(batch["success"] == .bool(true))
+    #expect(batch["trace"]?.arrayValue?.count == 1)
+    #expect(batch["trace"]?[0]?["index"] == .int(1))
+    #expect(batch["trace"]?[0]?["actionId"] == .string("a001"))
+    #expect(requests.map(\.method) == ["type"])
+}
+
 @Test func documentationBatchExamplesParse() throws {
     let packageRoot = URL(fileURLWithPath: #filePath)
         .deletingLastPathComponent()

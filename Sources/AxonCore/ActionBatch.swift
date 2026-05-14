@@ -68,6 +68,9 @@ public struct ActionBatchExecutor {
         var success = true
 
         for (index, action) in actions.enumerated() {
+            if isNoteBlock(action) {
+                continue
+            }
             let record = runAction(
                 action,
                 index: index,
@@ -257,6 +260,11 @@ public struct ActionBatchExecutor {
                 continue
             }
 
+            if isNoteBlock(action) {
+                substitutedActions.append(action)
+                continue
+            }
+
             try rejectUnsupportedReferences(in: object, actionIndex: index)
 
             var secretTaintedFields: Set<String> = []
@@ -292,6 +300,13 @@ public struct ActionBatchExecutor {
                 throw ActionBatchError.invalidParams("parameter references are only supported in string value fields: actions[\(actionIndex)].\(key)")
             }
         }
+    }
+
+    private func isNoteBlock(_ value: JSONValue) -> Bool {
+        guard case let .object(object) = value, object["tool"] == nil else {
+            return false
+        }
+        return object["note"] != nil
     }
 
     private func containsReferenceSyntax(_ value: JSONValue) -> Bool {
