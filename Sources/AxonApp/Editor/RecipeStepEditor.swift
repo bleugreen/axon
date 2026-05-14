@@ -161,10 +161,8 @@ private struct LookActionEditor: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            RecipeTextField(label: "Target", value: field("target"))
             RecipeToggleField(label: "Screenshot", value: field("screenshot"))
             RecipeToggleField(label: "Screen text", value: field("screenText"))
-            RecipeToggleField(label: "Sensitive", value: field("sensitive"))
         }
     }
 
@@ -186,16 +184,9 @@ private struct UnsupportedActionEditor: View {
     let action: AxonRecipeAction
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            Text("This action has fields the editor does not understand yet.")
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            ForEach(action.fields.keys.filter { $0 != "id" && $0 != "tool" }.sorted(), id: \.self) { key in
-                Text("\(key): \(action.fields[key]?.compactDescription ?? "")")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .textSelection(.enabled)
-            }
-        }
+        Text("The editor doesn't render this action's fields yet. The recipe will still replay; open an issue at github.com/bleugreen/axon if you'd like editing support.")
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
     }
 }

@@ -80,6 +80,9 @@ struct RecipeIntent {
             let target = LocatorSummary(target: action.fields["target"]).intentName ?? "target"
             return "Run \(name) on \(target)"
         case "look":
+            if let target = LocatorSummary(target: action.fields["target"]).intentName {
+                return "Read \(target)"
+            }
             return "Read the current interface"
         case "find":
             let target = LocatorSummary(target: action.fields["locator"]).intentName ?? "element"
