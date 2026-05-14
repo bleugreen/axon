@@ -22,16 +22,16 @@ The recorder fuses both streams. Raw input events get translated to semantic act
 - Menubar `Record` opens a target picker (running apps), then begins capture scoped to that app's pid.
 - A loud recording indicator (menubar status item color/icon, optional window border overlay) makes capture state unmistakable.
 - `Stop` closes the file, prompts for a name, writes a `.axn` into a configurable directory.
-- Output is a normal `.axn` runnable by `axon run` or `run_batch` with no special treatment.
+- Output is a normal `.axn` runnable by CLI `axon run` or MCP `run` with no special treatment.
 
 Translation rules:
 
 - Mouse-down/up at point P → `click` against the AX element hit-tested at P with a locator emitted from the element's attributes.
 - Mouse-down + threshold-crossing motion + mouse-up → single `drag` from source element to destination element (or coordinates if either end lacks an AX target).
 - Wheel events scoped to a scroll surface → single `scroll` call against that surface.
-- Keystrokes into a focused text field → coalesced `set_value` when the resulting AXValue is observable, else `type_text`.
-- Keyboard shortcuts that trigger a menu item (observable via `AXMenuItemSelected`) → `perform_action: AXPress` on the menu item, not the keystroke.
-- Bare keystrokes with no AX-observable result → `press_key`.
+- Keystrokes into a focused text field → coalesced `type` when the resulting AXValue is observable, else `keyboard`.
+- Keyboard shortcuts that trigger a menu item (observable via `AXMenuItemSelected`) → `invoke(name: AXPress)` on the menu item, not the keystroke.
+- Bare keystrokes with no AX-observable result → `keyboard`.
 
 Embedded verification:
 
@@ -78,11 +78,11 @@ Non-negotiable:
 Initial support landed with verified `.axn` metadata on normal batch actions:
 
 - actions may carry mechanical `id`, `requires`, `expects`, `observed`, and `warnings`
-- `run_batch` verifies `requires` before dispatch and `expects` after dispatch, then strips metadata before calling the primitive tool
+- `run` verifies `requires` before dispatch and `expects` after dispatch, then strips metadata before calling the primitive tool
 - passed expectations enter the per-run fact table for later requirements
 - recorded evidence remains audit-only unless promoted to `expects`
 
-The menu bar app now exposes `Record...` / `Stop Recording...`, scopes capture to a selected running app, shows a red recording status item, and saves to `~/Documents/Axon Recordings/` by default. The recorder uses a passive `CGEventTap`, AX hit-testing, focused-value reads, and target-app `AXObserver` notifications. It currently emits locator-backed clicks, settable text as `set_value`, submit keys as `press_key`, scrolls, drags, and warning-marked point fallbacks.
+The menu bar app now exposes `Record...` / `Stop Recording...`, scopes capture to a selected running app, shows a red recording status item, and saves to `~/Documents/Axon Recordings/` by default. The recorder uses a passive `CGEventTap`, AX hit-testing, focused-value reads, and target-app `AXObserver` notifications. It currently emits locator-backed clicks, settable text as `type`, submit keys as `keyboard`, scrolls, drags, and warning-marked point fallbacks.
 
 Remaining hardening work:
 

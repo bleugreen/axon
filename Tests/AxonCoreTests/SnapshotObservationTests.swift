@@ -179,11 +179,11 @@ import Testing
     let thread = observation["tree"]?[0]?["children"]?[0]
     let text = SnapshotObservationFormatter().text(from: observation)
 
-    #expect(thread?["more"]?["tool"] == .string("get_children"))
+    #expect(thread?["more"]?["tool"] == .string("look"))
     #expect(thread?["more"]?["target"] == .string("obs:1"))
     #expect(thread?["more"]?["offset"] == .int(24))
     #expect(thread?["more"]?["total"] == .int(154))
-    #expect(text.contains("more: get_children target=obs:1 offset=24 limit=24 total=154"))
+    #expect(text.contains("more: look target=obs:1 offset=24 limit=24 total=154"))
     #expect(!text.contains("children limited to 24 of 154"))
 }
 

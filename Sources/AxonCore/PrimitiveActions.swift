@@ -86,29 +86,26 @@ public enum PointerTarget: Equatable, Sendable {
 public struct PrimitiveActionHandlers {
     public var click: (String) throws -> PrimitiveActionResult
     public var clickPoint: (ActionPoint) throws -> PrimitiveActionResult
-    public var performAction: (String, String) throws -> PrimitiveActionResult
-    public var setValue: (String, String) throws -> PrimitiveActionResult
-    public var typeText: (String, String) throws -> PrimitiveActionResult
-    public var pressKey: (String, String) throws -> PrimitiveActionResult
+    public var invoke: (String, String) throws -> PrimitiveActionResult
+    public var type: (String, String) throws -> PrimitiveActionResult
+    public var keyboard: (String?, String) throws -> PrimitiveActionResult
     public var scroll: (PointerTarget?, String?, Double, Double) throws -> PrimitiveActionResult
     public var drag: (PointerTarget, PointerTarget, String?, Int?) throws -> PrimitiveActionResult
 
     public init(
         click: @escaping (String) throws -> PrimitiveActionResult = { _ in throw JSONRPCError.methodNotFound("click") },
         clickPoint: @escaping (ActionPoint) throws -> PrimitiveActionResult = { _ in throw JSONRPCError.methodNotFound("click") },
-        performAction: @escaping (String, String) throws -> PrimitiveActionResult = { _, _ in throw JSONRPCError.methodNotFound("perform_action") },
-        setValue: @escaping (String, String) throws -> PrimitiveActionResult = { _, _ in throw JSONRPCError.methodNotFound("set_value") },
-        typeText: @escaping (String, String) throws -> PrimitiveActionResult = { _, _ in throw JSONRPCError.methodNotFound("type_text") },
-        pressKey: @escaping (String, String) throws -> PrimitiveActionResult = { _, _ in throw JSONRPCError.methodNotFound("press_key") },
+        invoke: @escaping (String, String) throws -> PrimitiveActionResult = { _, _ in throw JSONRPCError.methodNotFound("invoke") },
+        type: @escaping (String, String) throws -> PrimitiveActionResult = { _, _ in throw JSONRPCError.methodNotFound("type") },
+        keyboard: @escaping (String?, String) throws -> PrimitiveActionResult = { _, _ in throw JSONRPCError.methodNotFound("keyboard") },
         scroll: @escaping (PointerTarget?, String?, Double, Double) throws -> PrimitiveActionResult = { _, _, _, _ in throw JSONRPCError.methodNotFound("scroll") },
         drag: @escaping (PointerTarget, PointerTarget, String?, Int?) throws -> PrimitiveActionResult = { _, _, _, _ in throw JSONRPCError.methodNotFound("drag") }
     ) {
         self.click = click
         self.clickPoint = clickPoint
-        self.performAction = performAction
-        self.setValue = setValue
-        self.typeText = typeText
-        self.pressKey = pressKey
+        self.invoke = invoke
+        self.type = type
+        self.keyboard = keyboard
         self.scroll = scroll
         self.drag = drag
     }

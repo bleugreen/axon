@@ -27,29 +27,29 @@ import Testing
 
     let tools = response?.result?["tools"]
     #expect(response?.error == nil)
-    #expect(toolNames(in: tools).contains("list_apps"))
-    #expect(toolNames(in: tools).contains("request_accessibility"))
-    #expect(toolNames(in: tools).contains("get_app_state"))
-    #expect(toolNames(in: tools).contains("get_children"))
-    #expect(toolNames(in: tools).contains("run_batch"))
-    #expect(toolNames(in: tools).contains("export_script"))
+    #expect(toolNames(in: tools).contains("look"))
+    #expect(toolNames(in: tools).contains("permit"))
+    #expect(toolNames(in: tools).contains("look"))
+    #expect(toolNames(in: tools).contains("look"))
+    #expect(toolNames(in: tools).contains("run"))
+    #expect(toolNames(in: tools).contains("save"))
     #expect(!toolNames(in: tools).contains("run_plan"))
-    #expect(toolNames(in: tools).contains("changed_since"))
+    #expect(toolNames(in: tools).contains("look"))
     #expect(toolNames(in: tools).contains("click"))
     #expect(toolNames(in: tools).contains("scroll"))
     #expect(toolNames(in: tools).contains("drag"))
     #expect(toolNames(in: tools).allSatisfy { !$0.contains("mcp") })
-    #expect(tool(named: "get_app_state", in: tools)?["inputSchema"]?["properties"]?["screenshot"] != nil)
-    #expect(tool(named: "get_app_state", in: tools)?["inputSchema"]?["properties"]?["screenText"] != nil)
-    #expect(tool(named: "get_app_state", in: tools)?["inputSchema"]?["properties"]?["sensitive"] != nil)
-    #expect(tool(named: "get_app_state", in: tools)?["inputSchema"]?["properties"]?["includeScreenshot"] == nil)
+    #expect(tool(named: "look", in: tools)?["inputSchema"]?["properties"]?["screenshot"] != nil)
+    #expect(tool(named: "look", in: tools)?["inputSchema"]?["properties"]?["screenText"] != nil)
+    #expect(tool(named: "look", in: tools)?["inputSchema"]?["properties"]?["sensitive"] != nil)
+    #expect(tool(named: "look", in: tools)?["inputSchema"]?["properties"]?["includeScreenshot"] == nil)
     #expect(tool(named: "click", in: tools)?["inputSchema"]?["properties"]?["target"]?["anyOf"]?[2] != nil)
     #expect(tool(named: "click", in: tools)?["inputSchema"]?["properties"]?["target"]?["anyOf"]?[3] != nil)
-    #expect(tool(named: "perform_action", in: tools)?["inputSchema"]?["properties"]?["target"]?["anyOf"]?[2] == nil)
-    #expect(tool(named: "set_value", in: tools)?["inputSchema"]?["properties"]?["target"]?["anyOf"]?[2] == nil)
+    #expect(tool(named: "invoke", in: tools)?["inputSchema"]?["properties"]?["target"]?["anyOf"]?[2] == nil)
+    #expect(tool(named: "type", in: tools)?["inputSchema"]?["properties"]?["target"]?["anyOf"]?[2] == nil)
 }
 
-@Test func mcpGetChildrenReturnsOnlyRequestedChildListObservation() {
+@Test func mcpLookChildrenReturnsOnlyRequestedChildListObservation() {
     let handler = MCPRecordingCommandHandler(result: [
         "children": .object([
             "snapshot": .string("s12"),
@@ -75,7 +75,7 @@ import Testing
         id: .string("children"),
         method: "tools/call",
         params: .object([
-            "name": .string("get_children"),
+            "name": .string("look"),
             "arguments": .object([
                 "target": .string("s12:4"),
                 "offset": .int(24),
@@ -88,7 +88,7 @@ import Testing
     #expect(handler.requests == [
         JSONRPCRequest(
             id: .string("children"),
-            method: "get_children",
+            method: "look",
             params: .object([
                 "target": .string("s12:4"),
                 "offset": .int(24),
@@ -118,7 +118,7 @@ import Testing
         id: .string("call"),
         method: "tools/call",
         params: .object([
-            "name": .string("list_apps"),
+            "name": .string("look"),
             "arguments": .object([:])
         ])
     ))
@@ -136,7 +136,7 @@ import Testing
     #expect(textContent(in: response?.result)?.contains("bundleIdentifier") == false)
 }
 
-@Test func mcpListAppsDebugReturnsFullAppObjects() {
+@Test func mcpLookAppsDebugReturnsFullAppObjects() {
     let commandRouter = CommandRouter(
         listApps: {
             [AppIdentity(bundleIdentifier: "com.example.App", name: "Example", processIdentifier: 7)]
@@ -146,7 +146,7 @@ import Testing
         id: .string("call"),
         method: "tools/call",
         params: .object([
-            "name": .string("list_apps"),
+            "name": .string("look"),
             "arguments": .object(["format": .string("debug")])
         ])
     ))
@@ -157,7 +157,7 @@ import Testing
     #expect(textContent(in: response?.result)?.contains("bundleIdentifier") == true)
 }
 
-@Test func mcpRunBatchForwardsActionsAndDryRun() {
+@Test func mcpRunForwardsActionsAndDryRun() {
     let handler = MCPRecordingCommandHandler(result: [
         "batch": .object([
             "success": .bool(true),
@@ -170,7 +170,7 @@ import Testing
         id: .string("batch"),
         method: "tools/call",
         params: .object([
-            "name": .string("run_batch"),
+            "name": .string("run"),
             "arguments": .object([
                 "actions": .array([
                     .object([
@@ -188,7 +188,7 @@ import Testing
     #expect(handler.requests == [
         JSONRPCRequest(
             id: .string("batch"),
-            method: "run_batch",
+            method: "run",
             params: .object([
                 "actions": .array([
                     .object([
@@ -204,7 +204,7 @@ import Testing
     #expect(response?.result?["structuredContent"]?["batch"]?["success"] == .bool(true))
 }
 
-@Test func mcpExportScriptForwardsSessionRangeAndPath() {
+@Test func mcpSaveForwardsSessionRangeAndPath() {
     let handler = MCPRecordingCommandHandler(result: [
         "script": .string("version: 1\nactions: []\n"),
         "path": .string("/tmp/example.axn"),
@@ -216,7 +216,7 @@ import Testing
         id: .string("export"),
         method: "tools/call",
         params: .object([
-            "name": .string("export_script"),
+            "name": .string("save"),
             "arguments": .object([
                 "sessionId": .string("thread-a"),
                 "from": .string("c1"),
@@ -231,7 +231,7 @@ import Testing
     #expect(handler.requests == [
         JSONRPCRequest(
             id: .string("export"),
-            method: "export_script",
+            method: "save",
             params: .object([
                 "sessionId": .string("thread-a"),
                 "from": .string("c1"),
@@ -259,7 +259,7 @@ import Testing
     #expect(response?.result?["structuredContent"]?["error"]?["code"] == .int(-32602))
 }
 
-@Test func mcpGetAppStateDefaultsToCompactStateWithoutScreenshot() {
+@Test func mcpLookDefaultsToCompactStateWithoutScreenshot() {
     let commandRouter = CommandRouter(
         captureSnapshot: { app, screenshot in
             #expect(app == "com.example.App")
@@ -285,8 +285,8 @@ import Testing
         id: .string("compact-state"),
         method: "tools/call",
         params: .object([
-            "name": .string("get_app_state"),
-            "arguments": .object(["app": .string("com.example.App")])
+            "name": .string("look"),
+            "arguments": .object(["target": .string("com.example.App")])
         ])
     ))
 
@@ -309,7 +309,7 @@ import Testing
     #expect(text?.contains("Hidden Tab") == false)
 }
 
-@Test func mcpGetAppStateScreenTextAddsOCRWithoutScreenshotPayload() {
+@Test func mcpLookScreenTextAddsOCRWithoutScreenshotPayload() {
     let commandRouter = CommandRouter(
         captureSnapshot: { app, screenshot in
             #expect(app == "com.example.App")
@@ -352,9 +352,9 @@ import Testing
         id: .string("screen-text"),
         method: "tools/call",
         params: .object([
-            "name": .string("get_app_state"),
+            "name": .string("look"),
             "arguments": .object([
-                "app": .string("com.example.App"),
+                "target": .string("com.example.App"),
                 "screenText": .bool(true)
             ])
         ])
@@ -380,7 +380,7 @@ import Testing
     #expect(text?.contains("internal-image-payload") == false)
 }
 
-@Test func mcpGetAppStateScreenTextCanIncludeFramesWhenRequested() {
+@Test func mcpLookScreenTextCanIncludeFramesWhenRequested() {
     let commandRouter = CommandRouter(
         captureSnapshot: { _, screenshot in
             #expect(screenshot == true)
@@ -412,9 +412,9 @@ import Testing
         id: .string("screen-text-frames"),
         method: "tools/call",
         params: .object([
-            "name": .string("get_app_state"),
+            "name": .string("look"),
             "arguments": .object([
-                "app": .string("com.example.App"),
+                "target": .string("com.example.App"),
                 "screenText": .bool(true),
                 "frames": .bool(true)
             ])
@@ -454,9 +454,9 @@ import Testing
         id: .string("sensitive-state"),
         method: "tools/call",
         params: .object([
-            "name": .string("get_app_state"),
+            "name": .string("look"),
             "arguments": .object([
-                "app": .string("com.example.App"),
+                "target": .string("com.example.App"),
                 "sensitive": .bool(true)
             ])
         ])
@@ -480,9 +480,9 @@ import Testing
         id: .string("sensitive-shot"),
         method: "tools/call",
         params: .object([
-            "name": .string("get_app_state"),
+            "name": .string("look"),
             "arguments": .object([
-                "app": .string("com.example.App"),
+                "target": .string("com.example.App"),
                 "sensitive": .bool(true),
                 "screenshot": .bool(true)
             ])
@@ -499,9 +499,9 @@ import Testing
         id: .string("sensitive-screen-text"),
         method: "tools/call",
         params: .object([
-            "name": .string("get_app_state"),
+            "name": .string("look"),
             "arguments": .object([
-                "app": .string("com.example.App"),
+                "target": .string("com.example.App"),
                 "sensitive": .bool(true),
                 "screenText": .bool(true)
             ])
@@ -515,13 +515,19 @@ import Testing
 
 @Test func mcpScreenshotUsesImageContentInsteadOfTextualBase64() {
     let commandRouter = CommandRouter(
-        captureScreenshot: { app in
+        captureSnapshot: { app, screenshot in
             #expect(app == "com.example.App")
-            return EncodedScreenshot(
-                mediaType: "image/png",
-                base64Data: "raw-image-payload",
-                width: 1600,
-                height: 990
+            #expect(screenshot == true)
+            return AppSnapshot(
+                id: SnapshotID("screenshot-only"),
+                app: AppIdentity(bundleIdentifier: "com.example.App", name: "Example", processIdentifier: 7),
+                windows: [AXNode(role: "AXWindow", title: "Main")],
+                screenshot: EncodedScreenshot(
+                    mediaType: "image/png",
+                    base64Data: "raw-image-payload",
+                    width: 1600,
+                    height: 990
+                )
             )
         }
     )
@@ -529,13 +535,17 @@ import Testing
         id: .string("shot"),
         method: "tools/call",
         params: .object([
-            "name": .string("get_screenshot"),
-            "arguments": .object(["app": .string("com.example.App")])
+            "name": .string("look"),
+            "arguments": .object([
+                "target": .string("com.example.App"),
+                "screenshot": .bool(true),
+                "tree": .bool(false)
+            ])
         ])
     ))
 
     let result = response?.result
-    let screenshot = result?["structuredContent"]?["screenshot"]
+    let screenshot = result?["structuredContent"]?["snapshot"]?["screenshot"]
     let text = textContent(in: result)
     let image = imageContent(in: result)
 
@@ -574,9 +584,9 @@ import Testing
         id: .string("state-shot"),
         method: "tools/call",
         params: .object([
-            "name": .string("get_app_state"),
+            "name": .string("look"),
             "arguments": .object([
-                "app": .string("com.example.App"),
+                "target": .string("com.example.App"),
                 "screenshot": .bool(true)
             ])
         ])

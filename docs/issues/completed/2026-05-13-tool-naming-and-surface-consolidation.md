@@ -1,5 +1,7 @@
 # Tool Naming And Surface Consolidation
 
+Status: Implemented. The user-facing MCP, socket, CLI, `.axn`, recorder, history, examples, and active docs now use the verb vocabulary without compatibility aliases.
+
 ## Context
 
 The MCP tool surface is the agent's working vocabulary. Every name an agent reads in its toolbox becomes part of how it plans. The current names are CRUD-shaped (`get_app_state`, `set_value`, `perform_action`) — they read as wrappers over the Accessibility API rather than as actions an agent does. That's a leak of internal shape into the agent's mental model, and it costs us in two places: agents pick the wrong tool when names overlap semantically (`set_value` vs `type_text`), and the surface is larger than it needs to be because related operations are spread across tools that could collapse.

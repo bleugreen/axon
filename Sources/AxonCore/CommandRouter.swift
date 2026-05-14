@@ -3,7 +3,6 @@ public struct CommandRouter {
 
     private let listApps: () -> [AppIdentity]
     private let captureSnapshot: (String, Bool) throws -> AppSnapshot
-    private let captureScreenshot: (String) throws -> EncodedScreenshot?
     private let resolveLocator: LocatorResolutionProvider
     private let batchSnapshotProvider: ActionBatchExecutor.SnapshotProvider
     private let requestAccessibility: () -> Bool
@@ -16,7 +15,6 @@ public struct CommandRouter {
     public init(
         listApps: @escaping () -> [AppIdentity] = { AppResolver().runningApps() },
         captureSnapshot: ((String, Bool) throws -> AppSnapshot)? = nil,
-        captureScreenshot: ((String) throws -> EncodedScreenshot?)? = nil,
         resolveLocator: LocatorResolutionProvider? = nil,
         batchSnapshotProvider: ActionBatchExecutor.SnapshotProvider? = nil,
         requestAccessibility: @escaping () -> Bool = AccessibilityPermission.requestTrustPrompt,
@@ -33,10 +31,6 @@ public struct CommandRouter {
         self.listApps = listApps
         self.captureSnapshot = captureSnapshot ?? { app, screenshot in
             try AXSnapshotCapturer(elementStore: elementStore).capture(app: app, screenshot: screenshot)
-        }
-        self.captureScreenshot = captureScreenshot ?? { app in
-            let identity = try AppResolver().resolveIdentity(app)
-            return ScreenshotCapturer().capture(app: identity)
         }
         self.resolveLocator = resolveLocator ?? { app, locator, scrollToVisible in
             try AXLiveLocatorResolver(elementStore: elementStore)
@@ -68,7 +62,7 @@ public struct CommandRouter {
                     "accessibility": .string(doctor.accessibility.status.rawValue)
                 ]
             )
-        case "request_accessibility":
+        case "permit":
             let trusted = requestAccessibility()
             return JSONRPCResponse(
                 id: request.id,
@@ -77,29 +71,46 @@ public struct CommandRouter {
                     "prompted": .bool(true)
                 ]
             )
-        case "list_apps":
-            return JSONRPCResponse(
-                id: request.id,
-                result: [
-                    "apps": .array(listApps().map(\.jsonValue))
-                ]
-            )
-        case "snapshot":
+        case "look":
             do {
-                let app = try requiredStringParam("app", in: request)
-                let screenshot = boolParam("screenshot", in: request) ?? false
-                let screenText = boolParam("screenText", in: request) ?? false
-                let includeTree = boolParam("includeTree", in: request) ?? true
-                let sensitive = boolParam("sensitive", in: request) ?? false
+                let params = try paramsObject(in: request)
+                if params["since"] != nil {
+                    return try changedSinceResponse(id: request.id, params: params)
+                }
+                guard let target = try optionalStringParam("target", in: params) ?? optionalStringParam("app", in: params) else {
+                    return JSONRPCResponse(
+                        id: request.id,
+                        result: [
+                            "apps": .array(listApps().map(\.jsonValue))
+                        ]
+                    )
+                }
+                if (try? SnapshotHandle(target)) != nil {
+                    let offset = intParam("offset", in: params) ?? 0
+                    let limit = intParam("limit", in: params) ?? AXSnapshotCapturer.defaultMaxChildrenPerNode
+                    let children = try AXSnapshotCapturer(elementStore: elementStore).captureChildren(
+                        parentHandle: target,
+                        offset: offset,
+                        limit: limit
+                    )
+                    return JSONRPCResponse(id: request.id, result: ["children": children.jsonValue])
+                }
+                let screenshot = boolParam("screenshot", in: params) ?? false
+                let screenText = boolParam("screenText", in: params) ?? false
+                let includeTree = boolParam("tree", in: params) ?? true
+                let sensitive = boolParam("sensitive", in: params) ?? false
                 if sensitive && screenshot {
                     throw JSONRPCError.invalidParams("sensitive snapshots cannot include screenshots")
                 }
                 if sensitive && screenText {
                     throw JSONRPCError.invalidParams("sensitive snapshots cannot include screenText")
                 }
-                let snapshot = try captureSnapshot(app, screenshot || screenText)
+                let snapshot = try captureSnapshot(target, screenshot || screenText)
                 elementStore.store(summary: observedSummary(for: snapshot))
                 var snapshotJSON = snapshot.jsonValue(includeTree: includeTree, sensitive: sensitive)
+                if let depth = intParam("depth", in: params) {
+                    snapshotJSON = snapshotJSON.limitingTreeDepth(max(0, depth))
+                }
                 if screenText {
                     snapshotJSON = snapshotJSON.addingScreenText(
                         ScreenTextExtractor(recognizeText: recognizeText).extract(in: snapshot),
@@ -114,94 +125,12 @@ public struct CommandRouter {
                 )
             } catch let error as JSONRPCError {
                 return JSONRPCResponse(id: request.id, error: error)
-            } catch {
-                return JSONRPCResponse(id: request.id, error: .internalError(String(describing: error)))
-            }
-        case "screenshot":
-            do {
-                let app = try requiredStringParam("app", in: request)
-                return JSONRPCResponse(
-                    id: request.id,
-                    result: [
-                        "screenshot": try captureScreenshot(app).map(\.jsonValue) ?? .null
-                    ]
-                )
-            } catch let error as JSONRPCError {
-                return JSONRPCResponse(id: request.id, error: error)
-            } catch {
-                return JSONRPCResponse(id: request.id, error: .internalError(String(describing: error)))
-            }
-        case "get_children":
-            do {
-                let params = try paramsObject(in: request)
-                let target = try requiredString("target", in: params)
-                let offset = intParam("offset", in: params) ?? 0
-                let limit = intParam("limit", in: params) ?? AXSnapshotCapturer.defaultMaxChildrenPerNode
-                let children = try AXSnapshotCapturer(elementStore: elementStore).captureChildren(
-                    parentHandle: target,
-                    offset: offset,
-                    limit: limit
-                )
-                return JSONRPCResponse(id: request.id, result: ["children": children.jsonValue])
-            } catch let error as JSONRPCError {
-                return JSONRPCResponse(id: request.id, error: error)
             } catch let error as AXElementStoreError {
                 return JSONRPCResponse(id: request.id, error: .invalidParams(error.description))
             } catch {
                 return JSONRPCResponse(id: request.id, error: .internalError(String(describing: error)))
             }
-        case "changed_since":
-            do {
-                let snapshotID = SnapshotID(try requiredStringParam("snapshotId", in: request))
-                let sensitive = boolParam("sensitive", in: request) ?? false
-                let previous = try elementStore.summary(for: snapshotID)
-                let observedChanges = observedChanges(since: previous)
-                let currentSnapshot = try captureSnapshot(previous.appQuery, false)
-                let current = observedSummary(for: currentSnapshot)
-                elementStore.store(summary: current)
-                let change = previous.change(comparedTo: current)
-                var result: [String: JSONValue] = [
-                    "changed": .bool(change.changed),
-                    "reason": .string(change.reason),
-                    "snapshotId": .string(previous.id.rawValue),
-                    "currentSnapshotId": .string(current.id.rawValue),
-                    "previous": previous.jsonValue(sensitive: sensitive),
-                    "current": current.jsonValue(sensitive: sensitive)
-                ]
-                if !observedChanges.isEmpty {
-                    result["observedChanges"] = .array(observedChanges.map(\.jsonValue))
-                }
-                return JSONRPCResponse(
-                    id: request.id,
-                    result: result
-                )
-            } catch let error as JSONRPCError {
-                return JSONRPCResponse(id: request.id, error: error)
-            } catch let error as AXElementStoreError {
-                return JSONRPCResponse(id: request.id, error: .invalidParams(error.description))
-            } catch AppResolverError.notFound {
-                do {
-                    let snapshotID = SnapshotID(try requiredStringParam("snapshotId", in: request))
-                    let sensitive = boolParam("sensitive", in: request) ?? false
-                    let previous = try elementStore.summary(for: snapshotID)
-                    return JSONRPCResponse(
-                        id: request.id,
-                        result: [
-                            "changed": .bool(true),
-                            "reason": .string("app_missing"),
-                            "snapshotId": .string(previous.id.rawValue),
-                            "currentSnapshotId": .null,
-                            "previous": previous.jsonValue(sensitive: sensitive),
-                            "current": .null
-                        ]
-                    )
-                } catch {
-                    return JSONRPCResponse(id: request.id, error: .internalError(String(describing: error)))
-                }
-            } catch {
-                return JSONRPCResponse(id: request.id, error: .internalError(String(describing: error)))
-            }
-        case "run_batch":
+        case "run":
             do {
                 let params = try paramsObject(in: request)
                 let batch = try ActionBatchExecutor(commandHandler: handle, snapshotProvider: batchSnapshotProvider).run(params: params)
@@ -211,7 +140,7 @@ public struct CommandRouter {
             } catch {
                 return JSONRPCResponse(id: request.id, error: .internalError(String(describing: error)))
             }
-        case "export_script":
+        case "save":
             do {
                 let params = try paramsObject(in: request)
                 let sessionID = try optionalStringParam("sessionId", in: params) ?? "default"
@@ -234,7 +163,7 @@ public struct CommandRouter {
             } catch {
                 return JSONRPCResponse(id: request.id, error: .internalError(String(describing: error)))
             }
-        case "resolve":
+        case "find":
             do {
                 let app = try requiredStringParam("app", in: request)
                 let locator = try requiredLocatorParam(in: request)
@@ -262,32 +191,26 @@ public struct CommandRouter {
                 }
                 return try actions.click(resolveTargetParam(in: request))
             }
-        case "perform_action":
+        case "invoke":
             return actionResponse(id: request.id) {
-                try actions.performAction(
+                try actions.invoke(
                     resolveTargetParam(in: request),
-                    requiredStringParam("action", in: request)
+                    requiredStringParam("name", in: request)
                 )
             }
-        case "set_value":
+        case "type":
             return actionResponse(id: request.id) {
-                try actions.setValue(
+                try actions.type(
                     resolveTargetParam(in: request),
                     requiredStringParam("value", in: request)
                 )
             }
-        case "type_text":
+        case "keyboard":
             return actionResponse(id: request.id) {
-                try actions.typeText(
-                    requiredStringParam("app", in: request),
-                    requiredStringParam("text", in: request)
-                )
-            }
-        case "press_key":
-            return actionResponse(id: request.id) {
-                try actions.pressKey(
-                    requiredStringParam("app", in: request),
-                    requiredStringParam("key", in: request)
+                let params = try paramsObject(in: request)
+                return try actions.keyboard(
+                    try optionalStringParam("app", in: params),
+                    requiredString("keys", in: params)
                 )
             }
         case "scroll":
@@ -324,10 +247,51 @@ public struct CommandRouter {
     }
 
     private func paramsObject(in request: JSONRPCRequest) throws -> [String: JSONValue] {
-        guard case let .object(params) = request.params else {
+        guard let params = request.params, params != .null else {
+            return [:]
+        }
+        guard case let .object(object) = params else {
             throw JSONRPCError.invalidParams("params must be an object")
         }
-        return params
+        return object
+    }
+
+    private func changedSinceResponse(id: JSONRPCID?, params: [String: JSONValue]) throws -> JSONRPCResponse {
+        let snapshotID = SnapshotID(try requiredString("since", in: params))
+        let sensitive = boolParam("sensitive", in: params) ?? false
+        do {
+            let previous = try elementStore.summary(for: snapshotID)
+            let observedChanges = observedChanges(since: previous)
+            let currentSnapshot = try captureSnapshot(previous.appQuery, false)
+            let current = observedSummary(for: currentSnapshot)
+            elementStore.store(summary: current)
+            let change = previous.change(comparedTo: current)
+            var result: [String: JSONValue] = [
+                "changed": .bool(change.changed),
+                "reason": .string(change.reason),
+                "snapshotId": .string(previous.id.rawValue),
+                "currentSnapshotId": .string(current.id.rawValue),
+                "previous": previous.jsonValue(sensitive: sensitive),
+                "current": current.jsonValue(sensitive: sensitive)
+            ]
+            if !observedChanges.isEmpty {
+                result["observedChanges"] = .array(observedChanges.map(\.jsonValue))
+            }
+            return JSONRPCResponse(id: id, result: result)
+        } catch AppResolverError.notFound {
+            let previous = try elementStore.summary(for: snapshotID)
+            return JSONRPCResponse(
+                id: id,
+                result: [
+                    "changed": .bool(true),
+                    "reason": .string("app_missing"),
+                    "snapshotId": .string(previous.id.rawValue),
+                    "currentSnapshotId": .null,
+                    "previous": previous.jsonValue(sensitive: sensitive),
+                    "current": .null
+                ]
+            )
+        }
     }
 
     private func requiredStringParam(_ key: String, in request: JSONRPCRequest) throws -> String {
@@ -506,6 +470,13 @@ public struct CommandRouter {
         return value
     }
 
+    private func boolParam(_ key: String, in params: [String: JSONValue]) -> Bool? {
+        guard case let .bool(value)? = params[key] else {
+            return nil
+        }
+        return value
+    }
+
     private func doubleParam(_ key: String, in params: [String: JSONValue]) -> Double? {
         numericValue(key, in: params)
     }
@@ -594,6 +565,28 @@ private struct TextLocationResolvedPoint {
 }
 
 private extension JSONValue {
+    func limitingTreeDepth(_ depth: Int) -> JSONValue {
+        guard case var .object(object) = self,
+              case let .array(windows)? = object["windows"]
+        else {
+            return self
+        }
+        object["windows"] = .array(windows.map { $0.limitingNodeDepth(depth) })
+        return .object(object)
+    }
+
+    private func limitingNodeDepth(_ remainingDepth: Int) -> JSONValue {
+        guard case var .object(object) = self else {
+            return self
+        }
+        if remainingDepth <= 0 {
+            object["children"] = .array([])
+        } else if case let .array(children)? = object["children"] {
+            object["children"] = .array(children.map { $0.limitingNodeDepth(remainingDepth - 1) })
+        }
+        return .object(object)
+    }
+
     func addingScreenText(_ items: [ScreenTextItem], includeScreenshot: Bool) -> JSONValue {
         guard case var .object(object) = self else {
             return self

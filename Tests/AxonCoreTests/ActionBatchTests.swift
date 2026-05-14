@@ -2,7 +2,7 @@ import Foundation
 import Testing
 @testable import AxonCore
 
-@Test func runBatchExecutesToolShapedActionsInOrder() {
+@Test func runExecutesToolShapedActionsInOrder() {
     var requests: [JSONRPCRequest] = []
     let executor = ActionBatchExecutor { request in
         requests.append(request)
@@ -17,7 +17,7 @@ import Testing
     let batch = try! executor.run(params: [
         "actions": .array([
             .object([
-                "tool": .string("set_value"),
+                "tool": .string("type"),
                 "target": .string("s1:2"),
                 "value": .string("Mitch")
             ]),
@@ -29,13 +29,13 @@ import Testing
     ])
 
     #expect(batch["success"] == .bool(true))
-    #expect(batch["trace"]?[0]?["tool"] == .string("set_value"))
+    #expect(batch["trace"]?[0]?["tool"] == .string("type"))
     #expect(batch["trace"]?[1]?["tool"] == .string("click"))
-    #expect(requests.map(\.method) == ["set_value", "click"])
+    #expect(requests.map(\.method) == ["type", "click"])
     #expect(requests[0].params?["value"] == .string("Mitch"))
 }
 
-@Test func runBatchStripsVerificationMetadataBeforeDispatch() {
+@Test func runStripsVerificationMetadataBeforeDispatch() {
     var requests: [JSONRPCRequest] = []
     let executor = ActionBatchExecutor { request in
         requests.append(request)
@@ -66,7 +66,7 @@ import Testing
     #expect(requests[0].params?["warnings"] == nil)
 }
 
-@Test func runBatchFailsWhenPrimitiveActionReportsFailure() {
+@Test func runFailsWhenPrimitiveActionReportsFailure() {
     var requests: [JSONRPCRequest] = []
     let executor = ActionBatchExecutor { request in
         requests.append(request)
@@ -101,7 +101,7 @@ import Testing
     #expect(requests.map(\.method) == ["scroll"])
 }
 
-@Test func runBatchWaitsForChangedExpectationBeforeNextAction() {
+@Test func runWaitsForChangedExpectationBeforeNextAction() {
     var snapshots = [
         changeFactSnapshot(title: "Before"),
         changeFactSnapshot(title: "Before"),
@@ -146,7 +146,7 @@ import Testing
     #expect(snapshots.isEmpty)
 }
 
-@Test func runBatchDoesNotEvaluateRevealResolutionBeforeDispatch() {
+@Test func runDoesNotEvaluateRevealResolutionBeforeDispatch() {
     let surface = scrollSurfaceTarget()
     let link = articleLinkTarget()
     var requests: [JSONRPCRequest] = []
@@ -180,7 +180,7 @@ import Testing
     #expect(requests[0].params?["resolve"] == nil)
 }
 
-@Test func runBatchTreatsRevealResolutionAsDispatchMetadata() {
+@Test func runTreatsRevealResolutionAsDispatchMetadata() {
     let link = articleLinkTarget()
     var requests: [JSONRPCRequest] = []
     let executor = ActionBatchExecutor(
@@ -209,7 +209,7 @@ import Testing
     #expect(requests[0].params?["resolve"] == nil)
 }
 
-@Test func runBatchVerifiesExpectedFactAndLaterRequirement() {
+@Test func runVerifiesExpectedFactAndLaterRequirement() {
     var requests: [JSONRPCRequest] = []
     let executor = ActionBatchExecutor(
         commandHandler: { request in
@@ -240,28 +240,28 @@ import Testing
     let actions: JSONValue = .array([
             .object([
                 "id": .string("a001"),
-                "tool": .string("set_value"),
+                "tool": .string("type"),
                 "target": .string("s1:2"),
                 "value": .string("Mitch"),
                 "expects": .array([fact])
             ]),
             .object([
                 "id": .string("a002"),
-                "tool": .string("press_key"),
+                "tool": .string("keyboard"),
                 "app": .string("Example"),
-                "key": .string("Return"),
+                "keys": .string("Return"),
                 "requires": .array([.string("a001.value.0")])
             ])
     ])
     let batch = try! executor.run(params: ["actions": actions])
 
     #expect(batch["success"] == JSONValue.bool(true))
-    #expect(requests.map(\.method) == ["set_value", "press_key"])
+    #expect(requests.map(\.method) == ["type", "keyboard"])
     #expect(requests[0].params?["id"] == nil)
     #expect(requests[0].params?["expects"] == nil)
 }
 
-@Test func runBatchAllowsRecordedValueContainmentFacts() {
+@Test func runAllowsRecordedValueContainmentFacts() {
     var requests: [JSONRPCRequest] = []
     let executor = ActionBatchExecutor(
         commandHandler: { request in
@@ -292,26 +292,26 @@ import Testing
         "actions": .array([
             .object([
                 "id": .string("a001"),
-                "tool": .string("set_value"),
+                "tool": .string("type"),
                 "target": .string("s1:2"),
                 "value": .string("wikipedia.com"),
                 "expects": .array([fact])
             ]),
             .object([
                 "id": .string("a002"),
-                "tool": .string("press_key"),
+                "tool": .string("keyboard"),
                 "app": .string("Firefox"),
-                "key": .string("Return"),
+                "keys": .string("Return"),
                 "requires": .array([.string("a001.value.0")])
             ])
         ])
     ])
 
     #expect(batch["success"] == .bool(true))
-    #expect(requests.map(\.method) == ["set_value", "press_key"])
+    #expect(requests.map(\.method) == ["type", "keyboard"])
 }
 
-@Test func runBatchStopsWhenRequiredFactNoLongerVerifies() {
+@Test func runStopsWhenRequiredFactNoLongerVerifies() {
     var snapshotReads = 0
     var requests: [JSONRPCRequest] = []
     let executor = ActionBatchExecutor(
@@ -343,28 +343,28 @@ import Testing
     let actions: JSONValue = .array([
             .object([
                 "id": .string("a001"),
-                "tool": .string("set_value"),
+                "tool": .string("type"),
                 "target": .string("s1:2"),
                 "value": .string("Mitch"),
                 "expects": .array([fact])
             ]),
             .object([
                 "id": .string("a002"),
-                "tool": .string("press_key"),
+                "tool": .string("keyboard"),
                 "app": .string("Example"),
-                "key": .string("Return"),
+                "keys": .string("Return"),
                 "requires": .array([.string("a001.value.0")])
             ])
     ])
     let batch = try! executor.run(params: ["actions": actions])
 
     #expect(batch["success"] == JSONValue.bool(false))
-    #expect(requests.map(\.method) == ["set_value"])
+    #expect(requests.map(\.method) == ["type"])
     #expect(batch["trace"]?[1]?["actionId"] == JSONValue.string("a002"))
     #expect(batch["trace"]?[1]?["factId"] == JSONValue.string("a001.value.0"))
 }
 
-@Test func runBatchStopsOnFirstFailureByDefault() {
+@Test func runStopsOnFirstFailureByDefault() {
     var requests: [JSONRPCRequest] = []
     let executor = ActionBatchExecutor { request in
         requests.append(request)
@@ -466,7 +466,7 @@ private func articleSnapshot(children: [AXNode]) -> AppSnapshot {
     )
 }
 
-@Test func runBatchCanContinueOnError() {
+@Test func runCanContinueOnError() {
     var requests: [JSONRPCRequest] = []
     let executor = ActionBatchExecutor { request in
         requests.append(request)
@@ -489,7 +489,7 @@ private func articleSnapshot(children: [AXNode]) -> AppSnapshot {
     #expect(requests.count == 2)
 }
 
-@Test func runBatchParsesAxnSource() {
+@Test func runLoadsPathAndAppendsInlineActions() throws {
     var requests: [JSONRPCRequest] = []
     let executor = ActionBatchExecutor { request in
         requests.append(request)
@@ -499,20 +499,41 @@ private func articleSnapshot(children: [AXNode]) -> AppSnapshot {
     let source = """
     version: 1
     actions:
-      - tool: press_key
+      - tool: keyboard
         app: Firefox
-        key: Return
+        keys: Return
     """
-    let batch = try! executor.run(params: ["source": .string(source)])
+    let path = FileManager.default.temporaryDirectory
+        .appendingPathComponent("axon-\(UUID().uuidString).axn")
+        .path
+    try source.write(toFile: path, atomically: true, encoding: .utf8)
+    defer { try? FileManager.default.removeItem(atPath: path) }
+
+    let batch = try executor.run(params: [
+        "path": .string(path),
+        "actions": .array([
+            .object([
+                "tool": .string("click"),
+                "target": .string("s1:2")
+            ])
+        ])
+    ])
 
     #expect(batch["success"] == .bool(true))
     #expect(requests == [
         JSONRPCRequest(
-            id: .string("batch.0.press_key"),
-            method: "press_key",
+            id: .string("batch.0.keyboard"),
+            method: "keyboard",
             params: .object([
                 "app": .string("Firefox"),
-                "key": .string("Return")
+                "keys": .string("Return")
+            ])
+        ),
+        JSONRPCRequest(
+            id: .string("batch.1.click"),
+            method: "click",
+            params: .object([
+                "target": .string("s1:2")
             ])
         )
     ])
@@ -529,7 +550,7 @@ private func articleSnapshot(children: [AXNode]) -> AppSnapshot {
 
     let response = router.handle(JSONRPCRequest(
         id: .string("batch"),
-        method: "run_batch",
+        method: "run",
         params: .object([
             "actions": .array([
                 .object(["tool": .string("click"), "target": .string("s1:2")])
@@ -543,7 +564,7 @@ private func articleSnapshot(children: [AXNode]) -> AppSnapshot {
 }
 
 @Test func commandRouterRunsBatchFactsThroughBatchSnapshotProvider() {
-    var setValues: [(String, String)] = []
+    var types: [(String, String)] = []
     var batchSnapshotApps: [String] = []
     let router = CommandRouter(
         captureSnapshot: { _, _ in
@@ -555,21 +576,21 @@ private func articleSnapshot(children: [AXNode]) -> AppSnapshot {
             return valueFactSnapshot(value: "Mitch")
         },
         actions: PrimitiveActionHandlers(
-            setValue: { target, value in
-                setValues.append((target, value))
-                return PrimitiveActionResult(action: "set_value", target: target, strategy: "test", success: true)
+            type: { target, value in
+                types.append((target, value))
+                return PrimitiveActionResult(action: "type", target: target, strategy: "test", success: true)
             }
         )
     )
 
     let response = router.handle(JSONRPCRequest(
         id: .string("batch"),
-        method: "run_batch",
+        method: "run",
         params: .object([
             "actions": .array([
                 .object([
                     "id": .string("a001"),
-                    "tool": .string("set_value"),
+                    "tool": .string("type"),
                     "target": .string("s1:2"),
                     "value": .string("Mitch"),
                     "expects": .array([
@@ -595,7 +616,7 @@ private func articleSnapshot(children: [AXNode]) -> AppSnapshot {
 
     #expect(response.error == nil)
     #expect(response.result?["batch"]?["success"] == .bool(true))
-    #expect(setValues.count == 1)
+    #expect(types.count == 1)
     #expect(batchSnapshotApps == ["Example"])
 }
 

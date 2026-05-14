@@ -13,10 +13,10 @@ import Testing
     #expect(response.result?["accessibility"] != nil)
 }
 
-@Test func requestAccessibilityReturnsPromptStatus() {
+@Test func permitReturnsPromptStatus() {
     let response = CommandRouter(requestAccessibility: { true }).handle(JSONRPCRequest(
         id: .string("accessibility"),
-        method: "request_accessibility"
+        method: "permit"
     ))
 
     #expect(response.id == .string("accessibility"))
@@ -46,7 +46,7 @@ import Testing
     #expect(decoded.method == "health")
 }
 
-@Test func listAppsRequestReturnsRunningApps() {
+@Test func lookAppsRequestReturnsRunningApps() {
     let router = CommandRouter(
         listApps: {
             [AppIdentity(bundleIdentifier: "com.example.App", name: "Example", processIdentifier: 7)]
@@ -57,12 +57,12 @@ import Testing
         }
     )
 
-    let response = router.handle(JSONRPCRequest(id: .string("apps"), method: "list_apps"))
+    let response = router.handle(JSONRPCRequest(id: .string("apps"), method: "look"))
 
     #expect(response.result?["apps"]?[0]?["name"] == .string("Example"))
 }
 
-@Test func snapshotRequestReturnsCapturedSnapshot() {
+@Test func lookRequestReturnsCapturedSnapshot() {
     let router = CommandRouter(
         listApps: { [] },
         captureSnapshot: { app, screenshot in
@@ -79,7 +79,7 @@ import Testing
 
     let request = JSONRPCRequest(
         id: .string("snapshot"),
-        method: "snapshot",
+        method: "look",
         params: .object(["app": .string("Finder"), "screenshot": .bool(true)])
     )
 
@@ -89,7 +89,7 @@ import Testing
     #expect(response.error == nil)
 }
 
-@Test func snapshotRequestDefaultsToNoScreenshot() {
+@Test func lookRequestDefaultsToNoScreenshot() {
     let router = CommandRouter(
         captureSnapshot: { app, screenshot in
             #expect(app == "com.example.App")
@@ -105,7 +105,7 @@ import Testing
 
     let response = router.handle(JSONRPCRequest(
         id: .string("snapshot-default"),
-        method: "snapshot",
+        method: "look",
         params: .object(["app": .string("com.example.App")])
     ))
 
@@ -113,7 +113,7 @@ import Testing
     #expect(response.result?["snapshot"]?["screenshot"] == .null)
 }
 
-@Test func snapshotRequestRejectsSensitiveScreenshot() {
+@Test func lookRequestRejectsSensitiveScreenshot() {
     let router = CommandRouter(
         captureSnapshot: { _, _ in
             Issue.record("snapshot capture should not run for invalid sensitive screenshot request")
@@ -123,7 +123,7 @@ import Testing
 
     let response = router.handle(JSONRPCRequest(
         id: .string("sensitive-shot"),
-        method: "snapshot",
+        method: "look",
         params: .object([
             "app": .string("com.example.App"),
             "sensitive": .bool(true),
@@ -136,7 +136,7 @@ import Testing
     #expect(response.error?.message == "sensitive snapshots cannot include screenshots")
 }
 
-@Test func snapshotRequestReturnsSensitiveRedactedSnapshot() {
+@Test func lookRequestReturnsSensitiveRedactedSnapshot() {
     let router = CommandRouter(
         captureSnapshot: { _, screenshot in
             #expect(screenshot == false)
@@ -155,11 +155,11 @@ import Testing
 
     let response = router.handle(JSONRPCRequest(
         id: .string("sensitive"),
-        method: "snapshot",
+        method: "look",
         params: .object([
             "app": .string("com.example.App"),
             "sensitive": .bool(true),
-            "includeTree": .bool(false)
+            "tree": .bool(false)
         ])
     ))
 
@@ -168,7 +168,7 @@ import Testing
     #expect(response.result?["snapshot"]?["indexedNodes"]?[1]?["value"] == .string("sk-proj-abcd...[redacted]"))
 }
 
-@Test func changedSinceReportsCoarseWindowChanges() {
+@Test func lookSinceReportsCoarseWindowChanges() {
     let elementStore = AXElementStore()
     var snapshots = [
         AppSnapshot(
@@ -191,13 +191,13 @@ import Testing
 
     let snapshotResponse = router.handle(JSONRPCRequest(
         id: .string("snapshot"),
-        method: "snapshot",
+        method: "look",
         params: .object(["app": .string("com.example.App"), "screenshot": .bool(false)])
     ))
     let changedResponse = router.handle(JSONRPCRequest(
         id: .string("changed"),
-        method: "changed_since",
-        params: .object(["snapshotId": .string("initial")])
+        method: "look",
+        params: .object(["since": .string("initial")])
     ))
 
     #expect(snapshotResponse.error == nil)
@@ -207,7 +207,7 @@ import Testing
     #expect(changedResponse.result?["currentSnapshotId"] == .string("current"))
 }
 
-@Test func changedSinceReportsMissingAppAsChanged() {
+@Test func lookSinceReportsMissingAppAsChanged() {
     let elementStore = AXElementStore()
     let snapshot = AppSnapshot(
         id: SnapshotID("initial"),
@@ -223,8 +223,8 @@ import Testing
 
     let changedResponse = router.handle(JSONRPCRequest(
         id: .string("changed"),
-        method: "changed_since",
-        params: .object(["snapshotId": .string("initial")])
+        method: "look",
+        params: .object(["since": .string("initial")])
     ))
 
     #expect(changedResponse.error == nil)
@@ -233,7 +233,7 @@ import Testing
     #expect(changedResponse.result?["current"] == .null)
 }
 
-@Test func changedSinceTreatsObservedEventsAsRecaptureHints() {
+@Test func lookSinceTreatsObservedEventsAsRecaptureHints() {
     let elementStore = AXElementStore()
     let tracker = AppChangeTracker()
     let app = AppIdentity(bundleIdentifier: "com.example.App", name: "Example", processIdentifier: 7)
@@ -254,14 +254,14 @@ import Testing
 
     let snapshotResponse = router.handle(JSONRPCRequest(
         id: .string("snapshot"),
-        method: "snapshot",
+        method: "look",
         params: .object(["app": .string("com.example.App"), "screenshot": .bool(false)])
     ))
     tracker.recordChange(app: app, reason: "AXFocusedWindowChanged")
     let changedResponse = router.handle(JSONRPCRequest(
         id: .string("changed"),
-        method: "changed_since",
-        params: .object(["snapshotId": .string("initial")])
+        method: "look",
+        params: .object(["since": .string("initial")])
     ))
 
     #expect(snapshotResponse.error == nil)
@@ -273,7 +273,7 @@ import Testing
     #expect(changedResponse.result?["observedChanges"]?[0]?["reason"] == .string("AXFocusedWindowChanged"))
 }
 
-@Test func changedSinceReportsSurfaceChangesAfterObservedEvents() {
+@Test func lookSinceReportsSurfaceChangesAfterObservedEvents() {
     let elementStore = AXElementStore()
     let tracker = AppChangeTracker()
     let app = AppIdentity(bundleIdentifier: "com.example.App", name: "Example", processIdentifier: 7)
@@ -299,14 +299,14 @@ import Testing
 
     let snapshotResponse = router.handle(JSONRPCRequest(
         id: .string("snapshot"),
-        method: "snapshot",
+        method: "look",
         params: .object(["app": .string("com.example.App"), "screenshot": .bool(false)])
     ))
     tracker.recordChange(app: app, reason: "AXWindowCreated")
     let changedResponse = router.handle(JSONRPCRequest(
         id: .string("changed"),
-        method: "changed_since",
-        params: .object(["snapshotId": .string("initial")])
+        method: "look",
+        params: .object(["since": .string("initial")])
     ))
 
     #expect(snapshotResponse.error == nil)

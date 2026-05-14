@@ -75,13 +75,13 @@ public struct MCPRouter {
                 ], isError: true)
             }
             let result = commandResponse.result ?? [:]
-            if name == "list_apps", Self.outputFormat(in: arguments) != "debug" {
+            if name == "look", result["apps"] != nil, Self.outputFormat(in: arguments) != "debug" {
                 return appListObservationResult(id: request.id, result: result)
             }
-            if name == "get_app_state", Self.outputFormat(in: arguments) != "debug" {
+            if name == "look", result["snapshot"] != nil, Self.outputFormat(in: arguments) != "debug" {
                 return appStateObservationResult(id: request.id, result: result, arguments: arguments)
             }
-            if name == "get_children", Self.outputFormat(in: arguments) != "debug" {
+            if name == "look", result["children"] != nil, Self.outputFormat(in: arguments) != "debug" {
                 return childrenObservationResult(id: request.id, result: result, arguments: arguments)
             }
             return toolResult(id: request.id, structuredContent: result, isError: false)
@@ -181,38 +181,8 @@ public struct MCPRouter {
 
     private static func commandMethod(for toolName: String) -> String? {
         switch toolName {
-        case "list_apps":
-            return "list_apps"
-        case "request_accessibility":
-            return "request_accessibility"
-        case "get_app_state":
-            return "snapshot"
-        case "get_children":
-            return "get_children"
-        case "get_screenshot":
-            return "screenshot"
-        case "resolve":
-            return "resolve"
-        case "changed_since":
-            return "changed_since"
-        case "run_batch":
-            return "run_batch"
-        case "export_script":
-            return "export_script"
-        case "click":
-            return "click"
-        case "scroll":
-            return "scroll"
-        case "drag":
-            return "drag"
-        case "perform_action":
-            return "perform_action"
-        case "set_value":
-            return "set_value"
-        case "type_text":
-            return "type_text"
-        case "press_key":
-            return "press_key"
+        case "look", "find", "click", "type", "keyboard", "scroll", "drag", "invoke", "save", "run", "permit":
+            return toolName
         default:
             return nil
         }
@@ -222,7 +192,15 @@ public struct MCPRouter {
         for toolName: String,
         arguments: [String: JSONValue]
     ) -> [String: JSONValue] {
-        guard toolName == "get_app_state" else {
+        guard toolName == "look" else {
+            return arguments
+        }
+        if arguments["since"] != nil {
+            return arguments
+        }
+        guard case let .string(target)? = arguments["target"] ?? arguments["app"],
+              (try? SnapshotHandle(target)) == nil
+        else {
             return arguments
         }
         var updated = arguments
@@ -230,8 +208,8 @@ public struct MCPRouter {
         if updated["screenshot"] == nil {
             updated["screenshot"] = .bool(false)
         }
-        if updated["includeTree"] == nil {
-            updated["includeTree"] = .bool(format != "debug")
+        if updated["tree"] == nil {
+            updated["tree"] = .bool(format != "debug")
         }
         if updated["sensitive"] == nil {
             updated["sensitive"] = .bool(false)
@@ -255,50 +233,24 @@ public struct MCPRouter {
 
     private static let tools: [MCPTool] = [
         MCPTool(
-            name: "list_apps",
-            description: "List currently running macOS app names visible to Axon. Use format=debug only when bundle ids or pids are needed.",
+            name: "look",
+            description: "Observe Axon's current surface: no target lists apps, an app target captures state, a handle target pages children, and since returns a change check.",
             inputSchema: objectSchema(properties: [
-                "format": stringSchema("Defaults to observation, a compact app-name list. Use debug for full bundle id and pid objects.")
+                "target": stringSchema("Bundle id, pid, app name, partial app name, or retained snapshot handle such as s12:4. Omit to list apps."),
+                "since": stringSchema("Snapshot id from a prior look response. Returns a coarse change check instead of a tree."),
+                "screenshot": boolSchema("Include embedded ScreenCaptureKit screenshot data with an app observation. Defaults to false for MCP."),
+                "screenText": boolSchema("OCR visible text from the app window screenshot and include it as organized screenText. Defaults to false."),
+                "tree": boolSchema("Include the nested AX tree for app observations. Defaults to true for observation format and false for debug format."),
+                "sensitive": boolSchema("Redact values and secret-like text while preserving short safe prefixes. Sensitive snapshots cannot include screenshots or screenText."),
+                "offset": numberSchema("Zero-based child offset when target is a retained handle. Defaults to 0."),
+                "limit": numberSchema("Maximum children when target is a retained handle. Defaults to Axon's sibling page size."),
+                "depth": numberSchema("Maximum tree depth to return for app observations, with windows at depth 0."),
+                "format": stringSchema("Defaults to observation. Use debug only when diagnosing Axon internals."),
+                "frames": boolSchema("Include frames in observation output. Defaults to false.")
             ])
         ),
         MCPTool(
-            name: "request_accessibility",
-            description: "Ask macOS to show the Accessibility permission prompt for the running Axon daemon identity.",
-            inputSchema: objectSchema()
-        ),
-        MCPTool(
-            name: "get_app_state",
-            description: "Capture an accessibility snapshot for a running app, optionally including an embedded screenshot or sensitive redaction.",
-            inputSchema: objectSchema(properties: [
-                "app": stringSchema("Bundle id, pid, exact app name, or partial app name."),
-                "screenshot": boolSchema("Whether to include embedded ScreenCaptureKit screenshot data. Defaults to false for MCP."),
-                "screenText": boolSchema("Whether to OCR visible text from the app window screenshot and include it as organized screenText. Defaults to false."),
-                "includeTree": boolSchema("Debug-only escape hatch for returning the nested raw AX tree."),
-                "sensitive": boolSchema("Redact values and secret-like text while preserving short safe prefixes. Sensitive snapshots cannot include screenshots or screenText."),
-                "format": stringSchema("Defaults to observation. Use debug only when diagnosing Axon internals."),
-                "frames": boolSchema("Include frames in observation output. Defaults to false.")
-            ], required: ["app"])
-        ),
-        MCPTool(
-            name: "get_children",
-            description: "Fetch only the retained children for a snapshot handle. Use nextOffset from the previous result to continue paging broad sibling lists.",
-            inputSchema: objectSchema(properties: [
-                "target": stringSchema("Retained snapshot handle for the parent node, for example s12:4."),
-                "offset": numberSchema("Zero-based child offset to fetch. Defaults to 0."),
-                "limit": numberSchema("Maximum children to fetch. Defaults to Axon's sibling page size."),
-                "format": stringSchema("Defaults to observation. Use debug only when diagnosing Axon internals."),
-                "frames": boolSchema("Include frames in observation output. Defaults to false.")
-            ], required: ["target"])
-        ),
-        MCPTool(
-            name: "get_screenshot",
-            description: "Capture an embedded ScreenCaptureKit screenshot for a running app window.",
-            inputSchema: objectSchema(properties: [
-                "app": stringSchema("Bundle id, pid, exact app name, or partial app name.")
-            ], required: ["app"])
-        ),
-        MCPTool(
-            name: "resolve",
+            name: "find",
             description: "Resolve an AX locator against a fresh app snapshot.",
             inputSchema: objectSchema(properties: [
                 "app": stringSchema("Bundle id, pid, exact app name, or partial app name."),
@@ -306,16 +258,8 @@ public struct MCPRouter {
             ], required: ["app", "locator"])
         ),
         MCPTool(
-            name: "changed_since",
-            description: "Recapture the app for a retained snapshot and report whether coarse app/window state changed.",
-            inputSchema: objectSchema(properties: [
-                "snapshotId": stringSchema("Snapshot id returned by get_app_state."),
-                "sensitive": boolSchema("Redact secret-like summary text while preserving short safe prefixes.")
-            ], required: ["snapshotId"])
-        ),
-        MCPTool(
-            name: "run_batch",
-            description: "Run a sequence of existing Axon tool calls. Each action is an object with tool plus that tool's normal arguments.",
+            name: "run",
+            description: "Run a sequence of Axon actions from inline actions, a .axn path, or a path loaded first with inline actions appended.",
             inputSchema: objectSchema(properties: [
                 "actions": .object([
                     "type": .string("array"),
@@ -325,26 +269,20 @@ public struct MCPRouter {
                         "additionalProperties": .bool(true)
                     ])
                 ]),
-                "source": stringSchema("YAML or JSON .axn batch source."),
                 "path": stringSchema("Local .axn batch file path for the Axon daemon to read."),
-                "batch": .object([
-                    "type": .string("object"),
-                    "description": .string("Batch object when not using actions, source, or path."),
-                    "additionalProperties": .bool(true)
-                ]),
                 "continueOnError": boolSchema("Continue after an action fails. Defaults to false."),
                 "dryRun": boolSchema("Trace the batch without dispatching actions.")
             ])
         ),
         MCPTool(
-            name: "export_script",
-            description: "Export recent recorded Axon calls as an editable .axn action batch. Read calls are omitted unless includeReads is true.",
+            name: "save",
+            description: "Save recent recorded Axon calls as an editable .axn action batch. Read calls are omitted unless includeReads is true.",
             inputSchema: objectSchema(properties: [
                 "sessionId": stringSchema("History session to export. Defaults to the daemon's default session."),
                 "from": stringSchema("Optional starting call id, inclusive."),
                 "to": stringSchema("Optional ending call id, inclusive."),
                 "path": stringSchema("Optional local path to write the .axn file."),
-                "includeReads": boolSchema("Include read/context tools such as get_app_state and resolve. Defaults to false.")
+                "includeReads": boolSchema("Include read/context tools such as look and find. Defaults to false.")
             ])
         ),
         MCPTool(
@@ -375,36 +313,33 @@ public struct MCPRouter {
             ], required: ["from", "to"])
         ),
         MCPTool(
-            name: "perform_action",
-            description: "Perform a named AX action on a target specified by snapshot handle or locator object.",
+            name: "invoke",
+            description: "Invoke a named AX action on a target specified by snapshot handle or locator object.",
             inputSchema: objectSchema(properties: [
                 "target": elementTargetSchema(),
-                "action": stringSchema("Accessibility action name, for example AXPress or AXShowMenu.")
-            ], required: ["target", "action"])
+                "name": stringSchema("Accessibility action name, for example AXPress or AXShowMenu.")
+            ], required: ["target", "name"])
         ),
         MCPTool(
-            name: "set_value",
-            description: "Preferred text-entry primitive for writable fields. Sets AXValue directly on a target, avoiding focus and keystroke timing races.",
+            name: "type",
+            description: "Fill a writable field by setting AXValue directly on a target, avoiding focus and keystroke timing races.",
             inputSchema: objectSchema(properties: [
                 "target": elementTargetSchema(),
                 "value": stringSchema("New string value.")
             ], required: ["target", "value"])
         ),
         MCPTool(
-            name: "type_text",
-            description: "Fallback text-entry primitive. Activates an app and posts keyboard events; use only when set_value is unavailable or keystroke semantics are required.",
+            name: "keyboard",
+            description: "Post keyboard input for shortcuts, special keys, or raw text when field-level type is not the right intent.",
             inputSchema: objectSchema(properties: [
-                "app": stringSchema("Bundle id, pid, exact app name, or partial app name."),
-                "text": stringSchema("Text to type.")
-            ], required: ["app", "text"])
+                "app": stringSchema("Optional app to activate before posting keyboard input."),
+                "keys": stringSchema("Text, special key, or combo, for example Return or cmd+shift+p.")
+            ], required: ["keys"])
         ),
         MCPTool(
-            name: "press_key",
-            description: "Activate an app and press a key or key combination.",
-            inputSchema: objectSchema(properties: [
-                "app": stringSchema("Bundle id, pid, exact app name, or partial app name."),
-                "key": stringSchema("Key or combo, for example Return or cmd+shift+p.")
-            ], required: ["app", "key"])
+            name: "permit",
+            description: "Ask macOS to show the Accessibility permission prompt for the running Axon daemon identity.",
+            inputSchema: objectSchema()
         )
     ]
 }

@@ -69,19 +69,17 @@ public struct ActionBatchExecutor {
     }
 
     private func batchValue(from params: [String: JSONValue]) throws -> JSONValue {
+        if case let .string(path)? = params["path"] {
+            var batch = try ActionBatchExecutor.parseSource(String(contentsOfFile: path, encoding: .utf8))
+            if let appendedActions = params["actions"] {
+                batch = try batch.appendingActions(appendedActions)
+            }
+            return batch
+        }
         if params["actions"] != nil {
             return .object(params)
         }
-        if let batch = params["batch"] {
-            return batch
-        }
-        if case let .string(source)? = params["source"] {
-            return try ActionBatchExecutor.parseSource(source)
-        }
-        if case let .string(path)? = params["path"] {
-            return try ActionBatchExecutor.parseSource(String(contentsOfFile: path, encoding: .utf8))
-        }
-        throw ActionBatchError.invalidParams("run_batch requires actions, batch, source, or path")
+        throw ActionBatchError.invalidParams("run requires actions or path")
     }
 
     public static func parseSource(_ source: String) throws -> JSONValue {
@@ -329,19 +327,7 @@ public struct ActionBatchExecutor {
 
     private func commandMethod(for tool: String) throws -> String {
         switch tool {
-        case "list_apps":
-            return "list_apps"
-        case "get_app_state":
-            return "snapshot"
-        case "get_children":
-            return "get_children"
-        case "get_screenshot":
-            return "screenshot"
-        case "resolve":
-            return "resolve"
-        case "changed_since":
-            return "changed_since"
-        case "click", "scroll", "drag", "perform_action", "set_value", "type_text", "press_key":
+        case "look", "find", "click", "scroll", "drag", "invoke", "type", "keyboard":
             return tool
         default:
             throw ActionBatchError.invalidParams("unknown batch tool: \(tool)")
@@ -350,35 +336,32 @@ public struct ActionBatchExecutor {
 
     private func resultSummary(method: String, result: [String: JSONValue]) -> JSONValue {
         switch method {
-        case "list_apps":
-            let count = result["apps"]?.arrayValue?.count ?? 0
-            return .object(["count": .int(count)])
-        case "snapshot":
-            guard case let .object(snapshot)? = result["snapshot"] else {
-                return .object([:])
+        case "look":
+            if let apps = result["apps"]?.arrayValue {
+                return .object(["count": .int(apps.count)])
             }
-            return .object([
-                "snapshot": snapshot["id"] ?? .null,
-                "app": snapshot["app"]?["name"] ?? .null
-            ])
-        case "screenshot":
-            return .object([
-                "width": result["screenshot"]?["width"] ?? .null,
-                "height": result["screenshot"]?["height"] ?? .null
-            ])
-        case "get_children":
-            return .object([
-                "parent": result["children"]?["parent"] ?? .null,
-                "offset": result["children"]?["offset"] ?? .null,
-                "nextOffset": result["children"]?["nextOffset"] ?? .null
-            ])
-        case "resolve":
+            if case let .object(snapshot)? = result["snapshot"] {
+                return .object([
+                    "snapshot": snapshot["id"] ?? .null,
+                    "app": snapshot["app"]?["name"] ?? .null
+                ])
+            }
+            if result["children"] != nil {
+                return .object([
+                    "parent": result["children"]?["parent"] ?? .null,
+                    "offset": result["children"]?["offset"] ?? .null,
+                    "nextOffset": result["children"]?["nextOffset"] ?? .null
+                ])
+            }
+            if result["changed"] != nil {
+                return .object([
+                    "changed": result["changed"] ?? .null,
+                    "reason": result["reason"] ?? .null
+                ])
+            }
+            return .object([:])
+        case "find":
             return result["resolution"] ?? .object([:])
-        case "changed_since":
-            return .object([
-                "changed": result["changed"] ?? .null,
-                "reason": result["reason"] ?? .null
-            ])
         default:
             return result["action"] ?? .object(result)
         }
@@ -421,5 +404,20 @@ private extension JSONValue {
             return nil
         }
         return values
+    }
+
+    func appendingActions(_ appendedActions: JSONValue) throws -> JSONValue {
+        guard case var .object(object) = self else {
+            throw ActionBatchError.invalidParams("batch must be an object")
+        }
+        guard case var .array(actions)? = object["actions"] else {
+            throw ActionBatchError.invalidParams("batch requires actions")
+        }
+        guard case let .array(appended) = appendedActions else {
+            throw ActionBatchError.invalidParams("actions must be an array")
+        }
+        actions.append(contentsOf: appended)
+        object["actions"] = .array(actions)
+        return .object(object)
     }
 }
