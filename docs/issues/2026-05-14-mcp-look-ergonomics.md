@@ -49,7 +49,7 @@ s17:60: button [click]
 
 Multiplied by hundreds of elements, the savings are real — both in context bytes and in human/model legibility. The CLI is already YAML and reads better; MCP should match.
 
-A proposed shape: `look` keeps a structured JSON envelope for metadata (snapshot id, app, bundle, errors, truncation markers) and emits the tree itself as a single DSL string under a `snapshot` (or `tree`) field. Indentation indicates nesting, role and handle lead each line, attributes follow:
+A proposed shape: the daemon renders the tree as a single DSL string. A structured envelope (snapshot id, app, bundle, errors, truncation markers) still wraps the tree for MCP's JSON-shaped wire format, but the *tree itself* is the same DSL whether the consumer is MCP or the CLI. CLI YAML, MCP JSON-per-node, and any other parallel tree renderers are deleted in the same change — there is one format. Indentation indicates nesting, role and handle lead each line, attributes follow:
 
 ```
 s17:0: window "AggFlow Quarry"
@@ -73,13 +73,11 @@ Three changes, each independently shippable:
 
 2. **Visible-apps default for the no-target app list.** Reuse the existing record-picker filter. Raw process-table output stays available behind a `format: debug` or `all: true` flag for diagnostics.
 
-3. **DSL-formatted tree in MCP responses.** Envelope stays JSON; the tree becomes a single DSL string. CLI YAML stays unchanged (it's already fine).
+3. **DSL-formatted tree everywhere.** The daemon's single tree renderer emits DSL; both CLI and MCP consume that one renderer. CLI's existing YAML tree serializer and MCP's existing JSON-per-node serializer are removed in the same change.
 
 ## Open Questions
 
 - **DSL grammar.** Handle-first vs role-first per line, where labels/frames/values live, how to represent parameterized actions vs plain click actions, whether to embed handle pagination cursors inline or in the envelope. Worth one short doc once we start building.
-- **CLI parity.** Should the CLI gain the same DSL as an option, or stick with YAML? Lean toward CLI staying YAML for now — the DSL is a model/agent-facing optimization first.
-- **Backward compatibility.** Strictly speaking, no users yet — change the wire shape freely. But the in-repo MCP integration tests and any example transcripts in docs reference the current JSON shape; update them in lockstep.
 - **What "visible apps" actually means.** The record picker presumably uses `NSApplicationActivationPolicyRegular` plus a windows-on-screen check. Verify that filter actually exists and is the right one before claiming reuse.
 
 ## Non-Goals
@@ -92,4 +90,4 @@ Three changes, each independently shippable:
 
 - Trace the depth/limit application path through `SnapshotJSON`/`AXSnapshotCapturer` and identify where the toolbar's children were dropped at depth-2 capture vs where the depth-4 walk reaches them. The fix likely lives at capture time, not at serialization.
 - Find the record-picker visible-apps filter and wire it into the no-target `look` path.
-- Sketch the DSL grammar against a real Firefox snapshot, iterate until it parses cleanly from a paste, then add an `MCPSnapshotRenderer` between the existing JSON path and the MCP response.
+- Sketch the DSL grammar against a real Firefox snapshot, iterate until it parses cleanly from a paste, then implement a single `SnapshotRenderer` shared by CLI and MCP. Remove the existing CLI YAML and MCP per-node JSON serializers in the same change — they don't survive alongside the DSL.
