@@ -49,11 +49,9 @@ public final class AXPrimitiveActionExecutor {
             )
         }
 
-        showTarget(element, label: "CGClick", state: .planned)
+        showTargetBeforeAction(element, label: "CGClick")
         postMouseClick(at: point)
-        let result = PrimitiveActionResult(action: "click", target: target, strategy: "CGEvent", success: true)
-        showTarget(element, label: "CGClick", state: .succeeded)
-        return result
+        return PrimitiveActionResult(action: "click", target: target, strategy: "CGEvent", success: true)
     }
 
     public func click(point: ActionPoint) throws -> PrimitiveActionResult {
@@ -70,32 +68,28 @@ public final class AXPrimitiveActionExecutor {
 
     public func performAction(target: String, action: String) throws -> PrimitiveActionResult {
         let element = try elementStore.element(for: target)
-        showTarget(element, label: action, state: .planned)
+        showTargetBeforeAction(element, label: action)
         let result = AXUIElementPerformAction(element, action as CFString)
-        let actionResult = PrimitiveActionResult(
+        return PrimitiveActionResult(
             action: action,
             target: target,
             strategy: "AXAction",
             success: result == .success,
             message: result == .success ? nil : "AXUIElementPerformAction returned \(result.rawValue)"
         )
-        showTarget(element, label: action, state: actionResult.success ? .succeeded : .failed)
-        return actionResult
     }
 
     public func setValue(target: String, value: String) throws -> PrimitiveActionResult {
         let element = try elementStore.element(for: target)
-        showTarget(element, label: "AXValue", state: .planned)
+        showTargetBeforeAction(element, label: "AXValue")
         let result = AXUIElementSetAttributeValue(element, kAXValueAttribute as CFString, value as CFTypeRef)
-        let actionResult = PrimitiveActionResult(
+        return PrimitiveActionResult(
             action: "set_value",
             target: target,
             strategy: "AXValue",
             success: result == .success,
             message: result == .success ? nil : "AXUIElementSetAttributeValue returned \(result.rawValue)"
         )
-        showTarget(element, label: "AXValue", state: actionResult.success ? .succeeded : .failed)
-        return actionResult
     }
 
     public func typeText(app: String, text: String) throws -> PrimitiveActionResult {
@@ -380,12 +374,11 @@ public final class AXPrimitiveActionExecutor {
         return AXFrame(x: point.x, y: point.y, width: cgSize.width, height: cgSize.height)
     }
 
-    private func showTarget(_ element: AXUIElement, label: String, state: VisualTargetState) {
+    private func showTargetBeforeAction(_ element: AXUIElement, label: String) {
         guard let overlay, overlayConfiguration.enabled, let frame = frame(of: element) else {
             return
         }
-        let duration = state == .planned ? overlayConfiguration.plannedDuration : overlayConfiguration.resultDuration
-        overlay.showTarget(VisualTarget(frame: frame, label: label, state: state, duration: duration))
+        overlay.showTarget(VisualTarget(frame: frame, label: label, state: .planned, duration: overlayConfiguration.actionDelay))
     }
 
     private func copyAttribute<T>(_ attribute: String, from element: AXUIElement) -> T? {

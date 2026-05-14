@@ -60,6 +60,21 @@ cat > "$CONTENTS_DIR/Info.plist" <<PLIST
   <string>$APP_NAME</string>
   <key>CFBundlePackageType</key>
   <string>APPL</string>
+  <key>CFBundleDocumentTypes</key>
+  <array>
+    <dict>
+      <key>CFBundleTypeName</key>
+      <string>Axon Recording</string>
+      <key>CFBundleTypeRole</key>
+      <string>Viewer</string>
+      <key>LSHandlerRank</key>
+      <string>Owner</string>
+      <key>LSItemContentTypes</key>
+      <array>
+        <string>dev.axon.recording</string>
+      </array>
+    </dict>
+  </array>
   <key>CFBundleShortVersionString</key>
   <string>$VERSION</string>
   <key>CFBundleVersion</key>
@@ -68,6 +83,29 @@ cat > "$CONTENTS_DIR/Info.plist" <<PLIST
   <string>14.0</string>
   <key>LSUIElement</key>
   <true/>
+  <key>UTExportedTypeDeclarations</key>
+  <array>
+    <dict>
+      <key>UTTypeIdentifier</key>
+      <string>dev.axon.recording</string>
+      <key>UTTypeDescription</key>
+      <string>Axon Recording</string>
+      <key>UTTypeConformsTo</key>
+      <array>
+        <string>public.yaml</string>
+        <string>public.text</string>
+      </array>
+      <key>UTTypeTagSpecification</key>
+      <dict>
+        <key>public.filename-extension</key>
+        <array>
+          <string>axn</string>
+        </array>
+        <key>public.mime-type</key>
+        <string>text/vnd.axon.recording</string>
+      </dict>
+    </dict>
+  </array>
 </dict>
 </plist>
 PLIST

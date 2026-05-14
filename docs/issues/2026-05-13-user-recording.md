@@ -72,3 +72,21 @@ Non-negotiable:
 - Decide on the `.axn` element-locator shape emitted by the recorder — likely a stable subset of the resolver's full locator language plus an optional `originHint` (point, element identifier) for debugging.
 - Wire the menubar Record / Stop UI to the existing Axon.app service binary.
 - Add a verification-assertion field to the `.axn` schema so recorded result events can travel with the action.
+
+## Implementation Notes
+
+Initial support landed with verified `.axn` metadata on normal batch actions:
+
+- actions may carry mechanical `id`, `requires`, `expects`, `observed`, and `warnings`
+- `run_batch` verifies `requires` before dispatch and `expects` after dispatch, then strips metadata before calling the primitive tool
+- passed expectations enter the per-run fact table for later requirements
+- recorded evidence remains audit-only unless promoted to `expects`
+
+The menu bar app now exposes `Record...` / `Stop Recording...`, scopes capture to a selected running app, shows a red recording status item, and saves to `~/Documents/Axon Recordings/` by default. The recorder uses a passive `CGEventTap`, AX hit-testing, focused-value reads, and target-app `AXObserver` notifications. It currently emits locator-backed clicks, settable text as `set_value`, submit keys as `press_key`, scrolls, drags, and warning-marked point fallbacks.
+
+Remaining hardening work:
+
+- exercise the live recorder manually against TextEdit and Finder and capture fixture recordings
+- improve keyboard burst segmentation beyond stop/click/submit flushing
+- promote more AX notification patterns into stable `expects`
+- add richer secure-field detection as more app-specific AX shapes are observed

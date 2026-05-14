@@ -291,6 +291,44 @@ axon run ./workflow.axn
 
 Use batches for simple ordered composition. History/export generates these files from observed calls rather than expecting agents to hand-author scripts from scratch.
 
+Recorded `.axn` files may attach verification metadata to actions without changing the flat action model:
+
+```yaml
+version: 1
+actions:
+  - id: a001
+    tool: set_value
+    target:
+      app: Example
+      locator:
+        role: AXTextField
+        identifier: name-field
+    value: Mitch
+    expects:
+      - id: a001.value.0
+        kind: value
+        target:
+          app: Example
+          locator:
+            role: AXTextField
+            identifier: name-field
+        state:
+          value:
+            equals: Mitch
+  - id: a002
+    tool: press_key
+    app: Example
+    key: Return
+    requires:
+      - a001.value.0
+```
+
+`requires` are checked before the action runs. `expects` are checked after the action runs, and only passed expectations enter the run's fact table for later `requires`. Verification metadata is stripped before dispatching the primitive tool, so there is no separate `verify_fact` action in `.axn`.
+
+`observed` may store raw capture evidence for audit and repair. `warnings` carry non-fatal recording gaps such as point fallback or unverifiable state. Neither field is enforced by replay.
+
+Supported fact kinds are `exists`, `focused`, `value`, `selected`, `enabled`, `window`, `menu-selection`, and `changed`. Facts resolve through the same locator model as actions and fail honestly on missing, ambiguous, unsupported, or mismatched state.
+
 ## History Export
 
 Axon records recent tool calls in daemon memory. Calls in the same session form a parent chain, so an interaction can be exported later as an editable `.axn` batch.
@@ -327,13 +365,12 @@ Focus-only interaction should not count as a meaningful layout change unless the
 
 Defaults:
 
-- planned target flash: 250 ms
-- result linger: 1100 ms
+- target highlight before action: 1100 ms
 
 Environment overrides are read by the service process:
 
 ```sh
 AXON_VISUAL_OVERLAY=0
-AXON_VISUAL_OVERLAY_PLANNED_MS=400
-AXON_VISUAL_OVERLAY_RESULT_MS=1500
+AXON_VISUAL_OVERLAY_DELAY_MS=1500
+AXON_VISUAL_OVERLAY_WAIT=1
 ```

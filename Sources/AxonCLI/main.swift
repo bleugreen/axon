@@ -198,7 +198,7 @@ do {
 
     case "run":
         let command = try runCommand(arguments: arguments)
-        let response = try SocketClient(path: socketPath)
+        let response = try SocketClient(path: socketPath, responseTimeoutSeconds: SocketClient.defaultBatchResponseTimeoutSeconds)
             .send(JSONRPCRequest(
                 id: .string(command.method),
                 method: command.method,
