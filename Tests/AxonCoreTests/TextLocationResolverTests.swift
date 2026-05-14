@@ -142,6 +142,46 @@ import Testing
     #expect(encodedString.contains(secret) == false)
 }
 
+@Test func textLocationResolutionJSONRedactsDeterministicSubstringMatcherReasons() throws {
+    let token = "sk-proj-abcdef1234567890SECRET"
+    let matchedText = "Generated token \(token)"
+    let resolution = TextLocationResolution(
+        status: .unique,
+        snapshotID: SnapshotID("text-location-fixture"),
+        best: TextLocationCandidate(
+            index: 1,
+            handle: SnapshotHandle(snapshotID: SnapshotID("text-location-fixture"), nodeIndex: 1),
+            role: "AXStaticText",
+            matchedText: matchedText,
+            source: .ax,
+            frame: AXFrame(x: 100, y: 100, width: 100, height: 20),
+            point: ActionPoint(x: 150, y: 110),
+            reasons: ["title contains \(token)"]
+        ),
+        candidates: [
+            TextLocationCandidate(
+                index: 1,
+                handle: SnapshotHandle(snapshotID: SnapshotID("text-location-fixture"), nodeIndex: 1),
+                role: "AXStaticText",
+                matchedText: matchedText,
+                source: .ax,
+                frame: AXFrame(x: 100, y: 100, width: 100, height: 20),
+                point: ActionPoint(x: 150, y: 110),
+                reasons: ["title contains \(token)"]
+            )
+        ]
+    )
+
+    let json = resolution.jsonValue
+    let encoded = try JSONEncoder().encode(json)
+    let encodedString = String(decoding: encoded, as: UTF8.self)
+
+    #expect(json["best"]?["matchedText"] == .string("<redacted: auth-credential>"))
+    #expect(json["best"]?["reasons"]?[0] == .string("<redacted: auth-credential>"))
+    #expect(json["candidates"]?[0]?["reasons"]?[0] == .string("<redacted: auth-credential>"))
+    #expect(encodedString.contains(token) == false)
+}
+
 private func textLocationFixtureSnapshot(
     _ children: [AXNode],
     screenshot: EncodedScreenshot? = nil

@@ -123,8 +123,7 @@ import Testing
             params: .object([
                 "app": .string("com.example.App"),
                 "screenshot": .bool(false),
-                "tree": .bool(true),
-                "sensitive": .bool(false)
+                "tree": .bool(true)
             ])
         )
     ])

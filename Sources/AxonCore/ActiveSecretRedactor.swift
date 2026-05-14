@@ -441,8 +441,10 @@ extension Dictionary where Key == String, Value == JSONValue {
         var reasons: [String: JSONValue] = [:]
         var providers: [String: JSONValue] = [:]
         var references: [String: JSONValue] = [:]
+        var metadata: [String: JSONValue] = [:]
 
         if case let .object(existing)? = self["redaction"] {
+            metadata = existing
             if case let .array(existingFields)? = existing["fields"] {
                 fields = existingFields
             }
@@ -465,12 +467,11 @@ extension Dictionary where Key == String, Value == JSONValue {
             providers[field] = .string(provider)
         }
         references[field] = .array(redaction.references.map(JSONValue.string))
-        self["redaction"] = .object([
-            "fields": .array(fields),
-            "reasons": .object(reasons),
-            "providers": .object(providers),
-            "references": .object(references)
-        ])
+        metadata["fields"] = .array(fields)
+        metadata["reasons"] = .object(reasons)
+        metadata["providers"] = .object(providers)
+        metadata["references"] = .object(references)
+        self["redaction"] = .object(metadata)
     }
 }
 

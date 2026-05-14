@@ -179,6 +179,42 @@ import Testing
     #expect(encodedString.contains(rawSecret) == false)
 }
 
+@Test func locatorResolutionJSONRedactsDeterministicSubstringMatcherReasons() throws {
+    let token = "sk-proj-abcdef1234567890SECRET"
+    let title = "Generated token \(token)"
+    let resolution = LocatorResolution(
+        status: .unique,
+        snapshotID: SnapshotID("locator-fixture"),
+        best: LocatorCandidate(
+            index: 2,
+            handle: SnapshotHandle(snapshotID: SnapshotID("locator-fixture"), nodeIndex: 2),
+            role: "AXButton",
+            title: title,
+            score: 1,
+            reasons: ["title contains \(token)"]
+        ),
+        candidates: [
+            LocatorCandidate(
+                index: 2,
+                handle: SnapshotHandle(snapshotID: SnapshotID("locator-fixture"), nodeIndex: 2),
+                role: "AXButton",
+                title: title,
+                score: 1,
+                reasons: ["title contains \(token)"]
+            )
+        ]
+    )
+
+    let json = resolution.jsonValue
+    let encoded = try JSONEncoder().encode(json)
+    let encodedString = String(decoding: encoded, as: UTF8.self)
+
+    #expect(json["best"]?["title"] == .string("<redacted: auth-credential>"))
+    #expect(json["best"]?["reasons"]?[0] == .string("<redacted: auth-credential>"))
+    #expect(json["candidates"]?[0]?["reasons"]?[0] == .string("<redacted: auth-credential>"))
+    #expect(encodedString.contains(token) == false)
+}
+
 private func locatorFixtureSnapshot(buttons: [String]) -> AppSnapshot {
     AppSnapshot(
         id: SnapshotID("locator-fixture"),

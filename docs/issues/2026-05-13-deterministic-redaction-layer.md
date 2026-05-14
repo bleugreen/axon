@@ -16,6 +16,8 @@ A pipeline stage that runs synchronously on every element of every snapshot and 
 
 Verdicts are additive: an element can match multiple rules, all matches surface in trace metadata, and the strongest tag wins for the displayed `<redacted: ...>` label. The classifier layer (when active) only sees elements the deterministic layer cleared; nothing above can subtract a deterministic redaction.
 
+Status: the core always-on rule layer is implemented in `DeterministicRedactor`. The caller-facing `sensitive` flag and CLI option have been removed; deterministic redaction now runs without opt-in for snapshot, child-page, summary, OCR screen-text, locator, and text-location textual serializers.
+
 ## Rule Categories
 
 ### Role-based
@@ -29,9 +31,9 @@ Verdicts are additive: an element can match multiple rules, all matches surface 
 - Luhn-valid 13–19 digit sequences → `financial-data`.
 - Phone numbers (E.164 plus common US formats) → `pii-identifier`.
 - Email addresses (simplified RFC) → `pii-identifier`.
-- Passport / driver-license number formats (where the shape is unambiguous) → `pii-identifier`.
+- Passport / driver-license number formats (where the shape is unambiguous) → `pii-identifier` (deferred until the rule can stay low-noise).
 - Token shapes: `sk-...`, `sk_live_...`, `ghp_...`, `gho_...`, `xoxb-...`, `xoxp-...`, `AKIA...`, JWT (three base64 segments dot-joined), PEM-armored keys (`-----BEGIN ... PRIVATE KEY-----`) → `auth-credential`.
-- Currency-context: an ISO currency literal (`$N.NN`, `£N.NN`, etc.) adjacent to a "balance" / "total" / "amount" / "due" / "owed" label → `financial-data`.
+- Currency-context: an ISO currency literal (`$N.NN`, `£N.NN`, etc.) adjacent to a "balance" / "total" / "amount" / "due" / "owed" label → `financial-data` (pending).
 
 ### Provider-indexed
 
@@ -93,10 +95,11 @@ Target: single-digit milliseconds for 200-element snapshots regardless of hardwa
 ## Next Steps
 
 - **Done** — Active-credential HMAC index shipped as `ActiveSecretRedactor` at the external textual output boundary. Highest-impact rule in the layer, delivers the headline read-side guarantee. Tracked in detail in [Active-Secret Redaction And Late-Bound Credentials](2026-05-13-late-bound-values-and-credentials.md).
-- Define the rule schema (`name`, `matcher`, `tag`, `version`, `enabled`) and the pipeline integration surface that extends the existing redactor with regex and role rules.
-- Implement the role-based rules — `AXSecureTextField` plus label-substring matchers. Smallest deliverable that meaningfully reduces leak surface beyond the index.
-- Implement the structured-PII regex set (SSN, phone, email, passport).
-- Implement the token-shape regex set with an explicit list of known issuer prefixes.
+- **Done** — Define the rule schema (`rule`, `version`, `tag`) and pipeline integration surface for deterministic regex and role rules.
+- **Done** — Remove caller-facing `sensitive` mode; deterministic redaction is always on and no read API can opt out of it.
+- **Done** — Implement the role-based rules — `AXSecureTextField` plus label-substring matchers.
+- **Partial** — Implement the structured-PII regex set: SSN, phone, email, and Luhn-valid payment-card numbers are live; passport / driver-license formats remain pending until an unambiguous low-noise rule set is chosen.
+- **Done** — Implement the token-shape regex set with explicit known issuer prefixes.
 - Implement the currency-context heuristic with label-adjacency.
 - Define the trace metadata schema and add an `axon redaction-trace <snapshot-id>` CLI for auditing which rules fired against which elements in a given snapshot.
 - Coordinate with the [classifier](2026-05-13-policy-driven-sensitivity-classifier.md) work so the deterministic layer's output is shaped to feed both runtime rendering and head training.

@@ -106,18 +106,10 @@ public struct CommandRouter {
                 let screenshot = boolParam("screenshot", in: params) ?? false
                 let screenText = boolParam("screenText", in: params) ?? false
                 let includeTree = boolParam("tree", in: params) ?? true
-                let sensitive = boolParam("sensitive", in: params) ?? false
-                if sensitive && screenshot {
-                    throw JSONRPCError.invalidParams("sensitive snapshots cannot include screenshots")
-                }
-                if sensitive && screenText {
-                    throw JSONRPCError.invalidParams("sensitive snapshots cannot include screenText")
-                }
                 let snapshot = try captureSnapshot(target, screenshot || screenText)
                 elementStore.store(summary: observedSummary(for: snapshot))
                 var snapshotJSON = snapshot.jsonValue(
                     includeTree: includeTree,
-                    sensitive: sensitive,
                     activeSecretRedactor: activeSecretRedactor
                 )
                 if let depth = intParam("depth", in: params) {
@@ -290,7 +282,6 @@ public struct CommandRouter {
 
     private func changedSinceResponse(id: JSONRPCID?, params: [String: JSONValue]) throws -> JSONRPCResponse {
         let snapshotID = SnapshotID(try requiredString("since", in: params))
-        let sensitive = boolParam("sensitive", in: params) ?? false
         let activeSecretRedactor = activeSecretRedactor()
         do {
             let previous = try elementStore.summary(for: snapshotID)
@@ -304,8 +295,8 @@ public struct CommandRouter {
                 "reason": .string(change.reason),
                 "snapshotId": .string(previous.id.rawValue),
                 "currentSnapshotId": .string(current.id.rawValue),
-                "previous": previous.jsonValue(sensitive: sensitive, activeSecretRedactor: activeSecretRedactor),
-                "current": current.jsonValue(sensitive: sensitive, activeSecretRedactor: activeSecretRedactor)
+                "previous": previous.jsonValue(activeSecretRedactor: activeSecretRedactor),
+                "current": current.jsonValue(activeSecretRedactor: activeSecretRedactor)
             ]
             if !observedChanges.isEmpty {
                 result["observedChanges"] = .array(observedChanges.map(\.jsonValue))
@@ -320,7 +311,7 @@ public struct CommandRouter {
                     "reason": .string("app_missing"),
                     "snapshotId": .string(previous.id.rawValue),
                     "currentSnapshotId": .null,
-                    "previous": previous.jsonValue(sensitive: sensitive, activeSecretRedactor: activeSecretRedactor),
+                    "previous": previous.jsonValue(activeSecretRedactor: activeSecretRedactor),
                     "current": .null
                 ]
             )

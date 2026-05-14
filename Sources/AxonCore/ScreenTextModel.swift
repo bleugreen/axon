@@ -60,14 +60,12 @@ public extension ScreenTextItem {
         var object: [String: JSONValue] = [
             "frame": frame.jsonValue
         ]
-        _ = object.addActiveSecretRedactedString(
+        object.addRedactedString(
             "text",
             text,
-            activeSecretRedactor: activeSecretRedactor
+            activeSecretRedactor: activeSecretRedactor,
+            redactionScope: redactionScope
         )
-        if object["text"] == nil {
-            object["text"] = .string(text)
-        }
         if let confidence {
             object["confidence"] = .double(confidence)
         }

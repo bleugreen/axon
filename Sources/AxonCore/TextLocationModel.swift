@@ -303,25 +303,24 @@ public extension TextLocationCandidate {
             "frame": frame.jsonValue,
             "point": point.jsonValue
         ]
-        let matchedTextWasRedacted = object.addActiveSecretRedactedString(
+        let matchedTextWasRedacted = object.addRedactedString(
             "matchedText",
             matchedText,
-            activeSecretRedactor: activeSecretRedactor
+            activeSecretRedactor: activeSecretRedactor,
+            redactionContext: DeterministicRedactionContext(role: role, title: matchedText),
+            redactionScope: redactionScope
         )
-        if object["matchedText"] == nil {
-            object["matchedText"] = .string(matchedText)
-        }
-        if matchedTextWasRedacted {
-            object["reasons"] = .array(reasons.map {
-                JSONValue.string($0.replacingOccurrences(of: matchedText, with: "<redacted: active-credential>"))
-            })
-            object.addActiveSecretRedactionMetadata(
-                field: "reasons",
-                redaction: activeSecretRedactor.redaction(for: matchedText) ?? ActiveSecretRedaction()
-            )
+        let renderedReasons: [String]
+        if matchedTextWasRedacted,
+           case let .string(replacement)? = object["matchedText"] {
+            renderedReasons = reasons.map { $0.replacingOccurrences(of: matchedText, with: replacement) }
         } else {
-            object["reasons"] = .array(reasons.map(JSONValue.string))
+            renderedReasons = reasons
         }
+        object["reasons"] = .array(renderedReasons.redactedReasonValues(
+            activeSecretRedactor: activeSecretRedactor,
+            redactionScope: redactionScope
+        ))
         return .object(object)
     }
 }

@@ -86,48 +86,64 @@ import Testing
     #expect(json["children"]?[1]?["handle"] == .string("s12:44"))
 }
 
-@Test func sensitiveSnapshotRedactsValuesAndSecretLikeTextWithPrefixes() throws {
-    let rawSecret = "sk-proj-abcdef1234567890SECRET"
+@Test func snapshotDeterministicRedactionRedactsRoleAndPatternMatchesWithoutOptIn() throws {
+    let apiToken = "not-shaped-but-labeled-secret"
+    let ssn = "123-45-6789"
+    let phone = "(415) 555-1212"
+    let email = "mitch@example.com"
+    let card = "4242 4242 4242 4242"
+    let token = "sk-proj-abcdef1234567890SECRET"
     let snapshot = AppSnapshot(
-        id: SnapshotID("snap-sensitive"),
+        id: SnapshotID("snap-deterministic"),
         app: AppIdentity(bundleIdentifier: "com.example.App", name: "Example", processIdentifier: 7),
         windows: [
             AXNode(role: "AXWindow", title: "Main", children: [
                 AXNode(
-                    role: "AXTextField",
-                    title: "API key",
-                    value: rawSecret,
-                    identifier: "github_pat_11ABCDEFGHijklmnopqrstuvwxyz1234567890"
+                    role: "AXSecureTextField",
+                    value: "hunter2"
                 ),
                 AXNode(
-                    role: "AXStaticText",
-                    title: "Generated key \(rawSecret)"
+                    role: "AXTextField",
+                    title: "API Token",
+                    value: apiToken
                 ),
-                AXNode(role: "AXButton", title: "Copy", actions: ["AXPress"])
+                AXNode(role: "AXStaticText", title: "SSN \(ssn)"),
+                AXNode(role: "AXStaticText", title: "Call \(phone)"),
+                AXNode(role: "AXStaticText", title: "Email \(email)"),
+                AXNode(role: "AXStaticText", title: "Card \(card)"),
+                AXNode(role: "AXStaticText", title: "Generated key \(token)")
             ])
         ],
         screenshot: EncodedScreenshot(mediaType: "image/png", base64Data: "raw-image", width: 300, height: 200)
     )
 
-    let json = snapshot.jsonValue(includeTree: true, sensitive: true)
+    let json = snapshot.jsonValue(includeTree: true)
     let encoded = try encodedJSONString(json)
-    let value = json["indexedNodes"]?[1]?["value"]
-    let title = json["indexedNodes"]?[2]?["title"]
-    let identifier = json["windows"]?[0]?["children"]?[0]?["identifier"]
 
-    #expect(json["redaction"]?["sensitive"] == .bool(true))
-    #expect(json["screenshot"] == .null)
-    #expect(value != .string(rawSecret))
-    #expect(value == .string("sk-proj-abcd...[redacted]"))
-    #expect(title == .string("Generated key sk-proj-abcd...[redacted]"))
-    #expect(identifier == .string("github_pat_1...[redacted]"))
-    #expect(json["indexedNodes"]?[3]?["title"] == .string("Copy"))
-    #expect(json["indexedNodes"]?[1]?["redaction"]?["fields"]?[0] == .string("value"))
+    #expect(json["redaction"] == nil)
+    #expect(json["screenshot"]?["base64Data"] == .string("raw-image"))
+    #expect(json["indexedNodes"]?[1]?["value"] == .string("<redacted: auth-credential>"))
+    #expect(json["indexedNodes"]?[1]?["redaction"]?["matched"]?["value"]?[0]?["rule"] == .string("ax-secure-text-field"))
+    #expect(json["indexedNodes"]?[2]?["title"] == .string("API Token"))
+    #expect(json["indexedNodes"]?[2]?["value"] == .string("<redacted: auth-credential>"))
+    #expect(json["indexedNodes"]?[2]?["redaction"]?["matched"]?["value"]?[0]?["rule"] == .string("secret-label-value"))
+    #expect(json["indexedNodes"]?[3]?["title"] == .string("<redacted: pii-identifier>"))
+    #expect(json["indexedNodes"]?[4]?["title"] == .string("<redacted: pii-identifier>"))
+    #expect(json["indexedNodes"]?[5]?["title"] == .string("<redacted: pii-identifier>"))
+    #expect(json["indexedNodes"]?[6]?["title"] == .string("<redacted: financial-data>"))
+    #expect(json["indexedNodes"]?[7]?["title"] == .string("<redacted: auth-credential>"))
+    #expect(json["indexedNodes"]?[7]?["redaction"]?["reasons"]?["title"] == .string("auth-credential"))
+    #expect(encoded.contains("hunter2") == false)
+    #expect(encoded.contains(apiToken) == false)
+    #expect(encoded.contains(ssn) == false)
+    #expect(encoded.contains(phone) == false)
+    #expect(encoded.contains(email) == false)
+    #expect(encoded.contains(card) == false)
     #expect(encoded.contains("SECRET") == false)
-    #expect(encoded.contains("raw-image") == false)
+    #expect(encoded.contains("raw-image"))
 }
 
-@Test func sensitiveSnapshotRedactsPlainValuesEvenWhenNotSecretShaped() {
+@Test func snapshotDeterministicRedactionKeepsPlainValuesWithoutRuleMatches() {
     let snapshot = AppSnapshot(
         id: SnapshotID("snap-value"),
         app: AppIdentity(bundleIdentifier: "com.example.App", name: "Example", processIdentifier: 7),
@@ -139,10 +155,48 @@ import Testing
         screenshot: nil
     )
 
-    let json = snapshot.jsonValue(includeTree: false, sensitive: true)
+    let json = snapshot.jsonValue(includeTree: false)
 
-    #expect(json["indexedNodes"]?[1]?["value"] == .string("hu...[redacted]"))
-    #expect(json["indexedNodes"]?[1]?["redaction"]?["reasons"]?["value"] == .string("sensitive_value"))
+    #expect(json["indexedNodes"]?[1]?["value"] == .string("hunter2"))
+    #expect(json["indexedNodes"]?[1]?["redaction"] == nil)
+}
+
+@Test func snapshotDeterministicRedactionKeepsAllRuleMatchesAndUsesStrongestTag() {
+    let snapshot = AppSnapshot(
+        id: SnapshotID("snap-multiple-rules"),
+        app: AppIdentity(bundleIdentifier: "com.example.App", name: "Example", processIdentifier: 7),
+        windows: [
+            AXNode(role: "AXWindow", title: "Main", children: [
+                AXNode(role: "AXStaticText", title: "token sk-proj-abcdef1234567890SECRET for 123-45-6789")
+            ])
+        ],
+        screenshot: nil
+    )
+
+    let json = snapshot.jsonValue(includeTree: false)
+    let redaction = json["indexedNodes"]?[1]?["redaction"]
+
+    #expect(json["indexedNodes"]?[1]?["title"] == .string("<redacted: auth-credential>"))
+    #expect(redaction?["reasons"]?["title"] == .string("auth-credential"))
+    #expect(redaction?["matched"]?["title"]?[0]?["rule"] == .string("ssn"))
+    #expect(redaction?["matched"]?["title"]?[0]?["tag"] == .string("pii-identifier"))
+    #expect(redaction?["matched"]?["title"]?[1]?["rule"] == .string("openai-api-key"))
+    #expect(redaction?["matched"]?["title"]?[1]?["tag"] == .string("auth-credential"))
+}
+
+@Test func screenTextDeterministicRedactionCatchesTokenShapes() throws {
+    let token = "ghp_abcdefghijklmnopqrstuvwxyz1234567890"
+    let item = ScreenTextItem(
+        text: "Generated token \(token)",
+        frame: AXFrame(x: 1, y: 2, width: 3, height: 4)
+    )
+
+    let json = item.jsonValue
+    let encoded = try encodedJSONString(json)
+
+    #expect(json["text"] == .string("<redacted: auth-credential>"))
+    #expect(json["redaction"]?["matched"]?["text"]?[0]?["rule"] == .string("github-token"))
+    #expect(encoded.contains(token) == false)
 }
 
 @Test func activeSecretSnapshotRedactsValuesWithoutSensitiveMode() throws {

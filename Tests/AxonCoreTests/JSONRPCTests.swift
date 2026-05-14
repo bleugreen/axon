@@ -113,16 +113,22 @@ import Testing
     #expect(response.result?["snapshot"]?["screenshot"] == .null)
 }
 
-@Test func lookRequestRejectsSensitiveScreenshot() {
+@Test func lookRequestTreatsRemovedSensitiveParameterAsInert() {
     let router = CommandRouter(
-        captureSnapshot: { _, _ in
-            Issue.record("snapshot capture should not run for invalid sensitive screenshot request")
-            return emptySnapshot
+        captureSnapshot: { app, screenshot in
+            #expect(app == "com.example.App")
+            #expect(screenshot)
+            return AppSnapshot(
+                id: SnapshotID("snap-removed-sensitive"),
+                app: AppIdentity(bundleIdentifier: "com.example.App", name: "Example", processIdentifier: 7),
+                windows: [AXNode(role: "AXWindow", title: "Main")],
+                screenshot: EncodedScreenshot(mediaType: "image/png", base64Data: "raw-image", width: 300, height: 200)
+            )
         }
     )
 
     let response = router.handle(JSONRPCRequest(
-        id: .string("sensitive-shot"),
+        id: .string("removed-sensitive"),
         method: "look",
         params: .object([
             "app": .string("com.example.App"),
@@ -131,12 +137,12 @@ import Testing
         ])
     ))
 
-    #expect(response.result == nil)
-    #expect(response.error?.code == -32602)
-    #expect(response.error?.message == "sensitive snapshots cannot include screenshots")
+    #expect(response.error == nil)
+    #expect(response.result?["snapshot"]?["screenshot"]?["base64Data"] == .string("raw-image"))
 }
 
-@Test func lookRequestReturnsSensitiveRedactedSnapshot() {
+@Test func lookRequestReturnsDeterministicallyRedactedSnapshotWithoutOptIn() {
+    let token = "sk-proj-abcdef1234567890SECRET"
     let router = CommandRouter(
         captureSnapshot: { _, screenshot in
             #expect(screenshot == false)
@@ -145,7 +151,7 @@ import Testing
                 app: AppIdentity(bundleIdentifier: "com.example.App", name: "Example", processIdentifier: 7),
                 windows: [
                     AXNode(role: "AXWindow", title: "Main", children: [
-                        AXNode(role: "AXTextField", value: "sk-proj-abcdef1234567890SECRET")
+                        AXNode(role: "AXTextField", value: token)
                     ])
                 ],
                 screenshot: nil
@@ -154,18 +160,18 @@ import Testing
     )
 
     let response = router.handle(JSONRPCRequest(
-        id: .string("sensitive"),
+        id: .string("deterministic-redaction"),
         method: "look",
         params: .object([
             "app": .string("com.example.App"),
-            "sensitive": .bool(true),
             "tree": .bool(false)
         ])
     ))
 
     #expect(response.error == nil)
-    #expect(response.result?["snapshot"]?["redaction"]?["sensitive"] == .bool(true))
-    #expect(response.result?["snapshot"]?["indexedNodes"]?[1]?["value"] == .string("sk-proj-abcd...[redacted]"))
+    #expect(response.result?["snapshot"]?["redaction"] == nil)
+    #expect(response.result?["snapshot"]?["indexedNodes"]?[1]?["value"] == .string("<redacted: auth-credential>"))
+    #expect(response.result?["snapshot"]?["indexedNodes"]?[1]?["redaction"]?["matched"]?["value"]?[0]?["rule"] == .string("openai-api-key"))
 }
 
 @Test func lookSinceReportsCoarseWindowChanges() {

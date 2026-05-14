@@ -35,25 +35,25 @@ public extension LocatorCandidate {
             "role": .string(role),
             "score": .int(score)
         ]
-        let titleWasRedacted = object.addActiveSecretRedactedString(
+        let titleWasRedacted = object.addRedactedString(
             "title",
             title,
-            activeSecretRedactor: activeSecretRedactor
+            activeSecretRedactor: activeSecretRedactor,
+            redactionContext: DeterministicRedactionContext(role: role, title: title),
+            redactionScope: redactionScope
         )
-        if object["title"] == nil {
-            object["title"] = title.map(JSONValue.string) ?? .null
-        }
-        if titleWasRedacted, let title {
-            object["reasons"] = .array(reasons.map {
-                JSONValue.string($0.replacingOccurrences(of: title, with: "<redacted: active-credential>"))
-            })
-            object.addActiveSecretRedactionMetadata(
-                field: "reasons",
-                redaction: activeSecretRedactor.redaction(for: title) ?? ActiveSecretRedaction()
-            )
+        let renderedReasons: [String]
+        if titleWasRedacted,
+           let title,
+           case let .string(replacement)? = object["title"] {
+            renderedReasons = reasons.map { $0.replacingOccurrences(of: title, with: replacement) }
         } else {
-            object["reasons"] = .array(reasons.map(JSONValue.string))
+            renderedReasons = reasons
         }
+        object["reasons"] = .array(renderedReasons.redactedReasonValues(
+            activeSecretRedactor: activeSecretRedactor,
+            redactionScope: redactionScope
+        ))
         return .object(object)
     }
 }
