@@ -64,14 +64,14 @@ cat > "$CONTENTS_DIR/Info.plist" <<PLIST
   <array>
     <dict>
       <key>CFBundleTypeName</key>
-      <string>Axon Recording</string>
+      <string>Axon Recipe</string>
       <key>CFBundleTypeRole</key>
-      <string>Viewer</string>
+      <string>Editor</string>
       <key>LSHandlerRank</key>
       <string>Owner</string>
       <key>LSItemContentTypes</key>
       <array>
-        <string>dev.axon.recording</string>
+        <string>com.bleugreen.axon.recipe</string>
       </array>
     </dict>
   </array>
@@ -82,14 +82,14 @@ cat > "$CONTENTS_DIR/Info.plist" <<PLIST
   <key>LSMinimumSystemVersion</key>
   <string>14.0</string>
   <key>LSUIElement</key>
-  <true/>
+  <false/>
   <key>UTExportedTypeDeclarations</key>
   <array>
     <dict>
       <key>UTTypeIdentifier</key>
-      <string>dev.axon.recording</string>
+      <string>com.bleugreen.axon.recipe</string>
       <key>UTTypeDescription</key>
-      <string>Axon Recording</string>
+      <string>Axon Recipe</string>
       <key>UTTypeConformsTo</key>
       <array>
         <string>public.yaml</string>
@@ -102,7 +102,7 @@ cat > "$CONTENTS_DIR/Info.plist" <<PLIST
           <string>axn</string>
         </array>
         <key>public.mime-type</key>
-        <string>text/vnd.axon.recording</string>
+        <string>text/vnd.axon.recipe</string>
       </dict>
     </dict>
   </array>

@@ -12,19 +12,40 @@ This issue defines the editor app that turns `.axn` files into a visual document
 
 One macOS app bundle, three scenes:
 
-1. **MenuBarExtra** — the existing menubar surface (daemon status, update flow). Already shipped.
-2. **DocumentGroup** — document-based editor for `.axn`. `.axn` registers as the owned file type; double-click opens an editor window per file.
+1. **MenuBarExtra** — the existing menubar surface (daemon status, update flow). This is shipped today as an AppKit `NSStatusItem`; the editor work may migrate it to SwiftUI rather than treating `MenuBarExtra` as already done.
+2. **DocumentGroup** — document-based editor for `.axn`. `.axn` registers as the owned file type; double-click opens an editor window per file. It no longer runs the recipe immediately.
 3. **Settings** — singleton preferences window (⌘,) for daemon-scoped config.
 
 Two-apps was the obvious alternative. Rejected: the menubar bundle already owns daemon lifecycle, the in-app updater, and the IPC socket — splitting the editor out duplicates all of that for no gain. SwiftUI 4+ supports `MenuBarExtra` + `DocumentGroup` + `Settings` in a single `App` cleanly.
 
 ## Editor
 
+The editor, not Finder, owns replay. Opening a file is inspect/edit-only; running is an explicit play button in the document toolbar.
+
 The editor renders an `.axn` as a vertical list of **action blocks**, never as raw yaml. Each block is a typed form for one tool-call: tool icon and name at the top, target summary on a second line, per-tool fields on expansion. Parameter references inside string fields tokenize into chips with binding popovers — `value: Hello {{recipient}}` renders as `Hello [👤 recipient]` and clicking the chip surfaces literal / caller-arg / declared-source options with an op picker for `op://` and an environment picker for `env://`.
+
+The product bar is a visual recipe document, not a generic structured-data editor. A user should be able to understand and change the recipe in domain terms:
+
+- `click` edits the target relationship and click verification, not a JSON object.
+- `type` edits the target field and parameterized value.
+- `keyboard` edits the target app and key chord/text.
+- `scroll` edits surface/app and deltas.
+- `drag` edits source target, destination target, app, and duration.
+- `invoke` edits target plus AX action name.
+- `look` and `find` edit perception/query settings.
+- `note` edits annotation text.
+
+Structural target data (`target`, `from`, `to`, `locator`) is never hand-authored in the primary UI. The editor renders it as quiet provenance: a single human locator line in the step summary, plus an optional disclosure with recorder detail when useful. It must not dominate the step or repeat AX internals. Target repair is not a picker button in the editor surface; broken middle sections are handled through the debugger-style run/record flow once that exists.
+
+App context is recipe-level for normal single-app recipes. It belongs near the document/inputs context, not as an editable field repeated inside every step. Per-step app controls should only appear for recipes that genuinely span multiple apps, and even then the UI should make the cross-app transition explicit rather than surfacing a generic app text field.
+
+Selection must not be the boundary between "useful" and "hidden." Collapsed rows should still read as complete recipe lines. Selecting a row only exposes controls for fields that are genuinely variable; it must not duplicate the title, repeat the same parameter chips, or expose recorded locator mechanics as if they are authoring controls.
+
+If a tool field has no typed editor yet, the block should be marked "unsupported field" with a read-only summary and a follow-up issue. Falling back to raw JSON/YAML editing in the main UI is a product bug, not an acceptable shortcut.
 
 The block list is the document body. Drag to reorder, multi-select, delete, duplicate. `note:` blocks render as sticky-note rows interleaved with action blocks — non-executable annotations that travel with the file.
 
-The locator picker that came up during design is a non-feature: recorded blocks already have a locator captured at record time, so there is no authoring path that needs hand-built locators. The one edit-time case is *repair* (a fragile locator broke between sessions) — selecting a block exposes a "Re-pick target" affordance that puts the daemon into picker-mode against the live app and replaces just the locator field.
+The locator picker that came up during design is a non-feature: recorded blocks already have a locator captured at record time, so there is no authoring path that needs hand-built locators. If a fragile locator breaks between sessions, the editor should help the user run to that point and re-record the affected section rather than pretending a static target picker is the main editing model.
 
 ## Run Model And Breakpoints
 
@@ -63,7 +84,9 @@ actions: [...]
 
 The comment header is optional — a file recorded by the daemon and never opened in the editor has none. The editor parses it best-effort and silently regenerates it on save.
 
-Block IDs (`b3`, `b7` above) are stable identifiers added to each action when the editor first writes the file, so breakpoints survive edits that reorder or insert blocks. The recorder emits IDs from the start; older files without IDs get them on first save through the editor.
+Block IDs (the `b3` / `b7` examples above are illustrative, not a required prefix) are stable opaque identifiers added to each block when the editor first writes the file, so breakpoints survive edits that reorder or insert blocks. The recorder already emits IDs from the start; older files without IDs get them on first save through the editor.
+
+`AxonRecipe` in `AxonCore` is the shared file model. It owns parsing, best-effort editor metadata loading, stable ID assignment, first-class `note:` blocks, and YAML serialization so the app, recorder, CLI, and executor do not grow separate parsers.
 
 ## Daemon Coupling
 
@@ -72,8 +95,6 @@ The editor is just another client of the existing daemon socket — no new IPC s
 - `run(blocks:until:)` — replay a block range, pause at a breakpoint.
 - `recordSession(insertAfter:)` — start a recording session whose output appends to the open document at a given block ID.
 - `look(snapshotAt:)` — fetch the AX snapshot the daemon captured at a paused point, for the snapshot panel.
-- `pickElement()` — picker-mode for locator repair; returns a locator for the next user-clicked element.
-
 If any of these don't exist yet on the daemon side, they fall out of the editor's needs and get added through this work — the editor is the forcing function for the daemon's public client surface.
 
 ## Preferences
@@ -91,7 +112,7 @@ Prefs is intentionally small. CLI parity matters more than UI breadth — anythi
 
 ## Implementation Sketch
 
-New types live in `Sources/AxonApp/Editor/`. The existing `Sources/AxonApp/main.swift` becomes a SwiftUI `@main App` with three scenes:
+Shared file-model types live in `Sources/AxonCore/` under `AxonRecipe`. Editor UI types live in `Sources/AxonApp/Editor/`. The existing `Sources/AxonApp/main.swift` becomes a SwiftUI `@main App` with three scenes:
 
 ```swift
 @main
@@ -114,7 +135,7 @@ struct AxonAppMain: App {
 }
 ```
 
-`AxonDocument` is a `ReferenceFileDocument` wrapping a parsed `Recipe` from `AxonCore`, plus editor-side state (breakpoints, selection, `runState`, ephemeral arg bindings for testing).
+`AxonDocument` is a `ReferenceFileDocument` wrapping a parsed `AxonRecipe` from `AxonCore`, plus editor-side state (selection, `runState`, ephemeral arg bindings for testing). Persistent editor metadata such as breakpoints remains in the recipe header, not in an app-only sidecar.
 
 The view hierarchy:
 
@@ -133,11 +154,12 @@ DocumentView (NavigationSplitView)
 
 Each tool verb gets a small dedicated body view (`LookBody`, `ClickBody`, `TypeBody`, …) keyed by the parsed action shape. A shared `ParamizableTextField` tokenizes `{{name}}` references into chips wherever string fields appear.
 
-Info.plist gets `CFBundleDocumentTypes` + `UTExportedTypeDeclarations` for `com.bleugreen.axon.recipe` conforming to `public.yaml`, so `.axn` files double-click into the editor and round-trip through the system as owned documents.
+Info.plist gets `CFBundleDocumentTypes` + `UTExportedTypeDeclarations` for the `.axn` type conforming to `public.yaml`, with role `Editor`, so `.axn` files double-click into the editor and round-trip through the system as owned documents. The current package script already registers `dev.axon.recording` as a viewer type; this work updates that registration rather than preserving open-to-run behavior.
 
 ## Non-Goals
 
 - **No raw-yaml editor pane.** The block view is the only authoring surface. Power users edit `.axn` in their own editor; the app does not compete with that path.
+- **No generic JSON/plist field editor as the main UI.** Structured fields are summarized, inspected, and repaired through typed affordances. Raw structural views are debug-only, never the normal editing path.
 - **No multi-pane live AX tree.** Single document window. The paused-snapshot panel shows AX state at a breakpoint, but there is no always-on live tree of the target app.
 - **No locator hand-authoring.** Locators come from the recorder or from picker-mode repair, never from manual field entry.
 - **No interactive prompting during replay.** Inherited from the parameter model — automations don't pause for typed input.
@@ -152,11 +174,12 @@ Info.plist gets `CFBundleDocumentTypes` + `UTExportedTypeDeclarations` for `com.
 
 ## Next Steps
 
-One PR. The chunks below describe the shape of that PR, not separate landings:
+Implementation chunks, in dependency order:
 
-- File-type registration (UTI + Info.plist) so `.axn` double-clicks into the app.
-- `AxonDocument` + leading-comment metadata round-trip.
-- Block-list rendering for the existing tool verbs (read-only at first, editing follows).
+- `AxonRecipe` + leading-comment metadata round-trip + first-class non-executable `note:` blocks.
+- Stable block IDs assigned by the recorder/editor and preserved on save.
+- File-type registration (UTI + Info.plist) so `.axn` double-clicks into the editor, not immediate replay.
+- SwiftUI app-scene migration that preserves the existing menubar behavior.
+- `AxonDocument` and block-list rendering for the existing tool verbs (read-only at first, editing follows).
 - Run-state machine wired to the daemon socket, including breakpoints and record-from-here.
-- Preferences scene with the v1 sections.
-- Stable block IDs emitted by the recorder, picked up by the editor on first save.
+- Preferences scene with the v1 sections that have backing CLI/core state.
