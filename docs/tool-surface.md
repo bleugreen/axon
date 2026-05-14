@@ -9,7 +9,7 @@ files, and the CLI. There are no compatibility aliases for previous tool names.
 look(target?, since?, screenshot?, screenText?, tree?, sensitive?, offset?, limit?, depth?, format?, frames?)
 find(app, locator)
 permit()
-run(actions?, path?, continueOnError?, dryRun?)
+run(actions?, path?, argValues?, continueOnError?, dryRun?)
 save(sessionId?, from?, to?, path?, includeReads?)
 
 click(target)
@@ -27,7 +27,7 @@ axon permit
 axon refresh-secrets [--json]
 axon look [target] [--since snapshot-id] [--screenshot] [--screen-text] [--sensitive] [--frames] [--json] [--no-tree] [--offset n] [--limit n] [--depth n]
 axon find <app> '<locator-json>'
-axon run <path.axn> [--dry-run] [--continue-on-error]
+axon run <path.axn> [--arg name=value] [--dry-run] [--continue-on-error]
 axon save [--session id] [--from call] [--to call] [--path file.axn] [--include-reads]
 
 axon click <handle|target-json>
@@ -90,18 +90,31 @@ for shortcuts, special keys, or raw text when keystroke behavior is the intent.
 
 `run` executes `.axn` actions from a file, inline actions, or both. When both
 `path` and `actions` are provided, the file is loaded first and inline actions
-are appended.
+are appended. Caller-supplied `.axn` parameters are passed as `argValues`
+through MCP/socket calls or as repeated CLI `--arg name=value` flags.
 
 ```yaml
 version: 1
+args:
+  - name: user_name
+    type: string
+    default: Mitch
 actions:
   - tool: type
     target: s1:12
-    value: Mitch
+    value: "{{user_name}}"
   - tool: keyboard
     app: Safari
     keys: Return
 ```
+
+Parameter references are substituted inside string `value` and `keys` fields
+before the first action runs. Supported v1 parameter types are `string`,
+`secret`, `number`, `date`, `email`, and `path`. `env://NAME` and
+`op://vault/item/field` sources can bind declared args; caller args cannot
+override a declared source. Secret-tainted action values are redacted in dry-run
+params, batch traces, and history. Prefer `op://` or `env://` sources for
+secrets; literal CLI `--arg` values can be exposed before Axon receives them.
 
 `save` writes recent recorded calls as an editable `.axn` file. Read calls such
 as `look` and `find` are omitted unless `includeReads` is true.

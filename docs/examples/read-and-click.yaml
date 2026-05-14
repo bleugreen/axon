@@ -1,4 +1,9 @@
 version: 1
+args:
+  - name: issue_title
+    type: string
+    description: Issue title to enter before saving
+    default: Draft issue title
 actions:
   - tool: type
     target:
@@ -7,7 +12,7 @@ actions:
         role: AXTextField
         label:
           contains: Title
-    value: Draft issue title
+    value: "{{issue_title}}"
   - tool: click
     target:
       app: cairn

@@ -43,6 +43,7 @@ import Testing
     #expect(tool(named: "look", in: tools)?["inputSchema"]?["properties"]?["screenText"] != nil)
     #expect(tool(named: "look", in: tools)?["inputSchema"]?["properties"]?["sensitive"] != nil)
     #expect(tool(named: "look", in: tools)?["inputSchema"]?["properties"]?["includeScreenshot"] == nil)
+    #expect(tool(named: "run", in: tools)?["inputSchema"]?["properties"]?["argValues"] != nil)
     #expect(tool(named: "click", in: tools)?["inputSchema"]?["properties"]?["target"]?["anyOf"]?[2] != nil)
     #expect(tool(named: "click", in: tools)?["inputSchema"]?["properties"]?["target"]?["anyOf"]?[3] != nil)
     #expect(tool(named: "invoke", in: tools)?["inputSchema"]?["properties"]?["target"]?["anyOf"]?[2] == nil)
@@ -178,6 +179,9 @@ import Testing
                         "target": .string("s1:2")
                     ])
                 ]),
+                "argValues": .object([
+                    "recipient": .string("mitch@example.com")
+                ]),
                 "dryRun": .bool(true),
                 "continueOnError": .bool(true)
             ])
@@ -195,6 +199,9 @@ import Testing
                         "tool": .string("click"),
                         "target": .string("s1:2")
                     ])
+                ]),
+                "argValues": .object([
+                    "recipient": .string("mitch@example.com")
                 ]),
                 "dryRun": .bool(true),
                 "continueOnError": .bool(true)

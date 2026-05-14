@@ -539,6 +539,314 @@ private func articleSnapshot(children: [AXNode]) -> AppSnapshot {
     ])
 }
 
+@Test func runSubstitutesCallerArgumentsIntoActionValues() throws {
+    var requests: [JSONRPCRequest] = []
+    let executor = ActionBatchExecutor { request in
+        requests.append(request)
+        return JSONRPCResponse(id: request.id, result: ["action": .object(["success": .bool(true)])])
+    }
+
+    let source = """
+    version: 1
+    args:
+      - name: recipient
+        type: email
+    actions:
+      - tool: type
+        target: s1:2
+        value: "Hello {{recipient}}"
+    """
+    let path = try temporaryAxnFile(source)
+    defer { try? FileManager.default.removeItem(atPath: path) }
+
+    let batch = try executor.run(params: [
+        "path": .string(path),
+        "argValues": .object(["recipient": .string("mitch@example.com")])
+    ])
+
+    #expect(batch["success"] == .bool(true))
+    #expect(requests.count == 1)
+    #expect(requests[0].params?["value"] == .string("Hello mitch@example.com"))
+}
+
+@Test func runFailsBeforeDispatchWhenRequiredArgumentIsMissing() throws {
+    var requests: [JSONRPCRequest] = []
+    let executor = ActionBatchExecutor { request in
+        requests.append(request)
+        return JSONRPCResponse(id: request.id, result: ["action": .object(["success": .bool(true)])])
+    }
+
+    let source = """
+    version: 1
+    args:
+      - name: recipient
+        type: email
+    actions:
+      - tool: type
+        target: s1:2
+        value: "{{recipient}}"
+    """
+    let path = try temporaryAxnFile(source)
+    defer { try? FileManager.default.removeItem(atPath: path) }
+
+    do {
+        _ = try executor.run(params: ["path": .string(path)])
+        Issue.record("missing required argument should fail")
+    } catch let error as ActionBatchError {
+        #expect(error.description == "missing required arg: recipient")
+    }
+    #expect(requests.isEmpty)
+}
+
+@Test func runRejectsUndeclaredParameterReferencesBeforeDispatch() throws {
+    var requests: [JSONRPCRequest] = []
+    let executor = ActionBatchExecutor { request in
+        requests.append(request)
+        return JSONRPCResponse(id: request.id, result: ["action": .object(["success": .bool(true)])])
+    }
+
+    let source = """
+    version: 1
+    actions:
+      - tool: type
+        target: s1:2
+        value: "{{recipient}}"
+    """
+    let path = try temporaryAxnFile(source)
+    defer { try? FileManager.default.removeItem(atPath: path) }
+
+    do {
+        _ = try executor.run(params: ["path": .string(path)])
+        Issue.record("undeclared parameter reference should fail")
+    } catch let error as ActionBatchError {
+        #expect(error.description == "undeclared arg reference: recipient")
+    }
+    #expect(requests.isEmpty)
+}
+
+@Test func runRejectsInlineSourceReferencesBeforeDispatch() throws {
+    var requests: [JSONRPCRequest] = []
+    let executor = ActionBatchExecutor { request in
+        requests.append(request)
+        return JSONRPCResponse(id: request.id, result: ["action": .object(["success": .bool(true)])])
+    }
+
+    let source = """
+    version: 1
+    actions:
+      - tool: type
+        target: s1:2
+        value: "{{env://HOME}}"
+    """
+    let path = try temporaryAxnFile(source)
+    defer { try? FileManager.default.removeItem(atPath: path) }
+
+    do {
+        _ = try executor.run(params: ["path": .string(path)])
+        Issue.record("inline source reference should fail")
+    } catch let error as ActionBatchError {
+        #expect(error.description == "invalid arg reference syntax: {{env://HOME}}")
+    }
+    #expect(requests.isEmpty)
+}
+
+@Test func runResolvesDeclaredSourceArguments() throws {
+    var requests: [JSONRPCRequest] = []
+    let executor = ActionBatchExecutor(
+        commandHandler: { request in
+            requests.append(request)
+            return JSONRPCResponse(id: request.id, result: ["action": .object(["success": .bool(true)])])
+        },
+        parameterSourceResolvers: [
+            "env": { source in
+                #expect(source.absoluteString == "env://UPLOAD_NAME")
+                return "report.csv"
+            }
+        ]
+    )
+
+    let source = """
+    version: 1
+    args:
+      - name: upload_name
+        type: string
+        source: env://UPLOAD_NAME
+    actions:
+      - tool: type
+        target: s1:2
+        value: "{{upload_name}}"
+    """
+    let path = try temporaryAxnFile(source)
+    defer { try? FileManager.default.removeItem(atPath: path) }
+
+    let batch = try executor.run(params: ["path": .string(path)])
+
+    #expect(batch["success"] == .bool(true))
+    #expect(requests[0].params?["value"] == .string("report.csv"))
+}
+
+@Test func runRejectsCallerOverrideForSourcedArgument() throws {
+    var requests: [JSONRPCRequest] = []
+    let executor = ActionBatchExecutor(
+        commandHandler: { request in
+            requests.append(request)
+            return JSONRPCResponse(id: request.id, result: ["action": .object(["success": .bool(true)])])
+        },
+        parameterSourceResolvers: [
+            "env": { _ in "from-source" }
+        ]
+    )
+
+    let source = """
+    version: 1
+    args:
+      - name: token
+        type: string
+        source: env://TOKEN
+    actions:
+      - tool: type
+        target: s1:2
+        value: "{{token}}"
+    """
+    let path = try temporaryAxnFile(source)
+    defer { try? FileManager.default.removeItem(atPath: path) }
+
+    do {
+        _ = try executor.run(params: [
+            "path": .string(path),
+            "argValues": .object(["token": .string("from-caller")])
+        ])
+        Issue.record("caller arg should not override a sourced arg")
+    } catch let error as ActionBatchError {
+        #expect(error.description == "caller arg cannot override sourced arg: token")
+    }
+    #expect(requests.isEmpty)
+}
+
+@Test func runRedactsSecretTaintedDryRunParams() throws {
+    var requests: [JSONRPCRequest] = []
+    let executor = ActionBatchExecutor { request in
+        requests.append(request)
+        return JSONRPCResponse(id: request.id, result: ["action": .object(["success": .bool(true)])])
+    }
+
+    let source = """
+    version: 1
+    args:
+      - name: password
+        type: secret
+    actions:
+      - tool: type
+        target: s1:2
+        value: "pw={{password}}"
+    """
+    let path = try temporaryAxnFile(source)
+    defer { try? FileManager.default.removeItem(atPath: path) }
+
+    let batch = try executor.run(params: [
+        "path": .string(path),
+        "dryRun": .bool(true),
+        "argValues": .object(["password": .string("s3cr3t!")])
+    ])
+
+    #expect(batch["success"] == .bool(true))
+    #expect(batch["trace"]?[0]?["params"]?["value"] == .string("<redacted: contains-secret>"))
+    #expect(requests.isEmpty)
+}
+
+@Test func runRedactsSecretTaintedTraceResults() throws {
+    let executor = ActionBatchExecutor { request in
+        JSONRPCResponse(id: request.id, result: [
+            "action": .object([
+                "success": .bool(true),
+                "echo": request.params?["value"] ?? .null
+            ])
+        ])
+    }
+
+    let source = """
+    version: 1
+    args:
+      - name: password
+        type: secret
+    actions:
+      - tool: type
+        target: s1:2
+        value: "{{password}}"
+    """
+    let path = try temporaryAxnFile(source)
+    defer { try? FileManager.default.removeItem(atPath: path) }
+
+    let batch = try executor.run(params: [
+        "path": .string(path),
+        "argValues": .object(["password": .string("s3cr3t!")])
+    ])
+
+    #expect(batch["success"] == .bool(true))
+    #expect(batch["trace"]?[0]?["result"] == .string("<redacted: contains-secret>"))
+}
+
+@Test func runRedactsSecretTaintedJSONRPCErrors() throws {
+    let executor = ActionBatchExecutor { request in
+        let value = request.params?["value"]?.stringValue ?? "missing"
+        return JSONRPCResponse(id: request.id, error: .invalidParams("failed with \(value)"))
+    }
+
+    let source = """
+    version: 1
+    args:
+      - name: password
+        type: secret
+    actions:
+      - tool: type
+        target: s1:2
+        value: "{{password}}"
+    """
+    let path = try temporaryAxnFile(source)
+    defer { try? FileManager.default.removeItem(atPath: path) }
+
+    let batch = try executor.run(params: [
+        "path": .string(path),
+        "argValues": .object(["password": .string("s3cr3t!")])
+    ])
+
+    #expect(batch["success"] == .bool(false))
+    #expect(batch["trace"]?[0]?["error"] == .string("<redacted: contains-secret>"))
+}
+
+@Test func runRejectsParameterReferencesInNonStringValueFieldsBeforeDispatch() throws {
+    var requests: [JSONRPCRequest] = []
+    let executor = ActionBatchExecutor { request in
+        requests.append(request)
+        return JSONRPCResponse(id: request.id, result: ["action": .object(["success": .bool(true)])])
+    }
+
+    let source = """
+    version: 1
+    args:
+      - name: recipient
+        type: string
+    actions:
+      - tool: type
+        target: s1:2
+        value:
+          - "{{recipient}}"
+    """
+    let path = try temporaryAxnFile(source)
+    defer { try? FileManager.default.removeItem(atPath: path) }
+
+    do {
+        _ = try executor.run(params: [
+            "path": .string(path),
+            "argValues": .object(["recipient": .string("Ada")])
+        ])
+        Issue.record("non-string value parameter reference should fail before dispatch")
+    } catch let error as ActionBatchError {
+        #expect(error.description == "parameter references are only supported in string value fields: actions[0].value")
+    }
+    #expect(requests.isEmpty)
+}
+
 @Test func commandRouterRunsBatch() {
     var clicked: [String] = []
     let router = CommandRouter(actions: PrimitiveActionHandlers(
@@ -648,4 +956,19 @@ private extension JSONValue {
         }
         return values
     }
+
+    var stringValue: String? {
+        guard case let .string(value) = self else {
+            return nil
+        }
+        return value
+    }
+}
+
+private func temporaryAxnFile(_ source: String) throws -> String {
+    let path = FileManager.default.temporaryDirectory
+        .appendingPathComponent("axon-\(UUID().uuidString).axn")
+        .path
+    try source.write(toFile: path, atomically: true, encoding: .utf8)
+    return path
 }

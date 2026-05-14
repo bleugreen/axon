@@ -199,7 +199,7 @@ do {
                    refresh the active credential redaction index from 1Password
           look [target] [--since snapshot-id] [--screenshot] [--screen-text] [--sensitive] [--frames] [--json] [--no-tree] [--offset n] [--limit n] [--depth n]
           find <app> <locator-json>
-          run <path.axn> [--dry-run] [--continue-on-error]
+          run <path.axn> [--arg name=value] [--dry-run] [--continue-on-error]
           save [--session id] [--from call] [--to call] [--path file.axn] [--include-reads]
           click <handle|target-json>
           type <handle> <value>
@@ -580,6 +580,7 @@ private func runCommand(arguments: [String]) throws -> (method: String, params: 
     var params: [String: JSONValue] = [:]
     var index = 1
     var path: String?
+    var argValues: [String: JSONValue] = [:]
 
     while index < arguments.count {
         let argument = arguments[index]
@@ -590,6 +591,18 @@ private func runCommand(arguments: [String]) throws -> (method: String, params: 
         case "--dry-run":
             params["dryRun"] = .bool(true)
             index += 1
+        case "--arg":
+            guard index + 1 < arguments.count else {
+                throw CLIError.missingArguments("run --arg requires name=value")
+            }
+            let assignment = arguments[index + 1]
+            guard let separator = assignment.firstIndex(of: "="), separator > assignment.startIndex else {
+                throw CLIError.missingArguments("run --arg requires name=value")
+            }
+            let name = String(assignment[..<separator])
+            let value = String(assignment[assignment.index(after: separator)...])
+            argValues[name] = .string(value)
+            index += 2
         default:
             if path == nil {
                 path = argument
@@ -604,6 +617,9 @@ private func runCommand(arguments: [String]) throws -> (method: String, params: 
         throw CLIError.missingArguments("run requires a path")
     }
     params["path"] = .string(path)
+    if !argValues.isEmpty {
+        params["argValues"] = .object(argValues)
+    }
 
     return ("run", params)
 }

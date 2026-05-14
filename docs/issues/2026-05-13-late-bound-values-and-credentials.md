@@ -174,36 +174,11 @@ The active-secret index ships independently because it is useful before the clas
 
 ## Later: Late-Bound Write Values
 
-Once `.axn` parameterization is better defined, the write side can reuse the same security language.
+The write-side parameterization is now defined in [Parameter Model For .axn Files](2026-05-14-parameter-model.md). The model splits declaration / reference / resolution as separate concerns, treats `secret` as a type (governing handling) rather than a source, and removes interactive prompting entirely.
 
-Possible future shape:
+The earlier sketch in this section (a `params:` map keyed by name, `{{param://name}}` reference syntax, `prompt://` as a resolver) has been superseded by the parameter-model doc and is no longer the planned shape.
 
-```yaml
-version: 1
-params:
-  recipient:
-    type: string
-    description: Email recipient
-  gmail_password:
-    type: secret
-    provider: op
-    reference: op://Personal/Gmail/password
-
-actions:
-  - tool: type
-    target: { app: Gmail, locator: { role: AXSecureTextField } }
-    value: "{{param://gmail_password}}"
-    resolveAs: secret
-```
-
-Future value resolvers:
-
-- `param://name` for typed `.axn` parameters.
-- `env://NAME` for process environment values.
-- `prompt://"label"` for interactive replay prompts.
-- `op://vault/item/field` for direct 1Password references, if direct references remain desirable after typed secret params exist.
-
-Resolved secrets must never enter history records, batch traces, stdout, logs, or exported `.axn` files as literals. That work should start only after the parameter model and trace-redaction rules are explicit.
+Resolved secrets must never enter history records, batch traces, stdout, logs, or exported `.axn` files as literals — the secret-handling rules live in the parameter-model doc.
 
 ## Open Questions
 
