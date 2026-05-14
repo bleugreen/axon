@@ -100,6 +100,6 @@ Target: single-digit milliseconds for 200-element snapshots regardless of hardwa
 - **Done** — Implement the role-based rules — `AXSecureTextField` plus label-substring matchers.
 - **Partial** — Implement the structured-PII regex set: SSN, phone, email, and Luhn-valid payment-card numbers are live; passport / driver-license formats remain pending until an unambiguous low-noise rule set is chosen.
 - **Done** — Implement the token-shape regex set with explicit known issuer prefixes.
-- Implement the currency-context heuristic with label-adjacency.
-- Define the trace metadata schema and add an `axon redaction-trace <snapshot-id>` CLI for auditing which rules fired against which elements in a given snapshot.
-- Coordinate with the [classifier](2026-05-13-policy-driven-sensitivity-classifier.md) work so the deterministic layer's output is shaped to feed both runtime rendering and head training.
+- **Decided against (2026-05-14)** — Currency-context heuristic. The remaining ambiguity (`$3` in a UI without a balance label) and the absence of a real reported leak don't justify the rule complexity. Reconsider if a concrete case shows up.
+- **Decided against (2026-05-14)** — `axon redaction-trace <snapshot-id>` audit CLI. Per-field `redaction: {fields, reasons, matched, ruleLibrary}` metadata already lives in every redacted output, so anyone who needs trace data can read it directly. A dedicated CLI is a layer with no consumers.
+- **Decided against (2026-05-14)** — Coordinate with classifier work; the classifier itself was decided against. See its [issue header](2026-05-13-policy-driven-sensitivity-classifier.md) for reasoning.

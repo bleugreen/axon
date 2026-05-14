@@ -1,5 +1,7 @@
 # Policy-Driven Sensitivity Classifier
 
+> **Status: decided against (2026-05-14).** The deterministic redaction layer landed first and ate this plan's lunch. Credential, financial, and structured-PII threats — the cases that actually matter for read-side leak prevention — are covered by exact rules and the active-secret HMAC index. The classifier's residual slice (textural sensitivity, contextual judgments) is mostly aesthetic in our threat model: the user is already looking at the screen, the model is already getting the snapshot as context, and hiding "this paragraph feels sensitive" from a model that can see surrounding UI doesn't actually prevent a leak. Against that thin payoff, the classifier costs an encoder backbone, a head-training pipeline, an ollama teacher, on-device inference budget per snapshot, a custom-head distribution path, and opaque verdicts that hurt the trust story. The one piece worth keeping — *user-authored* deterministic rules — reframes cleanly as a small config-loaded extension to `DeterministicRedactor`, not as custom heads. The original plan below is preserved as historical context.
+
 ## Context
 
 The removed `sensitive: true` flag was set by the agent at request time. It assumed the agent already knew which fields contained sensitive content, which is exactly the case where it usually doesn't. By the time the agent had the snapshot back, the data had already crossed the boundary.

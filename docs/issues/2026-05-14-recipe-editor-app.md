@@ -84,7 +84,6 @@ The `Settings` scene is a small, singleton window. v1 surfaces:
 - **Daemon** — install / uninstall / restart, last-launched, log tail.
 - **Updates** — channel, "Check now", current cask status (reuses existing [HomebrewInstaller](../../Sources/AxonCore/HomebrewInstaller.swift)).
 - **Secrets** — HMAC key status, rotate key (with confirmation), default `op` vault for new bindings.
-- **Classifier** — built-in head toggles, custom-head install path, ollama teacher endpoint (for the [policy-driven classifier](2026-05-13-policy-driven-sensitivity-classifier.md) work, gated on whether that's landed).
 - **History** — retention window, "Clear history" with confirmation, redaction-level setting.
 
 Prefs is intentionally small. CLI parity matters more than UI breadth — anything a power user would script lives in `axon` first; prefs is the legible surface.
