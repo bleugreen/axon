@@ -12,7 +12,7 @@ A pipeline stage that runs synchronously on every element of every snapshot and 
 
 1. **Role-based** — AX role and label-substring checks.
 2. **Pattern-based** — regex matchers for structured PII, token shapes, and currency-context.
-3. **Set-based** — hash-set membership checks (the op-backed bloom filter).
+3. **Provider-indexed** — HMAC fingerprint lookup against an exact index of known active credentials (already shipped as `ActiveSecretRedactor`; see [Active-Secret Redaction And Late-Bound Credentials](2026-05-13-late-bound-values-and-credentials.md#active-credential-index)).
 
 Verdicts are additive: an element can match multiple rules, all matches surface in trace metadata, and the strongest tag wins for the displayed `<redacted: ...>` label. The classifier layer (when active) only sees elements the deterministic layer cleared; nothing above can subtract a deterministic redaction.
 
@@ -33,9 +33,9 @@ Verdicts are additive: an element can match multiple rules, all matches surface 
 - Token shapes: `sk-...`, `sk_live_...`, `ghp_...`, `gho_...`, `xoxb-...`, `xoxp-...`, `AKIA...`, JWT (three base64 segments dot-joined), PEM-armored keys (`-----BEGIN ... PRIVATE KEY-----`) → `auth-credential`.
 - Currency-context: an ISO currency literal (`$N.NN`, `£N.NN`, etc.) adjacent to a "balance" / "total" / "amount" / "due" / "owed" label → `financial-data`.
 
-### Set-based
+### Provider-indexed
 
-- **Op-backed bloom filter** — verbatim sha256 match against the user's currently-active op secrets → `auth-credential`. The design and operational details live in [Late-Bound Values And Credentials](2026-05-13-late-bound-values-and-credentials.md#active-secret-bloom-filter-read-side-protection); this layer is where the rule executes. This is the load-bearing rule of the whole deterministic layer — it's the one that delivers the "active credentials cannot appear in `get_app_state`" guarantee.
+- **Active-credential HMAC index** — keyed HMAC-SHA256 lookup against the user's currently-active op secrets → `auth-credential`. Exact match, no probabilistic false positives, key in macOS Keychain. The design and operational details live in [Active-Secret Redaction And Late-Bound Credentials](2026-05-13-late-bound-values-and-credentials.md#active-credential-index); this layer is where the rule executes. **Already shipped as `ActiveSecretRedactor`** — runs at the external textual output boundary today, ahead of the rest of this layer's rules. It delivers the headline guarantee: *"if Axon has a fingerprint for an active credential value, that raw value must not appear in any external textual Axon output."*
 
 ## Rule Library Maintenance
 
@@ -46,7 +46,7 @@ The pattern set grows as new token formats appear in the wild. This is ongoing m
 - New rules ship via app update; the rule library version surfaces in trace metadata so audit can prove which rule set produced any historical verdict.
 - Rules can be marked deprecated (retained for re-classification of old snapshots) without continuing to fire on new ones.
 
-This is also where the [bloom filter as labeling oracle](2026-05-13-policy-driven-sensitivity-classifier.md#deterministic-layer-primary-defense) pays off: anything the deterministic layer flags becomes a high-confidence positive label when classifier heads are trained later. The same library doing redaction at runtime doubles as the label source at train time.
+This is also where the [HMAC index as labeling oracle](2026-05-13-policy-driven-sensitivity-classifier.md#deterministic-layer-primary-defense) pays off: anything the deterministic layer flags becomes a high-confidence positive label when classifier heads are trained later. The same library doing redaction at runtime doubles as the label source at train time.
 
 ## Pipeline Integration
 
@@ -69,7 +69,7 @@ All matches stay in `matched` for trace inspection; `display_tag` picks the stro
 
 This layer must be cheap enough to run unconditionally on every snapshot without a cache. Single-pass per element, no allocation in the hot path:
 
-- Bloom filter lookup: one sha256 per element-value, one bit-array probe. Microseconds.
+- HMAC index lookup: one HMAC-SHA256 per element value, one hash-map probe. Microseconds.
 - Pattern set: compile-once, run-once-per-element. Modern regex engines handle small fixed pattern sets at memory-bandwidth speed.
 - Role rules: hash-map lookup.
 
@@ -92,11 +92,11 @@ Target: single-digit milliseconds for 200-element snapshots regardless of hardwa
 
 ## Next Steps
 
-- Define the rule schema (`name`, `matcher`, `tag`, `version`, `enabled`) and the pipeline integration surface.
-- Implement the role-based rules first — `AXSecureTextField` plus label-substring matchers. Smallest deliverable that meaningfully reduces leak surface.
+- **Done** — Active-credential HMAC index shipped as `ActiveSecretRedactor` at the external textual output boundary. Highest-impact rule in the layer, delivers the headline read-side guarantee. Tracked in detail in [Active-Secret Redaction And Late-Bound Credentials](2026-05-13-late-bound-values-and-credentials.md).
+- Define the rule schema (`name`, `matcher`, `tag`, `version`, `enabled`) and the pipeline integration surface that extends the existing redactor with regex and role rules.
+- Implement the role-based rules — `AXSecureTextField` plus label-substring matchers. Smallest deliverable that meaningfully reduces leak surface beyond the index.
 - Implement the structured-PII regex set (SSN, phone, email, passport).
 - Implement the token-shape regex set with an explicit list of known issuer prefixes.
 - Implement the currency-context heuristic with label-adjacency.
-- Wire the op-backed bloom filter as the set-based rule once op integration phase 1 lands. This is the highest-impact rule in the layer and the one that delivers the headline read-side guarantee.
 - Define the trace metadata schema and add an `axon redaction-trace <snapshot-id>` CLI for auditing which rules fired against which elements in a given snapshot.
 - Coordinate with the [classifier](2026-05-13-policy-driven-sensitivity-classifier.md) work so the deterministic layer's output is shaped to feed both runtime rendering and head training.
