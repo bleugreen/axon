@@ -1,6 +1,6 @@
 # Locator Replay Speed
 
-Status: Design. Not yet implemented.
+Status: In progress. Core shared live resolver strategy implemented; more host coverage and tuning remain.
 
 ## Context
 
@@ -41,9 +41,8 @@ A parameterized AX attribute. One XPC call to the target host element runs the p
 ```
 let params: [String: Any] = [
     "AXSearchKey": "AXLinkSearchKey",
-    "AXSearchKeyText": "Coluccio Salutati",
-    "AXSearchKeyImmediateDescendantsOnly": false,
-    "AXSearchKeyResultsLimit": 5
+    "AXSearchText": "Coluccio Salutati",
+    "AXResultsLimit": 5
 ]
 AXUIElementCopyParameterizedAttributeValue(
     scopeElement,
@@ -61,9 +60,65 @@ Combined with #2: walk the recorded ancestor chain top-down until reaching the f
 
 Recipes that do scroll-then-click resolve the same target twice today. After a successful resolution, hold the `AXUIElement` reference keyed by locator hash with a short TTL (until the next focus change or window event). The second step skips resolution entirely.
 
+## Probe Results, 2026-05-14
+
+Added `scripts/probe-ax-search-predicate`, a standalone Swift AX probe that:
+
+- finds bounded scopes in running apps by AX role;
+- records each scope's `AXUIElementCopyParameterizedAttributeNames`;
+- tries `AXUIElementsForSearchPredicate` and `AXResultsForSearchPredicate` with known search keys;
+- emits JSON with AX errors, result counts, and sampled returned elements.
+
+Important correction from local SDK constants: the AppKit raw dictionary keys are `AXSearchKey`, `AXSearchText`, and `AXResultsLimit`. The earlier sketch's `AXSearchKeyText` / `AXSearchKeyResultsLimit` shape returned successful empty results in Firefox but did not produce useful matches.
+
+Observed on the local machine:
+
+- Firefox `org.mozilla.firefox`: `AXToolbar`, `AXScrollArea`, and `AXWebArea` scopes advertise `AXUIElementCountForSearchPredicate` and `AXUIElementsForSearchPredicate`. `AXUIElementsForSearchPredicate` returns real elements from `AXWebArea` with the corrected AppKit keys. Example: searching visible text `Deploy` under Firefox `AXWebArea` returned `AXLink` samples titled `Deploy` / `Deploys` for `AXLinkSearchKey`, and `AXButton` samples titled `Deploy Production` / `Deploy Staging` for `AXButtonSearchKey`.
+- Safari `com.apple.Safari`: positive on a local fixture page. `AXScrollArea` and `AXWebArea` advertise `AXUIElementsForSearchPredicate`; `AXLinkSearchKey` returned the fixture link and `AXButtonSearchKey` returned the fixture button.
+- Google Chrome `com.google.Chrome`: negative on the same local fixture page in this environment. Bounded probes only found `AXWindow` / `AXGroup` scopes and no search predicate attributes or nonempty predicate results, even after activating Chrome and increasing depth/child budgets.
+- Purpose-built native AppKit sample (`AxonPredicateProbeApp` with toolbar item, button, and static text): negative. Probed `AXWindow`, `AXToolbar`, `AXButton`, `AXStaticText`, and `AXGroup`; no searched scopes advertised search predicate attributes or returned results.
+- VS Code `com.microsoft.VSCode`, Codex `com.openai.codex`, Cursor `com.todesktop.230313mzl4w4u92`: no searched Electron scopes advertised search predicate attributes in the bounded probe.
+- Finder, Mail, TextEdit, Notes, Discord: no searched scopes advertised search predicate attributes or returned successful predicate results in the bounded probe.
+
+Current conclusion: predicate search is very promising for the Firefox web-content case and should be the primary fast path when a scoped element advertises `AXUIElementsForSearchPredicate`. It still needs runtime gating because host/scope coverage is uneven.
+
+## Implementation Notes, 2026-05-14
+
+The default `CommandRouter` path now owns one long-lived `AXLiveLocatorResolver` instance. All command surfaces that resolve locator targets (`find`, `click`, `invoke`, `type`, `scroll`, `drag`, and `run` actions routed through `CommandRouter`) share that resolver and its short-TTL live element cache.
+
+The live resolver strategy is:
+
+1. reuse a cached live `AXUIElement` for the same app/locator when still inside TTL;
+2. use recorded ancestry to narrow from app windows to the deepest matching scope;
+3. if that scope advertises `AXUIElementsForSearchPredicate`, issue a scoped predicate search using `AXSearchKey`, `AXSearchText`, and `AXResultsLimit`;
+4. run returned candidates through the existing `LocatorResolver` semantics using small synthetic snapshots;
+5. if predicate search is unavailable or no fast candidate matches, try bounded descendants within the narrowed scope;
+6. fall back to the previous full snapshot resolver.
+
+Recorded locators now preserve stable ancestor path information. Ancestors can carry `role`, `subrole`, `identifier`, and non-window `title`; volatile window titles remain omitted. `LocatorResolver` now matches ancestor `subrole` and `identifier` as well as the existing role/title/label signals.
+
+Live smoke test against the local Firefox page `Deploy - Ops - AggFlow Ops`:
+
+- locator: `AXLink` titled `Deploy`, action `AXPress`, ancestors `AXWindow` -> `AXWebArea`;
+- fast resolver narrowed to one `AXWebArea`;
+- predicate search returned two `AXLinkSearchKey` candidates;
+- existing matcher accepted one unique candidate and returned handle index `0`, confirming the full snapshot fallback was avoided.
+
+Live smoke test against Safari on a local fixture page:
+
+- locator: `AXLink` titled `Axon Predicate Probe Link`, action `AXPress`, ancestors `AXWindow` -> `AXWebArea`;
+- fast resolver narrowed to one `AXWebArea`;
+- predicate search returned one `AXLinkSearchKey` candidate;
+- existing matcher accepted one unique candidate and returned handle index `0`.
+
+Cache smoke test against the same Safari locator:
+
+- first resolution: predicate path, cache miss, then cache store;
+- second resolution through the same daemon: live element cache hit, validating that the shared resolver survives across socket requests.
+
 ## Open Questions
 
-- **Predicate API host coverage.** A throwaway probe needs to confirm `AXUIElementsForSearchPredicate` works in Firefox, Chrome, Safari, Finder, Slack, VS Code, and a native AppKit toolbar app. Output: which search keys each host implements. Until that's run, the predicate plan in #3 is conditional. Probe is small enough to live in `scripts/`.
+- **Predicate API host coverage.** Initial probe confirms Firefox and Safari `AXWebArea` / related scopes support `AXUIElementsForSearchPredicate` with useful results. Bounded probes did not find support in Google Chrome, VS Code, Codex, Cursor, Finder, Mail, TextEdit, Notes, Discord, or a purpose-built native AppKit toolbar/control sample.
 - **Ancestor stability.** Some hosts mutate ancestors aggressively — virtualized lists where an `AXGroup` parent disappears on scroll, web pages where wrappers shift. The path-walking resolver needs a notion of which roles are unstable and should be skipped in the recorded chain. The right list isn't obvious; likely emerges from running real recipes.
 - **Cache invalidation signals.** TTL is the blunt version. `kAXUIElementDestroyedNotification` and `kAXFocusedWindowChangedNotification` via `AXObserver` are precise but cost setup per resolved element. TTL probably wins for a first pass; revisit if cache misses turn out to matter.
 - **Recorded ancestry size.** The current 12-ancestor cap in `UserActionRecorder.elementAncestry` is fine for the walk, but persisting all 12 in every locator bloats `.axn` files. Probably want to keep ancestors with stable identity (identifier or title) and skip pure-structural intermediates. Heuristic worth validating against real recordings.
@@ -77,8 +132,7 @@ Recipes that do scroll-then-click resolve the same target twice today. After a s
 
 ## Next Steps
 
-- Run the predicate-API probe against ~6 representative hosts and record which search keys each implements. Decides whether #3 ships at all or only on a per-host allowlist.
-- Wire full ancestry through `RecordedLocatorBuilder` and confirm the existing matcher accepts the richer chain without change. Ship as #1 standalone; measurable as a first win.
-- Build the path-walking resolver as a separate type. `AXLiveLocatorResolver` becomes the fallback path; the path resolver runs first when the locator has usable ancestry. Time replay latency on the Firefox example before and after.
-- Layer the predicate call on top of the path walk once #1 confirms host support.
-- Add the per-recipe element cache. TTL-based first; consider `AXObserver`-driven invalidation if misses are common.
+- Run the predicate-API probe against remaining representative hosts: Chrome, Safari, Slack, and a purpose-built native AppKit toolbar app. Record which search keys each implements. Use `AXUIElementCopyParameterizedAttributeNames` as the runtime gate before any predicate call.
+- Run more live latency measurements and tune path-walk budgets for Firefox/Safari and Chrome fallback behavior.
+- Revisit Chrome with `--force-renderer-accessibility` or equivalent if Chrome support becomes important.
+- Consider `AXObserver`-driven cache invalidation if TTL misses or stale hits become common.

@@ -1,5 +1,19 @@
 import Foundation
 
+public struct RecordedAncestorCandidate: Equatable, Sendable {
+    public let role: String
+    public let subrole: String?
+    public let identifier: String?
+    public let title: String?
+
+    public init(role: String, subrole: String? = nil, identifier: String? = nil, title: String? = nil) {
+        self.role = role
+        self.subrole = subrole
+        self.identifier = identifier
+        self.title = title
+    }
+}
+
 public enum RecordedLocatorBuilder {
     private static let structuralRoles: Set<String> = [
         "AXGroup",
@@ -21,7 +35,8 @@ public enum RecordedLocatorBuilder {
         title: String?,
         description: String?,
         actions: [String],
-        windowTitle: String?
+        windowTitle: String?,
+        ancestors: [RecordedAncestorCandidate] = []
     ) -> [String: JSONValue] {
         var locator: [String: JSONValue] = ["role": .string(role)]
         if let subrole, !subrole.isEmpty {
@@ -39,10 +54,11 @@ public enum RecordedLocatorBuilder {
         if !actions.isEmpty {
             locator["actions"] = .array(actions.map(JSONValue.string))
         }
-        if windowTitle != nil {
-            locator["ancestors"] = .array([
-                .object(["role": .string("AXWindow")])
-            ])
+        let serializedAncestors = ancestors.compactMap(serializedAncestor)
+        if !serializedAncestors.isEmpty {
+            locator["ancestors"] = .array(serializedAncestors)
+        } else if windowTitle != nil {
+            locator["ancestors"] = .array([.object(["role": .string("AXWindow")])])
         }
         return locator
     }
@@ -73,5 +89,19 @@ public enum RecordedLocatorBuilder {
 
     private static func canReplayOutsideWindow(role: String, locator: [String: JSONValue]) -> Bool {
         stableOutOfTreeRoles.contains(role) && hasStableIdentity(locator)
+    }
+
+    private static func serializedAncestor(_ ancestor: RecordedAncestorCandidate) -> JSONValue? {
+        var object: [String: JSONValue] = ["role": .string(ancestor.role)]
+        if ancestor.role != "AXWindow", let subrole = ancestor.subrole, !subrole.isEmpty {
+            object["subrole"] = .string(subrole)
+        }
+        if ancestor.role != "AXWindow", let identifier = ancestor.identifier, !identifier.isEmpty {
+            object["identifier"] = .string(identifier)
+        }
+        if ancestor.role != "AXWindow", let title = ancestor.title, !title.isEmpty {
+            object["title"] = .string(title)
+        }
+        return .object(object)
     }
 }

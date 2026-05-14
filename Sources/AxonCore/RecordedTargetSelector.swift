@@ -10,6 +10,7 @@ public struct RecordedElementCandidate: Equatable, Sendable {
     public let actions: [String]
     public let windowTitle: String?
     public let hasWindowAncestor: Bool
+    public let ancestors: [RecordedAncestorCandidate]
 
     public init(
         role: String,
@@ -20,7 +21,8 @@ public struct RecordedElementCandidate: Equatable, Sendable {
         description: String? = nil,
         actions: [String] = [],
         windowTitle: String? = nil,
-        hasWindowAncestor: Bool
+        hasWindowAncestor: Bool,
+        ancestors: [RecordedAncestorCandidate] = []
     ) {
         self.role = role
         self.subrole = subrole
@@ -31,6 +33,7 @@ public struct RecordedElementCandidate: Equatable, Sendable {
         self.actions = actions
         self.windowTitle = windowTitle
         self.hasWindowAncestor = hasWindowAncestor
+        self.ancestors = ancestors
     }
 
     var stableText: String? {
@@ -92,7 +95,8 @@ public enum RecordedTargetSelector {
             title: candidate.title,
             description: candidate.description,
             actions: candidate.actions,
-            windowTitle: candidate.windowTitle
+            windowTitle: candidate.windowTitle,
+            ancestors: candidate.ancestors
         )
         guard RecordedLocatorBuilder.strictReplayWarning(
             for: locator,
@@ -130,7 +134,8 @@ public enum RecordedTargetSelector {
             description: candidate.description,
             actions: candidate.actions,
             windowTitle: candidate.windowTitle,
-            hasWindowAncestor: candidate.hasWindowAncestor
+            hasWindowAncestor: candidate.hasWindowAncestor,
+            ancestors: candidate.ancestors
         )
     }
 }

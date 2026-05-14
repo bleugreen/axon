@@ -1,0 +1,475 @@
+#!/usr/bin/swift
+
+import ApplicationServices
+import AppKit
+import Foundation
+
+struct Options {
+    var appQueries: [String] = []
+    var text = "Coluccio Salutati"
+    var roles = ["AXWebArea", "AXToolbar", "AXTable", "AXOutline", "AXScrollArea", "AXWindow"]
+    var maxDepth = 5
+    var maxChildren = 80
+    var limit = 5
+    var timeout: Float = 0.2
+}
+
+struct ProbeReport: Codable {
+    let trusted: Bool
+    let text: String
+    let apps: [AppReport]
+}
+
+struct AppReport: Codable {
+    let name: String
+    let bundleIdentifier: String?
+    let processIdentifier: Int32
+    let scopes: [ScopeReport]
+}
+
+struct ScopeReport: Codable {
+    let path: String
+    let role: String
+    let title: String?
+    let parameterizedAttributes: [String]
+    let attempts: [AttemptReport]
+}
+
+struct AttemptReport: Codable {
+    let attribute: String
+    let shape: String
+    let searchKey: String
+    let advertised: Bool
+    let error: String
+    let resultKind: String
+    let count: Int?
+    let samples: [ElementSample]
+}
+
+struct ElementSample: Codable {
+    let role: String?
+    let title: String?
+    let value: String?
+    let description: String?
+    let identifier: String?
+}
+
+let options = parseOptions(CommandLine.arguments.dropFirst())
+let trusted = AXIsProcessTrusted()
+
+let apps = runningApps(matching: options.appQueries).map { app -> AppReport in
+    let appElement = AXUIElementCreateApplication(app.processIdentifier)
+    AXUIElementSetMessagingTimeout(appElement, options.timeout)
+    let scopes = collectScopes(
+        appElement: appElement,
+        roles: Set(options.roles),
+        maxDepth: options.maxDepth,
+        maxChildren: options.maxChildren,
+        timeout: options.timeout
+    ).map { scope -> ScopeReport in
+        let names = parameterizedAttributeNames(for: scope.element)
+        return ScopeReport(
+            path: scope.path,
+            role: scope.role,
+            title: stringAttribute(kAXTitleAttribute, from: scope.element),
+            parameterizedAttributes: names,
+            attempts: probeAttempts(
+                element: scope.element,
+                advertisedNames: Set(names),
+                text: options.text,
+                limit: options.limit,
+                timeout: options.timeout
+            )
+        )
+    }
+    return AppReport(
+        name: app.localizedName ?? app.bundleIdentifier ?? "pid \(app.processIdentifier)",
+        bundleIdentifier: app.bundleIdentifier,
+        processIdentifier: app.processIdentifier,
+        scopes: scopes
+    )
+}
+
+let report = ProbeReport(trusted: trusted, text: options.text, apps: apps)
+let encoder = JSONEncoder()
+encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+let data = try encoder.encode(report)
+FileHandle.standardOutput.write(data)
+FileHandle.standardOutput.write(Data("\n".utf8))
+
+private struct Scope {
+    let element: AXUIElement
+    let path: String
+    let role: String
+}
+
+private func parseOptions(_ args: ArraySlice<String>) -> Options {
+    var options = Options()
+    var iterator = args.makeIterator()
+    while let arg = iterator.next() {
+        switch arg {
+        case "--app":
+            if let value = iterator.next() {
+                options.appQueries.append(value)
+            }
+        case "--text":
+            if let value = iterator.next() {
+                options.text = value
+            }
+        case "--roles":
+            if let value = iterator.next() {
+                options.roles = value.split(separator: ",").map(String.init).filter { !$0.isEmpty }
+            }
+        case "--max-depth":
+            if let value = iterator.next(), let intValue = Int(value) {
+                options.maxDepth = intValue
+            }
+        case "--max-children":
+            if let value = iterator.next(), let intValue = Int(value) {
+                options.maxChildren = intValue
+            }
+        case "--limit":
+            if let value = iterator.next(), let intValue = Int(value) {
+                options.limit = intValue
+            }
+        case "--timeout":
+            if let value = iterator.next(), let floatValue = Float(value) {
+                options.timeout = floatValue
+            }
+        case "--help", "-h":
+            print("""
+            Usage: scripts/probe-ax-search-predicate [options]
+
+              --app NAME_OR_BUNDLE     Probe matching running app. Repeatable. Defaults to Safari, Chrome, Firefox, Finder, Slack, VS Code, Axon if running.
+              --text TEXT              Search text. Defaults to "Coluccio Salutati".
+              --roles A,B,C            Scope roles to inspect. Defaults to AXWebArea,AXToolbar,AXTable,AXOutline,AXScrollArea,AXWindow.
+              --max-depth N            Descendant depth searched for scope elements. Defaults to 5.
+              --max-children N         Max children read per node while finding scopes. Defaults to 80.
+              --limit N                Predicate result limit. Defaults to 5.
+              --timeout SECONDS        AX messaging timeout. Defaults to 0.2.
+            """)
+            exit(0)
+        default:
+            if !arg.hasPrefix("-") {
+                options.appQueries.append(arg)
+            }
+        }
+    }
+    return options
+}
+
+private func runningApps(matching queries: [String]) -> [NSRunningApplication] {
+    let defaults = ["Safari", "Chrome", "Firefox", "Finder", "Slack", "Code", "Visual Studio Code", "Axon"]
+    let matchQueries = queries.isEmpty ? defaults : queries
+    let apps = NSWorkspace.shared.runningApplications.filter { app in
+        app.activationPolicy == .regular || app.bundleIdentifier == "com.apple.finder"
+    }
+    var seen: Set<pid_t> = []
+    return apps.filter { app in
+        let searchable = [
+            app.localizedName,
+            app.bundleIdentifier,
+            String(app.processIdentifier)
+        ].compactMap { $0?.lowercased() }
+        let matches = matchQueries.contains { query in
+            searchable.contains { $0.contains(query.lowercased()) }
+        }
+        guard matches, !seen.contains(app.processIdentifier) else {
+            return false
+        }
+        seen.insert(app.processIdentifier)
+        return true
+    }
+}
+
+private func collectScopes(
+    appElement: AXUIElement,
+    roles: Set<String>,
+    maxDepth: Int,
+    maxChildren: Int,
+    timeout: Float
+) -> [Scope] {
+    var scopes: [Scope] = []
+    let windows = children(attribute: kAXWindowsAttribute, from: appElement, maxChildren: maxChildren)
+    for (index, window) in windows.enumerated() {
+        appendScopes(
+            element: window,
+            path: "window[\(index)]",
+            roles: roles,
+            depth: 0,
+            maxDepth: maxDepth,
+            maxChildren: maxChildren,
+            timeout: timeout,
+            scopes: &scopes
+        )
+    }
+    return scopes
+}
+
+private func appendScopes(
+    element: AXUIElement,
+    path: String,
+    roles: Set<String>,
+    depth: Int,
+    maxDepth: Int,
+    maxChildren: Int,
+    timeout: Float,
+    scopes: inout [Scope]
+) {
+    AXUIElementSetMessagingTimeout(element, timeout)
+    let role = stringAttribute(kAXRoleAttribute, from: element) ?? "AXUnknown"
+    if roles.contains(role) {
+        scopes.append(Scope(element: element, path: path, role: role))
+    }
+    guard depth < maxDepth else {
+        return
+    }
+    let childElements = children(attribute: kAXChildrenAttribute, from: element, maxChildren: maxChildren)
+    for (index, child) in childElements.enumerated() {
+        appendScopes(
+            element: child,
+            path: "\(path)/\(role)[\(index)]",
+            roles: roles,
+            depth: depth + 1,
+            maxDepth: maxDepth,
+            maxChildren: maxChildren,
+            timeout: timeout,
+            scopes: &scopes
+        )
+    }
+}
+
+private func probeAttempts(
+    element: AXUIElement,
+    advertisedNames: Set<String>,
+    text: String,
+    limit: Int,
+    timeout: Float
+) -> [AttemptReport] {
+    AXUIElementSetMessagingTimeout(element, timeout)
+    let searchKeys = [
+        "AXAnyTypeSearchKey",
+        "AXLinkSearchKey",
+        "AXButtonSearchKey",
+        "AXControlSearchKey",
+        "AXTextFieldSearchKey",
+        "AXStaticTextSearchKey"
+    ]
+    let attributes = [
+        "AXUIElementsForSearchPredicate",
+        "AXResultsForSearchPredicate"
+    ]
+
+    var attempts: [AttemptReport] = []
+    for attribute in attributes {
+        for searchKey in searchKeys {
+            for shape in predicateShapes(text: text, limit: limit, searchKey: searchKey) {
+                attempts.append(tryPredicate(
+                    element: element,
+                    attribute: attribute,
+                    shapeName: shape.name,
+                    params: shape.params,
+                    searchKey: searchKey,
+                    advertised: advertisedNames.contains(attribute)
+                ))
+            }
+        }
+    }
+    return attempts
+}
+
+private func predicateShapes(text: String, limit: Int, searchKey: String) -> [(name: String, params: [String: Any])] {
+    [
+        (
+            "issue-shape",
+            [
+                "AXSearchKey": searchKey,
+                "AXSearchKeyText": text,
+                "AXSearchKeyImmediateDescendantsOnly": false,
+                "AXSearchKeyResultsLimit": limit
+            ]
+        ),
+        (
+            "appkit-search-key",
+            [
+                "AXSearchKey": searchKey,
+                "AXSearchText": text,
+                "AXResultsLimit": limit
+            ]
+        ),
+        (
+            "appkit-search-key-array",
+            [
+                "AXSearchKey": [searchKey],
+                "AXSearchText": text,
+                "AXResultsLimit": limit
+            ]
+        )
+    ]
+}
+
+private func tryPredicate(
+    element: AXUIElement,
+    attribute: String,
+    shapeName: String,
+    params: [String: Any],
+    searchKey: String,
+    advertised: Bool
+) -> AttemptReport {
+    var result: CFTypeRef?
+    let error = AXUIElementCopyParameterizedAttributeValue(
+        element,
+        attribute as CFString,
+        params as CFDictionary,
+        &result
+    )
+    let samples = sampleElements(from: result)
+    return AttemptReport(
+        attribute: attribute,
+        shape: shapeName,
+        searchKey: searchKey,
+        advertised: advertised,
+        error: errorName(error),
+        resultKind: kind(of: result),
+        count: count(of: result),
+        samples: samples
+    )
+}
+
+private func sampleElements(from result: CFTypeRef?) -> [ElementSample] {
+    if let elements = result as? [AXUIElement] {
+        return elements.prefix(5).map(sample)
+    }
+    if let dictionaries = result as? [[String: Any]] {
+        return dictionaries.prefix(5).compactMap { dict in
+            let element = dict["AXSearchResultElement"] ?? dict["NSAccessibilitySearchResultElementKey"]
+            guard let element else {
+                return nil
+            }
+            let cfElement = element as CFTypeRef
+            guard CFGetTypeID(cfElement) == AXUIElementGetTypeID() else {
+                return nil
+            }
+            return sample(cfElement as! AXUIElement)
+        }
+    }
+    return []
+}
+
+private func sample(_ element: AXUIElement) -> ElementSample {
+    ElementSample(
+        role: stringAttribute(kAXRoleAttribute, from: element),
+        title: stringAttribute(kAXTitleAttribute, from: element),
+        value: stringValue(rawAttribute(kAXValueAttribute, from: element)),
+        description: stringAttribute(kAXDescriptionAttribute, from: element),
+        identifier: stringAttribute("AXIdentifier", from: element)
+    )
+}
+
+private func parameterizedAttributeNames(for element: AXUIElement) -> [String] {
+    var names: CFArray?
+    guard AXUIElementCopyParameterizedAttributeNames(element, &names) == .success else {
+        return []
+    }
+    return ((names as? [String]) ?? []).sorted()
+}
+
+private func children(attribute: String, from element: AXUIElement, maxChildren: Int) -> [AXUIElement] {
+    var count: CFIndex = 0
+    guard AXUIElementGetAttributeValueCount(element, attribute as CFString, &count) == .success, count > 0 else {
+        return []
+    }
+    let cappedCount = min(maxChildren, max(0, count))
+    var values: CFArray?
+    guard AXUIElementCopyAttributeValues(element, attribute as CFString, 0, cappedCount, &values) == .success else {
+        return []
+    }
+    return (values as? [AXUIElement]) ?? []
+}
+
+private func stringAttribute(_ attribute: String, from element: AXUIElement) -> String? {
+    stringValue(rawAttribute(attribute, from: element))
+}
+
+private func rawAttribute(_ attribute: String, from element: AXUIElement) -> AnyObject? {
+    var value: CFTypeRef?
+    guard AXUIElementCopyAttributeValue(element, attribute as CFString, &value) == .success else {
+        return nil
+    }
+    return value
+}
+
+private func stringValue(_ value: AnyObject?) -> String? {
+    guard let value else {
+        return nil
+    }
+    if let string = value as? String {
+        return string
+    }
+    if let number = value as? NSNumber {
+        return number.stringValue
+    }
+    return String(describing: value)
+}
+
+private func kind(of value: CFTypeRef?) -> String {
+    guard let value else {
+        return "nil"
+    }
+    if value is [AXUIElement] {
+        return "AXUIElement[]"
+    }
+    if value is [[String: Any]] {
+        return "Dictionary[]"
+    }
+    if value is [Any] {
+        return "Array"
+    }
+    return String(describing: type(of: value))
+}
+
+private func count(of value: CFTypeRef?) -> Int? {
+    if let array = value as? [Any] {
+        return array.count
+    }
+    return nil
+}
+
+private func errorName(_ error: AXError) -> String {
+    switch error {
+    case .success:
+        return "success"
+    case .failure:
+        return "failure"
+    case .illegalArgument:
+        return "illegalArgument"
+    case .invalidUIElement:
+        return "invalidUIElement"
+    case .invalidUIElementObserver:
+        return "invalidUIElementObserver"
+    case .cannotComplete:
+        return "cannotComplete"
+    case .attributeUnsupported:
+        return "attributeUnsupported"
+    case .actionUnsupported:
+        return "actionUnsupported"
+    case .notificationUnsupported:
+        return "notificationUnsupported"
+    case .notImplemented:
+        return "notImplemented"
+    case .notificationAlreadyRegistered:
+        return "notificationAlreadyRegistered"
+    case .notificationNotRegistered:
+        return "notificationNotRegistered"
+    case .apiDisabled:
+        return "apiDisabled"
+    case .noValue:
+        return "noValue"
+    case .parameterizedAttributeUnsupported:
+        return "parameterizedAttributeUnsupported"
+    case .notEnoughPrecision:
+        return "notEnoughPrecision"
+    @unknown default:
+        return "unknown(\(error.rawValue))"
+    }
+}
