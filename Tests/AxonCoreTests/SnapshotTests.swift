@@ -41,6 +41,17 @@ import ApplicationServices
     #expect(AXSnapshotCapturer.defaultMaxChildrenPerNode <= 24)
 }
 
+@Test func captureBudgetKeepsGeneralSlackForObservationFiltering() {
+    #expect(AXSnapshotCapturer.childCaptureLimit(
+        childCount: 143,
+        maxChildrenPerNode: 24
+    ) == 28)
+    #expect(AXSnapshotCapturer.childCaptureLimit(
+        childCount: 26,
+        maxChildrenPerNode: 24
+    ) == 26)
+}
+
 @Test func snapshotHandleParsesSnapshotIdAndNodeIndex() throws {
     let handle = try SnapshotHandle("snap-test:42")
 

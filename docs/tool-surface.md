@@ -6,7 +6,7 @@ files, and the CLI. There are no compatibility aliases for previous tool names.
 ## MCP Tools
 
 ```text
-look(target?, since?, screenshot?, screenText?, tree?, offset?, limit?, depth?, format?, frames?)
+look(target?, since?, screenshot?, screenText?, tree?, offset?, limit?, depth?, all?, format?, frames?)
 find(app, locator)
 permit()
 run(actions?, path?, argValues?, continueOnError?, dryRun?)
@@ -25,7 +25,7 @@ invoke(target, name)
 ```text
 axon permit
 axon refresh-secrets [--json]
-axon look [target] [--since snapshot-id] [--screenshot] [--screen-text] [--frames] [--json] [--no-tree] [--offset n] [--limit n] [--depth n]
+axon look [target] [--since snapshot-id] [--screenshot] [--screen-text] [--frames] [--json] [--details] [--debug] [--no-tree] [--offset n] [--limit n] [--depth n]
 axon find <app> '<locator-json>'
 axon run <path.axn> [--arg name=value] [--dry-run] [--continue-on-error]
 axon save [--session id] [--from call] [--to call] [--path file.axn] [--include-reads]
@@ -40,13 +40,15 @@ axon invoke <handle> <action-name>
 
 ## Perception
 
-`look()` lists running app names. Use `format: "debug"` through MCP or
-`axon look --details` when bundle identifiers or pids are needed.
+`look()` lists regular running UI apps by default. Use `all: true` or
+`format: "debug"` through MCP, or `axon look --details`, when raw running
+processes, bundle identifiers, or pids are needed.
 
 `look(target: app)` captures an accessibility snapshot. MCP returns a compact
 agent-facing observation by default; `format: "debug"` returns the raw snapshot.
-Screenshots are opt-in with `screenshot: true`. `screenText: true` OCRs visible
-text from the screenshot.
+The observation tree is a DSL string with retained handles, roles, labels,
+actions, and explicit truncation markers. Screenshots are opt-in with
+`screenshot: true`. `screenText: true` OCRs visible text from the screenshot.
 
 Active credential redaction is always on when a provider-backed index has been
 refreshed with `axon refresh-secrets`. Redacted active credentials appear as
@@ -63,6 +65,7 @@ OCR text, Axon omits the image and returns a warning instead of sending pixels.
 
 `look(target: handle)` fetches a retained node's child page. Use the `offset`
 and `limit` fields from the returned continuation to page broad sibling lists.
+Child pages use the same DSL tree format as app observations.
 
 `look(since: snapshot)` recaptures the app for a retained snapshot and reports
 whether the coarse app/window surface changed. It uses observer hints when

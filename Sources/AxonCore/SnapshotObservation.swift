@@ -8,18 +8,28 @@ public struct SnapshotObservationFormatter {
     public init() {}
 
     public func observation(from snapshot: JSONValue, frames: Bool) -> JSONValue {
+        observation(from: snapshot, frames: frames, maxDepth: nil)
+    }
+
+    public func observation(from snapshot: JSONValue, frames: Bool, maxDepth: Int?) -> JSONValue {
         guard case let .object(object) = snapshot else {
             return snapshot
         }
 
         let snapshotID = string("id", in: object) ?? "unknown"
         let app = object["app"]?.objectValue ?? [:]
+        let compactTree = compactForest(
+            from: object["windows"],
+            snapshotID: snapshotID,
+            frames: frames,
+            maxDepth: maxDepth
+        )
         var observation: [String: JSONValue] = [
             "format": .string("observation"),
             "snapshot": .string(snapshotID),
             "app": .string(string("name", in: app) ?? "unknown"),
             "pid": app["processIdentifier"] ?? .null,
-            "tree": .array(compactForest(from: object["windows"], snapshotID: snapshotID, frames: frames))
+            "tree": .string(dsl(from: compactTree))
         ]
         if let bundle = string("bundleIdentifier", in: app) {
             observation["bundle"] = .string(bundle)
@@ -30,7 +40,7 @@ public struct SnapshotObservationFormatter {
         if let screenText = compactScreenText(from: object["screenText"], frames: frames) {
             observation["screenText"] = screenText
         }
-        if let redaction = object["redaction"] {
+        if let redaction = mergedRedaction(topLevel: object["redaction"], nodes: compactTree) {
             observation["redaction"] = redaction
         }
         if let warnings = object["warnings"] {
@@ -46,7 +56,13 @@ public struct SnapshotObservationFormatter {
 
         let snapshotID = string("snapshot", in: object) ?? "unknown"
         let baseIndex = object["baseIndex"]?.intValue ?? 0
-        let observation: [String: JSONValue] = [
+        let compactTree = compactForest(
+            from: object["children"],
+            snapshotID: snapshotID,
+            frames: frames,
+            baseIndex: baseIndex
+        )
+        var observation: [String: JSONValue] = [
             "format": .string("children"),
             "snapshot": .string(snapshotID),
             "parent": object["parent"] ?? .null,
@@ -54,8 +70,11 @@ public struct SnapshotObservationFormatter {
             "limit": object["limit"] ?? .int(0),
             "total": object["total"] ?? .int(0),
             "nextOffset": object["nextOffset"] ?? .null,
-            "items": .array(compactForest(from: object["children"], snapshotID: snapshotID, frames: frames, baseIndex: baseIndex))
+            "tree": .string(dsl(from: compactTree))
         ]
+        if let redaction = mergedRedaction(topLevel: nil, nodes: compactTree) {
+            observation["redaction"] = redaction
+        }
         return .object(observation)
     }
 
@@ -91,12 +110,15 @@ public struct SnapshotObservationFormatter {
                 appendScreenText(item, lines: &lines)
             }
         }
-        if case let .array(nodes)? = object["tree"] {
+        if case let .string(tree)? = object["tree"], string("format", in: object) == "observation" {
+            lines.append("tree:")
+            appendIndentedTree(tree, lines: &lines)
+        } else if case let .array(nodes)? = object["tree"] {
             lines.append("tree:")
             for node in nodes {
-                appendText(node, depth: 1, lines: &lines)
+                appendDSL(node, depth: 1, lines: &lines)
             }
-        } else if case let .array(nodes)? = object["items"] {
+        } else if string("format", in: object) == "children" {
             if let parent = object["parent"]?.scalarText {
                 lines.append("parent: \(parent)")
             }
@@ -109,8 +131,12 @@ public struct SnapshotObservationFormatter {
                 lines.append("nextOffset: \(nextOffset)")
             }
             lines.append("children:")
-            for node in nodes {
-                appendText(node, depth: 1, lines: &lines)
+            if case let .string(tree)? = object["tree"] {
+                appendIndentedTree(tree, lines: &lines)
+            } else if case let .array(nodes)? = object["items"] {
+                for node in nodes {
+                    appendDSL(node, depth: 1, lines: &lines)
+                }
             }
         }
         return lines.joined(separator: "\n")
@@ -157,23 +183,45 @@ public struct SnapshotObservationFormatter {
         lines.append(line)
     }
 
-    private func compactForest(from value: JSONValue?, snapshotID: String, frames: Bool) -> [JSONValue] {
-        compactForest(from: value, snapshotID: snapshotID, frames: frames, baseIndex: 0)
+    private func compactForest(
+        from value: JSONValue?,
+        snapshotID: String,
+        frames: Bool,
+        maxDepth: Int? = nil
+    ) -> [JSONValue] {
+        compactForest(from: value, snapshotID: snapshotID, frames: frames, baseIndex: 0, maxDepth: maxDepth)
     }
 
-    private func compactForest(from value: JSONValue?, snapshotID: String, frames: Bool, baseIndex: Int) -> [JSONValue] {
+    private func compactForest(
+        from value: JSONValue?,
+        snapshotID: String,
+        frames: Bool,
+        baseIndex: Int,
+        maxDepth: Int? = nil
+    ) -> [JSONValue] {
         guard case let .array(nodes)? = value else {
             return []
         }
         var nextIndex = baseIndex
-        return nodes.flatMap { compactNodes(from: $0, snapshotID: snapshotID, frames: frames, nextIndex: &nextIndex) }
+        return nodes.flatMap {
+            compactNodes(
+                from: $0,
+                snapshotID: snapshotID,
+                frames: frames,
+                nextIndex: &nextIndex,
+                depth: 0,
+                maxDepth: maxDepth
+            )
+        }
     }
 
     private func compactNodes(
         from value: JSONValue,
         snapshotID: String,
         frames: Bool,
-        nextIndex: inout Int
+        nextIndex: inout Int,
+        depth: Int,
+        maxDepth: Int?
     ) -> [JSONValue] {
         guard case let .object(object) = value else {
             return []
@@ -182,15 +230,31 @@ public struct SnapshotObservationFormatter {
         let index = nextIndex
         nextIndex += 1
 
+        let role = normalizedRole(string("role", in: object))
         let rawChildren = object["children"]?.arrayValue ?? []
-        var compactChildren = rawChildren.flatMap {
-            compactNodes(from: $0, snapshotID: snapshotID, frames: frames, nextIndex: &nextIndex)
+        var compactChildren: [JSONValue] = []
+        var truncationReasons: [String] = []
+        if let maxDepth, depth >= maxDepth, !rawChildren.isEmpty {
+            truncationReasons.append("depth limit hides \(childCountDescription(rawChildren.count))")
+            nextIndex += descendantCount(in: rawChildren)
+        } else {
+            for (childOffset, rawChild) in rawChildren.enumerated() {
+                let childNodes = compactNodes(
+                    from: rawChild,
+                    snapshotID: snapshotID,
+                    frames: frames,
+                    nextIndex: &nextIndex,
+                    depth: depth + 1,
+                    maxDepth: maxDepth
+                )
+                compactChildren.append(contentsOf: childNodes.map {
+                    withSourceEnd(childOffset + 1, in: $0)
+                })
+            }
         }
 
-        let role = normalizedRole(string("role", in: object))
         var label = label(in: object)
         let actions = exposedActions(compactActions(from: object["actions"]), role: role)
-        var truncationReasons: [String] = []
         if let truncation = string("truncationReason", in: object) {
             truncationReasons.append(truncation)
         }
@@ -210,11 +274,18 @@ public struct SnapshotObservationFormatter {
         }
 
         let outputRole = outputRole(for: role, label: label)
-        let handle = "\(snapshotID):\(index)"
-        let more = continuation(from: truncationReasons, handle: handle)
-        if compactChildren.count > Self.maxObservedChildren, more != nil {
-            truncationReasons.append("showing \(Self.maxObservedChildren) of \(compactChildren.count) children")
-            compactChildren = Array(compactChildren.prefix(Self.maxObservedChildren))
+        let handle = string("handle", in: object) ?? "\(snapshotID):\(index)"
+        var more = continuation(from: truncationReasons, handle: handle)
+        if compactChildren.count > Self.maxObservedChildren, var continuation = more {
+            let visibleChildren = Array(compactChildren.prefix(Self.maxObservedChildren))
+            if let sourceEnd = sourceEnd(in: visibleChildren.last) {
+                continuation.offset = sourceEnd
+            }
+            truncationReasons = truncationReasons.map {
+                normalizedChildLimitReason($0, visibleLimit: Self.maxObservedChildren)
+            }
+            compactChildren = visibleChildren
+            more = continuation
         }
 
         var compact: [String: JSONValue] = [
@@ -235,7 +306,7 @@ public struct SnapshotObservationFormatter {
             compact["redaction"] = redaction
         }
         if let more {
-            compact["more"] = more
+            compact["more"] = more.jsonValue
         }
         if frames, let frame = object["frame"], frame != .null {
             compact["frame"] = frame
@@ -244,6 +315,34 @@ public struct SnapshotObservationFormatter {
             compact.removeValue(forKey: "children")
         }
         return [.object(compact)]
+    }
+
+    private func descendantCount(in values: [JSONValue]) -> Int {
+        values.reduce(0) { total, value in
+            guard case let .object(object) = value else {
+                return total
+            }
+            return total + 1 + descendantCount(in: object["children"]?.arrayValue ?? [])
+        }
+    }
+
+    private func childCountDescription(_ count: Int) -> String {
+        "\(count) \(count == 1 ? "child" : "children")"
+    }
+
+    private func withSourceEnd(_ sourceEnd: Int, in value: JSONValue) -> JSONValue {
+        guard case var .object(object) = value else {
+            return value
+        }
+        object["_sourceEnd"] = .int(sourceEnd)
+        return .object(object)
+    }
+
+    private func sourceEnd(in value: JSONValue?) -> Int? {
+        guard case let .object(object)? = value else {
+            return nil
+        }
+        return object["_sourceEnd"]?.intValue
     }
 
     private func shouldInclude(
@@ -255,9 +354,30 @@ public struct SnapshotObservationFormatter {
         hasChildren: Bool,
         childCount: Int
     ) -> Bool {
-        if isFarOffscreen(object["frame"]) {
+        if isLowInformationPagingControl(role: role, label: label, actions: actions, hasChildren: hasChildren) {
             return false
         }
+        if isFarOffscreen(object["frame"]) && !hasSemanticSubrole(object) {
+            return false
+        }
+        return isContentful(
+            role: role,
+            label: label,
+            actions: actions,
+            truncationReasons: truncationReasons,
+            hasChildren: hasChildren,
+            childCount: childCount
+        )
+    }
+
+    private func isContentful(
+        role: String,
+        label: String?,
+        actions: [String],
+        truncationReasons: [String],
+        hasChildren: Bool,
+        childCount: Int
+    ) -> Bool {
         if !truncationReasons.isEmpty {
             return true
         }
@@ -286,6 +406,34 @@ public struct SnapshotObservationFormatter {
         }
     }
 
+    private func isLowInformationPagingControl(
+        role: String,
+        label: String?,
+        actions: [String],
+        hasChildren: Bool
+    ) -> Bool {
+        guard role == "button",
+              let label,
+              actions == ["click"],
+              !hasChildren
+        else {
+            return false
+        }
+        switch label.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() {
+        case "scroll backwards", "scroll forwards":
+            return true
+        default:
+            return false
+        }
+    }
+
+    private func hasSemanticSubrole(_ object: [String: JSONValue]) -> Bool {
+        guard let subrole = string("subrole", in: object) else {
+            return false
+        }
+        return !subrole.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
     private func outputRole(for role: String, label: String?) -> String {
         if role == "row" {
             return "item"
@@ -296,7 +444,24 @@ public struct SnapshotObservationFormatter {
         return role
     }
 
-    private func continuation(from truncationReasons: [String], handle: String) -> JSONValue? {
+    private struct Continuation {
+        let handle: String
+        var offset: Int
+        let limit: Int
+        let total: Int
+
+        var jsonValue: JSONValue {
+            .object([
+                "tool": .string("look"),
+                "target": .string(handle),
+                "offset": .int(offset),
+                "limit": .int(limit),
+                "total": .int(total)
+            ])
+        }
+    }
+
+    private func continuation(from truncationReasons: [String], handle: String) -> Continuation? {
         for reason in truncationReasons {
             if let range = reason.range(of: #"children limited to ([0-9]+) of ([0-9]+)"#, options: .regularExpression) {
                 let match = String(reason[range])
@@ -306,16 +471,29 @@ public struct SnapshotObservationFormatter {
                 guard values.count >= 2 else {
                     continue
                 }
-                return .object([
-                    "tool": .string("look"),
-                    "target": .string(handle),
-                    "offset": .int(values[0]),
-                    "limit": .int(values[0]),
-                    "total": .int(values[1])
-                ])
+                return Continuation(
+                    handle: handle,
+                    offset: values[0],
+                    limit: Self.maxObservedChildren,
+                    total: values[1]
+                )
             }
         }
         return nil
+    }
+
+    private func normalizedChildLimitReason(_ reason: String, visibleLimit: Int) -> String {
+        guard let range = reason.range(of: #"children limited to ([0-9]+) of ([0-9]+)"#, options: .regularExpression) else {
+            return reason
+        }
+        let match = String(reason[range])
+        let values = match
+            .split(whereSeparator: { !$0.isNumber })
+            .compactMap { Int($0) }
+        guard values.count >= 2 else {
+            return reason
+        }
+        return reason.replacingCharacters(in: range, with: "children limited to \(visibleLimit) of \(values[1])")
     }
 
     private func meaningfulLabel(_ label: String?) -> String? {
@@ -521,14 +699,28 @@ public struct SnapshotObservationFormatter {
         ].contains(role)
     }
 
-    private func appendText(_ value: JSONValue, depth: Int, lines: inout [String]) {
+    private func dsl(from nodes: [JSONValue]) -> String {
+        var lines: [String] = []
+        for node in nodes {
+            appendDSL(node, depth: 0, lines: &lines)
+        }
+        return lines.joined(separator: "\n")
+    }
+
+    private func appendIndentedTree(_ tree: String, lines: inout [String]) {
+        for line in tree.split(separator: "\n", omittingEmptySubsequences: false) {
+            lines.append("  \(line)")
+        }
+    }
+
+    private func appendDSL(_ value: JSONValue, depth: Int, lines: inout [String]) {
         guard case let .object(object) = value else {
             return
         }
         let indent = String(repeating: "  ", count: depth)
         let handle = string("handle", in: object) ?? "?:?"
         let role = string("role", in: object) ?? "node"
-        var line = "\(indent)\(handle) \(role)"
+        var line = "\(indent)\(handle): \(role)"
         if let label = string("label", in: object) {
             line += " \(yamlString(label))"
         }
@@ -546,9 +738,8 @@ public struct SnapshotObservationFormatter {
         if let redaction = firstRedactionLabel(in: object["redaction"]) {
             line += " redaction=\(redaction)"
         }
-        let hasContinuation = object["more"]?.objectValue != nil
-        if !hasContinuation, let truncated = string("truncated", in: object) {
-            line += " # \(truncated)"
+        if let truncated = string("truncated", in: object) {
+            line += " <truncated: \(truncated)>"
         }
         lines.append(line)
         if let more = object["more"]?.objectValue {
@@ -565,9 +756,87 @@ public struct SnapshotObservationFormatter {
 
         if case let .array(children)? = object["children"] {
             for child in children {
-                appendText(child, depth: depth + 1, lines: &lines)
+                appendDSL(child, depth: depth + 1, lines: &lines)
             }
         }
+    }
+
+    private func mergedRedaction(topLevel: JSONValue?, nodes: [JSONValue]) -> JSONValue? {
+        var merged: [String: JSONValue] = [:]
+        if case let .object(redaction)? = topLevel {
+            merge(redaction: redaction, into: &merged)
+        }
+        mergeRedactions(in: nodes, into: &merged)
+        return merged.isEmpty ? nil : .object(merged)
+    }
+
+    private func mergeRedactions(in nodes: [JSONValue], into merged: inout [String: JSONValue]) {
+        for node in nodes {
+            guard case let .object(object) = node else {
+                continue
+            }
+            if case let .object(redaction)? = object["redaction"] {
+                merge(redaction: redaction, into: &merged)
+            }
+            if case let .array(children)? = object["children"] {
+                mergeRedactions(in: children, into: &merged)
+            }
+        }
+    }
+
+    private func merge(redaction: [String: JSONValue], into merged: inout [String: JSONValue]) {
+        for (key, value) in redaction {
+            switch (key, value) {
+            case let ("fields", .array(values)):
+                merged[key] = .array(appendingUnique(values, to: merged[key]?.arrayValue ?? []))
+            case let ("references", .object(fields)),
+                 let ("matched", .object(fields)):
+                merged[key] = .object(mergingArrayFields(fields, into: merged[key]?.objectValue ?? [:]))
+            case let ("reasons", .object(fields)),
+                 let ("providers", .object(fields)):
+                merged[key] = .object(mergingObjectFields(fields, into: merged[key]?.objectValue ?? [:]))
+            default:
+                if merged[key] == nil {
+                    merged[key] = value
+                }
+            }
+        }
+    }
+
+    private func mergingArrayFields(
+        _ fields: [String: JSONValue],
+        into existing: [String: JSONValue]
+    ) -> [String: JSONValue] {
+        var merged = existing
+        for (field, value) in fields {
+            guard case let .array(values) = value else {
+                if merged[field] == nil {
+                    merged[field] = value
+                }
+                continue
+            }
+            merged[field] = .array(appendingUnique(values, to: merged[field]?.arrayValue ?? []))
+        }
+        return merged
+    }
+
+    private func mergingObjectFields(
+        _ fields: [String: JSONValue],
+        into existing: [String: JSONValue]
+    ) -> [String: JSONValue] {
+        var merged = existing
+        for (field, value) in fields where merged[field] == nil {
+            merged[field] = value
+        }
+        return merged
+    }
+
+    private func appendingUnique(_ values: [JSONValue], to existing: [JSONValue]) -> [JSONValue] {
+        var merged = existing
+        for value in values where !merged.contains(value) {
+            merged.append(value)
+        }
+        return merged
     }
 
     private func string(_ key: String, in object: [String: JSONValue]) -> String? {

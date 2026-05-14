@@ -2,6 +2,7 @@ public struct CommandRouter {
     public typealias LocatorResolutionProvider = (_ app: String, _ locator: AXLocator, _ scrollToVisible: Bool) throws -> LocatorResolution
 
     private let listApps: () -> [AppIdentity]
+    private let listAllApps: () -> [AppIdentity]
     private let captureSnapshot: (String, Bool) throws -> AppSnapshot
     private let resolveLocator: LocatorResolutionProvider
     private let batchSnapshotProvider: ActionBatchExecutor.SnapshotProvider
@@ -14,7 +15,8 @@ public struct CommandRouter {
     private let activeCredentialFilterProvider: @Sendable () -> any ActiveCredentialFilter
 
     public init(
-        listApps: @escaping () -> [AppIdentity] = { AppResolver().runningApps() },
+        listApps: @escaping () -> [AppIdentity] = { AppResolver().recordableApps() },
+        listAllApps: @escaping () -> [AppIdentity] = { AppResolver().runningApps() },
         captureSnapshot: ((String, Bool) throws -> AppSnapshot)? = nil,
         resolveLocator: LocatorResolutionProvider? = nil,
         batchSnapshotProvider: ActionBatchExecutor.SnapshotProvider? = nil,
@@ -33,6 +35,7 @@ public struct CommandRouter {
         self.recognizeText = recognizeText
         self.activeCredentialFilterProvider = activeCredentialFilterProvider ?? { activeCredentialFilter }
         self.listApps = listApps
+        self.listAllApps = listAllApps
         self.captureSnapshot = captureSnapshot ?? { app, screenshot in
             try AXSnapshotCapturer(elementStore: elementStore).capture(app: app, screenshot: screenshot)
         }
@@ -83,10 +86,12 @@ public struct CommandRouter {
                     return try changedSinceResponse(id: request.id, params: params)
                 }
                 guard let target = try optionalStringParam("target", in: params) ?? optionalStringParam("app", in: params) else {
+                    let format = try optionalStringParam("format", in: params)
+                    let includeAllApps = (boolParam("all", in: params) ?? false) || format == "debug"
                     return JSONRPCResponse(
                         id: request.id,
                         result: [
-                            "apps": .array(listApps().map(\.jsonValue))
+                            "apps": .array((includeAllApps ? listAllApps() : listApps()).map(\.jsonValue))
                         ]
                     )
                 }
@@ -112,9 +117,6 @@ public struct CommandRouter {
                     includeTree: includeTree,
                     activeSecretRedactor: activeSecretRedactor
                 )
-                if let depth = intParam("depth", in: params) {
-                    snapshotJSON = snapshotJSON.limitingTreeDepth(max(0, depth))
-                }
                 let screenTextItems = (screenText || screenshot)
                     ? ScreenTextExtractor(recognizeText: recognizeText).extract(in: snapshot)
                     : []
@@ -599,28 +601,6 @@ private struct TextLocationResolvedPoint {
 }
 
 private extension JSONValue {
-    func limitingTreeDepth(_ depth: Int) -> JSONValue {
-        guard case var .object(object) = self,
-              case let .array(windows)? = object["windows"]
-        else {
-            return self
-        }
-        object["windows"] = .array(windows.map { $0.limitingNodeDepth(depth) })
-        return .object(object)
-    }
-
-    private func limitingNodeDepth(_ remainingDepth: Int) -> JSONValue {
-        guard case var .object(object) = self else {
-            return self
-        }
-        if remainingDepth <= 0 {
-            object["children"] = .array([])
-        } else if case let .array(children)? = object["children"] {
-            object["children"] = .array(children.map { $0.limitingNodeDepth(remainingDepth - 1) })
-        }
-        return .object(object)
-    }
-
     func addingScreenText(
         _ items: [ScreenTextItem],
         includeScreenshot: Bool,

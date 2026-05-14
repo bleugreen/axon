@@ -20,6 +20,7 @@ public struct AXSnapshotCapturer {
     public static let defaultMaxChildrenPerNode = 24
     public static let defaultMaxWindows = 8
     public static let defaultMessagingTimeout: Float = 0.2
+    private static let rawChildCaptureSlack = 4
 
     private let appResolver: AppResolver
     private let screenshotCapturer: ScreenshotCapturer
@@ -27,6 +28,11 @@ public struct AXSnapshotCapturer {
     private let maxChildrenPerNode: Int
     private let maxWindows: Int
     private let messagingTimeout: Float
+
+    private enum ChildCaptureMode {
+        case normal
+        case shallow
+    }
 
     public init(
         appResolver: AppResolver = AppResolver(),
@@ -57,7 +63,7 @@ public struct AXSnapshotCapturer {
         let windows = windowElements(from: appElement)
             .prefix(maxWindows)
             .map { window -> AXNode in
-                serialize(window, retainedElements: &retainedElements)
+                serialize(window, retainedElements: &retainedElements, childCaptureMode: .normal)
             }
         let windowCount = windowCount(from: appElement)
         let truncationReason = windowCount > windows.count ? "windows limited to \(maxWindows) of \(windowCount)" : nil
@@ -97,7 +103,7 @@ public struct AXSnapshotCapturer {
         let childElements = rangedElements(kAXChildrenAttribute, from: parent, start: offset, limit: min(limit, total - offset))
         var retainedElements: [AXUIElement] = []
         let children = childElements.map { child -> AXNode in
-            serialize(child, retainedElements: &retainedElements)
+            serialize(child, retainedElements: &retainedElements, childCaptureMode: .normal)
         }
         let baseIndex = try elementStore.append(snapshotID: handle.snapshotID, elements: retainedElements)
         return AXChildrenPage(
@@ -121,7 +127,8 @@ public struct AXSnapshotCapturer {
 
     private func serialize(
         _ element: AXUIElement,
-        retainedElements: inout [AXUIElement]
+        retainedElements: inout [AXUIElement],
+        childCaptureMode: ChildCaptureMode
     ) -> AXNode {
         AXUIElementSetMessagingTimeout(element, messagingTimeout)
         retainedElements.append(element)
@@ -138,12 +145,25 @@ public struct AXSnapshotCapturer {
         let frame = frame(from: element)
         let actions = actionNames(for: element)
         var truncationReasons: [String] = []
-        let childCount = attributeValueCount(kAXChildrenAttribute, from: element)
-        if childCount > maxChildrenPerNode {
-            truncationReasons.append("children limited to \(maxChildrenPerNode) of \(childCount)")
-        }
-        let children = childElements(from: element).map { child in
-            serialize(child, retainedElements: &retainedElements)
+        let children: [AXNode]
+        if childCaptureMode == .shallow {
+            children = []
+        } else {
+            let childCount = attributeValueCount(kAXChildrenAttribute, from: element)
+            let childLimit = Self.childCaptureLimit(
+                childCount: childCount,
+                maxChildrenPerNode: maxChildrenPerNode
+            )
+            if childCount > childLimit {
+                truncationReasons.append("children limited to \(childLimit) of \(childCount)")
+            }
+            children = childElements(from: element, limit: childLimit).enumerated().map { offset, child in
+                serialize(
+                    child,
+                    retainedElements: &retainedElements,
+                    childCaptureMode: offset < maxChildrenPerNode ? .normal : .shallow
+                )
+            }
         }
 
         return AXNode(
@@ -163,8 +183,13 @@ public struct AXSnapshotCapturer {
         )
     }
 
-    private func childElements(from element: AXUIElement) -> [AXUIElement] {
-        rangedElements(kAXChildrenAttribute, from: element, start: 0, limit: maxChildrenPerNode)
+    static func childCaptureLimit(childCount: Int, maxChildrenPerNode: Int) -> Int {
+        let displayLimit = max(1, maxChildrenPerNode)
+        return min(childCount, displayLimit + Self.rawChildCaptureSlack)
+    }
+
+    private func childElements(from element: AXUIElement, limit: Int) -> [AXUIElement] {
+        rangedElements(kAXChildrenAttribute, from: element, start: 0, limit: limit)
     }
 
     private func attributeValueCount(_ attribute: String, from element: AXUIElement) -> Int {

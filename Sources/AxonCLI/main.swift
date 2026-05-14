@@ -73,7 +73,9 @@ do {
             throw CLIError.invalidArguments(error.message)
         }
         if case let .array(apps)? = response.result?["apps"] {
-            if look.details {
+            if look.json {
+                try printResponse(response)
+            } else if look.details {
                 for app in apps {
                     let pid = app["processIdentifier"].flatMap(stringValue) ?? "?"
                     let name = app["name"].flatMap(stringValue) ?? "unknown"
@@ -92,7 +94,8 @@ do {
                 let formatter = SnapshotObservationFormatter()
                 let observation = formatter.observation(
                     from: snapshot,
-                    frames: look.frames
+                    frames: look.frames,
+                    maxDepth: lookDepth(in: look.params)
                 )
                 print(formatter.text(from: observation))
             }
@@ -294,6 +297,10 @@ private func lookCommand(arguments: [String]) throws -> (params: [String: JSONVa
         case "--details", "--debug":
             details = true
             json = arguments[index] == "--debug"
+            params["all"] = .bool(true)
+            if arguments[index] == "--debug" {
+                params["format"] = .string("debug")
+            }
             index += 1
         case "--no-tree":
             params["tree"] = .bool(false)
@@ -329,6 +336,13 @@ private func lookCommand(arguments: [String]) throws -> (params: [String: JSONVa
         params["target"] = .string(target)
     }
     return (params, frames, json, details)
+}
+
+private func lookDepth(in params: [String: JSONValue]) -> Int? {
+    guard case let .int(depth)? = params["depth"] else {
+        return nil
+    }
+    return max(0, depth)
 }
 
 private func keyboardParams(arguments: [String]) throws -> [String: JSONValue] {
