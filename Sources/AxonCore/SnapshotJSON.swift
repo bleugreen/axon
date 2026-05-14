@@ -15,7 +15,6 @@ public extension AppSnapshot {
             "id": .string(id.rawValue),
             "app": app.jsonValue,
             "indexedNodes": .array(indexedNodes.map { indexed in
-                let redactionScope = "\(id.rawValue)_\(indexed.index)"
                 let redactionContext = DeterministicRedactionContext(node: indexed.node)
                 var node: [String: JSONValue] = [
                     "index": .int(indexed.index),
@@ -30,32 +29,28 @@ public extension AppSnapshot {
                     indexed.node.subrole,
                     activeSecretRedactor: activeSecretRedactor,
                     deterministicRedactor: deterministicRedactor,
-                    redactionContext: redactionContext,
-                    redactionScope: redactionScope
+                    redactionContext: redactionContext
                 )
                 node.addRedactedString(
                     "title",
                     indexed.node.title,
                     activeSecretRedactor: activeSecretRedactor,
                     deterministicRedactor: deterministicRedactor,
-                    redactionContext: redactionContext,
-                    redactionScope: redactionScope
+                    redactionContext: redactionContext
                 )
                 node.addRedactedString(
                     "value",
                     indexed.node.value,
                     activeSecretRedactor: activeSecretRedactor,
                     deterministicRedactor: deterministicRedactor,
-                    redactionContext: redactionContext,
-                    redactionScope: redactionScope
+                    redactionContext: redactionContext
                 )
                 node.addRedactedString(
                     "description",
                     indexed.node.description,
                     activeSecretRedactor: activeSecretRedactor,
                     deterministicRedactor: deterministicRedactor,
-                    redactionContext: redactionContext,
-                    redactionScope: redactionScope
+                    redactionContext: redactionContext
                 )
                 return .object(node)
             }),
@@ -126,7 +121,6 @@ private extension AXNode {
     ) -> JSONValue {
         let index = nextIndex
         nextIndex += 1
-        let redactionScope = "\(snapshotID.rawValue)_\(index)"
         let redactionContext = DeterministicRedactionContext(node: self)
         var object: [String: JSONValue] = [
             "role": .string(role),
@@ -153,48 +147,42 @@ private extension AXNode {
             subrole,
             activeSecretRedactor: activeSecretRedactor,
             deterministicRedactor: deterministicRedactor,
-            redactionContext: redactionContext,
-            redactionScope: redactionScope
+            redactionContext: redactionContext
         )
         object.addRedactedString(
             "title",
             title,
             activeSecretRedactor: activeSecretRedactor,
             deterministicRedactor: deterministicRedactor,
-            redactionContext: redactionContext,
-            redactionScope: redactionScope
+            redactionContext: redactionContext
         )
         object.addRedactedString(
             "value",
             value,
             activeSecretRedactor: activeSecretRedactor,
             deterministicRedactor: deterministicRedactor,
-            redactionContext: redactionContext,
-            redactionScope: redactionScope
+            redactionContext: redactionContext
         )
         object.addRedactedString(
             "description",
             description,
             activeSecretRedactor: activeSecretRedactor,
             deterministicRedactor: deterministicRedactor,
-            redactionContext: redactionContext,
-            redactionScope: redactionScope
+            redactionContext: redactionContext
         )
         object.addRedactedString(
             "help",
             help,
             activeSecretRedactor: activeSecretRedactor,
             deterministicRedactor: deterministicRedactor,
-            redactionContext: redactionContext,
-            redactionScope: redactionScope
+            redactionContext: redactionContext
         )
         object.addRedactedString(
             "identifier",
             identifier,
             activeSecretRedactor: activeSecretRedactor,
             deterministicRedactor: deterministicRedactor,
-            redactionContext: redactionContext,
-            redactionScope: redactionScope
+            redactionContext: redactionContext
         )
         object["frame"] = frame.map(\.jsonValue) ?? .null
         return .object(object)
@@ -249,11 +237,10 @@ public extension SnapshotSummary {
         let object: [String: JSONValue] = [
             "id": .string(id.rawValue),
             "app": app.jsonValue,
-            "windows": .array(windows.enumerated().map { index, window in
+            "windows": .array(windows.map { window in
                 window.jsonValue(
                     activeSecretRedactor: activeSecretRedactor,
-                    deterministicRedactor: DeterministicRedactor.standard,
-                    redactionScope: "\(id.rawValue)_window_\(index)"
+                    deterministicRedactor: DeterministicRedactor.standard
                 )
             }),
             "observationToken": observationToken.map(JSONValue.int) ?? .null
@@ -269,8 +256,7 @@ public extension WindowSignature {
 
     func jsonValue(
         activeSecretRedactor: ActiveSecretRedactor,
-        deterministicRedactor: DeterministicRedactor = DeterministicRedactor.standard,
-        redactionScope: String = "window"
+        deterministicRedactor: DeterministicRedactor = DeterministicRedactor.standard
     ) -> JSONValue {
         var object: [String: JSONValue] = [
             "role": .string(role),
@@ -283,8 +269,7 @@ public extension WindowSignature {
             title,
             activeSecretRedactor: activeSecretRedactor,
             deterministicRedactor: deterministicRedactor,
-            redactionContext: DeterministicRedactionContext(role: role, title: title),
-            redactionScope: redactionScope
+            redactionContext: DeterministicRedactionContext(role: role, title: title)
         )
         return .object(object)
     }

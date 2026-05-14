@@ -7,28 +7,18 @@ public extension LocatorResolution {
         .object([
             "status": .string(status.rawValue),
             "snapshotID": .string(snapshotID.rawValue),
-            "best": best.map {
-                $0.jsonValue(
-                    activeSecretRedactor: activeSecretRedactor,
-                    redactionScope: "\(snapshotID.rawValue)_locator_best_\($0.index)"
-                )
-            } ?? .null,
-            "candidates": .array(candidates.map {
-                $0.jsonValue(
-                    activeSecretRedactor: activeSecretRedactor,
-                    redactionScope: "\(snapshotID.rawValue)_locator_candidate_\($0.index)"
-                )
-            })
+            "best": best.map { $0.jsonValue(activeSecretRedactor: activeSecretRedactor) } ?? .null,
+            "candidates": .array(candidates.map { $0.jsonValue(activeSecretRedactor: activeSecretRedactor) })
         ])
     }
 }
 
 public extension LocatorCandidate {
     var jsonValue: JSONValue {
-        jsonValue(activeSecretRedactor: ActiveSecretRedactor(), redactionScope: "locator_candidate_\(index)")
+        jsonValue(activeSecretRedactor: ActiveSecretRedactor())
     }
 
-    func jsonValue(activeSecretRedactor: ActiveSecretRedactor, redactionScope: String) -> JSONValue {
+    func jsonValue(activeSecretRedactor: ActiveSecretRedactor) -> JSONValue {
         var object: [String: JSONValue] = [
             "index": .int(index),
             "handle": handle.map { .string($0.rawValue) } ?? .null,
@@ -39,8 +29,7 @@ public extension LocatorCandidate {
             "title",
             title,
             activeSecretRedactor: activeSecretRedactor,
-            redactionContext: DeterministicRedactionContext(role: role, title: title),
-            redactionScope: redactionScope
+            redactionContext: DeterministicRedactionContext(role: role, title: title)
         )
         let renderedReasons: [String]
         if titleWasRedacted,
@@ -51,8 +40,7 @@ public extension LocatorCandidate {
             renderedReasons = reasons
         }
         object["reasons"] = .array(renderedReasons.redactedReasonValues(
-            activeSecretRedactor: activeSecretRedactor,
-            redactionScope: redactionScope
+            activeSecretRedactor: activeSecretRedactor
         ))
         return .object(object)
     }

@@ -629,11 +629,8 @@ private extension JSONValue {
         guard case var .object(object) = self else {
             return self
         }
-        object["screenText"] = .array(items.enumerated().map { index, item in
-            item.jsonValue(
-                activeSecretRedactor: activeSecretRedactor,
-                redactionScope: "screenText_\(index)"
-            )
+        object["screenText"] = .array(items.map { item in
+            item.jsonValue(activeSecretRedactor: activeSecretRedactor)
         })
         if !includeScreenshot {
             object["screenshot"] = .null
@@ -670,11 +667,7 @@ private extension JSONValue {
 
 private extension Array where Element == ScreenTextItem {
     func containsActiveCredentialRedaction(activeSecretRedactor: ActiveSecretRedactor) -> Bool {
-        JSONValue.array(enumerated().map { index, item in
-            item.jsonValue(
-                activeSecretRedactor: activeSecretRedactor,
-                redactionScope: "screenText_guard_\(index)"
-            )
-        }).containsActiveCredentialRedaction()
+        JSONValue.array(map { $0.jsonValue(activeSecretRedactor: activeSecretRedactor) })
+            .containsActiveCredentialRedaction()
     }
 }

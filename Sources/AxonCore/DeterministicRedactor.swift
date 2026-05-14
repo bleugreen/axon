@@ -279,18 +279,6 @@ public struct DeterministicRedactor: Sendable {
             version: 1,
             tag: .authCredential,
             pattern: #"-----BEGIN [A-Z ]*PRIVATE KEY-----"#
-        ),
-        RegexRule(
-            name: "long-hex-secret",
-            version: 1,
-            tag: .authCredential,
-            pattern: #"\b[A-Fa-f0-9]{32,}\b"#
-        ),
-        RegexRule(
-            name: "long-token",
-            version: 1,
-            tag: .authCredential,
-            pattern: #"\b(?=[A-Za-z0-9_+/=-]{40,}\b)(?=[A-Za-z0-9_+/=-]*[A-Za-z])(?=[A-Za-z0-9_+/=-]*\d)(?:[A-Za-z0-9_+/=-]*[_+/=-]|[A-Za-z0-9_+/=-]{48,})[A-Za-z0-9_+/=-]*\b"#
         )
     ]
 
@@ -368,8 +356,7 @@ extension Dictionary where Key == String, Value == JSONValue {
         _ value: String?,
         activeSecretRedactor: ActiveSecretRedactor = ActiveSecretRedactor(),
         deterministicRedactor: DeterministicRedactor = DeterministicRedactor.standard,
-        redactionContext: DeterministicRedactionContext = DeterministicRedactionContext(),
-        redactionScope _: String? = nil
+        redactionContext: DeterministicRedactionContext = DeterministicRedactionContext()
     ) -> Bool {
         guard let value else {
             self[key] = .null
@@ -430,17 +417,15 @@ extension Dictionary where Key == String, Value == JSONValue {
 extension Array where Element == String {
     func redactedReasonValues(
         activeSecretRedactor: ActiveSecretRedactor,
-        deterministicRedactor: DeterministicRedactor = DeterministicRedactor.standard,
-        redactionScope: String
+        deterministicRedactor: DeterministicRedactor = DeterministicRedactor.standard
     ) -> [JSONValue] {
-        enumerated().map { index, reason in
+        map { reason in
             var object: [String: JSONValue] = [:]
             object.addRedactedString(
                 "reason",
                 reason,
                 activeSecretRedactor: activeSecretRedactor,
-                deterministicRedactor: deterministicRedactor,
-                redactionScope: "\(redactionScope)_reason_\(index)"
+                deterministicRedactor: deterministicRedactor
             )
             return object["reason"] ?? .string(reason)
         }

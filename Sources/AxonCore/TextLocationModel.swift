@@ -272,29 +272,19 @@ public extension TextLocationResolution {
         .object([
             "status": .string(status.rawValue),
             "snapshotID": .string(snapshotID.rawValue),
-            "best": best.map {
-                $0.jsonValue(
-                    activeSecretRedactor: activeSecretRedactor,
-                    redactionScope: "\(snapshotID.rawValue)_text_best_\($0.index)"
-                )
-            } ?? .null,
+            "best": best.map { $0.jsonValue(activeSecretRedactor: activeSecretRedactor) } ?? .null,
             "point": point.map(\.jsonValue) ?? .null,
-            "candidates": .array(candidates.map {
-                $0.jsonValue(
-                    activeSecretRedactor: activeSecretRedactor,
-                    redactionScope: "\(snapshotID.rawValue)_text_candidate_\($0.index)"
-                )
-            })
+            "candidates": .array(candidates.map { $0.jsonValue(activeSecretRedactor: activeSecretRedactor) })
         ])
     }
 }
 
 public extension TextLocationCandidate {
     var jsonValue: JSONValue {
-        jsonValue(activeSecretRedactor: ActiveSecretRedactor(), redactionScope: "text_candidate_\(index)")
+        jsonValue(activeSecretRedactor: ActiveSecretRedactor())
     }
 
-    func jsonValue(activeSecretRedactor: ActiveSecretRedactor, redactionScope: String) -> JSONValue {
+    func jsonValue(activeSecretRedactor: ActiveSecretRedactor) -> JSONValue {
         var object: [String: JSONValue] = [
             "index": .int(index),
             "handle": handle.map { .string($0.rawValue) } ?? .null,
@@ -307,8 +297,7 @@ public extension TextLocationCandidate {
             "matchedText",
             matchedText,
             activeSecretRedactor: activeSecretRedactor,
-            redactionContext: DeterministicRedactionContext(role: role, title: matchedText),
-            redactionScope: redactionScope
+            redactionContext: DeterministicRedactionContext(role: role, title: matchedText)
         )
         let renderedReasons: [String]
         if matchedTextWasRedacted,
@@ -318,8 +307,7 @@ public extension TextLocationCandidate {
             renderedReasons = reasons
         }
         object["reasons"] = .array(renderedReasons.redactedReasonValues(
-            activeSecretRedactor: activeSecretRedactor,
-            redactionScope: redactionScope
+            activeSecretRedactor: activeSecretRedactor
         ))
         return .object(object)
     }
