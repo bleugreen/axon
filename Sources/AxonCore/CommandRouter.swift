@@ -49,12 +49,12 @@ public struct CommandRouter {
 
     public func handle(_ request: JSONRPCRequest) -> JSONRPCResponse {
         let context = history.context(for: request)
-        let response = handleCommand(context.request)
+        let response = handleCommand(context.request, historySessionID: context.sessionID)
         history.record(request: context.request, response: response, sessionID: context.sessionID)
         return response
     }
 
-    private func handleCommand(_ request: JSONRPCRequest) -> JSONRPCResponse {
+    private func handleCommand(_ request: JSONRPCRequest, historySessionID: String? = nil) -> JSONRPCResponse {
         switch request.method {
         case "health":
             let doctor = Doctor.run()
@@ -155,7 +155,16 @@ public struct CommandRouter {
         case "run":
             do {
                 let params = try paramsObject(in: request)
-                let batch = try ActionBatchExecutor(commandHandler: handleCommand, snapshotProvider: batchSnapshotProvider).run(params: params)
+                let batch = try ActionBatchExecutor(
+                    commandHandler: { handleCommand($0) },
+                    snapshotProvider: batchSnapshotProvider,
+                    actionRecorder: { childRequest, childResponse in
+                        guard let historySessionID else {
+                            return
+                        }
+                        history.record(request: childRequest, response: childResponse, sessionID: historySessionID)
+                    }
+                ).run(params: params)
                 return JSONRPCResponse(id: request.id, result: ["batch": batch])
             } catch let error as ActionBatchError {
                 return JSONRPCResponse(id: request.id, error: .invalidParams(error.description))

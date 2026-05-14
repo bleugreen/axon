@@ -786,6 +786,67 @@ private func articleSnapshot(children: [AXNode]) -> AppSnapshot {
     #expect(batch["trace"]?[0]?["result"] == .string("<redacted: contains-secret>"))
 }
 
+@Test func runRedactsSecretTaintedJSONRPCErrors() throws {
+    let executor = ActionBatchExecutor { request in
+        let value = request.params?["value"]?.stringValue ?? "missing"
+        return JSONRPCResponse(id: request.id, error: .invalidParams("failed with \(value)"))
+    }
+
+    let source = """
+    version: 1
+    args:
+      - name: password
+        type: secret
+    actions:
+      - tool: type
+        target: s1:2
+        value: "{{password}}"
+    """
+    let path = try temporaryAxnFile(source)
+    defer { try? FileManager.default.removeItem(atPath: path) }
+
+    let batch = try executor.run(params: [
+        "path": .string(path),
+        "argValues": .object(["password": .string("s3cr3t!")])
+    ])
+
+    #expect(batch["success"] == .bool(false))
+    #expect(batch["trace"]?[0]?["error"] == .string("<redacted: contains-secret>"))
+}
+
+@Test func runRejectsParameterReferencesInNonStringValueFieldsBeforeDispatch() throws {
+    var requests: [JSONRPCRequest] = []
+    let executor = ActionBatchExecutor { request in
+        requests.append(request)
+        return JSONRPCResponse(id: request.id, result: ["action": .object(["success": .bool(true)])])
+    }
+
+    let source = """
+    version: 1
+    args:
+      - name: recipient
+        type: string
+    actions:
+      - tool: type
+        target: s1:2
+        value:
+          - "{{recipient}}"
+    """
+    let path = try temporaryAxnFile(source)
+    defer { try? FileManager.default.removeItem(atPath: path) }
+
+    do {
+        _ = try executor.run(params: [
+            "path": .string(path),
+            "argValues": .object(["recipient": .string("Ada")])
+        ])
+        Issue.record("non-string value parameter reference should fail before dispatch")
+    } catch let error as ActionBatchError {
+        #expect(error.description == "parameter references are only supported in string value fields: actions[0].value")
+    }
+    #expect(requests.isEmpty)
+}
+
 @Test func commandRouterRunsBatch() {
     var clicked: [String] = []
     let router = CommandRouter(actions: PrimitiveActionHandlers(
@@ -894,6 +955,13 @@ private extension JSONValue {
             return nil
         }
         return values
+    }
+
+    var stringValue: String? {
+        guard case let .string(value) = self else {
+            return nil
+        }
+        return value
     }
 }
 

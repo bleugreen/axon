@@ -14,6 +14,7 @@ public enum ActionBatchError: Error, CustomStringConvertible {
 
 public struct ActionBatchExecutor {
     public typealias CommandHandler = (JSONRPCRequest) -> JSONRPCResponse
+    public typealias ActionRecorder = (JSONRPCRequest, JSONRPCResponse) -> Void
     public typealias SnapshotProvider = RecordedFactEvaluator.SnapshotProvider
     public typealias ParameterSourceResolver = (URL) throws -> String?
 
@@ -32,13 +33,15 @@ public struct ActionBatchExecutor {
     private let changePollIntervalMs: Int
     private let changeTimeoutMs: Int
     private let parameterSourceResolvers: [String: ParameterSourceResolver]
+    private let actionRecorder: ActionRecorder?
 
     public init(
         commandHandler: @escaping CommandHandler,
         snapshotProvider: SnapshotProvider? = nil,
         changePollIntervalMs: Int = 100,
         changeTimeoutMs: Int = 5_000,
-        parameterSourceResolvers: [String: ParameterSourceResolver] = ActionBatchExecutor.defaultParameterSourceResolvers()
+        parameterSourceResolvers: [String: ParameterSourceResolver] = ActionBatchExecutor.defaultParameterSourceResolvers(),
+        actionRecorder: ActionRecorder? = nil
     ) {
         self.commandHandler = commandHandler
         self.snapshotProvider = snapshotProvider
@@ -46,6 +49,7 @@ public struct ActionBatchExecutor {
         self.changePollIntervalMs = max(0, changePollIntervalMs)
         self.changeTimeoutMs = max(0, changeTimeoutMs)
         self.parameterSourceResolvers = parameterSourceResolvers
+        self.actionRecorder = actionRecorder
     }
 
     public func run(params: [String: JSONValue]) throws -> JSONValue {
@@ -257,7 +261,13 @@ public struct ActionBatchExecutor {
 
             var secretTaintedFields: Set<String> = []
             for field in Self.substitutableStringFields {
-                guard case let .string(template)? = object[field] else {
+                guard let fieldValue = object[field] else {
+                    continue
+                }
+                guard case let .string(template) = fieldValue else {
+                    if containsReferenceSyntax(fieldValue) {
+                        throw ActionBatchError.invalidParams("parameter references are only supported in string value fields: actions[\(index)].\(field)")
+                    }
                     continue
                 }
                 let result = try substituteReferences(in: template, resolved: resolved)
@@ -396,9 +406,17 @@ public struct ActionBatchExecutor {
                 return .object(record)
             }
 
-            let response = dispatchPrimitive(object, index: index, tool: tool, method: method)
+            let response = dispatchPrimitive(
+                object,
+                index: index,
+                tool: tool,
+                method: method,
+                secretTaintedFields: secretTaintedFields
+            )
             if let error = response.error {
-                throw ActionBatchError.invalidParams(error.message)
+                record["success"] = .bool(false)
+                record["error"] = traceError(error.message, hasSecretTaint: !secretTaintedFields.isEmpty)
+                return .object(record)
             }
             if primitiveActionSucceeded(in: response.result) == false {
                 record["success"] = .bool(false)
@@ -438,13 +456,27 @@ public struct ActionBatchExecutor {
         _ object: [String: JSONValue],
         index: Int,
         tool: String,
-        method: String
+        method: String,
+        secretTaintedFields: Set<String>
     ) -> JSONRPCResponse {
-        commandHandler(JSONRPCRequest(
+        let request = JSONRPCRequest(
             id: .string("batch.\(index).\(tool)"),
             method: method,
             params: .object(object)
-        ))
+        )
+        let response = commandHandler(request)
+        if let actionRecorder {
+            let recordedRequest = JSONRPCRequest(
+                id: request.id,
+                method: request.method,
+                params: .object(redactingSecrets(in: object, secretTaintedFields: secretTaintedFields))
+            )
+            actionRecorder(
+                recordedRequest,
+                redactingSecretError(in: response, hasSecretTaint: !secretTaintedFields.isEmpty)
+            )
+        }
+        return response
     }
 
     private func verifyRequiredFacts(_ requiredFactIDs: [String], facts: [String: RecordedFact]) throws {
@@ -597,6 +629,16 @@ public struct ActionBatchExecutor {
 
     private func traceError(_ message: String, hasSecretTaint: Bool) -> JSONValue {
         .string(hasSecretTaint ? Self.redactedSecretValue : message)
+    }
+
+    private func redactingSecretError(
+        in response: JSONRPCResponse,
+        hasSecretTaint: Bool
+    ) -> JSONRPCResponse {
+        guard hasSecretTaint, response.error != nil else {
+            return response
+        }
+        return JSONRPCResponse(id: response.id, error: .invalidParams(Self.redactedSecretValue))
     }
 
     private func resultSummary(method: String, result: [String: JSONValue]) -> JSONValue {

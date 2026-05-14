@@ -130,6 +130,46 @@ import Testing
     #expect(response.result?["actionCount"] == JSONValue.int(1))
 }
 
+@Test func saveIncludesPrimitiveActionsExecutedInsideRun() {
+    let history = ActionHistoryStore()
+    let router = CommandRouter(
+        actions: PrimitiveActionHandlers(
+            type: { target, value in
+                PrimitiveActionResult(action: "type", target: target, strategy: "test", success: true, details: [
+                    "value": .string(value)
+                ])
+            }
+        ),
+        history: history
+    )
+
+    _ = router.handle(JSONRPCRequest(
+        id: .string("batch"),
+        method: "run",
+        params: .object([
+            "_session": .string("thread-a"),
+            "actions": .array([
+                .object([
+                    "tool": .string("type"),
+                    "target": .string("s1:2"),
+                    "value": .string("Hello")
+                ])
+            ])
+        ])
+    ))
+
+    let response = router.handle(JSONRPCRequest(
+        id: .string("export"),
+        method: "save",
+        params: .object(["sessionId": .string("thread-a")])
+    ))
+
+    #expect(response.error == nil)
+    #expect(response.result?["actionCount"] == .int(1))
+    #expect(response.result?["script"]?.stringValue?.contains("tool: type") == true)
+    #expect(response.result?["script"]?.stringValue?.contains("value: Hello") == true)
+}
+
 @Test func runHistoryDoesNotPersistSecretArgumentValues() throws {
     let history = ActionHistoryStore()
     var typedValues: [String] = []
