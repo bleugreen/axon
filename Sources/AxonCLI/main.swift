@@ -197,7 +197,7 @@ do {
           permit   ask macOS to approve the running daemon identity
           refresh-secrets [--json]
                    refresh the active credential redaction index from 1Password
-          look [target] [--since snapshot-id] [--screenshot] [--screen-text] [--sensitive] [--frames] [--json] [--no-tree] [--offset n] [--limit n] [--depth n]
+          look [target] [--since snapshot-id] [--screenshot] [--screen-text] [--frames] [--json] [--no-tree] [--offset n] [--limit n] [--depth n]
           find <app> <locator-json>
           run <path.axn> [--arg name=value] [--dry-run] [--continue-on-error]
           save [--session id] [--from call] [--to call] [--path file.axn] [--include-reads]
@@ -285,9 +285,6 @@ private func lookCommand(arguments: [String]) throws -> (params: [String: JSONVa
         case "--screen-text":
             params["screenText"] = .bool(true)
             index += 1
-        case "--sensitive":
-            params["sensitive"] = .bool(true)
-            index += 1
         case "--frames":
             frames = true
             index += 1
@@ -330,12 +327,6 @@ private func lookCommand(arguments: [String]) throws -> (params: [String: JSONVa
     }
     if let target {
         params["target"] = .string(target)
-    }
-    if params["sensitive"] == .bool(true), params["screenshot"] == .bool(true) {
-        throw CLIError.invalidArguments("look --sensitive cannot be combined with --screenshot")
-    }
-    if params["sensitive"] == .bool(true), params["screenText"] == .bool(true) {
-        throw CLIError.invalidArguments("look --sensitive cannot be combined with --screen-text")
     }
     return (params, frames, json, details)
 }

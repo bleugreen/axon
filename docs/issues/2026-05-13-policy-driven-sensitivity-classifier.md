@@ -2,7 +2,7 @@
 
 ## Context
 
-The current `sensitive: true` flag is set by the agent at request time. It assumes the agent already knows which fields contain sensitive content, which is exactly the case where it usually doesn't. By the time the agent has the snapshot back, the data has already crossed the boundary.
+The removed `sensitive: true` flag was set by the agent at request time. It assumed the agent already knew which fields contained sensitive content, which is exactly the case where it usually doesn't. By the time the agent had the snapshot back, the data had already crossed the boundary.
 
 We want sensitivity to be a property the *system* assigns based on what's actually in the snapshot, not a property the *caller* has to predict. The snapshot pipeline should be able to look at element content in context and apply user-authored redaction rules before anything reaches an agent or gets persisted.
 

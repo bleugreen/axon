@@ -17,13 +17,13 @@ This reframes 1Password integration as an always-on output guard first. Late-bou
 
 ## Current Problem
 
-The current `sensitive: true` flag is not a security boundary. It is caller-selected, and MCP `look` currently defaults it to `false`. That means the caller has to know in advance that a snapshot may contain sensitive values, which is exactly the case where the caller usually does not know.
+The removed `sensitive: true` flag was not a security boundary. It was caller-selected, and MCP `look` defaulted it to `false`. That meant the caller had to know in advance that a snapshot may contain sensitive values, which is exactly the case where the caller usually does not know.
 
 The right model is:
 
 - Active-credential redaction is always on for external textual output when a provider-backed index is available.
 - The caller does not opt into this redaction and cannot turn it off through normal read APIs.
-- The existing `sensitive` mode can remain as a broader aggressive-redaction/debug-suppression mode, but it is no longer the boundary that protects active credentials.
+- There is no caller-facing aggressive `sensitive` mode. Broader redaction belongs in always-on deterministic rules and the future policy classifier, not in an opt-in read flag.
 
 ## First Milestone: Always-On Look Redactor
 
@@ -186,7 +186,7 @@ Resolved secrets must never enter history records, batch traces, stdout, logs, o
 - **Index scope.** Should refresh include all readable vaults by default, or only user-selected vaults?
 - **Provider config.** How should Axon remember that a user wants 1Password protection enabled without making 1Password a dependency for everyone?
 - **Strict screenshot policy.** The first implementation omits screenshots when AX/OCR text detects an active credential. Should `look(..., screenshot: true)` refuse whenever active-secret protection is configured until pixel masking exists, even if text detection finds nothing?
-- **Sensitive flag.** Should `sensitive` be renamed/deprecated now that it is not the security boundary?
+- **Done: Sensitive flag.** Removed instead of renamed/deprecated. Redaction now belongs to always-on output layers, not caller-selected read modes.
 
 ## Non-Goals For The First Milestone
 

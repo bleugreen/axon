@@ -6,7 +6,7 @@ files, and the CLI. There are no compatibility aliases for previous tool names.
 ## MCP Tools
 
 ```text
-look(target?, since?, screenshot?, screenText?, tree?, sensitive?, offset?, limit?, depth?, format?, frames?)
+look(target?, since?, screenshot?, screenText?, tree?, offset?, limit?, depth?, format?, frames?)
 find(app, locator)
 permit()
 run(actions?, path?, argValues?, continueOnError?, dryRun?)
@@ -25,7 +25,7 @@ invoke(target, name)
 ```text
 axon permit
 axon refresh-secrets [--json]
-axon look [target] [--since snapshot-id] [--screenshot] [--screen-text] [--sensitive] [--frames] [--json] [--no-tree] [--offset n] [--limit n] [--depth n]
+axon look [target] [--since snapshot-id] [--screenshot] [--screen-text] [--frames] [--json] [--no-tree] [--offset n] [--limit n] [--depth n]
 axon find <app> '<locator-json>'
 axon run <path.axn> [--arg name=value] [--dry-run] [--continue-on-error]
 axon save [--session id] [--from call] [--to call] [--path file.axn] [--include-reads]
@@ -46,13 +46,18 @@ axon invoke <handle> <action-name>
 `look(target: app)` captures an accessibility snapshot. MCP returns a compact
 agent-facing observation by default; `format: "debug"` returns the raw snapshot.
 Screenshots are opt-in with `screenshot: true`. `screenText: true` OCRs visible
-text from the screenshot. `sensitive: true` redacts values and cannot be
-combined with screenshots or OCR.
+text from the screenshot.
 
 Active credential redaction is always on when a provider-backed index has been
 refreshed with `axon refresh-secrets`. Redacted active credentials appear as
 `<redacted: active-credential>` with matching `op://` references in structured
 redaction metadata; the secret value itself is never returned.
+
+Deterministic rule redaction is also always on for AX and OCR text. Role rules
+and curated patterns redact secure field values, secret-labeled values,
+structured identifiers, Luhn-valid cards, and known token shapes as
+`<redacted: auth-credential>`, `<redacted: pii-identifier>`, or
+`<redacted: financial-data>`.
 When a screenshot request is known to contain an active credential through AX or
 OCR text, Axon omits the image and returns a warning instead of sending pixels.
 

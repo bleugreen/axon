@@ -211,9 +211,6 @@ public struct MCPRouter {
         if updated["tree"] == nil {
             updated["tree"] = .bool(format != "debug")
         }
-        if updated["sensitive"] == nil {
-            updated["sensitive"] = .bool(false)
-        }
         return updated
     }
 
@@ -241,7 +238,6 @@ public struct MCPRouter {
                 "screenshot": boolSchema("Include embedded ScreenCaptureKit screenshot data with an app observation. Defaults to false for MCP."),
                 "screenText": boolSchema("OCR visible text from the app window screenshot and include it as organized screenText. Defaults to false."),
                 "tree": boolSchema("Include the nested AX tree for app observations. Defaults to true for observation format and false for debug format."),
-                "sensitive": boolSchema("Redact values and secret-like text while preserving short safe prefixes. Sensitive snapshots cannot include screenshots or screenText."),
                 "offset": numberSchema("Zero-based child offset when target is a retained handle. Defaults to 0."),
                 "limit": numberSchema("Maximum children when target is a retained handle. Defaults to Axon's sibling page size."),
                 "depth": numberSchema("Maximum tree depth to return for app observations, with windows at depth 0."),
