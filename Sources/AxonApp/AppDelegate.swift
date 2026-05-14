@@ -176,22 +176,19 @@ final class AxonAppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendabl
             } catch {
                 outcome = .failure(error)
             }
+            await self?.finishUpgrade(outcome: outcome, update: update)
+        }
+    }
 
-            await MainActor.run {
-                guard let self else { return }
-                switch outcome {
-                case .success:
-                    self.spawnRelaunchHelper()
-                    NSApp.terminate(nil)
-                case let .failure(error):
-                    self.updateMenuState = .available(update)
-                    self.installMenu()
-                    self.showAlert(
-                        title: "Update Failed",
-                        message: String(describing: error)
-                    )
-                }
-            }
+    private func finishUpgrade(outcome: Result<Void, Error>, update: ReleaseUpdate) {
+        switch outcome {
+        case .success:
+            spawnRelaunchHelper()
+            NSApp.terminate(nil)
+        case let .failure(error):
+            updateMenuState = .available(update)
+            installMenu()
+            showAlert(title: "Update Failed", message: String(describing: error))
         }
     }
 
