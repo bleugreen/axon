@@ -21,7 +21,7 @@ The current `sensitive: true` flag is not a security boundary. It is caller-sele
 
 The right model is:
 
-- Active-credential redaction is always on for external textual output when a provider-backed filter is available.
+- Active-credential redaction is always on for external textual output when a provider-backed index is available.
 - The caller does not opt into this redaction and cannot turn it off through normal read APIs.
 - The existing `sensitive` mode can remain as a broader aggressive-redaction/debug-suppression mode, but it is no longer the boundary that protects active credentials.
 
@@ -51,11 +51,11 @@ The redactor checks string-bearing AX fields such as `title`, `value`, `descript
     "reasons": {
       "value": "active-credential"
     },
-    "redactionIds": {
-      "value": "acr_s12_19_value"
+    "providers": {
+      "value": "1password"
     },
-    "attribution": {
-      "value": "requires-auth"
+    "references": {
+      "value": ["op://Personal/Gmail/password"]
     }
   }
 }
@@ -63,26 +63,26 @@ The redactor checks string-bearing AX fields such as `title`, `value`, `descript
 
 The value itself is never preserved in the output, not even as a short prefix. Prefix-preserving redaction is useful for generic token-shaped heuristics; active credentials are authentication-equivalent and should leak zero literal characters.
 
-## Active Credential Filter
+## Active Credential Index
 
-Use a provider-backed, presence-only filter. It answers "does this observed value match a known active credential?" It does not answer "which credential is this?"
+Use a provider-backed exact index. It answers "does this observed value match a known active credential?" and, on hit, returns the provider reference needed to make the redaction comprehensible without exposing the secret.
 
-The filter is built from keyed fingerprints:
+The index is built from keyed fingerprints:
 
 ```text
 fingerprint = HMAC-SHA256(indexKey, credentialValue)
 ```
 
-Those fingerprints are inserted into a Bloom filter. The `indexKey` lives in macOS Keychain. The on-disk cache stores the Bloom filter and metadata, never credential plaintext and never a per-secret map from fingerprint to credential reference.
+The `indexKey` lives in macOS Keychain. The on-disk cache stores keyed fingerprints mapped to provider references such as `op://vault/item/field`, plus metadata. It never stores credential plaintext and never stores the HMAC key.
 
 This avoids storing credentials locally while still making the normal `look` path cheap:
 
 1. Axon reads an AX value.
 2. Axon computes `HMAC(indexKey, observedValue)`.
-3. Axon checks the Bloom filter.
-4. On hit, Axon redacts the output field and records a transient redaction id.
+3. Axon checks the exact index.
+4. On hit, Axon redacts the output field and includes the matching provider reference in redaction metadata.
 
-The Bloom filter can produce false positives. That is acceptable: false positives hide benign values, while false negatives only come from missing/stale filter data or values that were intentionally excluded by thresholds.
+There are no probabilistic false positives in the normal path. False negatives come from missing/stale index data or values that were intentionally excluded by policy.
 
 ## 1Password Refresh
 
@@ -92,7 +92,7 @@ The Bloom filter can produce false positives. That is acceptable: false positive
 axon refresh-secrets
 ```
 
-During refresh, Axon shells out to `op`, lets 1Password own authentication and consent, reads active high-stakes secret fields, fingerprints them, inserts them into the filter, and immediately discards plaintext.
+During refresh, Axon shells out to `op`, lets 1Password own authentication and consent, lists items, reads concealed fields per item, fingerprints active high-stakes secret fields, stores keyed fingerprints with their `op://` references, and immediately discards plaintext.
 
 Fields to include:
 
@@ -115,29 +115,29 @@ Short or low-entropy values should be skipped to avoid nuisance redaction. A sta
 
 Normal `look` calls must not invoke `op` and must not trigger surprise authentication prompts.
 
-Instead, Axon stores `filterCreatedAt` and can run a user-initiated or pre-run metadata check:
+Instead, Axon stores the index creation time and can run a user-initiated or pre-run metadata check:
 
 ```sh
 op item list --long --format=json
 ```
 
-If any item metadata reports `updated_at > filterCreatedAt`, Axon marks the filter as stale and asks whether to refresh. If the user declines, Axon continues using the existing stale filter.
+If any item metadata reports `updated_at` later than the index creation time, Axon marks the index as stale and asks whether to refresh. If the user declines, Axon continues using the existing stale index.
 
 Filter states:
 
 | State | Behavior |
 | --- | --- |
-| `fresh` | Redaction runs with the current filter. |
-| `stale` | Redaction still runs with the old filter; Axon warns or prompts at pre-run/status checkpoints. |
+| `fresh` | Redaction runs with the current index. |
+| `stale` | Redaction still runs with the old index; Axon warns or prompts at pre-run/status checkpoints. |
 | `missing` with 1Password configured | Axon warns and offers refresh; if declined, it continues with provider redaction unavailable. |
 | `unconfigured` / no 1Password | Axon runs normally with built-in heuristic redaction only. |
-| `corrupt` | Axon ignores the broken filter, warns, and offers rebuild. |
+| `corrupt` | Axon ignores the broken index, warns, and offers rebuild. |
 
 No background timer should call `op`. Metadata checks belong at explicit checkpoints: CLI status, daemon startup, pre-run, menu bar "check protection", or user-requested refresh.
 
 The guarantee is intentionally precise:
 
-> If Axon has an active credential filter entry for a value, that value cannot appear in external textual output.
+> If Axon has an active credential index entry for a value, that value cannot appear in external textual output.
 
 It is not:
 
@@ -155,40 +155,22 @@ For the first milestone:
 
 This does not prove that every secret visible in pixels was detected. OCR can miss text, and some apps expose pixels without corresponding AX text. Full pixel safety is tracked separately in [Screenshot Pixel Secret Redaction](2026-05-14-screenshot-pixel-secret-redaction.md).
 
-## Optional Authenticated Attribution
+## Inline References
 
-Normal output should not include `op://` references. A Bloom filter can detect presence, but it cannot attribute a hit to a specific credential without retaining a local credential index. Storing such an index would weaken the reason for using `op` in the first place.
+Normal redacted output includes provider references such as `op://Personal/Gmail/password` directly in redaction metadata. The reference is not secret material, and including it makes the output comprehensible without a second authenticated lookup path.
 
-Instead, attribution is a separate opt-in operation:
-
-```text
-identify_redaction(redactionId)
-```
-
-That operation prompts through 1Password, reads current secret values in memory, computes the same HMAC fingerprints, compares them with the transient fingerprint stored for the redaction id, and returns only the matching reference:
-
-```json
-{
-  "redactionId": "acr_s12_19_value",
-  "status": "identified",
-  "reference": "op://Personal/Gmail/password"
-}
-```
-
-It never returns the secret value. If the filter hit was a Bloom false positive, the filter is stale, the value changed, or the daemon no longer has the transient redaction fingerprint, it returns `unattributed`.
-
-This path is useful for a local user who wants to understand what was hidden, but it should not be part of normal model-facing observation.
+This removes the need for a transient registry or a separate lookup operation. The index lookup already has the matching reference at the moment it decides to redact.
 
 ## Position Relative To Sensitivity Classifier
 
-The active-secret filter is the deterministic floor for authentication-equivalent values. It should eventually become one heuristic-floor rule inside the broader sensitivity classifier:
+The active-secret index is the deterministic floor for authentication-equivalent values. It should eventually become one heuristic-floor rule inside the broader sensitivity classifier:
 
-- Active-secret filter: exact, provider-backed, synchronous, no model.
+- Active-secret index: exact, provider-backed, synchronous, no model.
 - Regex heuristics: catch common token/API-key shapes.
 - AX secure-field rules: redact values from secure controls.
 - Classifier heads: catch sensitive values not known to a provider, including developer secrets in editors, partial credentials, personal identifiers, financial data, and private messages.
 
-The active-secret filter ships independently because it is useful before the classifier exists.
+The active-secret index ships independently because it is useful before the classifier exists.
 
 ## Later: Late-Bound Write Values
 
@@ -225,18 +207,16 @@ Resolved secrets must never enter history records, batch traces, stdout, logs, o
 
 ## Open Questions
 
-- **Strict mode.** Should Axon later offer `strictCredentialRedaction: true`, where missing or stale provider filters block model-facing observation until refreshed?
-- **Attribution surface.** Should `identify_redaction` be CLI/menu-only at first, or can it safely be exposed as an MCP tool that requires local user confirmation?
-- **Filter scope.** Should refresh include all readable vaults by default, or only user-selected vaults?
+- **Strict mode.** Should Axon later offer `strictCredentialRedaction: true`, where missing or stale provider indexes block model-facing observation until refreshed?
+- **Index scope.** Should refresh include all readable vaults by default, or only user-selected vaults?
 - **Provider config.** How should Axon remember that a user wants 1Password protection enabled without making 1Password a dependency for everyone?
-- **Screenshot policy.** Should `look(..., screenshot: true)` refuse whenever active-secret protection is configured until pixel masking exists, or only when the textual tree/OCR path detects a credential in the same response?
+- **Strict screenshot policy.** The first implementation omits screenshots when AX/OCR text detects an active credential. Should `look(..., screenshot: true)` refuse whenever active-secret protection is configured until pixel masking exists, even if text detection finds nothing?
 - **Sensitive flag.** Should `sensitive` be renamed/deprecated now that it is not the security boundary?
 
 ## Non-Goals For The First Milestone
 
 - No late-bound `.axn` secret parameters yet.
 - No local credential plaintext storage.
-- No local map from credential fingerprint to `op://` reference.
 - No background `op` polling or timer-triggered auth prompts.
 - No claim that screenshot pixels are active-secret safe before spatial masking exists.
 - No bespoke credential store inside Axon.
@@ -244,12 +224,12 @@ Resolved secrets must never enter history records, batch traces, stdout, logs, o
 
 ## Next Steps
 
-1. Define the `ActiveSecretRedactor` / `ActiveCredentialFilter` interface in axon-core.
-2. Add the redactor to the external textual `look`/`find` serialization paths.
-3. Add a Keychain-backed HMAC key and Bloom filter cache with metadata (`filterCreatedAt`, provider, version).
-4. Implement `axon refresh-secrets` for 1Password using `op`.
-5. Add metadata freshness checks at status/pre-run checkpoints; stale filters warn but still run.
-6. Add tests that prove a known active-secret fixture cannot appear in MCP `look` observation, MCP `look` debug JSON, CLI `axon look --json`, child pages, `find` candidates, or change summaries.
-7. Add the first screenshot guard: if text redaction detects an active credential and screenshot modality is requested for the same `look`, refuse or omit the image with an explicit warning.
-8. Resolve [Screenshot Pixel Secret Redaction](2026-05-14-screenshot-pixel-secret-redaction.md) before claiming image-returning `look` calls are active-secret safe.
-9. Defer write-side late-bound secret parameters until `.axn` parameterization is specified.
+1. Done: Define the `ActiveSecretRedactor` / `ActiveCredentialFilter` interface in axon-core.
+2. Done: Add the redactor to the external textual `look`/`find` serialization paths.
+3. Done: Add a Keychain-backed HMAC key and exact index cache with metadata (`createdAt`, provider, version).
+4. Done: Implement `axon refresh-secrets` for 1Password using `op`.
+5. Pending: Add metadata freshness checks at status/pre-run checkpoints; stale indexes warn but still run.
+6. Done: Add tests that prove a known active-secret fixture cannot appear in MCP `look` observation, MCP `look` debug JSON, child pages, `find` candidates, text-location candidates, or change summaries.
+7. Done: Add the first screenshot guard: if AX/OCR text redaction detects an active credential and screenshot modality is requested for the same `look`, omit the image with an explicit warning.
+8. Pending: Resolve [Screenshot Pixel Secret Redaction](2026-05-14-screenshot-pixel-secret-redaction.md) before claiming image-returning `look` calls are active-secret safe.
+9. Pending: Defer write-side late-bound secret parameters until `.axn` parameterization is specified.

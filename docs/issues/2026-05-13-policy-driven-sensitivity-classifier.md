@@ -40,7 +40,7 @@ Independent of any model, a heuristic layer always runs first and can only *add*
 - `AXSecureTextField` values are always redacted.
 - Regex matches for SSN (`\d{3}-\d{2}-\d{4}`), credit card patterns (Luhn-checked), API-key shapes (`sk-[A-Za-z0-9]{32,}`, `ghp_[A-Za-z0-9]{36}`, etc.) always redact.
 - Element labels containing `password`, `secret`, `token`, `private key`, `recovery code`, or similar high-signal substrings always redact the corresponding value.
-- **Active-credential bloom filter** against the user's currently-active op secrets — verbatim matches always redact. See [Late-Bound Values And Credentials](2026-05-13-late-bound-values-and-credentials.md#active-secret-bloom-filter-read-side-protection) for the design; this ships as part of the op integration work and slots into the floor when the classifier lands.
+- **Active-credential HMAC index** against the user's currently-active op secrets — verbatim matches always redact. See [Late-Bound Values And Credentials](2026-05-13-late-bound-values-and-credentials.md#active-credential-index) for the design; this ships as part of the op integration work and slots into the floor when the classifier lands.
 
 This is the false-negative floor: a model error in the "miss" direction can never expose a field a regex would have caught. The model can only flag *more* things, not unflag.
 

@@ -475,6 +475,249 @@ import Testing
     #expect(encoded.contains("SECRET") == false)
 }
 
+@Test func mcpLookRedactsActiveCredentialsWithoutSensitiveFlag() throws {
+    let secret = "correct horse battery staple"
+    let commandRouter = CommandRouter(
+        captureSnapshot: { app, screenshot in
+            #expect(app == "com.example.App")
+            #expect(screenshot == false)
+            return AppSnapshot(
+                id: SnapshotID("mcp-active"),
+                app: AppIdentity(bundleIdentifier: "com.example.App", name: "Example", processIdentifier: 7),
+                windows: [
+                    AXNode(role: "AXWindow", title: "Main", children: [
+                        AXNode(role: "AXTextField", value: secret)
+                    ])
+                ],
+                screenshot: nil
+            )
+        },
+        activeCredentialFilter: try mcpActiveCredentialFilter(values: [secret])
+    )
+
+    let response = MCPRouter(commandRouter: commandRouter).handle(JSONRPCRequest(
+        id: .string("active-state"),
+        method: "tools/call",
+        params: .object([
+            "name": .string("look"),
+            "arguments": .object([
+                "target": .string("com.example.App")
+            ])
+        ])
+    ))
+
+    let result = response?.result
+    let snapshot = result?["structuredContent"]?["snapshot"]
+    let encoded = try encodedJSONString(.object(result ?? [:]))
+
+    #expect(response?.error == nil)
+    #expect(result?["isError"] == .bool(false))
+    #expect(snapshot?["tree"]?[0]?["children"]?[0]?["label"] == .string("<redacted: active-credential>"))
+    #expect(snapshot?["tree"]?[0]?["children"]?[0]?["redaction"]?["references"]?["value"]?[0] == .string("op://MCP/Active/secret"))
+    #expect(textContent(in: result)?.contains("redaction=op://MCP/Active/secret") == true)
+    #expect(textContent(in: result)?.contains(secret) == false)
+    #expect(encoded.contains(secret) == false)
+    #expect(encoded.contains("<redacted: active-credential>"))
+}
+
+@Test func mcpLookScreenTextRedactsActiveCredentials() throws {
+    let secret = "correct horse battery staple"
+    let commandRouter = CommandRouter(
+        captureSnapshot: { app, screenshot in
+            #expect(app == "com.example.App")
+            #expect(screenshot == true)
+            return AppSnapshot(
+                id: SnapshotID("mcp-active-ocr"),
+                app: AppIdentity(bundleIdentifier: "com.example.App", name: "Example", processIdentifier: 7),
+                windows: [
+                    AXNode(
+                        role: "AXWindow",
+                        title: "Main",
+                        frame: AXFrame(x: 100, y: 200, width: 800, height: 600)
+                    )
+                ],
+                screenshot: EncodedScreenshot(mediaType: "image/png", base64Data: "ocr-image-payload", width: 800, height: 600)
+            )
+        },
+        recognizeText: { _ in
+            [
+                RecognizedTextObservation(
+                    text: secret,
+                    boundingBox: NormalizedTextBoundingBox(x: 0.10, y: 0.80, width: 0.20, height: 0.05),
+                    confidence: 1
+                )
+            ]
+        },
+        activeCredentialFilter: try mcpActiveCredentialFilter(values: [secret])
+    )
+
+    let response = MCPRouter(commandRouter: commandRouter).handle(JSONRPCRequest(
+        id: .string("active-screen-text"),
+        method: "tools/call",
+        params: .object([
+            "name": .string("look"),
+            "arguments": .object([
+                "target": .string("com.example.App"),
+                "screenText": .bool(true)
+            ])
+        ])
+    ))
+
+    let result = response?.result
+    let snapshot = result?["structuredContent"]?["snapshot"]
+    let encoded = try encodedJSONString(.object(result ?? [:]))
+
+    #expect(response?.error == nil)
+    #expect(snapshot?["screenText"]?[0]?["text"] == .string("<redacted: active-credential>"))
+    #expect(textContent(in: result)?.contains(secret) == false)
+    #expect(encoded.contains(secret) == false)
+    #expect(imageContent(in: result) == nil)
+}
+
+@Test func mcpLookOmitsScreenshotWhenActiveCredentialIsDetected() throws {
+    let secret = "correct horse battery staple"
+    let commandRouter = CommandRouter(
+        captureSnapshot: { app, screenshot in
+            #expect(app == "com.example.App")
+            #expect(screenshot == true)
+            return AppSnapshot(
+                id: SnapshotID("mcp-active-screenshot"),
+                app: AppIdentity(bundleIdentifier: "com.example.App", name: "Example", processIdentifier: 7),
+                windows: [
+                    AXNode(role: "AXWindow", title: "Main", children: [
+                        AXNode(role: "AXTextField", title: "Password", value: secret)
+                    ])
+                ],
+                screenshot: EncodedScreenshot(
+                    mediaType: "image/png",
+                    base64Data: "raw-image-payload",
+                    width: 1200,
+                    height: 800
+                )
+            )
+        },
+        activeCredentialFilter: try mcpActiveCredentialFilter(values: [secret])
+    )
+
+    let response = MCPRouter(commandRouter: commandRouter).handle(JSONRPCRequest(
+        id: .string("active-shot"),
+        method: "tools/call",
+        params: .object([
+            "name": .string("look"),
+            "arguments": .object([
+                "target": .string("com.example.App"),
+                "screenshot": .bool(true)
+            ])
+        ])
+    ))
+
+    let result = response?.result
+    let snapshot = result?["structuredContent"]?["snapshot"]
+    let encoded = try encodedJSONString(.object(result ?? [:]))
+
+    #expect(response?.error == nil)
+    #expect(snapshot?["screenshot"] == nil)
+    #expect(snapshot?["warnings"]?[0] == .string("screenshot omitted because active credential text was redacted"))
+    #expect(imageContent(in: result) == nil)
+    #expect(textContent(in: result)?.contains(secret) == false)
+    #expect(encoded.contains(secret) == false)
+    #expect(encoded.contains("raw-image-payload") == false)
+}
+
+@Test func mcpLookScreenshotOnlyRunsOCRGuardBeforeReturningImage() throws {
+    let secret = "correct horse battery staple"
+    let commandRouter = CommandRouter(
+        captureSnapshot: { app, screenshot in
+            #expect(app == "com.example.App")
+            #expect(screenshot == true)
+            return AppSnapshot(
+                id: SnapshotID("mcp-active-shot-ocr"),
+                app: AppIdentity(bundleIdentifier: "com.example.App", name: "Example", processIdentifier: 7),
+                windows: [
+                    AXNode(
+                        role: "AXWindow",
+                        title: "Main",
+                        frame: AXFrame(x: 100, y: 200, width: 1200, height: 800)
+                    )
+                ],
+                screenshot: EncodedScreenshot(
+                    mediaType: "image/png",
+                    base64Data: "raw-image-payload",
+                    width: 1200,
+                    height: 800
+                )
+            )
+        },
+        recognizeText: { _ in
+            [
+                RecognizedTextObservation(
+                    text: secret,
+                    boundingBox: NormalizedTextBoundingBox(x: 0.10, y: 0.80, width: 0.20, height: 0.05),
+                    confidence: 1
+                )
+            ]
+        },
+        activeCredentialFilter: try mcpActiveCredentialFilter(values: [secret])
+    )
+
+    let response = MCPRouter(commandRouter: commandRouter).handle(JSONRPCRequest(
+        id: .string("active-shot-ocr"),
+        method: "tools/call",
+        params: .object([
+            "name": .string("look"),
+            "arguments": .object([
+                "target": .string("com.example.App"),
+                "screenshot": .bool(true),
+                "tree": .bool(false)
+            ])
+        ])
+    ))
+
+    let result = response?.result
+    let snapshot = result?["structuredContent"]?["snapshot"]
+    let encoded = try encodedJSONString(.object(result ?? [:]))
+
+    #expect(response?.error == nil)
+    #expect(snapshot?["screenshot"] == nil)
+    #expect(snapshot?["screenText"] == nil)
+    #expect(snapshot?["warnings"]?[0] == .string("screenshot omitted because active credential text was redacted"))
+    #expect(imageContent(in: result) == nil)
+    #expect(encoded.contains(secret) == false)
+    #expect(encoded.contains("raw-image-payload") == false)
+}
+
+@Test func mcpLookUsesCurrentActiveCredentialFilterProvider() throws {
+    let secret = "correct horse battery staple"
+    let provider = RotatingActiveCredentialFilterProvider(
+        filters: [
+            EmptyActiveCredentialFilter(),
+            try mcpActiveCredentialFilter(values: [secret])
+        ]
+    )
+    let commandRouter = CommandRouter(
+        captureSnapshot: { _, _ in
+            AppSnapshot(
+                id: SnapshotID("mcp-rotating-filter"),
+                app: AppIdentity(bundleIdentifier: "com.example.App", name: "Example", processIdentifier: 7),
+                windows: [
+                    AXNode(role: "AXWindow", title: "Main", children: [
+                        AXNode(role: "AXTextField", value: secret)
+                    ])
+                ],
+                screenshot: nil
+            )
+        },
+        activeCredentialFilterProvider: provider.current
+    )
+
+    let first = MCPRouter(commandRouter: commandRouter).handle(lookCall(id: "first-current-filter"))
+    let second = MCPRouter(commandRouter: commandRouter).handle(lookCall(id: "second-current-filter"))
+
+    #expect(textContent(in: first?.result)?.contains(secret) == true)
+    #expect(textContent(in: second?.result)?.contains(secret) == false)
+    #expect(textContent(in: second?.result)?.contains("<redacted: active-credential>") == true)
+}
+
 @Test func mcpSensitiveAppStateRejectsScreenshots() {
     let response = MCPRouter(commandRouter: CommandRouter()).handle(JSONRPCRequest(
         id: .string("sensitive-shot"),
@@ -635,9 +878,49 @@ private func imageContent(in result: [String: JSONValue]?) -> JSONValue? {
     }
 }
 
+private func lookCall(id: String) -> JSONRPCRequest {
+    JSONRPCRequest(
+        id: .string(id),
+        method: "tools/call",
+        params: .object([
+            "name": .string("look"),
+            "arguments": .object(["target": .string("com.example.App")])
+        ])
+    )
+}
+
 private func encodedJSONString(_ value: JSONValue) throws -> String {
     let data = try JSONEncoder().encode(value)
     return String(decoding: data, as: UTF8.self)
+}
+
+private final class RotatingActiveCredentialFilterProvider: @unchecked Sendable {
+    private let lock = NSLock()
+    private let filters: [any ActiveCredentialFilter]
+    private var index = 0
+
+    init(filters: [any ActiveCredentialFilter]) {
+        self.filters = filters
+    }
+
+    func current() -> any ActiveCredentialFilter {
+        lock.lock()
+        defer { lock.unlock() }
+        let filter = filters[min(index, filters.count - 1)]
+        index += 1
+        return filter
+    }
+}
+
+private func mcpActiveCredentialFilter(values: [String]) throws -> ActiveCredentialIndex {
+    try ActiveCredentialIndex(
+        secrets: values.map {
+            ActiveCredentialSecret(value: $0, provider: "test", reference: "op://MCP/Active/secret")
+        },
+        hmacKey: Data(repeating: 0xC3, count: 32),
+        provider: "test",
+        createdAt: Date(timeIntervalSince1970: 1_775_000_000)
+    )
 }
 
 private func toolNames(in value: JSONValue?) -> [String] {

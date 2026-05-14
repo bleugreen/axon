@@ -9,11 +9,20 @@ public extension AppSnapshot {
         jsonValue(includeTree: includeTree, sensitive: false)
     }
 
-    func jsonValue(includeTree: Bool, sensitive: Bool) -> JSONValue {
+    func jsonValue(includeTree: Bool, activeSecretRedactor: ActiveSecretRedactor) -> JSONValue {
+        jsonValue(includeTree: includeTree, sensitive: false, activeSecretRedactor: activeSecretRedactor)
+    }
+
+    func jsonValue(
+        includeTree: Bool,
+        sensitive: Bool,
+        activeSecretRedactor: ActiveSecretRedactor = ActiveSecretRedactor()
+    ) -> JSONValue {
         var object: [String: JSONValue] = [
             "id": .string(id.rawValue),
             "app": app.jsonValue,
             "indexedNodes": .array(indexedNodes.map { indexed in
+                let redactionScope = "\(id.rawValue)_\(indexed.index)"
                 var node: [String: JSONValue] = [
                     "index": .int(indexed.index),
                     "role": .string(indexed.node.role),
@@ -22,10 +31,35 @@ public extension AppSnapshot {
                     "truncationReason": indexed.node.truncationReason.map(JSONValue.string) ?? .null,
                     "handle": handle(for: indexed.index).map { .string($0.rawValue) } ?? .null
                 ]
-                node.addRedactedString("subrole", indexed.node.subrole, sensitive: sensitive)
-                node.addRedactedString("title", indexed.node.title, sensitive: sensitive)
-                node.addRedactedString("value", indexed.node.value, sensitive: sensitive, always: true)
-                node.addRedactedString("description", indexed.node.description, sensitive: sensitive)
+                node.addRedactedString(
+                    "subrole",
+                    indexed.node.subrole,
+                    sensitive: sensitive,
+                    activeSecretRedactor: activeSecretRedactor,
+                    redactionScope: redactionScope
+                )
+                node.addRedactedString(
+                    "title",
+                    indexed.node.title,
+                    sensitive: sensitive,
+                    activeSecretRedactor: activeSecretRedactor,
+                    redactionScope: redactionScope
+                )
+                node.addRedactedString(
+                    "value",
+                    indexed.node.value,
+                    sensitive: sensitive,
+                    always: true,
+                    activeSecretRedactor: activeSecretRedactor,
+                    redactionScope: redactionScope
+                )
+                node.addRedactedString(
+                    "description",
+                    indexed.node.description,
+                    sensitive: sensitive,
+                    activeSecretRedactor: activeSecretRedactor,
+                    redactionScope: redactionScope
+                )
                 return .object(node)
             }),
             "screenshot": sensitive ? .null : screenshot.map(\.jsonValue) ?? .null
@@ -34,7 +68,16 @@ public extension AppSnapshot {
             object["redaction"] = SnapshotRedactor.metadata(scope: "snapshot")
         }
         if includeTree {
-            object["windows"] = .array(windows.map { $0.jsonValue(sensitive: sensitive) })
+            var nextIndex = 0
+            object["windows"] = .array(windows.map {
+                $0.jsonValue(
+                    snapshotID: id,
+                    nextIndex: &nextIndex,
+                    sensitive: sensitive,
+                    activeSecretRedactor: activeSecretRedactor,
+                    includeHandle: false
+                )
+            })
         }
         return .object(object)
     }
@@ -52,6 +95,10 @@ public extension AppIdentity {
 
 public extension AXChildrenPage {
     var jsonValue: JSONValue {
+        jsonValue(activeSecretRedactor: ActiveSecretRedactor())
+    }
+
+    func jsonValue(activeSecretRedactor: ActiveSecretRedactor) -> JSONValue {
         var nextIndex = baseIndex
         return .object([
             "snapshot": .string(snapshotID.rawValue),
@@ -62,32 +109,92 @@ public extension AXChildrenPage {
             "baseIndex": .int(baseIndex),
             "nextOffset": offset + limit < total ? .int(offset + limit) : .null,
             "children": .array(children.map { child in
-                child.jsonValue(snapshotID: snapshotID, nextIndex: &nextIndex)
+                child.jsonValue(
+                    snapshotID: snapshotID,
+                    nextIndex: &nextIndex,
+                    sensitive: false,
+                    activeSecretRedactor: activeSecretRedactor,
+                    includeHandle: true
+                )
             })
         ])
     }
 }
 
 private extension AXNode {
-    func jsonValue(snapshotID: SnapshotID, nextIndex: inout Int) -> JSONValue {
+    func jsonValue(
+        snapshotID: SnapshotID,
+        nextIndex: inout Int,
+        sensitive: Bool,
+        activeSecretRedactor: ActiveSecretRedactor,
+        includeHandle: Bool
+    ) -> JSONValue {
         let index = nextIndex
         nextIndex += 1
+        let redactionScope = "\(snapshotID.rawValue)_\(index)"
         var object: [String: JSONValue] = [
-            "index": .int(index),
-            "handle": .string(SnapshotHandle(snapshotID: snapshotID, nodeIndex: index).rawValue),
             "role": .string(role),
             "enabled": enabled.map(JSONValue.bool) ?? .null,
             "focused": focused.map(JSONValue.bool) ?? .null,
             "actions": .array(actions.map(JSONValue.string)),
             "truncationReason": truncationReason.map(JSONValue.string) ?? .null,
-            "children": .array(children.map { $0.jsonValue(snapshotID: snapshotID, nextIndex: &nextIndex) })
+            "children": .array(children.map {
+                $0.jsonValue(
+                    snapshotID: snapshotID,
+                    nextIndex: &nextIndex,
+                    sensitive: sensitive,
+                    activeSecretRedactor: activeSecretRedactor,
+                    includeHandle: includeHandle
+                )
+            })
         ]
-        object.addRedactedString("subrole", subrole, sensitive: false)
-        object.addRedactedString("title", title, sensitive: false)
-        object.addRedactedString("value", value, sensitive: false)
-        object.addRedactedString("description", description, sensitive: false)
-        object.addRedactedString("help", help, sensitive: false)
-        object.addRedactedString("identifier", identifier, sensitive: false)
+        if includeHandle {
+            object["index"] = .int(index)
+            object["handle"] = .string(SnapshotHandle(snapshotID: snapshotID, nodeIndex: index).rawValue)
+        }
+        object.addRedactedString(
+            "subrole",
+            subrole,
+            sensitive: sensitive,
+            activeSecretRedactor: activeSecretRedactor,
+            redactionScope: redactionScope
+        )
+        object.addRedactedString(
+            "title",
+            title,
+            sensitive: sensitive,
+            activeSecretRedactor: activeSecretRedactor,
+            redactionScope: redactionScope
+        )
+        object.addRedactedString(
+            "value",
+            value,
+            sensitive: sensitive,
+            always: true,
+            activeSecretRedactor: activeSecretRedactor,
+            redactionScope: redactionScope
+        )
+        object.addRedactedString(
+            "description",
+            description,
+            sensitive: sensitive,
+            activeSecretRedactor: activeSecretRedactor,
+            redactionScope: redactionScope
+        )
+        object.addRedactedString(
+            "help",
+            help,
+            sensitive: sensitive,
+            activeSecretRedactor: activeSecretRedactor,
+            redactionScope: redactionScope
+        )
+        object.addRedactedString(
+            "identifier",
+            identifier,
+            sensitive: sensitive,
+            activeSecretRedactor: activeSecretRedactor,
+            redactionScope: redactionScope
+        )
         object["frame"] = frame.map(\.jsonValue) ?? .null
         return .object(object)
     }
@@ -110,22 +217,18 @@ public extension AXNode {
     }
 
     func jsonValue(sensitive: Bool) -> JSONValue {
-        var object: [String: JSONValue] = [
-            "role": .string(role),
-            "enabled": enabled.map(JSONValue.bool) ?? .null,
-            "focused": focused.map(JSONValue.bool) ?? .null,
-            "actions": .array(actions.map(JSONValue.string)),
-            "truncationReason": truncationReason.map(JSONValue.string) ?? .null,
-            "children": .array(children.map { $0.jsonValue(sensitive: sensitive) })
-        ]
-        object.addRedactedString("subrole", subrole, sensitive: sensitive)
-        object.addRedactedString("title", title, sensitive: sensitive)
-        object.addRedactedString("value", value, sensitive: sensitive, always: true)
-        object.addRedactedString("description", description, sensitive: sensitive)
-        object.addRedactedString("help", help, sensitive: sensitive)
-        object.addRedactedString("identifier", identifier, sensitive: sensitive)
-        object["frame"] = frame.map(\.jsonValue) ?? .null
-        return .object(object)
+        jsonValue(sensitive: sensitive, activeSecretRedactor: ActiveSecretRedactor())
+    }
+
+    func jsonValue(sensitive: Bool, activeSecretRedactor: ActiveSecretRedactor) -> JSONValue {
+        var nextIndex = 0
+        return jsonValue(
+            snapshotID: SnapshotID("node"),
+            nextIndex: &nextIndex,
+            sensitive: sensitive,
+            activeSecretRedactor: activeSecretRedactor,
+            includeHandle: false
+        )
     }
 }
 
@@ -146,10 +249,24 @@ public extension SnapshotSummary {
     }
 
     func jsonValue(sensitive: Bool) -> JSONValue {
+        jsonValue(sensitive: sensitive, activeSecretRedactor: ActiveSecretRedactor())
+    }
+
+    func jsonValue(activeSecretRedactor: ActiveSecretRedactor) -> JSONValue {
+        jsonValue(sensitive: false, activeSecretRedactor: activeSecretRedactor)
+    }
+
+    func jsonValue(sensitive: Bool, activeSecretRedactor: ActiveSecretRedactor) -> JSONValue {
         var object: [String: JSONValue] = [
             "id": .string(id.rawValue),
             "app": app.jsonValue,
-            "windows": .array(windows.map { $0.jsonValue(sensitive: sensitive) }),
+            "windows": .array(windows.enumerated().map { index, window in
+                window.jsonValue(
+                    sensitive: sensitive,
+                    activeSecretRedactor: activeSecretRedactor,
+                    redactionScope: "\(id.rawValue)_window_\(index)"
+                )
+            }),
             "observationToken": observationToken.map(JSONValue.int) ?? .null
         ]
         if sensitive {
@@ -165,13 +282,27 @@ public extension WindowSignature {
     }
 
     func jsonValue(sensitive: Bool) -> JSONValue {
+        jsonValue(sensitive: sensitive, activeSecretRedactor: ActiveSecretRedactor())
+    }
+
+    func jsonValue(
+        sensitive: Bool,
+        activeSecretRedactor: ActiveSecretRedactor,
+        redactionScope: String = "window"
+    ) -> JSONValue {
         var object: [String: JSONValue] = [
             "role": .string(role),
             "subrole": subrole.map(JSONValue.string) ?? .null,
             "frame": frame.map(\.jsonValue) ?? .null,
             "childCount": .int(childCount)
         ]
-        object.addRedactedString("title", title, sensitive: sensitive)
+        object.addRedactedString(
+            "title",
+            title,
+            sensitive: sensitive,
+            activeSecretRedactor: activeSecretRedactor,
+            redactionScope: redactionScope
+        )
         return .object(object)
     }
 }
@@ -210,10 +341,20 @@ private extension Dictionary where Key == String, Value == JSONValue {
         _ key: String,
         _ value: String?,
         sensitive: Bool,
-        always: Bool = false
+        always: Bool = false,
+        activeSecretRedactor: ActiveSecretRedactor = ActiveSecretRedactor(),
+        redactionScope: String? = nil
     ) {
         guard let value else {
             self[key] = .null
+            return
+        }
+        if redactionScope != nil,
+           addActiveSecretRedactedString(
+               key,
+               value,
+               activeSecretRedactor: activeSecretRedactor
+           ) {
             return
         }
         guard sensitive else {
@@ -230,7 +371,9 @@ private extension Dictionary where Key == String, Value == JSONValue {
     private mutating func addRedactionMetadata(field: String, reason: String) {
         var fields: [JSONValue] = []
         var reasons: [String: JSONValue] = [:]
+        var metadata: [String: JSONValue] = [:]
         if case let .object(existing)? = self["redaction"] {
+            metadata = existing
             if case let .array(existingFields)? = existing["fields"] {
                 fields = existingFields
             }
@@ -242,10 +385,9 @@ private extension Dictionary where Key == String, Value == JSONValue {
             fields.append(.string(field))
         }
         reasons[field] = .string(reason)
-        self["redaction"] = .object([
-            "fields": .array(fields),
-            "reasons": .object(reasons)
-        ])
+        metadata["fields"] = .array(fields)
+        metadata["reasons"] = .object(reasons)
+        self["redaction"] = .object(metadata)
     }
 }
 

@@ -2,7 +2,7 @@
 
 ## Context
 
-The active-secret Bloom filter in [Active-Secret Redaction And Late-Bound Credentials](2026-05-13-late-bound-values-and-credentials.md) protects textual AX-derived output. It does not by itself protect pixels.
+The active-secret HMAC index in [Active-Secret Redaction And Late-Bound Credentials](2026-05-13-late-bound-values-and-credentials.md) protects textual AX-derived output. It does not by itself protect pixels.
 
 The tool-surface consolidation makes this simpler than it would have been before: screenshots now flow through `look(..., screenshot: true)` instead of a separate screenshot tool. That gives Axon one perception boundary where text redaction, OCR redaction, and screenshot policy can be coordinated.
 
@@ -34,6 +34,8 @@ Before full spatial masking exists, `look` should still avoid obvious unsafe ima
 
 This does not prove pixels are safe when text redaction finds nothing. It only prevents returning a screenshot that Axon already has strong evidence contains a secret.
 
+Status: implemented for AX text, returned `screenText`, and screenshot-only requests that can be OCR-checked internally. The image is omitted with a warning rather than masked.
+
 ## Full Spatial Redaction
 
 The full version needs region masking:
@@ -60,8 +62,8 @@ The full version needs region masking:
 
 ## Next Steps
 
-1. Add the first guard in `look`: omit/refuse screenshot output when text redaction detects an active credential in the same response.
+1. Done: Add the first guard in `look`: omit/refuse screenshot output when text redaction detects an active credential in the same response.
 2. Decide whether image-returning `look` calls should also be warning-gated whenever active-secret protection is configured, even if the text path finds no active credential.
-3. Prototype OCR-based masking for text regions that exactly match active-secret Bloom hits.
+3. Prototype OCR-based masking for text regions that exactly match active-secret index hits.
 4. Add tests with synthetic screenshots containing known secret fixtures.
 5. Wire redaction metadata into screenshot responses.

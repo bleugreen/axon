@@ -58,6 +58,9 @@ do {
             .send(JSONRPCRequest(id: .string("permit"), method: "permit"))
         try printResponse(response)
 
+    case "refresh-secrets":
+        try refreshSecrets(arguments: arguments)
+
     case "look":
         let look = try lookCommand(arguments: arguments)
         let response = try SocketClient(path: socketPath)
@@ -192,6 +195,8 @@ do {
           daemon <install|start|stop|status|uninstall>
           health   request daemon health over the local socket
           permit   ask macOS to approve the running daemon identity
+          refresh-secrets [--json]
+                   refresh the active credential redaction index from 1Password
           look [target] [--since snapshot-id] [--screenshot] [--screen-text] [--sensitive] [--frames] [--json] [--no-tree] [--offset n] [--limit n] [--depth n]
           find <app> <locator-json>
           run <path.axn> [--dry-run] [--continue-on-error]
@@ -223,6 +228,36 @@ private func sendAction(method: String, params: [String: JSONValue]) throws {
     let response = try SocketClient(path: socketPath)
         .send(JSONRPCRequest(id: .string(method), method: method, params: .object(params)))
     try printResponse(response)
+}
+
+private func refreshSecrets(arguments: [String]) throws {
+    let json = arguments.dropFirst().contains("--json")
+    let unexpected = arguments.dropFirst().first { $0 != "--json" }
+    if let unexpected {
+        throw CLIError.missingArguments("unexpected refresh-secrets argument: \(unexpected)")
+    }
+
+    let result = try ActiveCredentialRefreshService().refresh()
+    let cachePath = ActiveCredentialIndexCacheStore().fileURL.path
+    let createdAt = ISO8601DateFormatter().string(from: result.cache.createdAt)
+    if json {
+        let response = JSONValue.object([
+            "provider": .string(result.cache.provider),
+            "secretCount": .int(result.cache.secretCount),
+            "entryCount": .int(result.cache.entries.count),
+            "createdAt": .string(createdAt),
+            "cachePath": .string(cachePath)
+        ])
+        let data = try jsonEncoder.encode(response)
+        print(String(decoding: data, as: UTF8.self))
+    } else {
+        print("refreshed active credential index")
+        print("Provider: \(result.cache.provider)")
+        print("Secrets indexed: \(result.cache.secretCount)")
+        print("Index entries: \(result.cache.entries.count)")
+        print("Created: \(createdAt)")
+        print("Cache: \(cachePath)")
+    }
 }
 
 private func targetArgument(_ argument: String) -> JSONValue {

@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 @testable import AxonCore
 
@@ -102,6 +103,45 @@ import Testing
     #expect(target.source == .auto)
 }
 
+@Test func textLocationResolutionJSONRedactsActiveCredentialMatchedText() throws {
+    let secret = "correct horse battery staple"
+    let resolution = TextLocationResolution(
+        status: .unique,
+        snapshotID: SnapshotID("text-location-fixture"),
+        best: TextLocationCandidate(
+            index: 1,
+            handle: SnapshotHandle(snapshotID: SnapshotID("text-location-fixture"), nodeIndex: 1),
+            role: "AXStaticText",
+            matchedText: secret,
+            source: .ax,
+            frame: AXFrame(x: 100, y: 100, width: 100, height: 20),
+            point: ActionPoint(x: 150, y: 110),
+            reasons: ["title exact \(secret)"]
+        ),
+        candidates: [
+            TextLocationCandidate(
+                index: 1,
+                handle: SnapshotHandle(snapshotID: SnapshotID("text-location-fixture"), nodeIndex: 1),
+                role: "AXStaticText",
+                matchedText: secret,
+                source: .ax,
+                frame: AXFrame(x: 100, y: 100, width: 100, height: 20),
+                point: ActionPoint(x: 150, y: 110),
+                reasons: ["title exact \(secret)"]
+            )
+        ]
+    )
+
+    let json = resolution.jsonValue(activeSecretRedactor: try textLocationActiveRedactor(values: [secret]))
+    let encoded = try JSONEncoder().encode(json)
+    let encodedString = String(decoding: encoded, as: UTF8.self)
+
+    #expect(json["best"]?["matchedText"] == .string("<redacted: active-credential>"))
+    #expect(json["best"]?["redaction"]?["reasons"]?["matchedText"] == .string("active-credential"))
+    #expect(json["candidates"]?[0]?["matchedText"] == .string("<redacted: active-credential>"))
+    #expect(encodedString.contains(secret) == false)
+}
+
 private func textLocationFixtureSnapshot(
     _ children: [AXNode],
     screenshot: EncodedScreenshot? = nil
@@ -118,5 +158,16 @@ private func textLocationFixtureSnapshot(
             )
         ],
         screenshot: screenshot
+    )
+}
+
+private func textLocationActiveRedactor(values: [String]) throws -> ActiveSecretRedactor {
+    ActiveSecretRedactor(
+        filter: try ActiveCredentialIndex(
+            values: values,
+            hmacKey: Data(repeating: 0xD4, count: 32),
+            provider: "test",
+            createdAt: Date(timeIntervalSince1970: 1_775_000_000)
+        )
     )
 }

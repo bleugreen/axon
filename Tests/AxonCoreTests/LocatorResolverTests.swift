@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 @testable import AxonCore
 
@@ -143,6 +144,41 @@ import Testing
     #expect(locator.ancestors.first?.label?.matches("Navigation") == true)
 }
 
+@Test func locatorResolutionJSONRedactsActiveCredentialCandidateTitles() throws {
+    let rawSecret = "correct horse battery staple"
+    let resolution = LocatorResolution(
+        status: .unique,
+        snapshotID: SnapshotID("locator-fixture"),
+        best: LocatorCandidate(
+            index: 2,
+            handle: SnapshotHandle(snapshotID: SnapshotID("locator-fixture"), nodeIndex: 2),
+            role: "AXButton",
+            title: rawSecret,
+            score: 1,
+            reasons: ["title exact \(rawSecret)"]
+        ),
+        candidates: [
+            LocatorCandidate(
+                index: 2,
+                handle: SnapshotHandle(snapshotID: SnapshotID("locator-fixture"), nodeIndex: 2),
+                role: "AXButton",
+                title: rawSecret,
+                score: 1,
+                reasons: ["title exact \(rawSecret)"]
+            )
+        ]
+    )
+
+    let json = resolution.jsonValue(activeSecretRedactor: try locatorActiveRedactor(values: [rawSecret]))
+    let encoded = try JSONEncoder().encode(json)
+    let encodedString = String(decoding: encoded, as: UTF8.self)
+
+    #expect(json["best"]?["title"] == .string("<redacted: active-credential>"))
+    #expect(json["best"]?["redaction"]?["reasons"]?["title"] == .string("active-credential"))
+    #expect(json["candidates"]?[0]?["title"] == .string("<redacted: active-credential>"))
+    #expect(encodedString.contains(rawSecret) == false)
+}
+
 private func locatorFixtureSnapshot(buttons: [String]) -> AppSnapshot {
     AppSnapshot(
         id: SnapshotID("locator-fixture"),
@@ -163,5 +199,16 @@ private func locatorFixtureSnapshot(buttons: [String]) -> AppSnapshot {
             )
         ],
         screenshot: nil
+    )
+}
+
+private func locatorActiveRedactor(values: [String]) throws -> ActiveSecretRedactor {
+    ActiveSecretRedactor(
+        filter: try ActiveCredentialIndex(
+            values: values,
+            hmacKey: Data(repeating: 0x3C, count: 32),
+            provider: "test",
+            createdAt: Date(timeIntervalSince1970: 1_775_000_000)
+        )
     )
 }
