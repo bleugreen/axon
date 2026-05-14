@@ -10,13 +10,18 @@ final class AxonAppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendabl
         case checking
         case upToDate(version: String)
         case available(ReleaseUpdate)
+        case installing(version: String)
         case failed(String)
     }
+
+    nonisolated private static let appBundleIdentifier = "com.bleugreen.axon"
+    nonisolated private static let homebrewCaskName = "axon"
 
     private let socketPath = AxonEnvironment.socketPath()
     private let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
     private let serverQueue = DispatchQueue(label: "com.bleugreen.axon.socket-server", qos: .userInitiated)
     private let updateChecker = ReleaseUpdateChecker()
+    private let homebrewInstaller: HomebrewInstaller? = HomebrewInstaller.locate().map { HomebrewInstaller(brewURL: $0) }
     private var serverState = "starting"
     private var serverError: String?
     private var refreshTimer: Timer?
@@ -113,7 +118,9 @@ final class AxonAppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendabl
         case let .upToDate(version):
             menu.addItem(disabledItem("Up to Date (\(version))"))
         case let .available(update):
-            menu.addItem(NSMenuItem(title: "Update to \(update.latestVersion)...", action: #selector(openAvailableUpdate), keyEquivalent: ""))
+            menu.addItem(NSMenuItem(title: "Update to \(update.latestVersion)...", action: #selector(performAvailableUpdate), keyEquivalent: ""))
+        case let .installing(version):
+            menu.addItem(disabledItem("Installing \(version)..."))
         case .failed:
             menu.addItem(disabledItem("Update Check Failed"))
             menu.addItem(NSMenuItem(title: "Check Again", action: #selector(checkForUpdates), keyEquivalent: ""))
@@ -145,11 +152,94 @@ final class AxonAppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendabl
         }
     }
 
-    @objc private func openAvailableUpdate() {
+    @objc private func performAvailableUpdate() {
         guard case let .available(update) = updateMenuState else {
             return
         }
-        NSWorkspace.shared.open(update.releaseURL)
+
+        let installer = homebrewInstaller
+        let brewManaged = (try? installer?.isCaskInstalled(name: Self.homebrewCaskName)) ?? false
+        guard let installer, brewManaged else {
+            NSWorkspace.shared.open(update.releaseURL)
+            return
+        }
+
+        guard confirmInstall(update: update) else {
+            return
+        }
+
+        updateMenuState = .installing(version: update.latestVersion)
+        installMenu()
+
+        Task.detached(priority: .userInitiated) { [weak self] in
+            let outcome: Result<Void, Error>
+            do {
+                _ = try installer.upgradeCask(name: Self.homebrewCaskName)
+                try Self.reinstallDaemonFromCurrentBundle()
+                outcome = .success(())
+            } catch {
+                outcome = .failure(error)
+            }
+
+            await MainActor.run {
+                guard let self else { return }
+                switch outcome {
+                case .success:
+                    self.spawnRelaunchHelper()
+                    NSApp.terminate(nil)
+                case let .failure(error):
+                    self.updateMenuState = .available(update)
+                    self.installMenu()
+                    self.showAlert(
+                        title: "Update Failed",
+                        message: String(describing: error)
+                    )
+                }
+            }
+        }
+    }
+
+    private func confirmInstall(update: ReleaseUpdate) -> Bool {
+        let alert = NSAlert()
+        alert.messageText = "Update Axon to \(update.latestVersion)?"
+        alert.informativeText = "Axon will quit, install the update via Homebrew, and relaunch."
+        alert.addButton(withTitle: "Update")
+        alert.addButton(withTitle: "Cancel")
+        return alert.runModal() == .alertFirstButtonReturn
+    }
+
+    private nonisolated static func reinstallDaemonFromCurrentBundle() throws {
+        let workspace = NSWorkspace.shared
+        guard let bundleURL = workspace.urlForApplication(withBundleIdentifier: appBundleIdentifier) else {
+            throw HomebrewInstallerError.caskNotInstalled(name: homebrewCaskName)
+        }
+        let cliURL = bundleURL
+            .appendingPathComponent("Contents/Resources/bin/axon")
+
+        let process = Process()
+        process.executableURL = cliURL
+        process.arguments = ["install"]
+        let stderrPipe = Pipe()
+        process.standardError = stderrPipe
+        try process.run()
+        process.waitUntilExit()
+
+        guard process.terminationStatus == 0 else {
+            let data = (try? stderrPipe.fileHandleForReading.readToEnd()) ?? Data()
+            let stderr = String(decoding: data, as: UTF8.self)
+            throw HomebrewInstallerError.commandFailed(
+                arguments: ["install"],
+                status: process.terminationStatus,
+                stderr: stderr
+            )
+        }
+    }
+
+    private func spawnRelaunchHelper() {
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: "/bin/sh")
+        task.arguments = ["-c", "sleep 1 && /usr/bin/open -b \(Self.appBundleIdentifier)"]
+        try? task.run()
     }
 
     @objc private func startRecording() {
