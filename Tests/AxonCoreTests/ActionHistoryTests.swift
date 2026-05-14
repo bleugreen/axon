@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 @testable import AxonCore
 
@@ -129,6 +130,48 @@ import Testing
     #expect(response.result?["actionCount"] == JSONValue.int(1))
 }
 
+@Test func runHistoryDoesNotPersistSecretArgumentValues() throws {
+    let history = ActionHistoryStore()
+    var typedValues: [String] = []
+    let router = CommandRouter(
+        actions: PrimitiveActionHandlers(
+            type: { target, value in
+                typedValues.append(value)
+                return PrimitiveActionResult(action: "type", target: target, strategy: "test", success: true)
+            }
+        ),
+        history: history
+    )
+
+    let source = """
+    version: 1
+    args:
+      - name: password
+        type: secret
+    actions:
+      - tool: type
+        target: s1:2
+        value: "{{password}}"
+    """
+    let path = try temporaryAxnFile(source)
+    defer { try? FileManager.default.removeItem(atPath: path) }
+
+    let response = router.handle(JSONRPCRequest(
+        id: .string("batch"),
+        method: "run",
+        params: .object([
+            "_session": .string("thread-a"),
+            "path": .string(path),
+            "argValues": .object(["password": .string("s3cr3t!")])
+        ])
+    ))
+
+    #expect(response.error == nil)
+    #expect(typedValues == ["s3cr3t!"])
+    #expect(history.records(sessionID: "default").isEmpty)
+    #expect(history.records(sessionID: "thread-a").containsSecretLiteral("s3cr3t!") == false)
+}
+
 private extension JSONValue {
     var stringValue: String? {
         guard case let .string(value) = self else {
@@ -136,4 +179,33 @@ private extension JSONValue {
         }
         return value
     }
+
+    func containsString(_ needle: String) -> Bool {
+        switch self {
+        case let .string(value):
+            return value.contains(needle)
+        case let .array(values):
+            return values.contains { $0.containsString(needle) }
+        case let .object(object):
+            return object.values.contains { $0.containsString(needle) }
+        default:
+            return false
+        }
+    }
+}
+
+private extension Array where Element == ActionHistoryRecord {
+    func containsSecretLiteral(_ value: String) -> Bool {
+        contains { record in
+            record.params.values.contains { $0.containsString(value) }
+        }
+    }
+}
+
+private func temporaryAxnFile(_ source: String) throws -> String {
+    let path = FileManager.default.temporaryDirectory
+        .appendingPathComponent("axon-\(UUID().uuidString).axn")
+        .path
+    try source.write(toFile: path, atomically: true, encoding: .utf8)
+    return path
 }

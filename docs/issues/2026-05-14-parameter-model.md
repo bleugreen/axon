@@ -1,5 +1,8 @@
 # Parameter Model For .axn Files
 
+Status: Core loader/resolver support is implemented for replay. Recorder/editor
+UX is still pending.
+
 ## Context
 
 `.axn` files are recordings of tool-call sequences. To be reusable beyond their exact original context they need *holes* — named slots filled at replay time instead of hard-coded literals. The same mechanism handles two adjacent problems:
@@ -14,7 +17,7 @@ The [Active-Secret Redaction](2026-05-13-late-bound-values-and-credentials.md) r
 Three concepts, kept separate:
 
 1. **Declaration** — what holes exist in this file, with what type, optional default, optional source. Lives in an `args:` header at the top of the `.axn`. The file's *interface*.
-2. **Reference** — where holes appear in action bodies. `{{name}}` substitution inside string-shaped `value` fields.
+2. **Reference** — where holes appear in action bodies. `{{name}}` substitution inside string-shaped `value` and `keys` fields.
 3. **Resolution** — how each parameter's value is filled at replay time. Either the declared `source:` or a caller-supplied arg or a default; if nothing resolves and the parameter is required, the file errors at load time.
 
 **The load-bearing insight**: `secret` is a *type*, not a *source*. The type governs handling (no logging, no traces, redacted in errors, never persisted as plaintext). The source can be `op://`, `env://`, or a caller-supplied arg — the same secret-handling rules apply regardless. This separates "what kind of value is this" from "where does it come from."
@@ -61,13 +64,13 @@ A parameter either has a `source:` (bound to a resolver, file makes the decision
 
 ## Reference
 
-References use double-brace substitution inside string-shaped `value` fields:
+References use double-brace substitution inside string-shaped `value` and `keys` fields:
 
 ```yaml
 value: "Hello {{recipient}}, the report is at {{report_path}}/{{report_date}}.csv"
 ```
 
-A single string can contain multiple references. References inside non-string YAML fields (locators, keys, etc.) are out of scope for v1 — the parameter model touches values, not structure.
+A single string can contain multiple references. References inside non-string YAML fields, locators, object keys, and other structural fields are out of scope for v1 — the parameter model touches action strings, not structure.
 
 YAML treats unquoted `{{...}}` as ambiguous in some contexts. References must always sit inside quoted strings; a linter rule flags bare references at load time.
 
@@ -77,7 +80,7 @@ Only declared parameters can be referenced. Inline schemes like `value: "{{env:/
 
 At load time, each parameter resolves in order:
 
-1. **Caller-supplied arg.** A value passed to `run` (CLI `--arg name=value` or programmatic `run(path: ..., args: {...})`). Valid only for parameters without a declared `source:`.
+1. **Caller-supplied arg.** A value passed to `run` (CLI `--arg name=value` or programmatic `run(path: ..., argValues: {...})`). Valid only for parameters without a declared `source:`.
 2. **Declared `source:`.** Resolved via the source's scheme handler.
 3. **`default:`.** The literal in the declaration.
 4. **Error.** A required parameter (no caller arg, no source, no default) is a hard load-time error.
@@ -94,12 +97,12 @@ Source resolvers register by scheme:
 
 The v1 type set is closed and axon-defined:
 
-- `string` — any text. Default when `type` is omitted.
+- `string` — any text.
 - `secret` — string-shaped with secret-handling rules (next section).
 - `number` — integer or float. Caller args are parsed from string; non-numeric input is a load-time error.
 - `date` — ISO 8601 or the special tokens `today`, `yesterday`. Parsed at load.
 - `email` — string with basic shape validation.
-- `path` — filesystem path. Existence-check policy is an open question.
+- `path` — filesystem path. V1 does not check existence at load time.
 
 No user-registered types in v1. Validation stays small and auditable; extension can come later if real cases appear.
 
@@ -113,7 +116,7 @@ A parameter declared `type: secret` carries handling rules through the entire wr
 - **Taint propagates.** A secret substituted into a longer string (`"Hello {{password}}, welcome"`) taints the entire resulting string. The trace shows `<redacted: contains-secret>` rather than attempting partial-substitution masking. Errs toward leak-prevention.
 - **No `default:`.** A defaulted secret would be a literal in the file.
 
-These rules apply regardless of the source — a secret from `op://` and a secret from a CLI arg get identical handling. The shipped [ActiveSecretRedactor](2026-05-13-late-bound-values-and-credentials.md#active-credential-index) is the read-side equivalent (values matching the active-credential index are redacted on output even when they leak into AX snapshots); this section is the write-side mirror. Together the two layers give a symmetric guarantee: secrets cannot enter Axon as observable text, and secrets cannot leave Axon as observable text — at either boundary.
+These rules apply regardless of the source — a secret from `op://` and a secret from a caller-supplied arg get identical handling once Axon receives it. For CLI use, prefer `source: op://...` or `source: env://...` for secrets; literal `--arg` values can still be exposed by shell history or process inspection before Axon receives them. The shipped [ActiveSecretRedactor](2026-05-13-late-bound-values-and-credentials.md#active-credential-index) is the read-side equivalent (values matching the active-credential index are redacted on output even when they leak into AX snapshots); this section is the write-side mirror. Together the two layers give a symmetric guarantee: secrets cannot enter Axon as observable text, and secrets cannot leave Axon as observable text — at either boundary.
 
 ## Validation
 
@@ -145,27 +148,30 @@ Editor UI lives in its own issue when it's time to build; this issue defines the
 
 ## Open Questions
 
-- **Param naming convention.** snake_case, kebab-case, or camelCase? Lean: snake_case for YAML idiom consistency and to avoid quoting in `{{name}}` references.
-- **`type: path` existence checks.** Validate at load or at action time? Existence is racy regardless; lean toward action-time with a clear error message.
 - **`description` rendering.** Plain text v1. Markdown later if CLI usage strings or editor surfaces benefit.
 - **Multi-source params.** Could a parameter declare a source list with fallback? Nice-to-have, defer.
-- **Override-at-runtime escape hatch.** If a file declares `source: op://...` but a caller wants to override (for testing), is there an explicit unlock flag, or do you always edit the file? Lean: always edit. Runtime-override is a hole in the file's interface.
+
+Resolved:
+
+- **Param naming convention.** Implemented as snake_case.
+- **`type: path` existence checks.** No load-time existence check in v1; paths are string-shaped and action-level failures report runtime problems.
+- **Override-at-runtime escape hatch.** No runtime override for sourced args in v1. Caller values for sourced args are rejected before dispatch.
 
 ## Non-Goals
 
 - **No interactive prompting at any layer.** No `prompt://` resolver, no `prompt:` field on declarations. An automation that pauses for keyboard input is a tutorial, not an automation. If a human is required, the caller supplies the value before invoking `run`.
 - **No nested file composition.** A `.axn` cannot include another `.axn` in v1. Parameters don't flow across files yet.
 - **No computed parameters.** No `{{full_name}} = {{first}} {{last}}` expression layer. Parameters stay flat.
-- **No reference in non-string fields.** `{{name}}` only appears inside string-shaped value fields. Dynamic targeting (locator-as-template) is a separate problem.
+- **No reference in non-string fields.** `{{name}}` only appears inside string-shaped `value` and `keys` fields. Dynamic targeting (locator-as-template) is a separate problem.
 - **No user-registered types.** Closed v1 type set; extension is a later choice when real cases exist.
 - **No partial replay on failure.** Validation runs before any action fires; the file either has every value it needs or it errors at load.
 
 ## Next Steps
 
-- Define the YAML schema for `args:` and the formal type list. Update the `.axn` JSON schema (`docs/`) accordingly.
-- Implement the parameter loader and source-resolver registry in axon-core. `op://` resolver is the first concrete instance — reuse op CLI plumbing already present from the read-side work. `env://` is the second.
-- Implement caller-arg surfaces: CLI `--arg name=value` and programmatic `run(args:)`.
-- Wire secret-handling rules into the action executor, history store, and batch trace serializer. Audit every layer for "does this honor `type: secret`."
+- Done: Define the YAML schema for `args:` and the formal type list in docs.
+- Done: Implement the parameter loader and source-resolver registry in axon-core. `env://` and `op://` are the first resolvers.
+- Done: Implement caller-arg surfaces: CLI `--arg name=value`, MCP/socket `run(argValues:)`.
+- Done: Wire secret-handling rules into action dry-run params, batch trace serializer, and history store.
 - Update the recorder's secure-field branch to write parameter declarations + references rather than bare `op://` references in action values.
 - Open a separate issue for the document-based `.axn` editor app once this lands and there's something concrete to wire UI against.
-- Update the example `.axn` files and `docs/tool-surface.md` to reflect the new `args:` header.
+- Done: Update the example `.axn` files and `docs/tool-surface.md` to reflect the new `args:` header.

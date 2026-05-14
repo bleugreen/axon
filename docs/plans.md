@@ -6,13 +6,20 @@ accepted by `run`, so a recording can be replayed from MCP or with
 
 ```yaml
 version: 1
+args:
+  - name: assignee
+    type: string
+    default: Mitch
+  - name: assignee_email
+    type: email
+    default: mitch@example.com
 actions:
   - tool: type
     target: s1:12
-    value: Mitch
+    value: "{{assignee}}"
   - tool: type
     target: s1:14
-    value: mitch@example.com
+    value: "{{assignee_email}}"
   - tool: click
     target: s1:20
 ```
@@ -35,6 +42,19 @@ actions:
 When both `path` and `actions` are supplied, Axon loads the file first and then
 appends the inline actions. That supports parameterized replays without a second
 plan language.
+
+`.axn` parameters live in the top-level `args:` list. References use
+`{{name}}` inside string `value` and `keys` fields, and all parameters resolve
+before any action runs. Caller-provided values are passed as `argValues` over
+MCP/socket calls or with repeated CLI `--arg name=value` flags. Declared
+`source:` URLs such as `env://NAME` and `op://vault/item/field` bind a parameter
+to a resolver; caller values cannot override sourced args.
+
+`type: secret` is a handling rule, not a source. Secret-tainted values are sent
+to the primitive action but are redacted from dry-run params, batch traces, and
+history records. Prefer `source: op://...` or `source: env://...` for secrets;
+literal CLI `--arg` values can still be exposed by shell history or process
+inspection before Axon receives them.
 
 ## Metadata
 
@@ -68,6 +88,7 @@ workflows omit them.
 
 ```bash
 axon run ./workflow.axn
+axon run ./workflow.axn --arg assignee=Ada
 axon run ./workflow.axn --dry-run
 axon save --path ./workflow.axn
 axon save --include-reads

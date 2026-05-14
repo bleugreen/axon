@@ -15,24 +15,37 @@ public enum ActionBatchError: Error, CustomStringConvertible {
 public struct ActionBatchExecutor {
     public typealias CommandHandler = (JSONRPCRequest) -> JSONRPCResponse
     public typealias SnapshotProvider = RecordedFactEvaluator.SnapshotProvider
+    public typealias ParameterSourceResolver = (URL) throws -> String?
+
+    private static let redactedSecretValue = "<redacted: contains-secret>"
+    private static let substitutableStringFields: Set<String> = ["value", "keys"]
+    private static let parameterReferenceRegex = try! NSRegularExpression(
+        pattern: #"\{\{\s*([A-Za-z][A-Za-z0-9_]*)\s*\}\}"#
+    )
+    private static let anyParameterReferenceRegex = try! NSRegularExpression(
+        pattern: #"\{\{[^}]*\}\}"#
+    )
 
     private let commandHandler: CommandHandler
     private let factEvaluator: RecordedFactEvaluator?
     private let snapshotProvider: SnapshotProvider?
     private let changePollIntervalMs: Int
     private let changeTimeoutMs: Int
+    private let parameterSourceResolvers: [String: ParameterSourceResolver]
 
     public init(
         commandHandler: @escaping CommandHandler,
         snapshotProvider: SnapshotProvider? = nil,
         changePollIntervalMs: Int = 100,
-        changeTimeoutMs: Int = 5_000
+        changeTimeoutMs: Int = 5_000,
+        parameterSourceResolvers: [String: ParameterSourceResolver] = ActionBatchExecutor.defaultParameterSourceResolvers()
     ) {
         self.commandHandler = commandHandler
         self.snapshotProvider = snapshotProvider
         self.factEvaluator = snapshotProvider.map(RecordedFactEvaluator.init(snapshotProvider:))
         self.changePollIntervalMs = max(0, changePollIntervalMs)
         self.changeTimeoutMs = max(0, changeTimeoutMs)
+        self.parameterSourceResolvers = parameterSourceResolvers
     }
 
     public func run(params: [String: JSONValue]) throws -> JSONValue {
@@ -41,7 +54,8 @@ public struct ActionBatchExecutor {
             throw ActionBatchError.invalidParams("batch must be an object")
         }
 
-        let actions = try actionArray(in: batchObject)
+        let preparedBatch = try prepareBatch(batchObject, callerArgValues: callerArgValues(in: params))
+        let actions = try actionArray(in: preparedBatch.object)
         let dryRun = bool("dryRun", in: params) ?? bool("dryRun", in: batchObject) ?? false
         let continueOnError = bool("continueOnError", in: params) ?? bool("continueOnError", in: batchObject) ?? false
 
@@ -50,7 +64,13 @@ public struct ActionBatchExecutor {
         var success = true
 
         for (index, action) in actions.enumerated() {
-            let record = runAction(action, index: index, dryRun: dryRun, facts: &facts)
+            let record = runAction(
+                action,
+                index: index,
+                dryRun: dryRun,
+                secretTaintedFields: preparedBatch.secretTaintedFieldsByAction[index] ?? [],
+                facts: &facts
+            )
             trace.append(record)
             if record["success"] == .bool(false) {
                 success = false
@@ -66,6 +86,20 @@ public struct ActionBatchExecutor {
             "continueOnError": .bool(continueOnError),
             "trace": .array(trace)
         ])
+    }
+
+    public static func defaultParameterSourceResolvers() -> [String: ParameterSourceResolver] {
+        [
+            "env": { source in
+                guard let name = envName(from: source), !name.isEmpty else {
+                    throw ActionBatchError.invalidParams("env source requires a variable name")
+                }
+                return ProcessInfo.processInfo.environment[name]
+            },
+            "op": { source in
+                try OnePasswordCLI().read(reference: source.absoluteString)
+            }
+        ]
     }
 
     private func batchValue(from params: [String: JSONValue]) throws -> JSONValue {
@@ -127,7 +161,209 @@ public struct ActionBatchExecutor {
         return actions
     }
 
-    private func runAction(_ action: JSONValue, index: Int, dryRun: Bool, facts: inout [String: RecordedFact]) -> JSONValue {
+    private func prepareBatch(
+        _ object: [String: JSONValue],
+        callerArgValues: [String: JSONValue]
+    ) throws -> PreparedActionBatch {
+        let declarations = try ActionParameterDeclaration.parseList(object["args"])
+        guard !declarations.isEmpty else {
+            if let unknown = callerArgValues.keys.sorted().first {
+                throw ActionBatchError.invalidParams("unknown arg: \(unknown)")
+            }
+            _ = try substituteParameters(in: actionArray(in: object), resolved: [:])
+            return PreparedActionBatch(object: object, secretTaintedFieldsByAction: [:])
+        }
+
+        let resolved = try resolveParameters(declarations, callerArgValues: callerArgValues)
+        let actions = try actionArray(in: object)
+        let substituted = try substituteParameters(in: actions, resolved: resolved)
+
+        var prepared = object
+        prepared["actions"] = .array(substituted.actions)
+        return PreparedActionBatch(object: prepared, secretTaintedFieldsByAction: substituted.secretTaintedFieldsByAction)
+    }
+
+    private func callerArgValues(in params: [String: JSONValue]) throws -> [String: JSONValue] {
+        guard let value = params["argValues"], value != .null else {
+            return [:]
+        }
+        guard case let .object(object) = value else {
+            throw ActionBatchError.invalidParams("argValues must be an object")
+        }
+        return object
+    }
+
+    private func resolveParameters(
+        _ declarations: [ActionParameterDeclaration],
+        callerArgValues: [String: JSONValue]
+    ) throws -> [String: ResolvedActionParameter] {
+        let declaredNames = Set(declarations.map(\.name))
+        if let unknown = callerArgValues.keys.sorted().first(where: { !declaredNames.contains($0) }) {
+            throw ActionBatchError.invalidParams("unknown arg: \(unknown)")
+        }
+
+        var resolved: [String: ResolvedActionParameter] = [:]
+        for declaration in declarations {
+            if declaration.source != nil, callerArgValues[declaration.name] != nil {
+                throw ActionBatchError.invalidParams("caller arg cannot override sourced arg: \(declaration.name)")
+            }
+
+            let rawValue: JSONValue?
+            if let callerValue = callerArgValues[declaration.name] {
+                rawValue = callerValue
+            } else if let source = declaration.source {
+                rawValue = try resolveSource(source, for: declaration).map(JSONValue.string)
+                    ?? declaration.defaultValue
+            } else {
+                rawValue = declaration.defaultValue
+            }
+
+            guard let rawValue else {
+                throw ActionBatchError.invalidParams("missing required arg: \(declaration.name)")
+            }
+
+            resolved[declaration.name] = ResolvedActionParameter(
+                value: try ActionParameterValueCoercer.stringValue(rawValue, type: declaration.type, name: declaration.name),
+                isSecret: declaration.type == .secret
+            )
+        }
+        return resolved
+    }
+
+    private func resolveSource(_ source: URL, for declaration: ActionParameterDeclaration) throws -> String? {
+        guard let scheme = source.scheme, !scheme.isEmpty else {
+            throw ActionBatchError.invalidParams("arg \(declaration.name) source requires a scheme")
+        }
+        guard let resolver = parameterSourceResolvers[scheme] else {
+            throw ActionBatchError.invalidParams("unsupported source scheme for arg \(declaration.name): \(scheme)")
+        }
+        return try resolver(source)
+    }
+
+    private func substituteParameters(
+        in actions: [JSONValue],
+        resolved: [String: ResolvedActionParameter]
+    ) throws -> (actions: [JSONValue], secretTaintedFieldsByAction: [Int: Set<String>]) {
+        var substitutedActions: [JSONValue] = []
+        var taintByAction: [Int: Set<String>] = [:]
+
+        for (index, action) in actions.enumerated() {
+            guard case var .object(object) = action else {
+                substitutedActions.append(action)
+                continue
+            }
+
+            try rejectUnsupportedReferences(in: object, actionIndex: index)
+
+            var secretTaintedFields: Set<String> = []
+            for field in Self.substitutableStringFields {
+                guard case let .string(template)? = object[field] else {
+                    continue
+                }
+                let result = try substituteReferences(in: template, resolved: resolved)
+                object[field] = .string(result.value)
+                if result.containsSecret {
+                    secretTaintedFields.insert(field)
+                }
+            }
+
+            if !secretTaintedFields.isEmpty {
+                taintByAction[index] = secretTaintedFields
+            }
+            substitutedActions.append(.object(object))
+        }
+
+        return (substitutedActions, taintByAction)
+    }
+
+    private func rejectUnsupportedReferences(in object: [String: JSONValue], actionIndex: Int) throws {
+        for (key, value) in object where !Self.substitutableStringFields.contains(key) {
+            if containsReferenceSyntax(value) {
+                throw ActionBatchError.invalidParams("parameter references are only supported in string value fields: actions[\(actionIndex)].\(key)")
+            }
+        }
+    }
+
+    private func containsReferenceSyntax(_ value: JSONValue) -> Bool {
+        switch value {
+        case let .string(value):
+            return value.contains("{{")
+                || value.contains("}}")
+                || Self.anyParameterReferenceRegex.firstMatch(
+                    in: value,
+                    range: NSRange(value.startIndex..<value.endIndex, in: value)
+                ) != nil
+        case let .array(values):
+            return values.contains(where: containsReferenceSyntax)
+        case let .object(object):
+            return object.values.contains(where: containsReferenceSyntax)
+        default:
+            return false
+        }
+    }
+
+    private func substituteReferences(
+        in template: String,
+        resolved: [String: ResolvedActionParameter]
+    ) throws -> (value: String, containsSecret: Bool) {
+        let range = NSRange(template.startIndex..<template.endIndex, in: template)
+        let matches = Self.anyParameterReferenceRegex.matches(in: template, range: range)
+        guard !matches.isEmpty else {
+            if template.contains("{{") || template.contains("}}") {
+                throw ActionBatchError.invalidParams("invalid arg reference syntax: \(template)")
+            }
+            return (template, false)
+        }
+
+        var output = ""
+        var currentIndex = template.startIndex
+        var containsSecret = false
+
+        for match in matches {
+            guard let matchRange = Range(match.range, in: template),
+                  let name = parameterReferenceName(in: String(template[matchRange]))
+            else {
+                throw ActionBatchError.invalidParams("invalid arg reference syntax: \(template)")
+            }
+            let prefix = template[currentIndex..<matchRange.lowerBound]
+            if prefix.contains("{{") || prefix.contains("}}") {
+                throw ActionBatchError.invalidParams("invalid arg reference syntax: \(template)")
+            }
+            output += prefix
+            guard let parameter = resolved[name] else {
+                throw ActionBatchError.invalidParams("undeclared arg reference: \(name)")
+            }
+            output += parameter.value
+            containsSecret = containsSecret || parameter.isSecret
+            currentIndex = matchRange.upperBound
+        }
+
+        let suffix = template[currentIndex..<template.endIndex]
+        if suffix.contains("{{") || suffix.contains("}}") {
+            throw ActionBatchError.invalidParams("invalid arg reference syntax: \(template)")
+        }
+        output += suffix
+        return (output, containsSecret)
+    }
+
+    private func parameterReferenceName(in token: String) -> String? {
+        let range = NSRange(token.startIndex..<token.endIndex, in: token)
+        guard let match = Self.parameterReferenceRegex.firstMatch(in: token, range: range),
+              match.range == range,
+              let nameRange = Range(match.range(at: 1), in: token)
+        else {
+            return nil
+        }
+        return String(token[nameRange])
+    }
+
+    private func runAction(
+        _ action: JSONValue,
+        index: Int,
+        dryRun: Bool,
+        secretTaintedFields: Set<String>,
+        facts: inout [String: RecordedFact]
+    ) -> JSONValue {
         do {
             guard case var .object(object) = action else {
                 throw ActionBatchError.invalidParams("actions[\(index)] must be an object")
@@ -156,7 +392,7 @@ public struct ActionBatchExecutor {
 
             if dryRun {
                 record["dryRun"] = .bool(true)
-                record["params"] = .object(object)
+                record["params"] = .object(redactingSecrets(in: object, secretTaintedFields: secretTaintedFields))
                 return .object(record)
             }
 
@@ -166,12 +402,15 @@ public struct ActionBatchExecutor {
             }
             if primitiveActionSucceeded(in: response.result) == false {
                 record["success"] = .bool(false)
-                record["result"] = resultSummary(method: method, result: response.result ?? [:])
-                record["error"] = .string(primitiveActionFailureMessage(in: response.result) ?? "primitive action reported failure")
+                record["result"] = traceResult(method: method, result: response.result ?? [:], hasSecretTaint: !secretTaintedFields.isEmpty)
+                record["error"] = traceError(
+                    primitiveActionFailureMessage(in: response.result) ?? "primitive action reported failure",
+                    hasSecretTaint: !secretTaintedFields.isEmpty
+                )
                 return .object(record)
             }
             try verifyExpectedFacts(expectedFacts, changeBaselines: changeBaselines, facts: &facts)
-            record["result"] = resultSummary(method: method, result: response.result ?? [:])
+            record["result"] = traceResult(method: method, result: response.result ?? [:], hasSecretTaint: !secretTaintedFields.isEmpty)
             return .object(record)
         } catch let error as RecordedFactError {
             var record: [String: JSONValue] = [
@@ -334,6 +573,32 @@ public struct ActionBatchExecutor {
         }
     }
 
+    private func redactingSecrets(
+        in object: [String: JSONValue],
+        secretTaintedFields: Set<String>
+    ) -> [String: JSONValue] {
+        guard !secretTaintedFields.isEmpty else {
+            return object
+        }
+        var redacted = object
+        for field in secretTaintedFields {
+            redacted[field] = .string(Self.redactedSecretValue)
+        }
+        return redacted
+    }
+
+    private func traceResult(
+        method: String,
+        result: [String: JSONValue],
+        hasSecretTaint: Bool
+    ) -> JSONValue {
+        hasSecretTaint ? .string(Self.redactedSecretValue) : resultSummary(method: method, result: result)
+    }
+
+    private func traceError(_ message: String, hasSecretTaint: Bool) -> JSONValue {
+        .string(hasSecretTaint ? Self.redactedSecretValue : message)
+    }
+
     private func resultSummary(method: String, result: [String: JSONValue]) -> JSONValue {
         switch method {
         case "look":
@@ -396,6 +661,201 @@ public struct ActionBatchExecutor {
         return value
     }
 
+}
+
+private struct PreparedActionBatch {
+    let object: [String: JSONValue]
+    let secretTaintedFieldsByAction: [Int: Set<String>]
+}
+
+private enum ActionParameterType: String {
+    case string
+    case secret
+    case number
+    case date
+    case email
+    case path
+}
+
+private struct ActionParameterDeclaration {
+    let name: String
+    let type: ActionParameterType
+    let defaultValue: JSONValue?
+    let source: URL?
+
+    static func parseList(_ value: JSONValue?) throws -> [ActionParameterDeclaration] {
+        guard let value, value != .null else {
+            return []
+        }
+        guard case let .array(values) = value else {
+            throw ActionBatchError.invalidParams("args must be an array")
+        }
+
+        var seenNames: Set<String> = []
+        return try values.enumerated().map { index, value in
+            guard case let .object(object) = value else {
+                throw ActionBatchError.invalidParams("args[\(index)] must be an object")
+            }
+            guard case let .string(name)? = object["name"], isValidName(name) else {
+                throw ActionBatchError.invalidParams("args[\(index)] requires snake_case name")
+            }
+            guard seenNames.insert(name).inserted else {
+                throw ActionBatchError.invalidParams("duplicate arg: \(name)")
+            }
+            guard case let .string(rawType)? = object["type"],
+                  let type = ActionParameterType(rawValue: rawType)
+            else {
+                throw ActionBatchError.invalidParams("args[\(index)] requires type")
+            }
+            let defaultValue = object["default"]
+            if type == .secret, defaultValue != nil, defaultValue != .null {
+                throw ActionBatchError.invalidParams("secret arg cannot have default: \(name)")
+            }
+            let source: URL?
+            if let sourceValue = object["source"], sourceValue != .null {
+                guard case let .string(rawSource) = sourceValue,
+                      let url = URL(string: rawSource),
+                      url.scheme != nil
+                else {
+                    throw ActionBatchError.invalidParams("arg \(name) source must be a URL")
+                }
+                source = url
+            } else {
+                source = nil
+            }
+            return ActionParameterDeclaration(
+                name: name,
+                type: type,
+                defaultValue: defaultValue == .null ? nil : defaultValue,
+                source: source
+            )
+        }
+    }
+
+    private static func isValidName(_ name: String) -> Bool {
+        guard let first = name.unicodeScalars.first,
+              first >= "a",
+              first <= "z"
+        else {
+            return false
+        }
+        return name.unicodeScalars.allSatisfy { scalar in
+            (scalar >= "a" && scalar <= "z")
+                || (scalar >= "0" && scalar <= "9")
+                || scalar == "_"
+        }
+    }
+}
+
+private struct ResolvedActionParameter {
+    let value: String
+    let isSecret: Bool
+}
+
+private enum ActionParameterValueCoercer {
+    static func stringValue(_ value: JSONValue, type: ActionParameterType, name: String) throws -> String {
+        switch type {
+        case .string, .secret, .path:
+            return try scalarString(value, name: name)
+        case .email:
+            let string = try scalarString(value, name: name)
+            guard isValidEmail(string) else {
+                throw ActionBatchError.invalidParams("arg \(name) must be an email")
+            }
+            return string
+        case .number:
+            return try numberString(value, name: name)
+        case .date:
+            return try dateString(value, name: name)
+        }
+    }
+
+    private static func scalarString(_ value: JSONValue, name: String) throws -> String {
+        switch value {
+        case let .string(value):
+            return value
+        case let .int(value):
+            return String(value)
+        case let .double(value):
+            return String(value)
+        case let .bool(value):
+            return String(value)
+        default:
+            throw ActionBatchError.invalidParams("arg \(name) must be a scalar")
+        }
+    }
+
+    private static func numberString(_ value: JSONValue, name: String) throws -> String {
+        switch value {
+        case let .int(value):
+            return String(value)
+        case let .double(value):
+            return String(value)
+        case let .string(value):
+            guard Double(value) != nil else {
+                throw ActionBatchError.invalidParams("arg \(name) must be a number")
+            }
+            return value
+        default:
+            throw ActionBatchError.invalidParams("arg \(name) must be a number")
+        }
+    }
+
+    private static func dateString(_ value: JSONValue, name: String) throws -> String {
+        let string = try scalarString(value, name: name)
+        switch string {
+        case "today":
+            return isoDateString(Date())
+        case "yesterday":
+            let yesterday = Calendar.current.date(byAdding: .day, value: -1, to: Date()) ?? Date()
+            return isoDateString(yesterday)
+        default:
+            guard isISODate(string) else {
+                throw ActionBatchError.invalidParams("arg \(name) must be an ISO date, today, or yesterday")
+            }
+            return string
+        }
+    }
+
+    private static func isValidEmail(_ value: String) -> Bool {
+        let parts = value.split(separator: "@", omittingEmptySubsequences: false)
+        return parts.count == 2
+            && !parts[0].isEmpty
+            && parts[1].contains(".")
+            && !parts[1].hasPrefix(".")
+            && !parts[1].hasSuffix(".")
+    }
+
+    private static func isISODate(_ value: String) -> Bool {
+        guard value.count == 10 else {
+            return false
+        }
+        let parts = value.split(separator: "-")
+        guard parts.count == 3,
+              parts[0].count == 4,
+              parts[1].count == 2,
+              parts[2].count == 2
+        else {
+            return false
+        }
+        return parts.allSatisfy { Int($0) != nil }
+    }
+
+    private static func isoDateString(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.calendar = Calendar(identifier: .gregorian)
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "yyyy-MM-dd"
+        return formatter.string(from: date)
+    }
+}
+
+private func envName(from source: URL) -> String? {
+    if let host = source.host, !host.isEmpty {
+        return host
+    }
+    let path = source.path.trimmingCharacters(in: CharacterSet(charactersIn: "/"))
+    return path.isEmpty ? nil : path
 }
 
 private extension JSONValue {

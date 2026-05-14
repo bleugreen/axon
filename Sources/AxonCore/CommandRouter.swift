@@ -155,7 +155,7 @@ public struct CommandRouter {
         case "run":
             do {
                 let params = try paramsObject(in: request)
-                let batch = try ActionBatchExecutor(commandHandler: handle, snapshotProvider: batchSnapshotProvider).run(params: params)
+                let batch = try ActionBatchExecutor(commandHandler: handleCommand, snapshotProvider: batchSnapshotProvider).run(params: params)
                 return JSONRPCResponse(id: request.id, result: ["batch": batch])
             } catch let error as ActionBatchError {
                 return JSONRPCResponse(id: request.id, error: .invalidParams(error.description))

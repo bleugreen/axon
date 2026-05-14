@@ -46,7 +46,7 @@ public final class ActionHistoryStore: @unchecked Sendable {
         let sessionID = sessionID(in: request.params) ?? "default"
         return ActionHistoryContext(
             sessionID: sessionID,
-            request: request.withParams(strippingInternalHistoryKeysFrom: request.params)
+            request: request.withParams(strippingSessionKeyFrom: request.params)
         )
     }
 
@@ -54,8 +54,9 @@ public final class ActionHistoryStore: @unchecked Sendable {
         guard shouldRecord(method: request.method) else {
             return
         }
+        let historyRequest = request.withParams(strippingSensitiveHistoryKeysFrom: request.params)
         let params: [String: JSONValue]
-        if case let .object(object)? = request.params {
+        if case let .object(object)? = historyRequest.params {
             params = object
         } else {
             params = [:]
@@ -232,11 +233,23 @@ public struct ActionHistoryExport: Equatable, Sendable {
 }
 
 private extension JSONRPCRequest {
-    func withParams(strippingInternalHistoryKeysFrom params: JSONValue?) -> JSONRPCRequest {
+    func withParams(strippingSessionKeyFrom params: JSONValue?) -> JSONRPCRequest {
         guard case var .object(object)? = params else {
             return self
         }
         object.removeValue(forKey: "_session")
+        return JSONRPCRequest(id: id, method: method, params: .object(object))
+    }
+
+    func withParams(strippingSensitiveHistoryKeysFrom params: JSONValue?) -> JSONRPCRequest {
+        guard case var .object(object)? = params else {
+            return self
+        }
+        if method == "run" {
+            object.removeValue(forKey: "actions")
+            object.removeValue(forKey: "args")
+            object.removeValue(forKey: "argValues")
+        }
         return JSONRPCRequest(id: id, method: method, params: .object(object))
     }
 }

@@ -270,6 +270,11 @@ public struct MCPRouter {
                     ])
                 ]),
                 "path": stringSchema("Local .axn batch file path for the Axon daemon to read."),
+                "argValues": .object([
+                    "type": .string("object"),
+                    "description": .string("Caller-supplied .axn argument values keyed by declared arg name. Valid only for args without a declared source."),
+                    "additionalProperties": .bool(true)
+                ]),
                 "continueOnError": boolSchema("Continue after an action fails. Defaults to false."),
                 "dryRun": boolSchema("Trace the batch without dispatching actions.")
             ])
