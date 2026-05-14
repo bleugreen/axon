@@ -58,10 +58,24 @@ import Testing
 
 @Test func resolveRequestReturnsLocatorResolution() {
     let router = CommandRouter(
-        captureSnapshot: { app, screenshot in
+        resolveLocator: { app, locator, scrollToVisible in
             #expect(app == "com.example.App")
-            #expect(screenshot == false)
-            return actionLocatorFixtureSnapshot(buttons: ["NEW"])
+            #expect(locator.role == "AXButton")
+            #expect(locator.title?.matches("NEW") == true)
+            #expect(scrollToVisible == false)
+            return LocatorResolution(
+                status: .unique,
+                snapshotID: SnapshotID("live-locator"),
+                best: LocatorCandidate(
+                    index: 2,
+                    handle: SnapshotHandle(snapshotID: SnapshotID("live-locator"), nodeIndex: 2),
+                    role: "AXButton",
+                    title: "NEW",
+                    score: 2,
+                    reasons: []
+                ),
+                candidates: []
+            )
         }
     )
 
@@ -80,18 +94,26 @@ import Testing
 
     #expect(response.error == nil)
     #expect(response.result?["resolution"]?["status"] == .string("unique"))
-    #expect(response.result?["resolution"]?["best"]?["handle"] == .string("action-locator-fixture:2"))
+    #expect(response.result?["resolution"]?["best"]?["handle"] == .string("live-locator:2"))
 }
 
 @Test func clickRequestAcceptsLocatorTarget() {
     let router = CommandRouter(
-        captureSnapshot: { _, screenshot in
-            #expect(screenshot == false)
-            return actionLocatorFixtureSnapshot(buttons: ["NEW"])
+        resolveLocator: { app, locator, scrollToVisible in
+            #expect(app == "com.example.App")
+            #expect(locator.role == "AXButton")
+            #expect(locator.title?.matches("NEW") == true)
+            #expect(scrollToVisible == true)
+            return LocatorResolution(
+                status: .unique,
+                snapshotID: SnapshotID("live-locator"),
+                best: LocatorCandidate(index: 0, handle: SnapshotHandle(snapshotID: SnapshotID("live-locator"), nodeIndex: 0), role: "AXButton", title: "NEW", score: 2, reasons: []),
+                candidates: []
+            )
         },
         actions: PrimitiveActionHandlers(
             click: { target in
-                #expect(target == "action-locator-fixture:2")
+                #expect(target == "live-locator:0")
                 return PrimitiveActionResult(action: "click", target: target, strategy: "AXPress", success: true)
             }
         )
@@ -112,7 +134,7 @@ import Testing
     ))
 
     #expect(response.error == nil)
-    #expect(response.result?["action"]?["target"] == .string("action-locator-fixture:2"))
+    #expect(response.result?["action"]?["target"] == .string("live-locator:0"))
 }
 
 @Test func clickRequestAcceptsTextLocationTarget() {
@@ -236,7 +258,15 @@ import Testing
 
 @Test func clickRequestRejectsAmbiguousLocatorTarget() {
     let router = CommandRouter(
-        captureSnapshot: { _, _ in actionLocatorFixtureSnapshot(buttons: ["NEW", "NEW"]) },
+        resolveLocator: { _, _, scrollToVisible in
+            #expect(scrollToVisible == true)
+            return LocatorResolution(
+                status: .ambiguous,
+                snapshotID: SnapshotID("live-locator"),
+                best: nil,
+                candidates: []
+            )
+        },
         actions: PrimitiveActionHandlers(
             click: { _ in
                 Issue.record("ambiguous locator should not dispatch a click")
@@ -401,11 +431,29 @@ import Testing
 
 @Test func scrollRequestResolvesLocatorTarget() {
     let router = CommandRouter(
-        captureSnapshot: { _, _ in actionLocatorFixtureSnapshot(buttons: ["List"]) },
+        resolveLocator: { app, locator, scrollToVisible in
+            #expect(app == "com.example.App")
+            #expect(locator.role == "AXButton")
+            #expect(locator.title?.matches("List") == true)
+            #expect(scrollToVisible == true)
+            return LocatorResolution(
+                status: .unique,
+                snapshotID: SnapshotID("live-locator"),
+                best: LocatorCandidate(
+                    index: 2,
+                    handle: SnapshotHandle(snapshotID: SnapshotID("live-locator"), nodeIndex: 2),
+                    role: "AXButton",
+                    title: "List",
+                    score: 2,
+                    reasons: []
+                ),
+                candidates: []
+            )
+        },
         actions: PrimitiveActionHandlers(
             scroll: { target, _, _, _ in
-                #expect(target == .handle("action-locator-fixture:2"))
-                return PrimitiveActionResult(action: "scroll", target: "action-locator-fixture:2", strategy: "AXScrollToVisible", success: true)
+                #expect(target == .handle("live-locator:2"))
+                return PrimitiveActionResult(action: "scroll", target: "live-locator:2", strategy: "AXScrollToVisible", success: true)
             }
         )
     )

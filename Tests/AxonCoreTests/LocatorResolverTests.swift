@@ -99,6 +99,34 @@ import Testing
     #expect(resolution.status == .missing)
 }
 
+@Test func locatorResolverMatchesActionableLinkByDescendantTitle() {
+    let snapshot = AppSnapshot(
+        id: SnapshotID("locator-fixture"),
+        app: AppIdentity(bundleIdentifier: "org.mozilla.firefox", name: "Firefox", processIdentifier: 42),
+        windows: [
+            AXNode(role: "AXWindow", title: "Firefox", children: [
+                AXNode(role: "AXWebArea", children: [
+                    AXNode(role: "AXLink", actions: ["AXPress"], children: [
+                        AXNode(role: "AXStaticText", title: "co-operation with Russia")
+                    ])
+                ])
+            ])
+        ],
+        screenshot: nil
+    )
+    let locator = AXLocator(
+        role: "AXLink",
+        title: .exact("co-operation with Russia"),
+        actions: ["AXPress"]
+    )
+
+    let resolution = LocatorResolver().resolve(locator, in: snapshot)
+
+    #expect(resolution.status == .unique)
+    #expect(resolution.best?.handle?.rawValue == "locator-fixture:2")
+    #expect(resolution.best?.reasons.contains("descendant title exact co-operation with Russia") == true)
+}
+
 @Test func locatorJSONParsesLabelMatchersForTargetsAndAncestors() throws {
     let locator = try AXLocator(jsonValue: .object([
         "role": .string("AXComboBox"),

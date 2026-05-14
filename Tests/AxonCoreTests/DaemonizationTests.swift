@@ -56,6 +56,10 @@ import Testing
     #expect(SocketClient.defaultMaxResponseBytes > SocketServer.defaultMaxRequestBytes)
 }
 
+@Test func socketClientAllowsLongerBatchRunsThanSingleRequests() {
+    #expect(SocketClient.defaultBatchResponseTimeoutSeconds > SocketClient.defaultResponseTimeoutSeconds)
+}
+
 @Test func socketCommandRouterForwardsRequestsToSocketClient() throws {
     let request = JSONRPCRequest(id: .string("health"), method: "health")
     let router = SocketCommandRouter(path: "/tmp/axon-test.sock") { received in
@@ -135,7 +139,8 @@ import Testing
         socketPath: "/tmp/axon-test.sock",
         environment: [
             "AXON_VISUAL_OVERLAY": "1",
-            "AXON_VISUAL_OVERLAY_RESULT_MS": "500",
+            "AXON_VISUAL_OVERLAY_DELAY_MS": "500",
+            "AXON_VISUAL_OVERLAY_WAIT": "0",
             "UNRELATED": "ignored"
         ]
     )
@@ -156,7 +161,8 @@ import Testing
     #expect(plist?["ProcessType"] as? String == "Interactive")
     #expect(environment?["AXON_SOCKET_PATH"] == "/tmp/axon-test.sock")
     #expect(environment?["AXON_VISUAL_OVERLAY"] == "1")
-    #expect(environment?["AXON_VISUAL_OVERLAY_RESULT_MS"] == "500")
+    #expect(environment?["AXON_VISUAL_OVERLAY_DELAY_MS"] == "500")
+    #expect(environment?["AXON_VISUAL_OVERLAY_WAIT"] == "0")
     #expect(environment?["UNRELATED"] == nil)
 }
 

@@ -3,8 +3,6 @@ import Foundation
 
 public enum VisualTargetState: String, Codable, Equatable, Sendable {
     case planned
-    case succeeded
-    case failed
 }
 
 public struct VisualTarget: Equatable, Sendable {
@@ -26,35 +24,31 @@ public protocol VisualOverlay: AnyObject {
 }
 
 public struct VisualOverlayConfiguration: Equatable, Sendable {
-    public static let defaultPlannedDuration: TimeInterval = 0.25
-    public static let defaultResultDuration: TimeInterval = 1.10
+    public static let defaultActionDelay: TimeInterval = 1.10
 
     public let enabled: Bool
-    public let plannedDuration: TimeInterval
-    public let resultDuration: TimeInterval
+    public let actionDelay: TimeInterval
+    public let waitsForDisplay: Bool
 
     public init(
         enabled: Bool,
-        plannedDuration: TimeInterval = Self.defaultPlannedDuration,
-        resultDuration: TimeInterval = Self.defaultResultDuration
+        actionDelay: TimeInterval = Self.defaultActionDelay,
+        waitsForDisplay: Bool = true
     ) {
         self.enabled = enabled
-        self.plannedDuration = plannedDuration
-        self.resultDuration = resultDuration
+        self.actionDelay = actionDelay
+        self.waitsForDisplay = waitsForDisplay
     }
 
     public static func fromEnvironment(_ environment: [String: String] = ProcessInfo.processInfo.environment) -> VisualOverlayConfiguration {
         let enabled = enabledFlag(environment["AXON_VISUAL_OVERLAY"])
         return VisualOverlayConfiguration(
             enabled: enabled,
-            plannedDuration: duration(
-                milliseconds: environment["AXON_VISUAL_OVERLAY_PLANNED_MS"],
-                fallback: Self.defaultPlannedDuration
+            actionDelay: duration(
+                milliseconds: environment["AXON_VISUAL_OVERLAY_DELAY_MS"],
+                fallback: Self.defaultActionDelay
             ),
-            resultDuration: duration(
-                milliseconds: environment["AXON_VISUAL_OVERLAY_RESULT_MS"],
-                fallback: Self.defaultResultDuration
-            )
+            waitsForDisplay: enabledFlag(environment["AXON_VISUAL_OVERLAY_WAIT"])
         )
     }
 
@@ -84,15 +78,18 @@ public enum VisualOverlayFactory {
         guard configuration.enabled else {
             return nil
         }
-        return AppKitTargetBadgeOverlay()
+        return AppKitTargetBadgeOverlay(waitsForDisplay: configuration.waitsForDisplay)
     }
 }
 
 public final class AppKitTargetBadgeOverlay: VisualOverlay, @unchecked Sendable {
     private var panel: NSPanel?
     private var view: TargetBadgeView?
+    private let waitsForDisplay: Bool
 
-    public init() {}
+    public init(waitsForDisplay: Bool = true) {
+        self.waitsForDisplay = waitsForDisplay
+    }
 
     public func showTarget(_ target: VisualTarget) {
         guard target.frame.width > 0, target.frame.height > 0 else {
@@ -101,6 +98,12 @@ public final class AppKitTargetBadgeOverlay: VisualOverlay, @unchecked Sendable 
         if Thread.isMainThread {
             MainActor.assumeIsolated {
                 showTargetOnMainActor(target)
+            }
+        } else if waitsForDisplay {
+            DispatchQueue.main.sync {
+                MainActor.assumeIsolated {
+                    self.showTargetOnMainActor(target)
+                }
             }
         } else {
             DispatchQueue.main.async {
@@ -267,13 +270,6 @@ private final class TargetBadgeView: NSView {
     }
 
     private func color(for state: VisualTargetState) -> NSColor {
-        switch state {
-        case .planned:
-            return NSColor.systemCyan
-        case .succeeded:
-            return NSColor.systemGreen
-        case .failed:
-            return NSColor.systemRed
-        }
+        NSColor.systemCyan
     }
 }

@@ -5,8 +5,8 @@ import Testing
     let configuration = VisualOverlayConfiguration.fromEnvironment([:])
 
     #expect(configuration.enabled)
-    #expect(configuration.plannedDuration == 0.25)
-    #expect(configuration.resultDuration == 1.10)
+    #expect(configuration.actionDelay == 1.10)
+    #expect(configuration.waitsForDisplay)
 }
 
 @Test func visualOverlayConfigurationCanBeDisabled() {
@@ -20,13 +20,13 @@ import Testing
 @Test func visualOverlayConfigurationReadsEnvironment() {
     let configuration = VisualOverlayConfiguration.fromEnvironment([
         "AXON_VISUAL_OVERLAY": "1",
-        "AXON_VISUAL_OVERLAY_PLANNED_MS": "75",
-        "AXON_VISUAL_OVERLAY_RESULT_MS": "250"
+        "AXON_VISUAL_OVERLAY_DELAY_MS": "250",
+        "AXON_VISUAL_OVERLAY_WAIT": "0"
     ])
 
     #expect(configuration.enabled)
-    #expect(configuration.plannedDuration == 0.075)
-    #expect(configuration.resultDuration == 0.25)
+    #expect(configuration.actionDelay == 0.25)
+    #expect(configuration.waitsForDisplay == false)
 }
 
 @Test func visualTargetCarriesFrameLabelStateAndDuration() {

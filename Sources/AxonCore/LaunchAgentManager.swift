@@ -24,8 +24,8 @@ public struct LaunchAgentConfiguration: Equatable, Sendable {
         ]
         for key in [
             "AXON_VISUAL_OVERLAY",
-            "AXON_VISUAL_OVERLAY_PLANNED_MS",
-            "AXON_VISUAL_OVERLAY_RESULT_MS"
+            "AXON_VISUAL_OVERLAY_DELAY_MS",
+            "AXON_VISUAL_OVERLAY_WAIT"
         ] {
             if let value = environment[key] {
                 daemonEnvironment[key] = value

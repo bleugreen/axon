@@ -135,6 +135,16 @@ public struct LocatorResolution: Codable, Equatable, Sendable {
 }
 
 public struct LocatorResolver: Sendable {
+    private static let descendantLabelRoles: Set<String> = [
+        "AXButton",
+        "AXCheckBox",
+        "AXLink",
+        "AXMenuButton",
+        "AXMenuItem",
+        "AXPopUpButton",
+        "AXRadioButton"
+    ]
+
     public init() {}
 
     public func resolve(_ locator: AXLocator, in snapshot: AppSnapshot) -> LocatorResolution {
@@ -170,8 +180,8 @@ public struct LocatorResolver: Sendable {
 
         guard matchesExact(locator.role, actual: node.role, label: "role", reasons: &reasons),
               matchesExact(locator.subrole, actual: node.subrole, label: "subrole", reasons: &reasons),
-              matches(locator.title, actual: node.title, label: "title", reasons: &reasons),
-              matches(locator.label, actual: node.displayLabel, label: "label", reasons: &reasons),
+              matchesTitle(locator.title, node: node, reasons: &reasons),
+              matchesLabel(locator.label, node: node, reasons: &reasons),
               matches(locator.value, actual: node.value, label: "value", reasons: &reasons),
               matches(locator.description, actual: node.description, label: "description", reasons: &reasons),
               matches(locator.identifier, actual: node.identifier, label: "identifier", reasons: &reasons),
@@ -211,6 +221,51 @@ public struct LocatorResolver: Sendable {
         }
         reasons.append("\(label) \(matcher.reasonFragment)")
         return true
+    }
+
+    private func matchesTitle(_ matcher: TextMatch?, node: AXNode, reasons: inout [String]) -> Bool {
+        guard let matcher else {
+            return true
+        }
+        if matcher.matches(node.title) {
+            reasons.append("title \(matcher.reasonFragment)")
+            return true
+        }
+        guard Self.descendantLabelRoles.contains(node.role),
+              descendantLabels(of: node).contains(where: matcher.matches)
+        else {
+            return false
+        }
+        reasons.append("descendant title \(matcher.reasonFragment)")
+        return true
+    }
+
+    private func matchesLabel(_ matcher: TextMatch?, node: AXNode, reasons: inout [String]) -> Bool {
+        guard let matcher else {
+            return true
+        }
+        if matcher.matches(node.displayLabel) {
+            reasons.append("label \(matcher.reasonFragment)")
+            return true
+        }
+        guard descendantLabels(of: node).contains(where: matcher.matches) else {
+            return false
+        }
+        reasons.append("descendant label \(matcher.reasonFragment)")
+        return true
+    }
+
+    private func descendantLabels(of node: AXNode) -> [String] {
+        var labels: [String] = []
+        var queue = node.children
+        while !queue.isEmpty {
+            let next = queue.removeFirst()
+            if let label = next.displayLabel {
+                labels.append(label)
+            }
+            queue.append(contentsOf: next.children)
+        }
+        return labels
     }
 
     private func matchesActions(_ expected: [String], actual: [String], reasons: inout [String]) -> Bool {

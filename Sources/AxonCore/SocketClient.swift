@@ -3,6 +3,7 @@ import Foundation
 
 public struct SocketClient {
     public static let defaultResponseTimeoutSeconds: TimeInterval = 30.0
+    public static let defaultBatchResponseTimeoutSeconds: TimeInterval = 300.0
     public static let defaultMaxResponseBytes = 64 * 1_048_576
 
     private let path: String

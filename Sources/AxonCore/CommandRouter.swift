@@ -1,7 +1,11 @@
 public struct CommandRouter {
+    public typealias LocatorResolutionProvider = (_ app: String, _ locator: AXLocator, _ scrollToVisible: Bool) throws -> LocatorResolution
+
     private let listApps: () -> [AppIdentity]
     private let captureSnapshot: (String, Bool) throws -> AppSnapshot
     private let captureScreenshot: (String) throws -> EncodedScreenshot?
+    private let resolveLocator: LocatorResolutionProvider
+    private let batchSnapshotProvider: ActionBatchExecutor.SnapshotProvider
     private let requestAccessibility: () -> Bool
     private let actions: PrimitiveActionHandlers
     private let elementStore: AXElementStore
@@ -13,6 +17,8 @@ public struct CommandRouter {
         listApps: @escaping () -> [AppIdentity] = { AppResolver().runningApps() },
         captureSnapshot: ((String, Bool) throws -> AppSnapshot)? = nil,
         captureScreenshot: ((String) throws -> EncodedScreenshot?)? = nil,
+        resolveLocator: LocatorResolutionProvider? = nil,
+        batchSnapshotProvider: ActionBatchExecutor.SnapshotProvider? = nil,
         requestAccessibility: @escaping () -> Bool = AccessibilityPermission.requestTrustPrompt,
         actions: PrimitiveActionHandlers? = nil,
         elementStore: AXElementStore = AXElementStore(),
@@ -31,6 +37,13 @@ public struct CommandRouter {
         self.captureScreenshot = captureScreenshot ?? { app in
             let identity = try AppResolver().resolveIdentity(app)
             return ScreenshotCapturer().capture(app: identity)
+        }
+        self.resolveLocator = resolveLocator ?? { app, locator, scrollToVisible in
+            try AXLiveLocatorResolver(elementStore: elementStore)
+                .resolve(app: app, locator: locator, scrollToVisible: scrollToVisible)
+        }
+        self.batchSnapshotProvider = batchSnapshotProvider ?? { app in
+            try AXLiveLocatorResolver(elementStore: elementStore).captureSnapshot(app: app)
         }
         self.requestAccessibility = requestAccessibility
         self.actions = actions ?? AXPrimitiveActionExecutor(elementStore: elementStore).handlers()
@@ -191,7 +204,7 @@ public struct CommandRouter {
         case "run_batch":
             do {
                 let params = try paramsObject(in: request)
-                let batch = try ActionBatchExecutor(commandHandler: handle).run(params: params)
+                let batch = try ActionBatchExecutor(commandHandler: handle, snapshotProvider: batchSnapshotProvider).run(params: params)
                 return JSONRPCResponse(id: request.id, result: ["batch": batch])
             } catch let error as ActionBatchError {
                 return JSONRPCResponse(id: request.id, error: .invalidParams(error.description))
@@ -225,8 +238,7 @@ public struct CommandRouter {
             do {
                 let app = try requiredStringParam("app", in: request)
                 let locator = try requiredLocatorParam(in: request)
-                let snapshot = try captureSnapshot(app, false)
-                let resolution = LocatorResolver().resolve(locator, in: snapshot)
+                let resolution = try resolveLocator(app, locator, false)
                 return JSONRPCResponse(
                     id: request.id,
                     result: [
@@ -480,8 +492,7 @@ public struct CommandRouter {
         }
 
         let locator = try AXLocator(jsonValue: locatorValue)
-        let snapshot = try captureSnapshot(app, false)
-        let resolution = LocatorResolver().resolve(locator, in: snapshot)
+        let resolution = try resolveLocator(app, locator, true)
         guard resolution.status == .unique, let handle = resolution.best?.handle else {
             throw JSONRPCError.invalidParams("Locator did not resolve uniquely: \(resolution.status.rawValue)")
         }
