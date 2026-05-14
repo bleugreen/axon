@@ -1,10 +1,10 @@
 version: 1
 actions:
-  - tool: perform_action
+  - tool: invoke
     target:
       app: cairn
       locator:
         role: AXButton
         label:
           contains: Issue menu
-    action: AXShowMenu
+    name: AXShowMenu

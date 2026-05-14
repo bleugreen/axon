@@ -1,124 +1,74 @@
-# Action Batches and Scripts
+# Recordings And Runs
 
-Axon composition starts with the same tools agents already use. A batch is an ordered list of tool calls; each item has `tool` plus that tool's normal arguments.
-
-## MCP: run_batch
-
-```json
-{
-  "actions": [
-    { "tool": "set_value", "target": "s1:12", "value": "Mitch" },
-    { "tool": "set_value", "target": "s1:14", "value": "mitch@example.com" },
-    { "tool": "click", "target": "s1:18" }
-  ]
-}
-```
-
-`run_batch` executes actions in order and returns a trace. It stops on the first failed action by default.
-
-Options:
-
-- `dryRun`: trace actions without dispatching them
-- `continueOnError`: keep running after a failed action
-- `actions`: inline action array
-- `source`: YAML or JSON batch source
-- `path`: local `.axn` batch file path
-- `batch`: batch object
-
-## .axn Files
-
-`.axn` files are editable saved batches:
+`.axn` files are ordered Axon action lists. The file shape is the same shape
+accepted by `run`, so a recording can be replayed from MCP or with
+`axon run path.axn`.
 
 ```yaml
 version: 1
 actions:
-  - tool: set_value
-    target:
-      app: cairn
-      locator:
-        role: AXTextField
-        label:
-          contains: Title
-    value: Draft issue title
+  - tool: type
+    target: s1:12
+    value: Mitch
+  - tool: type
+    target: s1:14
+    value: mitch@example.com
   - tool: click
-    target:
-      app: cairn
-      locator:
-        role: AXButton
-        label: Save
+    target: s1:20
 ```
 
-Run one from the CLI:
-
-```sh
-axon run ./create-issue.axn
-```
-
-The file format is intentionally the same shape as `run_batch`, so there is no separate plan language to learn.
-
-## Tool Names
-
-Batch actions use MCP-facing tool names:
-
-```text
-list_apps
-get_app_state
-get_children
-get_screenshot
-resolve
-changed_since
-click
-scroll
-drag
-perform_action
-set_value
-type_text
-press_key
-```
-
-For normal replayable scripts, prefer action tools such as `click`, `set_value`, `perform_action`, `scroll`, `drag`, `type_text`, and `press_key`. Read tools are useful while exploring and stay in history as context, but exported scripts omit them by default.
-
-## Trace Shape
-
-A successful batch returns:
+`run` stops on the first failed action by default and returns a trace:
 
 ```json
 {
-  "batch": {
-    "success": true,
-    "dryRun": false,
-    "continueOnError": false,
-    "trace": [
-      { "index": 0, "tool": "set_value", "success": true },
-      { "index": 1, "tool": "click", "success": true }
-    ]
-  }
+  "success": true,
+  "dryRun": false,
+  "continueOnError": false,
+  "trace": [
+    { "index": 0, "tool": "type", "success": true },
+    { "index": 1, "tool": "type", "success": true },
+    { "index": 2, "tool": "click", "success": true }
+  ]
 }
 ```
 
-Failures include the failed index and stop the batch unless `continueOnError` is true.
+When both `path` and `actions` are supplied, Axon loads the file first and then
+appends the inline actions. That supports parameterized replays without a second
+plan language.
 
-## History and Export
+## Metadata
 
-Axon records recent tool calls in daemon memory. History may include reads (`get_app_state`, `resolve`, `get_children`) because they explain how an agent found targets. Script export filters to replayable action calls by default and emits an `.axn` file that can be edited and rerun.
+Actions may carry metadata that `run` strips before dispatch:
 
-CLI:
-
-```sh
-axon export-script --path ./workflow.axn
-axon export-script --include-reads
+```yaml
+version: 1
+actions:
+  - id: title
+    tool: type
+    target: s1:12
+    value: Draft issue title
+    expects:
+      - id: title.value
+        kind: value
+        target: s1:12
+        equals: Draft issue title
+  - tool: keyboard
+    app: Safari
+    keys: Return
+    requires:
+      - title.value
 ```
 
-MCP:
+Supported replay tools are `click`, `type`, `keyboard`, `scroll`, `drag`, and
+`invoke`. Read tools such as `look` and `find` may be kept in history as context
+and can be included by `save(..., includeReads: true)`, but normal saved
+workflows omit them.
 
-```json
-{
-  "sessionId": "default",
-  "from": "c12",
-  "to": "c18",
-  "path": "/Users/mitch/projects/app/workflow.axn",
-  "includeReads": false
-}
+## CLI
+
+```bash
+axon run ./workflow.axn
+axon run ./workflow.axn --dry-run
+axon save --path ./workflow.axn
+axon save --include-reads
 ```
-
-Use `includeReads: true` only when read/context calls should be replayed too.

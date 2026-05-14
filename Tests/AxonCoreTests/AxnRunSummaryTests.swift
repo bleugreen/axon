@@ -3,7 +3,7 @@ import Testing
 
 @Test func axnRunSummaryReportsBatchFailureWithActionAndFact() {
     let stdout = """
-    {"jsonrpc":"2.0","id":"run_batch","result":{"batch":{"success":false,"trace":[{"index":0,"tool":"set_value","success":true},{"index":1,"success":false,"actionId":"a002","factId":"a001.value.0","error":"Fact a001.value.0 did not verify"}]}}}
+    {"jsonrpc":"2.0","id":"run","result":{"batch":{"success":false,"trace":[{"index":0,"tool":"type","success":true},{"index":1,"success":false,"actionId":"a002","factId":"a001.value.0","error":"Fact a001.value.0 did not verify"}]}}}
     """
 
     let summary = AxnRunSummary.failureMessage(
@@ -33,7 +33,7 @@ import Testing
 
 @Test func axnRunSummaryReportsJSONRPCErrors() {
     let stdout = """
-    {"jsonrpc":"2.0","id":"run_batch","error":{"code":-32602,"message":"Locator did not resolve uniquely: missing"}}
+    {"jsonrpc":"2.0","id":"run","error":{"code":-32602,"message":"Locator did not resolve uniquely: missing"}}
     """
 
     let summary = AxnRunSummary.failureMessage(
@@ -49,7 +49,7 @@ import Testing
 
 @Test func axnRunSummaryReturnsNilForSuccessfulBatch() {
     let stdout = """
-    {"jsonrpc":"2.0","id":"run_batch","result":{"batch":{"success":true,"trace":[]}}}
+    {"jsonrpc":"2.0","id":"run","result":{"batch":{"success":true,"trace":[]}}}
     """
 
     let summary = AxnRunSummary.failureMessage(

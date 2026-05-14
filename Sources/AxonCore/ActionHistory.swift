@@ -129,19 +129,7 @@ public final class ActionHistoryStore: @unchecked Sendable {
 
     private func toolName(for method: String) -> String? {
         switch method {
-        case "list_apps":
-            return "list_apps"
-        case "snapshot":
-            return "get_app_state"
-        case "get_children":
-            return "get_children"
-        case "screenshot":
-            return "get_screenshot"
-        case "resolve":
-            return "resolve"
-        case "changed_since":
-            return "changed_since"
-        case "click", "scroll", "drag", "perform_action", "set_value", "type_text", "press_key":
+        case "look", "find", "click", "scroll", "drag", "invoke", "type", "keyboard":
             return method
         default:
             return nil
@@ -149,15 +137,15 @@ public final class ActionHistoryStore: @unchecked Sendable {
     }
 
     private func isReplayableAction(_ method: String) -> Bool {
-        ["click", "scroll", "drag", "perform_action", "set_value", "type_text", "press_key"].contains(method)
+        ["click", "scroll", "drag", "invoke", "type", "keyboard"].contains(method)
     }
 
     private func shouldRecord(method: String) -> Bool {
         switch method {
-        case "health", "request_accessibility", "export_script":
+        case "health", "permit", "save":
             return false
         default:
-            return toolName(for: method) != nil || method == "run_batch"
+            return toolName(for: method) != nil || method == "run"
         }
     }
 
@@ -224,7 +212,7 @@ public final class ActionHistoryStore: @unchecked Sendable {
             return 2
         case "locator":
             return 3
-        case "action", "value", "text", "key":
+        case "name", "value", "keys":
             return 4
         default:
             return 100

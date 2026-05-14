@@ -24,10 +24,9 @@ public final class AXPrimitiveActionExecutor {
         PrimitiveActionHandlers(
             click: click(target:),
             clickPoint: click(point:),
-            performAction: performAction(target:action:),
-            setValue: setValue(target:value:),
-            typeText: typeText(app:text:),
-            pressKey: pressKey(app:key:),
+            invoke: invoke(target:name:),
+            type: type(target:value:),
+            keyboard: keyboard(app:keys:),
             scroll: scroll(target:app:deltaX:deltaY:),
             drag: drag(from:to:app:durationMs:)
         )
@@ -36,7 +35,7 @@ public final class AXPrimitiveActionExecutor {
     public func click(target: String) throws -> PrimitiveActionResult {
         let element = try elementStore.element(for: target)
         if actionNames(for: element).contains(kAXPressAction) {
-            return try performAction(target: target, action: kAXPressAction)
+            return try invoke(target: target, name: kAXPressAction)
         }
 
         guard let point = centerPoint(of: element) else {
@@ -66,12 +65,12 @@ public final class AXPrimitiveActionExecutor {
         )
     }
 
-    public func performAction(target: String, action: String) throws -> PrimitiveActionResult {
+    public func invoke(target: String, name: String) throws -> PrimitiveActionResult {
         let element = try elementStore.element(for: target)
-        showTargetBeforeAction(element, label: action)
-        let result = AXUIElementPerformAction(element, action as CFString)
+        showTargetBeforeAction(element, label: name)
+        let result = AXUIElementPerformAction(element, name as CFString)
         return PrimitiveActionResult(
-            action: action,
+            action: name,
             target: target,
             strategy: "AXAction",
             success: result == .success,
@@ -79,12 +78,12 @@ public final class AXPrimitiveActionExecutor {
         )
     }
 
-    public func setValue(target: String, value: String) throws -> PrimitiveActionResult {
+    public func type(target: String, value: String) throws -> PrimitiveActionResult {
         let element = try elementStore.element(for: target)
         showTargetBeforeAction(element, label: "AXValue")
         let result = AXUIElementSetAttributeValue(element, kAXValueAttribute as CFString, value as CFTypeRef)
         return PrimitiveActionResult(
-            action: "set_value",
+            action: "type",
             target: target,
             strategy: "AXValue",
             success: result == .success,
@@ -92,36 +91,46 @@ public final class AXPrimitiveActionExecutor {
         )
     }
 
-    public func typeText(app: String, text: String) throws -> PrimitiveActionResult {
-        try activate(app: app)
-        for scalar in text.unicodeScalars {
+    public func keyboard(app: String?, keys: String) throws -> PrimitiveActionResult {
+        if let app {
+            try activate(app: app)
+        }
+        let target = app ?? "frontmost"
+        if let keyStroke = keyStrokeIntent(from: keys) {
+            postKeyStroke(keyStroke)
+            return PrimitiveActionResult(
+                action: "keyboard",
+                target: target,
+                strategy: "CGEventKeyboard",
+                success: true,
+                details: ["keys": .string(keys), "mode": .string("keystroke")]
+            )
+        }
+        for scalar in keys.unicodeScalars {
             var value = UniChar(scalar.value)
             guard let down = CGEvent(keyboardEventSource: nil, virtualKey: 0, keyDown: true),
                   let up = CGEvent(keyboardEventSource: nil, virtualKey: 0, keyDown: false)
             else {
-                return PrimitiveActionResult(action: "type_text", target: app, strategy: "CGEventKeyboard", success: false)
+                return PrimitiveActionResult(
+                    action: "keyboard",
+                    target: target,
+                    strategy: "CGEventKeyboard",
+                    success: false,
+                    details: ["keys": .string(keys), "mode": .string("text")]
+                )
             }
             down.keyboardSetUnicodeString(stringLength: 1, unicodeString: &value)
             up.keyboardSetUnicodeString(stringLength: 1, unicodeString: &value)
             down.post(tap: .cghidEventTap)
             up.post(tap: .cghidEventTap)
         }
-        return PrimitiveActionResult(action: "type_text", target: app, strategy: "CGEventKeyboard", success: true)
-    }
-
-    public func pressKey(app: String, key: String) throws -> PrimitiveActionResult {
-        try activate(app: app)
-        guard let keyStroke = KeyStroke(key) else {
-            return PrimitiveActionResult(
-                action: "press_key",
-                target: app,
-                strategy: "CGEventKeyboard",
-                success: false,
-                message: "Unsupported key: \(key)"
-            )
-        }
-        postKeyStroke(keyStroke)
-        return PrimitiveActionResult(action: "press_key", target: app, strategy: "CGEventKeyboard", success: true)
+        return PrimitiveActionResult(
+            action: "keyboard",
+            target: target,
+            strategy: "CGEventKeyboard",
+            success: true,
+            details: ["keys": .string(keys), "mode": .string("text")]
+        )
     }
 
     public func scroll(
@@ -415,6 +424,18 @@ public final class AXPrimitiveActionExecutor {
         up?.flags = keyStroke.flags
         down?.post(tap: .cghidEventTap)
         up?.post(tap: .cghidEventTap)
+    }
+
+    private func keyStrokeIntent(from keys: String) -> KeyStroke? {
+        if keys.contains("+") {
+            return KeyStroke(keys)
+        }
+        switch keys.lowercased() {
+        case "return", "enter", "tab", "space", "delete", "backspace", "escape", "esc", "left", "right", "down", "up":
+            return KeyStroke(keys)
+        default:
+            return nil
+        }
     }
 }
 

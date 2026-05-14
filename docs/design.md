@@ -160,21 +160,17 @@ Observer state should also support a "changed since snapshot" query. The initial
 Initial tools:
 
 ```text
-list_apps()
-get_app_state(app)
-get_children(target)
-get_screenshot(app)
-resolve(app, locator)
-changed_since(snapshotId)
+look(target?, since?, screenshot?, screenText?, tree?, sensitive?, offset?, limit?, depth?)
+find(app, locator)
+permit()
+run(actions?, path?)
+save(sessionId?, from?, to?, path?, includeReads?)
 click(target)
+type(target, value)
+keyboard(keys, app?)
 scroll(target?, app?, deltaX?, deltaY?)
 drag(from, to, app?, durationMs?)
-set_value(target, value)
-perform_action(target, action)
-type_text(app, text)
-press_key(app, key)
-run_batch(actions? | source? | path? | batch?)
-export_script(sessionId?, from?, to?, path?, includeReads?)
+invoke(target, name)
 ```
 
 Where `target` can be:
@@ -191,9 +187,9 @@ Screenshot-returning tools should embed image data in their response. File outpu
 
 ### Action Batches and `.axn` Files
 
-`run_batch` is an invocation-scoped composition layer. A batch is an ordered list of tool calls — each action is just `tool:` plus that tool's normal arguments. There is no separate plan language to learn, and no separate semantics for batched actions vs. standalone calls.
+`run` is an invocation-scoped composition layer. A batch is an ordered list of tool calls — each action is just `tool:` plus that tool's normal arguments. There is no separate plan language to learn, and no separate semantics for batched actions vs. standalone calls.
 
-`.axn` files (axon // action) are batches saved to disk. They are the project's primary persisted artifact: a recorded sequence of past tool calls that can be replayed, edited, and shared. History/export generates them from observed sessions rather than expecting agents to hand-author scripts. The file shape mirrors `run_batch` exactly, so `axon run path.axn` and an inline batch are interchangeable.
+`.axn` files (axon // action) are batches saved to disk. They are the project's primary persisted artifact: a recorded sequence of past tool calls that can be replayed, edited, and shared. `save` generates them from observed sessions rather than expecting agents to hand-author scripts. The file shape mirrors `run` exactly, so `axon run path.axn` and an inline batch are interchangeable.
 
 The daemon executes a submitted batch, traces it, and forgets it. It does not own a recipe registry or persistent script cache. Reusable `.axn` files live wherever the user or repo wants them.
 

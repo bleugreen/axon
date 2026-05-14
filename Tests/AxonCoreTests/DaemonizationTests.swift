@@ -110,7 +110,7 @@ import Testing
         id: .string("state"),
         method: "tools/call",
         params: .object([
-            "name": .string("get_app_state"),
+            "name": .string("look"),
             "arguments": .object(["app": .string("com.example.App")])
         ])
     ))
@@ -119,11 +119,11 @@ import Testing
     #expect(handler.requests == [
         JSONRPCRequest(
             id: .string("state"),
-            method: "snapshot",
+            method: "look",
             params: .object([
                 "app": .string("com.example.App"),
                 "screenshot": .bool(false),
-                "includeTree": .bool(true),
+                "tree": .bool(true),
                 "sensitive": .bool(false)
             ])
         )

@@ -1,6 +1,6 @@
 version: 1
 actions:
-  - tool: set_value
+  - tool: type
     target:
       app: cairn
       locator:

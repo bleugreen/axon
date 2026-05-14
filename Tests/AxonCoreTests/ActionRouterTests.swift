@@ -56,7 +56,7 @@ import Testing
     #expect(response.result?["action"]?["point"]?["x"] == .double(25))
 }
 
-@Test func resolveRequestReturnsLocatorResolution() {
+@Test func findRequestReturnsLocatorResolution() {
     let router = CommandRouter(
         resolveLocator: { app, locator, scrollToVisible in
             #expect(app == "com.example.App")
@@ -81,7 +81,7 @@ import Testing
 
     let response = router.handle(JSONRPCRequest(
         id: .string("resolve-1"),
-        method: "resolve",
+        method: "find",
         params: .object([
             "app": .string("com.example.App"),
             "locator": .object([
@@ -306,10 +306,10 @@ import Testing
     #expect(response.error?.message == "Snapshot is not retained: missing")
 }
 
-@Test func performActionRequestPassesActionName() {
+@Test func invokeRequestPassesActionName() {
     let router = CommandRouter(
         actions: PrimitiveActionHandlers(
-            performAction: { target, action in
+            invoke: { target, action in
                 #expect(target == "snap:2")
                 #expect(action == "AXShowMenu")
                 return PrimitiveActionResult(action: action, target: target, strategy: "AXAction", success: true)
@@ -319,10 +319,10 @@ import Testing
 
     let response = router.handle(JSONRPCRequest(
         id: .string("action-1"),
-        method: "perform_action",
+        method: "invoke",
         params: .object([
             "target": .string("snap:2"),
-            "action": .string("AXShowMenu")
+            "name": .string("AXShowMenu")
         ])
     ))
 
@@ -330,20 +330,20 @@ import Testing
     #expect(response.result?["action"]?["action"] == .string("AXShowMenu"))
 }
 
-@Test func setValueRequestPassesValue() {
+@Test func typeRequestPassesValue() {
     let router = CommandRouter(
         actions: PrimitiveActionHandlers(
-            setValue: { target, value in
+            type: { target, value in
                 #expect(target == "snap:3")
                 #expect(value == "hello")
-                return PrimitiveActionResult(action: "set_value", target: target, strategy: "AXValue", success: true)
+                return PrimitiveActionResult(action: "type", target: target, strategy: "AXValue", success: true)
             }
         )
     )
 
     let response = router.handle(JSONRPCRequest(
         id: .string("set-1"),
-        method: "set_value",
+        method: "type",
         params: .object([
             "target": .string("snap:3"),
             "value": .string("hello")
@@ -354,23 +354,23 @@ import Testing
     #expect(response.result?["action"]?["success"] == .bool(true))
 }
 
-@Test func typeTextRequestPassesAppAndText() {
+@Test func keyboardTextRequestPassesAppAndText() {
     let router = CommandRouter(
         actions: PrimitiveActionHandlers(
-            typeText: { app, text in
+            keyboard: { app, text in
                 #expect(app == "com.example.App")
                 #expect(text == "hello")
-                return PrimitiveActionResult(action: "type_text", target: app, strategy: "CGEventKeyboard", success: true)
+                return PrimitiveActionResult(action: "keyboard", target: app ?? "frontmost", strategy: "CGEventKeyboard", success: true)
             }
         )
     )
 
     let response = router.handle(JSONRPCRequest(
         id: .string("type-1"),
-        method: "type_text",
+        method: "keyboard",
         params: .object([
             "app": .string("com.example.App"),
-            "text": .string("hello")
+            "keys": .string("hello")
         ])
     ))
 
@@ -378,23 +378,23 @@ import Testing
     #expect(response.result?["action"]?["strategy"] == .string("CGEventKeyboard"))
 }
 
-@Test func pressKeyRequestPassesAppAndKey() {
+@Test func keyboardKeyRequestPassesAppAndKey() {
     let router = CommandRouter(
         actions: PrimitiveActionHandlers(
-            pressKey: { app, key in
+            keyboard: { app, key in
                 #expect(app == "com.example.App")
                 #expect(key == "Return")
-                return PrimitiveActionResult(action: "press_key", target: app, strategy: "CGEventKeyboard", success: true)
+                return PrimitiveActionResult(action: "keyboard", target: app ?? "frontmost", strategy: "CGEventKeyboard", success: true)
             }
         )
     )
 
     let response = router.handle(JSONRPCRequest(
         id: .string("key-1"),
-        method: "press_key",
+        method: "keyboard",
         params: .object([
             "app": .string("com.example.App"),
-            "key": .string("Return")
+            "keys": .string("Return")
         ])
     ))
 

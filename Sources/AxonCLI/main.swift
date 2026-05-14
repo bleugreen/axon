@@ -53,148 +53,77 @@ do {
             .send(JSONRPCRequest(id: .string("health"), method: "health"))
         try printResponse(response)
 
-    case "request-accessibility":
+    case "permit":
         let response = try SocketClient(path: socketPath)
-            .send(JSONRPCRequest(id: .string("request_accessibility"), method: "request_accessibility"))
+            .send(JSONRPCRequest(id: .string("permit"), method: "permit"))
         try printResponse(response)
 
-    case "apps":
+    case "look":
+        let look = try lookCommand(arguments: arguments)
         let response = try SocketClient(path: socketPath)
-            .send(JSONRPCRequest(id: .string("list_apps"), method: "list_apps"))
+            .send(JSONRPCRequest(
+                id: .string("look"),
+                method: "look",
+                params: .object(look.params)
+            ))
         if let error = response.error {
             throw CLIError.invalidArguments(error.message)
         }
-        guard case let .array(apps)? = response.result?["apps"] else {
-            throw CLIError.invalidArguments("list_apps response missing apps")
-        }
-        if arguments.contains("--details") || arguments.contains("--debug") {
-            for app in apps {
-                let pid = app["processIdentifier"].flatMap(stringValue) ?? "?"
-                let name = app["name"].flatMap(stringValue) ?? "unknown"
-                let bundle = app["bundleIdentifier"].flatMap(stringValue).map { " \($0)" } ?? ""
-                print("\(pid)\t\(name)\(bundle)")
+        if case let .array(apps)? = response.result?["apps"] {
+            if look.details {
+                for app in apps {
+                    let pid = app["processIdentifier"].flatMap(stringValue) ?? "?"
+                    let name = app["name"].flatMap(stringValue) ?? "unknown"
+                    let bundle = app["bundleIdentifier"].flatMap(stringValue).map { " \($0)" } ?? ""
+                    print("\(pid)\t\(name)\(bundle)")
+                }
+            } else {
+                let formatter = AppListFormatter()
+                print(formatter.text(from: formatter.observation(from: response.result ?? [:])))
+            }
+        } else if let snapshot = response.result?["snapshot"] {
+            if look.json {
+                let data = try jsonEncoder.encode(snapshot)
+                print(String(decoding: data, as: UTF8.self))
+            } else {
+                let formatter = SnapshotObservationFormatter()
+                let observation = formatter.observation(
+                    from: snapshot,
+                    frames: look.frames
+                )
+                print(formatter.text(from: observation))
+            }
+        } else if let children = response.result?["children"] {
+            if look.json {
+                let data = try jsonEncoder.encode(children)
+                print(String(decoding: data, as: UTF8.self))
+            } else {
+                let formatter = SnapshotObservationFormatter()
+                let observation = formatter.children(
+                    from: children,
+                    frames: look.frames
+                )
+                print(formatter.text(from: observation))
             }
         } else {
-            let formatter = AppListFormatter()
-            print(formatter.text(from: formatter.observation(from: response.result ?? [:])))
+            try printResponse(response)
         }
 
-    case "snapshot":
-        let app = try requiredArgument(after: command, in: arguments)
-        let screenshot = arguments.contains("--screenshot")
-        let sensitive = arguments.contains("--sensitive")
-        if sensitive && screenshot {
-            throw CLIError.invalidArguments("snapshot --sensitive cannot be combined with --screenshot")
-        }
-        let response = try SocketClient(path: socketPath)
-            .send(JSONRPCRequest(
-                id: .string("snapshot"),
-                method: "snapshot",
-                params: .object([
-                    "app": .string(app),
-                    "screenshot": .bool(screenshot),
-                    "sensitive": .bool(sensitive),
-                    "includeTree": .bool(true)
-                ])
-            ))
-        if let error = response.error {
-            throw CLIError.invalidArguments(error.message)
-        }
-        guard let snapshot = response.result?["snapshot"] else {
-            throw CLIError.invalidArguments("snapshot response missing snapshot")
-        }
-        let formatter = SnapshotObservationFormatter()
-        let observation = formatter.observation(
-            from: snapshot,
-            frames: arguments.contains("--frames")
-        )
-        print(formatter.text(from: observation))
-
-    case "snapshot-json":
-        let app = try requiredArgument(after: command, in: arguments)
-        let includeTree = !arguments.contains("--compact")
-        let screenshot = arguments.contains("--screenshot")
-        let sensitive = arguments.contains("--sensitive")
-        if sensitive && screenshot {
-            throw CLIError.invalidArguments("snapshot-json --sensitive cannot be combined with --screenshot")
-        }
-        let response = try SocketClient(path: socketPath)
-            .send(JSONRPCRequest(
-                id: .string("snapshot-json"),
-                method: "snapshot",
-                params: .object([
-                    "app": .string(app),
-                    "screenshot": .bool(screenshot),
-                    "sensitive": .bool(sensitive),
-                    "includeTree": .bool(includeTree)
-                ])
-            ))
-        if let error = response.error {
-            throw CLIError.invalidArguments(error.message)
-        }
-        let data = try jsonEncoder.encode(response.result?["snapshot"] ?? .null)
-        print(String(decoding: data, as: UTF8.self))
-
-    case "screenshot":
-        let app = try requiredArgument(after: command, in: arguments)
-        let response = try SocketClient(path: socketPath)
-            .send(JSONRPCRequest(
-                id: .string("screenshot"),
-                method: "screenshot",
-                params: .object(["app": .string(app)])
-            ))
-        if let error = response.error {
-            throw CLIError.invalidArguments(error.message)
-        }
-        let data = try jsonEncoder.encode(response.result?["screenshot"] ?? .null)
-        print(String(decoding: data, as: UTF8.self))
-
-    case "resolve":
+    case "find":
         guard arguments.count >= 3 else {
-            throw CLIError.missingArguments("resolve requires an app and locator JSON")
+            throw CLIError.missingArguments("find requires an app and locator JSON")
         }
         let locator = try decodeJSONValue(arguments.dropFirst(2).joined(separator: " "))
         let response = try SocketClient(path: socketPath)
             .send(JSONRPCRequest(
-                id: .string("resolve"),
-                method: "resolve",
+                id: .string("find"),
+                method: "find",
                 params: .object([
                     "app": .string(arguments[1]),
                     "locator": locator
                 ])
         ))
         try printResponse(response)
-
-    case "changed-since":
-        let snapshotID = try requiredArgument(after: command, in: arguments)
-        let response = try SocketClient(path: socketPath)
-            .send(JSONRPCRequest(
-                id: .string("changed_since"),
-                method: "changed_since",
-                params: .object(["snapshotId": .string(snapshotID)])
-            ))
-        try printResponse(response)
-
-    case "children":
-        let params = try childrenParams(arguments: arguments)
-        let response = try SocketClient(path: socketPath)
-            .send(JSONRPCRequest(
-                id: .string("get_children"),
-                method: "get_children",
-                params: .object(params)
-            ))
-        if let error = response.error {
-            throw CLIError.invalidArguments(error.message)
-        }
-        guard let children = response.result?["children"] else {
-            throw CLIError.invalidArguments("get_children response missing children")
-        }
-        let formatter = SnapshotObservationFormatter()
-        let observation = formatter.children(
-            from: children,
-            frames: arguments.contains("--frames")
-        )
-        print(formatter.text(from: observation))
 
     case "run":
         let command = try runCommand(arguments: arguments)
@@ -206,12 +135,12 @@ do {
             ))
         try printResponse(response)
 
-    case "export-script":
+    case "save":
         let response = try SocketClient(path: socketPath)
             .send(JSONRPCRequest(
-                id: .string("export_script"),
-                method: "export_script",
-                params: .object(try exportScriptParams(arguments: arguments))
+                id: .string("save"),
+                method: "save",
+                params: .object(try saveParams(arguments: arguments))
             ))
         try printResponse(response)
 
@@ -225,41 +154,26 @@ do {
     case "drag":
         try sendAction(method: "drag", params: dragParams(arguments: arguments))
 
-    case "perform-action":
+    case "invoke":
         guard arguments.count >= 3 else {
-            throw CLIError.missingArguments("perform-action requires a target and action")
+            throw CLIError.missingArguments("invoke requires a target and action name")
         }
-        try sendAction(method: "perform_action", params: [
+        try sendAction(method: "invoke", params: [
             "target": .string(arguments[1]),
-            "action": .string(arguments[2])
+            "name": .string(arguments[2])
         ])
 
-    case "set-value":
+    case "type":
         guard arguments.count >= 3 else {
-            throw CLIError.missingArguments("set-value requires a target and value")
+            throw CLIError.missingArguments("type requires a target and value")
         }
-        try sendAction(method: "set_value", params: [
+        try sendAction(method: "type", params: [
             "target": .string(arguments[1]),
             "value": .string(arguments.dropFirst(2).joined(separator: " "))
         ])
 
-    case "type-text":
-        guard arguments.count >= 3 else {
-            throw CLIError.missingArguments("type-text requires an app and text")
-        }
-        try sendAction(method: "type_text", params: [
-            "app": .string(arguments[1]),
-            "text": .string(arguments.dropFirst(2).joined(separator: " "))
-        ])
-
-    case "press-key":
-        guard arguments.count >= 3 else {
-            throw CLIError.missingArguments("press-key requires an app and key")
-        }
-        try sendAction(method: "press_key", params: [
-            "app": .string(arguments[1]),
-            "key": .string(arguments[2])
-        ])
+    case "keyboard":
+        try sendAction(method: "keyboard", params: try keyboardParams(arguments: arguments))
 
     case "help", "--help", "-h":
         print("""
@@ -277,23 +191,17 @@ do {
           restart  restart the installed Axon.app service
           daemon <install|start|stop|status|uninstall>
           health   request daemon health over the local socket
-          request-accessibility   ask macOS to approve the running daemon identity
-          apps [--details]  list running app names
-          snapshot <app> [--screenshot] [--sensitive] [--frames]
-          snapshot-json <app> [--compact] [--screenshot] [--sensitive]
-          screenshot <app>  print embedded screenshot JSON for a running app
-          resolve <app> <locator-json>
-          changed-since <snapshot-id>
-          children <handle> [--offset n] [--limit n] [--frames]
-          run <path.axn>|--source <yaml-or-json> [--dry-run] [--continue-on-error]
-          export-script [--session id] [--from call] [--to call] [--path file.axn] [--include-reads]
+          permit   ask macOS to approve the running daemon identity
+          look [target] [--since snapshot-id] [--screenshot] [--screen-text] [--sensitive] [--frames] [--json] [--no-tree] [--offset n] [--limit n] [--depth n]
+          find <app> <locator-json>
+          run <path.axn> [--dry-run] [--continue-on-error]
+          save [--session id] [--from call] [--to call] [--path file.axn] [--include-reads]
           click <handle|target-json>
+          type <handle> <value>
+          keyboard [--app app] <keys-or-text>
           scroll [--app app] [--target target-json] [--dx n] [--dy n]
           drag [--app app] [--duration-ms n] <from-json> <to-json>
-          perform-action <handle> <action>
-          set-value <handle> <value>
-          type-text <app> <text>
-          press-key <app> <key>
+          invoke <handle> <action-name>
         """)
 
     default:
@@ -319,6 +227,106 @@ private func sendAction(method: String, params: [String: JSONValue]) throws {
 
 private func targetArgument(_ argument: String) -> JSONValue {
     (try? decodeJSONValue(argument)) ?? .string(argument)
+}
+
+private func lookCommand(arguments: [String]) throws -> (params: [String: JSONValue], frames: Bool, json: Bool, details: Bool) {
+    var params: [String: JSONValue] = [:]
+    var frames = false
+    var json = false
+    var details = false
+    var target: String?
+    var index = 1
+    while index < arguments.count {
+        switch arguments[index] {
+        case "--since":
+            guard index + 1 < arguments.count else {
+                throw CLIError.missingArguments("look --since requires a snapshot id")
+            }
+            params["since"] = .string(arguments[index + 1])
+            index += 2
+        case "--screenshot":
+            params["screenshot"] = .bool(true)
+            index += 1
+        case "--screen-text":
+            params["screenText"] = .bool(true)
+            index += 1
+        case "--sensitive":
+            params["sensitive"] = .bool(true)
+            index += 1
+        case "--frames":
+            frames = true
+            index += 1
+        case "--json":
+            json = true
+            index += 1
+        case "--details", "--debug":
+            details = true
+            json = arguments[index] == "--debug"
+            index += 1
+        case "--no-tree":
+            params["tree"] = .bool(false)
+            index += 1
+        case "--offset":
+            guard index + 1 < arguments.count, let value = Int(arguments[index + 1]) else {
+                throw CLIError.missingArguments("look --offset requires an integer")
+            }
+            params["offset"] = .int(value)
+            index += 2
+        case "--limit":
+            guard index + 1 < arguments.count, let value = Int(arguments[index + 1]) else {
+                throw CLIError.missingArguments("look --limit requires an integer")
+            }
+            params["limit"] = .int(value)
+            index += 2
+        case "--depth":
+            guard index + 1 < arguments.count, let value = Int(arguments[index + 1]) else {
+                throw CLIError.missingArguments("look --depth requires an integer")
+            }
+            params["depth"] = .int(value)
+            index += 2
+        default:
+            if target == nil {
+                target = arguments[index]
+                index += 1
+            } else {
+                throw CLIError.missingArguments("unexpected look argument: \(arguments[index])")
+            }
+        }
+    }
+    if let target {
+        params["target"] = .string(target)
+    }
+    if params["sensitive"] == .bool(true), params["screenshot"] == .bool(true) {
+        throw CLIError.invalidArguments("look --sensitive cannot be combined with --screenshot")
+    }
+    if params["sensitive"] == .bool(true), params["screenText"] == .bool(true) {
+        throw CLIError.invalidArguments("look --sensitive cannot be combined with --screen-text")
+    }
+    return (params, frames, json, details)
+}
+
+private func keyboardParams(arguments: [String]) throws -> [String: JSONValue] {
+    var params: [String: JSONValue] = [:]
+    var keys: [String] = []
+    var index = 1
+    while index < arguments.count {
+        switch arguments[index] {
+        case "--app":
+            guard index + 1 < arguments.count else {
+                throw CLIError.missingArguments("keyboard --app requires an app")
+            }
+            params["app"] = .string(arguments[index + 1])
+            index += 2
+        default:
+            keys.append(arguments[index])
+            index += 1
+        }
+    }
+    guard !keys.isEmpty else {
+        throw CLIError.missingArguments("keyboard requires keys or text")
+    }
+    params["keys"] = .string(keys.joined(separator: " "))
+    return params
 }
 
 private func scrollParams(arguments: [String]) throws -> [String: JSONValue] {
@@ -388,61 +396,32 @@ private func dragParams(arguments: [String]) throws -> [String: JSONValue] {
     return params
 }
 
-private func childrenParams(arguments: [String]) throws -> [String: JSONValue] {
-    guard arguments.count >= 2 else {
-        throw CLIError.missingArguments("children requires a snapshot handle")
-    }
-    var params: [String: JSONValue] = ["target": .string(arguments[1])]
-    var index = 2
-    while index < arguments.count {
-        switch arguments[index] {
-        case "--offset":
-            guard index + 1 < arguments.count, let value = Int(arguments[index + 1]) else {
-                throw CLIError.missingArguments("children --offset requires an integer")
-            }
-            params["offset"] = .int(value)
-            index += 2
-        case "--limit":
-            guard index + 1 < arguments.count, let value = Int(arguments[index + 1]) else {
-                throw CLIError.missingArguments("children --limit requires an integer")
-            }
-            params["limit"] = .int(value)
-            index += 2
-        case "--frames":
-            index += 1
-        default:
-            throw CLIError.missingArguments("unexpected children argument: \(arguments[index])")
-        }
-    }
-    return params
-}
-
-private func exportScriptParams(arguments: [String]) throws -> [String: JSONValue] {
+private func saveParams(arguments: [String]) throws -> [String: JSONValue] {
     var params: [String: JSONValue] = [:]
     var index = 1
     while index < arguments.count {
         switch arguments[index] {
         case "--session":
             guard index + 1 < arguments.count else {
-                throw CLIError.missingArguments("export-script --session requires an id")
+                throw CLIError.missingArguments("save --session requires an id")
             }
             params["sessionId"] = .string(arguments[index + 1])
             index += 2
         case "--from":
             guard index + 1 < arguments.count else {
-                throw CLIError.missingArguments("export-script --from requires a call id")
+                throw CLIError.missingArguments("save --from requires a call id")
             }
             params["from"] = .string(arguments[index + 1])
             index += 2
         case "--to":
             guard index + 1 < arguments.count else {
-                throw CLIError.missingArguments("export-script --to requires a call id")
+                throw CLIError.missingArguments("save --to requires a call id")
             }
             params["to"] = .string(arguments[index + 1])
             index += 2
         case "--path":
             guard index + 1 < arguments.count else {
-                throw CLIError.missingArguments("export-script --path requires a file path")
+                throw CLIError.missingArguments("save --path requires a file path")
             }
             params["path"] = .string(arguments[index + 1])
             index += 2
@@ -450,7 +429,7 @@ private func exportScriptParams(arguments: [String]) throws -> [String: JSONValu
             params["includeReads"] = .bool(true)
             index += 1
         default:
-            throw CLIError.missingArguments("unexpected export-script argument: \(arguments[index])")
+            throw CLIError.missingArguments("unexpected save argument: \(arguments[index])")
         }
     }
     return params
@@ -472,7 +451,7 @@ private func runSetup() throws {
         .send(JSONRPCRequest(id: .string("setup-health"), method: "health"))
     if health.result?["accessibility"].flatMap(stringValue) != PermissionStatus.trusted.rawValue {
         _ = try SocketClient(path: socketPath)
-            .send(JSONRPCRequest(id: .string("request_accessibility"), method: "request_accessibility"))
+            .send(JSONRPCRequest(id: .string("permit"), method: "permit"))
     }
     try printSetupStatus()
 }
@@ -570,12 +549,6 @@ private func runCommand(arguments: [String]) throws -> (method: String, params: 
     while index < arguments.count {
         let argument = arguments[index]
         switch argument {
-        case "--source":
-            guard index + 1 < arguments.count else {
-                throw CLIError.missingArguments("run --source requires source")
-            }
-            params["source"] = .string(arguments[index + 1])
-            index += 2
         case "--continue-on-error":
             params["continueOnError"] = .bool(true)
             index += 1
@@ -592,14 +565,12 @@ private func runCommand(arguments: [String]) throws -> (method: String, params: 
         }
     }
 
-    if params["source"] == nil {
-        guard let path else {
-            throw CLIError.missingArguments("run requires a path or --source")
-        }
-        params["path"] = .string(path)
+    guard let path else {
+        throw CLIError.missingArguments("run requires a path")
     }
+    params["path"] = .string(path)
 
-    return ("run_batch", params)
+    return ("run", params)
 }
 
 private func handleDaemonCommand(arguments: [String]) throws {

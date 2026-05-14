@@ -4,8 +4,8 @@ Axon is a local macOS accessibility service that gives agents a typed, composabl
 
 It runs as a menu bar service, exposes a small JSON-RPC command surface over a Unix socket, and provides an MCP stdio facade for agent clients. The core loop is:
 
-1. capture app state
-2. resolve an honest target
+1. look at app state
+2. find an honest target
 3. perform a primitive action
 4. record the call so it can be replayed
 
@@ -47,10 +47,10 @@ The four guarantees Axon tries to make:
 - compact app snapshots with per-snapshot handles
 - opt-in embedded screenshots returned as MCP image content
 - locator resolution over role, subrole, title, value, description, identifier, actions, and ancestors
-- primitive actions: click, scroll, drag, perform AX action, set value, type text, press key
-- coarse `changed_since(snapshotId)` checks backed by observer hints plus fresh app/window signatures
-- `run_batch` and `.axn` files: ordered tool-call sequences, replayable from CLI or MCP
-- `export_script`: turn recorded session history into an editable `.axn` file
+- primitive actions: `click`, `type`, `keyboard`, `scroll`, `drag`, `invoke`
+- coarse `look(since:)` checks backed by observer hints plus fresh app/window signatures
+- `run` and `.axn` files: ordered tool-call sequences, replayable from CLI or MCP
+- `save`: turn recorded session history into an editable `.axn` file
 
 Scroll is intentionally AX-native: Axon resolves an offscreen descendant in the requested direction and requests `AXScrollToVisible`. Drag is still an escape-hatch pointer primitive; see [Drag Targeting and Verification](docs/issues/2026-05-12-drag-targeting-and-verification.md) for the next shape.
 

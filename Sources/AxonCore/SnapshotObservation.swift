@@ -258,7 +258,7 @@ public struct SnapshotObservationFormatter {
         if label != nil {
             return true
         }
-        if actions.contains("set_value") {
+        if actions.contains("type") {
             return true
         }
         if actions.contains("click"), isClickAffordance(role) {
@@ -301,7 +301,7 @@ public struct SnapshotObservationFormatter {
                     continue
                 }
                 return .object([
-                    "tool": .string("get_children"),
+                    "tool": .string("look"),
                     "target": .string(handle),
                     "offset": .int(values[0]),
                     "limit": .int(values[0]),
@@ -365,7 +365,7 @@ public struct SnapshotObservationFormatter {
         guard string("label", in: object) != nil else {
             return false
         }
-        if case let .array(actions)? = object["actions"], actions.contains(where: { $0 == .string("set_value") }) {
+        if case let .array(actions)? = object["actions"], actions.contains(where: { $0 == .string("type") }) {
             return false
         }
         if case let .array(children)? = object["children"], !children.isEmpty {
@@ -463,7 +463,7 @@ public struct SnapshotObservationFormatter {
             case "AXPress":
                 compact = "click"
             case "AXSetValue":
-                compact = "set_value"
+                compact = "type"
             case "AXShowMenu":
                 compact = "menu"
             case "AXScrollToVisible":
@@ -484,8 +484,8 @@ public struct SnapshotObservationFormatter {
         }
 
         var exposed: [String] = []
-        if actions.contains("set_value") {
-            exposed.append("set_value")
+        if actions.contains("type") {
+            exposed.append("type")
         }
         if actions.contains("click"), isClickAffordance(role) {
             exposed.append("click")
@@ -547,7 +547,7 @@ public struct SnapshotObservationFormatter {
             let offset = more["offset"]?.scalarText ?? "?"
             let limit = more["limit"]?.scalarText ?? "?"
             let total = more["total"]?.scalarText
-            var moreLine = "\(indent)  more: get_children target=\(target) offset=\(offset) limit=\(limit)"
+            var moreLine = "\(indent)  more: look target=\(target) offset=\(offset) limit=\(limit)"
             if let total {
                 moreLine += " total=\(total)"
             }

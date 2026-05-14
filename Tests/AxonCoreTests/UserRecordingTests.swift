@@ -26,7 +26,7 @@ import Testing
 
     #expect(batch["version"] == .int(1))
     #expect(batch["actions"]?[0]?["id"] == .string("a001"))
-    #expect(batch["actions"]?[0]?["tool"] == .string("set_value"))
+    #expect(batch["actions"]?[0]?["tool"] == .string("type"))
     #expect(batch["actions"]?[0]?["expects"]?[0]?["id"] == .string("a001.value.0"))
     #expect(batch["actions"]?[0]?["expects"]?[0]?["state"]?["value"]?["contains"] == .string("Mitch"))
 }

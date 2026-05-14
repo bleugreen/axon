@@ -2,11 +2,11 @@
 
 ## Context
 
-Tester feedback from browser automation showed that `changed_since` is too coarse for page-load completion. It can fire on tab-open or focus transitions even when the useful goal is "the URL/page has settled."
+Tester feedback from browser automation showed that `look(since:)` is too coarse for page-load completion. It can fire on tab-open or focus transitions even when the useful goal is "the URL/page has settled."
 
 Related observations:
 
-- URL bars that expose `AXValue` work well with `set_value`.
+- URL bars that expose `AXValue` work well with `type`.
 - Waiting on a lock/info button by `title contains "View site information"` failed because Firefox exposes that user-facing label as `AXDescription`, not `AXTitle`; use locator `label` for this class of target.
 - A robust navigation wait should read stable app state, not infer from generic window-change notifications.
 
@@ -20,4 +20,4 @@ Add an agent-facing primitive that waits on specific readable state:
 
 ## Notes
 
-This should not replace `changed_since`. `changed_since` remains useful for broad "did the surface mutate?" checks, while navigation needs a goal-specific settled condition.
+This should not replace `look(since:)`. Broad change checks remain useful for "did the surface mutate?", while navigation needs a goal-specific settled condition.

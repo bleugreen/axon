@@ -195,7 +195,7 @@ public final class UserActionRecorder {
             groups.append(RecordedUserEventGroup(
                 action: .typeText(app: focused.app.name, text: pendingText),
                 observed: target.observed + drainNotificationEvidence(),
-                warnings: target.warnings + ["focused element did not expose AXValue; recorded type_text fallback"]
+                warnings: target.warnings + ["focused element did not expose AXValue; recorded keyboard fallback"]
             ))
         }
     }

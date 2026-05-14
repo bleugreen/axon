@@ -14,14 +14,14 @@ Both problems want the same shape: **values that are references at rest and reso
 `.axn` actions gain a templated string syntax in any `value`-shaped field, plus an optional `resolveAs` tag for resolver-specific behavior:
 
 ```yaml
-- tool: set_value
+- tool: type
   target: { role: AXSecureTextField, ancestor: { title: "Gmail" } }
   value: "op://Personal/Gmail/password"
   resolveAs: secret
 
-- tool: type_text
-  target: ...
-  value: "Hello {{arg://recipient}}, the file is at {{env://REPORT_DIR}}/{{prompt://"which date?"}}.csv"
+- tool: keyboard
+  app: Mail
+  keys: "Hello {{arg://recipient}}, the file is at {{env://REPORT_DIR}}/{{prompt://"which date?"}}.csv"
 ```
 
 The syntax is borrowed deliberately:
@@ -61,7 +61,7 @@ The executor walks each action, scans every `value`-shaped field for templates a
 
 - `op://...` → shell out to op, substitute.
 - `{{env://NAME}}` → read from process env, substitute.
-- `{{arg://name}}` → read from `run_batch` / CLI args, substitute. Missing args are an error unless a default is declared at the top of the `.axn`.
+- `{{arg://name}}` → read from `run` / CLI args, substitute. Missing args are an error unless a default is declared at the top of the `.axn`.
 - `{{prompt://"label"}}` → block on a system prompt for input. Sensible default to mark these as `resolveAs: secret` unless the recording knew otherwise.
 
 Traces emitted for the action redact resolved values when `resolveAs: secret` is set. The trace shows the *reference*, not the resolution.
@@ -70,7 +70,7 @@ Traces emitted for the action redact resolved values when `resolveAs: secret` is
 
 The resolver is the *write* side of the op integration — it tells axon how to put secrets into the world. The *read* side has the symmetric problem: AX snapshots can return values that happen to be the user's active credentials, even when the agent didn't ask for them. A misconfigured app showing a password in plain text, a 2FA seed visible in account settings, a recovery code displayed for backup — all become text in the AX tree, and today axon would echo them straight back to the agent.
 
-This is op's mirror role. Op already knows every active credential the user has. We don't need to classify, learn, or pattern-match — we can ask op what's currently active and refuse to emit those values, full stop. This is the "active passwords cannot appear in `get_app_state`" guarantee, shippable independently of the broader [sensitivity classifier](2026-05-13-policy-driven-sensitivity-classifier.md) work.
+This is op's mirror role. Op already knows every active credential the user has. We don't need to classify, learn, or pattern-match — we can ask op what's currently active and refuse to emit those values, full stop. This is the "active passwords cannot appear in `look`" guarantee, shippable independently of the broader [sensitivity classifier](2026-05-13-policy-driven-sensitivity-classifier.md) work.
 
 ### How it works
 
@@ -106,7 +106,7 @@ Hashing short values produces nuisance false positives. A 4-digit PIN shares the
 
 The filter cannot auto-refresh in the background because op's CLI session expires (~8 min default) and we should not be prompting the user for op auth on a timer. Instead, opportunistic refresh:
 
-- Refresh whenever axon successfully resolves an `op://` reference for a `set_value` (we already have op auth in that flow).
+- Refresh whenever axon successfully resolves an `op://` reference for a `type` (we already have op auth in that flow).
 - Refresh on explicit `axon refresh-secrets` (manual, user-initiated).
 - Refresh on `axon train-head` and other op-authed workflows.
 - Cache the filter encrypted at rest, key in macOS Keychain (the natural trust boundary for user secrets on macOS).
@@ -125,14 +125,14 @@ The classifier's encoder + heads add a second layer of protection: catches crede
 - An `.axn` containing only references (no literals) is safe to commit to a repo or share with a collaborator. The `op://` reference reveals *that* a credential is used and which item, but not its value. (See open questions on reference-redaction.)
 - The op CLI's confirmation (Touch ID or master password) is the canonical human-in-the-loop checkpoint at replay. Axon does not add a second prompt by default; one consent moment is enough, and op already owns it.
 - Resolver failures fail loudly. The executor never proceeds with a partially-resolved or fallback value.
-- **Active credentials cannot appear in `get_app_state` output.** The bloom filter guarantees that any verbatim match against a currently-active op secret is redacted before the snapshot reaches an agent, regardless of how the value ended up in an AX tree.
+- **Active credentials cannot appear in `look` output.** The bloom filter guarantees that any verbatim match against a currently-active op secret is redacted before the snapshot reaches an agent, regardless of how the value ended up in an AX tree.
 
 ## Other Resolvers
 
 Once the resolver protocol exists, these come along nearly for free and round out the parameterization story:
 
 - `env://NAME` — process environment.
-- `arg://name` — `.axn` runtime arguments passed through `run_batch` params or `axon run --arg name=...`.
+- `arg://name` — `.axn` runtime arguments passed through `run` params or `axon run --arg name=...`.
 - `prompt://"label"` — interactive prompt at replay. Useful as the fallback at the secure-field record-time branch.
 
 Possible later additions: `aws-secrets://...`, `gcloud-secrets://...`, `pass://...`, `keychain://...`. Each is a thin shim implementing the same resolver protocol.
@@ -156,7 +156,7 @@ Possible later additions: `aws-secrets://...`, `gcloud-secrets://...`, `pass://.
 
 - Define the resolver protocol in axon-core: scheme registration, resolve call, error shape, redaction policy.
 - Implement the `op://` resolver as the first concrete instance. Confirm the `op read` UX path on macOS, including session-cache behavior and Touch ID prompts.
-- **Build the active-secret bloom filter as an immediate read-side protection.** Field-type filtering, length/entropy thresholds, encrypted-at-rest storage, Keychain-held key, opportunistic refresh on op-authed operations. This ships independently of the classifier work and gives the "active passwords cannot appear in `get_app_state`" guarantee right away.
+- **Build the active-secret bloom filter as an immediate read-side protection.** Field-type filtering, length/entropy thresholds, encrypted-at-rest storage, Keychain-held key, opportunistic refresh on op-authed operations. This ships independently of the classifier work and gives the "active passwords cannot appear in `look`" guarantee right away.
 - Implement `env://`, `arg://`, `prompt://` as core resolvers — they're small and exercise the same protocol.
 - Extend the `.axn` schema with an optional `args:` header block declaring `arg://` parameters.
 - Wire the recorder's secure-field branch to write `{{prompt://"<inferred label>"}}` by default, with a menubar affordance to upgrade to an `op://` binding.

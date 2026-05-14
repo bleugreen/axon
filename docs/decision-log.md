@@ -9,7 +9,7 @@ A long-lived service is needed for observer state, cache invalidation, and "user
 ```text
 axon serve
 axon doctor
-axon snapshot <app>
+axon look <app>
 axon mcp
 ```
 

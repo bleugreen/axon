@@ -292,11 +292,11 @@ public struct UserRecordingTranslator {
         case let .click(target):
             return ["tool": .string("click"), "target": target]
         case let .setValue(target, value):
-            return ["tool": .string("set_value"), "target": target, "value": .string(value)]
+            return ["tool": .string("type"), "target": target, "value": .string(value)]
         case let .typeText(app, text):
-            return ["tool": .string("type_text"), "app": .string(app), "text": .string(text)]
+            return ["tool": .string("keyboard"), "app": .string(app), "keys": .string(text)]
         case let .pressKey(app, key):
-            return ["tool": .string("press_key"), "app": .string(app), "key": .string(key)]
+            return ["tool": .string("keyboard"), "app": .string(app), "keys": .string(key)]
         case let .scroll(target, app, deltaX, deltaY):
             var object: [String: JSONValue] = [
                 "tool": .string("scroll"),
@@ -320,7 +320,7 @@ public struct UserRecordingTranslator {
             }
             return object
         case let .performAction(target, action):
-            return ["tool": .string("perform_action"), "target": target, "action": .string(action)]
+            return ["tool": .string("invoke"), "target": target, "name": .string(action)]
         }
     }
 

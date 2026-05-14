@@ -11,7 +11,7 @@ This is different from scroll: scroll should be AX-native where possible, and `A
 
 ## Evidence
 
-- Codex's project sidebar content was not exposed in the AX tree; `get_app_state` only returned the window shell.
+- Codex's project sidebar content was not exposed in the AX tree; `look` only returned the window shell.
 - A screenshot showed usable visual targets, but the tool surface had no way to address them semantically.
 - A direct `drag` from approximate point to approximate point returned `CGEventDrag` success without a visible sidebar reorder.
 - The user saw a later attempt happen, but the coordinates were off. That confirms event dispatch can be visible while still not being a usable automation primitive.
