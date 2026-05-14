@@ -10,7 +10,9 @@ This is the read-side mirror of [Late-Bound Values And Credentials](2026-05-13-l
 
 ## Desired Shape
 
-A `SensitivityClassifier` protocol in the snapshot pipeline. Classifier implementations are registered with axon-core; the active one is selected by user config. The default is a fast heuristic; the upgrade path is a local small model that interprets a natural-language policy.
+The pipeline is layered, cheapest first. A **deterministic layer** (regex library, role rules, op-backed bloom filter) carries the bulk of redactions — anything with a known shape or a known value goes through fast, free, exact rules. A **classifier layer** sits on top for the cases regex structurally can't reach: textural categories with no shape, context-dependent sensitivity, and the custom-head workflow that lets users describe a policy and get a redactor for it. Don't pay for a model where a filter works.
+
+Implementation-wise: a `SensitivityClassifier` protocol in the snapshot pipeline. The deterministic layer always runs first; the encoder-based classifier (when active) only sees elements the deterministic layer didn't already redact, and can only *add* redactions, never subtract.
 
 The classifier sees each element with full context (role, ancestors, labels, value) and returns a verdict per element: clear, or redact with a reason tag (e.g., `financial-data`, `auth-credential`, `pii-identifier`). Verdicts are attached to the snapshot record as metadata, not baked into the values themselves.
 
@@ -33,20 +35,45 @@ Do not redact:
 - The signed-in user's own display name.
 ```
 
-## Heuristic Floor
+## Deterministic Layer (Primary Defense)
 
-Independent of any model, a heuristic layer always runs first and can only *add* redactions, never subtract them:
+The first and most load-bearing layer. Cheap, exact, no model. This is where most redactions happen — the classifier layer above it exists for cases this layer structurally can't handle, not as a "real" classifier that the deterministic layer "floors."
 
-- `AXSecureTextField` values are always redacted.
-- Regex matches for SSN (`\d{3}-\d{2}-\d{4}`), credit card patterns (Luhn-checked), API-key shapes (`sk-[A-Za-z0-9]{32,}`, `ghp_[A-Za-z0-9]{36}`, etc.) always redact.
+**Role-based rules:**
+- `AXSecureTextField` values are always redacted regardless of content.
 - Element labels containing `password`, `secret`, `token`, `private key`, `recovery code`, or similar high-signal substrings always redact the corresponding value.
-- **Active-credential HMAC index** against the user's currently-active op secrets — verbatim matches always redact. See [Late-Bound Values And Credentials](2026-05-13-late-bound-values-and-credentials.md#active-credential-index) for the design; this ships as part of the op integration work and slots into the floor when the classifier lands.
 
-This is the false-negative floor: a model error in the "miss" direction can never expose a field a regex would have caught. The model can only flag *more* things, not unflag.
+**Pattern matching:**
+- Structured PII: SSN format (`\d{3}-\d{2}-\d{4}`), credit cards (Luhn-checked), phone numbers, passport numbers.
+- Token shapes for known issuers: `sk-...`, `sk_live_...`, `ghp_...`, `xoxb-...`, `AKIA...`, JWT-shaped values. A small library that grows as new formats appear — ongoing maintenance, not architecture.
+- Financial-context heuristics: `$N.NN` or other currency literals near a "balance" / "total" / "amount" label trigger `financial-data`.
+
+**Active-credential HMAC index:**
+- Any element value that hits the active-credential index is verbatim-known to be one of the user's current op secrets and redacts as `auth-credential`. See [Late-Bound Values And Credentials](2026-05-13-late-bound-values-and-credentials.md#active-credential-index) for the design — this shipped as the first deliverable of the op integration work.
+- The index doubles as a **training signal** when heads do come into play: anything it flags is a high-confidence positive label for `auth-credential` training data, no teacher pass needed.
+
+**Coverage by rule tag (rough architectural estimate, not measured):**
+- `auth-credential` — HMAC index + secure-field role + token-shape regex covers ~95% of practical cases. Residual: free-form plaintext passwords shown in UI without secure-field semantics; novel token formats not yet in the regex library.
+- `financial-data` — currency + label-context heuristic + Luhn check covers ~85%. Residual: free-form descriptions of finances ("I have $3000 saved up") without label scaffolding.
+- `pii-identifier` — structured PII regex covers the structured shapes well. Names and addresses are genuinely contextual and fall to the classifier layer when active.
+- `private-message` — no deterministic answer. Pure texture. The classifier owns this entirely.
+
+Redactions from this layer can only be *added* by anything above it; nothing can subtract them. A model verdict of "this isn't sensitive" cannot override a regex match.
+
+## Where The Classifier Earns Its Keep
+
+The classifier is not "the real redactor with regex as a fallback." It is the flexibility layer for what regex structurally cannot do. Four cases earn it its place:
+
+1. **Textural categories with no shape.** Private message bodies, medical notes, internal communications. No regex captures "this reads like a private message"; only an encoder embedding can. The classifier does irreplaceable work here.
+2. **Context-dependent sensitivity.** The same literal value being sensitive in one ancestor chain and benign in another. "John Smith" next to "Patient ID:" is PII; "John Smith" in a movie credits roll is not. A regex would need a regex-pair per context; an encoder with ancestor context handles this naturally.
+3. **The custom-head workflow.** Users describe a policy in markdown that no shippable regex library could anticipate ("redact anything related to project Foobar", "redact non-public commit hashes from this private repo"). The head learns the user's specific concept. This is the headline value of having head infrastructure at all.
+4. **Novel-format adaptation.** A locally-trained head picks up new credential-shaped formats from real usage without a code release. Lower priority than the others — adding a regex is cheap — but real value over a long horizon.
+
+The first two are why we ship any built-in head at all. The third is why the training infrastructure exists. The fourth is a side benefit.
 
 ## Encoder Classifier With Heads
 
-The upgrade beyond heuristics is a distilled encoder plus per-rule classification heads, exported to CoreML and run on the Apple Neural Engine. This is the runtime classifier — what ships in the app, what fires on every snapshot.
+The flexibility layer's mechanism. A distilled encoder plus per-rule classification heads, exported to CoreML and run on the Apple Neural Engine. Runs after the deterministic layer; sees only elements the deterministic layer didn't already resolve.
 
 Architecture:
 
@@ -55,11 +82,11 @@ Architecture:
 - **Batch per snapshot.** A snapshot with N elements is one batched forward pass, not N serial inferences. This is the structural reason the encoder path is viable where LLMs are not: latency is O(snapshot), not O(elements-in-snapshot).
 - **Local, free, fast.** Neural Engine inference on M-series hardware is sub-watt and sub-50ms for typical snapshots (~200 elements). No network call. No power-budget compromise for the daemon to run continuously.
 
-Built-in heads ship pre-trained, covering the common rule tags. Users can enable / disable each head via the policy file. Disable is zero-cost — the head's output is simply not consulted at runtime.
+The built-in head set stays minimal: a head ships only for categories the deterministic layer structurally cannot reach. Today that anchors at `private-message`; `pii-identifier` may justify a head specifically for contextual cases (names / addresses); `auth-credential` and the bulk of `financial-data` do not get built-in heads because the deterministic layer covers them. Users can enable / disable each head via the policy file. Disable is zero-cost — the head's output is simply not consulted at runtime.
 
 ## Custom Heads (Power-User Workflow)
 
-Behavior beyond the built-in heads is a documented developer-oriented workflow, not in-app UX. Axon ships only the backbone and the built-in heads; the teacher model is **not bundled** with the app.
+The headline reason any head infrastructure ships at all. Built-in heads cover the textural categories axon knows about up front; everything beyond that is the user's own policy, expressed via a documented developer-oriented workflow. Axon ships only the backbone and the minimal built-in head set; the teacher model is **not bundled** with the app.
 
 Sketch of the flow, fully documented in `docs/custom-heads.md` (not yet written):
 
@@ -87,7 +114,7 @@ A classified snapshot is the same shape as today's, with redacted elements showi
   "redaction": {
     "policy": "user/sensitivity-policy.md@a3f1b2",
     "rule": "financial-data",
-    "classifier": "encoder-v1+heads@a3f1b2/heuristic-floor"
+    "classifier": "deterministic-layer@v3"
   }
 }
 ```
@@ -110,8 +137,8 @@ Sensitivity policy is a living document. The user will edit it as they learn wha
 
 Snapshots happen on every observation. The classifier sits in a hot path. With the encoder architecture, classification can be synchronous:
 
-- The heuristic floor runs first and synchronously; single-digit milliseconds even on large snapshots.
-- The encoder + heads run as one batched CoreML forward pass per snapshot. Target: <50ms p95 for snapshots up to ~500 elements on M-series Macs, sub-watt power draw.
+- The deterministic layer runs first and synchronously; single-digit milliseconds even on large snapshots, and the bulk of redactions land here.
+- The encoder + heads run as one batched CoreML forward pass per snapshot for whatever the deterministic layer didn't already resolve. Target: <50ms p95 for snapshots up to ~500 elements on M-series Macs, sub-watt power draw.
 - Cache hit rate is still useful but no longer load-bearing — the encoder is fast enough that re-classification of unchanged content is cheap. Cache is an optimization, not a survival mechanism.
 - Snapshots return fully-classified by default. Async-with-pending was a workaround for LLM latency; the encoder doesn't need it.
 
@@ -156,7 +183,8 @@ Both are small, locally-executed, user-owned policy layers between axon-core and
 - **Per-call override discipline.** Should `allowSensitive: true` require an agent-stated reason string for the audit log, or is the fact of override sufficient?
 - **Policy summary visibility.** Should agents be told the *shape* of the active policy ("financial + auth + PII redaction active") so they can self-limit asks, or is that itself a leak surface?
 - **Conflict between policy and explicit user request.** "Read me back my account balance" via the agent — does the policy still redact? Probably yes, and the user-side override is to edit the policy or use the per-call override flag; we should not infer "the user wants this" from agent-side context.
-- **Built-in head set for v1.** Which rule tags ship pre-trained out of the box? Probable starting set: `financial-data`, `auth-credential`, `pii-identifier`, `private-message`. Open to add/drop based on what early users actually want.
+- **Built-in head set for v1.** Which textural rule tags warrant a shipped head given the deterministic-first reframe? Lean position: `private-message` is the clear one; `pii-identifier` may be worth a head specifically for contextual name/address cases; `auth-credential` and most of `financial-data` are deterministic-only since the residual is small. Audit the actual miss patterns once the deterministic layer is in place before committing.
+- **Promotion path between layers.** When a category currently handled deterministically accumulates enough residual misses to justify a head — or when a head's behavior crystallizes into a clean regex — what triggers the move? Probably a manual call based on observed miss patterns, not an automated threshold.
 - **Custom head storage and portability.** Where do `.head` files live (`~/.axon/heads/`?), how does sync work across user machines, what happens if a head was trained against an older backbone version? Probably content-address heads against backbone version and refuse-to-load on mismatch.
 - **Head composition.** Built-in rules are mostly independent ("is this financial" / "is this auth"), but real user policies may want logical combinations ("redact financial unless it's my own account"). Composition probably belongs as a policy-file layer above the heads, not as head architecture.
 
@@ -167,13 +195,14 @@ Both are small, locally-executed, user-owned policy layers between axon-core and
 - **No cloud classifier.** This was considered when the runtime was going to be an LLM. With the encoder running free-power on the Neural Engine, there is no scenario where cloud inference is better. Cleaner to drop the option entirely.
 - **No bespoke encoder trained inside axon.** The backbone is pretrained (DistilBERT / MiniLM / sentence-transformer class) and shipped as fixed. Axon trains heads, not backbones.
 - **No attempt to redact pixels in screenshots from this layer.** Screenshot redaction is a separate problem with different mechanics (OCR + spatial masking) and shouldn't be conflated.
-- **No model-side suppression of the heuristic floor.** The floor is non-negotiable; head outputs can only flag *more* things, never unflag what the floor matched.
+- **No head for a category the deterministic layer covers well.** If a regex/role-rule/bloom-filter handles a class with high recall, don't ship a head for it. Heads exist for what the deterministic layer structurally can't reach (textural, contextual, user-custom). Duplicating effort is its own anti-pattern.
+- **No model-side suppression of the deterministic layer.** The deterministic layer is non-negotiable; head outputs can only flag *more* things, never unflag what a deterministic rule matched.
 
 ## Next Steps
 
-- Define the `SensitivityClassifier` protocol and the heuristic-floor implementation. Heuristic floor ships first regardless of model layer.
-- Pick the encoder backbone. Candidates: DistilBERT (66M), MiniLM-L6 (22M), sentence-transformers/all-MiniLM-L6-v2 (22M), Apple's own foundation models if appropriate. Profile each on the same 20-element set after CoreML export to verify the <50ms per-snapshot target on Apple Neural Engine.
-- Build the central head-training pipeline (axon-internal): synthesize a labeled corpus per rule tag using the 20b safeguard as teacher, train heads, export, ship in the app bundle.
+- Define the `SensitivityClassifier` protocol and ship the deterministic layer as the primary defense: regex library for known credential / PII / financial shapes, role-rule library, op-backed bloom filter wiring. This is most of the v1 sensitivity story and stands on its own without any model.
+- Pick the encoder backbone for the flexibility layer. Candidates: DistilBERT (66M), MiniLM-L6 (22M), sentence-transformers/all-MiniLM-L6-v2 (22M), Apple's own foundation models if appropriate. Profile each on the same 20-element set after CoreML export to verify the <50ms per-snapshot target on Apple Neural Engine.
+- Build the central head-training pipeline (axon-internal) for the minimal set of *textural* built-in heads (currently scoped to `private-message`, possibly contextual `pii-identifier`). Use the deterministic layer as a labeling oracle wherever it applies and the 20b teacher to fill gaps the deterministic layer can't label.
 - Build the local `axon train-head` CLI for the custom-head workflow. Confirms ollama presence, runs the teacher labeling pass against the user's own history sample, trains and writes a `.head` file. Document thoroughly in `docs/custom-heads.md`.
 - Decide the snapshot record schema for classification metadata (active-heads version hash, rule tag, timestamp).
 - Wire policy-change detection (file watch on `~/.axon/sensitivity-policy.md`) and the reclassification pass over history. With encoder speed, reclassification of large history becomes tractable in seconds rather than minutes.
