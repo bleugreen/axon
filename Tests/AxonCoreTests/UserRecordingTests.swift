@@ -426,6 +426,43 @@ import Testing
     #expect(locator["ancestors"]?[0]?["title"] == nil)
 }
 
+@Test func recordedLocatorIncludesStableAncestorPath() throws {
+    let locator = RecordedLocatorBuilder.locator(
+        role: "AXButton",
+        subrole: nil,
+        identifier: nil,
+        title: "Deploy",
+        description: nil,
+        actions: ["AXPress"],
+        windowTitle: "Volatile Page Title",
+        ancestors: [
+            RecordedAncestorCandidate(
+                role: "AXWindow",
+                subrole: nil,
+                identifier: nil,
+                title: "Volatile Page Title"
+            ),
+            RecordedAncestorCandidate(
+                role: "AXGroup",
+                subrole: "AXContentGroup",
+                identifier: "main-content",
+                title: nil
+            )
+        ]
+    )
+    guard case let .array(ancestors)? = locator["ancestors"] else {
+        Issue.record("expected ancestors array")
+        return
+    }
+
+    #expect(ancestors.count == 2)
+    #expect(ancestors[0]["role"] == .string("AXWindow"))
+    #expect(ancestors[0]["title"] == nil)
+    #expect(ancestors[1]["role"] == .string("AXGroup"))
+    #expect(ancestors[1]["subrole"] == .string("AXContentGroup"))
+    #expect(ancestors[1]["identifier"] == .string("main-content"))
+}
+
 @Test func recordedLocatorRejectsElementsOutsideWindowSnapshots() {
     let locator = RecordedLocatorBuilder.locator(
         role: "AXGroup",

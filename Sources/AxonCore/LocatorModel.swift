@@ -34,17 +34,33 @@ public enum TextMatch: Codable, Equatable, Sendable {
 
 public struct AXAncestorLocator: Codable, Equatable, Sendable {
     public let role: String?
+    public let subrole: String?
+    public let identifier: TextMatch?
     public let title: TextMatch?
     public let label: TextMatch?
 
-    public init(role: String? = nil, title: TextMatch? = nil, label: TextMatch? = nil) {
+    public init(
+        role: String? = nil,
+        subrole: String? = nil,
+        identifier: TextMatch? = nil,
+        title: TextMatch? = nil,
+        label: TextMatch? = nil
+    ) {
         self.role = role
+        self.subrole = subrole
+        self.identifier = identifier
         self.title = title
         self.label = label
     }
 
     func matches(_ node: AXNode) -> Bool {
         if let role, node.role != role {
+            return false
+        }
+        if let subrole, node.subrole != subrole {
+            return false
+        }
+        if let identifier, !identifier.matches(node.identifier) {
             return false
         }
         if let title, !title.matches(node.title) {
@@ -291,6 +307,12 @@ public struct LocatorResolver: Sendable {
             searchStart = ancestors.index(after: matchIndex)
             if let role = locator.role {
                 reasons.append("ancestor role \(role)")
+            }
+            if let subrole = locator.subrole {
+                reasons.append("ancestor subrole \(subrole)")
+            }
+            if let identifier = locator.identifier {
+                reasons.append("ancestor identifier \(identifier.reasonFragment)")
             }
             if let title = locator.title {
                 reasons.append("ancestor title \(title.reasonFragment)")

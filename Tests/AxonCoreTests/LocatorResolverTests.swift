@@ -144,6 +144,42 @@ import Testing
     #expect(locator.ancestors.first?.label?.matches("Navigation") == true)
 }
 
+@Test func locatorResolverMatchesAncestorSubroleAndIdentifier() throws {
+    let snapshot = AppSnapshot(
+        id: SnapshotID("locator-fixture"),
+        app: AppIdentity(bundleIdentifier: "com.example.App", name: "Example", processIdentifier: 42),
+        windows: [
+            AXNode(role: "AXWindow", children: [
+                AXNode(role: "AXGroup", subrole: "AXContentGroup", identifier: "main-content", children: [
+                    AXNode(role: "AXButton", title: "Deploy", actions: ["AXPress"])
+                ]),
+                AXNode(role: "AXGroup", subrole: "AXContentGroup", identifier: "secondary-content", children: [
+                    AXNode(role: "AXButton", title: "Deploy", actions: ["AXPress"])
+                ])
+            ])
+        ],
+        screenshot: nil
+    )
+    let locator = try AXLocator(jsonValue: .object([
+        "role": .string("AXButton"),
+        "title": .string("Deploy"),
+        "ancestors": .array([
+            .object([
+                "role": .string("AXGroup"),
+                "subrole": .string("AXContentGroup"),
+                "identifier": .string("main-content")
+            ])
+        ])
+    ]))
+
+    let resolution = LocatorResolver().resolve(locator, in: snapshot)
+
+    #expect(resolution.status == .unique)
+    #expect(resolution.best?.handle?.rawValue == "locator-fixture:2")
+    #expect(resolution.best?.reasons.contains("ancestor subrole AXContentGroup") == true)
+    #expect(resolution.best?.reasons.contains("ancestor identifier exact main-content") == true)
+}
+
 @Test func locatorResolutionJSONRedactsActiveCredentialCandidateTitles() throws {
     let rawSecret = "correct horse battery staple"
     let resolution = LocatorResolution(

@@ -279,6 +279,17 @@ public final class UserActionRecorder {
             }
             let windowIndex = roles[index...].firstIndex { $0 == "AXWindow" }
             let windowTitle: String? = windowIndex.flatMap { attribute(kAXTitleAttribute, from: chain[$0]) }
+            let ancestors = chain[(index + 1)...].reversed().compactMap { ancestor -> RecordedAncestorCandidate? in
+                guard let role: String = attribute(kAXRoleAttribute, from: ancestor) else {
+                    return nil
+                }
+                return RecordedAncestorCandidate(
+                    role: role,
+                    subrole: attribute(kAXSubroleAttribute, from: ancestor),
+                    identifier: attribute("AXIdentifier", from: ancestor),
+                    title: attribute(kAXTitleAttribute, from: ancestor)
+                )
+            }
             return RecordedElementCandidate(
                 role: role,
                 subrole: attribute(kAXSubroleAttribute, from: chain[index]),
@@ -288,7 +299,8 @@ public final class UserActionRecorder {
                 description: attribute(kAXDescriptionAttribute, from: chain[index]),
                 actions: actionNames(for: chain[index]),
                 windowTitle: windowTitle,
-                hasWindowAncestor: windowIndex != nil || role == "AXWindow"
+                hasWindowAncestor: windowIndex != nil || role == "AXWindow",
+                ancestors: ancestors
             )
         }
     }

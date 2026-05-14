@@ -111,6 +111,8 @@ private func ancestorArray(_ key: String, in object: [String: JSONValue]) throws
         }
         return AXAncestorLocator(
             role: try optionalString("role", in: ancestor),
+            subrole: try optionalString("subrole", in: ancestor),
+            identifier: try optionalTextMatch("identifier", in: ancestor),
             title: try optionalTextMatch("title", in: ancestor),
             label: try optionalTextMatch("label", in: ancestor)
         )

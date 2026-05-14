@@ -36,12 +36,12 @@ public struct CommandRouter {
         self.captureSnapshot = captureSnapshot ?? { app, screenshot in
             try AXSnapshotCapturer(elementStore: elementStore).capture(app: app, screenshot: screenshot)
         }
+        let liveLocatorResolver = AXLiveLocatorResolver(elementStore: elementStore)
         self.resolveLocator = resolveLocator ?? { app, locator, scrollToVisible in
-            try AXLiveLocatorResolver(elementStore: elementStore)
-                .resolve(app: app, locator: locator, scrollToVisible: scrollToVisible)
+            try liveLocatorResolver.resolve(app: app, locator: locator, scrollToVisible: scrollToVisible)
         }
         self.batchSnapshotProvider = batchSnapshotProvider ?? { app in
-            try AXLiveLocatorResolver(elementStore: elementStore).captureSnapshot(app: app)
+            try liveLocatorResolver.captureSnapshot(app: app)
         }
         self.requestAccessibility = requestAccessibility
         self.actions = actions ?? AXPrimitiveActionExecutor(elementStore: elementStore).handlers()
