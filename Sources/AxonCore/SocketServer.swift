@@ -13,7 +13,9 @@ public struct SocketServer: @unchecked Sendable {
 
     public init(
         path: String,
-        router: CommandRouter = CommandRouter(),
+        router: CommandRouter = CommandRouter(
+            activeCredentialFilterProvider: { ActiveCredentialFilterLoader().loadOrEmpty() }
+        ),
         clientReadTimeoutSeconds: TimeInterval = Self.defaultClientReadTimeoutSeconds,
         maxRequestBytes: Int = Self.defaultMaxRequestBytes
     ) {

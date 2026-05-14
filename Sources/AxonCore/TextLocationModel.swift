@@ -265,28 +265,64 @@ public extension TextLocationTarget {
 
 public extension TextLocationResolution {
     var jsonValue: JSONValue {
+        jsonValue(activeSecretRedactor: ActiveSecretRedactor())
+    }
+
+    func jsonValue(activeSecretRedactor: ActiveSecretRedactor) -> JSONValue {
         .object([
             "status": .string(status.rawValue),
             "snapshotID": .string(snapshotID.rawValue),
-            "best": best.map(\.jsonValue) ?? .null,
+            "best": best.map {
+                $0.jsonValue(
+                    activeSecretRedactor: activeSecretRedactor,
+                    redactionScope: "\(snapshotID.rawValue)_text_best_\($0.index)"
+                )
+            } ?? .null,
             "point": point.map(\.jsonValue) ?? .null,
-            "candidates": .array(candidates.map(\.jsonValue))
+            "candidates": .array(candidates.map {
+                $0.jsonValue(
+                    activeSecretRedactor: activeSecretRedactor,
+                    redactionScope: "\(snapshotID.rawValue)_text_candidate_\($0.index)"
+                )
+            })
         ])
     }
 }
 
 public extension TextLocationCandidate {
     var jsonValue: JSONValue {
-        .object([
+        jsonValue(activeSecretRedactor: ActiveSecretRedactor(), redactionScope: "text_candidate_\(index)")
+    }
+
+    func jsonValue(activeSecretRedactor: ActiveSecretRedactor, redactionScope: String) -> JSONValue {
+        var object: [String: JSONValue] = [
             "index": .int(index),
             "handle": handle.map { .string($0.rawValue) } ?? .null,
             "role": .string(role),
-            "matchedText": .string(matchedText),
             "source": .string(source.rawValue),
             "frame": frame.jsonValue,
-            "point": point.jsonValue,
-            "reasons": .array(reasons.map(JSONValue.string))
-        ])
+            "point": point.jsonValue
+        ]
+        let matchedTextWasRedacted = object.addActiveSecretRedactedString(
+            "matchedText",
+            matchedText,
+            activeSecretRedactor: activeSecretRedactor
+        )
+        if object["matchedText"] == nil {
+            object["matchedText"] = .string(matchedText)
+        }
+        if matchedTextWasRedacted {
+            object["reasons"] = .array(reasons.map {
+                JSONValue.string($0.replacingOccurrences(of: matchedText, with: "<redacted: active-credential>"))
+            })
+            object.addActiveSecretRedactionMetadata(
+                field: "reasons",
+                redaction: activeSecretRedactor.redaction(for: matchedText) ?? ActiveSecretRedaction()
+            )
+        } else {
+            object["reasons"] = .array(reasons.map(JSONValue.string))
+        }
+        return .object(object)
     }
 }
 

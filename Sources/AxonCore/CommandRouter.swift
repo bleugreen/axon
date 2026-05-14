@@ -11,6 +11,7 @@ public struct CommandRouter {
     private let changeObserver: AppChangeObserving
     private let history: ActionHistoryStore
     private let recognizeText: TextRecognitionHandler
+    private let activeCredentialFilterProvider: @Sendable () -> any ActiveCredentialFilter
 
     public init(
         listApps: @escaping () -> [AppIdentity] = { AppResolver().runningApps() },
@@ -22,12 +23,15 @@ public struct CommandRouter {
         elementStore: AXElementStore = AXElementStore(),
         changeObserver: AppChangeObserving = AXAppChangeObserverRegistry(),
         history: ActionHistoryStore = .shared,
-        recognizeText: @escaping TextRecognitionHandler = VisionTextRecognizer.recognizeText(in:)
+        recognizeText: @escaping TextRecognitionHandler = VisionTextRecognizer.recognizeText(in:),
+        activeCredentialFilter: any ActiveCredentialFilter = EmptyActiveCredentialFilter(),
+        activeCredentialFilterProvider: (@Sendable () -> any ActiveCredentialFilter)? = nil
     ) {
         self.elementStore = elementStore
         self.changeObserver = changeObserver
         self.history = history
         self.recognizeText = recognizeText
+        self.activeCredentialFilterProvider = activeCredentialFilterProvider ?? { activeCredentialFilter }
         self.listApps = listApps
         self.captureSnapshot = captureSnapshot ?? { app, screenshot in
             try AXSnapshotCapturer(elementStore: elementStore).capture(app: app, screenshot: screenshot)
@@ -74,6 +78,7 @@ public struct CommandRouter {
         case "look":
             do {
                 let params = try paramsObject(in: request)
+                let activeSecretRedactor = activeSecretRedactor()
                 if params["since"] != nil {
                     return try changedSinceResponse(id: request.id, params: params)
                 }
@@ -93,7 +98,10 @@ public struct CommandRouter {
                         offset: offset,
                         limit: limit
                     )
-                    return JSONRPCResponse(id: request.id, result: ["children": children.jsonValue])
+                    return JSONRPCResponse(
+                        id: request.id,
+                        result: ["children": children.jsonValue(activeSecretRedactor: activeSecretRedactor)]
+                    )
                 }
                 let screenshot = boolParam("screenshot", in: params) ?? false
                 let screenText = boolParam("screenText", in: params) ?? false
@@ -107,16 +115,30 @@ public struct CommandRouter {
                 }
                 let snapshot = try captureSnapshot(target, screenshot || screenText)
                 elementStore.store(summary: observedSummary(for: snapshot))
-                var snapshotJSON = snapshot.jsonValue(includeTree: includeTree, sensitive: sensitive)
+                var snapshotJSON = snapshot.jsonValue(
+                    includeTree: includeTree,
+                    sensitive: sensitive,
+                    activeSecretRedactor: activeSecretRedactor
+                )
                 if let depth = intParam("depth", in: params) {
                     snapshotJSON = snapshotJSON.limitingTreeDepth(max(0, depth))
                 }
+                let screenTextItems = (screenText || screenshot)
+                    ? ScreenTextExtractor(recognizeText: recognizeText).extract(in: snapshot)
+                    : []
+                let screenshotOCRDetectedActiveCredential = screenshot && !screenText && screenTextItems
+                    .containsActiveCredentialRedaction(activeSecretRedactor: activeSecretRedactor)
                 if screenText {
                     snapshotJSON = snapshotJSON.addingScreenText(
-                        ScreenTextExtractor(recognizeText: recognizeText).extract(in: snapshot),
-                        includeScreenshot: screenshot
+                        screenTextItems,
+                        includeScreenshot: screenshot,
+                        activeSecretRedactor: activeSecretRedactor
                     )
                 }
+                snapshotJSON = snapshotJSON.omittingScreenshotForActiveCredentialRedaction(
+                    requestedScreenshot: screenshot,
+                    forceOmit: screenshotOCRDetectedActiveCredential
+                )
                 return JSONRPCResponse(
                     id: request.id,
                     result: [
@@ -168,10 +190,11 @@ public struct CommandRouter {
                 let app = try requiredStringParam("app", in: request)
                 let locator = try requiredLocatorParam(in: request)
                 let resolution = try resolveLocator(app, locator, false)
+                let activeSecretRedactor = activeSecretRedactor()
                 return JSONRPCResponse(
                     id: request.id,
                     result: [
-                        "resolution": resolution.jsonValue
+                        "resolution": resolution.jsonValue(activeSecretRedactor: activeSecretRedactor)
                     ]
                 )
             } catch let error as JSONRPCError {
@@ -259,6 +282,7 @@ public struct CommandRouter {
     private func changedSinceResponse(id: JSONRPCID?, params: [String: JSONValue]) throws -> JSONRPCResponse {
         let snapshotID = SnapshotID(try requiredString("since", in: params))
         let sensitive = boolParam("sensitive", in: params) ?? false
+        let activeSecretRedactor = activeSecretRedactor()
         do {
             let previous = try elementStore.summary(for: snapshotID)
             let observedChanges = observedChanges(since: previous)
@@ -271,8 +295,8 @@ public struct CommandRouter {
                 "reason": .string(change.reason),
                 "snapshotId": .string(previous.id.rawValue),
                 "currentSnapshotId": .string(current.id.rawValue),
-                "previous": previous.jsonValue(sensitive: sensitive),
-                "current": current.jsonValue(sensitive: sensitive)
+                "previous": previous.jsonValue(sensitive: sensitive, activeSecretRedactor: activeSecretRedactor),
+                "current": current.jsonValue(sensitive: sensitive, activeSecretRedactor: activeSecretRedactor)
             ]
             if !observedChanges.isEmpty {
                 result["observedChanges"] = .array(observedChanges.map(\.jsonValue))
@@ -287,7 +311,7 @@ public struct CommandRouter {
                     "reason": .string("app_missing"),
                     "snapshotId": .string(previous.id.rawValue),
                     "currentSnapshotId": .null,
-                    "previous": previous.jsonValue(sensitive: sensitive),
+                    "previous": previous.jsonValue(sensitive: sensitive, activeSecretRedactor: activeSecretRedactor),
                     "current": .null
                 ]
             )
@@ -426,7 +450,12 @@ public struct CommandRouter {
         }
 
         let summaries = resolution.candidates.prefix(5).map { candidate in
-            "[\(candidate.index)] \(candidate.role) \"\(candidate.matchedText)\" frame=\(frameDescription(candidate.frame))"
+            let matchedText = activeSecretRedactor()
+                .redaction(
+                    for: candidate.matchedText
+                )?
+                .value ?? candidate.matchedText
+            return "[\(candidate.index)] \(candidate.role) \"\(matchedText)\" frame=\(frameDescription(candidate.frame))"
         }
         message += " (\(resolution.candidates.count) candidates: \(summaries.joined(separator: "; "))"
         if resolution.candidates.count > summaries.count {
@@ -513,7 +542,8 @@ public struct CommandRouter {
         _ result: PrimitiveActionResult,
         resolutions: [TextLocationResolvedPoint?]
     ) -> PrimitiveActionResult {
-        let values = resolutions.compactMap { $0?.resolution.jsonValue }
+        let activeSecretRedactor = activeSecretRedactor()
+        let values = resolutions.compactMap { $0?.resolution.jsonValue(activeSecretRedactor: activeSecretRedactor) }
         guard !values.isEmpty else {
             return result
         }
@@ -552,6 +582,10 @@ public struct CommandRouter {
         }
         return changeObserver.changes(since: token, app: previous.app)
     }
+
+    private func activeSecretRedactor() -> ActiveSecretRedactor {
+        ActiveSecretRedactor(filter: activeCredentialFilterProvider())
+    }
 }
 
 private struct ResolvedPointerTarget {
@@ -587,14 +621,60 @@ private extension JSONValue {
         return .object(object)
     }
 
-    func addingScreenText(_ items: [ScreenTextItem], includeScreenshot: Bool) -> JSONValue {
+    func addingScreenText(
+        _ items: [ScreenTextItem],
+        includeScreenshot: Bool,
+        activeSecretRedactor: ActiveSecretRedactor
+    ) -> JSONValue {
         guard case var .object(object) = self else {
             return self
         }
-        object["screenText"] = .array(items.map(\.jsonValue))
+        object["screenText"] = .array(items.enumerated().map { index, item in
+            item.jsonValue(
+                activeSecretRedactor: activeSecretRedactor,
+                redactionScope: "screenText_\(index)"
+            )
+        })
         if !includeScreenshot {
             object["screenshot"] = .null
         }
         return .object(object)
+    }
+
+    func omittingScreenshotForActiveCredentialRedaction(
+        requestedScreenshot: Bool,
+        forceOmit: Bool = false
+    ) -> JSONValue {
+        guard requestedScreenshot,
+              (forceOmit || containsActiveCredentialRedaction()),
+              case var .object(object) = self,
+              object["screenshot"] != nil,
+              object["screenshot"] != .null
+        else {
+            return self
+        }
+
+        object["screenshot"] = .null
+        var warnings: [JSONValue] = []
+        if case let .array(existing)? = object["warnings"] {
+            warnings = existing
+        }
+        let warning = JSONValue.string("screenshot omitted because active credential text was redacted")
+        if !warnings.contains(warning) {
+            warnings.append(warning)
+        }
+        object["warnings"] = .array(warnings)
+        return .object(object)
+    }
+}
+
+private extension Array where Element == ScreenTextItem {
+    func containsActiveCredentialRedaction(activeSecretRedactor: ActiveSecretRedactor) -> Bool {
+        JSONValue.array(enumerated().map { index, item in
+            item.jsonValue(
+                activeSecretRedactor: activeSecretRedactor,
+                redactionScope: "screenText_guard_\(index)"
+            )
+        }).containsActiveCredentialRedaction()
     }
 }

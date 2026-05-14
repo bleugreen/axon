@@ -1,24 +1,60 @@
 public extension LocatorResolution {
     var jsonValue: JSONValue {
+        jsonValue(activeSecretRedactor: ActiveSecretRedactor())
+    }
+
+    func jsonValue(activeSecretRedactor: ActiveSecretRedactor) -> JSONValue {
         .object([
             "status": .string(status.rawValue),
             "snapshotID": .string(snapshotID.rawValue),
-            "best": best.map(\.jsonValue) ?? .null,
-            "candidates": .array(candidates.map(\.jsonValue))
+            "best": best.map {
+                $0.jsonValue(
+                    activeSecretRedactor: activeSecretRedactor,
+                    redactionScope: "\(snapshotID.rawValue)_locator_best_\($0.index)"
+                )
+            } ?? .null,
+            "candidates": .array(candidates.map {
+                $0.jsonValue(
+                    activeSecretRedactor: activeSecretRedactor,
+                    redactionScope: "\(snapshotID.rawValue)_locator_candidate_\($0.index)"
+                )
+            })
         ])
     }
 }
 
 public extension LocatorCandidate {
     var jsonValue: JSONValue {
-        .object([
+        jsonValue(activeSecretRedactor: ActiveSecretRedactor(), redactionScope: "locator_candidate_\(index)")
+    }
+
+    func jsonValue(activeSecretRedactor: ActiveSecretRedactor, redactionScope: String) -> JSONValue {
+        var object: [String: JSONValue] = [
             "index": .int(index),
             "handle": handle.map { .string($0.rawValue) } ?? .null,
             "role": .string(role),
-            "title": title.map(JSONValue.string) ?? .null,
-            "score": .int(score),
-            "reasons": .array(reasons.map(JSONValue.string))
-        ])
+            "score": .int(score)
+        ]
+        let titleWasRedacted = object.addActiveSecretRedactedString(
+            "title",
+            title,
+            activeSecretRedactor: activeSecretRedactor
+        )
+        if object["title"] == nil {
+            object["title"] = title.map(JSONValue.string) ?? .null
+        }
+        if titleWasRedacted, let title {
+            object["reasons"] = .array(reasons.map {
+                JSONValue.string($0.replacingOccurrences(of: title, with: "<redacted: active-credential>"))
+            })
+            object.addActiveSecretRedactionMetadata(
+                field: "reasons",
+                redaction: activeSecretRedactor.redaction(for: title) ?? ActiveSecretRedaction()
+            )
+        } else {
+            object["reasons"] = .array(reasons.map(JSONValue.string))
+        }
+        return .object(object)
     }
 }
 

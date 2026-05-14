@@ -24,6 +24,7 @@ invoke(target, name)
 
 ```text
 axon permit
+axon refresh-secrets [--json]
 axon look [target] [--since snapshot-id] [--screenshot] [--screen-text] [--sensitive] [--frames] [--json] [--no-tree] [--offset n] [--limit n] [--depth n]
 axon find <app> '<locator-json>'
 axon run <path.axn> [--dry-run] [--continue-on-error]
@@ -47,6 +48,13 @@ agent-facing observation by default; `format: "debug"` returns the raw snapshot.
 Screenshots are opt-in with `screenshot: true`. `screenText: true` OCRs visible
 text from the screenshot. `sensitive: true` redacts values and cannot be
 combined with screenshots or OCR.
+
+Active credential redaction is always on when a provider-backed index has been
+refreshed with `axon refresh-secrets`. Redacted active credentials appear as
+`<redacted: active-credential>` with matching `op://` references in structured
+redaction metadata; the secret value itself is never returned.
+When a screenshot request is known to contain an active credential through AX or
+OCR text, Axon omits the image and returns a warning instead of sending pixels.
 
 `look(target: handle)` fetches a retained node's child page. Use the `offset`
 and `limit` fields from the returned continuation to page broad sibling lists.

@@ -33,6 +33,9 @@ public struct SnapshotObservationFormatter {
         if let redaction = object["redaction"] {
             observation["redaction"] = redaction
         }
+        if let warnings = object["warnings"] {
+            observation["warnings"] = warnings
+        }
         return .object(observation)
     }
 
@@ -227,6 +230,9 @@ public struct SnapshotObservationFormatter {
         }
         if !truncationReasons.isEmpty {
             compact["truncated"] = .string(truncationReasons.joined(separator: "; "))
+        }
+        if let redaction = object["redaction"] {
+            compact["redaction"] = redaction
         }
         if let more {
             compact["more"] = more
@@ -537,6 +543,9 @@ public struct SnapshotObservationFormatter {
                 line += " [\(actionText)]"
             }
         }
+        if let redaction = firstRedactionLabel(in: object["redaction"]) {
+            line += " redaction=\(redaction)"
+        }
         let hasContinuation = object["more"]?.objectValue != nil
         if !hasContinuation, let truncated = string("truncated", in: object) {
             line += " # \(truncated)"
@@ -566,6 +575,28 @@ public struct SnapshotObservationFormatter {
             return nil
         }
         return value
+    }
+
+    private func firstRedactionLabel(in value: JSONValue?) -> String? {
+        guard case let .object(redaction)? = value else {
+            return nil
+        }
+        if case let .object(references)? = redaction["references"] {
+            let labels = references.values.flatMap { value -> [String] in
+                guard case let .array(items) = value else {
+                    return []
+                }
+                return items.compactMap(\.scalarText)
+            }
+            if let first = labels.sorted().first {
+                return first
+            }
+        }
+        if case let .object(reasons)? = redaction["reasons"],
+           reasons.values.contains(.string("active-credential")) {
+            return "active-credential"
+        }
+        return nil
     }
 
     private func yamlString(_ value: String) -> String {

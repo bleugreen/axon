@@ -1,163 +1,235 @@
-# Late-Bound Values And Credentials
+# Active-Secret Redaction And Late-Bound Credentials
 
 ## Context
 
-Two adjacent problems land in the same place:
+This issue started from two adjacent write-side problems:
 
-1. **Parameterization.** As `.axn` files accumulate, the most reusable ones are not the ones that hard-code every value. The path "open the report folder, drag yesterday's CSV into the upload field, click Submit" is generic; the literal filename is not. We want a way to define holes in a recording that get filled at replay time.
-2. **Secrets.** Some fields cannot be recorded literally — passwords, tokens, MFA codes, signing keys. Today the recorder either has to refuse those moments or silently drop them. Neither preserves the workflow.
+1. **Parameterization.** Reusable `.axn` files need holes that are filled at replay time instead of hard-coded literal values.
+2. **Secrets.** Passwords, tokens, MFA seeds, signing keys, and similar values cannot safely be recorded as literals.
 
-Both problems want the same shape: **values that are references at rest and resolve at replay**. Secrets are the first species of a broader late-bound value story. The credential case is also the one with the cleanest UX precedent on macOS — 1Password's `op` CLI already owns secure storage and consent, and we don't need to invent either.
+Those problems still matter, but they depend on a better parameter model for `.axn` files: typed args, runtime prompts, secure parameter entry, defaults, validation, and trace redaction. Adding `secret` as a parameter type before the parameter surface exists would force the credential work into the wrong shape.
 
-## Desired Shape
+The first shippable milestone is the read-side security boundary:
 
-`.axn` actions gain a templated string syntax in any `value`-shaped field, plus an optional `resolveAs` tag for resolver-specific behavior:
+> If Axon has a fingerprint for an active credential value, that raw value must not appear in any external textual Axon output.
 
-```yaml
-- tool: type
-  target: { role: AXSecureTextField, ancestor: { title: "Gmail" } }
-  value: "op://Personal/Gmail/password"
-  resolveAs: secret
+This reframes 1Password integration as an always-on output guard first. Late-bound credential writes remain the natural follow-up once `.axn` parameterization is better defined.
 
-- tool: keyboard
-  app: Mail
-  keys: "Hello {{arg://recipient}}, the file is at {{env://REPORT_DIR}}/{{prompt://"which date?"}}.csv"
+## Current Problem
+
+The current `sensitive: true` flag is not a security boundary. It is caller-selected, and MCP `look` currently defaults it to `false`. That means the caller has to know in advance that a snapshot may contain sensitive values, which is exactly the case where the caller usually does not know.
+
+The right model is:
+
+- Active-credential redaction is always on for external textual output when a provider-backed index is available.
+- The caller does not opt into this redaction and cannot turn it off through normal read APIs.
+- The existing `sensitive` mode can remain as a broader aggressive-redaction/debug-suppression mode, but it is no longer the boundary that protects active credentials.
+
+## First Milestone: Always-On Look Redactor
+
+Add an `ActiveSecretRedactor` to the external perception boundary. With the consolidated tool surface, that boundary is mostly `look`: app snapshots, child pages, change summaries, screenshots, OCR text, and CLI formatting all flow through the same verb.
+
+Axon may keep raw AX values inside the local process long enough to resolve locators, compare state, and execute supervised actions, but every external textual representation must pass through the redactor before leaving Axon.
+
+Covered outputs:
+
+- MCP `look()` app lists if app/window text ever includes string-bearing state.
+- MCP `look(target: app)`, including observation and debug structured content.
+- MCP `look(target: handle)` child pages.
+- MCP `look(since: snapshot)` change summaries.
+- MCP `find(app, locator)` candidate summaries when they include AX-derived strings.
+- CLI `axon look`, including formatted and `--json` output.
+- Any future batch trace, history export, or observation artifact that includes snapshot values.
+
+The redactor checks string-bearing AX fields such as `title`, `value`, `description`, `help`, and `identifier`. A match returns a non-prefix-preserving replacement:
+
+```json
+{
+  "value": "<redacted: active-credential>",
+  "redaction": {
+    "fields": ["value"],
+    "reasons": {
+      "value": "active-credential"
+    },
+    "providers": {
+      "value": "1password"
+    },
+    "references": {
+      "value": ["op://Personal/Gmail/password"]
+    }
+  }
+}
 ```
 
-The syntax is borrowed deliberately:
+The value itself is never preserved in the output, not even as a short prefix. Prefix-preserving redaction is useful for generic token-shaped heuristics; active credentials are authentication-equivalent and should leak zero literal characters.
 
-- Bare `op://...` strings (no braces) are recognized as 1Password references — same shape as `op inject` and `op read`. This keeps the common case ungarnished.
-- `{{scheme://path}}` is the general template form for embedding any resolver result inside a larger string.
-- A `resolveAs` tag is metadata for the executor, not the resolver. `resolveAs: secret` means "do not log this value at any layer, redact in traces, fail loudly if the resolver isn't available." Future tags (`resolveAs: path`, etc.) can carry similar policies.
+## Active Credential Index
 
-The resolver itself is a protocol axon-core exposes; integrations register implementations by scheme. axon-core stays agnostic. The first registered resolver is `op://`; the obvious additional resolvers are `env://`, `prompt://`, and `arg://`.
+Use a provider-backed exact index. It answers "does this observed value match a known active credential?" and, on hit, returns the provider reference needed to make the redaction comprehensible without exposing the secret.
 
-## The 1Password Resolver
+The index is built from keyed fingerprints:
 
-At replay, an `op://vault/item/field` reference is resolved by shelling out to `op read 'op://...'`. The op CLI handles auth, consent (typically Touch ID), and session caching (~8 minutes by default). Axon does not cache resolved secrets at any layer — every call goes through op.
+```text
+fingerprint = HMAC-SHA256(indexKey, credentialValue)
+```
 
-Resolution rules:
+The `indexKey` lives in macOS Keychain. The on-disk cache stores keyed fingerprints mapped to provider references such as `op://vault/item/field`, plus metadata. It never stores credential plaintext and never stores the HMAC key.
 
-- If `op` is not installed or not signed in, fail the action with a clear "credential reference unresolved" error. Do not soft-fail into the literal reference string.
-- If op returns an error, surface op's error message verbatim. Never substitute or guess.
-- Resolved secret values pass directly into the AX call. They are not echoed into history records, batch traces, stdout, or log files.
-- Failed resolutions log the *reference*, never the (unresolved) value placeholder or any partial.
+This avoids storing credentials locally while still making the normal `look` path cheap:
 
-## Recording UX
+1. Axon reads an AX value.
+2. Axon computes `HMAC(indexKey, observedValue)`.
+3. Axon checks the exact index.
+4. On hit, Axon redacts the output field and includes the matching provider reference in redaction metadata.
 
-The recorder treats `AXSecureTextField` focus as a hard signal: **never store the literal keystrokes**. When the recorder detects that secure input has just landed, it pauses and prompts via the menubar:
+There are no probabilistic false positives in the normal path. False negatives come from missing/stale index data or values that were intentionally excluded by policy.
 
-1. **Bind to 1Password item.** Opens a system sheet listing the user's op vaults and items; the user picks one, the recorder writes an `op://...` reference into the `.axn`.
-2. **Mark as prompt at replay.** Writes `{{prompt://"<inferred label>"}}` — at replay the executor pops a UI asking for the value.
-3. **Skip this action.** The keystrokes never enter the file; replay will need a manual edit.
+## 1Password Refresh
 
-The default has to be option 2 — fail-safe to "ask at replay" if the user doesn't actively pick a binding. macOS `IsSecureEventInputEnabled()` already blocks the recorder from seeing keystrokes inside secure fields, which dovetails with this design: the recorder *can't* accidentally capture, so the only question is what shape to write in place of the missing data.
+1Password is the first provider. Refresh is explicit and local:
 
-Non-secure fields can also be bound to references explicitly — the menubar can offer a "promote this value to a parameter" affordance during or after recording. That's how the broader parameterization story shows up at record time.
+```sh
+axon refresh-secrets
+```
 
-## Replay Behavior
+During refresh, Axon shells out to `op`, lets 1Password own authentication and consent, lists items, reads concealed fields per item, fingerprints active high-stakes secret fields, stores keyed fingerprints with their `op://` references, and immediately discards plaintext.
 
-The executor walks each action, scans every `value`-shaped field for templates and bare references, and resolves them in order. Resolver calls happen *before* the AX action; if any resolver fails, the action errors before any UI side effect.
+Fields to include:
 
-- `op://...` → shell out to op, substitute.
-- `{{env://NAME}}` → read from process env, substitute.
-- `{{arg://name}}` → read from `run` / CLI args, substitute. Missing args are an error unless a default is declared at the top of the `.axn`.
-- `{{prompt://"label"}}` → block on a system prompt for input. Sensible default to mark these as `resolveAs: secret` unless the recording knew otherwise.
+- Password fields.
+- Concealed fields.
+- Recovery codes and recovery keys.
+- OTP seeds, not rotating OTP codes.
+- API keys, tokens, SSH keys, and signing keys when represented as concealed/secret fields.
 
-Traces emitted for the action redact resolved values when `resolveAs: secret` is set. The trace shows the *reference*, not the resolution.
+Fields to skip:
 
-## Active-Secret Bloom Filter (Read-Side Protection)
+- Usernames.
+- Email addresses.
+- URLs.
+- Notes and other long free-text fields unless 1Password exposes a typed concealed value.
 
-The resolver is the *write* side of the op integration — it tells axon how to put secrets into the world. The *read* side has the symmetric problem: AX snapshots can return values that happen to be the user's active credentials, even when the agent didn't ask for them. A misconfigured app showing a password in plain text, a 2FA seed visible in account settings, a recovery code displayed for backup — all become text in the AX tree, and today axon would echo them straight back to the agent.
+Short or low-entropy values should be skipped to avoid nuisance redaction. A starting threshold is length >= 8 and estimated entropy >= 3.5 bits per character. Four-digit PINs and similarly short values need separate policy/classifier treatment later.
 
-This is op's mirror role. Op already knows every active credential the user has. We don't need to classify, learn, or pattern-match — we can ask op what's currently active and refuse to emit those values, full stop. This is the "active passwords cannot appear in `look`" guarantee, shippable independently of the broader [sensitivity classifier](2026-05-13-policy-driven-sensitivity-classifier.md) work.
+## Freshness Checks
 
-### How it works
+Normal `look` calls must not invoke `op` and must not trigger surprise authentication prompts.
 
-A local bloom filter of `sha256(<value>)` for every currently-active credential value in the user's op vaults. At snapshot-time, every AX element value gets hashed and checked. A hit means the value is verbatim a known active credential; the snapshot returns it as `<redacted: active-credential>` instead of the literal.
+Instead, Axon stores the index creation time and can run a user-initiated or pre-run metadata check:
 
-- **Filter size**: ~30 KB for tens of thousands of secrets at a 1-in-a-million false-positive rate.
-- **Per-element cost**: one SHA-256 hash plus a bloom lookup. Microseconds. Fits trivially in the synchronous snapshot path.
-- **No model weights, no leakage surface.** The filter is hashes; it cannot be reverse-engineered into the values. Storing it on disk is safe.
+```sh
+op item list --long --format=json
+```
 
-### What gets hashed
+If any item metadata reports `updated_at` later than the index creation time, Axon marks the index as stale and asks whether to refresh. If the user declines, Axon continues using the existing stale index.
 
-Op items have typed fields. We only fingerprint the high-stakes types:
+Filter states:
 
-- `password`
-- `recovery_code` / `recovery_key`
-- `otp` secrets (the seed, not the rotating code)
-- `concealed` fields (op's generic "this is secret" type)
-- API keys / tokens / SSH keys / signing keys, marked concealed
+| State | Behavior |
+| --- | --- |
+| `fresh` | Redaction runs with the current index. |
+| `stale` | Redaction still runs with the old index; Axon warns or prompts at pre-run/status checkpoints. |
+| `missing` with 1Password configured | Axon warns and offers refresh; if declined, it continues with provider redaction unavailable. |
+| `unconfigured` / no 1Password | Axon runs normally with built-in heuristic redaction only. |
+| `corrupt` | Axon ignores the broken index, warns, and offers rebuild. |
 
-We skip lower-stakes typed fields:
+No background timer should call `op`. Metadata checks belong at explicit checkpoints: CLI status, daemon startup, pre-run, menu bar "check protection", or user-requested refresh.
 
-- `username`, `email`, `url`, `notes` — too likely to legitimately appear elsewhere, too high a false-positive nuisance rate. The classifier work handles these via the `pii-identifier` head later.
+The guarantee is intentionally precise:
 
-### Rotation behavior
+> If Axon has an active credential index entry for a value, that value cannot appear in external textual output.
 
-A rotated secret is no longer in op, so it leaves the filter on next refresh. This is correct: a rotated credential is no longer active, no longer authentication-equivalent, and no longer needs the same protection. Stale-but-leaked is a lower-stakes leak than active-and-leaked.
+It is not:
 
-### Length and entropy threshold
+> Axon guarantees every active credential in every provider is covered even when the user has never configured or refreshed a provider.
 
-Hashing short values produces nuisance false positives. A 4-digit PIN shares the hash universe with `"3 of 12"` items remaining counts. The filter only ingests values whose length and entropy exceed a threshold — probably ≥8 characters and ≥3.5 bits of entropy per character. Anything shorter is left to the heuristic regex layer or skipped entirely.
+## Screenshot Modality
 
-### Refresh strategy
+The consolidated `look` surface makes screenshot policy simpler because screenshots are a modality of perception, not a separate tool path.
 
-The filter cannot auto-refresh in the background because op's CLI session expires (~8 min default) and we should not be prompting the user for op auth on a timer. Instead, opportunistic refresh:
+For the first milestone:
 
-- Refresh whenever axon successfully resolves an `op://` reference for a `type` (we already have op auth in that flow).
-- Refresh on explicit `axon refresh-secrets` (manual, user-initiated).
-- Refresh on `axon train-head` and other op-authed workflows.
-- Cache the filter encrypted at rest, key in macOS Keychain (the natural trust boundary for user secrets on macOS).
+- `look(..., screenText: true)` must run OCR text through the same active-secret redactor before returning it.
+- `look(..., screenshot: true)` must not return pixels known to contain an active credential.
+- Until spatial pixel masking exists, if the AX/OCR text path detects an active credential and `screenshot: true` is requested for the same response, Axon should refuse the screenshot modality or return the tree without the image plus an explicit warning.
 
-Between refreshes the filter may be stale. Newly-added op items aren't covered until the next refresh; rotated secrets stay in the filter until refresh and may produce one spurious redaction. Both failure modes are graceful — the worst case is a brief over-redaction on a rotated value.
+This does not prove that every secret visible in pixels was detected. OCR can miss text, and some apps expose pixels without corresponding AX text. Full pixel safety is tracked separately in [Screenshot Pixel Secret Redaction](2026-05-14-screenshot-pixel-secret-redaction.md).
 
-### Position in the pipeline
+## Inline References
 
-The bloom filter is a heuristic-floor protection: synchronous, deterministic, no ML. When the [sensitivity classifier](2026-05-13-policy-driven-sensitivity-classifier.md) lands, this filter slots in as one of the heuristic-floor rules alongside the `AXSecureTextField` and SSN-regex checks. Until then, it ships as a standalone snapshot-pipeline step driven by op.
+Normal redacted output includes provider references such as `op://Personal/Gmail/password` directly in redaction metadata. The reference is not secret material, and including it makes the output comprehensible without a second authenticated lookup path.
 
-The classifier's encoder + heads add a second layer of protection: catches credential-shaped values that *aren't* in op (developer credentials in `.env` files visible in editors, partial values, paraphrased displays). The two layers compose — bloom filter is the precise verbatim catch; classifier is the pattern-match safety net.
+This removes the need for a transient registry or a separate lookup operation. The index lookup already has the matching reference at the moment it decides to redact.
 
-## Privacy And Safety
+## Position Relative To Sensitivity Classifier
 
-- Resolved secrets are never written to disk, never put in history, never echoed in errors.
-- An `.axn` containing only references (no literals) is safe to commit to a repo or share with a collaborator. The `op://` reference reveals *that* a credential is used and which item, but not its value. (See open questions on reference-redaction.)
-- The op CLI's confirmation (Touch ID or master password) is the canonical human-in-the-loop checkpoint at replay. Axon does not add a second prompt by default; one consent moment is enough, and op already owns it.
-- Resolver failures fail loudly. The executor never proceeds with a partially-resolved or fallback value.
-- **Active credentials cannot appear in `look` output.** The bloom filter guarantees that any verbatim match against a currently-active op secret is redacted before the snapshot reaches an agent, regardless of how the value ended up in an AX tree.
+The active-secret index is the deterministic floor for authentication-equivalent values. It should eventually become one heuristic-floor rule inside the broader sensitivity classifier:
 
-## Other Resolvers
+- Active-secret index: exact, provider-backed, synchronous, no model.
+- Regex heuristics: catch common token/API-key shapes.
+- AX secure-field rules: redact values from secure controls.
+- Classifier heads: catch sensitive values not known to a provider, including developer secrets in editors, partial credentials, personal identifiers, financial data, and private messages.
 
-Once the resolver protocol exists, these come along nearly for free and round out the parameterization story:
+The active-secret index ships independently because it is useful before the classifier exists.
 
-- `env://NAME` — process environment.
-- `arg://name` — `.axn` runtime arguments passed through `run` params or `axon run --arg name=...`.
-- `prompt://"label"` — interactive prompt at replay. Useful as the fallback at the secure-field record-time branch.
+## Later: Late-Bound Write Values
 
-Possible later additions: `aws-secrets://...`, `gcloud-secrets://...`, `pass://...`, `keychain://...`. Each is a thin shim implementing the same resolver protocol.
+Once `.axn` parameterization is better defined, the write side can reuse the same security language.
+
+Possible future shape:
+
+```yaml
+version: 1
+params:
+  recipient:
+    type: string
+    description: Email recipient
+  gmail_password:
+    type: secret
+    provider: op
+    reference: op://Personal/Gmail/password
+
+actions:
+  - tool: type
+    target: { app: Gmail, locator: { role: AXSecureTextField } }
+    value: "{{param://gmail_password}}"
+    resolveAs: secret
+```
+
+Future value resolvers:
+
+- `param://name` for typed `.axn` parameters.
+- `env://NAME` for process environment values.
+- `prompt://"label"` for interactive replay prompts.
+- `op://vault/item/field` for direct 1Password references, if direct references remain desirable after typed secret params exist.
+
+Resolved secrets must never enter history records, batch traces, stdout, logs, or exported `.axn` files as literals. That work should start only after the parameter model and trace-redaction rules are explicit.
 
 ## Open Questions
 
-- **Argument schema.** `.axn` files that take args should declare them at the top (name, type, default, description) so the file is self-documenting and `axon run` can produce a usage line. What does that header look like?
-- **Reference leakage.** `op://Work/Acme-Internal/api-key` reveals you have a credential by that path even when shared safely. Worth a `redact-references: true` sharing mode, or YAGNI for now?
-- **Recorder bind UX.** How heavy is the menubar prompt during recording? If the user is mid-flow filling out a login form, a modal sheet between keystrokes is disruptive. Possible alternative: defer all secure-field bindings to a post-recording review screen and write placeholders inline during capture.
-- **Op session expiry.** Long chained `.axn` runs may need to re-prompt mid-sequence. Should the executor announce this explicitly ("about to request credentials; you may see a 1Password prompt") or let op's native UI speak for itself?
-- **Determinism of `prompt://`.** Re-running a file with prompts is by definition non-deterministic. Should we offer to capture prompt answers into a sibling `.values` file for replay reproducibility, with the same redaction rules as for secrets?
+- **Strict mode.** Should Axon later offer `strictCredentialRedaction: true`, where missing or stale provider indexes block model-facing observation until refreshed?
+- **Index scope.** Should refresh include all readable vaults by default, or only user-selected vaults?
+- **Provider config.** How should Axon remember that a user wants 1Password protection enabled without making 1Password a dependency for everyone?
+- **Strict screenshot policy.** The first implementation omits screenshots when AX/OCR text detects an active credential. Should `look(..., screenshot: true)` refuse whenever active-secret protection is configured until pixel masking exists, even if text detection finds nothing?
+- **Sensitive flag.** Should `sensitive` be renamed/deprecated now that it is not the security boundary?
 
-## Non-Goals
+## Non-Goals For The First Milestone
 
-- No bespoke credential store inside Axon. Credentials live in op (or whatever resolver the user registered); Axon never persists them.
-- No automatic detection of "sensitive-looking" non-secure fields. AXSecureTextField is the hard signal; everything else is up to the user to mark explicitly.
-- No silent fallback from `op://` to `prompt://` (or any other resolver) when op is unavailable. Resolution failure is an error, not a downgrade path.
-- No template language beyond simple `{{scheme://path}}` substitution. No conditionals, loops, or expressions inside `.axn` values — if logic is needed, it belongs in batch flow, not in a value template.
+- No late-bound `.axn` secret parameters yet.
+- No local credential plaintext storage.
+- No background `op` polling or timer-triggered auth prompts.
+- No claim that screenshot pixels are active-secret safe before spatial masking exists.
+- No bespoke credential store inside Axon.
+- No automatic provider lockout for users who do not use 1Password.
 
 ## Next Steps
 
-- Define the resolver protocol in axon-core: scheme registration, resolve call, error shape, redaction policy.
-- Implement the `op://` resolver as the first concrete instance. Confirm the `op read` UX path on macOS, including session-cache behavior and Touch ID prompts.
-- **Build the active-secret bloom filter as an immediate read-side protection.** Field-type filtering, length/entropy thresholds, encrypted-at-rest storage, Keychain-held key, opportunistic refresh on op-authed operations. This ships independently of the classifier work and gives the "active passwords cannot appear in `look`" guarantee right away.
-- Implement `env://`, `arg://`, `prompt://` as core resolvers — they're small and exercise the same protocol.
-- Extend the `.axn` schema with an optional `args:` header block declaring `arg://` parameters.
-- Wire the recorder's secure-field branch to write `{{prompt://"<inferred label>"}}` by default, with a menubar affordance to upgrade to an `op://` binding.
-- Audit every place values flow through the system (history store, batch trace, MCP response payloads, log lines) and confirm `resolveAs: secret` redaction holds end-to-end.
+1. Done: Define the `ActiveSecretRedactor` / `ActiveCredentialFilter` interface in axon-core.
+2. Done: Add the redactor to the external textual `look`/`find` serialization paths.
+3. Done: Add a Keychain-backed HMAC key and exact index cache with metadata (`createdAt`, provider, version).
+4. Done: Implement `axon refresh-secrets` for 1Password using `op`.
+5. Pending: Add metadata freshness checks at status/pre-run checkpoints; stale indexes warn but still run.
+6. Done: Add tests that prove a known active-secret fixture cannot appear in MCP `look` observation, MCP `look` debug JSON, child pages, `find` candidates, text-location candidates, or change summaries.
+7. Done: Add the first screenshot guard: if AX/OCR text redaction detects an active credential and screenshot modality is requested for the same `look`, omit the image with an explicit warning.
+8. Pending: Resolve [Screenshot Pixel Secret Redaction](2026-05-14-screenshot-pixel-secret-redaction.md) before claiming image-returning `look` calls are active-secret safe.
+9. Pending: Defer write-side late-bound secret parameters until `.axn` parameterization is specified.

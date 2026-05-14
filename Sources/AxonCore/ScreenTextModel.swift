@@ -53,10 +53,21 @@ public struct ScreenTextExtractor: Sendable {
 
 public extension ScreenTextItem {
     var jsonValue: JSONValue {
+        jsonValue(activeSecretRedactor: ActiveSecretRedactor(), redactionScope: "screenText")
+    }
+
+    func jsonValue(activeSecretRedactor: ActiveSecretRedactor, redactionScope: String) -> JSONValue {
         var object: [String: JSONValue] = [
-            "text": .string(text),
             "frame": frame.jsonValue
         ]
+        _ = object.addActiveSecretRedactedString(
+            "text",
+            text,
+            activeSecretRedactor: activeSecretRedactor
+        )
+        if object["text"] == nil {
+            object["text"] = .string(text)
+        }
         if let confidence {
             object["confidence"] = .double(confidence)
         }
