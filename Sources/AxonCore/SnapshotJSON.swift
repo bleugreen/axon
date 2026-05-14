@@ -64,7 +64,7 @@ public extension AppSnapshot {
                     nextIndex: &nextIndex,
                     activeSecretRedactor: activeSecretRedactor,
                     deterministicRedactor: deterministicRedactor,
-                    includeHandle: false
+                    includeHandle: true
                 )
             })
         }

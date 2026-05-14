@@ -75,7 +75,10 @@ public struct MCPRouter {
                 ], isError: true)
             }
             let result = commandResponse.result ?? [:]
-            if name == "look", result["apps"] != nil, Self.outputFormat(in: arguments) != "debug" {
+            if name == "look",
+               result["apps"] != nil,
+               Self.outputFormat(in: arguments) != "debug",
+               Self.bool("all", in: arguments) != true {
                 return appListObservationResult(id: request.id, result: result)
             }
             if name == "look", result["snapshot"] != nil, Self.outputFormat(in: arguments) != "debug" {
@@ -116,7 +119,11 @@ public struct MCPRouter {
         }
 
         let formatter = SnapshotObservationFormatter()
-        let observation = formatter.observation(from: snapshot, frames: Self.bool("frames", in: arguments) ?? false)
+        let observation = formatter.observation(
+            from: snapshot,
+            frames: Self.bool("frames", in: arguments) ?? false,
+            maxDepth: Self.int("depth", in: arguments).map { max(0, $0) }
+        )
         let content = MCPContent.normalize(.object(["snapshot": observation]))
         return JSONRPCResponse(id: id, result: [
             "content": .array([
@@ -228,6 +235,13 @@ public struct MCPRouter {
         return value
     }
 
+    private static func int(_ key: String, in object: [String: JSONValue]) -> Int? {
+        guard case let .int(value)? = object[key] else {
+            return nil
+        }
+        return value
+    }
+
     private static let tools: [MCPTool] = [
         MCPTool(
             name: "look",
@@ -240,7 +254,8 @@ public struct MCPRouter {
                 "tree": boolSchema("Include the nested AX tree for app observations. Defaults to true for observation format and false for debug format."),
                 "offset": numberSchema("Zero-based child offset when target is a retained handle. Defaults to 0."),
                 "limit": numberSchema("Maximum children when target is a retained handle. Defaults to Axon's sibling page size."),
-                "depth": numberSchema("Maximum tree depth to return for app observations, with windows at depth 0."),
+                "depth": numberSchema("Maximum tree depth to display for app observations, with windows at depth 0."),
+                "all": boolSchema("For no-target app lists, include all running processes instead of regular UI apps. Defaults to false."),
                 "format": stringSchema("Defaults to observation. Use debug only when diagnosing Axon internals."),
                 "frames": boolSchema("Include frames in observation output. Defaults to false.")
             ])

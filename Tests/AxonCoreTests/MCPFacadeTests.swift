@@ -99,10 +99,9 @@ import Testing
     ])
     #expect(response?.result?["structuredContent"]?["children"]?["format"] == .string("children"))
     #expect(response?.result?["structuredContent"]?["children"]?["parent"] == .string("s12:4"))
-    #expect(response?.result?["structuredContent"]?["children"]?["items"]?[0]?["handle"] == .string("s12:42"))
-    #expect(response?.result?["structuredContent"]?["children"]?["tree"] == nil)
+    #expect(response?.result?["structuredContent"]?["children"]?["tree"] == .string("s12:42: button \"Tab 25\" [click]"))
     #expect(textContent(in: response?.result)?.contains("children:") == true)
-    #expect(textContent(in: response?.result)?.contains("s12:42 button \"Tab 25\"") == true)
+    #expect(textContent(in: response?.result)?.contains("s12:42: button \"Tab 25\" [click]") == true)
 }
 
 @Test func mcpToolsCallReturnsStructuredContentFromCommandRouter() {
@@ -137,9 +136,49 @@ import Testing
     #expect(textContent(in: response?.result)?.contains("bundleIdentifier") == false)
 }
 
+@Test func mcpLookNoTargetUsesRegularUIAppsUnlessAllIsRequested() {
+    let commandRouter = CommandRouter(
+        listApps: {
+            [AppIdentity(bundleIdentifier: "com.example.Editor", name: "Editor", processIdentifier: 7)]
+        },
+        listAllApps: {
+            [
+                AppIdentity(bundleIdentifier: "com.example.Editor", name: "Editor", processIdentifier: 7),
+                AppIdentity(bundleIdentifier: "com.example.Helper", name: "Editor Helper", processIdentifier: 8)
+            ]
+        }
+    )
+    let router = MCPRouter(commandRouter: commandRouter)
+
+    let regular = router.handle(JSONRPCRequest(
+        id: .string("regular-apps"),
+        method: "tools/call",
+        params: .object([
+            "name": .string("look"),
+            "arguments": .object([:])
+        ])
+    ))
+    let all = router.handle(JSONRPCRequest(
+        id: .string("all-apps"),
+        method: "tools/call",
+        params: .object([
+            "name": .string("look"),
+            "arguments": .object(["all": .bool(true)])
+        ])
+    ))
+
+    #expect(regular?.result?["structuredContent"]?["apps"]?["count"] == JSONValue.int(1))
+    #expect(textContent(in: regular?.result)?.contains("Editor Helper") == false)
+    #expect(all?.result?["structuredContent"]?["apps"]?[1]?["name"] == JSONValue.string("Editor Helper"))
+    #expect(textContent(in: all?.result)?.contains("bundleIdentifier") == true)
+}
+
 @Test func mcpLookAppsDebugReturnsFullAppObjects() {
     let commandRouter = CommandRouter(
         listApps: {
+            []
+        },
+        listAllApps: {
             [AppIdentity(bundleIdentifier: "com.example.App", name: "Example", processIdentifier: 7)]
         }
     )
@@ -302,18 +341,64 @@ import Testing
     #expect(response?.error == nil)
     #expect(snapshot?["format"] == .string("observation"))
     #expect(snapshot?["snapshot"] == .string("mcp-compact"))
-    #expect(snapshot?["tree"]?[0]?["handle"] == .string("mcp-compact:0"))
-    #expect(snapshot?["tree"]?[0]?["children"]?[0]?["handle"] == .string("mcp-compact:2"))
-    #expect(snapshot?["tree"]?[0]?["children"]?[0]?["role"] == .string("button"))
-    #expect(snapshot?["tree"]?[0]?["children"]?[0]?["label"] == .string("Run"))
-    #expect(snapshot?["tree"]?[0]?["children"]?[0]?["actions"]?[0] == .string("click"))
+    #expect(snapshot?["tree"]?.stringValue?.contains("mcp-compact:2: button \"Run\" [click]") == true)
     #expect(snapshot?["indexedNodes"] == nil)
     #expect(snapshot?["windows"] == nil)
     #expect(text?.contains("snapshot: mcp-compact") == true)
-    #expect(text?.contains("mcp-compact:2 button \"Run\"") == true)
+    #expect(text?.contains("mcp-compact:2: button \"Run\" [click]") == true)
     #expect(text?.contains("snapshot:") == true)
     #expect(text?.contains("snapshot:mcp-compact") == false)
     #expect(text?.contains("Hidden Tab") == false)
+}
+
+@Test func mcpLookDepthKeepsRetainedHandlesAndShowsHiddenChildren() {
+    let commandRouter = CommandRouter(
+        captureSnapshot: { app, screenshot in
+            #expect(app == "org.mozilla.firefox")
+            #expect(screenshot == false)
+            return AppSnapshot(
+                id: SnapshotID("mcp-depth"),
+                app: AppIdentity(bundleIdentifier: "org.mozilla.firefox", name: "Firefox", processIdentifier: 7),
+                windows: [
+                    AXNode(role: "AXWindow", title: "Firefox", children: [
+                        AXNode(role: "AXTabGroup", title: "Browser tabs", children: [
+                            AXNode(role: "AXRadioButton", title: "Tab 1", actions: ["AXPress"]),
+                            AXNode(role: "AXRadioButton", title: "Tab 2", actions: ["AXPress"]),
+                            AXNode(role: "AXRadioButton", title: "Tab 3", actions: ["AXPress"])
+                        ]),
+                        AXNode(role: "AXToolbar", description: "Navigation", children: [
+                            AXNode(role: "AXButton", title: "Reload", actions: ["AXPress"])
+                        ])
+                    ])
+                ],
+                screenshot: nil
+            )
+        }
+    )
+
+    let response = MCPRouter(commandRouter: commandRouter).handle(JSONRPCRequest(
+        id: .string("depth"),
+        method: "tools/call",
+        params: .object([
+            "name": .string("look"),
+            "arguments": .object([
+                "target": .string("org.mozilla.firefox"),
+                "depth": .int(1)
+            ])
+        ])
+    ))
+
+    let tree = response?.result?["structuredContent"]?["snapshot"]?["tree"]
+    let text = textContent(in: response?.result)
+
+    #expect(response?.error == nil)
+    #expect(tree == .string("""
+    mcp-depth:0: window "Firefox"
+      mcp-depth:1: tabgroup "Browser tabs" <truncated: depth limit hides 3 children>
+      mcp-depth:5: toolbar "Navigation" <truncated: depth limit hides 1 child>
+    """))
+    #expect(text?.contains("mcp-depth:2: toolbar \"Navigation\"") == false)
+    #expect(text?.contains("mcp-depth:5: toolbar \"Navigation\"") == true)
 }
 
 @Test func mcpLookScreenTextAddsOCRWithoutScreenshotPayload() {
@@ -474,9 +559,9 @@ import Testing
 
     #expect(response?.error == nil)
     #expect(result?["isError"] == .bool(false))
-    #expect(snapshot?["redaction"] == nil)
+    #expect(snapshot?["redaction"]?["reasons"]?["value"] == .string("auth-credential"))
     #expect(snapshot?["indexedNodes"] == nil)
-    #expect(snapshot?["tree"]?[0]?["children"]?[0]?["label"] == .string("<redacted: auth-credential>"))
+    #expect(snapshot?["tree"]?.stringValue?.contains("<redacted: auth-credential>") == true)
     #expect(textContent(in: result)?.contains("SECRET") == false)
     #expect(encoded.contains("SECRET") == false)
 }
@@ -518,8 +603,8 @@ import Testing
 
     #expect(response?.error == nil)
     #expect(result?["isError"] == .bool(false))
-    #expect(snapshot?["tree"]?[0]?["children"]?[0]?["label"] == .string("<redacted: active-credential>"))
-    #expect(snapshot?["tree"]?[0]?["children"]?[0]?["redaction"]?["references"]?["value"]?[0] == .string("op://MCP/Active/secret"))
+    #expect(snapshot?["tree"]?.stringValue?.contains("<redacted: active-credential>") == true)
+    #expect(snapshot?["redaction"]?["references"]?["value"]?[0] == .string("op://MCP/Active/secret"))
     #expect(textContent(in: result)?.contains("redaction=op://MCP/Active/secret") == true)
     #expect(textContent(in: result)?.contains(secret) == false)
     #expect(encoded.contains(secret) == false)
@@ -996,6 +1081,15 @@ private func tool(named expectedName: String, in value: JSONValue?) -> JSONValue
     }
     return tools.first { tool in
         tool["name"] == .string(expectedName)
+    }
+}
+
+private extension JSONValue {
+    var stringValue: String? {
+        guard case let .string(value) = self else {
+            return nil
+        }
+        return value
     }
 }
 

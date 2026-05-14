@@ -1,6 +1,20 @@
 # MCP Look Ergonomics
 
-Status: Design. Not yet implemented.
+Status: Implemented.
+
+Implemented on 2026-05-14:
+
+- Observation rendering now uses retained snapshot handles from snapshot JSON
+  instead of synthesizing handles from a pruned display tree.
+- `depth` is an observation-rendering limit for MCP/CLI text output, with
+  explicit `<truncated: depth limit hides ...>` markers.
+- No-target `look()` defaults to regular UI apps. Raw/all process listings are
+  available with MCP `all: true`, MCP `format: "debug"`, or CLI `--details`.
+- MCP/CLI observation trees are rendered as one DSL string in the structured
+  envelope. Debug JSON remains available with `format: "debug"`/`--debug`.
+- Broad child sets are paginated after conversion to contentful DSL items.
+  Capture keeps a small shallow raw-sibling slack so low-information AX chrome
+  does not consume the 24 visible child slots.
 
 ## Context
 
@@ -84,9 +98,9 @@ Three changes, each independently shippable:
 
 - **No model inference for relevance.** A traversal heuristic ("this subtree is probably interesting") is fine; a classifier deciding what's worth showing is not.
 - **No DSL extension to the read-only tools beyond `look`.** `find` already returns a single resolved locator + candidates; that's small enough that JSON is fine.
-- **No tree-rewriting for "cleaner" output.** The DSL is a *rendering* of the AX tree, not an opinionated selection — every node the daemon captured appears in output, just more densely.
+- **No model-based tree rewriting for "cleaner" output.** The DSL is a deterministic rendering of the captured AX tree after mechanical compaction: anonymous wrappers, decorative labels, and low-information paging chrome may collapse away, but no model/classifier decides relevance.
 
-## Next Steps
+## Historical Next Steps
 
 - Trace the depth/limit application path through `SnapshotJSON`/`AXSnapshotCapturer` and identify where the toolbar's children were dropped at depth-2 capture vs where the depth-4 walk reaches them. The fix likely lives at capture time, not at serialization.
 - Find the record-picker visible-apps filter and wire it into the no-target `look` path.

@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 @testable import AxonCore
 
@@ -24,14 +25,12 @@ import Testing
     )
 
     let observation = SnapshotObservationFormatter().observation(from: snapshot.jsonValue, frames: false)
-    let window = observation["tree"]?[0]
-    let tabGroup = window?["children"]?[0]
+    let tree = treeString(in: observation)
 
-    #expect(tabGroup?["role"] == .string("tabgroup"))
-    #expect(tabGroup?["children"]?.arrayValue?.count == 30)
-    #expect(tabGroup?["truncated"] == nil)
-    #expect(window?["children"]?[1]?["role"] == .string("heading"))
-    #expect(window?["children"]?[1]?["label"] == .string("Front page story"))
+    #expect(tree.contains("obs:1: tabgroup \"Browser tabs\""))
+    #expect((1...30).allSatisfy { tree.contains("radiobutton \"Tab \($0)\" [click]") })
+    #expect(!tree.contains("<truncated:"))
+    #expect(tree.contains("heading \"Front page story\""))
 }
 
 @Test func observationCollapsesAnonymousWrapperChainsBeforeUsefulLeaves() {
@@ -55,10 +54,9 @@ import Testing
     )
 
     let observation = SnapshotObservationFormatter().observation(from: snapshot.jsonValue, frames: false)
-    let child = observation["tree"]?[0]?["children"]?[0]
+    let tree = treeString(in: observation)
 
-    #expect(child?["role"] == .string("button"))
-    #expect(child?["label"] == .string("Run"))
+    #expect(tree == "obs:0: window \"Main\"\n  obs:5: button \"Run\" [click]")
 }
 
 @Test func observationCoalescesAdjacentStaticTextUnderParent() {
@@ -79,13 +77,13 @@ import Testing
     )
 
     let observation = SnapshotObservationFormatter().observation(from: snapshot.jsonValue, frames: false)
-    let row = observation["tree"]?[0]?["children"]?[0]
+    let tree = treeString(in: observation)
 
-    #expect(row?["role"] == .string("group"))
-    #expect(row?["label"] == .string("42 points by alice 13 comments"))
-    #expect(row?["children"]?.arrayValue?.count == 1)
-    #expect(row?["children"]?[0]?["role"] == .string("link"))
-    #expect(row?["children"]?[0]?["label"] == .string("Story title"))
+    #expect(tree == """
+    obs:0: window "Main"
+      obs:1: group "42 points by alice 13 comments"
+        obs:2: link "Story title" [click]
+    """)
 }
 
 @Test func observationDropsEmptyRowsCellsAndDecorativeLabels() {
@@ -149,11 +147,73 @@ import Testing
     )
 
     let observation = SnapshotObservationFormatter().observation(from: snapshot.jsonValue, frames: false)
-    let tabGroup = observation["tree"]?[0]?["children"]?[0]
+    let tree = treeString(in: observation)
 
-    #expect(tabGroup?["role"] == .string("tabgroup"))
-    #expect(tabGroup?["label"] == nil)
-    #expect(tabGroup?["truncated"] == .string("children limited to 24 of 92"))
+    #expect(tree.contains("obs:1: tabgroup <truncated: children limited to 24 of 92>"))
+    #expect(!tree.contains("<AXUIElement"))
+}
+
+@Test func observationPaginatesBroadChildrenAfterDslFiltering() {
+    let buttons = (1...26).map { index in
+        AXNode(role: "AXButton", title: "Action \(index)", actions: ["AXPress"])
+    }
+    let snapshot = AppSnapshot(
+        id: SnapshotID("obs-filtered-page"),
+        app: AppIdentity(bundleIdentifier: "com.example.App", name: "Example", processIdentifier: 7),
+        windows: [
+            AXNode(role: "AXWindow", title: "Example", children: [
+                AXNode(role: "AXGroup", truncationReason: "children limited to 28 of 143", children: [
+                    AXNode(role: "AXGroup"),
+                    AXNode(role: "AXStaticText", title: "|")
+                ] + buttons)
+            ])
+        ],
+        screenshot: nil
+    )
+
+    let observation = SnapshotObservationFormatter().observation(from: snapshot.jsonValue, frames: false)
+    let tree = treeString(in: observation)
+    let text = SnapshotObservationFormatter().text(from: observation)
+
+    #expect((1...24).allSatisfy { tree.contains("button \"Action \($0)\" [click]") })
+    #expect(!tree.contains("Action 25"))
+    #expect(tree.contains("obs-filtered-page:1: group <truncated: children limited to 24 of 143>"))
+    #expect(text.contains("more: look target=obs-filtered-page:1 offset=26 limit=24 total=143"))
+}
+
+@Test func observationKeepsSemanticSubroleItemsThatReportOffscreenFrames() {
+    let tabs = (1...26).map { index in
+        AXNode(
+            role: "AXRadioButton",
+            subrole: "AXTabButton",
+            title: "Tab \(index)",
+            frame: AXFrame(x: -9_000 + Double(index * 76), y: 33, width: 76, height: 44),
+            actions: ["AXPress"]
+        )
+    }
+    let snapshot = AppSnapshot(
+        id: SnapshotID("obs-tabs"),
+        app: AppIdentity(bundleIdentifier: "org.mozilla.firefox", name: "Firefox", processIdentifier: 7),
+        windows: [
+            AXNode(role: "AXWindow", title: "Firefox", children: [
+                AXNode(role: "AXTabGroup", truncationReason: "children limited to 28 of 143", children: [
+                    AXNode(role: "AXGroup", frame: AXFrame(x: 190, y: 33, width: 0, height: 44)),
+                    AXNode(role: "AXButton", title: "Scroll backwards", frame: AXFrame(x: 190, y: 33, width: 28, height: 44), actions: ["AXPress"])
+                ] + tabs)
+            ])
+        ],
+        screenshot: nil
+    )
+
+    let observation = SnapshotObservationFormatter().observation(from: snapshot.jsonValue, frames: false)
+    let tree = treeString(in: observation)
+    let text = SnapshotObservationFormatter().text(from: observation)
+
+    #expect((1...24).allSatisfy { tree.contains("radiobutton \"Tab \($0)\" [click]") })
+    #expect(!tree.contains("Tab 25"))
+    #expect(!tree.contains("Scroll backwards"))
+    #expect(tree.contains("obs-tabs:1: tabgroup <truncated: children limited to 24 of 143>"))
+    #expect(text.contains("more: look target=obs-tabs:1 offset=26 limit=24 total=143"))
 }
 
 @Test func observationShowsContinuationDoorForCaptureTruncation() {
@@ -176,15 +236,13 @@ import Testing
     )
 
     let observation = SnapshotObservationFormatter().observation(from: snapshot.jsonValue, frames: false)
-    let thread = observation["tree"]?[0]?["children"]?[0]
+    let tree = treeString(in: observation)
     let text = SnapshotObservationFormatter().text(from: observation)
 
-    #expect(thread?["more"]?["tool"] == .string("look"))
-    #expect(thread?["more"]?["target"] == .string("obs:1"))
-    #expect(thread?["more"]?["offset"] == .int(24))
-    #expect(thread?["more"]?["total"] == .int(154))
+    #expect(tree.contains("obs:1: group \"Comment thread\" <truncated: children limited to 24 of 154>"))
+    #expect(tree.contains("more: look target=obs:1 offset=24 limit=24 total=154"))
     #expect(text.contains("more: look target=obs:1 offset=24 limit=24 total=154"))
-    #expect(!text.contains("children limited to 24 of 154"))
+    #expect(text.contains("children limited to 24 of 154"))
 }
 
 @Test func observationDoesNotExposeClickOnHeadings() {
@@ -200,11 +258,46 @@ import Testing
     )
 
     let observation = SnapshotObservationFormatter().observation(from: snapshot.jsonValue, frames: false)
-    let heading = observation["tree"]?[0]?["children"]?[0]
+    let tree = treeString(in: observation)
 
-    #expect(heading?["role"] == .string("heading"))
-    #expect(heading?["label"] == .string("Overview"))
-    #expect(heading?["actions"] == nil)
+    #expect(tree.contains("obs:1: heading \"Overview\""))
+    #expect(!tree.contains("heading \"Overview\" [click]"))
+}
+
+@Test func observationPromotesAllNodeRedactionReferencesToEnvelope() throws {
+    let firstSecret = "first active credential"
+    let secondSecret = "second active credential"
+    let snapshot = AppSnapshot(
+        id: SnapshotID("obs-redaction"),
+        app: AppIdentity(bundleIdentifier: "com.example.App", name: "Example", processIdentifier: 7),
+        windows: [
+            AXNode(role: "AXWindow", title: "Main", children: [
+                AXNode(role: "AXTextField", value: firstSecret),
+                AXNode(role: "AXTextField", value: secondSecret)
+            ])
+        ],
+        screenshot: nil
+    )
+    let redactor = ActiveSecretRedactor(
+        filter: try ActiveCredentialIndex(
+            secrets: [
+                ActiveCredentialSecret(value: firstSecret, provider: "test", reference: "op://Test/First/secret"),
+                ActiveCredentialSecret(value: secondSecret, provider: "test", reference: "op://Test/Second/secret")
+            ],
+            hmacKey: Data(repeating: 0xA5, count: 32),
+            provider: "test",
+            createdAt: Date(timeIntervalSince1970: 1_775_000_000)
+        )
+    )
+
+    let observation = SnapshotObservationFormatter().observation(
+        from: snapshot.jsonValue(includeTree: true, activeSecretRedactor: redactor),
+        frames: false
+    )
+    let references = observation["redaction"]?["references"]?["value"]?.arrayValue ?? []
+
+    #expect(references.contains(.string("op://Test/First/secret")))
+    #expect(references.contains(.string("op://Test/Second/secret")))
 }
 
 @Test func childListObservationContainsOnlyRequestedChildrenAndPagingCursor() {
@@ -228,13 +321,18 @@ import Testing
     #expect(observation["parent"] == .string("s12:4"))
     #expect(observation["offset"] == .int(24))
     #expect(observation["nextOffset"] == .int(26))
-    #expect(observation["items"]?[0]?["handle"] == .string("s12:42"))
-    #expect(observation["items"]?[1]?["handle"] == .string("s12:43"))
-    #expect(observation["tree"] == nil)
+    #expect(observation["tree"] == .string("s12:42: button \"Tab 25\" [click]\ns12:43: button \"Tab 26\" [click]"))
     #expect(text.contains("children:"))
     #expect(text.contains("range: 24..<26 of 30"))
     #expect(text.contains("nextOffset: 26"))
-    #expect(text.contains("s12:42 button \"Tab 25\""))
+    #expect(text.contains("s12:42: button \"Tab 25\" [click]"))
+}
+
+private func treeString(in observation: JSONValue) -> String {
+    guard case let .string(tree)? = observation["tree"] else {
+        return ""
+    }
+    return tree
 }
 
 private extension JSONValue {

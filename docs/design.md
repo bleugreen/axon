@@ -160,7 +160,7 @@ Observer state should also support a "changed since snapshot" query. The initial
 Initial tools:
 
 ```text
-look(target?, since?, screenshot?, screenText?, tree?, offset?, limit?, depth?)
+look(target?, since?, screenshot?, screenText?, tree?, offset?, limit?, depth?, all?)
 find(app, locator)
 permit()
 run(actions?, path?)
