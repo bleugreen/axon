@@ -42,15 +42,18 @@ public extension LocatorCandidate {
             redactionContext: DeterministicRedactionContext(role: role, title: title),
             redactionScope: redactionScope
         )
+        let renderedReasons: [String]
         if titleWasRedacted,
            let title,
            case let .string(replacement)? = object["title"] {
-            object["reasons"] = .array(reasons.map {
-                JSONValue.string($0.replacingOccurrences(of: title, with: replacement))
-            })
+            renderedReasons = reasons.map { $0.replacingOccurrences(of: title, with: replacement) }
         } else {
-            object["reasons"] = .array(reasons.map(JSONValue.string))
+            renderedReasons = reasons
         }
+        object["reasons"] = .array(renderedReasons.redactedReasonValues(
+            activeSecretRedactor: activeSecretRedactor,
+            redactionScope: redactionScope
+        ))
         return .object(object)
     }
 }

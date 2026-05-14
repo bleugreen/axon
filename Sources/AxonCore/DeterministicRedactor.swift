@@ -426,3 +426,23 @@ extension Dictionary where Key == String, Value == JSONValue {
         self["redaction"] = .object(metadata)
     }
 }
+
+extension Array where Element == String {
+    func redactedReasonValues(
+        activeSecretRedactor: ActiveSecretRedactor,
+        deterministicRedactor: DeterministicRedactor = DeterministicRedactor.standard,
+        redactionScope: String
+    ) -> [JSONValue] {
+        enumerated().map { index, reason in
+            var object: [String: JSONValue] = [:]
+            object.addRedactedString(
+                "reason",
+                reason,
+                activeSecretRedactor: activeSecretRedactor,
+                deterministicRedactor: deterministicRedactor,
+                redactionScope: "\(redactionScope)_reason_\(index)"
+            )
+            return object["reason"] ?? .string(reason)
+        }
+    }
+}

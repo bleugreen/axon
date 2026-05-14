@@ -310,14 +310,17 @@ public extension TextLocationCandidate {
             redactionContext: DeterministicRedactionContext(role: role, title: matchedText),
             redactionScope: redactionScope
         )
+        let renderedReasons: [String]
         if matchedTextWasRedacted,
            case let .string(replacement)? = object["matchedText"] {
-            object["reasons"] = .array(reasons.map {
-                JSONValue.string($0.replacingOccurrences(of: matchedText, with: replacement))
-            })
+            renderedReasons = reasons.map { $0.replacingOccurrences(of: matchedText, with: replacement) }
         } else {
-            object["reasons"] = .array(reasons.map(JSONValue.string))
+            renderedReasons = reasons
         }
+        object["reasons"] = .array(renderedReasons.redactedReasonValues(
+            activeSecretRedactor: activeSecretRedactor,
+            redactionScope: redactionScope
+        ))
         return .object(object)
     }
 }
