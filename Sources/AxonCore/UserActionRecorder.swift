@@ -33,6 +33,14 @@ public enum UserRecordingScope: Equatable, Sendable {
 }
 
 public final class UserActionRecorder {
+    private typealias CapturedTarget = (target: JSONValue, observed: [JSONValue], warnings: [String], app: AppIdentity?)
+
+    private struct PendingTextContext {
+        let element: AXUIElement
+        let app: AppIdentity
+        let actionTarget: CapturedTarget
+    }
+
     private let scope: UserRecordingScope
     private let translator = UserRecordingTranslator()
     private var eventTap: CFMachPort?
@@ -42,6 +50,7 @@ public final class UserActionRecorder {
     private var groups: [RecordedUserEventGroup] = []
     private var mouseDown: CGPoint?
     private var pendingText = ""
+    private var pendingTextContext: PendingTextContext?
     private var notificationEvidence: [JSONValue] = []
 
     public convenience init(targetApp: AppIdentity) {
@@ -100,6 +109,7 @@ public final class UserActionRecorder {
     fileprivate func handle(_ event: CGEvent, type: CGEventType) -> Unmanaged<CGEvent>? {
         if IsSecureEventInputEnabled() {
             pendingText = ""
+            pendingTextContext = nil
             return Unmanaged.passUnretained(event)
         }
 
@@ -172,6 +182,9 @@ public final class UserActionRecorder {
         }
 
         if let text, !text.isEmpty {
+            if pendingText.isEmpty {
+                pendingTextContext = pendingTextContextForCurrentFocus()
+            }
             pendingText += text
         }
     }
@@ -180,24 +193,40 @@ public final class UserActionRecorder {
         guard !pendingText.isEmpty else {
             return
         }
-        defer { pendingText = "" }
-        guard let focused = focusedElement(), !isSensitive(focused.element) else {
+        defer {
+            pendingText = ""
+            pendingTextContext = nil
+        }
+        guard let context = pendingTextContext ?? pendingTextContextForCurrentFocus(),
+              !isSensitive(context.element)
+        else {
             return
         }
-        let target = targetForElement(focused.element, app: focused.app)
-        if let value: String = attribute(kAXValueAttribute, from: focused.element), !value.isEmpty {
+        let factTarget = targetForElement(context.element, app: context.app)
+        if let value: String = attribute(kAXValueAttribute, from: context.element), !value.isEmpty {
             groups.append(RecordedUserEventGroup(
-                action: .setValue(target: target.target, value: value),
-                observed: target.observed + drainNotificationEvidence(),
-                warnings: target.warnings
+                action: .setValue(target: context.actionTarget.target, value: value, factTarget: factTarget.target),
+                observed: context.actionTarget.observed + factTarget.observed + drainNotificationEvidence(),
+                warnings: context.actionTarget.warnings + factTarget.warnings
             ))
         } else {
             groups.append(RecordedUserEventGroup(
-                action: .typeText(app: focused.app.name, text: pendingText),
-                observed: target.observed + drainNotificationEvidence(),
-                warnings: target.warnings + ["focused element did not expose AXValue; recorded keyboard fallback"]
+                action: .typeText(app: context.app.name, text: pendingText),
+                observed: context.actionTarget.observed + drainNotificationEvidence(),
+                warnings: context.actionTarget.warnings + ["focused element did not expose AXValue; recorded keyboard fallback"]
             ))
         }
+    }
+
+    private func pendingTextContextForCurrentFocus() -> PendingTextContext? {
+        guard let focused = focusedElement(), !isSensitive(focused.element) else {
+            return nil
+        }
+        return PendingTextContext(
+            element: focused.element,
+            app: focused.app,
+            actionTarget: targetForElement(focused.element, app: focused.app)
+        )
     }
 
     private func startObservingScopedApp() {

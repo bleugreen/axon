@@ -31,6 +31,31 @@ import Testing
     #expect(batch["actions"]?[0]?["expects"]?[0]?["state"]?["value"]?["contains"] == .string("Mitch"))
 }
 
+@Test func recordingTranslatorUsesPostActionTargetForValueExpectation() throws {
+    let translator = UserRecordingTranslator()
+    let actionTarget: JSONValue = .object([
+        "app": .string("Example"),
+        "locator": .object([
+            "role": .string("AXComboBox"),
+            "description": .string("Search with Google or enter address")
+        ])
+    ])
+    let factTarget: JSONValue = .object([
+        "app": .string("Example"),
+        "locator": .object([
+            "role": .string("AXComboBox"),
+            "value": .string("wikipedia.org")
+        ])
+    ])
+
+    let batch = try translator.batch(from: [
+        RecordedUserEventGroup(action: .setValue(target: actionTarget, value: "wikipedia.org", factTarget: factTarget))
+    ])
+
+    #expect(batch["actions"]?[0]?["target"] == actionTarget)
+    #expect(batch["actions"]?[0]?["expects"]?[0]?["target"] == factTarget)
+}
+
 @Test func recordingTranslatorAddsConservativeValueDependencyForSubmitKey() throws {
     let translator = UserRecordingTranslator()
     let target: JSONValue = .object([
@@ -461,6 +486,20 @@ import Testing
     #expect(ancestors[1]["role"] == .string("AXGroup"))
     #expect(ancestors[1]["subrole"] == .string("AXContentGroup"))
     #expect(ancestors[1]["identifier"] == .string("main-content"))
+}
+
+@Test func recordedTargetSelectorIncludesElementValueInLocator() throws {
+    let selection = try #require(RecordedTargetSelector.select(from: [
+        RecordedElementCandidate(
+            role: "AXComboBox",
+            value: "wikipedia.org",
+            windowTitle: "Example",
+            hasWindowAncestor: true
+        )
+    ]))
+
+    #expect(selection.locator["role"] == .string("AXComboBox"))
+    #expect(selection.locator["value"] == .string("wikipedia.org"))
 }
 
 @Test func recordedLocatorRejectsElementsOutsideWindowSnapshots() {

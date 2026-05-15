@@ -3,7 +3,7 @@ import Yams
 
 public enum RecordedUserAction: Equatable, Sendable {
     case click(target: JSONValue)
-    case setValue(target: JSONValue, value: String)
+    case setValue(target: JSONValue, value: String, factTarget: JSONValue? = nil)
     case typeText(app: String, text: String)
     case pressKey(app: String, key: String)
     case scroll(target: JSONValue?, app: String?, deltaX: Double, deltaY: Double)
@@ -69,9 +69,9 @@ public struct UserRecordingTranslator {
 
             var expectedFacts: [JSONValue] = []
             switch emittedGroup.action {
-            case let .setValue(target, value):
+            case let .setValue(target, value, factTarget):
                 let factID = "\(actionID).value.0"
-                expectedFacts.append(valueFact(id: factID, target: target, value: value))
+                expectedFacts.append(valueFact(id: factID, target: factTarget ?? target, value: value))
                 lastValueFactID = factID
             default:
                 break
@@ -278,7 +278,7 @@ public struct UserRecordingTranslator {
 
     private func targetBearingActionTarget(_ action: RecordedUserAction) -> JSONValue? {
         switch action {
-        case let .click(target), let .setValue(target, _), let .performAction(target, _):
+        case let .click(target), let .setValue(target, _, _), let .performAction(target, _):
             return target
         case let .drag(_, to, _, _):
             return to
@@ -291,7 +291,7 @@ public struct UserRecordingTranslator {
         switch action {
         case let .click(target):
             return ["tool": .string("click"), "target": target]
-        case let .setValue(target, value):
+        case let .setValue(target, value, _):
             return ["tool": .string("type"), "target": target, "value": .string(value)]
         case let .typeText(app, text):
             return ["tool": .string("keyboard"), "app": .string(app), "keys": .string(text)]
@@ -385,7 +385,7 @@ public struct UserRecordingTranslator {
 
     private func appName(for action: RecordedUserAction) -> String? {
         switch action {
-        case let .click(target), let .setValue(target, _), let .performAction(target, _):
+        case let .click(target), let .setValue(target, _, _), let .performAction(target, _):
             return appName(in: target)
         case let .typeText(app, _), let .pressKey(app, _):
             return app

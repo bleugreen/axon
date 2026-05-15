@@ -33,6 +33,7 @@ public enum RecordedLocatorBuilder {
         subrole: String?,
         identifier: String?,
         title: String?,
+        value: String? = nil,
         description: String?,
         actions: [String],
         windowTitle: String?,
@@ -47,6 +48,9 @@ public enum RecordedLocatorBuilder {
         }
         if let title, !title.isEmpty {
             locator["title"] = .string(title)
+        }
+        if let value, !value.isEmpty {
+            locator["value"] = .string(value)
         }
         if let description, !description.isEmpty {
             locator["description"] = .string(description)

@@ -1,6 +1,6 @@
 # Fact Target Locators Should Be Recorded From Post-Action State
 
-Status: Open. Filed 2026-05-14.
+Status: In progress. Filed 2026-05-14.
 
 ## Context
 
@@ -106,8 +106,9 @@ This is a larger design question than the same-element fix and should be scoped 
 
 ## Next Steps
 
-- Identify the recorder code path where the fact target locator is built today and where the AX element reference is held through the action.
-- Add a post-action settle step (driven by the AX notification stream or a short timeout) before the fact locator is serialized.
-- Re-read the element's attributes from its post-state, build the fact's `target.locator` from those.
+- Done: identified the recorder/translator path. `UserActionRecorder.flushPendingText()` was serializing a single target through `RecordedUserAction.setValue`, and `UserRecordingTranslator` reused that target for the `value` fact.
+- Done: same-element value facts can now carry a distinct post-action `factTarget`. The recorder captures the focused element/action target when a text burst starts, then re-reads the same AX element when the text burst is flushed and serializes that fresh target for the fact.
+- Done: recorded locators now include non-empty `AXValue`, so the post-action locator can identify text controls by the value that exists after mutation.
+- Still needed: add an explicit notification/timeout settle boundary if live Firefox recording shows the post-read can race AX value propagation.
 - Re-record `2026-05-14-193649-Firefox.axn` and confirm `a002.value.0` resolves and asserts correctly.
 - Scope the cross-element fact case (open question above) as a follow-up issue once the same-element fix lands.

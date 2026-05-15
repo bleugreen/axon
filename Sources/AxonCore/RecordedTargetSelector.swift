@@ -93,6 +93,7 @@ public enum RecordedTargetSelector {
             subrole: candidate.subrole,
             identifier: candidate.identifier,
             title: candidate.title,
+            value: candidate.value,
             description: candidate.description,
             actions: candidate.actions,
             windowTitle: candidate.windowTitle,
