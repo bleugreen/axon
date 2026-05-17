@@ -90,3 +90,52 @@ import Testing
     #expect(reparsed.unknownTopLevelFields["owner"] == .string("local-test"))
     #expect(reparsed.blocks == recipe.blocks)
 }
+
+@Test func axonRecipeInsertsRecordedBlocksBeforeTargetAndRemapsDuplicateIDs() throws {
+    var recipe = try AxonRecipe(source: """
+    version: 1
+    actions:
+      - id: a001
+        tool: click
+        target: existing
+      - id: a002
+        tool: click
+        target: after
+    """)
+    let recording = try AxonRecipe(source: """
+    version: 1
+    actions:
+      - id: a001
+        tool: type
+        target: inserted
+        value: Ada
+        expects:
+          - id: a001.value.0
+            kind: value
+            target:
+              app: Example
+            state:
+              value:
+                equals: Ada
+      - id: a002
+        tool: keyboard
+        app: Example
+        keys: Return
+        requires:
+          - a001.value.0
+    """)
+
+    recipe.insertRecordedBlocks(recording.blocks, beforeBlockID: "a002")
+
+    #expect(recipe.blocks.map(\.id) == ["a001", "a003", "a004", "a002"])
+    guard case let .action(typeAction) = recipe.blocks[1],
+          case let .array(expects)? = typeAction.fields["expects"],
+          case let .object(fact)? = expects.first,
+          case let .action(keyboardAction) = recipe.blocks[2]
+    else {
+        Issue.record("inserted actions should keep expected shape")
+        return
+    }
+    #expect(fact["id"] == .string("a003.value.0"))
+    #expect(keyboardAction.fields["requires"] == .array([.string("a003.value.0")]))
+}

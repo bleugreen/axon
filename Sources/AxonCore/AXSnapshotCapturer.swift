@@ -32,6 +32,7 @@ public struct AXSnapshotCapturer {
     private enum ChildCaptureMode {
         case normal
         case shallow
+        case none
     }
 
     public init(
@@ -50,7 +51,7 @@ public struct AXSnapshotCapturer {
         self.messagingTimeout = messagingTimeout
     }
 
-    public func capture(app query: String, screenshot: Bool = false) throws -> AppSnapshot {
+    public func capture(app query: String, screenshot: Bool = false, childDepth: Int? = nil) throws -> AppSnapshot {
         guard AccessibilityPermission.isTrusted() else {
             throw SnapshotCaptureError.missingAccessibilityPermission
         }
@@ -58,12 +59,31 @@ public struct AXSnapshotCapturer {
         let app = try appResolver.resolve(query)
         let appElement = AXUIElementCreateApplication(app.processIdentifier)
         AXUIElementSetMessagingTimeout(appElement, messagingTimeout)
-        var retainedElements: [AXUIElement] = []
         let snapshotID = SnapshotID.next()
+        let appIdentity = AppIdentity(
+            bundleIdentifier: app.bundleIdentifier,
+            name: app.localizedName ?? app.bundleIdentifier ?? "pid \(app.processIdentifier)",
+            processIdentifier: app.processIdentifier
+        )
+
+        if childDepth != 0, let snapshot = captureUsingBulkHierarchy(
+            appElement: appElement,
+            appIdentity: appIdentity,
+            snapshotID: snapshotID,
+            screenshot: screenshot
+        ) {
+            return snapshot
+        }
+
+        var retainedElements: [AXUIElement] = []
         let windows = windowElements(from: appElement)
             .prefix(maxWindows)
             .map { window -> AXNode in
-                serialize(window, retainedElements: &retainedElements, childCaptureMode: .normal)
+                serialize(
+                    window,
+                    retainedElements: &retainedElements,
+                    childCaptureMode: childDepth == 0 ? .none : .normal
+                )
             }
         let windowCount = windowCount(from: appElement)
         let truncationReason = windowCount > windows.count ? "windows limited to \(maxWindows) of \(windowCount)" : nil
@@ -73,11 +93,6 @@ public struct AXSnapshotCapturer {
             }
             return window.withAdditionalTruncationReason(truncationReason)
         }
-        let appIdentity = AppIdentity(
-            bundleIdentifier: app.bundleIdentifier,
-            name: app.localizedName ?? app.bundleIdentifier ?? "pid \(app.processIdentifier)",
-            processIdentifier: app.processIdentifier
-        )
         let encodedScreenshot = screenshot ? screenshotCapturer.capture(app: appIdentity, axWindows: annotatedWindows) : nil
         let snapshot = AppSnapshot(
             id: snapshotID,
@@ -89,7 +104,33 @@ public struct AXSnapshotCapturer {
         return snapshot
     }
 
-    public func captureChildren(parentHandle: String, offset: Int, limit: Int) throws -> AXChildrenPage {
+    private func captureUsingBulkHierarchy(
+        appElement: AXUIElement,
+        appIdentity: AppIdentity,
+        snapshotID: SnapshotID,
+        screenshot: Bool
+    ) -> AppSnapshot? {
+        guard let capture = AXHierarchyBulkCapturer().capture(appElement: appElement) else {
+            return nil
+        }
+        let encodedScreenshot = screenshot ? screenshotCapturer.capture(app: appIdentity, axWindows: capture.windows) : nil
+        let snapshot = AppSnapshot(
+            id: snapshotID,
+            app: appIdentity,
+            windows: capture.windows,
+            screenshot: encodedScreenshot
+        )
+        elementStore?.store(snapshotID: snapshotID, elements: capture.retainedElements, summary: SnapshotSummary(snapshot: snapshot))
+        return snapshot
+    }
+
+    public func captureChildren(
+        parentHandle: String,
+        offset: Int,
+        limit: Int,
+        direct: Bool = false,
+        allDirectChildren: Bool = false
+    ) throws -> AXChildrenPage {
         guard let elementStore else {
             throw AXElementStoreError.missingSnapshot(SnapshotID("unknown"))
         }
@@ -99,11 +140,16 @@ public struct AXSnapshotCapturer {
 
         let total = attributeValueCount(kAXChildrenAttribute, from: parent)
         let offset = min(max(0, offset), total)
-        let limit = min(max(1, limit), maxChildrenPerNode)
+        let requestedLimit = allDirectChildren && limit <= 0 ? total - offset : limit
+        let limit = allDirectChildren ? max(0, requestedLimit) : min(max(1, requestedLimit), maxChildrenPerNode)
         let childElements = rangedElements(kAXChildrenAttribute, from: parent, start: offset, limit: min(limit, total - offset))
         var retainedElements: [AXUIElement] = []
         let children = childElements.map { child -> AXNode in
-            serialize(child, retainedElements: &retainedElements, childCaptureMode: .normal)
+            serialize(
+                child,
+                retainedElements: &retainedElements,
+                childCaptureMode: direct ? .none : .normal
+            )
         }
         let baseIndex = try elementStore.append(snapshotID: handle.snapshotID, elements: retainedElements)
         return AXChildrenPage(
@@ -146,7 +192,7 @@ public struct AXSnapshotCapturer {
         let actions = actionNames(for: element)
         var truncationReasons: [String] = []
         let children: [AXNode]
-        if childCaptureMode == .shallow {
+        if childCaptureMode == .shallow || childCaptureMode == .none {
             children = []
         } else {
             let childCount = attributeValueCount(kAXChildrenAttribute, from: element)
@@ -178,6 +224,7 @@ public struct AXSnapshotCapturer {
             focused: focused,
             frame: frame,
             actions: actions,
+            childCount: attributeValueCount(kAXChildrenAttribute, from: element),
             truncationReason: truncationReasons.isEmpty ? nil : truncationReasons.joined(separator: "; "),
             children: children
         )

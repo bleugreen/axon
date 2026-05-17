@@ -1,9 +1,12 @@
+import Foundation
+
 public struct CommandRouter {
     public typealias LocatorResolutionProvider = (_ app: String, _ locator: AXLocator, _ scrollToVisible: Bool) throws -> LocatorResolution
 
     private let listApps: () -> [AppIdentity]
     private let listAllApps: () -> [AppIdentity]
     private let captureSnapshot: (String, Bool) throws -> AppSnapshot
+    private let captureSnapshotWithChildDepth: (String, Bool, Int?) throws -> AppSnapshot
     private let resolveLocator: LocatorResolutionProvider
     private let batchSnapshotProvider: ActionBatchExecutor.SnapshotProvider
     private let requestAccessibility: () -> Bool
@@ -13,6 +16,7 @@ public struct CommandRouter {
     private let history: ActionHistoryStore
     private let recognizeText: TextRecognitionHandler
     private let activeCredentialFilterProvider: @Sendable () -> any ActiveCredentialFilter
+    private let debugSessions: ActionBatchDebugSessionStore
 
     public init(
         listApps: @escaping () -> [AppIdentity] = { AppResolver().recordableApps() },
@@ -34,10 +38,24 @@ public struct CommandRouter {
         self.history = history
         self.recognizeText = recognizeText
         self.activeCredentialFilterProvider = activeCredentialFilterProvider ?? { activeCredentialFilter }
+        self.debugSessions = ActionBatchDebugSessionStore()
         self.listApps = listApps
         self.listAllApps = listAllApps
         self.captureSnapshot = captureSnapshot ?? { app, screenshot in
-            try AXSnapshotCapturer(elementStore: elementStore).capture(app: app, screenshot: screenshot)
+            try AXFullTreeCapturer(elementStore: elementStore).capture(app: app, screenshot: screenshot)
+        }
+        self.captureSnapshotWithChildDepth = { app, screenshot, childDepth in
+            if let captureSnapshot, childDepth == nil {
+                return try captureSnapshot(app, screenshot)
+            }
+            if childDepth != 0 {
+                return try AXFullTreeCapturer(elementStore: elementStore).capture(app: app, screenshot: screenshot)
+            }
+            return try AXSnapshotCapturer(elementStore: elementStore).capture(
+                app: app,
+                screenshot: screenshot,
+                childDepth: childDepth
+            )
         }
         let liveLocatorResolver = AXLiveLocatorResolver(elementStore: elementStore)
         self.resolveLocator = resolveLocator ?? { app, locator, scrollToVisible in
@@ -98,10 +116,14 @@ public struct CommandRouter {
                 if (try? SnapshotHandle(target)) != nil {
                     let offset = intParam("offset", in: params) ?? 0
                     let limit = intParam("limit", in: params) ?? AXSnapshotCapturer.defaultMaxChildrenPerNode
+                    let direct = boolParam("direct", in: params) ?? false
+                    let allDirectChildren = boolParam("all", in: params) ?? false
                     let children = try AXSnapshotCapturer(elementStore: elementStore).captureChildren(
                         parentHandle: target,
                         offset: offset,
-                        limit: limit
+                        limit: limit,
+                        direct: direct,
+                        allDirectChildren: allDirectChildren
                     )
                     return JSONRPCResponse(
                         id: request.id,
@@ -111,7 +133,8 @@ public struct CommandRouter {
                 let screenshot = boolParam("screenshot", in: params) ?? false
                 let screenText = boolParam("screenText", in: params) ?? false
                 let includeTree = boolParam("tree", in: params) ?? true
-                let snapshot = try captureSnapshot(target, screenshot || screenText)
+                let childDepth = intParam("childDepth", in: params)
+                let snapshot = try captureSnapshotWithChildDepth(target, screenshot || screenText, childDepth)
                 elementStore.store(summary: observedSummary(for: snapshot))
                 var snapshotJSON = snapshot.jsonValue(
                     includeTree: includeTree,
@@ -164,6 +187,76 @@ public struct CommandRouter {
                 return JSONRPCResponse(id: request.id, error: .invalidParams(error.description))
             } catch {
                 return JSONRPCResponse(id: request.id, error: .internalError(String(describing: error)))
+            }
+        case "debug.create", "debug.start":
+            do {
+                let params = try paramsObject(in: request)
+                let breakpoints = try stringArrayParam("breakpoints", in: params)
+                let session = try ActionBatchExecutor(
+                    commandHandler: { handleCommand($0) },
+                    snapshotProvider: batchSnapshotProvider,
+                    actionRecorder: { childRequest, childResponse in
+                        guard let historySessionID else {
+                            return
+                        }
+                        history.record(request: childRequest, response: childResponse, sessionID: historySessionID)
+                    }
+                ).debugSession(params: params, breakpoints: Set(breakpoints))
+                debugSessions.insert(session)
+                if request.method == "debug.start" {
+                    session.runUntilPause(before: try optionalStringParam("pauseBefore", in: params))
+                }
+                let status = session.status
+                if isTerminalDebugStatus(status) {
+                    debugSessions.remove(id: session.id)
+                }
+                return JSONRPCResponse(id: request.id, result: ["debug": status])
+            } catch let error as ActionBatchError {
+                return JSONRPCResponse(id: request.id, error: .invalidParams(error.description))
+            } catch let error as JSONRPCError {
+                return JSONRPCResponse(id: request.id, error: error)
+            } catch {
+                return JSONRPCResponse(id: request.id, error: .internalError(String(describing: error)))
+            }
+        case "debug.step":
+            return debugSessionResponse(id: request.id, request: request) { session in
+                session.step()
+            }
+        case "debug.retry":
+            return debugSessionResponse(id: request.id, request: request) { session in
+                session.retryFailedAction()
+            }
+        case "debug.continue", "debug.resume":
+            return debugSessionResponse(id: request.id, request: request) { session in
+                session.continueUntilBreakpoint()
+            }
+        case "debug.runTo":
+            do {
+                let params = try paramsObject(in: request)
+                let blockID = try requiredString("blockId", in: params)
+                return debugSessionResponse(id: request.id, request: request) { session in
+                    session.runToBlock(blockID)
+                }
+            } catch let error as JSONRPCError {
+                return JSONRPCResponse(id: request.id, error: error)
+            } catch {
+                return JSONRPCResponse(id: request.id, error: .internalError(String(describing: error)))
+            }
+        case "debug.setBreakpoints":
+            do {
+                let params = try paramsObject(in: request)
+                let breakpoints = try stringArrayParam("breakpoints", in: params)
+                return debugSessionResponse(id: request.id, request: request) { session in
+                    session.setBreakpoints(Set(breakpoints))
+                }
+            } catch let error as JSONRPCError {
+                return JSONRPCResponse(id: request.id, error: error)
+            } catch {
+                return JSONRPCResponse(id: request.id, error: .internalError(String(describing: error)))
+            }
+        case "debug.stop":
+            return debugSessionResponse(id: request.id, request: request, removeAfter: true) { session in
+                session.stop()
             }
         case "save":
             do {
@@ -280,6 +373,54 @@ public struct CommandRouter {
             throw JSONRPCError.invalidParams("params must be an object")
         }
         return object
+    }
+
+    private func debugSessionResponse(
+        id: JSONRPCID?,
+        request: JSONRPCRequest,
+        removeAfter: Bool = false,
+        operation: (ActionBatchDebugSession) -> JSONValue
+    ) -> JSONRPCResponse {
+        do {
+            let params = try paramsObject(in: request)
+            let sessionID = try requiredString("sessionId", in: params)
+            guard let session = debugSessions.session(id: sessionID) else {
+                return JSONRPCResponse(id: id, error: .invalidParams("unknown debug session: \(sessionID)"))
+            }
+            let status = operation(session)
+            if removeAfter || isTerminalDebugStatus(status) {
+                debugSessions.remove(id: sessionID)
+            }
+            return JSONRPCResponse(id: id, result: ["debug": status])
+        } catch let error as JSONRPCError {
+            return JSONRPCResponse(id: id, error: error)
+        } catch {
+            return JSONRPCResponse(id: id, error: .internalError(String(describing: error)))
+        }
+    }
+
+    private func stringArrayParam(_ key: String, in params: [String: JSONValue]) throws -> [String] {
+        guard let value = params[key], value != .null else {
+            return []
+        }
+        guard case let .array(values) = value else {
+            throw JSONRPCError.invalidParams("\(key) must be an array of strings")
+        }
+        return try values.map { value in
+            guard case let .string(string) = value, !string.isEmpty else {
+                throw JSONRPCError.invalidParams("\(key) must be an array of strings")
+            }
+            return string
+        }
+    }
+
+    private func isTerminalDebugStatus(_ status: JSONValue) -> Bool {
+        switch status["state"] {
+        case .string("completed"), .string("stopped"):
+            return true
+        default:
+            return false
+        }
     }
 
     private func changedSinceResponse(id: JSONRPCID?, params: [String: JSONValue]) throws -> JSONRPCResponse {
@@ -587,6 +728,31 @@ public struct CommandRouter {
 
     private func activeSecretRedactor() -> ActiveSecretRedactor {
         ActiveSecretRedactor(filter: activeCredentialFilterProvider())
+    }
+}
+
+public final class ActionBatchDebugSessionStore: @unchecked Sendable {
+    private let lock = NSLock()
+    private var sessions: [String: ActionBatchDebugSession] = [:]
+
+    public init() {}
+
+    public func insert(_ session: ActionBatchDebugSession) {
+        lock.withLock {
+            sessions[session.id] = session
+        }
+    }
+
+    public func session(id: String) -> ActionBatchDebugSession? {
+        lock.withLock {
+            sessions[id]
+        }
+    }
+
+    public func remove(id: String) {
+        _ = lock.withLock {
+            sessions.removeValue(forKey: id)
+        }
     }
 }
 

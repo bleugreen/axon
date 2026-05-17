@@ -254,8 +254,10 @@ public struct MCPRouter {
                 "tree": boolSchema("Include the nested AX tree for app observations. Defaults to true for observation format and false for debug format."),
                 "offset": numberSchema("Zero-based child offset when target is a retained handle. Defaults to 0."),
                 "limit": numberSchema("Maximum children when target is a retained handle. Defaults to Axon's sibling page size."),
+                "direct": boolSchema("For handle targets, return only direct children and retain their handles without recursively capturing descendants."),
+                "childDepth": numberSchema("Initial child depth for app observations. Use 0 to retain top-level windows only and page children by handle."),
                 "depth": numberSchema("Maximum tree depth to display for app observations, with windows at depth 0."),
-                "all": boolSchema("For no-target app lists, include all running processes instead of regular UI apps. Defaults to false."),
+                "all": boolSchema("For no-target app lists, include all running processes. For direct handle child requests, include all direct children."),
                 "format": stringSchema("Defaults to observation. Use debug only when diagnosing Axon internals."),
                 "frames": boolSchema("Include frames in observation output. Defaults to false.")
             ])

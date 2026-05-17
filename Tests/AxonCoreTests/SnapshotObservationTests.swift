@@ -28,8 +28,9 @@ import Testing
     let tree = treeString(in: observation)
 
     #expect(tree.contains("obs:1: tabgroup \"Browser tabs\""))
-    #expect((1...30).allSatisfy { tree.contains("radiobutton \"Tab \($0)\" [click]") })
-    #expect(!tree.contains("<truncated:"))
+    #expect((1...24).allSatisfy { tree.contains("radiobutton \"Tab \($0)\" [click]") })
+    #expect(!tree.contains("Tab 25"))
+    #expect(tree.contains("obs:1: tabgroup \"Browser tabs\" <truncated: children display limited to 24 of 30>"))
     #expect(tree.contains("heading \"Front page story\""))
 }
 
