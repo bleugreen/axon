@@ -7,37 +7,40 @@ struct RecipeCanvas: View {
     @Binding var selectedBlockID: String?
     let inputNames: [String]
     let trace: [JSONValue]
+    let debugCursorBlockID: String?
+    let failedRepairBlockID: String?
+    let areBreakpointsDisabled: Bool
+    let breakpointsChanged: ([String]) -> Void
 
     var body: some View {
-        VStack(spacing: 0) {
-            RecipeSequenceHeader(stepCount: blocks.count, addNote: addNote)
-            Divider()
-            ScrollView {
-                LazyVStack(spacing: 10) {
-                    ForEach(blocks.indices, id: \.self) { index in
-                        RecipeStepView(
-                            index: index,
-                            block: $blocks[index],
-                            isSelected: selectedBlockID == blocks[index].id,
-                            isBreakpoint: isBreakpoint(blocks[index]),
-                            canMoveUp: index > 0,
-                            canMoveDown: index < blocks.count - 1,
-                            traceRecord: traceRecord(for: blocks[index]),
-                            inputNames: inputNames,
-                            select: { selectedBlockID = blocks[index].id },
-                            toggleBreakpoint: { toggleBreakpoint(blocks[index]) },
-                            moveUp: { move(index, by: -1) },
-                            moveDown: { move(index, by: 1) },
-                            duplicate: { duplicate(index) },
-                            delete: { delete(index) }
-                        )
-                    }
+        ScrollView {
+            LazyVStack(spacing: 10) {
+                ForEach(blocks.indices, id: \.self) { index in
+                    RecipeStepView(
+                        index: index,
+                        block: $blocks[index],
+                        isSelected: selectedBlockID == blocks[index].id,
+                        isBreakpoint: isBreakpoint(blocks[index]),
+                        isDebugCursor: blocks[index].id == debugCursorBlockID,
+                        canMoveUp: index > 0,
+                        canMoveDown: index < blocks.count - 1,
+                        traceRecord: traceRecord(for: blocks[index]),
+                        isRepairTarget: blocks[index].id == failedRepairBlockID,
+                        isBreakpointDisabled: areBreakpointsDisabled,
+                        inputNames: inputNames,
+                        select: { selectedBlockID = blocks[index].id },
+                        toggleBreakpoint: { toggleBreakpoint(blocks[index]) },
+                        moveUp: { move(index, by: -1) },
+                        moveDown: { move(index, by: 1) },
+                        duplicate: { duplicate(index) },
+                        delete: { delete(index) }
+                    )
                 }
-                .padding(.horizontal, 24)
-                .padding(.vertical, 20)
-                .frame(maxWidth: 1040)
-                .frame(maxWidth: .infinity)
             }
+            .padding(.horizontal, 24)
+            .padding(.vertical, 20)
+            .frame(maxWidth: 1040)
+            .frame(maxWidth: .infinity)
         }
         .background(RecipeEditorPalette.canvasBackground)
     }
@@ -67,6 +70,7 @@ struct RecipeCanvas: View {
         } else {
             editorMetadata.breakpoints.append(id)
         }
+        breakpointsChanged(editorMetadata.breakpoints)
     }
 
     private func move(_ index: Int, by delta: Int) {
@@ -95,16 +99,11 @@ struct RecipeCanvas: View {
         blocks.remove(at: index)
         if let removedID {
             editorMetadata.breakpoints.removeAll { $0 == removedID }
+            breakpointsChanged(editorMetadata.breakpoints)
         }
         if selectedBlockID == removedID {
             selectedBlockID = blocks[safe: min(index, blocks.count - 1)]?.id
         }
-    }
-
-    private func addNote() {
-        blocks.append(.note(AxonRecipeNote(fields: ["note": .string("New note")])))
-        blocks[blocks.count - 1].id = nextBlockID()
-        selectedBlockID = blocks.last?.id
     }
 
     private func nextBlockID() -> String {
@@ -117,27 +116,6 @@ struct RecipeCanvas: View {
             }
             nextID += 1
         }
-    }
-}
-
-private struct RecipeSequenceHeader: View {
-    let stepCount: Int
-    let addNote: () -> Void
-
-    var body: some View {
-        HStack(spacing: 12) {
-            Text("\(stepCount) step\(stepCount == 1 ? "" : "s")")
-                .font(.callout.weight(.medium))
-                .foregroundStyle(.secondary)
-            Spacer()
-            Button(action: addNote) {
-                Label("Add Note", systemImage: "note.text.badge.plus")
-            }
-            .buttonStyle(.borderless)
-        }
-        .padding(.horizontal, 24)
-        .padding(.vertical, 11)
-        .background(RecipeEditorPalette.canvasBackground)
     }
 }
 

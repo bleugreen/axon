@@ -138,6 +138,7 @@ public struct AXNode: Codable, Equatable, Sendable {
     public let focused: Bool?
     public let frame: AXFrame?
     public let actions: [String]
+    public let childCount: Int?
     public let truncationReason: String?
     public let children: [AXNode]
 
@@ -153,6 +154,7 @@ public struct AXNode: Codable, Equatable, Sendable {
         focused: Bool? = nil,
         frame: AXFrame? = nil,
         actions: [String] = [],
+        childCount: Int? = nil,
         truncationReason: String? = nil,
         children: [AXNode] = []
     ) {
@@ -167,6 +169,7 @@ public struct AXNode: Codable, Equatable, Sendable {
         self.focused = focused
         self.frame = frame
         self.actions = actions
+        self.childCount = childCount
         self.truncationReason = truncationReason
         self.children = children
     }
@@ -207,6 +210,7 @@ public extension AXNode {
             focused: focused,
             frame: frame,
             actions: actions,
+            childCount: childCount,
             truncationReason: combinedReason,
             children: children
         )
@@ -302,7 +306,7 @@ public struct WindowSignature: Codable, Equatable, Sendable {
             subrole: node.subrole,
             title: node.title,
             frame: node.frame.map(FrameSignature.init(frame:)),
-            childCount: node.children.count
+            childCount: node.childCount ?? node.children.count
         )
     }
 }

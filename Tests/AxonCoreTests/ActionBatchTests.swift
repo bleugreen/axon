@@ -409,6 +409,19 @@ private func changeFactSnapshot(title: String) -> AppSnapshot {
     )
 }
 
+private func debugPauseSnapshot(id: String, app: String) -> AppSnapshot {
+    AppSnapshot(
+        id: SnapshotID(id),
+        app: AppIdentity(bundleIdentifier: "com.example.App", name: app, processIdentifier: 42),
+        windows: [
+            AXNode(role: "AXWindow", title: "Main", children: [
+                AXNode(role: "AXButton", title: "Continue", identifier: "continue")
+            ])
+        ],
+        screenshot: nil
+    )
+}
+
 private func scrollSurfaceTarget() -> JSONValue {
     .object([
         "app": .string("Example"),
@@ -926,6 +939,522 @@ private func articleSnapshot(children: [AXNode]) -> AppSnapshot {
     #expect(response.result?["batch"]?["success"] == .bool(true))
     #expect(types.count == 1)
     #expect(batchSnapshotApps == ["Example"])
+}
+
+@Test func commandRouterDebugStartPausesBeforeSelectedBlock() {
+    var requests: [String] = []
+    let router = CommandRouter(actions: PrimitiveActionHandlers(
+        click: { target in
+            requests.append("click:\(target)")
+            return PrimitiveActionResult(action: "click", target: target, strategy: "test", success: true)
+        },
+        type: { target, value in
+            requests.append("type:\(target):\(value)")
+            return PrimitiveActionResult(action: "type", target: target, strategy: "test", success: true)
+        }
+    ))
+
+    let response = router.handle(JSONRPCRequest(
+        id: .string("debug-start"),
+        method: "debug.start",
+        params: .object([
+            "pauseBefore": .string("a002"),
+            "actions": .array([
+                .object([
+                    "id": .string("a001"),
+                    "tool": .string("click"),
+                    "target": .string("s1:2")
+                ]),
+                .object([
+                    "id": .string("a002"),
+                    "tool": .string("type"),
+                    "target": .string("s1:3"),
+                    "value": .string("Mitch")
+                ])
+            ])
+        ])
+    ))
+
+    #expect(response.error == nil)
+    #expect(response.result?["debug"]?["state"] == .string("paused"))
+    #expect(response.result?["debug"]?["currentActionId"] == .string("a002"))
+    #expect(response.result?["debug"]?["trace"]?[0]?["actionId"] == .string("a001"))
+    #expect(requests == ["click:s1:2"])
+}
+
+@Test func commandRouterDebugStartCarriesCallerDocumentID() {
+    let router = CommandRouter(actions: PrimitiveActionHandlers())
+
+    let response = router.handle(JSONRPCRequest(
+        id: .string("debug-start"),
+        method: "debug.start",
+        params: .object([
+            "documentId": .string("doc-123"),
+            "actions": .array([])
+        ])
+    ))
+
+    #expect(response.error == nil)
+    #expect(response.result?["debug"]?["documentId"] == .string("doc-123"))
+}
+
+@Test func commandRouterDebugCreateDoesNotRunActions() {
+    var requests: [String] = []
+    let router = CommandRouter(actions: PrimitiveActionHandlers(
+        click: { target in
+            requests.append("click:\(target)")
+            return PrimitiveActionResult(action: "click", target: target, strategy: "test", success: true)
+        }
+    ))
+
+    let response = router.handle(JSONRPCRequest(
+        id: .string("debug-create"),
+        method: "debug.create",
+        params: .object([
+            "breakpoints": .array([.string("a002")]),
+            "actions": .array([
+                .object([
+                    "id": .string("a001"),
+                    "tool": .string("click"),
+                    "target": .string("s1:1")
+                ])
+            ])
+        ])
+    ))
+
+    let debug = response.result?["debug"]
+    #expect(response.error == nil)
+    #expect(debug?["state"] == .string("paused"))
+    #expect(debug?["cursorBlockId"] == .string("a001"))
+    #expect(debug?["lastActionId"] == .null)
+    #expect(debug?["pauseReason"] == .string("start"))
+    #expect(debug?["availableActions"]?.arrayValue?.contains(.string("runTo")) == true)
+    #expect(requests == [])
+}
+
+@Test func commandRouterDebugRunToPausesBeforeSelectedBlock() {
+    var requests: [String] = []
+    let router = CommandRouter(actions: PrimitiveActionHandlers(
+        click: { target in
+            requests.append("click:\(target)")
+            return PrimitiveActionResult(action: "click", target: target, strategy: "test", success: true)
+        },
+        type: { target, value in
+            requests.append("type:\(target):\(value)")
+            return PrimitiveActionResult(action: "type", target: target, strategy: "test", success: true)
+        }
+    ))
+
+    let start = router.handle(JSONRPCRequest(
+        id: .string("debug-create"),
+        method: "debug.create",
+        params: .object([
+            "actions": .array([
+                .object([
+                    "id": .string("a001"),
+                    "tool": .string("click"),
+                    "target": .string("s1:1")
+                ]),
+                .object([
+                    "id": .string("a002"),
+                    "tool": .string("type"),
+                    "target": .string("s1:2"),
+                    "value": .string("Ada")
+                ])
+            ])
+        ])
+    ))
+    guard case let .string(sessionID)? = start.result?["debug"]?["sessionId"] else {
+        Issue.record("debug.create should return a session id")
+        return
+    }
+
+    let runTo = router.handle(JSONRPCRequest(
+        id: .string("debug-run-to"),
+        method: "debug.runTo",
+        params: .object([
+            "sessionId": .string(sessionID),
+            "blockId": .string("a002")
+        ])
+    ))
+
+    let debug = runTo.result?["debug"]
+    #expect(runTo.error == nil)
+    #expect(debug?["state"] == .string("paused"))
+    #expect(debug?["cursorBlockId"] == .string("a002"))
+    #expect(debug?["lastActionId"] == .string("a001"))
+    #expect(debug?["pauseReason"] == .string("runTo"))
+    #expect(requests == ["click:s1:1"])
+}
+
+@Test func commandRouterDebugSetBreakpointsUpdatesLiveSession() {
+    var requests: [String] = []
+    let router = CommandRouter(actions: PrimitiveActionHandlers(
+        click: { target in
+            requests.append("click:\(target)")
+            return PrimitiveActionResult(action: "click", target: target, strategy: "test", success: true)
+        }
+    ))
+
+    let start = router.handle(JSONRPCRequest(
+        id: .string("debug-create"),
+        method: "debug.create",
+        params: .object([
+            "actions": .array([
+                .object([
+                    "id": .string("a001"),
+                    "tool": .string("click"),
+                    "target": .string("s1:1")
+                ]),
+                .object([
+                    "id": .string("a002"),
+                    "tool": .string("click"),
+                    "target": .string("s1:2")
+                ])
+            ])
+        ])
+    ))
+    guard case let .string(sessionID)? = start.result?["debug"]?["sessionId"] else {
+        Issue.record("debug.create should return a session id")
+        return
+    }
+
+    let updated = router.handle(JSONRPCRequest(
+        id: .string("debug-set-breakpoints"),
+        method: "debug.setBreakpoints",
+        params: .object([
+            "sessionId": .string(sessionID),
+            "breakpoints": .array([.string("a002")])
+        ])
+    ))
+    let resumed = router.handle(JSONRPCRequest(
+        id: .string("debug-resume"),
+        method: "debug.resume",
+        params: .object(["sessionId": .string(sessionID)])
+    ))
+
+    #expect(updated.error == nil)
+    #expect(updated.result?["debug"]?["breakpoints"] == .array([.string("a002")]))
+    #expect(resumed.error == nil)
+    #expect(resumed.result?["debug"]?["state"] == .string("paused"))
+    #expect(resumed.result?["debug"]?["cursorBlockId"] == .string("a002"))
+    #expect(resumed.result?["debug"]?["pauseReason"] == .string("breakpoint"))
+    #expect(requests == ["click:s1:1"])
+}
+
+@Test func commandRouterDebugStartCapturesSnapshotForPauseBefore() {
+    var snapshotApps: [String] = []
+    let router = CommandRouter(
+        batchSnapshotProvider: { app in
+            snapshotApps.append(app)
+            return debugPauseSnapshot(id: "pause-snapshot", app: app)
+        },
+        actions: PrimitiveActionHandlers()
+    )
+
+    let response = router.handle(JSONRPCRequest(
+        id: .string("debug-start"),
+        method: "debug.start",
+        params: .object([
+            "pauseBefore": .string("a001"),
+            "actions": .array([
+                .object([
+                    "id": .string("a001"),
+                    "tool": .string("click"),
+                    "app": .string("Example"),
+                    "target": .string("s1:1")
+                ])
+            ])
+        ])
+    ))
+
+    #expect(response.error == nil)
+    let debug = response.result?["debug"]
+    let pauseSnapshot = debug?["pauseSnapshot"]
+    #expect(debug?["state"] == JSONValue.string("paused"))
+    #expect(pauseSnapshot?["reason"] == JSONValue.string("pauseBefore"))
+    #expect(pauseSnapshot?["snapshotId"] == JSONValue.string("pause-snapshot"))
+    #expect(pauseSnapshot?["app"]?["name"] == JSONValue.string("Example"))
+    #expect(snapshotApps == ["Example"])
+}
+
+@Test func commandRouterDebugStepDoesNotCaptureSnapshotForOrdinaryStepPause() {
+    var snapshotApps: [String] = []
+    let router = CommandRouter(
+        batchSnapshotProvider: { app in
+            snapshotApps.append(app)
+            return debugPauseSnapshot(id: "unexpected", app: app)
+        },
+        actions: PrimitiveActionHandlers(
+            click: { target in
+                PrimitiveActionResult(action: "click", target: target, strategy: "test", success: true)
+            }
+        )
+    )
+
+    let start = router.handle(JSONRPCRequest(
+        id: .string("debug-start"),
+        method: "debug.start",
+        params: .object([
+            "actions": .array([
+                .object([
+                    "id": .string("a001"),
+                    "tool": .string("click"),
+                    "app": .string("Example"),
+                    "target": .string("s1:1")
+                ]),
+                .object([
+                    "id": .string("a002"),
+                    "tool": .string("click"),
+                    "app": .string("Example"),
+                    "target": .string("s1:1")
+                ])
+            ])
+        ])
+    ))
+    guard case let .string(sessionID)? = start.result?["debug"]?["sessionId"] else {
+        Issue.record("debug.start should return a session id")
+        return
+    }
+
+    let stepped = router.handle(JSONRPCRequest(
+        id: .string("debug-step"),
+        method: "debug.step",
+        params: .object(["sessionId": .string(sessionID)])
+    ))
+
+    #expect(stepped.error == nil)
+    let debug = stepped.result?["debug"]
+    #expect(debug?["state"] == JSONValue.string("paused"))
+    #expect(debug?["currentActionId"] == JSONValue.string("a002"))
+    #expect(debug?["pauseSnapshot"] == nil)
+    #expect(snapshotApps == [])
+}
+
+@Test func commandRouterDebugContinuePausesAtNextBreakpoint() {
+    var requests: [String] = []
+    let router = CommandRouter(actions: PrimitiveActionHandlers(
+        click: { target in
+            requests.append("click:\(target)")
+            return PrimitiveActionResult(action: "click", target: target, strategy: "test", success: true)
+        },
+        type: { target, value in
+            requests.append("type:\(target):\(value)")
+            return PrimitiveActionResult(action: "type", target: target, strategy: "test", success: true)
+        }
+    ))
+
+    let start = router.handle(JSONRPCRequest(
+        id: .string("debug-start"),
+        method: "debug.start",
+        params: .object([
+            "breakpoints": .array([.string("a003")]),
+            "actions": .array([
+                .object([
+                    "id": .string("a001"),
+                    "tool": .string("click"),
+                    "target": .string("s1:1")
+                ]),
+                .object([
+                    "id": .string("a002"),
+                    "tool": .string("type"),
+                    "target": .string("s1:2"),
+                    "value": .string("Ada")
+                ]),
+                .object([
+                    "id": .string("a003"),
+                    "tool": .string("click"),
+                    "target": .string("s1:3")
+                ])
+            ])
+        ])
+    ))
+    guard case let .string(sessionID)? = start.result?["debug"]?["sessionId"] else {
+        Issue.record("debug.start should return a session id")
+        return
+    }
+
+    let continued = router.handle(JSONRPCRequest(
+        id: .string("debug-continue"),
+        method: "debug.continue",
+        params: .object(["sessionId": .string(sessionID)])
+    ))
+
+    #expect(continued.error == nil)
+    #expect(continued.result?["debug"]?["state"] == .string("paused"))
+    #expect(continued.result?["debug"]?["currentActionId"] == .string("a003"))
+    #expect(requests == ["click:s1:1", "type:s1:2:Ada"])
+}
+
+@Test func commandRouterDebugContinueCapturesSnapshotAtBreakpoint() {
+    var snapshotApps: [String] = []
+    let router = CommandRouter(
+        batchSnapshotProvider: { app in
+            snapshotApps.append(app)
+            return debugPauseSnapshot(id: "breakpoint-snapshot", app: app)
+        },
+        actions: PrimitiveActionHandlers(
+            click: { target in
+                PrimitiveActionResult(action: "click", target: target, strategy: "test", success: true)
+            }
+        )
+    )
+
+    let start = router.handle(JSONRPCRequest(
+        id: .string("debug-start"),
+        method: "debug.start",
+        params: .object([
+            "breakpoints": .array([.string("a002")]),
+            "actions": .array([
+                .object([
+                    "id": .string("a001"),
+                    "tool": .string("click"),
+                    "app": .string("Example"),
+                    "target": .string("s1:1")
+                ]),
+                .object([
+                    "id": .string("a002"),
+                    "tool": .string("click"),
+                    "app": .string("Example"),
+                    "target": .string("s1:1")
+                ])
+            ])
+        ])
+    ))
+    guard case let .string(sessionID)? = start.result?["debug"]?["sessionId"] else {
+        Issue.record("debug.start should return a session id")
+        return
+    }
+
+    let continued = router.handle(JSONRPCRequest(
+        id: .string("debug-continue"),
+        method: "debug.continue",
+        params: .object(["sessionId": .string(sessionID)])
+    ))
+
+    #expect(continued.error == nil)
+    let debug = continued.result?["debug"]
+    let pauseSnapshot = debug?["pauseSnapshot"]
+    #expect(debug?["state"] == JSONValue.string("paused"))
+    #expect(pauseSnapshot?["reason"] == JSONValue.string("breakpoint"))
+    #expect(pauseSnapshot?["snapshotId"] == JSONValue.string("breakpoint-snapshot"))
+    #expect(snapshotApps == ["Example"])
+}
+
+@Test func commandRouterDebugStepExecutesCurrentActionAndAdvances() {
+    var requests: [String] = []
+    let router = CommandRouter(actions: PrimitiveActionHandlers(
+        click: { target in
+            requests.append("click:\(target)")
+            return PrimitiveActionResult(action: "click", target: target, strategy: "test", success: true)
+        },
+        type: { target, value in
+            requests.append("type:\(target):\(value)")
+            return PrimitiveActionResult(action: "type", target: target, strategy: "test", success: true)
+        }
+    ))
+
+    let start = router.handle(JSONRPCRequest(
+        id: .string("debug-start"),
+        method: "debug.start",
+        params: .object([
+            "actions": .array([
+                .object([
+                    "id": .string("a001"),
+                    "tool": .string("click"),
+                    "target": .string("s1:1")
+                ]),
+                .object([
+                    "id": .string("a002"),
+                    "tool": .string("type"),
+                    "target": .string("s1:2"),
+                    "value": .string("Ada")
+                ])
+            ])
+        ])
+    ))
+    guard case let .string(sessionID)? = start.result?["debug"]?["sessionId"] else {
+        Issue.record("debug.start should return a session id")
+        return
+    }
+
+    let stepped = router.handle(JSONRPCRequest(
+        id: .string("debug-step"),
+        method: "debug.step",
+        params: .object(["sessionId": .string(sessionID)])
+    ))
+
+    #expect(stepped.error == nil)
+    #expect(stepped.result?["debug"]?["state"] == .string("paused"))
+    #expect(stepped.result?["debug"]?["currentActionId"] == .string("a002"))
+    #expect(stepped.result?["debug"]?["trace"]?[0]?["actionId"] == .string("a001"))
+    #expect(requests == ["click:s1:1"])
+}
+
+@Test func commandRouterDebugFailureCapturesSnapshotAndCanRetry() {
+    var attempts = 0
+    var snapshotApps: [String] = []
+    let router = CommandRouter(
+        batchSnapshotProvider: { app in
+            let id = "failure-snapshot-\(snapshotApps.count + 1)"
+            snapshotApps.append(app)
+            return debugPauseSnapshot(id: id, app: app)
+        },
+        actions: PrimitiveActionHandlers(
+            click: { target in
+                attempts += 1
+                return PrimitiveActionResult(
+                    action: "click",
+                    target: target,
+                    strategy: "test",
+                    success: attempts > 1,
+                    message: attempts > 1 ? nil : "blocked"
+                )
+            }
+        )
+    )
+
+    let start = router.handle(JSONRPCRequest(
+        id: .string("debug-start"),
+        method: "debug.start",
+        params: .object([
+            "actions": .array([
+                .object([
+                    "id": .string("a001"),
+                    "tool": .string("click"),
+                    "app": .string("Example"),
+                    "target": .string("s1:1")
+                ])
+            ])
+        ])
+    ))
+    guard case let .string(sessionID)? = start.result?["debug"]?["sessionId"] else {
+        Issue.record("debug.start should return a session id")
+        return
+    }
+
+    let failed = router.handle(JSONRPCRequest(
+        id: .string("debug-step"),
+        method: "debug.step",
+        params: .object(["sessionId": .string(sessionID)])
+    ))
+    let retried = router.handle(JSONRPCRequest(
+        id: .string("debug-retry"),
+        method: "debug.retry",
+        params: .object(["sessionId": .string(sessionID)])
+    ))
+
+    #expect(failed.error == nil)
+    let failedDebug = failed.result?["debug"]
+    let failureSnapshot = failedDebug?["pauseSnapshot"]
+    #expect(failedDebug?["state"] == JSONValue.string("failed"))
+    #expect(failedDebug?["currentActionId"] == JSONValue.string("a001"))
+    #expect(failureSnapshot?["reason"] == JSONValue.string("failure"))
+    #expect(failureSnapshot?["snapshotId"] == JSONValue.string("failure-snapshot-1"))
+    #expect(retried.error == nil)
+    #expect(retried.result?["debug"]?["state"] == JSONValue.string("completed"))
+    #expect(attempts == 2)
+    #expect(snapshotApps == ["Example"])
 }
 
 @Test func runSkipsFirstClassNoteBlocks() throws {

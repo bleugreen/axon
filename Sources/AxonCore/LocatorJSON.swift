@@ -23,6 +23,7 @@ public extension LocatorCandidate {
             "index": .int(index),
             "handle": handle.map { .string($0.rawValue) } ?? .null,
             "role": .string(role),
+            "frame": frame.map(\.jsonValue) ?? .null,
             "score": .int(score)
         ]
         let titleWasRedacted = object.addRedactedString(

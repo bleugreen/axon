@@ -29,6 +29,9 @@ do {
         try launchAxonApp()
         print("started Axon.app")
 
+    case "edit":
+        try openRecipeEditor(arguments: arguments)
+
     case "status":
         try printHumanStatus()
 
@@ -191,6 +194,8 @@ do {
           serve    run the local daemon socket server
           mcp      run an MCP stdio facade backed by the daemon socket
           start    launch the installed Axon.app menu bar service
+          edit <path.axn>
+                  open a recipe in the visual editor
           status   print app-backed daemon status
           setup    launch Axon.app and request permissions when needed
           quit     quit the installed Axon.app service
@@ -543,6 +548,22 @@ private func launchAxonApp() throws {
     process.waitUntilExit()
     guard process.terminationStatus == 0 else {
         throw CLIError.missingArguments("Could not open Axon.app at \(appURL.path)")
+    }
+}
+
+private func openRecipeEditor(arguments: [String]) throws {
+    guard arguments.count == 2 else {
+        throw CLIError.missingArguments("edit requires a path")
+    }
+    let fileURL = URL(fileURLWithPath: arguments[1]).standardizedFileURL
+    let editURL = AxonEditorURL.url(forEditing: fileURL)
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: "/usr/bin/open")
+    process.arguments = [editURL.absoluteString]
+    try process.run()
+    process.waitUntilExit()
+    guard process.terminationStatus == 0 else {
+        throw CLIError.missingArguments("Could not open recipe editor for \(fileURL.path)")
     }
 }
 

@@ -15,6 +15,11 @@ final class AxonAppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendabl
         case failed(String)
     }
 
+    private enum RecordingDestination {
+        case review(scope: UserRecordingScope?)
+        case editor(controller: RecipeEditorWindowController, beforeBlockID: String?, scope: UserRecordingScope?)
+    }
+
     nonisolated private static let appBundleIdentifier = "com.bleugreen.axon"
     nonisolated private static let homebrewCaskName = "axon"
 
@@ -29,17 +34,17 @@ final class AxonAppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendabl
     private var updateMenuState: UpdateMenuState = .idle
     private var recorder: UserActionRecorder?
     private var recordingScope: UserRecordingScope?
+    private var recordingDestination: RecordingDestination?
     private let appRecency = RecordingAppRecencyStore()
+    private var editorWindows: [RecipeEditorWindowController] = []
 
     func applicationWillFinishLaunching(_ notification: Notification) {
-        NSApp.setActivationPolicy(.regular)
+        NSApp.setActivationPolicy(.accessory)
     }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        NSApp.setActivationPolicy(.regular)
-        DispatchQueue.main.async {
-            NSApp.setActivationPolicy(.regular)
-        }
+        NSApp.setActivationPolicy(.accessory)
+        UserDefaults.standard.set(false, forKey: "NSQuitAlwaysKeepsWindows")
         appRecency.start()
         configureStatusItem()
         ScreenCaptureRuntime.bootstrapSynchronously()
@@ -55,6 +60,14 @@ final class AxonAppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendabl
     func applicationWillTerminate(_ notification: Notification) {
         refreshTimer?.invalidate()
         appRecency.stop()
+    }
+
+    func applicationShouldHandleReopen(_ sender: NSApplication, hasVisibleWindows flag: Bool) -> Bool {
+        if let controller = editorWindows.first {
+            promoteForEditorWindows()
+            controller.showWindow(nil)
+        }
+        return true
     }
 
     private func configureStatusItem() {
@@ -92,6 +105,7 @@ final class AxonAppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendabl
         if !AccessibilityPermission.isTrusted() {
             menu.addItem(NSMenuItem(title: "Request Accessibility", action: #selector(requestAccessibility), keyEquivalent: ""))
         }
+        menu.addItem(NSMenuItem(title: "Open Recipe...", action: #selector(openRecipeFromMenu), keyEquivalent: ""))
         if let recordingScope {
             menu.addItem(disabledItem("Recording \(recordingScope.displayName)"))
             menu.addItem(NSMenuItem(title: "Stop Recording...", action: #selector(stopRecording), keyEquivalent: ""))
@@ -236,6 +250,18 @@ final class AxonAppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendabl
     }
 
     @objc private func startRecording() {
+        beginRecording(destination: .review(scope: nil))
+    }
+
+    private func startRecordingFromEditor(_ controller: RecipeEditorWindowController, beforeBlockID: String?) {
+        beginRecording(destination: .editor(controller: controller, beforeBlockID: beforeBlockID, scope: nil))
+    }
+
+    private func beginRecording(destination requestedDestination: RecordingDestination) {
+        guard recorder == nil else {
+            showAlert(title: "Recording Already Active", message: "Stop the current recording before starting another.")
+            return
+        }
         guard AccessibilityPermission.isTrusted() else {
             showAlert(title: "Accessibility Required", message: "Axon needs Accessibility permission before it can record user actions.")
             _ = AccessibilityPermission.requestTrustPrompt()
@@ -250,6 +276,12 @@ final class AxonAppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendabl
             try recorder.start()
             self.recorder = recorder
             self.recordingScope = scope
+            switch requestedDestination {
+            case .review:
+                self.recordingDestination = .review(scope: scope)
+            case let .editor(controller, beforeBlockID, _):
+                self.recordingDestination = .editor(controller: controller, beforeBlockID: beforeBlockID, scope: scope)
+            }
             installMenu()
         } catch {
             showAlert(title: "Unable to Start Recording", message: String(describing: error))
@@ -264,12 +296,20 @@ final class AxonAppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendabl
             let source = try recorder.stop()
             self.recorder = nil
             let scope = recordingScope
+            let destination = recordingDestination ?? .review(scope: scope)
             self.recordingScope = nil
+            self.recordingDestination = nil
             installMenu()
-            try saveRecording(source, scope: scope)
+            switch destination {
+            case let .review(scope):
+                try openRecordingReview(source, scope: scope)
+            case let .editor(controller, beforeBlockID, scope):
+                try controller.insertRecording(source, beforeBlockID: beforeBlockID, scope: scope)
+            }
         } catch {
             self.recorder = nil
             self.recordingScope = nil
+            self.recordingDestination = nil
             installMenu()
             showAlert(title: "Unable to Stop Recording", message: String(describing: error))
         }
@@ -310,22 +350,6 @@ final class AxonAppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendabl
         }
     }
 
-    private func saveRecording(_ source: String, scope: UserRecordingScope?) throws {
-        let directory = defaultRecordingsDirectory()
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-
-        let savePanel = NSSavePanel()
-        savePanel.title = "Save Axon Recording"
-        savePanel.directoryURL = directory
-        savePanel.nameFieldStringValue = defaultRecordingName(scope: scope)
-        savePanel.allowedContentTypes = [UTType(filenameExtension: "axn") ?? .yaml]
-        savePanel.canCreateDirectories = true
-        guard savePanel.runModal() == .OK, let url = savePanel.url else {
-            return
-        }
-        try source.write(to: url, atomically: true, encoding: .utf8)
-    }
-
     private func updateStatusItemAppearance() {
         guard let button = statusItem.button else {
             return
@@ -363,6 +387,142 @@ final class AxonAppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendabl
         return image
     }
 
+    func application(_ application: NSApplication, open urls: [URL]) {
+        handleOpenedURLs(urls)
+    }
+
+    func application(_ sender: NSApplication, openFile filename: String) -> Bool {
+        handleRecipeFileOpen(URL(fileURLWithPath: filename))
+        return true
+    }
+
+    func application(_ sender: NSApplication, openFiles filenames: [String]) {
+        filenames.forEach { handleRecipeFileOpen(URL(fileURLWithPath: $0)) }
+        sender.reply(toOpenOrPrint: .success)
+    }
+
+    private func handleOpenedURLs(_ urls: [URL]) {
+        for url in urls {
+            if url.scheme == AxonEditorURL.scheme {
+                do {
+                    try openRecipeInEditor(url: AxonEditorURL.fileURL(from: url))
+                } catch {
+                    showAlert(title: "Unable to Open Editor", message: String(describing: error))
+                }
+            } else if url.isFileURL {
+                handleRecipeFileOpen(url)
+            }
+        }
+    }
+
+    private func handleRecipeFileOpen(_ url: URL) {
+        do {
+            try openRecipeInEditor(url: url)
+        } catch {
+            showAlert(title: "Unable to Open Recipe", message: String(describing: error))
+        }
+    }
+
+    @objc func openRecipeFromMenu() {
+        let openPanel = NSOpenPanel()
+        openPanel.title = "Open Axon Recipe"
+        openPanel.allowedContentTypes = [.axonRecipe, UTType(filenameExtension: "axn") ?? .yaml]
+        openPanel.canChooseDirectories = false
+        openPanel.allowsMultipleSelection = false
+        guard openPanel.runModal() == .OK, let url = openPanel.url else {
+            return
+        }
+        do {
+            try openRecipeInEditor(url: url)
+        } catch {
+            showAlert(title: "Unable to Open Recipe", message: String(describing: error))
+        }
+    }
+
+    private func openRecipeInEditor(url: URL) throws {
+        let source = try String(contentsOf: url, encoding: .utf8)
+        try openRecipeSourceInEditor(
+            source,
+            fileURL: url,
+            review: false,
+            suggestedName: url.lastPathComponent,
+            suggestedDirectory: url.deletingLastPathComponent()
+        )
+    }
+
+    private func openRecordingReview(_ source: String, scope: UserRecordingScope?) throws {
+        try openRecipeSourceInEditor(
+            source,
+            fileURL: nil,
+            review: true,
+            suggestedName: defaultRecordingName(scope: scope),
+            suggestedDirectory: defaultRecordingsDirectory()
+        )
+    }
+
+    private func openRecipeSourceInEditor(
+        _ source: String,
+        fileURL: URL?,
+        review: Bool,
+        suggestedName: String,
+        suggestedDirectory: URL
+    ) throws {
+        let recipe = try AxonRecipe(source: source)
+        openEditorWindow(
+            document: AxonDocument(recipe: recipe),
+            fileURL: fileURL,
+            review: review,
+            suggestedName: suggestedName,
+            suggestedDirectory: suggestedDirectory
+        )
+    }
+
+    private func openEditorWindow(
+        document: AxonDocument,
+        fileURL: URL?,
+        review: Bool,
+        suggestedName: String,
+        suggestedDirectory: URL
+    ) {
+        promoteForEditorWindows()
+        let controller = RecipeEditorWindowController(
+            document: document,
+            fileURL: fileURL,
+            review: review,
+            suggestedName: suggestedName,
+            suggestedDirectory: suggestedDirectory
+        ) { [weak self] closed in
+            self?.editorWindows.removeAll { $0 === closed }
+            if self?.editorWindows.isEmpty == true {
+                self?.demoteWithoutEditorWindows()
+            }
+        }
+        controller.recordFromHere = { [weak self] controller, beforeBlockID in
+            self?.startRecordingFromEditor(controller, beforeBlockID: beforeBlockID)
+        }
+        editorWindows.append(controller)
+        controller.showWindow(nil)
+        promoteForEditorWindows()
+        DispatchQueue.main.async { [weak self] in
+            self?.promoteForEditorWindows()
+        }
+    }
+
+    private func promoteForEditorWindows() {
+        NSApp.setActivationPolicy(.regular)
+        statusItem.isVisible = true
+        NSApp.unhide(nil)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    private func demoteWithoutEditorWindows() {
+        guard editorWindows.isEmpty else {
+            return
+        }
+        NSApp.setActivationPolicy(.accessory)
+        statusItem.isVisible = true
+    }
+
     private func defaultRecordingsDirectory() -> URL {
         FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("Axon Recordings", isDirectory: true)
@@ -387,8 +547,155 @@ final class AxonAppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendabl
         Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? AxonVersion.current
     }
 
+    private func firstTraceError(in trace: [JSONValue]) -> String? {
+        for record in trace {
+            if record["success"] == .bool(false), case let .string(error)? = record["error"] {
+                return error
+            }
+        }
+        return nil
+    }
+
     @objc private func quit() {
         NSApp.terminate(nil)
+    }
+}
+
+@MainActor
+private final class RecipeEditorWindowController: NSWindowController, NSWindowDelegate {
+    private var axonDocument: AxonDocument
+    private var fileURL: URL?
+    private var review: Bool
+    private let documentID = UUID().uuidString
+    private let suggestedName: String
+    private let suggestedDirectory: URL
+    private let onClose: (RecipeEditorWindowController) -> Void
+    var recordFromHere: ((RecipeEditorWindowController, String?) -> Void)?
+
+    init(
+        document: AxonDocument,
+        fileURL: URL?,
+        review: Bool,
+        suggestedName: String,
+        suggestedDirectory: URL,
+        onClose: @escaping (RecipeEditorWindowController) -> Void
+    ) {
+        self.axonDocument = document
+        self.fileURL = fileURL
+        self.review = review
+        self.suggestedName = suggestedName
+        self.suggestedDirectory = suggestedDirectory
+        self.onClose = onClose
+
+        let window = NSWindow(
+            contentRect: NSRect(x: 0, y: 0, width: 1160, height: 720),
+            styleMask: [.titled, .closable, .miniaturizable, .resizable],
+            backing: .buffered,
+            defer: false
+        )
+        window.contentMinSize = NSSize(width: 1040, height: 620)
+        window.isReleasedWhenClosed = false
+        window.isRestorable = false
+        window.title = fileURL?.lastPathComponent ?? "Unsaved Recording"
+        window.representedURL = fileURL
+        window.isDocumentEdited = review || fileURL == nil
+
+        super.init(window: window)
+
+        window.delegate = self
+        window.contentViewController = NSHostingController(rootView: makeDocumentView())
+        shouldCascadeWindows = true
+    }
+
+    private func makeDocumentView() -> DocumentView {
+        DocumentView(
+            document: Binding(
+                get: { [weak self] in self?.axonDocument ?? AxonDocument() },
+                set: { [weak self] document in
+                    self?.axonDocument = document
+                    self?.window?.isDocumentEdited = true
+                }
+            ),
+            isReview: review,
+            documentID: documentID,
+            saveDocument: showsToolbarSave ? { [weak self] in self?.saveDocument() } : nil,
+            discardDocument: review ? { [weak self] in self?.close() } : nil,
+            recordFromHere: { [weak self] beforeBlockID in
+                guard let self else {
+                    return
+                }
+                self.recordFromHere?(self, beforeBlockID)
+            }
+        )
+    }
+
+    private var showsToolbarSave: Bool {
+        review || fileURL == nil
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) {
+        fatalError("init(coder:) has not been implemented")
+    }
+
+    private func saveDocument() {
+        do {
+            let targetURL = try saveURL()
+            let source = try axonDocument.recipe.yamlString()
+            try source.write(to: targetURL, atomically: true, encoding: .utf8)
+            fileURL = targetURL
+            review = false
+            window?.representedURL = targetURL
+            window?.title = targetURL.lastPathComponent
+            window?.isDocumentEdited = false
+            if let hostingController = window?.contentViewController as? NSHostingController<DocumentView> {
+                hostingController.rootView = makeDocumentView()
+            }
+        } catch CocoaError.userCancelled {
+            return
+        } catch {
+            let alert = NSAlert()
+            alert.messageText = "Unable to Save Recipe"
+            alert.informativeText = String(describing: error)
+            alert.addButton(withTitle: "OK")
+            if let window {
+                alert.beginSheetModal(for: window)
+            } else {
+                alert.runModal()
+            }
+        }
+    }
+
+    private func saveURL() throws -> URL {
+        if let fileURL {
+            return fileURL
+        }
+        try FileManager.default.createDirectory(at: suggestedDirectory, withIntermediateDirectories: true)
+        let savePanel = NSSavePanel()
+        savePanel.title = review ? "Save Axon Recording" : "Save Axon Recipe"
+        savePanel.directoryURL = suggestedDirectory
+        savePanel.nameFieldStringValue = suggestedName
+        savePanel.allowedContentTypes = [.axonRecipe, UTType(filenameExtension: "axn") ?? .yaml]
+        savePanel.canCreateDirectories = true
+        guard savePanel.runModal() == .OK, let url = savePanel.url else {
+            throw CocoaError(.userCancelled)
+        }
+        return url
+    }
+
+    func insertRecording(_ source: String, beforeBlockID: String?, scope: UserRecordingScope?) throws {
+        let recording = try AxonRecipe(source: source)
+        axonDocument.recipe.insertRecordedBlocks(recording.blocks, beforeBlockID: beforeBlockID)
+        axonDocument.recipe.assignMissingBlockIDs()
+        window?.isDocumentEdited = true
+        window?.title = fileURL?.lastPathComponent ?? "Unsaved Recording"
+        if let hostingController = window?.contentViewController as? NSHostingController<DocumentView> {
+            hostingController.rootView = makeDocumentView()
+        }
+    }
+
+    func windowWillClose(_ notification: Notification) {
+        onClose(self)
     }
 }
 
@@ -482,12 +789,16 @@ struct AxonAppMain: App {
     @NSApplicationDelegateAdaptor(AxonAppDelegate.self) private var appDelegate
 
     var body: some Scene {
-        DocumentGroup(newDocument: AxonDocument()) { file in
-            DocumentView(document: file.$document)
-        }
-
         Settings {
             PreferencesView()
+        }
+        .commands {
+            CommandGroup(replacing: .newItem) {
+                Button("Open Recipe...") {
+                    appDelegate.openRecipeFromMenu()
+                }
+                .keyboardShortcut("o", modifiers: [.command])
+            }
         }
     }
 }

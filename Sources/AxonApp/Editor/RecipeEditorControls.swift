@@ -61,6 +61,7 @@ enum RecipeEditorPalette {
     static let pillBackground = Color.secondary.opacity(0.14)
     static let selectionFill = Color(red: 0.40, green: 0.52, blue: 0.43).opacity(0.22)
     static let selectionStroke = Color(red: 0.55, green: 0.68, blue: 0.57).opacity(0.72)
+    static let debugCursor = Color(red: 0.82, green: 0.68, blue: 0.38).opacity(0.86)
     static let stepStroke = Color.secondary.opacity(0.15)
     static let breakpoint = Color(red: 0.67, green: 0.28, blue: 0.20)
     static let parameterFill = Color(red: 0.45, green: 0.55, blue: 0.46).opacity(0.22)

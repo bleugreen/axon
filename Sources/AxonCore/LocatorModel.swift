@@ -118,14 +118,24 @@ public struct LocatorCandidate: Codable, Equatable, Sendable {
     public let handle: SnapshotHandle?
     public let role: String
     public let title: String?
+    public let frame: AXFrame?
     public let score: Int
     public let reasons: [String]
 
-    public init(index: Int, handle: SnapshotHandle?, role: String, title: String?, score: Int, reasons: [String]) {
+    public init(
+        index: Int,
+        handle: SnapshotHandle?,
+        role: String,
+        title: String?,
+        frame: AXFrame? = nil,
+        score: Int,
+        reasons: [String]
+    ) {
         self.index = index
         self.handle = handle
         self.role = role
         self.title = title
+        self.frame = frame
         self.score = score
         self.reasons = reasons
     }
@@ -212,6 +222,7 @@ public struct LocatorResolver: Sendable {
             handle: snapshot.handle(for: indexed.index),
             role: node.role,
             title: node.title,
+            frame: node.frame,
             score: reasons.count,
             reasons: reasons
         )
