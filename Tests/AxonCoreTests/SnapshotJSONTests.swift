@@ -60,6 +60,33 @@ import Testing
     #expect(json["indexedNodes"]?[1]?["frame"]?["width"] == .double(30))
 }
 
+@Test func snapshotJSONSuppressesAXUIElementPointerLabelsWithoutMutatingSnapshot() {
+    let pointerLabel = "<AXUIElement 0x9df1e63d0> {pid=695}"
+    let snapshot = AppSnapshot(
+        id: SnapshotID("snap-pointer"),
+        app: AppIdentity(bundleIdentifier: "com.example.App", name: "Example", processIdentifier: 7),
+        windows: [
+            AXNode(
+                role: "AXWindow",
+                title: "Main",
+                value: pointerLabel,
+                children: [
+                    AXNode(role: "AXGroup", description: pointerLabel)
+                ]
+            )
+        ],
+        screenshot: nil
+    )
+
+    let json = snapshot.jsonValue
+
+    #expect(snapshot.windows[0].value == pointerLabel)
+    #expect(json["windows"]?[0]?["value"] == .null)
+    #expect(json["windows"]?[0]?["children"]?[0]?["description"] == .null)
+    #expect(json["indexedNodes"]?[0]?["value"] == .null)
+    #expect(json["indexedNodes"]?[1]?["description"] == .null)
+}
+
 @Test func childrenPageJSONStartsHandlesAtRetainedBaseIndex() {
     let children = AXChildrenPage(
         snapshotID: SnapshotID("s12"),

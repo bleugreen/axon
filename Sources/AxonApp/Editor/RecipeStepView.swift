@@ -6,9 +6,12 @@ struct RecipeStepView: View {
     @Binding var block: AxonRecipeBlock
     let isSelected: Bool
     let isBreakpoint: Bool
+    let isDebugCursor: Bool
     let canMoveUp: Bool
     let canMoveDown: Bool
     let traceRecord: JSONValue?
+    let isRepairTarget: Bool
+    let isBreakpointDisabled: Bool
     let inputNames: [String]
     let select: () -> Void
     let toggleBreakpoint: () -> Void
@@ -23,6 +26,7 @@ struct RecipeStepView: View {
                 index: index,
                 isBreakpoint: isBreakpoint,
                 traceRecord: traceRecord,
+                isDisabled: isBreakpointDisabled,
                 toggleBreakpoint: toggleBreakpoint
             )
 
@@ -48,6 +52,7 @@ struct RecipeStepView: View {
                         .font(.caption)
                         .foregroundStyle(.red)
                 }
+
             }
             .frame(maxWidth: .infinity, alignment: .leading)
         }
@@ -58,7 +63,7 @@ struct RecipeStepView: View {
         )
         .overlay(
             RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .stroke(isSelected ? RecipeEditorPalette.selectionStroke : RecipeEditorPalette.stepStroke, lineWidth: 1)
+                .stroke(stepStroke, lineWidth: isDebugCursor || isRepairTarget ? 2 : 1)
         )
         .contentShape(Rectangle())
         .onTapGesture(perform: select)
@@ -110,6 +115,16 @@ struct RecipeStepView: View {
             return nil
         }
         return error
+    }
+
+    private var stepStroke: Color {
+        if isRepairTarget {
+            return .red
+        }
+        if isDebugCursor {
+            return RecipeEditorPalette.debugCursor
+        }
+        return isSelected ? RecipeEditorPalette.selectionStroke : RecipeEditorPalette.stepStroke
     }
 }
 
@@ -165,43 +180,57 @@ private struct StepGutter: View {
     let index: Int
     let isBreakpoint: Bool
     let traceRecord: JSONValue?
+    let isDisabled: Bool
     let toggleBreakpoint: () -> Void
 
     var body: some View {
         VStack(spacing: 7) {
             Button(action: toggleBreakpoint) {
-                Image(systemName: iconName)
-                    .foregroundStyle(iconColor)
+                Image(systemName: breakpointIconName)
+                    .foregroundStyle(breakpointColor)
                     .frame(width: 18, height: 18)
             }
             .buttonStyle(.plain)
+            .disabled(isDisabled)
             .help(isBreakpoint ? "Remove breakpoint" : "Add breakpoint")
 
             Text(String(index + 1))
                 .font(.caption.weight(.medium))
                 .foregroundStyle(.secondary)
+
+            if let statusIconName {
+                Image(systemName: statusIconName)
+                    .font(.caption)
+                    .foregroundStyle(statusIconColor)
+                    .frame(width: 18, height: 18)
+            }
         }
         .frame(width: 34)
     }
 
-    private var iconName: String {
+    private var breakpointIconName: String {
+        isBreakpoint ? "smallcircle.filled.circle" : "circle"
+    }
+
+    private var breakpointColor: Color {
+        isBreakpoint ? RecipeEditorPalette.breakpoint : .secondary
+    }
+
+    private var statusIconName: String? {
         if traceRecord?["success"] == .bool(false) {
             return "xmark.circle.fill"
         }
         if traceRecord?["success"] == .bool(true) {
             return "checkmark.circle.fill"
         }
-        return isBreakpoint ? "circle.fill" : "circle"
+        return nil
     }
 
-    private var iconColor: Color {
+    private var statusIconColor: Color {
         if traceRecord?["success"] == .bool(false) {
             return .red
         }
-        if traceRecord?["success"] == .bool(true) {
-            return .green
-        }
-        return isBreakpoint ? RecipeEditorPalette.breakpoint : .secondary
+        return .green
     }
 }
 
@@ -219,16 +248,20 @@ private struct StepActions: View {
                 Label("Move Up", systemImage: "arrow.up")
             }
             .disabled(!canMoveUp)
+            .help("Move step up")
             Button(action: moveDown) {
                 Label("Move Down", systemImage: "arrow.down")
             }
             .disabled(!canMoveDown)
+            .help("Move step down")
             Button(action: duplicate) {
                 Label("Duplicate", systemImage: "plus.square.on.square")
             }
+            .help("Duplicate step")
             Button(role: .destructive, action: delete) {
                 Label("Delete", systemImage: "trash")
             }
+            .help("Delete step")
         }
         .labelStyle(.iconOnly)
         .buttonStyle(.borderless)

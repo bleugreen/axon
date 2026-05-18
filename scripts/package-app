@@ -77,6 +77,17 @@ cat > "$CONTENTS_DIR/Info.plist" <<PLIST
   </array>
   <key>CFBundleShortVersionString</key>
   <string>$VERSION</string>
+  <key>CFBundleURLTypes</key>
+  <array>
+    <dict>
+      <key>CFBundleURLName</key>
+      <string>Axon Editor</string>
+      <key>CFBundleURLSchemes</key>
+      <array>
+        <string>axon</string>
+      </array>
+    </dict>
+  </array>
   <key>CFBundleVersion</key>
   <string>$VERSION</string>
   <key>LSMinimumSystemVersion</key>

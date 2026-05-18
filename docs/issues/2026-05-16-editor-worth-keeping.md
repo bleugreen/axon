@@ -1,6 +1,38 @@
 # Make The Editor Worth Keeping
 
-Status: Design. Filed 2026-05-16.
+Status: Implemented 2026-05-17. Filed 2026-05-16.
+
+## 2026-05-17 Implementation Note
+
+The friction-removal phase is implemented:
+
+- Double-click / Finder open now routes file URLs through the run path instead of opening `DocumentGroup`.
+- The visual editor is explicit via `axon edit <path>` or the menubar `Open Recipe...` item.
+- Stop-recording opens an unsaved review window with Replay / Save / Discard.
+- The app launches as an accessory service and promotes to regular foreground presence only while editor windows are open.
+- Empty-arg recipes start with the Inputs sidebar collapsed.
+- The fake prefix-truncation debugger was replaced with a real paused session model.
+
+## 2026-05-17 Debugger Rework Note
+
+The first debugger UI pass was not good enough. It exposed toolbar buttons whose labels and icons did not communicate the state machine, left breakpoint behavior ambiguous after a run, and rendered pause snapshots as raw diagnostic text. That was an implementation-shaped imitation of the original design, not the design itself.
+
+The corrected debugger contract and editor surface are now implemented:
+
+- `debug.create` creates a paused session without executing any action.
+- `debug.step` executes exactly one block and pauses before the next executable block.
+- `debug.resume` runs until the next active breakpoint or completion.
+- `debug.runTo` runs to a selected block and pauses before it.
+- `debug.setBreakpoints` updates breakpoints on a live session, so breakpoints remain editable after a run starts.
+- `debug.retry` reruns the failed block in the existing session.
+- Debug status now reports `cursorBlockId`, `lastActionId`, `pauseReason`, active `breakpoints`, and `availableActions` so the app no longer infers state from ambiguous fields.
+- The editor debugger is an in-window icon control strip with help text for each command, grouped by run/debug/repair lifecycle rather than mixed with document save controls.
+- The save/discard controls are no longer interleaved with run/step controls.
+- Breakpoint affordances remain visible independently from success/failure status, so completed/failed steps can still be breakpoint targets; duplicate row-toolbar breakpoint controls are gone.
+- The collapsed sidebar rail now exposes multiple layers instead of one generic button.
+- The editor includes a live AX Tree sidebar layer for the recipe target app. It captures top-level windows first, then fetches direct AX children per expanded node instead of rendering a truncated deep snapshot.
+- The AX Tree sidebar supports refresh, search over loaded nodes, expandable children, node details, selected-node frame highlighting, and acted-on target highlighting while a debug session runs.
+- Record From Here inserts newly captured blocks at the paused point by default, preserving following blocks.
 
 ## Context
 
@@ -53,17 +85,20 @@ The editor shipped the disruptive parts of the design doc in full — double-cli
 - **No back-compat or migration framing.** There are no users; behavior can simply change. Don't scope this around preserving the current double-click behavior for anyone.
 - **No new daemon IPC for the basics.** Replay-in-review uses the existing one-shot `run`. The real debug loop, if built, is a separate scoped effort and inherits the prior doc's daemon-coupling plan.
 
-## Open Questions
+## Resolved Questions
 
-- **Where does an unsaved review window live before Save?** A scratch path the editor manages, or a true in-memory `FileDocument` with no URL until Save? The latter is cleaner but needs the new non-file `AxonDocument` init either way.
-- **Is the debug loop in scope here, or its own issue?** Leaning: this issue removes the friction and the fake debugger chrome; the real run-to-pause/record-from-here loop is a separate phase, since it is the larger build and the friction fixes are independently shippable.
-- **What is the explicit "Open in Editor" entry point?** Finder right-click services, a menubar item, a CLI flag (`axon edit <file>`), or all three. Decide once the run-path default is restored.
+- **Where does an unsaved review window live before Save?** In memory in an editor review window until the user saves or discards it.
+- **Is the debug loop in scope here, or its own issue?** It is in scope here, but only with a real paused-session model and an editor surface whose controls map directly to debugger states.
+- **What is the explicit "Open in Editor" entry point?** `axon edit <file>` plus the app's explicit editor-opening path.
 
-## Next Steps
+## Completed Steps
 
 - Restore run-on-open: change the `.axn` `CFBundleTypeRole` away from `Editor`-owns-open, and route a plain double-click through the existing run path. Provide one explicit Open-in-Editor gesture.
 - Add an unsaved-document path to `AxonDocument`; route `stopRecording` into a review window with Replay / Save / Discard instead of `saveRecording`'s `NSSavePanel`.
 - Decide the activation model and implement it once (accessory ↔ regular tied to editor-window presence); disable document window-state restoration for the service launch.
 - Gate the sidebar on the recipe having args; default collapsed for recordings.
-- Remove the breakpoint gutter and the two prefix-truncation toolbar buttons, or replace them with the real debug loop — no half-state.
-- Scope the real run-to-pause / record-from-here debug loop as a separate issue if it is not taken here.
+- Replace the breakpoint gutter and prefix-truncation toolbar buttons with a real paused debugger session.
+- Rework the debugger API around explicit create/resume/run-to/step/set-breakpoints commands and clear cursor/last-action status.
+- Move debugger controls into an icon-cluster in-window control strip with help text, keep save/discard separate, and make Reset available after a run.
+- Add a navigable live AX Tree sidebar layer for inspecting the app being automated/debugged, backed by lazy direct AX child loading rather than raw pause snapshots.
+- Complete the real run-to-pause / record-from-here debug loop, including intentional pause snapshots and failed-block retry.

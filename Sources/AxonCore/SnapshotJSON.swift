@@ -26,28 +26,28 @@ public extension AppSnapshot {
                 ]
                 node.addRedactedString(
                     "subrole",
-                    indexed.node.subrole,
+                    indexed.node.subrole.presentationString,
                     activeSecretRedactor: activeSecretRedactor,
                     deterministicRedactor: deterministicRedactor,
                     redactionContext: redactionContext
                 )
                 node.addRedactedString(
                     "title",
-                    indexed.node.title,
+                    indexed.node.title.presentationString,
                     activeSecretRedactor: activeSecretRedactor,
                     deterministicRedactor: deterministicRedactor,
                     redactionContext: redactionContext
                 )
                 node.addRedactedString(
                     "value",
-                    indexed.node.value,
+                    indexed.node.value.presentationString,
                     activeSecretRedactor: activeSecretRedactor,
                     deterministicRedactor: deterministicRedactor,
                     redactionContext: redactionContext
                 )
                 node.addRedactedString(
                     "description",
-                    indexed.node.description,
+                    indexed.node.description.presentationString,
                     activeSecretRedactor: activeSecretRedactor,
                     deterministicRedactor: deterministicRedactor,
                     redactionContext: redactionContext
@@ -127,6 +127,7 @@ private extension AXNode {
             "enabled": enabled.map(JSONValue.bool) ?? .null,
             "focused": focused.map(JSONValue.bool) ?? .null,
             "actions": .array(actions.map(JSONValue.string)),
+            "childCount": .int(childCount ?? children.count),
             "truncationReason": truncationReason.map(JSONValue.string) ?? .null,
             "children": .array(children.map {
                 $0.jsonValue(
@@ -144,42 +145,42 @@ private extension AXNode {
         }
         object.addRedactedString(
             "subrole",
-            subrole,
+            subrole.presentationString,
             activeSecretRedactor: activeSecretRedactor,
             deterministicRedactor: deterministicRedactor,
             redactionContext: redactionContext
         )
         object.addRedactedString(
             "title",
-            title,
+            title.presentationString,
             activeSecretRedactor: activeSecretRedactor,
             deterministicRedactor: deterministicRedactor,
             redactionContext: redactionContext
         )
         object.addRedactedString(
             "value",
-            value,
+            value.presentationString,
             activeSecretRedactor: activeSecretRedactor,
             deterministicRedactor: deterministicRedactor,
             redactionContext: redactionContext
         )
         object.addRedactedString(
             "description",
-            description,
+            description.presentationString,
             activeSecretRedactor: activeSecretRedactor,
             deterministicRedactor: deterministicRedactor,
             redactionContext: redactionContext
         )
         object.addRedactedString(
             "help",
-            help,
+            help.presentationString,
             activeSecretRedactor: activeSecretRedactor,
             deterministicRedactor: deterministicRedactor,
             redactionContext: redactionContext
         )
         object.addRedactedString(
             "identifier",
-            identifier,
+            identifier.presentationString,
             activeSecretRedactor: activeSecretRedactor,
             deterministicRedactor: deterministicRedactor,
             redactionContext: redactionContext
@@ -225,6 +226,21 @@ public extension AXFrame {
             "width": .double(width),
             "height": .double(height)
         ])
+    }
+}
+
+private extension Optional where Wrapped == String {
+    var presentationString: String? {
+        guard let value = self else {
+            return nil
+        }
+        return value.isAXUIElementPointerLabel ? nil : value
+    }
+}
+
+private extension String {
+    var isAXUIElementPointerLabel: Bool {
+        hasPrefix("<AXUIElement ") && contains(">")
     }
 }
 

@@ -365,6 +365,7 @@ public final class AXLiveLocatorResolver: @unchecked Sendable {
                 handle: SnapshotHandle(snapshotID: snapshotID, nodeIndex: offset),
                 role: match.candidate.role,
                 title: match.candidate.title,
+                frame: match.candidate.frame,
                 score: match.candidate.score,
                 reasons: match.candidate.reasons
             )

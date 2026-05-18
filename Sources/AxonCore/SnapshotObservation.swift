@@ -276,16 +276,26 @@ public struct SnapshotObservationFormatter {
         let outputRole = outputRole(for: role, label: label)
         let handle = string("handle", in: object) ?? "\(snapshotID):\(index)"
         var more = continuation(from: truncationReasons, handle: handle)
-        if compactChildren.count > Self.maxObservedChildren, var continuation = more {
+        let rawChildTotal = object["childCount"]?.intValue ?? rawChildren.count
+        if rawChildTotal > Self.maxObservedChildren, compactChildren.count > Self.maxObservedChildren {
             let visibleChildren = Array(compactChildren.prefix(Self.maxObservedChildren))
-            if let sourceEnd = sourceEnd(in: visibleChildren.last) {
-                continuation.offset = sourceEnd
-            }
-            truncationReasons = truncationReasons.map {
-                normalizedChildLimitReason($0, visibleLimit: Self.maxObservedChildren)
+            let sourceOffset = sourceEnd(in: visibleChildren.last) ?? Self.maxObservedChildren
+            if var continuation = more {
+                continuation.offset = sourceOffset
+                more = continuation
+                truncationReasons = truncationReasons.map {
+                    normalizedChildLimitReason($0, visibleLimit: Self.maxObservedChildren)
+                }
+            } else {
+                more = Continuation(
+                    handle: handle,
+                    offset: sourceOffset,
+                    limit: Self.maxObservedChildren,
+                    total: rawChildTotal
+                )
+                truncationReasons.append("children display limited to \(Self.maxObservedChildren) of \(rawChildTotal)")
             }
             compactChildren = visibleChildren
-            more = continuation
         }
 
         var compact: [String: JSONValue] = [

@@ -1,10 +1,36 @@
 import AxonCore
 import SwiftUI
 
-struct RecipeSidebar: View {
+enum EditorSidebarLayer: String, CaseIterable {
+    case inputs
+    case tree
+
+    var title: String {
+        switch self {
+        case .inputs:
+            return "Inputs"
+        case .tree:
+            return "AX Tree"
+        }
+    }
+
+    var symbolName: String {
+        switch self {
+        case .inputs:
+            return "slider.horizontal.3"
+        case .tree:
+            return "square.stack.3d.down.right"
+        }
+    }
+}
+
+struct EditorSidebar: View {
     let appName: String?
+    let actedOnTarget: JSONValue?
     @Binding var args: [AxonRecipeArgument]
     @Binding var selectedIndex: Int?
+    @Binding var selectedLayer: EditorSidebarLayer
+    let treeRefreshToken: Int
     let hideSidebar: () -> Void
 
     var body: some View {
@@ -31,26 +57,63 @@ struct RecipeSidebar: View {
                 }
 
                 HStack {
-                    Text("Inputs")
-                        .font(.headline)
-                    Spacer()
-                    Button {
-                        args.append(AxonRecipeArgument(fields: [
-                            "name": .string("new_input"),
-                            "type": .string("string")
-                        ]))
-                        selectedIndex = args.indices.last
-                    } label: {
-                        Label("Add", systemImage: "plus")
-                            .labelStyle(.iconOnly)
+                    ForEach(EditorSidebarLayer.allCases, id: \.self) { layer in
+                        Button {
+                            selectedLayer = layer
+                        } label: {
+                            Label(layer.title, systemImage: layer.symbolName)
+                                .labelStyle(.iconOnly)
+                        }
+                        .buttonStyle(.borderless)
+                        .help(layer.title)
+                        .foregroundStyle(selectedLayer == layer ? RecipeEditorPalette.debugCursor : .secondary)
                     }
-                    .buttonStyle(.borderless)
-                    .help("Add input")
+                    Spacer()
                 }
             }
             .padding(.horizontal, 14)
             .padding(.top, 14)
             .padding(.bottom, 12)
+
+            Divider()
+
+            switch selectedLayer {
+            case .inputs:
+                RecipeInputsSidebar(args: $args, selectedIndex: $selectedIndex)
+            case .tree:
+                AXTreeInspector(appName: appName, actedOnTarget: actedOnTarget, refreshToken: treeRefreshToken)
+            }
+        }
+        .background(RecipeEditorPalette.sidebarBackground)
+    }
+}
+
+private struct RecipeInputsSidebar: View {
+    @Binding var args: [AxonRecipeArgument]
+    @Binding var selectedIndex: Int?
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack {
+                Text("Inputs")
+                    .font(.headline)
+                Spacer()
+                Button {
+                    args.append(AxonRecipeArgument(fields: [
+                        "name": .string("new_input"),
+                        "type": .string("string")
+                    ]))
+                    selectedIndex = args.indices.last
+                } label: {
+                    Label("Add", systemImage: "plus")
+                        .labelStyle(.iconOnly)
+                }
+                .buttonStyle(.borderless)
+                .help("Add input")
+            }
+            .padding(.horizontal, 14)
+            .padding(.bottom, 12)
+            .padding(.top, 12)
 
             if args.isEmpty {
                 Spacer()
@@ -81,7 +144,6 @@ struct RecipeSidebar: View {
                 }
             }
         }
-        .background(RecipeEditorPalette.sidebarBackground)
     }
 
     private func deleteParameter(at index: Int) {
@@ -187,17 +249,28 @@ private struct ParameterEditor: View {
 }
 
 struct SidebarRevealRail: View {
-    let showSidebar: () -> Void
+    let showSidebar: (EditorSidebarLayer) -> Void
 
     var body: some View {
-        VStack {
-            Button(action: showSidebar) {
-                Label("Show Sidebar", systemImage: "sidebar.left")
+        VStack(spacing: 14) {
+            Button {
+                showSidebar(.inputs)
+            } label: {
+                Label("Inputs", systemImage: "slider.horizontal.3")
                     .labelStyle(.iconOnly)
             }
             .buttonStyle(.borderless)
-            .help("Show sidebar")
+            .help("Show inputs")
             .padding(.top, 14)
+
+            Button {
+                showSidebar(.tree)
+            } label: {
+                Label("AX Tree", systemImage: EditorSidebarLayer.tree.symbolName)
+                    .labelStyle(.iconOnly)
+            }
+            .buttonStyle(.borderless)
+            .help("Show live AX tree")
 
             Spacer()
         }

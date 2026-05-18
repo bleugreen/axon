@@ -88,6 +88,58 @@ public struct AxonRecipe: Equatable, Sendable {
         }
     }
 
+    public mutating func insertRecordedBlocks(_ recordedBlocks: [AxonRecipeBlock], beforeBlockID: String?) {
+        let originalIDs = Set(blocks.compactMap(\.id))
+        var usedIDs = originalIDs
+        var nextID = 1
+        var idMap: [String: String] = [:]
+        var remappedBlocks: [AxonRecipeBlock] = []
+
+        for var block in recordedBlocks {
+            if let id = block.id {
+                if usedIDs.contains(id) {
+                    let replacement = nextAvailableBlockID(prefix: blockIDPrefix(id), usedIDs: &usedIDs, nextID: &nextID)
+                    idMap[id] = replacement
+                    block.id = replacement
+                } else {
+                    usedIDs.insert(id)
+                }
+            } else {
+                block.id = nextAvailableBlockID(prefix: "a", usedIDs: &usedIDs, nextID: &nextID)
+            }
+            remappedBlocks.append(block)
+        }
+
+        if !idMap.isEmpty {
+            remappedBlocks = remappedBlocks.map { Self.remappingReferences(in: $0, idMap: idMap) }
+        }
+
+        let insertionIndex: Int
+        if let beforeBlockID,
+           let index = blocks.firstIndex(where: { $0.id == beforeBlockID }) {
+            insertionIndex = index
+        } else {
+            insertionIndex = blocks.endIndex
+        }
+        blocks.insert(contentsOf: remappedBlocks, at: insertionIndex)
+    }
+
+    private func nextAvailableBlockID(prefix: String, usedIDs: inout Set<String>, nextID: inout Int) -> String {
+        while true {
+            let id = "\(prefix)\(String(format: "%03d", nextID))"
+            nextID += 1
+            if !usedIDs.contains(id) {
+                usedIDs.insert(id)
+                return id
+            }
+        }
+    }
+
+    private func blockIDPrefix(_ id: String) -> String {
+        let prefix = id.prefix { !$0.isNumber }
+        return prefix.isEmpty ? "a" : String(prefix)
+    }
+
     public var jsonValue: JSONValue {
         var object = unknownTopLevelFields
         object["version"] = .int(version)
@@ -139,6 +191,59 @@ public struct AxonRecipe: Equatable, Sendable {
             }
             return .action(AxonRecipeAction(fields: object))
         }
+    }
+
+    private static func remappingReferences(
+        in block: AxonRecipeBlock,
+        idMap: [String: String]
+    ) -> AxonRecipeBlock {
+        switch block {
+        case var .action(action):
+            action.fields = remappingReferences(in: action.fields, idMap: idMap)
+            return .action(action)
+        case var .note(note):
+            note.fields = remappingReferences(in: note.fields, idMap: idMap)
+            return .note(note)
+        }
+    }
+
+    private static func remappingReferences(
+        in object: [String: JSONValue],
+        idMap: [String: String]
+    ) -> [String: JSONValue] {
+        var remapped = object
+        if case let .array(requires)? = object["requires"] {
+            remapped["requires"] = .array(requires.map { value in
+                guard case let .string(reference) = value else {
+                    return value
+                }
+                return .string(remappedReference(reference, idMap: idMap))
+            })
+        }
+        if case let .array(expects)? = object["expects"] {
+            remapped["expects"] = .array(expects.map { value in
+                guard case var .object(fact) = value,
+                      case let .string(id)? = fact["id"]
+                else {
+                    return value
+                }
+                fact["id"] = .string(remappedReference(id, idMap: idMap))
+                return .object(fact)
+            })
+        }
+        return remapped
+    }
+
+    private static func remappedReference(_ value: String, idMap: [String: String]) -> String {
+        for (oldID, newID) in idMap {
+            if value == oldID {
+                return newID
+            }
+            if value.hasPrefix("\(oldID).") {
+                return newID + value.dropFirst(oldID.count)
+            }
+        }
+        return value
     }
 }
 
