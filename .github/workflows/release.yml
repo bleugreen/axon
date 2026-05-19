@@ -6,7 +6,7 @@ on:
       version:
         description: Version to release, without the leading v
         required: true
-        default: 0.1.1
+        default: 0.1.6
   push:
     tags:
       - "v*"
