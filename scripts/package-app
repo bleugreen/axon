@@ -9,39 +9,29 @@ elif [[ -x "$HOME/.swiftly/bin/swift" ]]; then
 else
   SWIFT="$(command -v swift)"
 fi
-APP_NAME="${AXON_APP_NAME:-Axon}"
-BUNDLE_ID="${AXON_BUNDLE_ID:-com.bleugreen.axon}"
+
 VERSION="${AXON_VERSION:-0.1.5}"
 DIST_DIR="$ROOT/dist"
-APP_DIR="$DIST_DIR/$APP_NAME.app"
-CONTENTS_DIR="$APP_DIR/Contents"
-MACOS_DIR="$CONTENTS_DIR/MacOS"
-RESOURCES_DIR="$CONTENTS_DIR/Resources"
-CLI_DIR="$RESOURCES_DIR/bin"
+DAEMON_APP_NAME="Axon"
+EDITOR_APP_NAME="Axon Editor"
+DAEMON_BUNDLE_ID="${AXON_BUNDLE_ID:-com.bleugreen.axon}"
+EDITOR_BUNDLE_ID="${AXON_EDITOR_BUNDLE_ID:-com.bleugreen.axon.editor}"
+DAEMON_APP_DIR="$DIST_DIR/$DAEMON_APP_NAME.app"
+EDITOR_APP_DIR="$DIST_DIR/$EDITOR_APP_NAME.app"
 ICON_SOURCE="$ROOT/Assets/Axon.icns"
 MENU_BAR_ICON_SOURCE="$ROOT/Assets/AxonMenuBarTemplate.png"
-ICON_NAME="Axon"
-MENU_BAR_ICON_NAME="AxonMenuBarTemplate"
 
 cd "$ROOT"
 
 "$SWIFT" build -c release --product axon
-"$SWIFT" build -c release --product AxonApp
+"$SWIFT" build -c release --product AxonDaemonApp
+"$SWIFT" build -c release --product AxonEditorApp
 
-rm -rf "$APP_DIR"
-mkdir -p "$MACOS_DIR" "$CLI_DIR"
+rm -rf "$DAEMON_APP_DIR" "$EDITOR_APP_DIR"
 
-cp "$ROOT/.build/release/AxonApp" "$MACOS_DIR/$APP_NAME"
-cp "$ROOT/.build/release/axon" "$CLI_DIR/axon"
-chmod 755 "$MACOS_DIR/$APP_NAME" "$CLI_DIR/axon"
-if [[ -f "$ICON_SOURCE" ]]; then
-  cp "$ICON_SOURCE" "$RESOURCES_DIR/$ICON_NAME.icns"
-fi
-if [[ -f "$MENU_BAR_ICON_SOURCE" ]]; then
-  cp "$MENU_BAR_ICON_SOURCE" "$RESOURCES_DIR/$MENU_BAR_ICON_NAME.png"
-fi
-
-cat > "$CONTENTS_DIR/Info.plist" <<PLIST
+write_daemon_info_plist() {
+  local plist_path="$1"
+  cat > "$plist_path" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
@@ -49,15 +39,49 @@ cat > "$CONTENTS_DIR/Info.plist" <<PLIST
   <key>CFBundleDevelopmentRegion</key>
   <string>en</string>
   <key>CFBundleExecutable</key>
-  <string>$APP_NAME</string>
+  <string>Axon</string>
   <key>CFBundleIdentifier</key>
-  <string>$BUNDLE_ID</string>
+  <string>$DAEMON_BUNDLE_ID</string>
   <key>CFBundleInfoDictionaryVersion</key>
   <string>6.0</string>
   <key>CFBundleIconFile</key>
-  <string>$ICON_NAME</string>
+  <string>Axon</string>
   <key>CFBundleName</key>
-  <string>$APP_NAME</string>
+  <string>Axon</string>
+  <key>CFBundlePackageType</key>
+  <string>APPL</string>
+  <key>CFBundleShortVersionString</key>
+  <string>$VERSION</string>
+  <key>CFBundleVersion</key>
+  <string>$VERSION</string>
+  <key>LSMinimumSystemVersion</key>
+  <string>14.0</string>
+  <key>LSUIElement</key>
+  <true/>
+</dict>
+</plist>
+PLIST
+}
+
+write_editor_info_plist() {
+  local plist_path="$1"
+  cat > "$plist_path" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleDevelopmentRegion</key>
+  <string>en</string>
+  <key>CFBundleExecutable</key>
+  <string>AxonEditor</string>
+  <key>CFBundleIdentifier</key>
+  <string>$EDITOR_BUNDLE_ID</string>
+  <key>CFBundleInfoDictionaryVersion</key>
+  <string>6.0</string>
+  <key>CFBundleIconFile</key>
+  <string>Axon</string>
+  <key>CFBundleName</key>
+  <string>Axon Editor</string>
   <key>CFBundlePackageType</key>
   <string>APPL</string>
   <key>CFBundleDocumentTypes</key>
@@ -120,6 +144,30 @@ cat > "$CONTENTS_DIR/Info.plist" <<PLIST
 </dict>
 </plist>
 PLIST
+}
+
+copy_common_resources() {
+  local resources_dir="$1"
+  if [[ -f "$ICON_SOURCE" ]]; then
+    cp "$ICON_SOURCE" "$resources_dir/Axon.icns"
+  fi
+  if [[ -f "$MENU_BAR_ICON_SOURCE" ]]; then
+    cp "$MENU_BAR_ICON_SOURCE" "$resources_dir/AxonMenuBarTemplate.png"
+  fi
+}
+
+mkdir -p "$DAEMON_APP_DIR/Contents/MacOS" "$DAEMON_APP_DIR/Contents/Resources/bin"
+cp "$ROOT/.build/release/AxonDaemonApp" "$DAEMON_APP_DIR/Contents/MacOS/Axon"
+cp "$ROOT/.build/release/axon" "$DAEMON_APP_DIR/Contents/Resources/bin/axon"
+chmod 755 "$DAEMON_APP_DIR/Contents/MacOS/Axon" "$DAEMON_APP_DIR/Contents/Resources/bin/axon"
+copy_common_resources "$DAEMON_APP_DIR/Contents/Resources"
+write_daemon_info_plist "$DAEMON_APP_DIR/Contents/Info.plist"
+
+mkdir -p "$EDITOR_APP_DIR/Contents/MacOS" "$EDITOR_APP_DIR/Contents/Resources"
+cp "$ROOT/.build/release/AxonEditorApp" "$EDITOR_APP_DIR/Contents/MacOS/AxonEditor"
+chmod 755 "$EDITOR_APP_DIR/Contents/MacOS/AxonEditor"
+copy_common_resources "$EDITOR_APP_DIR/Contents/Resources"
+write_editor_info_plist "$EDITOR_APP_DIR/Contents/Info.plist"
 
 SIGN_IDENTITY="${AXON_CODESIGN_IDENTITY:-}"
 if [[ -z "$SIGN_IDENTITY" ]]; then
@@ -135,21 +183,33 @@ if [[ "$SIGN_IDENTITY" != "-" ]]; then
   SIGN_ARGS+=(--timestamp)
 fi
 
-/usr/bin/codesign "${SIGN_ARGS[@]}" "$CLI_DIR/axon"
-/usr/bin/codesign "${SIGN_ARGS[@]}" "$MACOS_DIR/$APP_NAME"
-/usr/bin/codesign "${SIGN_ARGS[@]}" "$APP_DIR"
+/usr/bin/codesign "${SIGN_ARGS[@]}" "$DAEMON_APP_DIR/Contents/Resources/bin/axon"
+/usr/bin/codesign "${SIGN_ARGS[@]}" "$DAEMON_APP_DIR/Contents/MacOS/Axon"
+/usr/bin/codesign "${SIGN_ARGS[@]}" "$DAEMON_APP_DIR"
+/usr/bin/codesign "${SIGN_ARGS[@]}" "$EDITOR_APP_DIR/Contents/MacOS/AxonEditor"
+/usr/bin/codesign "${SIGN_ARGS[@]}" "$EDITOR_APP_DIR"
 
-ZIP_PATH="$DIST_DIR/$APP_NAME-$VERSION.zip"
+ZIP_PATH="$DIST_DIR/Axon-$VERSION.zip"
+STAGING_DIR="$DIST_DIR/Axon-$VERSION"
 rm -f "$ZIP_PATH"
-(cd "$DIST_DIR" && /usr/bin/ditto -c -k --norsrc --noextattr --keepParent "$APP_NAME.app" "$ZIP_PATH")
+rm -rf "$STAGING_DIR"
+mkdir -p "$STAGING_DIR"
+cp -R "$DAEMON_APP_DIR" "$STAGING_DIR/$DAEMON_APP_NAME.app"
+cp -R "$EDITOR_APP_DIR" "$STAGING_DIR/$EDITOR_APP_NAME.app"
+(cd "$DIST_DIR" && /usr/bin/ditto -c -k --norsrc --noextattr --keepParent "Axon-$VERSION" "$ZIP_PATH")
 
 if [[ -n "${AXON_NOTARY_PROFILE:-}" ]]; then
   /usr/bin/xcrun notarytool submit "$ZIP_PATH" \
     --keychain-profile "$AXON_NOTARY_PROFILE" \
     --wait
-  /usr/bin/xcrun stapler staple "$APP_DIR"
+  /usr/bin/xcrun stapler staple "$DAEMON_APP_DIR"
+  /usr/bin/xcrun stapler staple "$EDITOR_APP_DIR"
   rm -f "$ZIP_PATH"
-  (cd "$DIST_DIR" && /usr/bin/ditto -c -k --norsrc --noextattr --keepParent "$APP_NAME.app" "$ZIP_PATH")
+  rm -rf "$STAGING_DIR"
+  mkdir -p "$STAGING_DIR"
+  cp -R "$DAEMON_APP_DIR" "$STAGING_DIR/$DAEMON_APP_NAME.app"
+  cp -R "$EDITOR_APP_DIR" "$STAGING_DIR/$EDITOR_APP_NAME.app"
+  (cd "$DIST_DIR" && /usr/bin/ditto -c -k --norsrc --noextattr --keepParent "Axon-$VERSION" "$ZIP_PATH")
 elif [[ -n "${AXON_NOTARY_KEY_PATH:-}" || -n "${AXON_NOTARY_KEY_ID:-}" || -n "${AXON_NOTARY_ISSUER:-}" ]]; then
   if [[ -z "${AXON_NOTARY_KEY_PATH:-}" || -z "${AXON_NOTARY_KEY_ID:-}" || -z "${AXON_NOTARY_ISSUER:-}" ]]; then
     printf 'AXON_NOTARY_KEY_PATH, AXON_NOTARY_KEY_ID, and AXON_NOTARY_ISSUER must be set together\n' >&2
@@ -160,14 +220,20 @@ elif [[ -n "${AXON_NOTARY_KEY_PATH:-}" || -n "${AXON_NOTARY_KEY_ID:-}" || -n "${
     --key-id "$AXON_NOTARY_KEY_ID" \
     --issuer "$AXON_NOTARY_ISSUER" \
     --wait
-  /usr/bin/xcrun stapler staple "$APP_DIR"
+  /usr/bin/xcrun stapler staple "$DAEMON_APP_DIR"
+  /usr/bin/xcrun stapler staple "$EDITOR_APP_DIR"
   rm -f "$ZIP_PATH"
-  (cd "$DIST_DIR" && /usr/bin/ditto -c -k --norsrc --noextattr --keepParent "$APP_NAME.app" "$ZIP_PATH")
+  rm -rf "$STAGING_DIR"
+  mkdir -p "$STAGING_DIR"
+  cp -R "$DAEMON_APP_DIR" "$STAGING_DIR/$DAEMON_APP_NAME.app"
+  cp -R "$EDITOR_APP_DIR" "$STAGING_DIR/$EDITOR_APP_NAME.app"
+  (cd "$DIST_DIR" && /usr/bin/ditto -c -k --norsrc --noextattr --keepParent "Axon-$VERSION" "$ZIP_PATH")
 fi
 
 SHA256="$(/usr/bin/shasum -a 256 "$ZIP_PATH" | awk '{ print $1 }')"
 
-printf 'app: %s\n' "$APP_DIR"
+printf 'daemon app: %s\n' "$DAEMON_APP_DIR"
+printf 'editor app: %s\n' "$EDITOR_APP_DIR"
 printf 'zip: %s\n' "$ZIP_PATH"
 printf 'sha256: %s\n' "$SHA256"
 cat <<CASK
@@ -185,7 +251,8 @@ cask "axon" do
 
   depends_on macos: ">= :sonoma"
 
-  app "Axon.app"
+  app "Axon-$VERSION/Axon.app"
+  app "Axon-$VERSION/Axon Editor.app"
   binary "#{appdir}/Axon.app/Contents/Resources/bin/axon"
 
   zap trash: [

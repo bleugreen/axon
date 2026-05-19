@@ -25,6 +25,35 @@ import Testing
     }
 }
 
+@Test func editorReviewURLRoundTripsRecipePathAndSuggestedName() throws {
+    let fileURL = URL(fileURLWithPath: "/tmp/Axon Recordings/demo recording.axn")
+
+    let reviewURL = AxonEditorURL.url(forReviewing: fileURL, suggestedName: "demo recording.axn")
+
+    #expect(reviewURL.scheme == "axon")
+    #expect(reviewURL.host == "review")
+    #expect(try AxonEditorURL.fileURL(from: reviewURL) == fileURL)
+    #expect(AxonEditorURL.suggestedName(from: reviewURL) == "demo recording.axn")
+}
+
+@Test func editorInsertURLRoundTripsRecordingTarget() throws {
+    let fileURL = URL(fileURLWithPath: "/tmp/Axon Recordings/repair.axn")
+
+    let insertURL = AxonEditorURL.url(
+        forInserting: fileURL,
+        documentID: "doc-123",
+        beforeBlockID: "a002",
+        suggestedName: "repair.axn"
+    )
+
+    #expect(insertURL.scheme == "axon")
+    #expect(insertURL.host == "insert")
+    #expect(try AxonEditorURL.fileURL(from: insertURL) == fileURL)
+    #expect(AxonEditorURL.documentID(from: insertURL) == "doc-123")
+    #expect(AxonEditorURL.beforeBlockID(from: insertURL) == "a002")
+    #expect(AxonEditorURL.suggestedName(from: insertURL) == "repair.axn")
+}
+
 @Test func editorURLRejectsMissingPath() {
     let url = URL(string: "axon://edit")!
 
