@@ -6,14 +6,14 @@ public struct SocketServer: @unchecked Sendable {
     public static let defaultMaxRequestBytes = 1_048_576
 
     private let path: String
-    private let router: CommandRouter
+    private let router: any JSONRPCCommandHandling
     private let clientReadTimeoutSeconds: TimeInterval
     private let maxRequestBytes: Int
     private let clientQueue = DispatchQueue(label: "dev.axon.socket-clients", attributes: .concurrent)
 
     public init(
         path: String,
-        router: CommandRouter = CommandRouter(
+        router: any JSONRPCCommandHandling = CommandRouter(
             activeCredentialFilterProvider: { ActiveCredentialFilterLoader().loadOrEmpty() }
         ),
         clientReadTimeoutSeconds: TimeInterval = Self.defaultClientReadTimeoutSeconds,

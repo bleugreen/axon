@@ -118,7 +118,9 @@ jobs:
           set -euo pipefail
           ./scripts/package-app
           codesign --verify --deep --strict "dist/Axon.app"
+          codesign --verify --deep --strict "dist/Axon Editor.app"
           spctl -a -vvv -t install "dist/Axon.app"
+          spctl -a -vvv -t install "dist/Axon Editor.app"
 
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
@@ -172,7 +174,8 @@ jobs:
 
             depends_on macos: ">= :sonoma"
 
-            app "Axon.app"
+            app "Axon-#{version}/Axon.app"
+            app "Axon-#{version}/Axon Editor.app"
             binary "#{appdir}/Axon.app/Contents/Resources/bin/axon"
 
             zap trash: [

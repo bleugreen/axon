@@ -8,6 +8,7 @@ let socketPath = AxonEnvironment.socketPath()
 let jsonEncoder = JSONEncoder()
 let jsonDecoder = JSONDecoder()
 let axonAppBundleIdentifier = "com.bleugreen.axon"
+let axonEditorBundleIdentifier = "com.bleugreen.axon.editor"
 
 do {
     switch command {
@@ -559,7 +560,11 @@ private func openRecipeEditor(arguments: [String]) throws {
     let editURL = AxonEditorURL.url(forEditing: fileURL)
     let process = Process()
     process.executableURL = URL(fileURLWithPath: "/usr/bin/open")
-    process.arguments = [editURL.absoluteString]
+    if let editorURL = axonEditorAppURL() {
+        process.arguments = ["-a", editorURL.path, editURL.absoluteString]
+    } else {
+        process.arguments = ["-b", axonEditorBundleIdentifier, editURL.absoluteString]
+    }
     try process.run()
     process.waitUntilExit()
     guard process.terminationStatus == 0 else {
@@ -586,6 +591,18 @@ private func axonAppURL() -> URL? {
         return bundled
     }
     return NSWorkspace.shared.urlForApplication(withBundleIdentifier: axonAppBundleIdentifier)
+}
+
+private func axonEditorAppURL() -> URL? {
+    if let daemonURL = bundledAxonAppURL() {
+        let sibling = daemonURL
+            .deletingLastPathComponent()
+            .appendingPathComponent("Axon Editor.app", isDirectory: true)
+        if FileManager.default.fileExists(atPath: sibling.path) {
+            return sibling
+        }
+    }
+    return NSWorkspace.shared.urlForApplication(withBundleIdentifier: axonEditorBundleIdentifier)
 }
 
 private func bundledAxonAppURL() -> URL? {

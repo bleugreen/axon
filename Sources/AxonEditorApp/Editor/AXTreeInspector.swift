@@ -232,8 +232,24 @@ struct AXTreeInspector: View {
 
 private struct FullAXTreeReader: Sendable {
     func read(appName: String) throws -> [AXTreeNode] {
-        let snapshot = try AXFullTreeCapturer().capture(app: appName)
-        return AXTreeNode.nodes(from: snapshot)
+        let response = try SocketClient(
+            path: AxonEnvironment.socketPath(),
+            responseTimeoutSeconds: SocketClient.defaultBatchResponseTimeoutSeconds
+        ).send(JSONRPCRequest(
+            id: .string("editor.ax-tree.look"),
+            method: "look",
+            params: .object([
+                "target": .string(appName),
+                "tree": .bool(true)
+            ])
+        ))
+        if let error = response.error {
+            throw AXTreeInspectorError.message(error.message)
+        }
+        guard let snapshot = response.result?["snapshot"] else {
+            throw AXTreeInspectorError.message("AX tree response did not include a snapshot")
+        }
+        return try AXTreeNode.nodes(fromSnapshotJSON: snapshot)
     }
 }
 
@@ -433,6 +449,19 @@ private struct AXTreeNode: Identifiable, Equatable {
         }
     }
 
+    static func nodes(fromSnapshotJSON snapshot: JSONValue) throws -> [AXTreeNode] {
+        guard case let .object(object) = snapshot,
+              case let .array(windows)? = object["windows"]
+        else {
+            throw AXTreeInspectorError.message("AX tree response did not include window nodes")
+        }
+
+        var nextIndex = 0
+        return try windows.map { window in
+            try AXTreeNode(json: window, nextIndex: &nextIndex)
+        }
+    }
+
     private init(node: AXNode, snapshotID: SnapshotID, nextIndex: inout Int) {
         let index = nextIndex
         nextIndex += 1
@@ -453,6 +482,33 @@ private struct AXTreeNode: Identifiable, Equatable {
             actions: node.actions,
             source: nil,
             childCount: node.childCount ?? children.count,
+            isRepeated: false,
+            children: children
+        )
+    }
+
+    private init(json: JSONValue, nextIndex: inout Int) throws {
+        guard case let .object(object) = json else {
+            throw AXTreeInspectorError.message("AX tree node was not an object")
+        }
+        let index = nextIndex
+        nextIndex += 1
+        let children = try (object["children"]?.treeArrayValue ?? []).map { child in
+            try AXTreeNode(json: child, nextIndex: &nextIndex)
+        }
+        let handle = object["handle"]?.stringValue
+        self.init(
+            id: handle ?? "node-\(index)",
+            handle: handle,
+            role: object["role"]?.stringValue ?? "AXUnknown",
+            title: object["title"]?.stringValue,
+            value: object["value"]?.stringValue,
+            description: object["description"]?.stringValue,
+            identifier: object["identifier"]?.stringValue,
+            frame: AXFrame(json: object["frame"]),
+            actions: object["actions"]?.stringArrayValue ?? [],
+            source: nil,
+            childCount: object["childCount"]?.intValue ?? children.count,
             isRepeated: false,
             children: children
         )
@@ -770,6 +826,13 @@ private extension AXTreeNode {
 }
 
 private extension JSONValue {
+    var treeArrayValue: [JSONValue]? {
+        guard case let .array(value) = self else {
+            return nil
+        }
+        return value
+    }
+
     var stringValue: String? {
         guard case let .string(value) = self else {
             return nil
@@ -786,6 +849,20 @@ private extension JSONValue {
         case .string, .bool, .object, .array, .null:
             return nil
         }
+    }
+
+    var intValue: Int? {
+        guard case let .int(value) = self else {
+            return nil
+        }
+        return value
+    }
+
+    var stringArrayValue: [String]? {
+        guard case let .array(values) = self else {
+            return nil
+        }
+        return values.compactMap(\.stringValue)
     }
 
 }

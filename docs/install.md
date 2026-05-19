@@ -1,8 +1,9 @@
 # Install and Operations
 
-Axon's deployed shape is a menu bar app plus a bundled CLI:
+Axon's deployed shape is a menu bar daemon, a separate editor app, and a bundled CLI:
 
 - `Axon.app` owns the long-running socket service in the user's Aqua session.
+- `Axon Editor.app` owns document windows, normal app menus, and `.axn` editing.
 - `axon` is the CLI and MCP entrypoint installed on `PATH`.
 - MCP clients run `axon mcp`, which forwards to the app-owned socket.
 
@@ -21,16 +22,21 @@ The release artifact is a signed and preferably notarized zip:
 
 ```text
 Axon-<version>.zip
-└── Axon.app
-    └── Contents
-        ├── MacOS
-        │   └── Axon
-        └── Resources
-            └── bin
-                └── axon
+└── Axon-<version>
+    ├── Axon.app
+    │   └── Contents
+    │       ├── MacOS
+    │       │   └── Axon
+    │       └── Resources
+    │           └── bin
+    │               └── axon
+    └── Axon Editor.app
+        └── Contents
+            └── MacOS
+                └── AxonEditor
 ```
 
-The Homebrew cask installs `Axon.app` and links `Axon.app/Contents/Resources/bin/axon`.
+The Homebrew cask installs both apps and links `Axon.app/Contents/Resources/bin/axon`.
 
 `Axon.app` uses bundle id:
 
@@ -39,6 +45,12 @@ com.bleugreen.axon
 ```
 
 That bundle id is the stable macOS Accessibility trust identity.
+
+`Axon Editor.app` uses bundle id:
+
+```text
+com.bleugreen.axon.editor
+```
 
 ## Building a Release Artifact
 
@@ -52,6 +64,7 @@ The script writes:
 
 ```text
 dist/Axon.app
+dist/Axon Editor.app
 dist/Axon-0.1.5.zip
 ```
 
@@ -71,7 +84,7 @@ AXON_NOTARY_PROFILE="axon-notary" \
 make package-app
 ```
 
-When `AXON_NOTARY_PROFILE` is set, the packager submits the zip to Apple, staples the accepted ticket to `Axon.app`, and recreates the zip.
+When `AXON_NOTARY_PROFILE` is set, the packager submits the zip to Apple, staples the accepted ticket to both apps, and recreates the zip.
 
 ## Homebrew Cask
 
@@ -95,7 +108,8 @@ cask "axon" do
 
   depends_on macos: ">= :sonoma"
 
-  app "Axon.app"
+  app "Axon-#{version}/Axon.app"
+  app "Axon-#{version}/Axon Editor.app"
   binary "#{appdir}/Axon.app/Contents/Resources/bin/axon"
 
   zap trash: [
