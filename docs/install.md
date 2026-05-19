@@ -65,7 +65,7 @@ The script writes:
 ```text
 dist/Axon.app
 dist/Axon Editor.app
-dist/Axon-0.1.6.zip
+dist/Axon-0.1.7.zip
 ```
 
 It also prints the SHA-256 and a Homebrew cask stanza for `bleugreen/tap`.
@@ -98,7 +98,7 @@ The cask shape:
 
 ```ruby
 cask "axon" do
-  version "0.1.6"
+  version "0.1.7"
   sha256 "<printed by scripts/package-app>"
 
   url "https://github.com/bleugreen/axon/releases/download/v#{version}/Axon-#{version}.zip"

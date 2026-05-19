@@ -197,7 +197,6 @@ final class AxonDaemonAppDelegate: NSObject, NSApplicationDelegate, @unchecked S
             let outcome: Result<Void, Error>
             do {
                 _ = try installer.upgradeCask(name: Self.homebrewCaskName)
-                try Self.reinstallDaemonFromCurrentBundle()
                 outcome = .success(())
             } catch {
                 outcome = .failure(error)
@@ -225,33 +224,6 @@ final class AxonDaemonAppDelegate: NSObject, NSApplicationDelegate, @unchecked S
         alert.addButton(withTitle: "Update")
         alert.addButton(withTitle: "Cancel")
         return alert.runModal() == .alertFirstButtonReturn
-    }
-
-    private nonisolated static func reinstallDaemonFromCurrentBundle() throws {
-        let workspace = NSWorkspace.shared
-        guard let bundleURL = workspace.urlForApplication(withBundleIdentifier: appBundleIdentifier) else {
-            throw HomebrewInstallerError.caskNotInstalled(name: homebrewCaskName)
-        }
-        let cliURL = bundleURL
-            .appendingPathComponent("Contents/Resources/bin/axon")
-
-        let process = Process()
-        process.executableURL = cliURL
-        process.arguments = ["install"]
-        let stderrPipe = Pipe()
-        process.standardError = stderrPipe
-        try process.run()
-        process.waitUntilExit()
-
-        guard process.terminationStatus == 0 else {
-            let data = (try? stderrPipe.fileHandleForReading.readToEnd()) ?? Data()
-            let stderr = String(decoding: data, as: UTF8.self)
-            throw HomebrewInstallerError.commandFailed(
-                arguments: ["install"],
-                status: process.terminationStatus,
-                stderr: stderr
-            )
-        }
     }
 
     private func spawnRelaunchHelper() {
