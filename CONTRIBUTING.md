@@ -32,6 +32,18 @@ make package-app
 
 For signing and notarization options, see [docs/install.md](docs/install.md).
 
+## Releasing
+
+Releases are fully automated by [`.github/workflows/release.yml`](.github/workflows/release.yml), triggered by pushing a `vX.Y.Z` tag. CI builds, signs, **notarizes and staples** the bundle, publishes the GitHub release, and updates the `bleugreen/homebrew-tap` cask. The procedure is:
+
+1. Bump the version in all three places: `Sources/AxonCore/AxonVersion.swift`, `scripts/package-app`, and `docs/install.md`.
+2. `make test` to confirm green.
+3. Commit as `Bump to X.Y.Z` with a one-paragraph summary of what shipped since the last release.
+4. `git tag vX.Y.Z && git push origin main vX.Y.Z`.
+5. Watch CI with `gh run watch` and confirm the release asset and tap cask land.
+
+Do **not** run `make package-app` or `gh release create` as part of a release. `make package-app` produces a local, **non-notarized** bundle for testing only; a hand-created release publishes that non-notarized zip until the CI run overwrites it. The tag push is the entire release action — everything else is CI's job.
+
 ## Accessibility for Development
 
 The daemon needs macOS Accessibility permission. The deployed `Axon.app` carries a stable bundle identity (`com.bleugreen.axon`) for TCC, so once approved it survives rebuilds.
