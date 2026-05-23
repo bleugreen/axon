@@ -1,5 +1,4 @@
 import Foundation
-import Yams
 
 public struct ActionHistoryRecord: Equatable, Sendable {
     public let id: String
@@ -97,7 +96,10 @@ public final class ActionHistoryStore: @unchecked Sendable {
     public func exportScript(sessionID: String, includeReads: Bool = false, from: String? = nil, to: String? = nil) throws -> ActionHistoryExport {
         let records = slicedRecords(sessionID: sessionID, from: from, to: to)
         let actions = records.compactMap { actionObject(for: $0, includeReads: includeReads) }
-        let script = try Yams.serialize(node: scriptNode(actions: actions), sortKeys: false)
+        let script = try AxnDocumentCodec.yamlString(from: .object([
+            "version": .int(1),
+            "actions": .array(actions.map(JSONValue.object))
+        ]))
         return ActionHistoryExport(script: script, actionCount: actions.count, recordCount: records.count)
     }
 
@@ -160,65 +162,6 @@ public final class ActionHistoryStore: @unchecked Sendable {
         return sessionID
     }
 
-    private func scriptNode(actions: [[String: JSONValue]]) -> Node {
-        Node([
-            (Node("version"), Node("1", Tag(.int))),
-            (Node("actions"), Node(actions.map(yamlNode(from:)), Tag(.seq)))
-        ], Tag(.map))
-    }
-
-    private func yamlNode(from object: [String: JSONValue]) -> Node {
-        Node(orderedKeys(for: object).map { key in
-            (Node(key), yamlNode(from: object[key] ?? .null))
-        }, Tag(.map))
-    }
-
-    private func yamlNode(from value: JSONValue) -> Node {
-        switch value {
-        case let .string(value):
-            return .scalar(value.represented())
-        case let .int(value):
-            return .scalar(value.represented())
-        case let .double(value):
-            return .scalar(value.represented())
-        case let .bool(value):
-            return .scalar(value.represented())
-        case .null:
-            return .scalar(NSNull().represented())
-        case let .array(values):
-            return Node(values.map(yamlNode(from:)), Tag(.seq))
-        case let .object(object):
-            return yamlNode(from: object)
-        }
-    }
-
-    private func orderedKeys(for object: [String: JSONValue]) -> [String] {
-        object.keys.sorted { lhs, rhs in
-            let lhsPriority = keyPriority(lhs)
-            let rhsPriority = keyPriority(rhs)
-            if lhsPriority != rhsPriority {
-                return lhsPriority < rhsPriority
-            }
-            return lhs < rhs
-        }
-    }
-
-    private func keyPriority(_ key: String) -> Int {
-        switch key {
-        case "tool":
-            return 0
-        case "app":
-            return 1
-        case "target":
-            return 2
-        case "locator":
-            return 3
-        case "name", "value", "keys":
-            return 4
-        default:
-            return 100
-        }
-    }
 }
 
 public struct ActionHistoryContext {

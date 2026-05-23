@@ -30,8 +30,8 @@ The corrected debugger contract and editor surface are now implemented:
 - The save/discard controls are no longer interleaved with run/step controls.
 - Breakpoint affordances remain visible independently from success/failure status, so completed/failed steps can still be breakpoint targets; duplicate row-toolbar breakpoint controls are gone.
 - The collapsed sidebar rail now exposes multiple layers instead of one generic button.
-- The editor includes a live AX Tree sidebar layer for the recipe target app. It captures top-level windows first, then fetches direct AX children per expanded node instead of rendering a truncated deep snapshot.
-- The AX Tree sidebar supports refresh, search over loaded nodes, expandable children, node details, selected-node frame highlighting, and acted-on target highlighting while a debug session runs.
+- The editor includes an AX Tree sidebar layer for the recipe target app, with refresh, search over loaded nodes, expandable children, node details, selected-node frame highlighting, and acted-on target highlighting while a debug session runs.
+- Correction, 2026-05-22: the current sidebar is still backed by socket `look`/`find` calls, not an editor-owned live AX session. The direct live inspector remains tracked in [Really Good Live AX Inspector Sidebar](2026-05-17-live-ax-inspector-sidebar.md).
 - Record From Here inserts newly captured blocks at the paused point by default, preserving following blocks.
 
 ## Context
@@ -100,5 +100,5 @@ The editor shipped the disruptive parts of the design doc in full — double-cli
 - Replace the breakpoint gutter and prefix-truncation toolbar buttons with a real paused debugger session.
 - Rework the debugger API around explicit create/resume/run-to/step/set-breakpoints commands and clear cursor/last-action status.
 - Move debugger controls into an icon-cluster in-window control strip with help text, keep save/discard separate, and make Reset available after a run.
-- Add a navigable live AX Tree sidebar layer for inspecting the app being automated/debugged, backed by lazy direct AX child loading rather than raw pause snapshots.
+- Add a navigable AX Tree sidebar layer for inspecting the app being automated/debugged. The current shipped layer is snapshot-backed; replacing it with lazy direct AX child loading remains tracked in [Really Good Live AX Inspector Sidebar](2026-05-17-live-ax-inspector-sidebar.md).
 - Complete the real run-to-pause / record-from-here debug loop, including intentional pause snapshots and failed-block retry.

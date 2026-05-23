@@ -32,6 +32,67 @@ import Testing
     #expect(resolution.candidates.map(\.index) == [2, 3])
 }
 
+@Test func locatorResolverUsesPrimaryWindowAsTieBreaker() {
+    let snapshot = AppSnapshot(
+        id: SnapshotID("locator-fixture"),
+        app: AppIdentity(bundleIdentifier: "org.mozilla.firefox", name: "Firefox", processIdentifier: 42),
+        windows: [
+            AXNode(role: "AXWindow", title: "Active", children: [
+                AXNode(role: "AXComboBox", description: "Search with Google or enter address")
+            ]),
+            AXNode(role: "AXWindow", title: "Background", children: [
+                AXNode(role: "AXComboBox", description: "Search with Google or enter address")
+            ])
+        ],
+        screenshot: nil
+    )
+    let locator = AXLocator(
+        role: "AXComboBox",
+        description: .exact("Search with Google or enter address")
+    )
+
+    let resolution = LocatorResolver().resolve(locator, in: snapshot)
+
+    #expect(resolution.status == .unique)
+    #expect(resolution.best?.handle?.rawValue == "locator-fixture:1")
+    #expect(resolution.best?.reasons.contains("primary window") == true)
+}
+
+@Test func locatorResolverPrefersValueMatchOverPrimaryWindowHint() {
+    let snapshot = AppSnapshot(
+        id: SnapshotID("locator-fixture"),
+        app: AppIdentity(bundleIdentifier: "org.mozilla.firefox", name: "Firefox", processIdentifier: 42),
+        windows: [
+            AXNode(role: "AXWindow", title: "Active", children: [
+                AXNode(
+                    role: "AXComboBox",
+                    value: "wikipedia.org/",
+                    description: "Search with Google or enter address"
+                )
+            ]),
+            AXNode(role: "AXWindow", title: "Background", children: [
+                AXNode(
+                    role: "AXComboBox",
+                    value: "wikipedia.org",
+                    description: "Search with Google or enter address"
+                )
+            ])
+        ],
+        screenshot: nil
+    )
+    let locator = AXLocator(
+        role: "AXComboBox",
+        value: .exact("wikipedia.org"),
+        description: .exact("Search with Google or enter address")
+    )
+
+    let resolution = LocatorResolver().resolve(locator, in: snapshot)
+
+    #expect(resolution.status == .unique)
+    #expect(resolution.best?.handle?.rawValue == "locator-fixture:3")
+    #expect(resolution.best?.reasons.contains("value exact wikipedia.org") == true)
+}
+
 @Test func locatorResolverReportsMissingMatches() {
     let snapshot = locatorFixtureSnapshot(buttons: ["NEW"])
     let locator = AXLocator(role: "AXButton", title: .exact("DELETE"))
@@ -72,6 +133,72 @@ import Testing
     #expect(resolution.best?.handle?.rawValue == "locator-fixture:3")
     #expect(resolution.best?.reasons.contains("label contains example.com") == true)
     #expect(resolution.best?.reasons.contains("ancestor label exact Navigation") == true)
+}
+
+@Test func locatorResolverTreatsAppAncestorAndActionsAsReplayHints() throws {
+    let snapshot = AppSnapshot(
+        id: SnapshotID("locator-fixture"),
+        app: AppIdentity(bundleIdentifier: "org.mozilla.firefox", name: "Firefox", processIdentifier: 42),
+        windows: [
+            AXNode(role: "AXWindow", children: [
+                AXNode(role: "AXGroup", children: [
+                    AXNode(role: "AXToolbar", children: [
+                        AXNode(
+                            role: "AXComboBox",
+                            description: "Search with Google or enter address",
+                            actions: []
+                        )
+                    ])
+                ])
+            ])
+        ],
+        screenshot: nil
+    )
+    let locator = AXLocator(
+        role: "AXComboBox",
+        description: .exact("Search with Google or enter address"),
+        actions: ["AXShowMenu", "AXScrollToVisible", "AXPress"],
+        ancestors: [
+            AXAncestorLocator(role: "AXApplication", title: .exact("Firefox")),
+            AXAncestorLocator(role: "AXWindow"),
+            AXAncestorLocator(role: "AXToolbar")
+        ]
+    )
+
+    let resolution = LocatorResolver().resolve(locator, in: snapshot)
+
+    #expect(resolution.status == .unique)
+    #expect(resolution.best?.handle?.rawValue == "locator-fixture:3")
+    #expect(resolution.best?.reasons.contains("ancestor role AXApplication") == true)
+    #expect(resolution.best?.reasons.contains { $0.hasPrefix("action ") } == false)
+}
+
+@Test func locatorResolverTreatsEditableValueAsReplayHint() throws {
+    let snapshot = AppSnapshot(
+        id: SnapshotID("locator-fixture"),
+        app: AppIdentity(bundleIdentifier: "org.mozilla.firefox", name: "Firefox", processIdentifier: 42),
+        windows: [
+            AXNode(role: "AXWindow", children: [
+                AXNode(
+                    role: "AXComboBox",
+                    value: "",
+                    description: "Search with Google or enter address"
+                )
+            ])
+        ],
+        screenshot: nil
+    )
+    let locator = AXLocator(
+        role: "AXComboBox",
+        value: .exact("w"),
+        description: .exact("Search with Google or enter address")
+    )
+
+    let resolution = LocatorResolver().resolve(locator, in: snapshot)
+
+    #expect(resolution.status == .unique)
+    #expect(resolution.best?.handle?.rawValue == "locator-fixture:1")
+    #expect(resolution.best?.reasons.contains { $0.hasPrefix("value ") } == false)
 }
 
 @Test func locatorResolverKeepsTitleMatchingRawTitleOnly() {

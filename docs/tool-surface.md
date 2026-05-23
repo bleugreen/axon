@@ -73,6 +73,10 @@ available and always compares a fresh summary.
 
 `find(app, locator)` resolves an AX locator against a fresh app snapshot and
 returns `unique`, `ambiguous`, or `missing` with candidate summaries.
+Locator fields are not all equally durable: role, subrole, title, label,
+description, identifier, non-editable value, and ancestors filter candidates;
+actions and editable text values contribute to candidate reasons and scoring
+when present.
 
 ## Actions
 

@@ -1,6 +1,14 @@
 # Recipe Editor And Preferences App
 
-Status: Design. Not yet implemented.
+Status: Historical design. Partially superseded by the shipped split daemon/editor app architecture.
+
+## 2026-05-22 Conceptual Maintenance Note
+
+This document is no longer the current implementation contract. The shipped
+architecture now has `AxonDaemonApp` as the menu bar/socket service and
+`AxonEditorApp` as the foreground editor/settings app. The shared `.axn` model,
+explicit editor entry point, unsaved review window, and debugger loop survived;
+the one-bundle `MenuBarExtra` + `DocumentGroup` shape did not.
 
 ## Context
 

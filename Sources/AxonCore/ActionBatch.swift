@@ -1,5 +1,4 @@
 import Foundation
-import Yams
 
 public enum ActionBatchError: Error, CustomStringConvertible {
     case invalidParams(String)
@@ -196,37 +195,10 @@ public struct ActionBatchExecutor {
     }
 
     public static func parseSource(_ source: String) throws -> JSONValue {
-        if let data = source.data(using: .utf8),
-           let json = try? JSONDecoder().decode(JSONValue.self, from: data) {
-            return json
-        }
-        let loaded = try Yams.load(yaml: source)
-        return try jsonValue(from: loaded)
-    }
-
-    private static func jsonValue(from value: Any?) throws -> JSONValue {
-        guard let value else {
-            return .null
-        }
-        switch value {
-        case let value as String:
-            return .string(value)
-        case let value as Bool:
-            return .bool(value)
-        case let value as Int:
-            return .int(value)
-        case let value as Double:
-            return .double(value)
-        case let value as [Any?]:
-            return .array(try value.map(jsonValue(from:)))
-        case let value as [Any]:
-            return .array(try value.map { try jsonValue(from: $0) })
-        case let value as [String: Any?]:
-            return .object(try value.mapValues { try jsonValue(from: $0) })
-        case let value as [String: Any]:
-            return .object(try value.mapValues { try jsonValue(from: $0) })
-        default:
-            throw ActionBatchError.invalidParams("unsupported YAML value: \(type(of: value))")
+        do {
+            return try AxnDocumentCodec.parseSource(source)
+        } catch let error as AxonRecipeError {
+            throw ActionBatchError.invalidParams(error.description)
         }
     }
 

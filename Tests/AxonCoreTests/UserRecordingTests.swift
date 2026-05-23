@@ -488,7 +488,32 @@ import Testing
     #expect(ancestors[1]["identifier"] == .string("main-content"))
 }
 
-@Test func recordedTargetSelectorIncludesElementValueInLocator() throws {
+@Test func recordedLocatorOmitsAppScopedAncestor() throws {
+    let locator = RecordedLocatorBuilder.locator(
+        role: "AXComboBox",
+        subrole: nil,
+        identifier: nil,
+        title: nil,
+        description: "Search with Google or enter address",
+        actions: [],
+        windowTitle: "Example",
+        ancestors: [
+            RecordedAncestorCandidate(role: "AXApplication", title: "Example"),
+            RecordedAncestorCandidate(role: "AXWindow", title: "Example"),
+            RecordedAncestorCandidate(role: "AXToolbar")
+        ]
+    )
+    guard case let .array(ancestors)? = locator["ancestors"] else {
+        Issue.record("expected ancestors array")
+        return
+    }
+
+    #expect(ancestors.count == 2)
+    #expect(ancestors[0]["role"] == .string("AXWindow"))
+    #expect(ancestors[1]["role"] == .string("AXToolbar"))
+}
+
+@Test func recordedTargetSelectorOmitsEditableElementValueFromLocator() throws {
     let selection = try #require(RecordedTargetSelector.select(from: [
         RecordedElementCandidate(
             role: "AXComboBox",
@@ -499,7 +524,7 @@ import Testing
     ]))
 
     #expect(selection.locator["role"] == .string("AXComboBox"))
-    #expect(selection.locator["value"] == .string("wikipedia.org"))
+    #expect(selection.locator["value"] == nil)
 }
 
 @Test func recordedLocatorRejectsElementsOutsideWindowSnapshots() {

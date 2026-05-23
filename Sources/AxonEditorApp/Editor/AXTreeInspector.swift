@@ -28,7 +28,7 @@ struct AXTreeInspector: View {
                 }
                 .buttonStyle(.borderless)
                 .disabled(appName == nil || isLoading)
-                .help("Refresh live AX tree")
+                .help("Refresh AX tree")
             }
             .padding(12)
 
@@ -442,13 +442,6 @@ private struct AXTreeNode: Identifiable, Equatable {
     let isRepeated: Bool
     let children: [AXTreeNode]
 
-    static func nodes(from snapshot: AppSnapshot) -> [AXTreeNode] {
-        var nextIndex = 0
-        return snapshot.windows.map { node in
-            AXTreeNode(node: node, snapshotID: snapshot.id, nextIndex: &nextIndex)
-        }
-    }
-
     static func nodes(fromSnapshotJSON snapshot: JSONValue) throws -> [AXTreeNode] {
         guard case let .object(object) = snapshot,
               case let .array(windows)? = object["windows"]
@@ -460,31 +453,6 @@ private struct AXTreeNode: Identifiable, Equatable {
         return try windows.map { window in
             try AXTreeNode(json: window, nextIndex: &nextIndex)
         }
-    }
-
-    private init(node: AXNode, snapshotID: SnapshotID, nextIndex: inout Int) {
-        let index = nextIndex
-        nextIndex += 1
-        let children = node.children.map { child in
-            AXTreeNode(node: child, snapshotID: snapshotID, nextIndex: &nextIndex)
-        }
-        let handle = SnapshotHandle(snapshotID: snapshotID, nodeIndex: index).rawValue
-
-        self.init(
-            id: handle,
-            handle: handle,
-            role: node.role,
-            title: node.title,
-            value: node.value,
-            description: node.description,
-            identifier: node.identifier,
-            frame: node.frame,
-            actions: node.actions,
-            source: nil,
-            childCount: node.childCount ?? children.count,
-            isRepeated: false,
-            children: children
-        )
     }
 
     private init(json: JSONValue, nextIndex: inout Int) throws {
