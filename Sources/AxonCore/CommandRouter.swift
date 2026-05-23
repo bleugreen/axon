@@ -71,7 +71,12 @@ public struct CommandRouter {
     public func handle(_ request: JSONRPCRequest) -> JSONRPCResponse {
         let context = history.context(for: request)
         let response = handleCommand(context.request, historySessionID: context.sessionID)
-        history.record(request: context.request, response: response, sessionID: context.sessionID)
+        history.record(
+            request: context.request,
+            response: response,
+            sessionID: context.sessionID,
+            activeSecretRedactor: activeSecretRedactor()
+        )
         return response
     }
 
@@ -172,6 +177,7 @@ public struct CommandRouter {
         case "run":
             do {
                 let params = try paramsObject(in: request)
+                let credentialFilterProvider = activeCredentialFilterProvider
                 let batch = try ActionBatchExecutor(
                     commandHandler: { handleCommand($0) },
                     snapshotProvider: batchSnapshotProvider,
@@ -179,8 +185,14 @@ public struct CommandRouter {
                         guard let historySessionID else {
                             return
                         }
-                        history.record(request: childRequest, response: childResponse, sessionID: historySessionID)
-                    }
+                        history.record(
+                            request: childRequest,
+                            response: childResponse,
+                            sessionID: historySessionID,
+                            activeSecretRedactor: ActiveSecretRedactor(filter: credentialFilterProvider())
+                        )
+                    },
+                    activeSecretRedactorProvider: { ActiveSecretRedactor(filter: credentialFilterProvider()) }
                 ).run(params: params)
                 return JSONRPCResponse(id: request.id, result: ["batch": batch])
             } catch let error as ActionBatchError {
@@ -192,6 +204,7 @@ public struct CommandRouter {
             do {
                 let params = try paramsObject(in: request)
                 let breakpoints = try stringArrayParam("breakpoints", in: params)
+                let credentialFilterProvider = activeCredentialFilterProvider
                 let session = try ActionBatchExecutor(
                     commandHandler: { handleCommand($0) },
                     snapshotProvider: batchSnapshotProvider,
@@ -199,8 +212,14 @@ public struct CommandRouter {
                         guard let historySessionID else {
                             return
                         }
-                        history.record(request: childRequest, response: childResponse, sessionID: historySessionID)
-                    }
+                        history.record(
+                            request: childRequest,
+                            response: childResponse,
+                            sessionID: historySessionID,
+                            activeSecretRedactor: ActiveSecretRedactor(filter: credentialFilterProvider())
+                        )
+                    },
+                    activeSecretRedactorProvider: { ActiveSecretRedactor(filter: credentialFilterProvider()) }
                 ).debugSession(params: params, breakpoints: Set(breakpoints))
                 debugSessions.insert(session)
                 if request.method == "debug.start" {
@@ -276,6 +295,8 @@ public struct CommandRouter {
                     result["path"] = .string(path)
                 }
                 return JSONRPCResponse(id: request.id, result: result)
+            } catch let error as ActionHistoryError {
+                return JSONRPCResponse(id: request.id, error: .invalidParams(error.description))
             } catch let error as JSONRPCError {
                 return JSONRPCResponse(id: request.id, error: error)
             } catch {
@@ -593,11 +614,7 @@ public struct CommandRouter {
         }
 
         let summaries = resolution.candidates.prefix(5).map { candidate in
-            let matchedText = activeSecretRedactor()
-                .redaction(
-                    for: candidate.matchedText
-                )?
-                .value ?? candidate.matchedText
+            let matchedText = redactedTextLocationSummaryText(candidate)
             return "[\(candidate.index)] \(candidate.role) \"\(matchedText)\" frame=\(frameDescription(candidate.frame))"
         }
         message += " (\(resolution.candidates.count) candidates: \(summaries.joined(separator: "; "))"
@@ -606,6 +623,24 @@ public struct CommandRouter {
         }
         message += ")"
         return message
+    }
+
+    private func redactedTextLocationSummaryText(_ candidate: TextLocationCandidate) -> String {
+        if let active = activeSecretRedactor().redaction(for: candidate.matchedText) {
+            return active.value
+        }
+        if let deterministic = DeterministicRedactor.standard.redaction(
+            for: "value",
+            value: candidate.matchedText,
+            context: DeterministicRedactionContext(
+                role: candidate.role,
+                title: candidate.matchedText,
+                value: candidate.matchedText
+            )
+        ) {
+            return deterministic.value
+        }
+        return candidate.matchedText
     }
 
     private func frameDescription(_ frame: AXFrame) -> String {

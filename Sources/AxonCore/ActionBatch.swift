@@ -17,6 +17,7 @@ public struct ActionBatchExecutor {
     public typealias ActionRecorder = (JSONRPCRequest, JSONRPCResponse) -> Void
     public typealias SnapshotProvider = RecordedFactEvaluator.SnapshotProvider
     public typealias ParameterSourceResolver = (URL) throws -> String?
+    public typealias ActiveSecretRedactorProvider = @Sendable () -> ActiveSecretRedactor
 
     private static let redactedSecretValue = "<redacted: contains-secret>"
     private static let substitutableStringFields: Set<String> = ["value", "keys"]
@@ -34,6 +35,7 @@ public struct ActionBatchExecutor {
     private let changeTimeoutMs: Int
     private let parameterSourceResolvers: [String: ParameterSourceResolver]
     private let actionRecorder: ActionRecorder?
+    private let activeSecretRedactorProvider: ActiveSecretRedactorProvider
 
     public init(
         commandHandler: @escaping CommandHandler,
@@ -41,7 +43,8 @@ public struct ActionBatchExecutor {
         changePollIntervalMs: Int = 100,
         changeTimeoutMs: Int = 5_000,
         parameterSourceResolvers: [String: ParameterSourceResolver] = ActionBatchExecutor.defaultParameterSourceResolvers(),
-        actionRecorder: ActionRecorder? = nil
+        actionRecorder: ActionRecorder? = nil,
+        activeSecretRedactorProvider: @escaping ActiveSecretRedactorProvider = { ActiveSecretRedactor() }
     ) {
         self.commandHandler = commandHandler
         self.snapshotProvider = snapshotProvider
@@ -50,6 +53,7 @@ public struct ActionBatchExecutor {
         self.changeTimeoutMs = max(0, changeTimeoutMs)
         self.parameterSourceResolvers = parameterSourceResolvers
         self.actionRecorder = actionRecorder
+        self.activeSecretRedactorProvider = activeSecretRedactorProvider
     }
 
     public func run(params: [String: JSONValue]) throws -> JSONValue {
@@ -147,7 +151,10 @@ public struct ActionBatchExecutor {
 
         do {
             let snapshot = try snapshotProvider(app)
-            let snapshotJSON = snapshot.jsonValue(includeTree: true)
+            let snapshotJSON = snapshot.jsonValue(
+                includeTree: true,
+                activeSecretRedactor: activeSecretRedactorProvider()
+            )
             return .object([
                 "reason": .string(reason),
                 "snapshotId": .string(snapshot.id.rawValue),
@@ -1251,15 +1258,25 @@ private enum ActionParameterValueCoercer {
         guard value.count == 10 else {
             return false
         }
-        let parts = value.split(separator: "-")
+        let parts = value.split(separator: "-", omittingEmptySubsequences: false)
         guard parts.count == 3,
               parts[0].count == 4,
               parts[1].count == 2,
-              parts[2].count == 2
+              parts[2].count == 2,
+              let year = Int(parts[0]),
+              let month = Int(parts[1]),
+              let day = Int(parts[2])
         else {
             return false
         }
-        return parts.allSatisfy { Int($0) != nil }
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0) ?? calendar.timeZone
+        let components = DateComponents(calendar: calendar, timeZone: calendar.timeZone, year: year, month: month, day: day)
+        guard let date = calendar.date(from: components) else {
+            return false
+        }
+        let roundTrip = calendar.dateComponents([.year, .month, .day], from: date)
+        return roundTrip.year == year && roundTrip.month == month && roundTrip.day == day
     }
 
     private static func isoDateString(_ date: Date) -> String {
