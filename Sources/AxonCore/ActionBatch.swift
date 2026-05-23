@@ -599,12 +599,16 @@ public struct ActionBatchExecutor {
         guard let factEvaluator else {
             throw RecordedFactError.unsupported(factID: expectedFacts[0].id, message: "fact verification is unavailable")
         }
+        var verifiedFacts: [RecordedFact] = []
         for fact in expectedFacts {
             if fact.kind == "changed", let baseline = changeBaselines[fact.id] {
                 try verifyChangedFact(fact, baseline: baseline)
             } else {
                 try factEvaluator.verify(fact)
             }
+            verifiedFacts.append(fact)
+        }
+        for fact in verifiedFacts {
             facts[fact.id] = fact
         }
     }
