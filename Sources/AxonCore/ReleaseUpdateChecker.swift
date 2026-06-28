@@ -7,7 +7,7 @@ public struct ReleaseUpdate: Equatable, Sendable {
     public let isUpdateAvailable: Bool
 }
 
-public enum ReleaseUpdateError: Error, CustomStringConvertible {
+public enum ReleaseUpdateError: Error, CustomStringConvertible, Equatable {
     case invalidHTTPStatus(Int)
     case missingReleaseVersion
 
