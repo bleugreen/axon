@@ -147,6 +147,16 @@ public struct LocatorResolution: Codable, Equatable, Sendable {
     public let best: LocatorCandidate?
     public let candidates: [LocatorCandidate]
 
+    init(snapshotID: SnapshotID, candidates: [LocatorCandidate]) {
+        let best = Self.uniqueHighestScoringCandidate(in: candidates)
+        self.init(
+            status: candidates.isEmpty ? .missing : (best == nil ? .ambiguous : .unique),
+            snapshotID: snapshotID,
+            best: best,
+            candidates: candidates
+        )
+    }
+
     public init(
         status: LocatorResolutionStatus,
         snapshotID: SnapshotID,
@@ -157,6 +167,14 @@ public struct LocatorResolution: Codable, Equatable, Sendable {
         self.snapshotID = snapshotID
         self.best = best
         self.candidates = candidates
+    }
+
+    private static func uniqueHighestScoringCandidate(in candidates: [LocatorCandidate]) -> LocatorCandidate? {
+        guard let highestScore = candidates.map(\.score).max() else {
+            return nil
+        }
+        let highestScoring = candidates.filter { $0.score == highestScore }
+        return highestScoring.count == 1 ? highestScoring[0] : nil
     }
 }
 
@@ -178,21 +196,7 @@ public struct LocatorResolver: Sendable {
             candidate(for: indexed, ancestors: ancestors, locator: locator, snapshot: snapshot)
         }
 
-        let status: LocatorResolutionStatus
-        let best: LocatorCandidate?
-        switch candidates.count {
-        case 0:
-            status = .missing
-            best = nil
-        case 1:
-            status = .unique
-            best = candidates[0]
-        default:
-            status = .ambiguous
-            best = nil
-        }
-
-        return LocatorResolution(status: status, snapshotID: snapshot.id, best: best, candidates: candidates)
+        return LocatorResolution(snapshotID: snapshot.id, candidates: candidates)
     }
 
     private func candidate(
@@ -208,14 +212,15 @@ public struct LocatorResolver: Sendable {
               matchesExact(locator.subrole, actual: node.subrole, label: "subrole", reasons: &reasons),
               matchesTitle(locator.title, node: node, reasons: &reasons),
               matchesLabel(locator.label, node: node, reasons: &reasons),
-              matches(locator.value, actual: node.value, label: "value", reasons: &reasons),
+              matchesValue(locator.value, node: node, reasons: &reasons),
               matches(locator.description, actual: node.description, label: "description", reasons: &reasons),
               matches(locator.identifier, actual: node.identifier, label: "identifier", reasons: &reasons),
-              matchesActions(locator.actions, actual: node.actions, reasons: &reasons),
-              matchesAncestors(locator.ancestors, actual: ancestors, reasons: &reasons)
+              matchesAncestors(locator.ancestors, actual: ancestors, snapshot: snapshot, reasons: &reasons)
         else {
             return nil
         }
+        addActionReasons(locator.actions, actual: node.actions, reasons: &reasons)
+        addPrimaryWindowReason(for: indexed.node, ancestors: ancestors, snapshot: snapshot, reasons: &reasons)
 
         return LocatorCandidate(
             index: indexed.index,
@@ -223,9 +228,17 @@ public struct LocatorResolver: Sendable {
             role: node.role,
             title: node.title,
             frame: node.frame,
-            score: reasons.count,
+            score: score(for: locator, node: node, reasons: reasons),
             reasons: reasons
         )
+    }
+
+    private func score(for locator: AXLocator, node: AXNode, reasons: [String]) -> Int {
+        var score = reasons.count
+        if let value = locator.value, value.matches(node.value) {
+            score += 2
+        }
+        return score
     }
 
     private func matchesExact(_ expected: String?, actual: String?, label: String, reasons: inout [String]) -> Bool {
@@ -248,6 +261,17 @@ public struct LocatorResolver: Sendable {
         }
         reasons.append("\(label) \(matcher.reasonFragment)")
         return true
+    }
+
+    private func matchesValue(_ matcher: TextMatch?, node: AXNode, reasons: inout [String]) -> Bool {
+        guard let matcher else {
+            return true
+        }
+        if matcher.matches(node.value) {
+            reasons.append("value \(matcher.reasonFragment)")
+            return true
+        }
+        return AXRoleSemantics.isEditableTextRole(node.role)
     }
 
     private func matchesTitle(_ matcher: TextMatch?, node: AXNode, reasons: inout [String]) -> Bool {
@@ -295,23 +319,26 @@ public struct LocatorResolver: Sendable {
         return labels
     }
 
-    private func matchesActions(_ expected: [String], actual: [String], reasons: inout [String]) -> Bool {
+    private func addActionReasons(_ expected: [String], actual: [String], reasons: inout [String]) {
         for action in expected {
-            guard actual.contains(action) else {
-                return false
+            if actual.contains(action) {
+                reasons.append("action \(action)")
             }
-            reasons.append("action \(action)")
         }
-        return true
     }
 
     private func matchesAncestors(
         _ expected: [AXAncestorLocator],
         actual ancestors: [AXNode],
+        snapshot: AppSnapshot,
         reasons: inout [String]
     ) -> Bool {
         var searchStart = 0
         for locator in expected {
+            if matchesAppAncestor(locator, snapshot: snapshot) {
+                reasons.append("ancestor role AXApplication")
+                continue
+            }
             guard let matchIndex = ancestors[searchStart...].firstIndex(where: locator.matches) else {
                 return false
             }
@@ -333,6 +360,40 @@ public struct LocatorResolver: Sendable {
             }
         }
         return true
+    }
+
+    private func matchesAppAncestor(_ locator: AXAncestorLocator, snapshot: AppSnapshot) -> Bool {
+        guard locator.role == "AXApplication" else {
+            return false
+        }
+        if let subrole = locator.subrole, !subrole.isEmpty {
+            return false
+        }
+        if let identifier = locator.identifier, !identifier.matches(snapshot.app.bundleIdentifier) {
+            return false
+        }
+        if let title = locator.title, !title.matches(snapshot.app.name) {
+            return false
+        }
+        if let label = locator.label, !label.matches(snapshot.app.name) {
+            return false
+        }
+        return true
+    }
+
+    private func addPrimaryWindowReason(
+        for node: AXNode,
+        ancestors: [AXNode],
+        snapshot: AppSnapshot,
+        reasons: inout [String]
+    ) {
+        guard snapshot.windows.count > 1, let firstWindow = snapshot.windows.first else {
+            return
+        }
+        let candidateWindow = node.role == "AXWindow" ? node : ancestors.first
+        if candidateWindow == firstWindow {
+            reasons.append("primary window")
+        }
     }
 
     private func indexedNodesWithAncestors(in snapshot: AppSnapshot) -> [(IndexedAXNode, [AXNode])] {

@@ -47,78 +47,23 @@ public final class AXLiveLocatorResolver: @unchecked Sendable {
             return resolution
         }
 
-        let capture = try capture(app: query)
-        let resolution = LocatorResolver().resolve(locator, in: capture.snapshot)
+        let snapshot = try captureSnapshot(app: query)
+        let resolution = LocatorResolver().resolve(locator, in: snapshot)
 
-        if scrollToVisible,
-           resolution.status == .unique,
-           let index = resolution.best?.handle?.nodeIndex,
-           capture.elements.indices.contains(index) {
-            scrollElementToVisible(capture.elements[index])
-        }
         if resolution.status == .unique,
-           let index = resolution.best?.handle?.nodeIndex,
-           capture.elements.indices.contains(index) {
-            storeCachedElement(capture.elements[index], app: query, locator: locator)
+           let handle = resolution.best?.handle,
+           let element = try? elementStore.element(for: handle) {
+            if scrollToVisible {
+                scrollElementToVisible(element)
+            }
+            storeCachedElement(element, app: query, locator: locator)
         }
 
         return resolution
     }
 
     public func captureSnapshot(app query: String) throws -> AppSnapshot {
-        try capture(app: query).snapshot
-    }
-
-    private func capture(app query: String) throws -> LiveLocatorCapture {
-        guard AccessibilityPermission.isTrusted() else {
-            throw SnapshotCaptureError.missingAccessibilityPermission
-        }
-
-        let app = try appResolver.resolve(query)
-        let appElement = AXUIElementCreateApplication(app.processIdentifier)
-        AXUIElementSetMessagingTimeout(appElement, messagingTimeout)
-        let snapshotID = SnapshotID.next()
-        var retainedElements: [AXUIElement] = []
-        let windows = elements(attribute: kAXWindowsAttribute, from: appElement).map { window in
-            serialize(window, retainedElements: &retainedElements)
-        }
-        let identity = AppIdentity(
-            bundleIdentifier: app.bundleIdentifier,
-            name: app.localizedName ?? app.bundleIdentifier ?? "pid \(app.processIdentifier)",
-            processIdentifier: app.processIdentifier
-        )
-        let capture = LiveLocatorCapture(
-            snapshot: AppSnapshot(id: snapshotID, app: identity, windows: windows, screenshot: nil),
-            elements: retainedElements
-        )
-        elementStore.store(
-            snapshotID: capture.snapshot.id,
-            elements: capture.elements,
-            summary: SnapshotSummary(snapshot: capture.snapshot)
-        )
-        return capture
-    }
-
-    private func serialize(_ element: AXUIElement, retainedElements: inout [AXUIElement]) -> AXNode {
-        AXUIElementSetMessagingTimeout(element, messagingTimeout)
-        retainedElements.append(element)
-
-        return AXNode(
-            role: copyAttribute(kAXRoleAttribute, from: element) ?? "AXUnknown",
-            subrole: copyAttribute(kAXSubroleAttribute, from: element),
-            title: copyAttribute(kAXTitleAttribute, from: element),
-            value: stringValue(copyRawAttribute(kAXValueAttribute, from: element)),
-            description: copyAttribute(kAXDescriptionAttribute, from: element),
-            help: copyAttribute(kAXHelpAttribute, from: element),
-            identifier: copyAttribute("AXIdentifier", from: element),
-            enabled: copyAttribute(kAXEnabledAttribute, from: element),
-            focused: copyAttribute(kAXFocusedAttribute, from: element),
-            frame: frame(from: element),
-            actions: actionNames(for: element),
-            children: elements(attribute: kAXChildrenAttribute, from: element).map { child in
-                serialize(child, retainedElements: &retainedElements)
-            }
-        )
+        try AXFullTreeCapturer(appResolver: appResolver, elementStore: elementStore).capture(app: query, screenshot: false)
     }
 
     private func scrollElementToVisible(_ element: AXUIElement) {
@@ -371,16 +316,14 @@ public final class AXLiveLocatorResolver: @unchecked Sendable {
             )
         }
 
-        if candidates.count == 1, cacheResult {
-            storeCachedElement(elements[0], app: query, locator: locator)
+        let resolution = LocatorResolution(snapshotID: snapshotID, candidates: candidates)
+        if cacheResult,
+           resolution.status == .unique,
+           let index = resolution.best?.index,
+           elements.indices.contains(index) {
+            storeCachedElement(elements[index], app: query, locator: locator)
         }
-
-        return LocatorResolution(
-            status: candidates.count == 1 ? .unique : .ambiguous,
-            snapshotID: snapshotID,
-            best: candidates.count == 1 ? candidates[0] : nil,
-            candidates: candidates
-        )
+        return resolution
     }
 
     private func miniCapture(app: AppIdentity, leaf: AXUIElement) -> LiveLocatorCapture {

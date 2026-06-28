@@ -102,6 +102,12 @@ Resolution should score candidates using multiple signals:
 5. ancestry and sibling structure
 6. normalized geometry as a tie-breaker
 
+Role, subrole, title, label, description, identifier, non-editable value, and
+ancestor requirements are hard filters. Supported actions and editable text
+values are replay signals: they explain and score a candidate when present, but
+they do not make an otherwise stable editable text target disappear just because
+the current field value or host-reported action list changed.
+
 The resolver should return one of:
 
 - `unique`: one high-confidence match

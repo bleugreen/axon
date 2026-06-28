@@ -270,7 +270,7 @@ struct SidebarRevealRail: View {
                     .labelStyle(.iconOnly)
             }
             .buttonStyle(.borderless)
-            .help("Show live AX tree")
+            .help("Show AX tree")
 
             Spacer()
         }

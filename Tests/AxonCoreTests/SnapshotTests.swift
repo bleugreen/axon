@@ -52,6 +52,12 @@ import ApplicationServices
     ) == 26)
 }
 
+@Test func privateBulkHierarchyCaptureIsDisabledForFirefox() {
+    #expect(!AXHierarchyBulkCapturer.permitsBulkHierarchy(bundleIdentifier: "org.mozilla.firefox"))
+    #expect(AXHierarchyBulkCapturer.permitsBulkHierarchy(bundleIdentifier: "com.apple.TextEdit"))
+    #expect(AXHierarchyBulkCapturer.permitsBulkHierarchy(bundleIdentifier: nil))
+}
+
 @Test func snapshotHandleParsesSnapshotIdAndNodeIndex() throws {
     let handle = try SnapshotHandle("snap-test:42")
 

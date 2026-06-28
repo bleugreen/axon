@@ -91,6 +91,50 @@ import Testing
     #expect(reparsed.blocks == recipe.blocks)
 }
 
+@Test func axonRecipeSerializationUsesCanonicalDocumentOrder() throws {
+    let recipe = try AxonRecipe(source: """
+    owner: local-test
+    actions:
+      - value: Hello
+        target: s1:2
+        tool: type
+        id: a001
+    args:
+      - default: Mitch
+        type: string
+        name: recipient
+    version: 1
+    """)
+
+    let rendered = try recipe.yamlString(includeEditorMetadata: false)
+
+    guard let version = rendered.range(of: "version: 1")?.lowerBound,
+          let args = rendered.range(of: "args:")?.lowerBound,
+          let actions = rendered.range(of: "actions:")?.lowerBound,
+          let owner = rendered.range(of: "owner: local-test")?.lowerBound,
+          let argName = rendered.range(of: "- name: recipient")?.lowerBound,
+          let argType = rendered.range(of: "  type: string")?.lowerBound,
+          let actionID = rendered.range(of: "- id: a001")?.lowerBound,
+          let actionTool = rendered.range(of: "  tool: type")?.lowerBound,
+          let actionTarget = rendered.range(of: "  target:")?.lowerBound,
+          let actionValue = rendered.range(of: "  value: Hello")?.lowerBound
+    else {
+        Issue.record("rendered recipe is missing expected fields:\n\(rendered)")
+        return
+    }
+
+    #expect(version < args)
+    #expect(args < actions)
+    #expect(actions < owner)
+    #expect(argName < argType)
+    #expect(actionID < actionTool)
+    #expect(actionTool < actionTarget)
+    #expect(actionTarget < actionValue)
+
+    let batch = try ActionBatchExecutor.parseSource(rendered)
+    #expect(batch == recipe.jsonValue)
+}
+
 @Test func axonRecipeInsertsRecordedBlocksBeforeTargetAndRemapsDuplicateIDs() throws {
     var recipe = try AxonRecipe(source: """
     version: 1

@@ -82,12 +82,40 @@ public final class AXPrimitiveActionExecutor {
         let element = try elementStore.element(for: target)
         showTargetBeforeAction(element, label: "AXValue")
         let result = AXUIElementSetAttributeValue(element, kAXValueAttribute as CFString, value as CFTypeRef)
+        if result == .success, stringValue(copyRawAttribute(kAXValueAttribute, from: element)) == value {
+            return PrimitiveActionResult(
+                action: "type",
+                target: target,
+                strategy: "AXValue",
+                success: true
+            )
+        }
+
+        guard let point = centerPoint(of: element) else {
+            return PrimitiveActionResult(
+                action: "type",
+                target: target,
+                strategy: "AXValue",
+                success: false,
+                message: result == .success
+                    ? "AXUIElementSetAttributeValue did not update the element value"
+                    : "AXUIElementSetAttributeValue returned \(result.rawValue)"
+            )
+        }
+
+        postMouseClick(at: point)
+        Thread.sleep(forTimeInterval: 0.05)
+        if let selectAll = KeyStroke("command+a") {
+            postKeyStroke(selectAll)
+            Thread.sleep(forTimeInterval: 0.02)
+        }
+        let typed = postKeyboardText(value)
         return PrimitiveActionResult(
             action: "type",
             target: target,
-            strategy: "AXValue",
-            success: result == .success,
-            message: result == .success ? nil : "AXUIElementSetAttributeValue returned \(result.rawValue)"
+            strategy: "CGEventKeyboard",
+            success: typed,
+            message: typed ? nil : "Unable to create keyboard events for text fallback"
         )
     }
 
@@ -106,29 +134,12 @@ public final class AXPrimitiveActionExecutor {
                 details: ["keys": .string(keys), "mode": .string("keystroke")]
             )
         }
-        for scalar in keys.unicodeScalars {
-            var value = UniChar(scalar.value)
-            guard let down = CGEvent(keyboardEventSource: nil, virtualKey: 0, keyDown: true),
-                  let up = CGEvent(keyboardEventSource: nil, virtualKey: 0, keyDown: false)
-            else {
-                return PrimitiveActionResult(
-                    action: "keyboard",
-                    target: target,
-                    strategy: "CGEventKeyboard",
-                    success: false,
-                    details: ["keys": .string(keys), "mode": .string("text")]
-                )
-            }
-            down.keyboardSetUnicodeString(stringLength: 1, unicodeString: &value)
-            up.keyboardSetUnicodeString(stringLength: 1, unicodeString: &value)
-            down.post(tap: .cghidEventTap)
-            up.post(tap: .cghidEventTap)
-        }
+        let success = postKeyboardText(keys)
         return PrimitiveActionResult(
             action: "keyboard",
             target: target,
             strategy: "CGEventKeyboard",
-            success: true,
+            success: success,
             details: ["keys": .string(keys), "mode": .string("text")]
         )
     }
@@ -391,11 +402,28 @@ public final class AXPrimitiveActionExecutor {
     }
 
     private func copyAttribute<T>(_ attribute: String, from element: AXUIElement) -> T? {
+        copyRawAttribute(attribute, from: element) as? T
+    }
+
+    private func copyRawAttribute(_ attribute: String, from element: AXUIElement) -> AnyObject? {
         var value: CFTypeRef?
         guard AXUIElementCopyAttributeValue(element, attribute as CFString, &value) == .success else {
             return nil
         }
-        return value as? T
+        return value
+    }
+
+    private func stringValue(_ value: AnyObject?) -> String? {
+        guard let value else {
+            return nil
+        }
+        if let string = value as? String {
+            return string
+        }
+        if let number = value as? NSNumber {
+            return number.stringValue
+        }
+        return String(describing: value)
     }
 
     private func postMouseClick(at point: CGPoint) {
@@ -424,6 +452,22 @@ public final class AXPrimitiveActionExecutor {
         up?.flags = keyStroke.flags
         down?.post(tap: .cghidEventTap)
         up?.post(tap: .cghidEventTap)
+    }
+
+    private func postKeyboardText(_ text: String) -> Bool {
+        for scalar in text.unicodeScalars {
+            var value = UniChar(scalar.value)
+            guard let down = CGEvent(keyboardEventSource: nil, virtualKey: 0, keyDown: true),
+                  let up = CGEvent(keyboardEventSource: nil, virtualKey: 0, keyDown: false)
+            else {
+                return false
+            }
+            down.keyboardSetUnicodeString(stringLength: 1, unicodeString: &value)
+            up.keyboardSetUnicodeString(stringLength: 1, unicodeString: &value)
+            down.post(tap: .cghidEventTap)
+            up.post(tap: .cghidEventTap)
+        }
+        return true
     }
 
     private func keyStrokeIntent(from keys: String) -> KeyStroke? {

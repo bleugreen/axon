@@ -54,7 +54,8 @@ Two locators per action+fact pair, both fully attributed:
 - **Action locator**: built from the pre-action snapshot. Used to find the element to act upon.
 - **Fact locator**: built from the post-action re-read of the same `AXUIElement`. Used to find the element when checking the predicate.
 
-For the URL bar example the recorded recipe would look something like:
+For the URL bar example the recorded recipe should keep mutable text as fact
+state rather than durable locator identity:
 
 ```
 - id: a002
@@ -70,15 +71,15 @@ For the URL bar example the recorded recipe would look something like:
     target:
       locator:
         role: AXComboBox
-        value: "wikipedia.org"                              # post-action, freshly read
-        # description omitted because the post-state element no longer exposes one
+        # value omitted from locator identity for editable text controls
+        # description omitted if the post-state element no longer exposes one
         ancestors: [...]                                    # re-read; usually identical
     state:
       value:
         contains: wikipedia.org
 ```
 
-The fact target now identifies the URL bar **as it exists in the post-action state**, and the `value.contains` predicate is a real assertion about the change rather than a tautology.
+The fact target now identifies the URL bar **as it exists in the post-action state**, while the `value.contains` predicate is the assertion about the change. Existing recordings that do contain editable `value` locators remain replayable because the resolver treats editable values as scoring hints instead of hard filters.
 
 ### Settling the Post-State
 
@@ -108,7 +109,7 @@ This is a larger design question than the same-element fix and should be scoped 
 
 - Done: identified the recorder/translator path. `UserActionRecorder.flushPendingText()` was serializing a single target through `RecordedUserAction.setValue`, and `UserRecordingTranslator` reused that target for the `value` fact.
 - Done: same-element value facts can now carry a distinct post-action `factTarget`. The recorder captures the focused element/action target when a text burst starts, then re-reads the same AX element when the text burst is flushed and serializes that fresh target for the fact.
-- Done: recorded locators now include non-empty `AXValue`, so the post-action locator can identify text controls by the value that exists after mutation.
+- Superseded: recorded editable text locators should not include mutable `AXValue` as durable identity. The value belongs in the fact state; legacy editable value locators are tolerated as resolver scoring hints.
 - Still needed: add an explicit notification/timeout settle boundary if live Firefox recording shows the post-read can race AX value propagation.
 - Re-record `2026-05-14-193649-Firefox.axn` and confirm `a002.value.0` resolves and asserts correctly.
 - Scope the cross-element fact case (open question above) as a follow-up issue once the same-element fix lands.
