@@ -7,7 +7,7 @@ public struct ReleaseUpdate: Equatable, Sendable {
     public let isUpdateAvailable: Bool
 }
 
-public enum ReleaseUpdateError: Error, CustomStringConvertible {
+public enum ReleaseUpdateError: Error, Equatable, CustomStringConvertible {
     case invalidHTTPStatus(Int)
     case missingReleaseVersion
 
@@ -24,19 +24,19 @@ public enum ReleaseUpdateError: Error, CustomStringConvertible {
 public struct ReleaseUpdateChecker: Sendable {
     public typealias Fetch = @Sendable (URL) async throws -> Data
 
-    private let caskURL: URL
+    private let releasesURL: URL
     private let fetch: Fetch
 
     public init(
-        caskURL: URL = URL(string: "https://raw.githubusercontent.com/bleugreen/homebrew-tap/main/Casks/axon.rb")!,
+        releasesURL: URL = URL(string: "https://api.github.com/repos/bleugreen/axon/releases/latest")!,
         fetch: @escaping Fetch = ReleaseUpdateChecker.defaultFetch
     ) {
-        self.caskURL = caskURL
+        self.releasesURL = releasesURL
         self.fetch = fetch
     }
 
     public func check(currentVersion: String = AxonVersion.current) async throws -> ReleaseUpdate {
-        let data = try await fetch(caskURL)
+        let data = try await fetch(releasesURL)
         let release = try Self.release(from: data)
         return ReleaseUpdate(
             currentVersion: currentVersion,
@@ -47,13 +47,18 @@ public struct ReleaseUpdateChecker: Sendable {
     }
 
     public static func release(from data: Data) throws -> (version: String, url: URL) {
-        guard let cask = String(data: data, encoding: .utf8),
-              let rawVersion = cask.firstMatch(for: #"(?m)^\s*version\s+"([^"]+)""#)
+        guard let json = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let tagName = json["tag_name"] as? String
         else {
             throw ReleaseUpdateError.missingReleaseVersion
         }
-        let version = normalizedVersion(rawVersion)
-        let url = URL(string: "https://github.com/bleugreen/axon/releases/tag/v\(version)")!
+        let version = normalizedVersion(tagName)
+        let url: URL
+        if let htmlURL = json["html_url"] as? String, let parsed = URL(string: htmlURL) {
+            url = parsed
+        } else {
+            url = URL(string: "https://github.com/bleugreen/axon/releases/tag/v\(version)")!
+        }
         return (version, url)
     }
 
@@ -72,7 +77,10 @@ public struct ReleaseUpdateChecker: Sendable {
 
     public static func defaultFetch(url: URL) async throws -> Data {
         var request = URLRequest(url: url)
+        request.cachePolicy = .reloadIgnoringLocalAndRemoteCacheData
         request.setValue("Axon/\(AxonVersion.current)", forHTTPHeaderField: "User-Agent")
+        request.setValue("application/vnd.github+json", forHTTPHeaderField: "Accept")
+        request.setValue("2022-11-28", forHTTPHeaderField: "X-GitHub-Api-Version")
         let (data, response) = try await URLSession.shared.data(for: request)
         if let httpResponse = response as? HTTPURLResponse,
            !(200..<300).contains(httpResponse.statusCode)
@@ -97,21 +105,5 @@ public struct ReleaseUpdateChecker: Sendable {
                 let digits = component.prefix { $0.isNumber }
                 return Int(digits) ?? 0
             }
-    }
-}
-
-private extension String {
-    func firstMatch(for pattern: String) -> String? {
-        guard let regex = try? NSRegularExpression(pattern: pattern) else {
-            return nil
-        }
-        let range = NSRange(startIndex..<endIndex, in: self)
-        guard let match = regex.firstMatch(in: self, range: range),
-              match.numberOfRanges > 1,
-              let matchRange = Range(match.range(at: 1), in: self)
-        else {
-            return nil
-        }
-        return String(self[matchRange])
     }
 }
