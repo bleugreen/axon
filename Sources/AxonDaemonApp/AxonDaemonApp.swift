@@ -133,6 +133,7 @@ final class AxonDaemonAppDelegate: NSObject, NSApplicationDelegate, @unchecked S
             menu.addItem(disabledItem("Checking for Updates..."))
         case let .upToDate(version):
             menu.addItem(disabledItem("Up to Date (\(version))"))
+            menu.addItem(menuItem(title: "Check Again", action: #selector(checkForUpdates)))
         case let .available(update):
             menu.addItem(menuItem(title: "Update to \(update.latestVersion)...", action: #selector(performAvailableUpdate)))
         case let .installing(version):
