@@ -54,7 +54,7 @@ struct NoteStepEditor: View {
                 get: { note.text ?? "" },
                 set: { note.text = $0 }
             ),
-            prompt: "Add context for this part of the recipe"
+            prompt: "Add context for this part of the axn file"
         )
     }
 }
@@ -184,7 +184,7 @@ private struct UnsupportedActionEditor: View {
     let action: AxnAction
 
     var body: some View {
-        Text("The editor doesn't render this action's fields yet. The recipe will still replay; open an issue at github.com/bleugreen/axon if you'd like editing support.")
+        Text("The editor doesn't render this action's fields yet. The axn file will still replay; open an issue at github.com/bleugreen/axon if you'd like editing support.")
             .font(.caption)
             .foregroundStyle(.secondary)
             .fixedSize(horizontal: false, vertical: true)

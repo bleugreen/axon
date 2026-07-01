@@ -125,7 +125,7 @@ before the first action runs. Supported v1 parameter types are `string`,
 `secret`, `number`, `date`, `email`, and `path`. `env://NAME` and
 `op://vault/item/field` sources can bind declared args; caller args cannot
 override a declared source. Secret-tainted action values are redacted in dry-run
-params, batch traces, and history. Prefer `op://` or `env://` sources for
+params, axn traces, and history. Prefer `op://` or `env://` sources for
 secrets; literal CLI `--arg` values can be exposed before Axon receives them.
 
 `save` writes recent recorded calls as an editable `.axn` file. Read calls such

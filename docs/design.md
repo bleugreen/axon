@@ -96,7 +96,7 @@ Locators should be AX-native and honest about macOS semantics. They can borrow u
 ```json
 {
   "role": "AXButton",
-  "title": { "contains": "Profile concurrent batch exploration" },
+  "title": { "contains": "Profile concurrent axn exploration" },
   "actions": ["AXPress"],
   "ancestors": [
     { "role": "AXWindow", "title": { "contains": "cairn" } },
@@ -211,17 +211,17 @@ Screenshot-returning tools should embed image data in their response. File outpu
 
 ### Action Batches and `.axn` Files
 
-`run` is an invocation-scoped composition layer. A batch is an ordered list of tool calls — each action is just `tool:` plus that tool's normal arguments. There is no separate plan language to learn, and no separate semantics for batched actions vs. standalone calls.
+`run` is an invocation-scoped composition layer. An axn is an ordered list of tool calls — each action is just `tool:` plus that tool's normal arguments. There is no separate plan language to learn, and no separate semantics for axn actions vs. standalone calls.
 
-`.axn` files (axon // action) are batches saved to disk. They are the project's primary persisted artifact: a recorded sequence of past tool calls that can be replayed, edited, and shared. `save` generates them from observed sessions rather than expecting agents to hand-author scripts. The file shape mirrors `run` exactly, so `axon run path.axn` and an inline batch are interchangeable.
+`.axn` files (axon // action) are axn artifacts saved to disk. They are the project's primary persisted artifact: a recorded sequence of past tool calls that can be replayed, edited, and shared. `save` generates them from observed sessions rather than expecting agents to hand-author scripts. The file shape mirrors `run` exactly, so `axon run path.axn` and an inline axn object are interchangeable.
 
-The daemon executes a submitted batch, traces it, and forgets it. It does not own a recipe registry or persistent script cache. Reusable `.axn` files live wherever the user or repo wants them.
+The daemon executes a submitted axn object, traces it, and forgets it. It does not own a axn registry or persistent script cache. Reusable `.axn` files live wherever the user or repo wants them.
 
-YAML is the preferred on-disk format because it is compact and human-editable. JSON-RPC remains the daemon transport, and structured JSON batch objects remain acceptable when a caller already has data in memory.
+YAML is the preferred on-disk format because it is compact and human-editable. JSON-RPC remains the daemon transport, and structured JSON axn objects remain acceptable when a caller already has data in memory.
 
-Failures are part of the batch trace, not MCP transport failures. A failed batch stops at the first failing action unless `continueOnError: true`, preserves completed trace entries, and returns `success: false` with the failing action's index, tool, and error. Locator failures preserve the resolution status, snapshot id, candidate count, and candidate summaries so an agent can repair the batch without another broad state read.
+Failures are part of the axn trace, not MCP transport failures. A failed axn run stops at the first failing action unless `continueOnError: true`, preserves completed trace entries, and returns `success: false` with the failing action's index, tool, and error. Locator failures preserve the resolution status, snapshot id, candidate count, and candidate summaries so an agent can repair the axn file without another broad state read.
 
-Higher-order control flow (conditionals, polling waits, repeat loops, assertions, output binding) is intentionally not part of the batch surface. If those primitives prove necessary, they should be added to the underlying tool set so that batches remain a flat sequence of normal tool calls.
+Higher-order control flow (conditionals, polling waits, repeat loops, assertions, output binding) is intentionally not part of the axn surface. If those primitives prove necessary, they should be added to the underlying tool set so that axn files remain a flat sequence of normal tool calls.
 
 ### Technology Direction
 

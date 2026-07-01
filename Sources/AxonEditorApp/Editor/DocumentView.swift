@@ -45,17 +45,17 @@ struct DocumentView: View {
         self.discardDocument = discardDocument
         self.recordFromHere = recordFromHere
         self._runStatus = State(initialValue: isReview ? "Unsaved recording" : "Idle")
-        self._isSidebarVisible = State(initialValue: !document.wrappedValue.recipe.args.isEmpty)
-        self._sidebarLayer = State(initialValue: document.wrappedValue.recipe.args.isEmpty ? .tree : .inputs)
+        self._isSidebarVisible = State(initialValue: !document.wrappedValue.axn.args.isEmpty)
+        self._sidebarLayer = State(initialValue: document.wrappedValue.axn.args.isEmpty ? .tree : .inputs)
     }
 
     var body: some View {
         HStack(spacing: 0) {
             if isSidebarVisible {
                 EditorSidebar(
-                    appName: document.recipe.primaryAppName,
+                    appName: document.axn.primaryAppName,
                     actedOnTarget: actedOnTarget,
-                    args: $document.recipe.args,
+                    args: $document.axn.args,
                     selectedIndex: $selectedArgumentIndex,
                     selectedLayer: $sidebarLayer,
                     treeRefreshToken: treeRefreshToken,
@@ -75,9 +75,9 @@ struct DocumentView: View {
                     title: debugTitle,
                     detail: debugDetail,
                     isRunning: isRunning,
-                    canRun: !document.recipe.blocks.isEmpty && !isDebugActive,
-                    canDebug: !document.recipe.blocks.isEmpty && !isDebugActive,
-                    canRunToSelection: selectedBlockID != nil && !document.recipe.blocks.isEmpty,
+                    canRun: !document.axn.blocks.isEmpty && !isDebugActive,
+                    canDebug: !document.axn.blocks.isEmpty && !isDebugActive,
+                    canRunToSelection: selectedBlockID != nil && !document.axn.blocks.isEmpty,
                     canResume: isDebugPaused,
                     canStep: isDebugPaused,
                     canRetry: isDebugFailed,
@@ -98,10 +98,10 @@ struct DocumentView: View {
                 )
                 Divider()
                 AxnCanvas(
-                    blocks: $document.recipe.blocks,
-                    editorMetadata: $document.recipe.editorMetadata,
+                    blocks: $document.axn.blocks,
+                    editorMetadata: $document.axn.editorMetadata,
                     selectedBlockID: $selectedBlockID,
-                    inputNames: document.recipe.inputNames,
+                    inputNames: document.axn.inputNames,
                     trace: lastTrace,
                     debugCursorBlockID: cursorBlockID,
                     failedRepairBlockID: repairActionID,
@@ -136,7 +136,7 @@ struct DocumentView: View {
         .frame(minWidth: 560, minHeight: 420)
         .onAppear {
             if selectedBlockID == nil {
-                selectedBlockID = document.recipe.blocks.first?.id
+                selectedBlockID = document.axn.blocks.first?.id
             }
         }
     }
@@ -198,15 +198,15 @@ struct DocumentView: View {
         if let pauseReason, pauseReason != "start" {
             return "Paused by \(pauseReason)"
         }
-        if !document.recipe.editorMetadata.breakpoints.isEmpty {
-            let count = document.recipe.editorMetadata.breakpoints.count
+        if !document.axn.editorMetadata.breakpoints.isEmpty {
+            let count = document.axn.editorMetadata.breakpoints.count
             return "\(count) breakpoint\(count == 1 ? "" : "s")"
         }
         return nil
     }
 
     private func runAxn() {
-        let runTarget = document.recipe
+        let runTarget = document.axn
         guard runTarget.blocks.isEmpty == false else {
             return
         }
@@ -254,8 +254,8 @@ struct DocumentView: View {
 
     private func startDebugSession(runTo blockID: String?) {
         var params = axnParams()
-        if !document.recipe.editorMetadata.breakpoints.isEmpty {
-            params["breakpoints"] = .array(document.recipe.editorMetadata.breakpoints.map(JSONValue.string))
+        if !document.axn.editorMetadata.breakpoints.isEmpty {
+            params["breakpoints"] = .array(document.axn.editorMetadata.breakpoints.map(JSONValue.string))
         }
         if let documentID {
             params["documentId"] = .string(documentID)
@@ -503,7 +503,7 @@ struct DocumentView: View {
     }
 
     private func axnParams() -> [String: JSONValue] {
-        if case let .object(object) = document.recipe.jsonValue {
+        if case let .object(object) = document.axn.jsonValue {
             return object
         }
         return [:]
@@ -541,7 +541,7 @@ struct DocumentView: View {
         guard let actionID else {
             return nil
         }
-        for block in document.recipe.blocks {
+        for block in document.axn.blocks {
             guard block.id == actionID,
                   case let .action(action) = block
             else {

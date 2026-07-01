@@ -21,7 +21,7 @@ import Testing
           nested: true
     """
 
-    let recipe = try Axn(source: source)
+    let axn = try Axn(source: source)
 
     #expect(recipe.version == 1)
     #expect(recipe.editorMetadata.breakpoints == ["a001"])
@@ -29,14 +29,14 @@ import Testing
     #expect(recipe.args.map(\.name) == ["recipient"])
     #expect(recipe.blocks.count == 2)
 
-    guard case let .note(note) = recipe.blocks[0] else {
+    guard case let .note(note) = axn.blocks[0] else {
         Issue.record("first block should be a note")
         return
     }
     #expect(note.id == "intro")
     #expect(note.text == "Sign in first")
 
-    guard case let .action(action) = recipe.blocks[1] else {
+    guard case let .action(action) = axn.blocks[1] else {
         Issue.record("second block should be an action")
         return
     }
@@ -46,7 +46,7 @@ import Testing
 }
 
 @Test func axnFileAssignsStableIDsToMissingBlocks() throws {
-    var recipe = try Axn(source: """
+    var axn = try Axn(source: """
     version: 1
     actions:
       - note: Explain the setup
@@ -58,13 +58,13 @@ import Testing
         keys: Return
     """)
 
-    recipe.assignMissingBlockIDs(prefix: "x")
+    axn.assignMissingBlockIDs(prefix: "x")
 
     #expect(recipe.blocks.map(\.id) == ["x001", "x002", "existing"])
 }
 
 @Test func axnFileRoundTripsMetadataNotesAndUnknownFields() throws {
-    var recipe = try Axn(source: """
+    var axn = try Axn(source: """
     # axon-editor: { breakpoints: [a001], notes: { a001: "auth fails here" }, panel: expanded }
     version: 1
     owner: local-test
@@ -78,9 +78,9 @@ import Testing
         extra:
           survives: true
     """)
-    recipe.assignMissingBlockIDs(prefix: "b")
+    axn.assignMissingBlockIDs(prefix: "b")
 
-    let rendered = try recipe.yamlString()
+    let rendered = try axn.yamlString()
     let reparsed = try Axn(source: rendered)
 
     #expect(rendered.hasPrefix("# axon-editor:"))
@@ -88,11 +88,11 @@ import Testing
     #expect(reparsed.editorMetadata.notes == ["a001": "auth fails here"])
     #expect(reparsed.editorMetadata.unknownFields["panel"] == .string("expanded"))
     #expect(reparsed.unknownTopLevelFields["owner"] == .string("local-test"))
-    #expect(reparsed.blocks == recipe.blocks)
+    #expect(reparsed.blocks == axn.blocks)
 }
 
 @Test func axnFileSerializationUsesCanonicalDocumentOrder() throws {
-    let recipe = try Axn(source: """
+    let axn = try Axn(source: """
     owner: local-test
     actions:
       - value: Hello
@@ -106,7 +106,7 @@ import Testing
     version: 1
     """)
 
-    let rendered = try recipe.yamlString(includeEditorMetadata: false)
+    let rendered = try axn.yamlString(includeEditorMetadata: false)
 
     guard let version = rendered.range(of: "version: 1")?.lowerBound,
           let args = rendered.range(of: "args:")?.lowerBound,
@@ -119,7 +119,7 @@ import Testing
           let actionTarget = rendered.range(of: "  target:")?.lowerBound,
           let actionValue = rendered.range(of: "  value: Hello")?.lowerBound
     else {
-        Issue.record("rendered recipe is missing expected fields:\n\(rendered)")
+        Issue.record("rendered axn file is missing expected fields:\n\(rendered)")
         return
     }
 
@@ -132,11 +132,11 @@ import Testing
     #expect(actionTarget < actionValue)
 
     let batch = try AxnRunner.parseSource(rendered)
-    #expect(batch == recipe.jsonValue)
+    #expect(batch == axn.jsonValue)
 }
 
 @Test func axnFileInsertsRecordedBlocksBeforeTargetAndRemapsDuplicateIDs() throws {
-    var recipe = try Axn(source: """
+    var axn = try Axn(source: """
     version: 1
     actions:
       - id: a001
@@ -169,13 +169,13 @@ import Testing
           - a001.value.0
     """)
 
-    recipe.insertRecordedBlocks(recording.blocks, beforeBlockID: "a002")
+    axn.insertRecordedBlocks(recording.blocks, beforeBlockID: "a002")
 
     #expect(recipe.blocks.map(\.id) == ["a001", "a003", "a004", "a002"])
-    guard case let .action(typeAction) = recipe.blocks[1],
+    guard case let .action(typeAction) = axn.blocks[1],
           case let .array(expects)? = typeAction.fields["expects"],
           case let .object(fact)? = expects.first,
-          case let .action(keyboardAction) = recipe.blocks[2]
+          case let .action(keyboardAction) = axn.blocks[2]
     else {
         Issue.record("inserted actions should keep expected shape")
         return

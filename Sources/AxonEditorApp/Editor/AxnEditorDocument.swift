@@ -4,18 +4,18 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 extension UTType {
-    static let axnFile = UTType(exportedAs: "com.bleugreen.axon.recipe", conformingTo: .yaml)
+    static let axnFile = UTType(exportedAs: "com.bleugreen.axon.axn", conformingTo: .yaml)
 }
 
 struct AxnEditorDocument: FileDocument {
     static var readableContentTypes: [UTType] { [.axnFile, UTType(filenameExtension: "axn") ?? .yaml] }
     static var writableContentTypes: [UTType] { [.axnFile] }
 
-    var recipe: Axn
+    var axn: Axn
 
-    init(recipe: Axn = Axn()) {
-        self.recipe = recipe
-        self.recipe.assignMissingBlockIDs()
+    init(axn: Axn = Axn()) {
+        self.axn = recipe
+        self.axn.assignMissingBlockIDs()
     }
 
     init(configuration: ReadConfiguration) throws {
@@ -24,12 +24,12 @@ struct AxnEditorDocument: FileDocument {
         else {
             throw CocoaError(.fileReadCorruptFile)
         }
-        recipe = try Axn(source: source)
-        recipe.assignMissingBlockIDs()
+        axn = try Axn(source: source)
+        axn.assignMissingBlockIDs()
     }
 
     func fileWrapper(configuration: WriteConfiguration) throws -> FileWrapper {
-        let source = try recipe.yamlString()
+        let source = try axn.yamlString()
         guard let data = source.data(using: .utf8) else {
             throw CocoaError(.fileWriteInapplicableStringEncoding)
         }

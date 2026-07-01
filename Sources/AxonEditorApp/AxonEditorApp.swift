@@ -138,9 +138,9 @@ final class AxonEditorAppDelegate: NSObject, NSApplicationDelegate, @unchecked S
         suggestedName: String,
         suggestedDirectory: URL
     ) throws {
-        let recipe = try Axn(source: source)
+        let axn = try Axn(source: source)
         openEditorWindow(
-            document: AxnEditorDocument(recipe: recipe),
+            document: AxnEditorDocument(axn: axn),
             fileURL: fileURL,
             review: review,
             suggestedName: suggestedName,
@@ -319,7 +319,7 @@ private final class AxnEditorWindowController: NSWindowController, NSWindowDeleg
     func saveDocument() {
         do {
             let targetURL = try saveURL()
-            let source = try axonDocument.recipe.yamlString()
+            let source = try axonDocument.axn.yamlString()
             try source.write(to: targetURL, atomically: true, encoding: .utf8)
             fileURL = targetURL
             review = false
@@ -363,8 +363,8 @@ private final class AxnEditorWindowController: NSWindowController, NSWindowDeleg
 
     func insertRecording(_ source: String, beforeBlockID: String?) throws {
         let recording = try Axn(source: source)
-        axonDocument.recipe.insertRecordedBlocks(recording.blocks, beforeBlockID: beforeBlockID)
-        axonDocument.recipe.assignMissingBlockIDs()
+        axonDocument.axn.insertRecordedBlocks(recording.blocks, beforeBlockID: beforeBlockID)
+        axonDocument.axn.assignMissingBlockIDs()
         window?.isDocumentEdited = true
         window?.title = fileURL?.lastPathComponent ?? "Unsaved Recording"
         if let hostingController = window?.contentViewController as? NSHostingController<DocumentView> {

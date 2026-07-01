@@ -1,4 +1,4 @@
-# Recordings And Runs
+# The `.axn` File
 
 `.axn` files are ordered Axon action lists. The file shape is the same shape
 accepted by `run`, so a recording can be replayed from MCP or with
@@ -51,7 +51,7 @@ MCP/socket calls or with repeated CLI `--arg name=value` flags. Declared
 to a resolver; caller values cannot override sourced args.
 
 `type: secret` is a handling rule, not a source. Secret-tainted values are sent
-to the primitive action but are redacted from dry-run params, batch traces, and
+to the primitive action but are redacted from dry-run params, axn traces, and
 history records. Prefer `source: op://...` or `source: env://...` for secrets;
 literal CLI `--arg` values can still be exposed by shell history or process
 inspection before Axon receives them.

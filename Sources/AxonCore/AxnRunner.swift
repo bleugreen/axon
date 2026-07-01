@@ -215,14 +215,14 @@ public struct AxnRunner {
     private func prepareBatch(
         _ object: [String: JSONValue],
         callerArgValues: [String: JSONValue]
-    ) throws -> PreparedActionBatch {
+    ) throws -> PreparedAxnRun {
         let declarations = try ActionParameterDeclaration.parseList(object["args"])
         guard !declarations.isEmpty else {
             if let unknown = callerArgValues.keys.sorted().first {
                 throw AxnRunError.invalidParams("unknown arg: \(unknown)")
             }
             _ = try substituteParameters(in: actionArray(in: object), resolved: [:])
-            return PreparedActionBatch(object: object, secretTaintedFieldsByAction: [:])
+            return PreparedAxnRun(object: object, secretTaintedFieldsByAction: [:])
         }
 
         let resolved = try resolveParameters(declarations, callerArgValues: callerArgValues)
@@ -231,7 +231,7 @@ public struct AxnRunner {
 
         var prepared = object
         prepared["actions"] = .array(substituted.actions)
-        return PreparedActionBatch(object: prepared, secretTaintedFieldsByAction: substituted.secretTaintedFieldsByAction)
+        return PreparedAxnRun(object: prepared, secretTaintedFieldsByAction: substituted.secretTaintedFieldsByAction)
     }
 
     private func callerArgValues(in params: [String: JSONValue]) throws -> [String: JSONValue] {
@@ -1056,7 +1056,7 @@ public final class AxnDebugSession {
     }
 }
 
-private struct PreparedActionBatch {
+private struct PreparedAxnRun {
     let object: [String: JSONValue]
     let secretTaintedFieldsByAction: [Int: Set<String>]
 }

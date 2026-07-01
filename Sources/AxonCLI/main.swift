@@ -31,7 +31,7 @@ do {
         print("started Axon.app")
 
     case "edit":
-        try openRecipeEditor(arguments: arguments)
+        try openAxnEditor(arguments: arguments)
 
     case "status":
         try printHumanStatus()
@@ -552,7 +552,7 @@ private func launchAxonApp() throws {
     }
 }
 
-private func openRecipeEditor(arguments: [String]) throws {
+private func openAxnEditor(arguments: [String]) throws {
     guard arguments.count == 2 else {
         throw CLIError.missingArguments("edit requires a path")
     }
@@ -568,7 +568,7 @@ private func openRecipeEditor(arguments: [String]) throws {
     try process.run()
     process.waitUntilExit()
     guard process.terminationStatus == 0 else {
-        throw CLIError.missingArguments("Could not open recipe editor for \(fileURL.path)")
+        throw CLIError.missingArguments("Could not open axn file editor for \(fileURL.path)")
     }
 }
 

@@ -43,7 +43,7 @@ struct EditorSidebar: View {
                                 .font(.title3.weight(.semibold))
                                 .lineLimit(1)
                         }
-                        Text("Recipe")
+                        Text(".axn")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }

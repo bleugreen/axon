@@ -36,7 +36,7 @@ The four guarantees Axon tries to make:
 
 - [Install and Operations](docs/install.md) — build, daemon lifecycle, MCP setup, logs, troubleshooting
 - [Tool Surface](docs/tool-surface.md) — MCP/CLI commands, target shapes, screenshots, action semantics
-- [Action Batches and `.axn` Files](docs/plans.md) — batch schema, history export, replay
+- [The `.axn` File](docs/axn.md) — file schema, history export, replay
 - [Design](docs/design.md) — architecture and long-term direction
 - [Decision Log](docs/decision-log.md) — durable decisions made while shaping the project
 - [Open Issues](docs/issues) — known gaps and active follow-up work

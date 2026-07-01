@@ -42,7 +42,7 @@ import Testing
     #expect(records[1].method == "type")
 }
 
-@Test func saveOmitsReadsByDefaultAndWritesActionBatch() {
+@Test func saveOmitsReadsByDefaultAndWritesAxnFile() {
     let history = ActionHistoryStore()
     let router = CommandRouter(
         captureSnapshot: { _, _ in
