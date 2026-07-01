@@ -9,3 +9,4 @@ dist/
 # Recordings written to the repo root by the daemon during local testing.
 # Scoped to the root so `.axn` remains usable as a fixture extension elsewhere.
 /*.axn
+.cairn/assets/

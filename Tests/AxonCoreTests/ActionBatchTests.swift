@@ -364,6 +364,167 @@ import Testing
     #expect(batch["trace"]?[1]?["factId"] == JSONValue.string("a001.value.0"))
 }
 
+@Test func runDoesNotPublishPartialFactsFromFailedActionWhenContinuing() {
+    var requests: [JSONRPCRequest] = []
+    let executor = ActionBatchExecutor(
+        commandHandler: { request in
+            requests.append(request)
+            return JSONRPCResponse(id: request.id, result: ["action": .object(["success": .bool(true)])])
+        },
+        snapshotProvider: { _ in
+            valueFactSnapshot(value: "Mitch")
+        }
+    )
+
+    let passingFact: JSONValue = .object([
+        "id": .string("a001.value.0"),
+        "kind": .string("value"),
+        "target": .object([
+            "app": .string("Example"),
+            "locator": .object([
+                "role": .string("AXTextField"),
+                "identifier": .string("name-field")
+            ])
+        ]),
+        "state": .object([
+            "value": .object(["equals": .string("Mitch")])
+        ])
+    ])
+    let failingFact: JSONValue = .object([
+        "id": .string("a001.value.1"),
+        "kind": .string("value"),
+        "target": .object([
+            "app": .string("Example"),
+            "locator": .object([
+                "role": .string("AXTextField"),
+                "identifier": .string("name-field")
+            ])
+        ]),
+        "state": .object([
+            "value": .object(["equals": .string("Ada")])
+        ])
+    ])
+
+    let batch = try! executor.run(params: [
+        "continueOnError": .bool(true),
+        "actions": .array([
+            .object([
+                "id": .string("a001"),
+                "tool": .string("type"),
+                "target": .string("s1:2"),
+                "value": .string("Mitch"),
+                "expects": .array([passingFact, failingFact])
+            ]),
+            .object([
+                "id": .string("a002"),
+                "tool": .string("click"),
+                "target": .string("s1:3"),
+                "requires": .array([.string("a001.value.0")])
+            ])
+        ])
+    ])
+
+    #expect(batch["success"] == .bool(false))
+    #expect(requests.map(\.method) == ["type"])
+    #expect(batch["trace"]?[0]?["success"] == .bool(false))
+    #expect(batch["trace"]?[0]?["factId"] == .string("a001.value.1"))
+    #expect(batch["trace"]?[1]?["success"] == .bool(false))
+    #expect(batch["trace"]?[1]?["factId"] == .string("a001.value.0"))
+    #expect(batch["trace"]?[1]?["error"] == .string("Missing required fact: a001.value.0"))
+}
+
+@Test func runReportsMalformedActionAtItsTurn() {
+    var requests: [JSONRPCRequest] = []
+    let executor = ActionBatchExecutor { request in
+        requests.append(request)
+        return JSONRPCResponse(id: request.id, result: ["action": .object(["success": .bool(true)])])
+    }
+
+    let batch = try! executor.run(params: [
+        "continueOnError": .bool(true),
+        "actions": .array([
+            .object(["tool": .string("click"), "target": .string("s1:1")]),
+            .object(["tool": .string("unsupported"), "target": .string("s1:2")]),
+            .object(["tool": .string("type"), "target": .string("s1:3"), "value": .string("after")])
+        ])
+    ])
+
+    #expect(batch["success"] == .bool(false))
+    #expect(requests.map(\.method) == ["click", "type"])
+    #expect(batch["trace"]?[0]?["success"] == .bool(true))
+    #expect(batch["trace"]?[1]?["success"] == .bool(false))
+    #expect(batch["trace"]?[1]?["error"] == .string("unknown batch tool: unsupported"))
+    #expect(batch["trace"]?[2]?["success"] == .bool(true))
+}
+
+@Test func runDispatchesBeforeReportingUnverifiableExpectedFact() {
+    var requests: [JSONRPCRequest] = []
+    let executor = ActionBatchExecutor { request in
+        requests.append(request)
+        return JSONRPCResponse(id: request.id, result: ["action": .object(["success": .bool(true)])])
+    }
+
+    let batch = try! executor.run(params: [
+        "actions": .array([
+            .object([
+                "id": .string("a001"),
+                "tool": .string("type"),
+                "target": .string("s1:2"),
+                "value": .string("Mitch"),
+                "expects": .array([
+                    .object([
+                        "id": .string("a001.value.0"),
+                        "kind": .string("value"),
+                        "target": .object([
+                            "app": .string("Example"),
+                            "locator": .object(["role": .string("AXTextField")])
+                        ]),
+                        "state": .object([
+                            "value": .object(["equals": .string("Mitch")])
+                        ])
+                    ])
+                ])
+            ])
+        ])
+    ])
+
+    #expect(batch["success"] == .bool(false))
+    #expect(requests.map(\.method) == ["type"])
+    #expect(batch["trace"]?[0]?["success"] == .bool(false))
+    #expect(batch["trace"]?[0]?["actionId"] == .string("a001"))
+    #expect(batch["trace"]?[0]?["factId"] == .string("a001.value.0"))
+    #expect(batch["trace"]?[0]?["error"] == .string("Fact a001.value.0 is unsupported: fact verification is unavailable"))
+}
+
+@Test func runReportsUnknownRequiredFactAtItsTurn() {
+    var requests: [JSONRPCRequest] = []
+    let executor = ActionBatchExecutor(
+        commandHandler: { request in
+            requests.append(request)
+            return JSONRPCResponse(id: request.id, result: ["action": .object(["success": .bool(true)])])
+        },
+        snapshotProvider: { _ in valueFactSnapshot(value: "Mitch") }
+    )
+
+    let batch = try! executor.run(params: [
+        "actions": .array([
+            .object(["tool": .string("click"), "target": .string("s1:1")]),
+            .object([
+                "tool": .string("keyboard"),
+                "app": .string("Example"),
+                "keys": .string("Return"),
+                "requires": .array([.string("missing.value.0")])
+            ])
+        ])
+    ])
+
+    #expect(batch["success"] == .bool(false))
+    #expect(requests.map(\.method) == ["click"])
+    #expect(batch["trace"]?[1]?["success"] == .bool(false))
+    #expect(batch["trace"]?[1]?["factId"] == .string("missing.value.0"))
+    #expect(batch["trace"]?[1]?["error"] == .string("Missing required fact: missing.value.0"))
+}
+
 @Test func runStopsOnFirstFailureByDefault() {
     var requests: [JSONRPCRequest] = []
     let executor = ActionBatchExecutor { request in
