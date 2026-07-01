@@ -1,6 +1,6 @@
 import SwiftUI
 
-struct RecipeTextField: View {
+struct AxnTextField: View {
     let label: String
     @Binding var value: String
     var prompt: String = "Optional"
@@ -17,7 +17,7 @@ struct RecipeTextField: View {
     }
 }
 
-struct RecipePickerField: View {
+struct AxnPickerField: View {
     let label: String
     @Binding var value: String
     let options: [String]
@@ -39,7 +39,7 @@ struct RecipePickerField: View {
     }
 }
 
-struct RecipeToggleField: View {
+struct AxnToggleField: View {
     let label: String
     @Binding var value: String
 

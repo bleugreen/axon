@@ -23,11 +23,11 @@ import Testing
 
     let axn = try Axn(source: source)
 
-    #expect(recipe.version == 1)
-    #expect(recipe.editorMetadata.breakpoints == ["a001"])
-    #expect(recipe.editorMetadata.notes == ["a001": "auth fails here"])
-    #expect(recipe.args.map(\.name) == ["recipient"])
-    #expect(recipe.blocks.count == 2)
+    #expect(axn.version == 1)
+    #expect(axn.editorMetadata.breakpoints == ["a001"])
+    #expect(axn.editorMetadata.notes == ["a001": "auth fails here"])
+    #expect(axn.args.map(\.name) == ["recipient"])
+    #expect(axn.blocks.count == 2)
 
     guard case let .note(note) = axn.blocks[0] else {
         Issue.record("first block should be a note")
@@ -60,7 +60,7 @@ import Testing
 
     axn.assignMissingBlockIDs(prefix: "x")
 
-    #expect(recipe.blocks.map(\.id) == ["x001", "x002", "existing"])
+    #expect(axn.blocks.map(\.id) == ["x001", "x002", "existing"])
 }
 
 @Test func axnFileRoundTripsMetadataNotesAndUnknownFields() throws {
@@ -171,7 +171,7 @@ import Testing
 
     axn.insertRecordedBlocks(recording.blocks, beforeBlockID: "a002")
 
-    #expect(recipe.blocks.map(\.id) == ["a001", "a003", "a004", "a002"])
+    #expect(axn.blocks.map(\.id) == ["a001", "a003", "a004", "a002"])
     guard case let .action(typeAction) = axn.blocks[1],
           case let .array(expects)? = typeAction.fields["expects"],
           case let .object(fact)? = expects.first,

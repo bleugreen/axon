@@ -79,7 +79,7 @@ struct EditorSidebar: View {
 
             switch selectedLayer {
             case .inputs:
-                RecipeInputsSidebar(args: $args, selectedIndex: $selectedIndex)
+                AxnInputsSidebar(args: $args, selectedIndex: $selectedIndex)
             case .tree:
                 AXTreeInspector(appName: appName, actedOnTarget: actedOnTarget, refreshToken: treeRefreshToken)
             }
@@ -88,7 +88,7 @@ struct EditorSidebar: View {
     }
 }
 
-private struct RecipeInputsSidebar: View {
+private struct AxnInputsSidebar: View {
     @Binding var args: [AxnArgument]
     @Binding var selectedIndex: Int?
 
@@ -203,7 +203,7 @@ private struct ParameterEditor: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .top, spacing: 10) {
-                RecipeTextField(label: "Name", value: field("name"))
+                AxnTextField(label: "Name", value: field("name"))
                 Button(action: done) {
                     Label("Done", systemImage: "xmark")
                         .labelStyle(.iconOnly)
@@ -219,11 +219,11 @@ private struct ParameterEditor: View {
                 .help("Delete input")
                 .padding(.top, 20)
             }
-            RecipePickerField(label: "Type", value: field("type"), options: ["string", "number", "bool", "path", "email", "secret"])
-            RecipeTextField(label: "Description", value: field("description"))
-            RecipeTextField(label: "Default", value: field("default"))
+            AxnPickerField(label: "Type", value: field("type"), options: ["string", "number", "bool", "path", "email", "secret"])
+            AxnTextField(label: "Description", value: field("description"))
+            AxnTextField(label: "Default", value: field("default"))
             if arg.fields["source"] != nil {
-                RecipeTextField(label: "Source", value: field("source"))
+                AxnTextField(label: "Source", value: field("source"))
             }
         }
         .padding(12)

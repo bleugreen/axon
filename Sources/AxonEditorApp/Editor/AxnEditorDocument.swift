@@ -14,7 +14,7 @@ struct AxnEditorDocument: FileDocument {
     var axn: Axn
 
     init(axn: Axn = Axn()) {
-        self.axn = recipe
+        self.axn = axn
         self.axn.assignMissingBlockIDs()
     }
 

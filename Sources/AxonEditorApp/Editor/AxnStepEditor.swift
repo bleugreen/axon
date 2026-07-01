@@ -48,7 +48,7 @@ struct NoteStepEditor: View {
     @Binding var note: AxnNote
 
     var body: some View {
-        RecipeTextField(
+        AxnTextField(
             label: "Note",
             value: Binding(
                 get: { note.text ?? "" },
@@ -108,8 +108,8 @@ private struct ScrollActionEditor: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 12) {
-                RecipeTextField(label: "Delta X", value: field("deltaX"))
-                RecipeTextField(label: "Delta Y", value: field("deltaY"))
+                AxnTextField(label: "Delta X", value: field("deltaX"))
+                AxnTextField(label: "Delta Y", value: field("deltaY"))
             }
         }
     }
@@ -127,7 +127,7 @@ private struct DragActionEditor: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            RecipeTextField(label: "Duration ms", value: field("durationMs"))
+            AxnTextField(label: "Duration ms", value: field("durationMs"))
         }
     }
 
@@ -144,7 +144,7 @@ private struct InvokeActionEditor: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            RecipeTextField(label: "Action", value: field("name"))
+            AxnTextField(label: "Action", value: field("name"))
         }
     }
 
@@ -161,8 +161,8 @@ private struct LookActionEditor: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            RecipeToggleField(label: "Screenshot", value: field("screenshot"))
-            RecipeToggleField(label: "Screen text", value: field("screenText"))
+            AxnToggleField(label: "Screenshot", value: field("screenshot"))
+            AxnToggleField(label: "Screen text", value: field("screenText"))
         }
     }
 
