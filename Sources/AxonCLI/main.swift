@@ -206,16 +206,7 @@ do {
           permit   ask macOS to approve the running daemon identity
           refresh-secrets [--json]
                    refresh the active credential redaction index from 1Password
-          look [target] [--since snapshot-id] [--screenshot] [--screen-text] [--frames] [--json] [--no-tree] [--offset n] [--limit n] [--depth n]
-          find <app> <locator-json>
-          run <path.axn> [--arg name=value] [--dry-run] [--continue-on-error]
-          save [--session id] [--from call] [--to call] [--path file.axn] [--include-reads]
-          click <handle|target-json>
-          type <handle> <value>
-          keyboard [--app app] <keys-or-text>
-          scroll [--app app] [--target target-json] [--dx n] [--dy n]
-          drag [--app app] [--duration-ms n] <from-json> <to-json>
-          invoke <handle> <action-name>
+          \(ToolSurfaceSpec.cliUsageBlock.replacingOccurrences(of: "\n", with: "\n          "))
         """)
 
     default:
