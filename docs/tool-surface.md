@@ -6,12 +6,11 @@ files, and the CLI. There are no compatibility aliases for previous tool names.
 ## MCP Tools
 
 ```text
-look(target?, since?, screenshot?, screenText?, tree?, offset?, limit?, depth?, all?, format?, frames?)
+look(target?, since?, screenshot?, screenText?, tree?, offset?, limit?, direct?, childDepth?, depth?, all?, format?, frames?)
 find(app, locator)
 permit()
 run(actions?, path?, argValues?, continueOnError?, dryRun?)
 save(sessionId?, from?, to?, path?, includeReads?)
-
 click(target)
 type(target, value)
 keyboard(keys, app?)
@@ -65,7 +64,10 @@ OCR text, Axon omits the image and returns a warning instead of sending pixels.
 
 `look(target: handle)` fetches a retained node's child page. Use the `offset`
 and `limit` fields from the returned continuation to page broad sibling lists.
-Child pages use the same DSL tree format as app observations.
+`direct: true` returns only direct children, and `all: true` includes every
+direct child. Child pages use the same DSL tree format as app observations.
+`childDepth: 0` on an app observation retains top-level windows without walking
+descendants so callers can page children by handle.
 
 `look(since: snapshot)` recaptures the app for a retained snapshot and reports
 whether the coarse app/window surface changed. It uses observer hints when
