@@ -2,7 +2,7 @@ import Foundation
 import Testing
 @testable import AxonCore
 
-@Test func editorURLRoundTripsRecipePath() throws {
+@Test func editorURLRoundTripsAxnPath() throws {
     let fileURL = URL(fileURLWithPath: "/Users/mitch/Documents/Axon Recordings/hello world.axn")
 
     let editURL = AxonEditorURL.url(forEditing: fileURL)
@@ -25,7 +25,7 @@ import Testing
     }
 }
 
-@Test func editorReviewURLRoundTripsRecipePathAndSuggestedName() throws {
+@Test func editorReviewURLRoundTripsAxnPathAndSuggestedName() throws {
     let fileURL = URL(fileURLWithPath: "/tmp/Axon Recordings/demo recording.axn")
 
     let reviewURL = AxonEditorURL.url(forReviewing: fileURL, suggestedName: "demo recording.axn")
