@@ -8,6 +8,9 @@ struct AXHierarchyBulkCapture {
     let retainedElements: [AXUIElement]
 
     var looksLikeCompleteAppTree: Bool {
+        // AXUIElementCopyHierarchy can return only menu-bar chrome for some app roots.
+        // Accept bulk app-root capture only when it exposes web content directly or a
+        // substantial non-menu tree; otherwise the caller re-walks dynamically from windows.
         containsRole("AXWebArea") || (nodeCount > 64 && !containsRole("AXMenuBar") && !containsRole("AXMenuItem"))
     }
 
@@ -25,6 +28,9 @@ struct AXHierarchyBulkCapturer {
     private static let maxDepth = -1
     private static let messagingTimeout: Float = 3.0
     private static let deniedBundleIdentifiers: Set<String> = [
+        // Firefox's app-root bulk hierarchy has produced misleading partial trees in
+        // local captures; its web content is better reached by the dynamic window walk
+        // and scoped web-area bulk captures gated below.
         "org.mozilla.firefox"
     ]
 

@@ -51,6 +51,9 @@ public struct CommandRouter {
             if childDepth != 0 {
                 return try AXFullTreeCapturer(elementStore: elementStore).capture(app: app, screenshot: screenshot)
             }
+            // childDepth == 0 is the explicit paged-root mode: retain the top-level
+            // window handles without pre-walking descendants so callers can request
+            // child pages from live AX elements through later handle-targeted look calls.
             return try AXSnapshotCapturer(elementStore: elementStore).capture(
                 app: app,
                 screenshot: screenshot,
