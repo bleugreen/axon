@@ -5,8 +5,7 @@ public final class AxnDebugSession {
 
     private let lock = NSRecursiveLock()
     private let executor: AxnRunner
-    private let actions: [JSONValue]
-    private let secretTaintedFieldsByAction: [Int: Set<String>]
+    private let actions: [PreparedAxnAction]
     private let dryRun: Bool
     private var breakpoints: Set<String>
     private let documentID: String?
@@ -22,8 +21,7 @@ public final class AxnDebugSession {
     public init(
         id: String = UUID().uuidString,
         executor: AxnRunner,
-        actions: [JSONValue],
-        secretTaintedFieldsByAction: [Int: Set<String>],
+        actions: [PreparedAxnAction],
         dryRun: Bool,
         breakpoints: Set<String>,
         documentID: String? = nil,
@@ -32,12 +30,11 @@ public final class AxnDebugSession {
         self.id = id
         self.executor = executor
         self.actions = actions
-        self.secretTaintedFieldsByAction = secretTaintedFieldsByAction
         self.dryRun = dryRun
         self.breakpoints = breakpoints
         self.documentID = documentID
         self.label = label
-        self.currentIndex = Self.nextExecutableIndex(in: actions, startingAt: 0, executor: executor)
+        self.currentIndex = actions.isEmpty ? nil : 0
         self.state = self.currentIndex == nil ? .completed : .paused
         self.pauseReason = self.currentIndex == nil ? nil : "start"
     }
@@ -86,20 +83,18 @@ public final class AxnDebugSession {
         pauseReason = nil
         let record = executor.debugRunAction(
             actions[index],
-            index: index,
             dryRun: dryRun,
-            secretTaintedFields: secretTaintedFieldsByAction[index] ?? [],
             facts: &facts
         )
         trace.append(record)
-        lastActionID = Self.actionID(in: actions[index])
+        lastActionID = actions[index].action.id
         if record["success"] == .bool(false) {
             state = .failed
             capturePauseSnapshot(reason: "failure")
             return status
         }
 
-        currentIndex = Self.nextExecutableIndex(in: actions, startingAt: index + 1, executor: executor)
+        currentIndex = index + 1 < actions.count ? index + 1 : nil
         state = currentIndex == nil ? .completed : .paused
         pauseReason = state == .paused ? "step" : nil
         return status
@@ -157,7 +152,7 @@ public final class AxnDebugSession {
             "availableActions": .array(availableActions.map(JSONValue.string))
         ]
         if let currentIndex {
-            object["currentIndex"] = .int(currentIndex)
+            object["currentIndex"] = .int(actions[currentIndex].index)
         } else {
             object["currentIndex"] = .null
         }
@@ -205,7 +200,7 @@ public final class AxnDebugSession {
         guard let currentIndex else {
             return nil
         }
-        return Self.actionID(in: actions[currentIndex])
+        return actions[currentIndex].action.id
     }
 
     private func capturePauseSnapshot(reason: String) {
@@ -214,32 +209,7 @@ public final class AxnDebugSession {
             pauseSnapshot = nil
             return
         }
-        pauseSnapshot = executor.debugPauseSnapshot(for: actions[currentIndex], reason: reason)
-    }
-
-    private static func nextExecutableIndex(
-        in actions: [JSONValue],
-        startingAt start: Int,
-        executor: AxnRunner
-    ) -> Int? {
-        var index = start
-        while index < actions.count {
-            if executor.isExecutableDebugAction(actions[index]) {
-                return index
-            }
-            index += 1
-        }
-        return nil
-    }
-
-    private static func actionID(in action: JSONValue) -> String? {
-        guard case let .object(object) = action,
-              case let .string(id)? = object["id"],
-              !id.isEmpty
-        else {
-            return nil
-        }
-        return id
+        pauseSnapshot = executor.debugPauseSnapshot(for: actions[currentIndex].action, reason: reason)
     }
 
     private enum State: String {
