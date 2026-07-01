@@ -229,7 +229,7 @@ struct DocumentView: View {
             do {
                 response = .success(try SocketClient(
                     path: AxonEnvironment.socketPath(),
-                    responseTimeoutSeconds: SocketClient.defaultBatchResponseTimeoutSeconds
+                    responseTimeoutSeconds: SocketClient.defaultRunResponseTimeoutSeconds
                 ).send(JSONRPCRequest(
                     id: .string("editor.run"),
                     method: "run",
@@ -362,7 +362,7 @@ struct DocumentView: View {
             do {
                 response = .success(try SocketClient(
                     path: AxonEnvironment.socketPath(),
-                    responseTimeoutSeconds: SocketClient.defaultBatchResponseTimeoutSeconds
+                    responseTimeoutSeconds: SocketClient.defaultRunResponseTimeoutSeconds
                 ).send(JSONRPCRequest(
                     id: .string(id),
                     method: method,

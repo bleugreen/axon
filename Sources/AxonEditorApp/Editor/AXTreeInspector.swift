@@ -182,7 +182,7 @@ struct AXTreeInspector: View {
             do {
                 let response = try SocketClient(
                     path: AxonEnvironment.socketPath(),
-                    responseTimeoutSeconds: SocketClient.defaultBatchResponseTimeoutSeconds
+                    responseTimeoutSeconds: SocketClient.defaultRunResponseTimeoutSeconds
                 ).send(JSONRPCRequest(
                     id: .string("editor.ax-tree.find-target"),
                     method: "find",
@@ -234,7 +234,7 @@ private struct FullAXTreeReader: Sendable {
     func read(appName: String) throws -> [AXTreeNode] {
         let response = try SocketClient(
             path: AxonEnvironment.socketPath(),
-            responseTimeoutSeconds: SocketClient.defaultBatchResponseTimeoutSeconds
+            responseTimeoutSeconds: SocketClient.defaultRunResponseTimeoutSeconds
         ).send(JSONRPCRequest(
             id: .string("editor.ax-tree.look"),
             method: "look",

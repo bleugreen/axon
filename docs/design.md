@@ -209,7 +209,7 @@ Tool names should stay plain. MCP clients already namespace tools by server, so 
 
 Screenshot-returning tools should embed image data in their response. File output can exist as a CLI/debug convenience later, but clients should not need filesystem coordination to inspect the visual state.
 
-### Action Batches and `.axn` Files
+### `run` and `.axn` Files
 
 `run` is an invocation-scoped composition layer. An axn is an ordered list of tool calls — each action is just `tool:` plus that tool's normal arguments. There is no separate plan language to learn, and no separate semantics for axn actions vs. standalone calls.
 

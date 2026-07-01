@@ -203,7 +203,7 @@ final class AxonEditorAppDelegate: NSObject, NSApplicationDelegate, @unchecked S
             do {
                 let response = try SocketClient(
                     path: AxonEnvironment.socketPath(),
-                    responseTimeoutSeconds: SocketClient.defaultBatchResponseTimeoutSeconds
+                    responseTimeoutSeconds: SocketClient.defaultRunResponseTimeoutSeconds
                 ).send(JSONRPCRequest(
                     id: .string("editor.record-from-here"),
                     method: "editor.recordFromHere",
