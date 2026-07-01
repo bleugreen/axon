@@ -18,14 +18,6 @@ public struct AxnRunner {
     public typealias ParameterSourceResolver = (URL) throws -> String?
 
     private static let redactedSecretValue = "<redacted: contains-secret>"
-    private static let substitutableStringFields: Set<String> = ["value", "keys"]
-    private static let parameterReferenceRegex = try! NSRegularExpression(
-        pattern: #"\{\{\s*([A-Za-z][A-Za-z0-9_]*)\s*\}\}"#
-    )
-    private static let anyParameterReferenceRegex = try! NSRegularExpression(
-        pattern: #"\{\{[^}]*\}\}"#
-    )
-
     private let commandHandler: CommandHandler
     private let factEvaluator: RecordedFactEvaluator?
     private let snapshotProvider: SnapshotProvider?
@@ -52,29 +44,21 @@ public struct AxnRunner {
     }
 
     public func run(params: [String: JSONValue]) throws -> JSONValue {
-        let batch = try batchValue(from: params)
-        guard case let .object(batchObject) = batch else {
-            throw AxnRunError.invalidParams("batch must be an object")
-        }
-
-        let preparedBatch = try prepareBatch(batchObject, callerArgValues: callerArgValues(in: params))
-        let actions = try actionArray(in: preparedBatch.object)
-        let dryRun = bool("dryRun", in: params) ?? bool("dryRun", in: batchObject) ?? false
-        let continueOnError = bool("continueOnError", in: params) ?? bool("continueOnError", in: batchObject) ?? false
+        let axn = try axnValue(from: params)
+        let preparedRun = try prepareRun(axn, callerArgValues: callerArgValues(in: params))
+        let dryRun = bool("dryRun", in: params) ?? bool("dryRun", in: axn.unknownTopLevelFields) ?? false
+        let continueOnError = bool("continueOnError", in: params) ?? bool("continueOnError", in: axn.unknownTopLevelFields) ?? false
 
         var trace: [JSONValue] = []
         var facts: [String: RecordedFact] = [:]
         var success = true
 
-        for (index, action) in actions.enumerated() {
-            if isNoteBlock(action) {
-                continue
-            }
+        for action in preparedRun.actions {
             let record = runAction(
-                action,
-                index: index,
+                action.action,
+                index: action.index,
                 dryRun: dryRun,
-                secretTaintedFields: preparedBatch.secretTaintedFieldsByAction[index] ?? [],
+                secretTaintedFields: action.secretTaintedFields,
                 facts: &facts
             )
             trace.append(record)
@@ -98,18 +82,12 @@ public struct AxnRunner {
         params: [String: JSONValue],
         breakpoints: Set<String> = []
     ) throws -> AxnDebugSession {
-        let batch = try batchValue(from: params)
-        guard case let .object(batchObject) = batch else {
-            throw AxnRunError.invalidParams("batch must be an object")
-        }
-
-        let preparedBatch = try prepareBatch(batchObject, callerArgValues: callerArgValues(in: params))
-        let actions = try actionArray(in: preparedBatch.object)
-        let dryRun = bool("dryRun", in: params) ?? bool("dryRun", in: batchObject) ?? false
+        let axn = try axnValue(from: params)
+        let preparedRun = try prepareRun(axn, callerArgValues: callerArgValues(in: params))
+        let dryRun = bool("dryRun", in: params) ?? bool("dryRun", in: axn.unknownTopLevelFields) ?? false
         return AxnDebugSession(
             executor: self,
-            actions: actions,
-            secretTaintedFieldsByAction: preparedBatch.secretTaintedFieldsByAction,
+            actions: preparedRun.actions,
             dryRun: dryRun,
             breakpoints: breakpoints,
             documentID: optionalString("documentId", in: params),
@@ -118,28 +96,22 @@ public struct AxnRunner {
     }
 
     func debugRunAction(
-        _ action: JSONValue,
-        index: Int,
+        _ action: PreparedAxnAction,
         dryRun: Bool,
-        secretTaintedFields: Set<String>,
         facts: inout [String: RecordedFact]
     ) -> JSONValue {
         runAction(
-            action,
-            index: index,
+            action.action,
+            index: action.index,
             dryRun: dryRun,
-            secretTaintedFields: secretTaintedFields,
+            secretTaintedFields: action.secretTaintedFields,
             facts: &facts
         )
     }
 
-    func isExecutableDebugAction(_ action: JSONValue) -> Bool {
-        !isNoteBlock(action)
-    }
-
-    func debugPauseSnapshot(for action: JSONValue, reason: String) -> JSONValue? {
+    func debugPauseSnapshot(for action: AxnAction, reason: String) -> JSONValue? {
         guard let snapshotProvider,
-              let app = debugSnapshotApp(in: action)
+              let app = debugSnapshotApp(in: action.jsonValue)
         else {
             return nil
         }
@@ -169,7 +141,7 @@ public struct AxnRunner {
     public static func defaultParameterSourceResolvers() -> [String: ParameterSourceResolver] {
         [
             "env": { source in
-                guard let name = envName(from: source), !name.isEmpty else {
+                guard let name = axnEnvironmentName(from: source), !name.isEmpty else {
                     throw AxnRunError.invalidParams("env source requires a variable name")
                 }
                 return ProcessInfo.processInfo.environment[name]
@@ -180,58 +152,57 @@ public struct AxnRunner {
         ]
     }
 
-    private func batchValue(from params: [String: JSONValue]) throws -> JSONValue {
-        if case let .string(path)? = params["path"] {
-            var batch = try AxnRunner.parseSource(String(contentsOfFile: path, encoding: .utf8))
-            if let appendedActions = params["actions"] {
-                batch = try batch.appendingActions(appendedActions)
-            }
-            return batch
-        }
-        if params["actions"] != nil {
-            return .object(params)
-        }
-        throw AxnRunError.invalidParams("run requires actions or path")
-    }
-
-    public static func parseSource(_ source: String) throws -> JSONValue {
+    private func axnValue(from params: [String: JSONValue]) throws -> Axn {
         do {
-            return try AxnDocumentCodec.parseSource(source)
+            if case let .string(path)? = params["path"] {
+                var axn = try Axn(source: String(contentsOfFile: path, encoding: .utf8))
+                if let appendedActions = params["actions"] {
+                    axn.blocks.append(contentsOf: try blocks(fromActionsValue: appendedActions))
+                }
+                return axn
+            }
+            if params["actions"] != nil {
+                return try Axn(jsonValue: .object(params))
+            }
+            throw AxnRunError.invalidParams("run requires actions or path")
+        } catch let error as AxnRunError {
+            throw error
         } catch let error as AxnParseError {
             throw AxnRunError.invalidParams(error.description)
         }
     }
 
-    private func actionArray(in object: [String: JSONValue]) throws -> [JSONValue] {
-        guard let value = object["actions"] else {
-            throw AxnRunError.invalidParams("batch requires actions")
+    public static func parseSource(_ source: String) throws -> JSONValue {
+        do {
+            return try Axn(source: source).jsonValue
+        } catch let error as AxnParseError {
+            throw AxnRunError.invalidParams(error.description)
         }
+    }
+
+    private func blocks(fromActionsValue value: JSONValue) throws -> [AxnBlock] {
         guard case let .array(actions) = value else {
             throw AxnRunError.invalidParams("actions must be an array")
         }
-        return actions
+        return try actions.enumerated().map { index, value in
+            guard case let .object(object) = value else {
+                throw AxnRunError.invalidParams("actions[\(index)] must be an object")
+            }
+            if object["tool"] == nil, object["note"] != nil {
+                return .note(AxnNote(fields: object))
+            }
+            return .action(AxnAction(fields: object))
+        }
     }
 
-    private func prepareBatch(
-        _ object: [String: JSONValue],
+    private func prepareRun(
+        _ axn: Axn,
         callerArgValues: [String: JSONValue]
     ) throws -> PreparedAxnRun {
-        let declarations = try ActionParameterDeclaration.parseList(object["args"])
-        guard !declarations.isEmpty else {
-            if let unknown = callerArgValues.keys.sorted().first {
-                throw AxnRunError.invalidParams("unknown arg: \(unknown)")
-            }
-            _ = try substituteParameters(in: actionArray(in: object), resolved: [:])
-            return PreparedAxnRun(object: object, secretTaintedFieldsByAction: [:])
-        }
-
-        let resolved = try resolveParameters(declarations, callerArgValues: callerArgValues)
-        let actions = try actionArray(in: object)
-        let substituted = try substituteParameters(in: actions, resolved: resolved)
-
-        var prepared = object
-        prepared["actions"] = .array(substituted.actions)
-        return PreparedAxnRun(object: prepared, secretTaintedFieldsByAction: substituted.secretTaintedFieldsByAction)
+        let resolved = try AxnArgumentResolver(sourceResolvers: parameterSourceResolvers)
+            .resolve(axn.args, callerArgValues: callerArgValues)
+        let substituted = try substituteParameters(in: axn.blocks, resolved: resolved)
+        return PreparedAxnRun(axn: axn, actions: substituted)
     }
 
     private func callerArgValues(in params: [String: JSONValue]) throws -> [String: JSONValue] {
@@ -244,200 +215,61 @@ public struct AxnRunner {
         return object
     }
 
-    private func resolveParameters(
-        _ declarations: [ActionParameterDeclaration],
-        callerArgValues: [String: JSONValue]
-    ) throws -> [String: ResolvedActionParameter] {
-        let declaredNames = Set(declarations.map(\.name))
-        if let unknown = callerArgValues.keys.sorted().first(where: { !declaredNames.contains($0) }) {
-            throw AxnRunError.invalidParams("unknown arg: \(unknown)")
-        }
-
-        var resolved: [String: ResolvedActionParameter] = [:]
-        for declaration in declarations {
-            if declaration.source != nil, callerArgValues[declaration.name] != nil {
-                throw AxnRunError.invalidParams("caller arg cannot override sourced arg: \(declaration.name)")
-            }
-
-            let rawValue: JSONValue?
-            if let callerValue = callerArgValues[declaration.name] {
-                rawValue = callerValue
-            } else if let source = declaration.source {
-                rawValue = try resolveSource(source, for: declaration).map(JSONValue.string)
-                    ?? declaration.defaultValue
-            } else {
-                rawValue = declaration.defaultValue
-            }
-
-            guard let rawValue else {
-                throw AxnRunError.invalidParams("missing required arg: \(declaration.name)")
-            }
-
-            resolved[declaration.name] = ResolvedActionParameter(
-                value: try ActionParameterValueCoercer.stringValue(rawValue, type: declaration.type, name: declaration.name),
-                isSecret: declaration.type == .secret
-            )
-        }
-        return resolved
-    }
-
-    private func resolveSource(_ source: URL, for declaration: ActionParameterDeclaration) throws -> String? {
-        guard let scheme = source.scheme, !scheme.isEmpty else {
-            throw AxnRunError.invalidParams("arg \(declaration.name) source requires a scheme")
-        }
-        guard let resolver = parameterSourceResolvers[scheme] else {
-            throw AxnRunError.invalidParams("unsupported source scheme for arg \(declaration.name): \(scheme)")
-        }
-        return try resolver(source)
-    }
-
     private func substituteParameters(
-        in actions: [JSONValue],
-        resolved: [String: ResolvedActionParameter]
-    ) throws -> (actions: [JSONValue], secretTaintedFieldsByAction: [Int: Set<String>]) {
-        var substitutedActions: [JSONValue] = []
-        var taintByAction: [Int: Set<String>] = [:]
+        in blocks: [AxnBlock],
+        resolved: [String: ResolvedAxnArgument]
+    ) throws -> [PreparedAxnAction] {
+        var actions: [PreparedAxnAction] = []
 
-        for (index, action) in actions.enumerated() {
-            guard case var .object(object) = action else {
-                substitutedActions.append(action)
+        for (index, block) in blocks.enumerated() {
+            guard case var .action(action) = block else {
                 continue
             }
 
-            if isNoteBlock(action) {
-                substitutedActions.append(action)
-                continue
-            }
-
-            try rejectUnsupportedReferences(in: object, actionIndex: index)
+            try rejectUnsupportedReferences(in: action.fields, actionIndex: index)
 
             var secretTaintedFields: Set<String> = []
-            for field in Self.substitutableStringFields {
-                guard let fieldValue = object[field] else {
+            for field in AxnArgumentReferenceSyntax.substitutableStringFields {
+                guard let fieldValue = action.fields[field] else {
                     continue
                 }
                 guard case let .string(template) = fieldValue else {
-                    if containsReferenceSyntax(fieldValue) {
+                    if AxnArgumentReferenceSyntax.containsReferenceSyntax(fieldValue) {
                         throw AxnRunError.invalidParams("parameter references are only supported in string value fields: actions[\(index)].\(field)")
                     }
                     continue
                 }
-                let result = try substituteReferences(in: template, resolved: resolved)
-                object[field] = .string(result.value)
+                let result = try AxnArgumentReferenceSyntax.substituteReferences(in: template, resolved: resolved)
+                action.fields[field] = .string(result.value)
                 if result.containsSecret {
                     secretTaintedFields.insert(field)
                 }
             }
 
-            if !secretTaintedFields.isEmpty {
-                taintByAction[index] = secretTaintedFields
-            }
-            substitutedActions.append(.object(object))
+            actions.append(PreparedAxnAction(index: index, action: action, secretTaintedFields: secretTaintedFields))
         }
 
-        return (substitutedActions, taintByAction)
+        return actions
     }
 
     private func rejectUnsupportedReferences(in object: [String: JSONValue], actionIndex: Int) throws {
-        for (key, value) in object where !Self.substitutableStringFields.contains(key) {
-            if containsReferenceSyntax(value) {
+        for (key, value) in object where !AxnArgumentReferenceSyntax.substitutableStringFields.contains(key) {
+            if AxnArgumentReferenceSyntax.containsReferenceSyntax(value) {
                 throw AxnRunError.invalidParams("parameter references are only supported in string value fields: actions[\(actionIndex)].\(key)")
             }
         }
     }
 
-    private func isNoteBlock(_ value: JSONValue) -> Bool {
-        guard case let .object(object) = value, object["tool"] == nil else {
-            return false
-        }
-        return object["note"] != nil
-    }
-
-    private func containsReferenceSyntax(_ value: JSONValue) -> Bool {
-        switch value {
-        case let .string(value):
-            return value.contains("{{")
-                || value.contains("}}")
-                || Self.anyParameterReferenceRegex.firstMatch(
-                    in: value,
-                    range: NSRange(value.startIndex..<value.endIndex, in: value)
-                ) != nil
-        case let .array(values):
-            return values.contains(where: containsReferenceSyntax)
-        case let .object(object):
-            return object.values.contains(where: containsReferenceSyntax)
-        default:
-            return false
-        }
-    }
-
-    private func substituteReferences(
-        in template: String,
-        resolved: [String: ResolvedActionParameter]
-    ) throws -> (value: String, containsSecret: Bool) {
-        let range = NSRange(template.startIndex..<template.endIndex, in: template)
-        let matches = Self.anyParameterReferenceRegex.matches(in: template, range: range)
-        guard !matches.isEmpty else {
-            if template.contains("{{") || template.contains("}}") {
-                throw AxnRunError.invalidParams("invalid arg reference syntax: \(template)")
-            }
-            return (template, false)
-        }
-
-        var output = ""
-        var currentIndex = template.startIndex
-        var containsSecret = false
-
-        for match in matches {
-            guard let matchRange = Range(match.range, in: template),
-                  let name = parameterReferenceName(in: String(template[matchRange]))
-            else {
-                throw AxnRunError.invalidParams("invalid arg reference syntax: \(template)")
-            }
-            let prefix = template[currentIndex..<matchRange.lowerBound]
-            if prefix.contains("{{") || prefix.contains("}}") {
-                throw AxnRunError.invalidParams("invalid arg reference syntax: \(template)")
-            }
-            output += prefix
-            guard let parameter = resolved[name] else {
-                throw AxnRunError.invalidParams("undeclared arg reference: \(name)")
-            }
-            output += parameter.value
-            containsSecret = containsSecret || parameter.isSecret
-            currentIndex = matchRange.upperBound
-        }
-
-        let suffix = template[currentIndex..<template.endIndex]
-        if suffix.contains("{{") || suffix.contains("}}") {
-            throw AxnRunError.invalidParams("invalid arg reference syntax: \(template)")
-        }
-        output += suffix
-        return (output, containsSecret)
-    }
-
-    private func parameterReferenceName(in token: String) -> String? {
-        let range = NSRange(token.startIndex..<token.endIndex, in: token)
-        guard let match = Self.parameterReferenceRegex.firstMatch(in: token, range: range),
-              match.range == range,
-              let nameRange = Range(match.range(at: 1), in: token)
-        else {
-            return nil
-        }
-        return String(token[nameRange])
-    }
-
     private func runAction(
-        _ action: JSONValue,
+        _ action: AxnAction,
         index: Int,
         dryRun: Bool,
         secretTaintedFields: Set<String>,
         facts: inout [String: RecordedFact]
     ) -> JSONValue {
         do {
-            guard case var .object(object) = action else {
-                throw AxnRunError.invalidParams("actions[\(index)] must be an object")
-            }
-            let actionID = optionalString("id", in: object)
+            var object = action.fields
+            let actionID = action.id
             let requiredFactIDs = try requiredFacts(in: object)
             let expectedFacts = try expectedFacts(in: object)
             let changeBaselines = try changedBaselines(for: expectedFacts)
@@ -495,7 +327,7 @@ public struct AxnRunner {
                 "success": .bool(false),
                 "error": .string(error.description)
             ]
-            if case let .object(object) = action, let actionID = optionalString("id", in: object) {
+            if let actionID = action.id {
                 record["actionId"] = .string(actionID)
             }
             if let factID = error.factID {
@@ -702,7 +534,7 @@ public struct AxnRunner {
         case "look", "find", "click", "scroll", "drag", "invoke", "type", "keyboard":
             return tool
         default:
-            throw AxnRunError.invalidParams("unknown batch tool: \(tool)")
+            throw AxnRunError.invalidParams("unknown axn tool: \(tool)")
         }
     }
 
@@ -814,20 +646,5 @@ private extension JSONValue {
             return nil
         }
         return values
-    }
-
-    func appendingActions(_ appendedActions: JSONValue) throws -> JSONValue {
-        guard case var .object(object) = self else {
-            throw AxnRunError.invalidParams("batch must be an object")
-        }
-        guard case var .array(actions)? = object["actions"] else {
-            throw AxnRunError.invalidParams("batch requires actions")
-        }
-        guard case let .array(appended) = appendedActions else {
-            throw AxnRunError.invalidParams("actions must be an array")
-        }
-        actions.append(contentsOf: appended)
-        object["actions"] = .array(actions)
-        return .object(object)
     }
 }
