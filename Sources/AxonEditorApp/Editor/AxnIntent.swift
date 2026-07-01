@@ -1,7 +1,7 @@
 import AxonCore
 import SwiftUI
 
-struct RecipeIntent {
+struct AxnIntent {
     let title: String
     let detail: String?
     let generatedTitle: String
@@ -9,7 +9,7 @@ struct RecipeIntent {
     let symbolColor: Color
     let parameterNames: [String]
 
-    init(block: AxonRecipeBlock) {
+    init(block: AxnBlock) {
         switch block {
         case let .note(note):
             let text = note.text?.nilIfEmpty ?? "New note"
@@ -18,7 +18,7 @@ struct RecipeIntent {
                 detail: nil,
                 generatedTitle: text,
                 symbolName: "note.text",
-                symbolColor: RecipeEditorPalette.note,
+                symbolColor: AxnEditorPalette.note,
                 parameterNames: []
             )
         case let .action(action):
@@ -42,7 +42,7 @@ struct RecipeIntent {
         self.parameterNames = parameterNames
     }
 
-    init(action: AxonRecipeAction) {
+    init(action: AxnAction) {
         let generated = Self.generatedTitle(for: action)
         let label = action.fields["label"]?.editableString.nilIfEmpty
         title = label ?? generated
@@ -53,7 +53,7 @@ struct RecipeIntent {
         parameterNames = Self.parameters(in: action)
     }
 
-    private static func generatedTitle(for action: AxonRecipeAction) -> String {
+    private static func generatedTitle(for action: AxnAction) -> String {
         switch action.tool {
         case "type":
             let value = action.fields["value"]?.editableString.nilIfEmpty ?? "text"
@@ -92,7 +92,7 @@ struct RecipeIntent {
         }
     }
 
-    private static func detail(for action: AxonRecipeAction) -> String? {
+    private static func detail(for action: AxnAction) -> String? {
         switch action.tool {
         case "type", "click", "invoke":
             return nil
@@ -140,19 +140,19 @@ struct RecipeIntent {
     private static func symbolColor(for tool: String?) -> Color {
         switch tool {
         case "type", "keyboard":
-            return RecipeEditorPalette.write
+            return AxnEditorPalette.write
         case "click", "invoke", "drag":
-            return RecipeEditorPalette.action
+            return AxnEditorPalette.action
         case "look", "find":
-            return RecipeEditorPalette.read
+            return AxnEditorPalette.read
         case "scroll":
-            return RecipeEditorPalette.motion
+            return AxnEditorPalette.motion
         default:
             return .secondary
         }
     }
 
-    private static func parameters(in action: AxonRecipeAction) -> [String] {
+    private static func parameters(in action: AxnAction) -> [String] {
         var names: [String] = []
         for key in ["value", "keys", "text"] {
             if let value = action.fields[key]?.editableString {

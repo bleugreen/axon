@@ -4,7 +4,7 @@ import Testing
 
 @Test func runExecutesToolShapedActionsInOrder() {
     var requests: [JSONRPCRequest] = []
-    let executor = ActionBatchExecutor { request in
+    let executor = AxnRunner { request in
         requests.append(request)
         return JSONRPCResponse(id: request.id, result: [
             "action": .object([
@@ -37,7 +37,7 @@ import Testing
 
 @Test func runStripsVerificationMetadataBeforeDispatch() {
     var requests: [JSONRPCRequest] = []
-    let executor = ActionBatchExecutor { request in
+    let executor = AxnRunner { request in
         requests.append(request)
         return JSONRPCResponse(id: request.id, result: ["action": .object(["success": .bool(true)])])
     }
@@ -68,7 +68,7 @@ import Testing
 
 @Test func runFailsWhenPrimitiveActionReportsFailure() {
     var requests: [JSONRPCRequest] = []
-    let executor = ActionBatchExecutor { request in
+    let executor = AxnRunner { request in
         requests.append(request)
         return JSONRPCResponse(id: request.id, result: [
             "action": .object([
@@ -108,7 +108,7 @@ import Testing
         changeFactSnapshot(title: "After")
     ]
     var requests: [JSONRPCRequest] = []
-    let executor = ActionBatchExecutor(
+    let executor = AxnRunner(
         commandHandler: { request in
             requests.append(request)
             return JSONRPCResponse(id: request.id, result: ["action": .object(["success": .bool(true)])])
@@ -150,7 +150,7 @@ import Testing
     let surface = scrollSurfaceTarget()
     let link = articleLinkTarget()
     var requests: [JSONRPCRequest] = []
-    let executor = ActionBatchExecutor(
+    let executor = AxnRunner(
         commandHandler: { request in
             requests.append(request)
             return JSONRPCResponse(id: request.id, result: ["action": .object(["success": .bool(true)])])
@@ -183,7 +183,7 @@ import Testing
 @Test func runTreatsRevealResolutionAsDispatchMetadata() {
     let link = articleLinkTarget()
     var requests: [JSONRPCRequest] = []
-    let executor = ActionBatchExecutor(
+    let executor = AxnRunner(
         commandHandler: { request in
             requests.append(request)
             return JSONRPCResponse(id: request.id, result: ["action": .object(["success": .bool(true)])])
@@ -211,7 +211,7 @@ import Testing
 
 @Test func runVerifiesExpectedFactAndLaterRequirement() {
     var requests: [JSONRPCRequest] = []
-    let executor = ActionBatchExecutor(
+    let executor = AxnRunner(
         commandHandler: { request in
             requests.append(request)
             return JSONRPCResponse(id: request.id, result: ["action": .object(["success": .bool(true)])])
@@ -263,7 +263,7 @@ import Testing
 
 @Test func runAllowsRecordedValueContainmentFacts() {
     var requests: [JSONRPCRequest] = []
-    let executor = ActionBatchExecutor(
+    let executor = AxnRunner(
         commandHandler: { request in
             requests.append(request)
             return JSONRPCResponse(id: request.id, result: ["action": .object(["success": .bool(true)])])
@@ -314,7 +314,7 @@ import Testing
 @Test func runStopsWhenRequiredFactNoLongerVerifies() {
     var snapshotReads = 0
     var requests: [JSONRPCRequest] = []
-    let executor = ActionBatchExecutor(
+    let executor = AxnRunner(
         commandHandler: { request in
             requests.append(request)
             return JSONRPCResponse(id: request.id, result: ["action": .object(["success": .bool(true)])])
@@ -366,7 +366,7 @@ import Testing
 
 @Test func runStopsOnFirstFailureByDefault() {
     var requests: [JSONRPCRequest] = []
-    let executor = ActionBatchExecutor { request in
+    let executor = AxnRunner { request in
         requests.append(request)
         return JSONRPCResponse(id: request.id, error: .invalidParams("bad target"))
     }
@@ -481,7 +481,7 @@ private func articleSnapshot(children: [AXNode]) -> AppSnapshot {
 
 @Test func runCanContinueOnError() {
     var requests: [JSONRPCRequest] = []
-    let executor = ActionBatchExecutor { request in
+    let executor = AxnRunner { request in
         requests.append(request)
         if requests.count == 1 {
             return JSONRPCResponse(id: request.id, error: .invalidParams("bad target"))
@@ -504,7 +504,7 @@ private func articleSnapshot(children: [AXNode]) -> AppSnapshot {
 
 @Test func runLoadsPathAndAppendsInlineActions() throws {
     var requests: [JSONRPCRequest] = []
-    let executor = ActionBatchExecutor { request in
+    let executor = AxnRunner { request in
         requests.append(request)
         return JSONRPCResponse(id: request.id, result: ["action": .object(["success": .bool(true)])])
     }
@@ -554,7 +554,7 @@ private func articleSnapshot(children: [AXNode]) -> AppSnapshot {
 
 @Test func runSubstitutesCallerArgumentsIntoActionValues() throws {
     var requests: [JSONRPCRequest] = []
-    let executor = ActionBatchExecutor { request in
+    let executor = AxnRunner { request in
         requests.append(request)
         return JSONRPCResponse(id: request.id, result: ["action": .object(["success": .bool(true)])])
     }
@@ -584,7 +584,7 @@ private func articleSnapshot(children: [AXNode]) -> AppSnapshot {
 
 @Test func runFailsBeforeDispatchWhenRequiredArgumentIsMissing() throws {
     var requests: [JSONRPCRequest] = []
-    let executor = ActionBatchExecutor { request in
+    let executor = AxnRunner { request in
         requests.append(request)
         return JSONRPCResponse(id: request.id, result: ["action": .object(["success": .bool(true)])])
     }
@@ -605,7 +605,7 @@ private func articleSnapshot(children: [AXNode]) -> AppSnapshot {
     do {
         _ = try executor.run(params: ["path": .string(path)])
         Issue.record("missing required argument should fail")
-    } catch let error as ActionBatchError {
+    } catch let error as AxnRunError {
         #expect(error.description == "missing required arg: recipient")
     }
     #expect(requests.isEmpty)
@@ -613,7 +613,7 @@ private func articleSnapshot(children: [AXNode]) -> AppSnapshot {
 
 @Test func runRejectsUndeclaredParameterReferencesBeforeDispatch() throws {
     var requests: [JSONRPCRequest] = []
-    let executor = ActionBatchExecutor { request in
+    let executor = AxnRunner { request in
         requests.append(request)
         return JSONRPCResponse(id: request.id, result: ["action": .object(["success": .bool(true)])])
     }
@@ -631,7 +631,7 @@ private func articleSnapshot(children: [AXNode]) -> AppSnapshot {
     do {
         _ = try executor.run(params: ["path": .string(path)])
         Issue.record("undeclared parameter reference should fail")
-    } catch let error as ActionBatchError {
+    } catch let error as AxnRunError {
         #expect(error.description == "undeclared arg reference: recipient")
     }
     #expect(requests.isEmpty)
@@ -639,7 +639,7 @@ private func articleSnapshot(children: [AXNode]) -> AppSnapshot {
 
 @Test func runRejectsInlineSourceReferencesBeforeDispatch() throws {
     var requests: [JSONRPCRequest] = []
-    let executor = ActionBatchExecutor { request in
+    let executor = AxnRunner { request in
         requests.append(request)
         return JSONRPCResponse(id: request.id, result: ["action": .object(["success": .bool(true)])])
     }
@@ -657,7 +657,7 @@ private func articleSnapshot(children: [AXNode]) -> AppSnapshot {
     do {
         _ = try executor.run(params: ["path": .string(path)])
         Issue.record("inline source reference should fail")
-    } catch let error as ActionBatchError {
+    } catch let error as AxnRunError {
         #expect(error.description == "invalid arg reference syntax: {{env://HOME}}")
     }
     #expect(requests.isEmpty)
@@ -665,7 +665,7 @@ private func articleSnapshot(children: [AXNode]) -> AppSnapshot {
 
 @Test func runResolvesDeclaredSourceArguments() throws {
     var requests: [JSONRPCRequest] = []
-    let executor = ActionBatchExecutor(
+    let executor = AxnRunner(
         commandHandler: { request in
             requests.append(request)
             return JSONRPCResponse(id: request.id, result: ["action": .object(["success": .bool(true)])])
@@ -700,7 +700,7 @@ private func articleSnapshot(children: [AXNode]) -> AppSnapshot {
 
 @Test func runRejectsCallerOverrideForSourcedArgument() throws {
     var requests: [JSONRPCRequest] = []
-    let executor = ActionBatchExecutor(
+    let executor = AxnRunner(
         commandHandler: { request in
             requests.append(request)
             return JSONRPCResponse(id: request.id, result: ["action": .object(["success": .bool(true)])])
@@ -730,7 +730,7 @@ private func articleSnapshot(children: [AXNode]) -> AppSnapshot {
             "argValues": .object(["token": .string("from-caller")])
         ])
         Issue.record("caller arg should not override a sourced arg")
-    } catch let error as ActionBatchError {
+    } catch let error as AxnRunError {
         #expect(error.description == "caller arg cannot override sourced arg: token")
     }
     #expect(requests.isEmpty)
@@ -738,7 +738,7 @@ private func articleSnapshot(children: [AXNode]) -> AppSnapshot {
 
 @Test func runRedactsSecretTaintedDryRunParams() throws {
     var requests: [JSONRPCRequest] = []
-    let executor = ActionBatchExecutor { request in
+    let executor = AxnRunner { request in
         requests.append(request)
         return JSONRPCResponse(id: request.id, result: ["action": .object(["success": .bool(true)])])
     }
@@ -768,7 +768,7 @@ private func articleSnapshot(children: [AXNode]) -> AppSnapshot {
 }
 
 @Test func runRedactsSecretTaintedTraceResults() throws {
-    let executor = ActionBatchExecutor { request in
+    let executor = AxnRunner { request in
         JSONRPCResponse(id: request.id, result: [
             "action": .object([
                 "success": .bool(true),
@@ -800,7 +800,7 @@ private func articleSnapshot(children: [AXNode]) -> AppSnapshot {
 }
 
 @Test func runRedactsSecretTaintedJSONRPCErrors() throws {
-    let executor = ActionBatchExecutor { request in
+    let executor = AxnRunner { request in
         let value = request.params?["value"]?.stringValue ?? "missing"
         return JSONRPCResponse(id: request.id, error: .invalidParams("failed with \(value)"))
     }
@@ -829,7 +829,7 @@ private func articleSnapshot(children: [AXNode]) -> AppSnapshot {
 
 @Test func runRejectsParameterReferencesInNonStringValueFieldsBeforeDispatch() throws {
     var requests: [JSONRPCRequest] = []
-    let executor = ActionBatchExecutor { request in
+    let executor = AxnRunner { request in
         requests.append(request)
         return JSONRPCResponse(id: request.id, result: ["action": .object(["success": .bool(true)])])
     }
@@ -854,7 +854,7 @@ private func articleSnapshot(children: [AXNode]) -> AppSnapshot {
             "argValues": .object(["recipient": .string("Ada")])
         ])
         Issue.record("non-string value parameter reference should fail before dispatch")
-    } catch let error as ActionBatchError {
+    } catch let error as AxnRunError {
         #expect(error.description == "parameter references are only supported in string value fields: actions[0].value")
     }
     #expect(requests.isEmpty)
@@ -1459,7 +1459,7 @@ private func articleSnapshot(children: [AXNode]) -> AppSnapshot {
 
 @Test func runSkipsFirstClassNoteBlocks() throws {
     var requests: [JSONRPCRequest] = []
-    let executor = ActionBatchExecutor { request in
+    let executor = AxnRunner { request in
         requests.append(request)
         return JSONRPCResponse(id: request.id, result: ["action": .object(["success": .bool(true)])])
     }
@@ -1495,7 +1495,7 @@ private func articleSnapshot(children: [AXNode]) -> AppSnapshot {
 
     for name in ["open-menu.yaml", "read-and-click.yaml", "scroll.yaml"] {
         let source = try String(contentsOf: examplesDirectory.appendingPathComponent(name), encoding: .utf8)
-        let batch = try ActionBatchExecutor.parseSource(source)
+        let batch = try AxnRunner.parseSource(source)
         guard case let .array(actions)? = batch["actions"] else {
             Issue.record("Batch \(name) is missing actions array")
             continue

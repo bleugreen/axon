@@ -2,7 +2,7 @@ import Foundation
 import Testing
 @testable import AxonCore
 
-@Test func axonRecipeParsesEditorMetadataAndBlocks() throws {
+@Test func axnFileParsesEditorMetadataAndBlocks() throws {
     let source = """
     # axon-editor: {"breakpoints":["a001"],"notes":{"a001":"auth fails here"}}
     version: 1
@@ -21,7 +21,7 @@ import Testing
           nested: true
     """
 
-    let recipe = try AxonRecipe(source: source)
+    let recipe = try Axn(source: source)
 
     #expect(recipe.version == 1)
     #expect(recipe.editorMetadata.breakpoints == ["a001"])
@@ -45,8 +45,8 @@ import Testing
     #expect(action.fields["custom"]?["nested"] == .bool(true))
 }
 
-@Test func axonRecipeAssignsStableIDsToMissingBlocks() throws {
-    var recipe = try AxonRecipe(source: """
+@Test func axnFileAssignsStableIDsToMissingBlocks() throws {
+    var recipe = try Axn(source: """
     version: 1
     actions:
       - note: Explain the setup
@@ -63,8 +63,8 @@ import Testing
     #expect(recipe.blocks.map(\.id) == ["x001", "x002", "existing"])
 }
 
-@Test func axonRecipeRoundTripsMetadataNotesAndUnknownFields() throws {
-    var recipe = try AxonRecipe(source: """
+@Test func axnFileRoundTripsMetadataNotesAndUnknownFields() throws {
+    var recipe = try Axn(source: """
     # axon-editor: { breakpoints: [a001], notes: { a001: "auth fails here" }, panel: expanded }
     version: 1
     owner: local-test
@@ -81,7 +81,7 @@ import Testing
     recipe.assignMissingBlockIDs(prefix: "b")
 
     let rendered = try recipe.yamlString()
-    let reparsed = try AxonRecipe(source: rendered)
+    let reparsed = try Axn(source: rendered)
 
     #expect(rendered.hasPrefix("# axon-editor:"))
     #expect(reparsed.editorMetadata.breakpoints == ["a001"])
@@ -91,8 +91,8 @@ import Testing
     #expect(reparsed.blocks == recipe.blocks)
 }
 
-@Test func axonRecipeSerializationUsesCanonicalDocumentOrder() throws {
-    let recipe = try AxonRecipe(source: """
+@Test func axnFileSerializationUsesCanonicalDocumentOrder() throws {
+    let recipe = try Axn(source: """
     owner: local-test
     actions:
       - value: Hello
@@ -131,12 +131,12 @@ import Testing
     #expect(actionTool < actionTarget)
     #expect(actionTarget < actionValue)
 
-    let batch = try ActionBatchExecutor.parseSource(rendered)
+    let batch = try AxnRunner.parseSource(rendered)
     #expect(batch == recipe.jsonValue)
 }
 
-@Test func axonRecipeInsertsRecordedBlocksBeforeTargetAndRemapsDuplicateIDs() throws {
-    var recipe = try AxonRecipe(source: """
+@Test func axnFileInsertsRecordedBlocksBeforeTargetAndRemapsDuplicateIDs() throws {
+    var recipe = try Axn(source: """
     version: 1
     actions:
       - id: a001
@@ -146,7 +146,7 @@ import Testing
         tool: click
         target: after
     """)
-    let recording = try AxonRecipe(source: """
+    let recording = try Axn(source: """
     version: 1
     actions:
       - id: a001

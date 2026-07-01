@@ -52,7 +52,7 @@ struct RecipeToggleField: View {
     }
 }
 
-enum RecipeEditorPalette {
+enum AxnEditorPalette {
     static let canvasBackground = Color(nsColor: .windowBackgroundColor)
     static let sidebarBackground = Color(nsColor: .underPageBackgroundColor)
     static let stepFill = Color(nsColor: .controlBackgroundColor).opacity(0.72)

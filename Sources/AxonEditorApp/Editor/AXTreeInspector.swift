@@ -74,7 +74,7 @@ struct AXTreeInspector: View {
                     }
                 }
             } else {
-                Text("No target app in recipe")
+                Text("No target app in axn file")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -332,7 +332,7 @@ private struct AXTreeNodeRow: View {
                             if node.isActionable {
                                 Image(systemName: "cursorarrow.click.2")
                                     .font(.caption2)
-                                    .foregroundStyle(RecipeEditorPalette.action)
+                                    .foregroundStyle(AxnEditorPalette.action)
                             }
                             Spacer(minLength: 0)
                         }
@@ -355,7 +355,7 @@ private struct AXTreeNodeRow: View {
             .padding(.vertical, 4)
             .background(
                 RoundedRectangle(cornerRadius: 6, style: .continuous)
-                    .fill(selectedNodeID == node.id ? RecipeEditorPalette.selectionFill : Color.clear)
+                    .fill(selectedNodeID == node.id ? AxnEditorPalette.selectionFill : Color.clear)
             )
 
             if isExpanded {

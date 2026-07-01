@@ -1,8 +1,8 @@
 import AxonCore
 import SwiftUI
 
-struct RecipeStepEditor: View {
-    @Binding var action: AxonRecipeAction
+struct AxnStepEditor: View {
+    @Binding var action: AxnAction
     let inputNames: [String]
 
     var body: some View {
@@ -31,7 +31,7 @@ struct RecipeStepEditor: View {
     }
 }
 
-extension AxonRecipeAction {
+extension AxnAction {
     var hasPrimaryEditor: Bool {
         switch tool {
         case "type", "keyboard", "scroll", "drag", "invoke", "look":
@@ -45,7 +45,7 @@ extension AxonRecipeAction {
 }
 
 struct NoteStepEditor: View {
-    @Binding var note: AxonRecipeNote
+    @Binding var note: AxnNote
 
     var body: some View {
         RecipeTextField(
@@ -60,7 +60,7 @@ struct NoteStepEditor: View {
 }
 
 private struct TypeActionEditor: View {
-    @Binding var action: AxonRecipeAction
+    @Binding var action: AxnAction
     let inputNames: [String]
 
     var body: some View {
@@ -84,7 +84,7 @@ private struct ClickActionEditor: View {
 }
 
 private struct KeyboardActionEditor: View {
-    @Binding var action: AxonRecipeAction
+    @Binding var action: AxnAction
     let inputNames: [String]
 
     var body: some View {
@@ -103,7 +103,7 @@ private struct KeyboardActionEditor: View {
 }
 
 private struct ScrollActionEditor: View {
-    @Binding var action: AxonRecipeAction
+    @Binding var action: AxnAction
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -123,7 +123,7 @@ private struct ScrollActionEditor: View {
 }
 
 private struct DragActionEditor: View {
-    @Binding var action: AxonRecipeAction
+    @Binding var action: AxnAction
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -140,7 +140,7 @@ private struct DragActionEditor: View {
 }
 
 private struct InvokeActionEditor: View {
-    @Binding var action: AxonRecipeAction
+    @Binding var action: AxnAction
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -157,7 +157,7 @@ private struct InvokeActionEditor: View {
 }
 
 private struct LookActionEditor: View {
-    @Binding var action: AxonRecipeAction
+    @Binding var action: AxnAction
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -181,7 +181,7 @@ private struct FindActionEditor: View {
 }
 
 private struct UnsupportedActionEditor: View {
-    let action: AxonRecipeAction
+    let action: AxnAction
 
     var body: some View {
         Text("The editor doesn't render this action's fields yet. The recipe will still replay; open an issue at github.com/bleugreen/axon if you'd like editing support.")

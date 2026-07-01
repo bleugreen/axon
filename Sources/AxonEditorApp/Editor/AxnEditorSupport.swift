@@ -15,7 +15,7 @@ func parameterTokenNames(in value: String) -> [String] {
     }
 }
 
-extension AxonRecipeAction {
+extension AxnAction {
     mutating func setEditableString(value: String, forKey key: String) {
         if value.isEmpty {
             fields.removeValue(forKey: key)
@@ -41,7 +41,7 @@ extension AxonRecipeAction {
     }
 }
 
-extension AxonRecipe {
+extension Axn {
     var inputNames: [String] {
         args.compactMap { arg in
             guard case let .string(name)? = arg.fields["name"], !name.isEmpty else {
@@ -63,7 +63,7 @@ extension AxonRecipe {
     }
 }
 
-extension AxonRecipeAction {
+extension AxnAction {
     var knownApps: Set<String> {
         var apps: Set<String> = []
         for key in ["app"] {

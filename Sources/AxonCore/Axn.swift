@@ -1,7 +1,7 @@
 import Foundation
 import Yams
 
-public enum AxonRecipeError: Error, CustomStringConvertible, Equatable {
+public enum AxnParseError: Error, CustomStringConvertible, Equatable {
     case invalidFormat(String)
 
     public var description: String {
@@ -12,18 +12,18 @@ public enum AxonRecipeError: Error, CustomStringConvertible, Equatable {
     }
 }
 
-public struct AxonRecipe: Equatable, Sendable {
+public struct Axn: Equatable, Sendable {
     public var version: Int
-    public var args: [AxonRecipeArgument]
-    public var blocks: [AxonRecipeBlock]
-    public var editorMetadata: AxonRecipeEditorMetadata
+    public var args: [AxnArgument]
+    public var blocks: [AxnBlock]
+    public var editorMetadata: AxnEditorMetadata
     public var unknownTopLevelFields: [String: JSONValue]
 
     public init(
         version: Int = 1,
-        args: [AxonRecipeArgument] = [],
-        blocks: [AxonRecipeBlock] = [],
-        editorMetadata: AxonRecipeEditorMetadata = AxonRecipeEditorMetadata(),
+        args: [AxnArgument] = [],
+        blocks: [AxnBlock] = [],
+        editorMetadata: AxnEditorMetadata = AxnEditorMetadata(),
         unknownTopLevelFields: [String: JSONValue] = [:]
     ) {
         self.version = version
@@ -34,17 +34,17 @@ public struct AxonRecipe: Equatable, Sendable {
     }
 
     public init(source: String) throws {
-        let editorMetadata = AxonRecipeEditorMetadata.parseLeadingComment(in: source)
+        let editorMetadata = AxnEditorMetadata.parseLeadingComment(in: source)
         let value = try AxnDocumentCodec.parseSource(source)
         try self.init(jsonValue: value, editorMetadata: editorMetadata)
     }
 
     public init(
         jsonValue: JSONValue,
-        editorMetadata: AxonRecipeEditorMetadata = AxonRecipeEditorMetadata()
+        editorMetadata: AxnEditorMetadata = AxnEditorMetadata()
     ) throws {
         guard case var .object(object) = jsonValue else {
-            throw AxonRecipeError.invalidFormat("recipe must be an object")
+            throw AxnParseError.invalidFormat("axn file must be an object")
         }
         let version: Int
         switch object.removeValue(forKey: "version") {
@@ -52,13 +52,13 @@ public struct AxonRecipe: Equatable, Sendable {
             version = value
         case let .string(value):
             guard let parsed = Int(value) else {
-                throw AxonRecipeError.invalidFormat("version must be an integer")
+                throw AxnParseError.invalidFormat("version must be an integer")
             }
             version = parsed
         case nil:
             version = 1
         default:
-            throw AxonRecipeError.invalidFormat("version must be an integer")
+            throw AxnParseError.invalidFormat("version must be an integer")
         }
 
         let args = try Self.parseArgs(object.removeValue(forKey: "args"))
@@ -88,12 +88,12 @@ public struct AxonRecipe: Equatable, Sendable {
         }
     }
 
-    public mutating func insertRecordedBlocks(_ recordedBlocks: [AxonRecipeBlock], beforeBlockID: String?) {
+    public mutating func insertRecordedBlocks(_ recordedBlocks: [AxnBlock], beforeBlockID: String?) {
         let originalIDs = Set(blocks.compactMap(\.id))
         var usedIDs = originalIDs
         var nextID = 1
         var idMap: [String: String] = [:]
-        var remappedBlocks: [AxonRecipeBlock] = []
+        var remappedBlocks: [AxnBlock] = []
 
         for var block in recordedBlocks {
             if let id = block.id {
@@ -160,43 +160,43 @@ public struct AxonRecipe: Equatable, Sendable {
         return output
     }
 
-    private static func parseArgs(_ value: JSONValue?) throws -> [AxonRecipeArgument] {
+    private static func parseArgs(_ value: JSONValue?) throws -> [AxnArgument] {
         guard let value, value != .null else {
             return []
         }
         guard case let .array(values) = value else {
-            throw AxonRecipeError.invalidFormat("args must be an array")
+            throw AxnParseError.invalidFormat("args must be an array")
         }
         return try values.enumerated().map { index, value in
             guard case let .object(object) = value else {
-                throw AxonRecipeError.invalidFormat("args[\(index)] must be an object")
+                throw AxnParseError.invalidFormat("args[\(index)] must be an object")
             }
-            return AxonRecipeArgument(fields: object)
+            return AxnArgument(fields: object)
         }
     }
 
-    private static func parseBlocks(_ value: JSONValue?) throws -> [AxonRecipeBlock] {
+    private static func parseBlocks(_ value: JSONValue?) throws -> [AxnBlock] {
         guard let value, value != .null else {
             return []
         }
         guard case let .array(values) = value else {
-            throw AxonRecipeError.invalidFormat("actions must be an array")
+            throw AxnParseError.invalidFormat("actions must be an array")
         }
         return try values.enumerated().map { index, value in
             guard case let .object(object) = value else {
-                throw AxonRecipeError.invalidFormat("actions[\(index)] must be an object")
+                throw AxnParseError.invalidFormat("actions[\(index)] must be an object")
             }
             if object["tool"] == nil, object["note"] != nil {
-                return .note(AxonRecipeNote(fields: object))
+                return .note(AxnNote(fields: object))
             }
-            return .action(AxonRecipeAction(fields: object))
+            return .action(AxnAction(fields: object))
         }
     }
 
     private static func remappingReferences(
-        in block: AxonRecipeBlock,
+        in block: AxnBlock,
         idMap: [String: String]
-    ) -> AxonRecipeBlock {
+    ) -> AxnBlock {
         switch block {
         case var .action(action):
             action.fields = remappingReferences(in: action.fields, idMap: idMap)
@@ -247,7 +247,7 @@ public struct AxonRecipe: Equatable, Sendable {
     }
 }
 
-public struct AxonRecipeArgument: Equatable, Sendable {
+public struct AxnArgument: Equatable, Sendable {
     public var fields: [String: JSONValue]
 
     public init(fields: [String: JSONValue]) {
@@ -278,9 +278,9 @@ public struct AxonRecipeArgument: Equatable, Sendable {
     }
 }
 
-public enum AxonRecipeBlock: Equatable, Sendable {
-    case action(AxonRecipeAction)
-    case note(AxonRecipeNote)
+public enum AxnBlock: Equatable, Sendable {
+    case action(AxnAction)
+    case note(AxnNote)
 
     public var id: String? {
         get {
@@ -313,7 +313,7 @@ public enum AxonRecipeBlock: Equatable, Sendable {
     }
 }
 
-public struct AxonRecipeAction: Equatable, Sendable {
+public struct AxnAction: Equatable, Sendable {
     public var fields: [String: JSONValue]
 
     public init(fields: [String: JSONValue]) {
@@ -353,7 +353,7 @@ public struct AxonRecipeAction: Equatable, Sendable {
     }
 }
 
-public struct AxonRecipeNote: Equatable, Sendable {
+public struct AxnNote: Equatable, Sendable {
     public var fields: [String: JSONValue]
 
     public init(fields: [String: JSONValue]) {
@@ -398,7 +398,7 @@ public struct AxonRecipeNote: Equatable, Sendable {
     }
 }
 
-public struct AxonRecipeEditorMetadata: Equatable, Sendable {
+public struct AxnEditorMetadata: Equatable, Sendable {
     public var breakpoints: [String]
     public var notes: [String: String]
     public var unknownFields: [String: JSONValue]
@@ -417,14 +417,14 @@ public struct AxonRecipeEditorMetadata: Equatable, Sendable {
         breakpoints.isEmpty && notes.isEmpty && unknownFields.isEmpty
     }
 
-    public static func parseLeadingComment(in source: String) -> AxonRecipeEditorMetadata {
+    public static func parseLeadingComment(in source: String) -> AxnEditorMetadata {
         for line in source.split(separator: "\n", omittingEmptySubsequences: false) {
             let trimmed = line.trimmingCharacters(in: .whitespaces)
             if trimmed.isEmpty {
                 continue
             }
             guard trimmed.hasPrefix("#") else {
-                return AxonRecipeEditorMetadata()
+                return AxnEditorMetadata()
             }
             guard let range = trimmed.range(of: "axon-editor:") else {
                 continue
@@ -432,7 +432,7 @@ public struct AxonRecipeEditorMetadata: Equatable, Sendable {
             let metadataSource = trimmed[range.upperBound...].trimmingCharacters(in: .whitespaces)
             return parse(metadataSource)
         }
-        return AxonRecipeEditorMetadata()
+        return AxnEditorMetadata()
     }
 
     public func commentLine() -> String? {
@@ -456,7 +456,7 @@ public struct AxonRecipeEditorMetadata: Equatable, Sendable {
         return "# axon-editor: \(encoded)"
     }
 
-    private static func parse(_ source: String) -> AxonRecipeEditorMetadata {
+    private static func parse(_ source: String) -> AxnEditorMetadata {
         let value: JSONValue?
         if let data = source.data(using: .utf8),
            let decoded = try? JSONDecoder().decode(JSONValue.self, from: data) {
@@ -468,7 +468,7 @@ public struct AxonRecipeEditorMetadata: Equatable, Sendable {
             value = nil
         }
         guard case var .object(object)? = value else {
-            return AxonRecipeEditorMetadata()
+            return AxnEditorMetadata()
         }
 
         let breakpoints: [String]
@@ -495,7 +495,7 @@ public struct AxonRecipeEditorMetadata: Equatable, Sendable {
             notes = [:]
         }
 
-        return AxonRecipeEditorMetadata(
+        return AxnEditorMetadata(
             breakpoints: breakpoints,
             notes: notes,
             unknownFields: object

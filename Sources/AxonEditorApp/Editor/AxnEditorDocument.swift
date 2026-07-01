@@ -4,16 +4,16 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 extension UTType {
-    static let axonRecipe = UTType(exportedAs: "com.bleugreen.axon.recipe", conformingTo: .yaml)
+    static let axnFile = UTType(exportedAs: "com.bleugreen.axon.recipe", conformingTo: .yaml)
 }
 
-struct AxonDocument: FileDocument {
-    static var readableContentTypes: [UTType] { [.axonRecipe, UTType(filenameExtension: "axn") ?? .yaml] }
-    static var writableContentTypes: [UTType] { [.axonRecipe] }
+struct AxnEditorDocument: FileDocument {
+    static var readableContentTypes: [UTType] { [.axnFile, UTType(filenameExtension: "axn") ?? .yaml] }
+    static var writableContentTypes: [UTType] { [.axnFile] }
 
-    var recipe: AxonRecipe
+    var recipe: Axn
 
-    init(recipe: AxonRecipe = AxonRecipe()) {
+    init(recipe: Axn = Axn()) {
         self.recipe = recipe
         self.recipe.assignMissingBlockIDs()
     }
@@ -24,7 +24,7 @@ struct AxonDocument: FileDocument {
         else {
             throw CocoaError(.fileReadCorruptFile)
         }
-        recipe = try AxonRecipe(source: source)
+        recipe = try Axn(source: source)
         recipe.assignMissingBlockIDs()
     }
 

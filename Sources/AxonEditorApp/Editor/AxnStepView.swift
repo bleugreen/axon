@@ -1,9 +1,9 @@
 import AxonCore
 import SwiftUI
 
-struct RecipeStepView: View {
+struct AxnStepView: View {
     let index: Int
-    @Binding var block: AxonRecipeBlock
+    @Binding var block: AxnBlock
     let isSelected: Bool
     let isBreakpoint: Bool
     let isDebugCursor: Bool
@@ -59,7 +59,7 @@ struct RecipeStepView: View {
         .padding(14)
         .background(
             RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(isSelected ? RecipeEditorPalette.selectedStepFill : RecipeEditorPalette.stepFill)
+                .fill(isSelected ? AxnEditorPalette.selectedStepFill : AxnEditorPalette.stepFill)
         )
         .overlay(
             RoundedRectangle(cornerRadius: 8, style: .continuous)
@@ -87,7 +87,7 @@ struct RecipeStepView: View {
                 set: { block = .note($0) }
             ))
         case let .action(action):
-            RecipeStepEditor(action: Binding(
+            AxnStepEditor(action: Binding(
                 get: {
                     if case let .action(current) = block {
                         return current
@@ -122,14 +122,14 @@ struct RecipeStepView: View {
             return .red
         }
         if isDebugCursor {
-            return RecipeEditorPalette.debugCursor
+            return AxnEditorPalette.debugCursor
         }
-        return isSelected ? RecipeEditorPalette.selectionStroke : RecipeEditorPalette.stepStroke
+        return isSelected ? AxnEditorPalette.selectionStroke : AxnEditorPalette.stepStroke
     }
 }
 
 private struct StepHeader: View {
-    let block: AxonRecipeBlock
+    let block: AxnBlock
     let isSelected: Bool
     let canMoveUp: Bool
     let canMoveDown: Bool
@@ -139,7 +139,7 @@ private struct StepHeader: View {
     let delete: () -> Void
 
     var body: some View {
-        let intent = RecipeIntent(block: block)
+        let intent = AxnIntent(block: block)
         HStack(alignment: .top, spacing: 12) {
             Image(systemName: intent.symbolName)
                 .font(.system(size: 18, weight: .medium))
@@ -213,7 +213,7 @@ private struct StepGutter: View {
     }
 
     private var breakpointColor: Color {
-        isBreakpoint ? RecipeEditorPalette.breakpoint : .secondary
+        isBreakpoint ? AxnEditorPalette.breakpoint : .secondary
     }
 
     private var statusIconName: String? {

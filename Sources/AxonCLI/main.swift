@@ -196,7 +196,7 @@ do {
           mcp      run an MCP stdio facade backed by the daemon socket
           start    launch the installed Axon.app menu bar service
           edit <path.axn>
-                  open a recipe in the visual editor
+                  open an axn file in the visual editor
           status   print app-backed daemon status
           setup    launch Axon.app and request permissions when needed
           quit     quit the installed Axon.app service

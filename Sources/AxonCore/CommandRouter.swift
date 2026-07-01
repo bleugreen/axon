@@ -8,7 +8,7 @@ public struct CommandRouter {
     private let captureSnapshot: (String, Bool) throws -> AppSnapshot
     private let captureSnapshotWithChildDepth: (String, Bool, Int?) throws -> AppSnapshot
     private let resolveLocator: LocatorResolutionProvider
-    private let batchSnapshotProvider: ActionBatchExecutor.SnapshotProvider
+    private let batchSnapshotProvider: AxnRunner.SnapshotProvider
     private let requestAccessibility: () -> Bool
     private let actions: PrimitiveActionHandlers
     private let elementStore: AXElementStore
@@ -16,14 +16,14 @@ public struct CommandRouter {
     private let history: ActionHistoryStore
     private let recognizeText: TextRecognitionHandler
     private let activeCredentialFilterProvider: @Sendable () -> any ActiveCredentialFilter
-    private let debugSessions: ActionBatchDebugSessionStore
+    private let debugSessions: AxnDebugSessionStore
 
     public init(
         listApps: @escaping () -> [AppIdentity] = { AppResolver().recordableApps() },
         listAllApps: @escaping () -> [AppIdentity] = { AppResolver().runningApps() },
         captureSnapshot: ((String, Bool) throws -> AppSnapshot)? = nil,
         resolveLocator: LocatorResolutionProvider? = nil,
-        batchSnapshotProvider: ActionBatchExecutor.SnapshotProvider? = nil,
+        batchSnapshotProvider: AxnRunner.SnapshotProvider? = nil,
         requestAccessibility: @escaping () -> Bool = AccessibilityPermission.requestTrustPrompt,
         actions: PrimitiveActionHandlers? = nil,
         elementStore: AXElementStore = AXElementStore(),
@@ -38,7 +38,7 @@ public struct CommandRouter {
         self.history = history
         self.recognizeText = recognizeText
         self.activeCredentialFilterProvider = activeCredentialFilterProvider ?? { activeCredentialFilter }
-        self.debugSessions = ActionBatchDebugSessionStore()
+        self.debugSessions = AxnDebugSessionStore()
         self.listApps = listApps
         self.listAllApps = listAllApps
         self.captureSnapshot = captureSnapshot ?? { app, screenshot in
@@ -175,7 +175,7 @@ public struct CommandRouter {
         case "run":
             do {
                 let params = try paramsObject(in: request)
-                let batch = try ActionBatchExecutor(
+                let batch = try AxnRunner(
                     commandHandler: { handleCommand($0) },
                     snapshotProvider: batchSnapshotProvider,
                     actionRecorder: { childRequest, childResponse in
@@ -186,7 +186,7 @@ public struct CommandRouter {
                     }
                 ).run(params: params)
                 return JSONRPCResponse(id: request.id, result: ["batch": batch])
-            } catch let error as ActionBatchError {
+            } catch let error as AxnRunError {
                 return JSONRPCResponse(id: request.id, error: .invalidParams(error.description))
             } catch {
                 return JSONRPCResponse(id: request.id, error: .internalError(String(describing: error)))
@@ -195,7 +195,7 @@ public struct CommandRouter {
             do {
                 let params = try paramsObject(in: request)
                 let breakpoints = try stringArrayParam("breakpoints", in: params)
-                let session = try ActionBatchExecutor(
+                let session = try AxnRunner(
                     commandHandler: { handleCommand($0) },
                     snapshotProvider: batchSnapshotProvider,
                     actionRecorder: { childRequest, childResponse in
@@ -214,7 +214,7 @@ public struct CommandRouter {
                     debugSessions.remove(id: session.id)
                 }
                 return JSONRPCResponse(id: request.id, result: ["debug": status])
-            } catch let error as ActionBatchError {
+            } catch let error as AxnRunError {
                 return JSONRPCResponse(id: request.id, error: .invalidParams(error.description))
             } catch let error as JSONRPCError {
                 return JSONRPCResponse(id: request.id, error: error)
@@ -382,7 +382,7 @@ public struct CommandRouter {
         id: JSONRPCID?,
         request: JSONRPCRequest,
         removeAfter: Bool = false,
-        operation: (ActionBatchDebugSession) -> JSONValue
+        operation: (AxnDebugSession) -> JSONValue
     ) -> JSONRPCResponse {
         do {
             let params = try paramsObject(in: request)
@@ -734,19 +734,19 @@ public struct CommandRouter {
     }
 }
 
-public final class ActionBatchDebugSessionStore: @unchecked Sendable {
+public final class AxnDebugSessionStore: @unchecked Sendable {
     private let lock = NSLock()
-    private var sessions: [String: ActionBatchDebugSession] = [:]
+    private var sessions: [String: AxnDebugSession] = [:]
 
     public init() {}
 
-    public func insert(_ session: ActionBatchDebugSession) {
+    public func insert(_ session: AxnDebugSession) {
         lock.withLock {
             sessions[session.id] = session
         }
     }
 
-    public func session(id: String) -> ActionBatchDebugSession? {
+    public func session(id: String) -> AxnDebugSession? {
         lock.withLock {
             sessions[id]
         }

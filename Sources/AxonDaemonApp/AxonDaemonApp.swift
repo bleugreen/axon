@@ -111,7 +111,7 @@ final class AxonDaemonAppDelegate: NSObject, NSApplicationDelegate, @unchecked S
         if !AccessibilityPermission.isTrusted() {
             menu.addItem(menuItem(title: "Request Accessibility", action: #selector(requestAccessibility)))
         }
-        menu.addItem(menuItem(title: "Open Recipe...", action: #selector(openRecipeFromMenu)))
+        menu.addItem(menuItem(title: "Open .axn File...", action: #selector(openAxnFromMenu)))
         if let recordingScope {
             menu.addItem(disabledItem("Recording \(recordingScope.displayName)"))
             menu.addItem(menuItem(title: "Stop Recording...", action: #selector(stopRecording)))
@@ -373,9 +373,9 @@ final class AxonDaemonAppDelegate: NSObject, NSApplicationDelegate, @unchecked S
         return image
     }
 
-    @objc func openRecipeFromMenu() {
+    @objc func openAxnFromMenu() {
         let openPanel = NSOpenPanel()
-        openPanel.title = "Open Axon Recipe"
+        openPanel.title = "Open .axn File"
         openPanel.allowedContentTypes = [UTType(filenameExtension: "axn") ?? .yaml, .yaml]
         openPanel.canChooseDirectories = false
         openPanel.allowsMultipleSelection = false

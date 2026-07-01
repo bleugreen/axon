@@ -7,7 +7,7 @@ private enum DebugFollowUp: Sendable {
 }
 
 struct DocumentView: View {
-    @Binding var document: AxonDocument
+    @Binding var document: AxnEditorDocument
     let isReview: Bool
     let documentID: String?
     let saveDocument: (() -> Void)?
@@ -31,7 +31,7 @@ struct DocumentView: View {
     @State private var repairActionID: String?
 
     init(
-        document: Binding<AxonDocument>,
+        document: Binding<AxnEditorDocument>,
         isReview: Bool = false,
         documentID: String? = nil,
         saveDocument: (() -> Void)? = nil,
@@ -83,7 +83,7 @@ struct DocumentView: View {
                     canRetry: isDebugFailed,
                     canRecordFromHere: (isDebugPaused || isDebugFailed) && recordFromHere != nil,
                     canReset: hasDebugState,
-                    run: runRecipe,
+                    run: runAxn,
                     debug: { startDebugSession(runTo: nil) },
                     runToSelection: runToSelection,
                     resume: continueDebugSession,
@@ -97,7 +97,7 @@ struct DocumentView: View {
                     stop: stopDebugSession
                 )
                 Divider()
-                RecipeCanvas(
+                AxnCanvas(
                     blocks: $document.recipe.blocks,
                     editorMetadata: $document.recipe.editorMetadata,
                     selectedBlockID: $selectedBlockID,
@@ -205,7 +205,7 @@ struct DocumentView: View {
         return nil
     }
 
-    private func runRecipe() {
+    private func runAxn() {
         let runTarget = document.recipe
         guard runTarget.blocks.isEmpty == false else {
             return
@@ -253,7 +253,7 @@ struct DocumentView: View {
     }
 
     private func startDebugSession(runTo blockID: String?) {
-        var params = recipeParams()
+        var params = axnParams()
         if !document.recipe.editorMetadata.breakpoints.isEmpty {
             params["breakpoints"] = .array(document.recipe.editorMetadata.breakpoints.map(JSONValue.string))
         }
@@ -502,7 +502,7 @@ struct DocumentView: View {
         }
     }
 
-    private func recipeParams() -> [String: JSONValue] {
+    private func axnParams() -> [String: JSONValue] {
         if case let .object(object) = document.recipe.jsonValue {
             return object
         }
@@ -523,7 +523,7 @@ struct DocumentView: View {
             lastError = nil
         } else {
             runStatus = "Failed"
-            lastError = firstTraceError(in: lastTrace) ?? "Recipe failed"
+            lastError = firstTraceError(in: lastTrace) ?? "Axn run failed"
         }
     }
 
@@ -602,7 +602,7 @@ private struct DebugControlBar: View {
                     Label(isRunning ? "Running" : "Run", systemImage: isRunning ? "hourglass" : "play.fill")
                 }
                 .disabled(isRunning || !canRun)
-                .help("Run recipe")
+                .help("Run axn file")
 
                 Button(action: debug) {
                     Label("Debug", systemImage: "ladybug")
@@ -682,6 +682,6 @@ private struct DebugControlBar: View {
         .font(.caption)
         .padding(.horizontal, 14)
         .padding(.vertical, 9)
-        .background(RecipeEditorPalette.sidebarBackground)
+        .background(AxnEditorPalette.sidebarBackground)
     }
 }

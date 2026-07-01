@@ -1,9 +1,9 @@
 import AxonCore
 import SwiftUI
 
-struct RecipeCanvas: View {
-    @Binding var blocks: [AxonRecipeBlock]
-    @Binding var editorMetadata: AxonRecipeEditorMetadata
+struct AxnCanvas: View {
+    @Binding var blocks: [AxnBlock]
+    @Binding var editorMetadata: AxnEditorMetadata
     @Binding var selectedBlockID: String?
     let inputNames: [String]
     let trace: [JSONValue]
@@ -16,7 +16,7 @@ struct RecipeCanvas: View {
         ScrollView {
             LazyVStack(spacing: 10) {
                 ForEach(blocks.indices, id: \.self) { index in
-                    RecipeStepView(
+                    AxnStepView(
                         index: index,
                         block: $blocks[index],
                         isSelected: selectedBlockID == blocks[index].id,
@@ -42,10 +42,10 @@ struct RecipeCanvas: View {
             .frame(maxWidth: 1040)
             .frame(maxWidth: .infinity)
         }
-        .background(RecipeEditorPalette.canvasBackground)
+        .background(AxnEditorPalette.canvasBackground)
     }
 
-    private func traceRecord(for block: AxonRecipeBlock) -> JSONValue? {
+    private func traceRecord(for block: AxnBlock) -> JSONValue? {
         guard let id = block.id else {
             return nil
         }
@@ -54,14 +54,14 @@ struct RecipeCanvas: View {
         }
     }
 
-    private func isBreakpoint(_ block: AxonRecipeBlock) -> Bool {
+    private func isBreakpoint(_ block: AxnBlock) -> Bool {
         guard let id = block.id else {
             return false
         }
         return editorMetadata.breakpoints.contains(id)
     }
 
-    private func toggleBreakpoint(_ block: AxonRecipeBlock) {
+    private func toggleBreakpoint(_ block: AxnBlock) {
         guard let id = block.id else {
             return
         }
@@ -142,6 +142,6 @@ struct EditorStatusBar: View {
         .font(.caption)
         .padding(.horizontal, 14)
         .padding(.vertical, 7)
-        .background(RecipeEditorPalette.sidebarBackground)
+        .background(AxnEditorPalette.sidebarBackground)
     }
 }

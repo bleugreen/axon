@@ -91,8 +91,8 @@ struct ParameterChipRow: View {
                     .font(.caption.weight(.medium))
                     .padding(.horizontal, 8)
                     .padding(.vertical, 3)
-                    .background(Capsule().fill(RecipeEditorPalette.parameterFill))
-                    .foregroundStyle(RecipeEditorPalette.parameterText)
+                    .background(Capsule().fill(AxnEditorPalette.parameterFill))
+                    .foregroundStyle(AxnEditorPalette.parameterText)
             }
         }
     }

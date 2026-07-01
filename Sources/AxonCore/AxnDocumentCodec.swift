@@ -44,7 +44,7 @@ enum AxnDocumentCodec {
         case let value as [String: Any]:
             return .object(try value.mapValues { try jsonValue(from: $0) })
         default:
-            throw AxonRecipeError.invalidFormat("unsupported YAML value: \(type(of: value))")
+            throw AxnParseError.invalidFormat("unsupported YAML value: \(type(of: value))")
         }
     }
 
