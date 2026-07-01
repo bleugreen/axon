@@ -929,16 +929,16 @@ private func articleSnapshot(children: [AXNode]) -> AppSnapshot {
     #expect(clicked == ["s1:2"])
 }
 
-@Test func commandRouterRunsBatchFactsThroughBatchSnapshotProvider() {
+@Test func commandRouterRunsFactsThroughAxnSnapshotProvider() {
     var types: [(String, String)] = []
-    var batchSnapshotApps: [String] = []
+    var axnSnapshotApps: [String] = []
     let router = CommandRouter(
         captureSnapshot: { _, _ in
-            Issue.record("batch fact verification should not use compact snapshot capture")
+            Issue.record("Axn fact verification should not use compact snapshot capture")
             return valueFactSnapshot(value: "Wrong")
         },
-        batchSnapshotProvider: { app in
-            batchSnapshotApps.append(app)
+        axnSnapshotProvider: { app in
+            axnSnapshotApps.append(app)
             return valueFactSnapshot(value: "Mitch")
         },
         actions: PrimitiveActionHandlers(
@@ -983,7 +983,7 @@ private func articleSnapshot(children: [AXNode]) -> AppSnapshot {
     #expect(response.error == nil)
     #expect(response.result?["batch"]?["success"] == .bool(true))
     #expect(types.count == 1)
-    #expect(batchSnapshotApps == ["Example"])
+    #expect(axnSnapshotApps == ["Example"])
 }
 
 @Test func commandRouterDebugStartPausesBeforeSelectedBlock() {
@@ -1190,7 +1190,7 @@ private func articleSnapshot(children: [AXNode]) -> AppSnapshot {
 @Test func commandRouterDebugStartCapturesSnapshotForPauseBefore() {
     var snapshotApps: [String] = []
     let router = CommandRouter(
-        batchSnapshotProvider: { app in
+        axnSnapshotProvider: { app in
             snapshotApps.append(app)
             return debugPauseSnapshot(id: "pause-snapshot", app: app)
         },
@@ -1226,7 +1226,7 @@ private func articleSnapshot(children: [AXNode]) -> AppSnapshot {
 @Test func commandRouterDebugStepDoesNotCaptureSnapshotForOrdinaryStepPause() {
     var snapshotApps: [String] = []
     let router = CommandRouter(
-        batchSnapshotProvider: { app in
+        axnSnapshotProvider: { app in
             snapshotApps.append(app)
             return debugPauseSnapshot(id: "unexpected", app: app)
         },
@@ -1334,7 +1334,7 @@ private func articleSnapshot(children: [AXNode]) -> AppSnapshot {
 @Test func commandRouterDebugContinueCapturesSnapshotAtBreakpoint() {
     var snapshotApps: [String] = []
     let router = CommandRouter(
-        batchSnapshotProvider: { app in
+        axnSnapshotProvider: { app in
             snapshotApps.append(app)
             return debugPauseSnapshot(id: "breakpoint-snapshot", app: app)
         },
@@ -1440,7 +1440,7 @@ private func articleSnapshot(children: [AXNode]) -> AppSnapshot {
     var attempts = 0
     var snapshotApps: [String] = []
     let router = CommandRouter(
-        batchSnapshotProvider: { app in
+        axnSnapshotProvider: { app in
             let id = "failure-snapshot-\(snapshotApps.count + 1)"
             snapshotApps.append(app)
             return debugPauseSnapshot(id: id, app: app)
