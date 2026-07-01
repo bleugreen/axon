@@ -502,6 +502,51 @@ private func articleSnapshot(children: [AXNode]) -> AppSnapshot {
     #expect(requests.count == 2)
 }
 
+@Test func runUsesTypedAxnForFileLevelOptionsAndInlineAppend() throws {
+    var requests: [JSONRPCRequest] = []
+    let executor = AxnRunner { request in
+        requests.append(request)
+        if request.method == "click" {
+            return JSONRPCResponse(id: request.id, error: .invalidParams("blocked"))
+        }
+        return JSONRPCResponse(id: request.id, result: ["action": .object(["success": .bool(true)])])
+    }
+
+    let source = """
+    version: 1
+    dryRun: false
+    continueOnError: true
+    owner: local-test
+    actions:
+      - id: note-1
+        note: Preserved in the typed model, skipped by the runner
+      - id: a001
+        tool: keyboard
+        app: Firefox
+        keys: Return
+    """
+    let path = try temporaryAxnFile(source)
+    defer { try? FileManager.default.removeItem(atPath: path) }
+
+    let result = try executor.run(params: [
+        "path": .string(path),
+        "actions": .array([
+            .object([
+                "id": .string("a002"),
+                "tool": .string("click"),
+                "target": .string("s1:2")
+            ])
+        ])
+    ])
+
+    #expect(result["success"] == .bool(false))
+    #expect(result["continueOnError"] == .bool(true))
+    #expect(result["trace"]?.arrayValue?.count == 2)
+    #expect(result["trace"]?[0]?["index"] == .int(1))
+    #expect(result["trace"]?[1]?["index"] == .int(2))
+    #expect(requests.map(\.method) == ["keyboard", "click"])
+}
+
 @Test func runLoadsPathAndAppendsInlineActions() throws {
     var requests: [JSONRPCRequest] = []
     let executor = AxnRunner { request in

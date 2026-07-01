@@ -135,6 +135,55 @@ import Testing
     #expect(batch == axn.jsonValue)
 }
 
+@Test func axnArgumentResolverUsesModelDeclarations() throws {
+    let axn = try Axn(source: """
+    version: 1
+    args:
+      - name: recipient
+        type: email
+      - name: retry_count
+        type: number
+        default: 2
+      - name: upload_name
+        type: path
+        source: env://UPLOAD_NAME
+    actions: []
+    """)
+    let resolver = AxnArgumentResolver(sourceResolvers: [
+        "env": { source in
+            #expect(axnEnvironmentName(from: source) == "UPLOAD_NAME")
+            return "report.csv"
+        }
+    ])
+
+    let resolved = try resolver.resolve(axn.args, callerArgValues: [
+        "recipient": .string("ada@example.com")
+    ])
+
+    #expect(axn.args.map(\.argumentType) == [.email, .number, .path])
+    #expect(resolved["recipient"]?.value == "ada@example.com")
+    #expect(resolved["retry_count"]?.value == "2")
+    #expect(resolved["upload_name"]?.value == "report.csv")
+}
+
+@Test func axnArgumentResolverRejectsInvalidModelDeclarations() throws {
+    let axn = try Axn(source: """
+    version: 1
+    args:
+      - name: api_token
+        type: secret
+        default: literal-secret
+    actions: []
+    """)
+
+    do {
+        _ = try AxnArgumentResolver(sourceResolvers: [:]).resolve(axn.args, callerArgValues: [:])
+        Issue.record("secret defaults should be rejected by the model-level resolver")
+    } catch let error as AxnRunError {
+        #expect(error.description == "secret arg cannot have default: api_token")
+    }
+}
+
 @Test func axnFileInsertsRecordedBlocksBeforeTargetAndRemapsDuplicateIDs() throws {
     var axn = try Axn(source: """
     version: 1
