@@ -141,38 +141,41 @@ public struct AxnArgumentResolver {
 
         var resolved: [String: ResolvedAxnArgument] = [:]
         for declaration in declarations {
-            if declaration.sourceURL != nil, callerArgValues[declaration.name] != nil {
-                throw AxnRunError.invalidParams("caller arg cannot override sourced arg: \(declaration.name)")
+            guard let name = declaration.name, let argumentType = declaration.argumentType else {
+                continue
+            }
+            if declaration.sourceURL != nil, callerArgValues[name] != nil {
+                throw AxnRunError.invalidParams("caller arg cannot override sourced arg: \(name)")
             }
 
             let rawValue: JSONValue?
-            if let callerValue = callerArgValues[declaration.name] {
+            if let callerValue = callerArgValues[name] {
                 rawValue = callerValue
             } else if let source = declaration.sourceURL {
-                rawValue = try resolveSource(source, for: declaration).map(JSONValue.string)
+                rawValue = try resolveSource(source, name: name).map(JSONValue.string)
                     ?? declaration.defaultValue
             } else {
                 rawValue = declaration.defaultValue
             }
 
             guard let rawValue else {
-                throw AxnRunError.invalidParams("missing required arg: \(declaration.name)")
+                throw AxnRunError.invalidParams("missing required arg: \(name)")
             }
 
-            resolved[declaration.name] = ResolvedAxnArgument(
-                value: try AxnArgumentValueCoercer.stringValue(rawValue, type: declaration.argumentType, name: declaration.name),
-                isSecret: declaration.argumentType == .secret
+            resolved[name] = ResolvedAxnArgument(
+                value: try AxnArgumentValueCoercer.stringValue(rawValue, type: argumentType, name: name),
+                isSecret: argumentType == .secret
             )
         }
         return resolved
     }
 
-    private func resolveSource(_ source: URL, for declaration: AxnArgument) throws -> String? {
+    private func resolveSource(_ source: URL, name: String) throws -> String? {
         guard let scheme = source.scheme, !scheme.isEmpty else {
-            throw AxnRunError.invalidParams("arg \(declaration.name) source requires a scheme")
+            throw AxnRunError.invalidParams("arg \(name) source requires a scheme")
         }
         guard let resolver = sourceResolvers[scheme] else {
-            throw AxnRunError.invalidParams("unsupported source scheme for arg \(declaration.name): \(scheme)")
+            throw AxnRunError.invalidParams("unsupported source scheme for arg \(name): \(scheme)")
         }
         return try resolver(source)
     }

@@ -18,7 +18,7 @@ public final class AxnDebugSession {
     private var pauseSnapshot: JSONValue?
     private var state: State
 
-    public init(
+    init(
         id: String = UUID().uuidString,
         executor: AxnRunner,
         actions: [PreparedAxnAction],
