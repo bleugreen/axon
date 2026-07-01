@@ -41,13 +41,13 @@ public struct ToolTargetKindSet: OptionSet, Sendable {
     public func contains(_ kind: ToolTargetKind) -> Bool {
         switch kind {
         case .handle:
-            return contains(.handle)
+            return contains(ToolTargetKindSet.handle)
         case .locator:
-            return contains(.locator)
+            return contains(ToolTargetKindSet.locator)
         case .point:
-            return contains(.point)
+            return contains(ToolTargetKindSet.point)
         case .textLocation:
-            return contains(.textLocation)
+            return contains(ToolTargetKindSet.textLocation)
         }
     }
 
