@@ -1,5 +1,4 @@
 import Foundation
-import Yams
 
 public enum RecordedUserAction: Equatable, Sendable {
     case click(target: JSONValue)
@@ -26,7 +25,7 @@ public struct RecordedUserEventGroup: Equatable, Sendable {
 public struct UserRecordingTranslator {
     public init() {}
 
-    public func batch(from groups: [RecordedUserEventGroup]) throws -> JSONValue {
+    public func axnDocument(from groups: [RecordedUserEventGroup]) throws -> JSONValue {
         var actions: [JSONValue] = []
         var lastValueFactID: String?
         let semanticGroups = coalescedScrollBursts(from: groups)
@@ -102,8 +101,8 @@ public struct UserRecordingTranslator {
     }
 
     public func yaml(from groups: [RecordedUserEventGroup]) throws -> String {
-        let batch = try batch(from: groups)
-        return try Yams.serialize(node: yamlNode(from: batch), sortKeys: false)
+        let axnDocument = try axnDocument(from: groups)
+        return try AxnDocumentCodec.yamlString(from: axnDocument)
     }
 
     private func coalescedScrollBursts(from groups: [RecordedUserEventGroup]) -> [RecordedUserEventGroup] {
@@ -482,64 +481,4 @@ public struct UserRecordingTranslator {
         ])
     }
 
-    private func yamlNode(from value: JSONValue) -> Node {
-        switch value {
-        case let .string(value):
-            return .scalar(value.represented())
-        case let .int(value):
-            return .scalar(value.represented())
-        case let .double(value):
-            return .scalar(value.represented())
-        case let .bool(value):
-            return .scalar(value.represented())
-        case .null:
-            return .scalar(NSNull().represented())
-        case let .array(values):
-            return Node(values.map(yamlNode(from:)), Tag(.seq))
-        case let .object(object):
-            return Node(orderedKeys(for: object).map { key in
-                (Node(key), yamlNode(from: object[key] ?? .null))
-            }, Tag(.map))
-        }
-    }
-
-    private func orderedKeys(for object: [String: JSONValue]) -> [String] {
-        object.keys.sorted { lhs, rhs in
-            let lhsPriority = keyPriority(lhs)
-            let rhsPriority = keyPriority(rhs)
-            if lhsPriority != rhsPriority {
-                return lhsPriority < rhsPriority
-            }
-            return lhs < rhs
-        }
-    }
-
-    private func keyPriority(_ key: String) -> Int {
-        switch key {
-        case "version":
-            return 0
-        case "actions":
-            return 1
-        case "id":
-            return 0
-        case "tool":
-            return 1
-        case "app":
-            return 2
-        case "target", "from", "to":
-            return 3
-        case "action", "value", "text", "key":
-            return 4
-        case "requires":
-            return 5
-        case "expects":
-            return 6
-        case "observed":
-            return 7
-        case "warnings":
-            return 8
-        default:
-            return 100
-        }
-    }
 }

@@ -55,7 +55,7 @@ For source-checkout development against `.build/debug/axon`, TCC trust can be in
 Two shapes are intended as durable contracts. Changes to either need a deliberate decision, ideally captured in [docs/decision-log.md](docs/decision-log.md):
 
 - **The JSON-RPC socket protocol.** Method names, parameter shapes, and error envelopes. The CLI and MCP facade are both clients of this protocol; downstream tools may be too.
-- **The `.axn` file format.** A `.axn` file is a saved batch — `{ version, actions: [{ tool, ...args }] }`. New tools must keep their batch arguments backward compatible with existing recorded files; removing or renaming a tool breaks playback.
+- **The `.axn` file format.** A `.axn` file is a saved axn artifact — `{ version, actions: [{ tool, ...args }] }`. New tools must keep their axn file arguments backward compatible with existing recorded files; removing or renaming a tool breaks playback.
 
 Implementation details below those two surfaces — the snapshot internals, locator scoring, the observer layer — are free to evolve.
 
@@ -65,7 +65,7 @@ Implementation details below those two surfaces — the snapshot internals, loca
 - Integration tests exercise real AX behavior against fixture apps where possible.
 - Manual smoke tests against Finder, System Settings, and a browser are useful for verifying observer and screenshot behavior.
 
-Add tests with the change. New tools, locator features, and batch behavior should ship with unit coverage against fixture trees.
+Add tests with the change. New tools, locator features, and axn run behavior should ship with unit coverage against fixture trees.
 
 ## Reporting Issues
 

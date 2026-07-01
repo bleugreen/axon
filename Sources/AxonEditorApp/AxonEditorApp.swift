@@ -6,7 +6,7 @@ import UniformTypeIdentifiers
 
 @MainActor
 final class AxonEditorAppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
-    private var editorWindows: [RecipeEditorWindowController] = []
+    private var editorWindows: [AxnEditorWindowController] = []
 
     func applicationWillFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular)
@@ -22,7 +22,7 @@ final class AxonEditorAppDelegate: NSObject, NSApplicationDelegate, @unchecked S
         if let controller = editorWindows.first {
             controller.showWindow(nil)
         } else if !flag {
-            openRecipeFromMenu()
+            openAxnFromMenu()
         }
         return true
     }
@@ -32,12 +32,12 @@ final class AxonEditorAppDelegate: NSObject, NSApplicationDelegate, @unchecked S
     }
 
     func application(_ sender: NSApplication, openFile filename: String) -> Bool {
-        handleRecipeFileOpen(URL(fileURLWithPath: filename))
+        handleAxnFileOpen(URL(fileURLWithPath: filename))
         return true
     }
 
     func application(_ sender: NSApplication, openFiles filenames: [String]) {
-        filenames.forEach { handleRecipeFileOpen(URL(fileURLWithPath: $0)) }
+        filenames.forEach { handleAxnFileOpen(URL(fileURLWithPath: $0)) }
         sender.reply(toOpenOrPrint: .success)
     }
 
@@ -50,7 +50,7 @@ final class AxonEditorAppDelegate: NSObject, NSApplicationDelegate, @unchecked S
                     showAlert(title: "Unable to Open Editor", message: String(describing: error))
                 }
             } else if url.isFileURL {
-                handleRecipeFileOpen(url)
+                handleAxnFileOpen(url)
             }
         }
     }
@@ -70,28 +70,28 @@ final class AxonEditorAppDelegate: NSObject, NSApplicationDelegate, @unchecked S
                 suggestedName: AxonEditorURL.suggestedName(from: url) ?? fileURL.lastPathComponent
             )
         } else {
-            try openRecipeInEditor(url: fileURL)
+            try openAxnInEditor(url: fileURL)
         }
     }
 
-    private func handleRecipeFileOpen(_ url: URL) {
+    private func handleAxnFileOpen(_ url: URL) {
         do {
-            try openRecipeInEditor(url: url)
+            try openAxnInEditor(url: url)
         } catch {
-            showAlert(title: "Unable to Open Recipe", message: String(describing: error))
+            showAlert(title: "Unable to Open .axn File", message: String(describing: error))
         }
     }
 
-    func openRecipeFromMenu() {
+    func openAxnFromMenu() {
         let openPanel = NSOpenPanel()
-        openPanel.title = "Open Axon Recipe"
-        openPanel.allowedContentTypes = [.axonRecipe, UTType(filenameExtension: "axn") ?? .yaml]
+        openPanel.title = "Open .axn File"
+        openPanel.allowedContentTypes = [.axnFile, UTType(filenameExtension: "axn") ?? .yaml]
         openPanel.canChooseDirectories = false
         openPanel.allowsMultipleSelection = false
         guard openPanel.runModal() == .OK, let url = openPanel.url else {
             return
         }
-        handleRecipeFileOpen(url)
+        handleAxnFileOpen(url)
     }
 
     func saveActiveDocument() {
@@ -101,7 +101,7 @@ final class AxonEditorAppDelegate: NSObject, NSApplicationDelegate, @unchecked S
         controller.saveDocument()
     }
 
-    private func activeEditorWindowController() -> RecipeEditorWindowController? {
+    private func activeEditorWindowController() -> AxnEditorWindowController? {
         if let keyWindow = NSApp.keyWindow,
            let controller = editorWindows.first(where: { $0.window === keyWindow }) {
             return controller
@@ -109,9 +109,9 @@ final class AxonEditorAppDelegate: NSObject, NSApplicationDelegate, @unchecked S
         return editorWindows.last
     }
 
-    private func openRecipeInEditor(url: URL) throws {
+    private func openAxnInEditor(url: URL) throws {
         let source = try String(contentsOf: url, encoding: .utf8)
-        try openRecipeSourceInEditor(
+        try openAxnSourceInEditor(
             source,
             fileURL: url,
             review: false,
@@ -122,7 +122,7 @@ final class AxonEditorAppDelegate: NSObject, NSApplicationDelegate, @unchecked S
 
     private func openRecordingReview(fileURL: URL, suggestedName: String) throws {
         let source = try String(contentsOf: fileURL, encoding: .utf8)
-        try openRecipeSourceInEditor(
+        try openAxnSourceInEditor(
             source,
             fileURL: nil,
             review: true,
@@ -131,16 +131,16 @@ final class AxonEditorAppDelegate: NSObject, NSApplicationDelegate, @unchecked S
         )
     }
 
-    private func openRecipeSourceInEditor(
+    private func openAxnSourceInEditor(
         _ source: String,
         fileURL: URL?,
         review: Bool,
         suggestedName: String,
         suggestedDirectory: URL
     ) throws {
-        let recipe = try AxonRecipe(source: source)
+        let axn = try Axn(source: source)
         openEditorWindow(
-            document: AxonDocument(recipe: recipe),
+            document: AxnEditorDocument(axn: axn),
             fileURL: fileURL,
             review: review,
             suggestedName: suggestedName,
@@ -167,13 +167,13 @@ final class AxonEditorAppDelegate: NSObject, NSApplicationDelegate, @unchecked S
     }
 
     private func openEditorWindow(
-        document: AxonDocument,
+        document: AxnEditorDocument,
         fileURL: URL?,
         review: Bool,
         suggestedName: String,
         suggestedDirectory: URL
     ) {
-        let controller = RecipeEditorWindowController(
+        let controller = AxnEditorWindowController(
             document: document,
             fileURL: fileURL,
             review: review,
@@ -190,7 +190,7 @@ final class AxonEditorAppDelegate: NSObject, NSApplicationDelegate, @unchecked S
         NSApp.activate(ignoringOtherApps: true)
     }
 
-    private func requestRecordFromHere(controller: RecipeEditorWindowController, beforeBlockID: String?) {
+    private func requestRecordFromHere(controller: AxnEditorWindowController, beforeBlockID: String?) {
         var params: [String: JSONValue] = [
             "documentId": .string(controller.documentID)
         ]
@@ -203,7 +203,7 @@ final class AxonEditorAppDelegate: NSObject, NSApplicationDelegate, @unchecked S
             do {
                 let response = try SocketClient(
                     path: AxonEnvironment.socketPath(),
-                    responseTimeoutSeconds: SocketClient.defaultBatchResponseTimeoutSeconds
+                    responseTimeoutSeconds: SocketClient.defaultRunResponseTimeoutSeconds
                 ).send(JSONRPCRequest(
                     id: .string("editor.record-from-here"),
                     method: "editor.recordFromHere",
@@ -240,23 +240,23 @@ final class AxonEditorAppDelegate: NSObject, NSApplicationDelegate, @unchecked S
 }
 
 @MainActor
-private final class RecipeEditorWindowController: NSWindowController, NSWindowDelegate {
-    private var axonDocument: AxonDocument
+private final class AxnEditorWindowController: NSWindowController, NSWindowDelegate {
+    private var axonDocument: AxnEditorDocument
     private var fileURL: URL?
     private var review: Bool
     let documentID = UUID().uuidString
     private let suggestedName: String
     private let suggestedDirectory: URL
-    private let onClose: (RecipeEditorWindowController) -> Void
-    var recordFromHere: ((RecipeEditorWindowController, String?) -> Void)?
+    private let onClose: (AxnEditorWindowController) -> Void
+    var recordFromHere: ((AxnEditorWindowController, String?) -> Void)?
 
     init(
-        document: AxonDocument,
+        document: AxnEditorDocument,
         fileURL: URL?,
         review: Bool,
         suggestedName: String,
         suggestedDirectory: URL,
-        onClose: @escaping (RecipeEditorWindowController) -> Void
+        onClose: @escaping (AxnEditorWindowController) -> Void
     ) {
         self.axonDocument = document
         self.fileURL = fileURL
@@ -288,7 +288,7 @@ private final class RecipeEditorWindowController: NSWindowController, NSWindowDe
     private func makeDocumentView() -> DocumentView {
         DocumentView(
             document: Binding(
-                get: { [weak self] in self?.axonDocument ?? AxonDocument() },
+                get: { [weak self] in self?.axonDocument ?? AxnEditorDocument() },
                 set: { [weak self] document in
                     self?.axonDocument = document
                     self?.window?.isDocumentEdited = true
@@ -319,7 +319,7 @@ private final class RecipeEditorWindowController: NSWindowController, NSWindowDe
     func saveDocument() {
         do {
             let targetURL = try saveURL()
-            let source = try axonDocument.recipe.yamlString()
+            let source = try axonDocument.axn.yamlString()
             try source.write(to: targetURL, atomically: true, encoding: .utf8)
             fileURL = targetURL
             review = false
@@ -333,7 +333,7 @@ private final class RecipeEditorWindowController: NSWindowController, NSWindowDe
             return
         } catch {
             let alert = NSAlert()
-            alert.messageText = "Unable to Save Recipe"
+            alert.messageText = "Unable to Save .axn File"
             alert.informativeText = String(describing: error)
             alert.addButton(withTitle: "OK")
             if let window {
@@ -350,10 +350,10 @@ private final class RecipeEditorWindowController: NSWindowController, NSWindowDe
         }
         try FileManager.default.createDirectory(at: suggestedDirectory, withIntermediateDirectories: true)
         let savePanel = NSSavePanel()
-        savePanel.title = review ? "Save Axon Recording" : "Save Axon Recipe"
+        savePanel.title = review ? "Save Axon Recording" : "Save .axn File"
         savePanel.directoryURL = suggestedDirectory
         savePanel.nameFieldStringValue = suggestedName
-        savePanel.allowedContentTypes = [.axonRecipe, UTType(filenameExtension: "axn") ?? .yaml]
+        savePanel.allowedContentTypes = [.axnFile, UTType(filenameExtension: "axn") ?? .yaml]
         savePanel.canCreateDirectories = true
         guard savePanel.runModal() == .OK, let url = savePanel.url else {
             throw CocoaError(.userCancelled)
@@ -362,9 +362,9 @@ private final class RecipeEditorWindowController: NSWindowController, NSWindowDe
     }
 
     func insertRecording(_ source: String, beforeBlockID: String?) throws {
-        let recording = try AxonRecipe(source: source)
-        axonDocument.recipe.insertRecordedBlocks(recording.blocks, beforeBlockID: beforeBlockID)
-        axonDocument.recipe.assignMissingBlockIDs()
+        let recording = try Axn(source: source)
+        axonDocument.axn.insertRecordedBlocks(recording.blocks, beforeBlockID: beforeBlockID)
+        axonDocument.axn.assignMissingBlockIDs()
         window?.isDocumentEdited = true
         window?.title = fileURL?.lastPathComponent ?? "Unsaved Recording"
         if let hostingController = window?.contentViewController as? NSHostingController<DocumentView> {
@@ -387,8 +387,8 @@ struct AxonEditorAppMain: App {
         }
         .commands {
             CommandGroup(replacing: .newItem) {
-                Button("Open Recipe...") {
-                    appDelegate.openRecipeFromMenu()
+                Button("Open .axn File...") {
+                    appDelegate.openAxnFromMenu()
                 }
                 .keyboardShortcut("o", modifiers: [.command])
             }

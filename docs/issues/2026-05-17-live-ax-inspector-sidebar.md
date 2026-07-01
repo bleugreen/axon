@@ -1,6 +1,18 @@
 # Really Good Live AX Inspector Sidebar
 
-Status: Spec. Filed 2026-05-17.
+Status: Open. Filed 2026-05-17. Reconfirmed 2026-05-22.
+
+## 2026-05-22 Conceptual Maintenance Note
+
+This issue remains open. The current editor sidebar is named like a live AX
+tree, but `Sources/AxonEditorApp/Editor/AXTreeInspector.swift` still reads
+through `SocketClient` calls to `look` for the primary tree and `find` for
+acted-on target cues. That means the shipped sidebar is a snapshot-backed
+inspection client, not the direct editor-owned AX instrument specified here.
+
+The corrected contract below is still the desired shape: keep compact
+`look`/snapshot behavior for CLI, MCP, replay, and locator resolution, and build
+a separate inspector session when the editor needs a full live AX surface.
 
 ## Context
 

@@ -1,4 +1,5 @@
 import ApplicationServices
+import AppKit
 import Darwin
 import Foundation
 
@@ -7,6 +8,9 @@ struct AXHierarchyBulkCapture {
     let retainedElements: [AXUIElement]
 
     var looksLikeCompleteAppTree: Bool {
+        // AXUIElementCopyHierarchy can return only menu-bar chrome for some app roots.
+        // Accept bulk app-root capture only when it exposes web content directly or a
+        // substantial non-menu tree; otherwise the caller re-walks dynamically from windows.
         containsRole("AXWebArea") || (nodeCount > 64 && !containsRole("AXMenuBar") && !containsRole("AXMenuItem"))
     }
 
@@ -23,6 +27,12 @@ struct AXHierarchyBulkCapturer {
     private static let maxArrayCount = -1
     private static let maxDepth = -1
     private static let messagingTimeout: Float = 3.0
+    private static let deniedBundleIdentifiers: Set<String> = [
+        // Firefox's app-root bulk hierarchy has produced misleading partial trees in
+        // local captures; its web content is better reached by the dynamic window walk
+        // and scoped web-area bulk captures gated below.
+        "org.mozilla.firefox"
+    ]
 
     private let loader: AXUIElementCopyHierarchyLoader?
     private let includeActions: Bool
@@ -35,6 +45,7 @@ struct AXHierarchyBulkCapturer {
     func capture(appElement: AXUIElement) -> AXHierarchyBulkCapture? {
         guard
             ProcessInfo.processInfo.environment["AXON_DISABLE_BULK_HIERARCHY"] != "1",
+            Self.permitsBulkHierarchy(element: appElement),
             let loader
         else {
             return nil
@@ -65,6 +76,31 @@ struct AXHierarchyBulkCapturer {
             actionProvider = { _ in [] }
         }
         return AXHierarchyBulkParser(actionProvider: actionProvider).parse(hierarchy)
+    }
+
+    static func permitsBulkHierarchy(bundleIdentifier: String?) -> Bool {
+        guard let bundleIdentifier else {
+            return true
+        }
+        return !deniedBundleIdentifiers.contains(bundleIdentifier)
+    }
+
+    private static func permitsBulkHierarchy(element: AXUIElement) -> Bool {
+        guard
+            let processIdentifier = processIdentifier(from: element),
+            let app = NSRunningApplication(processIdentifier: processIdentifier)
+        else {
+            return true
+        }
+        return permitsBulkHierarchy(bundleIdentifier: app.bundleIdentifier)
+    }
+
+    private static func processIdentifier(from element: AXUIElement) -> pid_t? {
+        var processIdentifier: pid_t = 0
+        guard AXUIElementGetPid(element, &processIdentifier) == .success else {
+            return nil
+        }
+        return processIdentifier
     }
 
     private static func actionNames(for object: AnyObject) -> [String] {
@@ -142,9 +178,11 @@ public struct AXFullTreeCapturer {
             name: app.localizedName ?? app.bundleIdentifier ?? "pid \(app.processIdentifier)",
             processIdentifier: app.processIdentifier
         )
-        let capture = AXHierarchyBulkCapturer().capture(appElement: appElement).flatMap { capture in
+        let allowBulkHierarchy = AXHierarchyBulkCapturer.permitsBulkHierarchy(bundleIdentifier: app.bundleIdentifier)
+        let bulkCapture = allowBulkHierarchy ? AXHierarchyBulkCapturer().capture(appElement: appElement).flatMap { capture in
             capture.looksLikeCompleteAppTree ? capture : nil
-        } ?? dynamicCapture(appElement: appElement)
+        } : nil
+        let capture = bulkCapture ?? dynamicCapture(appElement: appElement, allowBulkHierarchy: allowBulkHierarchy)
 
         let encodedScreenshot = screenshot ? screenshotCapturer.capture(app: appIdentity, axWindows: capture.windows) : nil
         let snapshot = AppSnapshot(
@@ -157,11 +195,11 @@ public struct AXFullTreeCapturer {
         return snapshot
     }
 
-    private func dynamicCapture(appElement: AXUIElement) -> AXHierarchyBulkCapture {
+    private func dynamicCapture(appElement: AXUIElement, allowBulkHierarchy: Bool) -> AXHierarchyBulkCapture {
         var retainedElements: [AXUIElement] = []
         let rootElements = dynamicRootElements(from: appElement)
         let windows = rootElements.map { window in
-            scopedWindowNode(element: window, retainedElements: &retainedElements)
+            scopedWindowNode(element: window, retainedElements: &retainedElements, allowBulkHierarchy: allowBulkHierarchy)
         }
         return AXHierarchyBulkCapture(windows: windows, retainedElements: retainedElements)
     }
@@ -190,19 +228,28 @@ public struct AXFullTreeCapturer {
         return result
     }
 
-    private func scopedWindowNode(element: AXUIElement, retainedElements: inout [AXUIElement]) -> AXNode {
+    private func scopedWindowNode(
+        element: AXUIElement,
+        retainedElements: inout [AXUIElement],
+        allowBulkHierarchy: Bool
+    ) -> AXNode {
         AXUIElementSetMessagingTimeout(element, Self.messagingTimeout)
         retainedElements.append(element)
         var subtreeElements: [AXUIElement] = []
-        let webAreas = webAreas(in: element)
-        let webNodes = webAreas.compactMap { webArea -> AXNode? in
-            guard let scoped = AXHierarchyBulkCapturer(includeActions: false).capture(appElement: webArea),
-                  let webNode = scoped.windows.first
-            else {
-                return nil
+        let webNodes: [AXNode]
+        if allowBulkHierarchy {
+            let webAreas = webAreas(in: element)
+            webNodes = webAreas.compactMap { webArea -> AXNode? in
+                guard let scoped = AXHierarchyBulkCapturer(includeActions: false).capture(appElement: webArea),
+                      let webNode = scoped.windows.first
+                else {
+                    return nil
+                }
+                subtreeElements.append(contentsOf: scoped.retainedElements)
+                return webNode.withInferredActions()
             }
-            subtreeElements.append(contentsOf: scoped.retainedElements)
-            return webNode.withInferredActions()
+        } else {
+            webNodes = []
         }
         if !webNodes.isEmpty {
             retainedElements.append(contentsOf: subtreeElements)

@@ -27,7 +27,7 @@ enum EditorSidebarLayer: String, CaseIterable {
 struct EditorSidebar: View {
     let appName: String?
     let actedOnTarget: JSONValue?
-    @Binding var args: [AxonRecipeArgument]
+    @Binding var args: [AxnArgument]
     @Binding var selectedIndex: Int?
     @Binding var selectedLayer: EditorSidebarLayer
     let treeRefreshToken: Int
@@ -43,7 +43,7 @@ struct EditorSidebar: View {
                                 .font(.title3.weight(.semibold))
                                 .lineLimit(1)
                         }
-                        Text("Recipe")
+                        Text(".axn")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
@@ -66,7 +66,7 @@ struct EditorSidebar: View {
                         }
                         .buttonStyle(.borderless)
                         .help(layer.title)
-                        .foregroundStyle(selectedLayer == layer ? RecipeEditorPalette.debugCursor : .secondary)
+                        .foregroundStyle(selectedLayer == layer ? AxnEditorPalette.debugCursor : .secondary)
                     }
                     Spacer()
                 }
@@ -79,17 +79,17 @@ struct EditorSidebar: View {
 
             switch selectedLayer {
             case .inputs:
-                RecipeInputsSidebar(args: $args, selectedIndex: $selectedIndex)
+                AxnInputsSidebar(args: $args, selectedIndex: $selectedIndex)
             case .tree:
                 AXTreeInspector(appName: appName, actedOnTarget: actedOnTarget, refreshToken: treeRefreshToken)
             }
         }
-        .background(RecipeEditorPalette.sidebarBackground)
+        .background(AxnEditorPalette.sidebarBackground)
     }
 }
 
-private struct RecipeInputsSidebar: View {
-    @Binding var args: [AxonRecipeArgument]
+private struct AxnInputsSidebar: View {
+    @Binding var args: [AxnArgument]
     @Binding var selectedIndex: Int?
 
     var body: some View {
@@ -99,7 +99,7 @@ private struct RecipeInputsSidebar: View {
                     .font(.headline)
                 Spacer()
                 Button {
-                    args.append(AxonRecipeArgument(fields: [
+                    args.append(AxnArgument(fields: [
                         "name": .string("new_input"),
                         "type": .string("string")
                     ]))
@@ -156,7 +156,7 @@ private struct RecipeInputsSidebar: View {
 }
 
 private struct ParameterRow: View {
-    let arg: AxonRecipeArgument
+    let arg: AxnArgument
 
     var body: some View {
         HStack(alignment: .firstTextBaseline, spacing: 10) {
@@ -182,28 +182,28 @@ private struct ParameterRow: View {
                 .font(.caption.weight(.medium))
                 .padding(.horizontal, 7)
                 .padding(.vertical, 3)
-                .background(Capsule().fill(RecipeEditorPalette.pillBackground))
+                .background(Capsule().fill(AxnEditorPalette.pillBackground))
                 .foregroundStyle(.secondary)
         }
         .padding(.horizontal, 10)
         .padding(.vertical, 10)
         .background(
             RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(RecipeEditorPalette.quietFill)
+                .fill(AxnEditorPalette.quietFill)
         )
         .contentShape(Rectangle())
     }
 }
 
 private struct ParameterEditor: View {
-    @Binding var arg: AxonRecipeArgument
+    @Binding var arg: AxnArgument
     let done: () -> Void
     let delete: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .top, spacing: 10) {
-                RecipeTextField(label: "Name", value: field("name"))
+                AxnTextField(label: "Name", value: field("name"))
                 Button(action: done) {
                     Label("Done", systemImage: "xmark")
                         .labelStyle(.iconOnly)
@@ -219,18 +219,18 @@ private struct ParameterEditor: View {
                 .help("Delete input")
                 .padding(.top, 20)
             }
-            RecipePickerField(label: "Type", value: field("type"), options: ["string", "number", "bool", "path", "email", "secret"])
-            RecipeTextField(label: "Description", value: field("description"))
-            RecipeTextField(label: "Default", value: field("default"))
+            AxnPickerField(label: "Type", value: field("type"), options: ["string", "number", "bool", "path", "email", "secret"])
+            AxnTextField(label: "Description", value: field("description"))
+            AxnTextField(label: "Default", value: field("default"))
             if arg.fields["source"] != nil {
-                RecipeTextField(label: "Source", value: field("source"))
+                AxnTextField(label: "Source", value: field("source"))
             }
         }
         .padding(12)
-        .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(RecipeEditorPalette.selectionFill))
+        .background(RoundedRectangle(cornerRadius: 8, style: .continuous).fill(AxnEditorPalette.selectionFill))
         .overlay(
             RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .stroke(RecipeEditorPalette.selectionStroke, lineWidth: 1)
+                .stroke(AxnEditorPalette.selectionStroke, lineWidth: 1)
         )
     }
 
@@ -270,11 +270,11 @@ struct SidebarRevealRail: View {
                     .labelStyle(.iconOnly)
             }
             .buttonStyle(.borderless)
-            .help("Show live AX tree")
+            .help("Show AX tree")
 
             Spacer()
         }
         .frame(width: 42)
-        .background(RecipeEditorPalette.sidebarBackground)
+        .background(AxnEditorPalette.sidebarBackground)
     }
 }

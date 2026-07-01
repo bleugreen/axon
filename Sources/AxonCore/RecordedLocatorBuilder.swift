@@ -49,7 +49,7 @@ public enum RecordedLocatorBuilder {
         if let title, !title.isEmpty {
             locator["title"] = .string(title)
         }
-        if let value, !value.isEmpty {
+        if let value, !value.isEmpty, !AXRoleSemantics.isEditableTextRole(role) {
             locator["value"] = .string(value)
         }
         if let description, !description.isEmpty {
@@ -96,6 +96,9 @@ public enum RecordedLocatorBuilder {
     }
 
     private static func serializedAncestor(_ ancestor: RecordedAncestorCandidate) -> JSONValue? {
+        guard ancestor.role != "AXApplication" else {
+            return nil
+        }
         var object: [String: JSONValue] = ["role": .string(ancestor.role)]
         if ancestor.role != "AXWindow", let subrole = ancestor.subrole, !subrole.isEmpty {
             object["subrole"] = .string(subrole)

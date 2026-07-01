@@ -4,7 +4,7 @@ import Testing
 
 @Test func runExecutesToolShapedActionsInOrder() {
     var requests: [JSONRPCRequest] = []
-    let executor = ActionBatchExecutor { request in
+    let executor = AxnRunner { request in
         requests.append(request)
         return JSONRPCResponse(id: request.id, result: [
             "action": .object([
@@ -37,7 +37,7 @@ import Testing
 
 @Test func runStripsVerificationMetadataBeforeDispatch() {
     var requests: [JSONRPCRequest] = []
-    let executor = ActionBatchExecutor { request in
+    let executor = AxnRunner { request in
         requests.append(request)
         return JSONRPCResponse(id: request.id, result: ["action": .object(["success": .bool(true)])])
     }
@@ -68,7 +68,7 @@ import Testing
 
 @Test func runFailsWhenPrimitiveActionReportsFailure() {
     var requests: [JSONRPCRequest] = []
-    let executor = ActionBatchExecutor { request in
+    let executor = AxnRunner { request in
         requests.append(request)
         return JSONRPCResponse(id: request.id, result: [
             "action": .object([
@@ -108,7 +108,7 @@ import Testing
         changeFactSnapshot(title: "After")
     ]
     var requests: [JSONRPCRequest] = []
-    let executor = ActionBatchExecutor(
+    let executor = AxnRunner(
         commandHandler: { request in
             requests.append(request)
             return JSONRPCResponse(id: request.id, result: ["action": .object(["success": .bool(true)])])
@@ -150,7 +150,7 @@ import Testing
     let surface = scrollSurfaceTarget()
     let link = articleLinkTarget()
     var requests: [JSONRPCRequest] = []
-    let executor = ActionBatchExecutor(
+    let executor = AxnRunner(
         commandHandler: { request in
             requests.append(request)
             return JSONRPCResponse(id: request.id, result: ["action": .object(["success": .bool(true)])])
@@ -183,7 +183,7 @@ import Testing
 @Test func runTreatsRevealResolutionAsDispatchMetadata() {
     let link = articleLinkTarget()
     var requests: [JSONRPCRequest] = []
-    let executor = ActionBatchExecutor(
+    let executor = AxnRunner(
         commandHandler: { request in
             requests.append(request)
             return JSONRPCResponse(id: request.id, result: ["action": .object(["success": .bool(true)])])
@@ -211,7 +211,7 @@ import Testing
 
 @Test func runVerifiesExpectedFactAndLaterRequirement() {
     var requests: [JSONRPCRequest] = []
-    let executor = ActionBatchExecutor(
+    let executor = AxnRunner(
         commandHandler: { request in
             requests.append(request)
             return JSONRPCResponse(id: request.id, result: ["action": .object(["success": .bool(true)])])
@@ -263,7 +263,7 @@ import Testing
 
 @Test func runAllowsRecordedValueContainmentFacts() {
     var requests: [JSONRPCRequest] = []
-    let executor = ActionBatchExecutor(
+    let executor = AxnRunner(
         commandHandler: { request in
             requests.append(request)
             return JSONRPCResponse(id: request.id, result: ["action": .object(["success": .bool(true)])])
@@ -314,7 +314,7 @@ import Testing
 @Test func runStopsWhenRequiredFactNoLongerVerifies() {
     var snapshotReads = 0
     var requests: [JSONRPCRequest] = []
-    let executor = ActionBatchExecutor(
+    let executor = AxnRunner(
         commandHandler: { request in
             requests.append(request)
             return JSONRPCResponse(id: request.id, result: ["action": .object(["success": .bool(true)])])
@@ -366,7 +366,7 @@ import Testing
 
 @Test func runStopsOnFirstFailureByDefault() {
     var requests: [JSONRPCRequest] = []
-    let executor = ActionBatchExecutor { request in
+    let executor = AxnRunner { request in
         requests.append(request)
         return JSONRPCResponse(id: request.id, error: .invalidParams("bad target"))
     }
@@ -481,7 +481,7 @@ private func articleSnapshot(children: [AXNode]) -> AppSnapshot {
 
 @Test func runCanContinueOnError() {
     var requests: [JSONRPCRequest] = []
-    let executor = ActionBatchExecutor { request in
+    let executor = AxnRunner { request in
         requests.append(request)
         if requests.count == 1 {
             return JSONRPCResponse(id: request.id, error: .invalidParams("bad target"))
@@ -502,9 +502,54 @@ private func articleSnapshot(children: [AXNode]) -> AppSnapshot {
     #expect(requests.count == 2)
 }
 
+@Test func runUsesTypedAxnForFileLevelOptionsAndInlineAppend() throws {
+    var requests: [JSONRPCRequest] = []
+    let executor = AxnRunner { request in
+        requests.append(request)
+        if request.method == "click" {
+            return JSONRPCResponse(id: request.id, error: .invalidParams("blocked"))
+        }
+        return JSONRPCResponse(id: request.id, result: ["action": .object(["success": .bool(true)])])
+    }
+
+    let source = """
+    version: 1
+    dryRun: false
+    continueOnError: true
+    owner: local-test
+    actions:
+      - id: note-1
+        note: Preserved in the typed model, skipped by the runner
+      - id: a001
+        tool: keyboard
+        app: Firefox
+        keys: Return
+    """
+    let path = try temporaryAxnFile(source)
+    defer { try? FileManager.default.removeItem(atPath: path) }
+
+    let result = try executor.run(params: [
+        "path": .string(path),
+        "actions": .array([
+            .object([
+                "id": .string("a002"),
+                "tool": .string("click"),
+                "target": .string("s1:2")
+            ])
+        ])
+    ])
+
+    #expect(result["success"] == .bool(false))
+    #expect(result["continueOnError"] == .bool(true))
+    #expect(result["trace"]?.arrayValue?.count == 2)
+    #expect(result["trace"]?[0]?["index"] == .int(1))
+    #expect(result["trace"]?[1]?["index"] == .int(2))
+    #expect(requests.map(\.method) == ["keyboard", "click"])
+}
+
 @Test func runLoadsPathAndAppendsInlineActions() throws {
     var requests: [JSONRPCRequest] = []
-    let executor = ActionBatchExecutor { request in
+    let executor = AxnRunner { request in
         requests.append(request)
         return JSONRPCResponse(id: request.id, result: ["action": .object(["success": .bool(true)])])
     }
@@ -535,7 +580,7 @@ private func articleSnapshot(children: [AXNode]) -> AppSnapshot {
     #expect(batch["success"] == .bool(true))
     #expect(requests == [
         JSONRPCRequest(
-            id: .string("batch.0.keyboard"),
+            id: .string("run.0.keyboard"),
             method: "keyboard",
             params: .object([
                 "app": .string("Firefox"),
@@ -543,7 +588,7 @@ private func articleSnapshot(children: [AXNode]) -> AppSnapshot {
             ])
         ),
         JSONRPCRequest(
-            id: .string("batch.1.click"),
+            id: .string("run.1.click"),
             method: "click",
             params: .object([
                 "target": .string("s1:2")
@@ -554,7 +599,7 @@ private func articleSnapshot(children: [AXNode]) -> AppSnapshot {
 
 @Test func runSubstitutesCallerArgumentsIntoActionValues() throws {
     var requests: [JSONRPCRequest] = []
-    let executor = ActionBatchExecutor { request in
+    let executor = AxnRunner { request in
         requests.append(request)
         return JSONRPCResponse(id: request.id, result: ["action": .object(["success": .bool(true)])])
     }
@@ -582,41 +627,9 @@ private func articleSnapshot(children: [AXNode]) -> AppSnapshot {
     #expect(requests[0].params?["value"] == .string("Hello mitch@example.com"))
 }
 
-@Test func runRejectsImpossibleISODateBeforeDispatch() throws {
-    var requests: [JSONRPCRequest] = []
-    let executor = ActionBatchExecutor { request in
-        requests.append(request)
-        return JSONRPCResponse(id: request.id, result: ["action": .object(["success": .bool(true)])])
-    }
-
-    let source = """
-    version: 1
-    args:
-      - name: report_date
-        type: date
-    actions:
-      - tool: type
-        target: s1:2
-        value: "{{report_date}}"
-    """
-    let path = try temporaryAxnFile(source)
-    defer { try? FileManager.default.removeItem(atPath: path) }
-
-    do {
-        _ = try executor.run(params: [
-            "path": .string(path),
-            "argValues": .object(["report_date": .string("2026-02-30")])
-        ])
-        Issue.record("impossible ISO-shaped date should fail before dispatch")
-    } catch let error as ActionBatchError {
-        #expect(error.description == "arg report_date must be an ISO date, today, or yesterday")
-    }
-    #expect(requests.isEmpty)
-}
-
 @Test func runFailsBeforeDispatchWhenRequiredArgumentIsMissing() throws {
     var requests: [JSONRPCRequest] = []
-    let executor = ActionBatchExecutor { request in
+    let executor = AxnRunner { request in
         requests.append(request)
         return JSONRPCResponse(id: request.id, result: ["action": .object(["success": .bool(true)])])
     }
@@ -637,7 +650,7 @@ private func articleSnapshot(children: [AXNode]) -> AppSnapshot {
     do {
         _ = try executor.run(params: ["path": .string(path)])
         Issue.record("missing required argument should fail")
-    } catch let error as ActionBatchError {
+    } catch let error as AxnRunError {
         #expect(error.description == "missing required arg: recipient")
     }
     #expect(requests.isEmpty)
@@ -645,7 +658,7 @@ private func articleSnapshot(children: [AXNode]) -> AppSnapshot {
 
 @Test func runRejectsUndeclaredParameterReferencesBeforeDispatch() throws {
     var requests: [JSONRPCRequest] = []
-    let executor = ActionBatchExecutor { request in
+    let executor = AxnRunner { request in
         requests.append(request)
         return JSONRPCResponse(id: request.id, result: ["action": .object(["success": .bool(true)])])
     }
@@ -663,7 +676,7 @@ private func articleSnapshot(children: [AXNode]) -> AppSnapshot {
     do {
         _ = try executor.run(params: ["path": .string(path)])
         Issue.record("undeclared parameter reference should fail")
-    } catch let error as ActionBatchError {
+    } catch let error as AxnRunError {
         #expect(error.description == "undeclared arg reference: recipient")
     }
     #expect(requests.isEmpty)
@@ -671,7 +684,7 @@ private func articleSnapshot(children: [AXNode]) -> AppSnapshot {
 
 @Test func runRejectsInlineSourceReferencesBeforeDispatch() throws {
     var requests: [JSONRPCRequest] = []
-    let executor = ActionBatchExecutor { request in
+    let executor = AxnRunner { request in
         requests.append(request)
         return JSONRPCResponse(id: request.id, result: ["action": .object(["success": .bool(true)])])
     }
@@ -689,7 +702,7 @@ private func articleSnapshot(children: [AXNode]) -> AppSnapshot {
     do {
         _ = try executor.run(params: ["path": .string(path)])
         Issue.record("inline source reference should fail")
-    } catch let error as ActionBatchError {
+    } catch let error as AxnRunError {
         #expect(error.description == "invalid arg reference syntax: {{env://HOME}}")
     }
     #expect(requests.isEmpty)
@@ -697,7 +710,7 @@ private func articleSnapshot(children: [AXNode]) -> AppSnapshot {
 
 @Test func runResolvesDeclaredSourceArguments() throws {
     var requests: [JSONRPCRequest] = []
-    let executor = ActionBatchExecutor(
+    let executor = AxnRunner(
         commandHandler: { request in
             requests.append(request)
             return JSONRPCResponse(id: request.id, result: ["action": .object(["success": .bool(true)])])
@@ -732,7 +745,7 @@ private func articleSnapshot(children: [AXNode]) -> AppSnapshot {
 
 @Test func runRejectsCallerOverrideForSourcedArgument() throws {
     var requests: [JSONRPCRequest] = []
-    let executor = ActionBatchExecutor(
+    let executor = AxnRunner(
         commandHandler: { request in
             requests.append(request)
             return JSONRPCResponse(id: request.id, result: ["action": .object(["success": .bool(true)])])
@@ -762,7 +775,7 @@ private func articleSnapshot(children: [AXNode]) -> AppSnapshot {
             "argValues": .object(["token": .string("from-caller")])
         ])
         Issue.record("caller arg should not override a sourced arg")
-    } catch let error as ActionBatchError {
+    } catch let error as AxnRunError {
         #expect(error.description == "caller arg cannot override sourced arg: token")
     }
     #expect(requests.isEmpty)
@@ -770,7 +783,7 @@ private func articleSnapshot(children: [AXNode]) -> AppSnapshot {
 
 @Test func runRedactsSecretTaintedDryRunParams() throws {
     var requests: [JSONRPCRequest] = []
-    let executor = ActionBatchExecutor { request in
+    let executor = AxnRunner { request in
         requests.append(request)
         return JSONRPCResponse(id: request.id, result: ["action": .object(["success": .bool(true)])])
     }
@@ -800,7 +813,7 @@ private func articleSnapshot(children: [AXNode]) -> AppSnapshot {
 }
 
 @Test func runRedactsSecretTaintedTraceResults() throws {
-    let executor = ActionBatchExecutor { request in
+    let executor = AxnRunner { request in
         JSONRPCResponse(id: request.id, result: [
             "action": .object([
                 "success": .bool(true),
@@ -832,7 +845,7 @@ private func articleSnapshot(children: [AXNode]) -> AppSnapshot {
 }
 
 @Test func runRedactsSecretTaintedJSONRPCErrors() throws {
-    let executor = ActionBatchExecutor { request in
+    let executor = AxnRunner { request in
         let value = request.params?["value"]?.stringValue ?? "missing"
         return JSONRPCResponse(id: request.id, error: .invalidParams("failed with \(value)"))
     }
@@ -859,98 +872,9 @@ private func articleSnapshot(children: [AXNode]) -> AppSnapshot {
     #expect(batch["trace"]?[0]?["error"] == .string("<redacted: contains-secret>"))
 }
 
-@Test func runKeepsSecretTaintScopedAcrossContinueOnError() throws {
-    var requests: [JSONRPCRequest] = []
-    let executor = ActionBatchExecutor { request in
-        requests.append(request)
-        if request.method == "type" {
-            let value = request.params?["value"]?.stringValue ?? "missing"
-            return JSONRPCResponse(id: request.id, error: .invalidParams("failed with \(value)"))
-        }
-        return JSONRPCResponse(id: request.id, result: [
-            "action": .object([
-                "success": .bool(true),
-                "target": request.params?["target"] ?? .null
-            ])
-        ])
-    }
-
-    let source = """
-    version: 1
-    args:
-      - name: password
-        type: secret
-    actions:
-      - tool: type
-        target: s1:2
-        value: "{{password}}"
-      - tool: click
-        target: s1:3
-    """
-    let path = try temporaryAxnFile(source)
-    defer { try? FileManager.default.removeItem(atPath: path) }
-
-    let batch = try executor.run(params: [
-        "path": .string(path),
-        "continueOnError": .bool(true),
-        "argValues": .object(["password": .string("s3cr3t!")])
-    ])
-
-    #expect(batch["success"] == .bool(false))
-    #expect(batch["trace"]?[0]?["success"] == .bool(false))
-    #expect(batch["trace"]?[0]?["error"] == .string("<redacted: contains-secret>"))
-    #expect(batch["trace"]?[1]?["success"] == .bool(true))
-    #expect(batch["trace"]?[1]?["result"]?["target"] == .string("s1:3"))
-    #expect(requests.map(\.method) == ["type", "click"])
-    #expect(requests[0].params?["value"] == .string("s3cr3t!"))
-}
-
-@Test func runAppendedActionsShareDeclaredArgumentsAndSecretTaint() throws {
-    var requests: [JSONRPCRequest] = []
-    let executor = ActionBatchExecutor { request in
-        requests.append(request)
-        return JSONRPCResponse(id: request.id, result: [
-            "action": .object([
-                "success": .bool(true),
-                "echo": request.params ?? .null
-            ])
-        ])
-    }
-
-    let source = """
-    version: 1
-    args:
-      - name: password
-        type: secret
-    actions:
-      - tool: click
-        target: s1:1
-    """
-    let path = try temporaryAxnFile(source)
-    defer { try? FileManager.default.removeItem(atPath: path) }
-
-    let batch = try executor.run(params: [
-        "path": .string(path),
-        "actions": .array([
-            .object([
-                "tool": .string("type"),
-                "target": .string("s1:2"),
-                "value": .string("pw={{password}}")
-            ])
-        ]),
-        "argValues": .object(["password": .string("s3cr3t!")])
-    ])
-
-    #expect(batch["success"] == .bool(true))
-    #expect(requests.map(\.method) == ["click", "type"])
-    #expect(requests[1].params?["value"] == .string("pw=s3cr3t!"))
-    #expect(batch["trace"]?[0]?["result"]?["echo"]?["target"] == .string("s1:1"))
-    #expect(batch["trace"]?[1]?["result"] == .string("<redacted: contains-secret>"))
-}
-
 @Test func runRejectsParameterReferencesInNonStringValueFieldsBeforeDispatch() throws {
     var requests: [JSONRPCRequest] = []
-    let executor = ActionBatchExecutor { request in
+    let executor = AxnRunner { request in
         requests.append(request)
         return JSONRPCResponse(id: request.id, result: ["action": .object(["success": .bool(true)])])
     }
@@ -975,7 +899,7 @@ private func articleSnapshot(children: [AXNode]) -> AppSnapshot {
             "argValues": .object(["recipient": .string("Ada")])
         ])
         Issue.record("non-string value parameter reference should fail before dispatch")
-    } catch let error as ActionBatchError {
+    } catch let error as AxnRunError {
         #expect(error.description == "parameter references are only supported in string value fields: actions[0].value")
     }
     #expect(requests.isEmpty)
@@ -1005,16 +929,16 @@ private func articleSnapshot(children: [AXNode]) -> AppSnapshot {
     #expect(clicked == ["s1:2"])
 }
 
-@Test func commandRouterRunsBatchFactsThroughBatchSnapshotProvider() {
+@Test func commandRouterRunsFactsThroughAxnSnapshotProvider() {
     var types: [(String, String)] = []
-    var batchSnapshotApps: [String] = []
+    var axnSnapshotApps: [String] = []
     let router = CommandRouter(
         captureSnapshot: { _, _ in
-            Issue.record("batch fact verification should not use compact snapshot capture")
+            Issue.record("Axn fact verification should not use compact snapshot capture")
             return valueFactSnapshot(value: "Wrong")
         },
-        batchSnapshotProvider: { app in
-            batchSnapshotApps.append(app)
+        axnSnapshotProvider: { app in
+            axnSnapshotApps.append(app)
             return valueFactSnapshot(value: "Mitch")
         },
         actions: PrimitiveActionHandlers(
@@ -1059,7 +983,7 @@ private func articleSnapshot(children: [AXNode]) -> AppSnapshot {
     #expect(response.error == nil)
     #expect(response.result?["batch"]?["success"] == .bool(true))
     #expect(types.count == 1)
-    #expect(batchSnapshotApps == ["Example"])
+    #expect(axnSnapshotApps == ["Example"])
 }
 
 @Test func commandRouterDebugStartPausesBeforeSelectedBlock() {
@@ -1266,7 +1190,7 @@ private func articleSnapshot(children: [AXNode]) -> AppSnapshot {
 @Test func commandRouterDebugStartCapturesSnapshotForPauseBefore() {
     var snapshotApps: [String] = []
     let router = CommandRouter(
-        batchSnapshotProvider: { app in
+        axnSnapshotProvider: { app in
             snapshotApps.append(app)
             return debugPauseSnapshot(id: "pause-snapshot", app: app)
         },
@@ -1299,51 +1223,10 @@ private func articleSnapshot(children: [AXNode]) -> AppSnapshot {
     #expect(snapshotApps == ["Example"])
 }
 
-@Test func commandRouterDebugPauseSnapshotRedactsActiveCredentials() throws {
-    let secret = "correct horse battery staple"
-    let router = CommandRouter(
-        batchSnapshotProvider: { app in
-            AppSnapshot(
-                id: SnapshotID("debug-redaction"),
-                app: AppIdentity(bundleIdentifier: "com.example.App", name: app, processIdentifier: 42),
-                windows: [
-                    AXNode(role: "AXWindow", title: "Main", children: [
-                        AXNode(role: "AXTextField", value: secret)
-                    ])
-                ],
-                screenshot: nil
-            )
-        },
-        actions: PrimitiveActionHandlers(),
-        activeCredentialFilter: try actionBatchActiveCredentialFilter(values: [secret])
-    )
-
-    let response = router.handle(JSONRPCRequest(
-        id: .string("debug-start"),
-        method: "debug.start",
-        params: .object([
-            "pauseBefore": .string("a001"),
-            "actions": .array([
-                .object([
-                    "id": .string("a001"),
-                    "tool": .string("click"),
-                    "app": .string("Example"),
-                    "target": .string("s1:1")
-                ])
-            ])
-        ])
-    ))
-    let encoded = String(decoding: try JSONEncoder().encode(JSONValue.object(response.result ?? [:])), as: UTF8.self)
-
-    #expect(response.error == nil)
-    #expect(encoded.contains(secret) == false)
-    #expect(encoded.contains("<redacted: active-credential>") == true)
-}
-
 @Test func commandRouterDebugStepDoesNotCaptureSnapshotForOrdinaryStepPause() {
     var snapshotApps: [String] = []
     let router = CommandRouter(
-        batchSnapshotProvider: { app in
+        axnSnapshotProvider: { app in
             snapshotApps.append(app)
             return debugPauseSnapshot(id: "unexpected", app: app)
         },
@@ -1451,7 +1334,7 @@ private func articleSnapshot(children: [AXNode]) -> AppSnapshot {
 @Test func commandRouterDebugContinueCapturesSnapshotAtBreakpoint() {
     var snapshotApps: [String] = []
     let router = CommandRouter(
-        batchSnapshotProvider: { app in
+        axnSnapshotProvider: { app in
             snapshotApps.append(app)
             return debugPauseSnapshot(id: "breakpoint-snapshot", app: app)
         },
@@ -1557,7 +1440,7 @@ private func articleSnapshot(children: [AXNode]) -> AppSnapshot {
     var attempts = 0
     var snapshotApps: [String] = []
     let router = CommandRouter(
-        batchSnapshotProvider: { app in
+        axnSnapshotProvider: { app in
             let id = "failure-snapshot-\(snapshotApps.count + 1)"
             snapshotApps.append(app)
             return debugPauseSnapshot(id: id, app: app)
@@ -1621,7 +1504,7 @@ private func articleSnapshot(children: [AXNode]) -> AppSnapshot {
 
 @Test func runSkipsFirstClassNoteBlocks() throws {
     var requests: [JSONRPCRequest] = []
-    let executor = ActionBatchExecutor { request in
+    let executor = AxnRunner { request in
         requests.append(request)
         return JSONRPCResponse(id: request.id, result: ["action": .object(["success": .bool(true)])])
     }
@@ -1657,7 +1540,7 @@ private func articleSnapshot(children: [AXNode]) -> AppSnapshot {
 
     for name in ["open-menu.yaml", "read-and-click.yaml", "scroll.yaml"] {
         let source = try String(contentsOf: examplesDirectory.appendingPathComponent(name), encoding: .utf8)
-        let batch = try ActionBatchExecutor.parseSource(source)
+        let batch = try AxnRunner.parseSource(source)
         guard case let .array(actions)? = batch["actions"] else {
             Issue.record("Batch \(name) is missing actions array")
             continue
@@ -1693,10 +1576,172 @@ private func temporaryAxnFile(_ source: String) throws -> String {
     return path
 }
 
-private func actionBatchActiveCredentialFilter(values: [String]) throws -> ActiveCredentialIndex {
+@Test func runRejectsImpossibleISODateBeforeDispatch() throws {
+    var requests: [JSONRPCRequest] = []
+    let runner = AxnRunner { request in
+        requests.append(request)
+        return JSONRPCResponse(id: request.id, result: ["action": .object(["success": .bool(true)])])
+    }
+
+    let source = """
+    version: 1
+    args:
+      - name: report_date
+        type: date
+    actions:
+      - tool: type
+        target: s1:2
+        value: "{{report_date}}"
+    """
+    let path = try temporaryAxnFile(source)
+    defer { try? FileManager.default.removeItem(atPath: path) }
+
+    do {
+        _ = try runner.run(params: [
+            "path": .string(path),
+            "argValues": .object(["report_date": .string("2026-02-30")])
+        ])
+        Issue.record("impossible ISO-shaped date should fail before dispatch")
+    } catch let error as AxnRunError {
+        #expect(error.description == "arg report_date must be an ISO date, today, or yesterday")
+    }
+    #expect(requests.isEmpty)
+}
+
+@Test func runKeepsSecretTaintScopedAcrossContinueOnError() throws {
+    var requests: [JSONRPCRequest] = []
+    let runner = AxnRunner { request in
+        requests.append(request)
+        if request.method == "type" {
+            let value = request.params?["value"]?.stringValue ?? "missing"
+            return JSONRPCResponse(id: request.id, error: .invalidParams("failed with \(value)"))
+        }
+        return JSONRPCResponse(id: request.id, result: [
+            "action": .object([
+                "success": .bool(true),
+                "target": request.params?["target"] ?? .null
+            ])
+        ])
+    }
+
+    let source = """
+    version: 1
+    args:
+      - name: password
+        type: secret
+    actions:
+      - tool: type
+        target: s1:2
+        value: "{{password}}"
+      - tool: click
+        target: s1:3
+    """
+    let path = try temporaryAxnFile(source)
+    defer { try? FileManager.default.removeItem(atPath: path) }
+
+    let result = try runner.run(params: [
+        "path": .string(path),
+        "continueOnError": .bool(true),
+        "argValues": .object(["password": .string("s3cr3t!")])
+    ])
+
+    #expect(result["success"] == .bool(false))
+    #expect(result["trace"]?[0]?["success"] == .bool(false))
+    #expect(result["trace"]?[0]?["error"] == .string("<redacted: contains-secret>"))
+    #expect(result["trace"]?[1]?["success"] == .bool(true))
+    #expect(result["trace"]?[1]?["result"]?["target"] == .string("s1:3"))
+    #expect(requests.map(\.method) == ["type", "click"])
+    #expect(requests[0].params?["value"] == .string("s3cr3t!"))
+}
+
+@Test func runAppendedActionsShareDeclaredArgumentsAndSecretTaint() throws {
+    var requests: [JSONRPCRequest] = []
+    let runner = AxnRunner { request in
+        requests.append(request)
+        return JSONRPCResponse(id: request.id, result: [
+            "action": .object([
+                "success": .bool(true),
+                "echo": request.params ?? .null
+            ])
+        ])
+    }
+
+    let source = """
+    version: 1
+    args:
+      - name: password
+        type: secret
+    actions:
+      - tool: click
+        target: s1:1
+    """
+    let path = try temporaryAxnFile(source)
+    defer { try? FileManager.default.removeItem(atPath: path) }
+
+    let result = try runner.run(params: [
+        "path": .string(path),
+        "actions": .array([
+            .object([
+                "tool": .string("type"),
+                "target": .string("s1:2"),
+                "value": .string("pw={{password}}")
+            ])
+        ]),
+        "argValues": .object(["password": .string("s3cr3t!")])
+    ])
+
+    #expect(result["success"] == .bool(true))
+    #expect(requests.map(\.method) == ["click", "type"])
+    #expect(requests[1].params?["value"] == .string("pw=s3cr3t!"))
+    #expect(result["trace"]?[0]?["result"]?["echo"]?["target"] == .string("s1:1"))
+    #expect(result["trace"]?[1]?["result"] == .string("<redacted: contains-secret>"))
+}
+
+@Test func commandRouterDebugPauseSnapshotRedactsActiveCredentials() throws {
+    let secret = "correct horse battery staple"
+    let router = CommandRouter(
+        axnSnapshotProvider: { app in
+            AppSnapshot(
+                id: SnapshotID("debug-redaction"),
+                app: AppIdentity(bundleIdentifier: "com.example.App", name: app, processIdentifier: 42),
+                windows: [
+                    AXNode(role: "AXWindow", title: "Main", children: [
+                        AXNode(role: "AXTextField", value: secret)
+                    ])
+                ],
+                screenshot: nil
+            )
+        },
+        actions: PrimitiveActionHandlers(),
+        activeCredentialFilter: try axnActiveCredentialFilter(values: [secret])
+    )
+
+    let response = router.handle(JSONRPCRequest(
+        id: .string("debug-start"),
+        method: "debug.start",
+        params: .object([
+            "pauseBefore": .string("a001"),
+            "actions": .array([
+                .object([
+                    "id": .string("a001"),
+                    "tool": .string("click"),
+                    "app": .string("Example"),
+                    "target": .string("s1:1")
+                ])
+            ])
+        ])
+    ))
+    let encoded = String(decoding: try JSONEncoder().encode(JSONValue.object(response.result ?? [:])), as: UTF8.self)
+
+    #expect(response.error == nil)
+    #expect(encoded.contains(secret) == false)
+    #expect(encoded.contains("<redacted: active-credential>") == true)
+}
+
+private func axnActiveCredentialFilter(values: [String]) throws -> ActiveCredentialIndex {
     try ActiveCredentialIndex(
         secrets: values.map {
-            ActiveCredentialSecret(value: $0, provider: "test", reference: "op://Batch/Active/secret")
+            ActiveCredentialSecret(value: $0, provider: "test", reference: "op://Axn/Active/secret")
         },
         hmacKey: Data(repeating: 0x3C, count: 32),
         provider: "test",

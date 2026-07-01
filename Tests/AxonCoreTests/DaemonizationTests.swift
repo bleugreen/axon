@@ -57,7 +57,7 @@ import Testing
 }
 
 @Test func socketClientAllowsLongerBatchRunsThanSingleRequests() {
-    #expect(SocketClient.defaultBatchResponseTimeoutSeconds > SocketClient.defaultResponseTimeoutSeconds)
+    #expect(SocketClient.defaultRunResponseTimeoutSeconds > SocketClient.defaultResponseTimeoutSeconds)
 }
 
 @Test func socketCommandRouterForwardsRequestsToSocketClient() throws {

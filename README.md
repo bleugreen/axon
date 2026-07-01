@@ -27,7 +27,7 @@ The unit of memory is the **`.axn` file** (axon // action) — a saved sequence 
 
 The four guarantees Axon tries to make:
 
-- **Semantic targets, not coordinates.** Locators match AX role, label, identifier, actions, and ancestry. Point targets are an escape hatch.
+- **Semantic targets, not coordinates.** Locators use AX role, label, identifier, ancestry, action support, and value signals. Point targets are an escape hatch.
 - **Honest results.** Dispatch success and goal success are distinct. A click that posted but produced no UI change does not return "success."
 - **Stable contracts.** The JSON-RPC socket protocol and the `.axn` file format are intended as durable shapes that downstream tools can build on.
 - **Local and inspectable.** The service is a menu bar app you can see, quit, restart, and approve. `.axn` files are human-readable text.
@@ -36,7 +36,7 @@ The four guarantees Axon tries to make:
 
 - [Install and Operations](docs/install.md) — build, daemon lifecycle, MCP setup, logs, troubleshooting
 - [Tool Surface](docs/tool-surface.md) — MCP/CLI commands, target shapes, screenshots, action semantics
-- [Action Batches and `.axn` Files](docs/plans.md) — batch schema, history export, replay
+- [The `.axn` File](docs/axn.md) — file schema, history export, replay
 - [Design](docs/design.md) — architecture and long-term direction
 - [Decision Log](docs/decision-log.md) — durable decisions made while shaping the project
 - [Open Issues](docs/issues) — known gaps and active follow-up work
@@ -46,7 +46,7 @@ The four guarantees Axon tries to make:
 - signed `Axon.app` menu bar service with bundled `axon` CLI, installed via Homebrew cask
 - compact app snapshots with per-snapshot handles
 - opt-in embedded screenshots returned as MCP image content
-- locator resolution over role, subrole, title, value, description, identifier, actions, and ancestors
+- scored locator resolution over role, subrole, title, value, description, identifier, actions, and ancestors
 - primitive actions: `click`, `type`, `keyboard`, `scroll`, `drag`, `invoke`
 - coarse `look(since:)` checks backed by observer hints plus fresh app/window signatures
 - `run` and `.axn` files: ordered tool-call sequences, replayable from CLI or MCP

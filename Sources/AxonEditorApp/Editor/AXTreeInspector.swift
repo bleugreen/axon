@@ -28,7 +28,7 @@ struct AXTreeInspector: View {
                 }
                 .buttonStyle(.borderless)
                 .disabled(appName == nil || isLoading)
-                .help("Refresh live AX tree")
+                .help("Refresh AX tree")
             }
             .padding(12)
 
@@ -74,7 +74,7 @@ struct AXTreeInspector: View {
                     }
                 }
             } else {
-                Text("No target app in recipe")
+                Text("No target app in axn file")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -182,7 +182,7 @@ struct AXTreeInspector: View {
             do {
                 let response = try SocketClient(
                     path: AxonEnvironment.socketPath(),
-                    responseTimeoutSeconds: SocketClient.defaultBatchResponseTimeoutSeconds
+                    responseTimeoutSeconds: SocketClient.defaultRunResponseTimeoutSeconds
                 ).send(JSONRPCRequest(
                     id: .string("editor.ax-tree.find-target"),
                     method: "find",
@@ -234,7 +234,7 @@ private struct FullAXTreeReader: Sendable {
     func read(appName: String) throws -> [AXTreeNode] {
         let response = try SocketClient(
             path: AxonEnvironment.socketPath(),
-            responseTimeoutSeconds: SocketClient.defaultBatchResponseTimeoutSeconds
+            responseTimeoutSeconds: SocketClient.defaultRunResponseTimeoutSeconds
         ).send(JSONRPCRequest(
             id: .string("editor.ax-tree.look"),
             method: "look",
@@ -332,7 +332,7 @@ private struct AXTreeNodeRow: View {
                             if node.isActionable {
                                 Image(systemName: "cursorarrow.click.2")
                                     .font(.caption2)
-                                    .foregroundStyle(RecipeEditorPalette.action)
+                                    .foregroundStyle(AxnEditorPalette.action)
                             }
                             Spacer(minLength: 0)
                         }
@@ -355,7 +355,7 @@ private struct AXTreeNodeRow: View {
             .padding(.vertical, 4)
             .background(
                 RoundedRectangle(cornerRadius: 6, style: .continuous)
-                    .fill(selectedNodeID == node.id ? RecipeEditorPalette.selectionFill : Color.clear)
+                    .fill(selectedNodeID == node.id ? AxnEditorPalette.selectionFill : Color.clear)
             )
 
             if isExpanded {
@@ -442,13 +442,6 @@ private struct AXTreeNode: Identifiable, Equatable {
     let isRepeated: Bool
     let children: [AXTreeNode]
 
-    static func nodes(from snapshot: AppSnapshot) -> [AXTreeNode] {
-        var nextIndex = 0
-        return snapshot.windows.map { node in
-            AXTreeNode(node: node, snapshotID: snapshot.id, nextIndex: &nextIndex)
-        }
-    }
-
     static func nodes(fromSnapshotJSON snapshot: JSONValue) throws -> [AXTreeNode] {
         guard case let .object(object) = snapshot,
               case let .array(windows)? = object["windows"]
@@ -460,31 +453,6 @@ private struct AXTreeNode: Identifiable, Equatable {
         return try windows.map { window in
             try AXTreeNode(json: window, nextIndex: &nextIndex)
         }
-    }
-
-    private init(node: AXNode, snapshotID: SnapshotID, nextIndex: inout Int) {
-        let index = nextIndex
-        nextIndex += 1
-        let children = node.children.map { child in
-            AXTreeNode(node: child, snapshotID: snapshotID, nextIndex: &nextIndex)
-        }
-        let handle = SnapshotHandle(snapshotID: snapshotID, nodeIndex: index).rawValue
-
-        self.init(
-            id: handle,
-            handle: handle,
-            role: node.role,
-            title: node.title,
-            value: node.value,
-            description: node.description,
-            identifier: node.identifier,
-            frame: node.frame,
-            actions: node.actions,
-            source: nil,
-            childCount: node.childCount ?? children.count,
-            isRepeated: false,
-            children: children
-        )
     }
 
     private init(json: JSONValue, nextIndex: inout Int) throws {

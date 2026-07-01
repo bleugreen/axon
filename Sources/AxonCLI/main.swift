@@ -31,7 +31,7 @@ do {
         print("started Axon.app")
 
     case "edit":
-        try openRecipeEditor(arguments: arguments)
+        try openAxnEditor(arguments: arguments)
 
     case "status":
         try printHumanStatus()
@@ -137,7 +137,7 @@ do {
 
     case "run":
         let command = try runCommand(arguments: arguments)
-        let response = try SocketClient(path: socketPath, responseTimeoutSeconds: SocketClient.defaultBatchResponseTimeoutSeconds)
+        let response = try SocketClient(path: socketPath, responseTimeoutSeconds: SocketClient.defaultRunResponseTimeoutSeconds)
             .send(JSONRPCRequest(
                 id: .string(command.method),
                 method: command.method,
@@ -196,7 +196,7 @@ do {
           mcp      run an MCP stdio facade backed by the daemon socket
           start    launch the installed Axon.app menu bar service
           edit <path.axn>
-                  open a recipe in the visual editor
+                  open an axn file in the visual editor
           status   print app-backed daemon status
           setup    launch Axon.app and request permissions when needed
           quit     quit the installed Axon.app service
@@ -206,16 +206,7 @@ do {
           permit   ask macOS to approve the running daemon identity
           refresh-secrets [--json]
                    refresh the active credential redaction index from 1Password
-          look [target] [--since snapshot-id] [--screenshot] [--screen-text] [--frames] [--json] [--no-tree] [--offset n] [--limit n] [--depth n]
-          find <app> <locator-json>
-          run <path.axn> [--arg name=value] [--dry-run] [--continue-on-error]
-          save [--session id] [--from call] [--to call] [--path file.axn] [--include-reads]
-          click <handle|target-json>
-          type <handle> <value>
-          keyboard [--app app] <keys-or-text>
-          scroll [--app app] [--target target-json] [--dx n] [--dy n]
-          drag [--app app] [--duration-ms n] <from-json> <to-json>
-          invoke <handle> <action-name>
+          \(ToolSurfaceSpec.cliUsageBlock.replacingOccurrences(of: "\n", with: "\n          "))
         """)
 
     default:
@@ -552,7 +543,7 @@ private func launchAxonApp() throws {
     }
 }
 
-private func openRecipeEditor(arguments: [String]) throws {
+private func openAxnEditor(arguments: [String]) throws {
     guard arguments.count == 2 else {
         throw CLIError.missingArguments("edit requires a path")
     }
@@ -568,7 +559,7 @@ private func openRecipeEditor(arguments: [String]) throws {
     try process.run()
     process.waitUntilExit()
     guard process.terminationStatus == 0 else {
-        throw CLIError.missingArguments("Could not open recipe editor for \(fileURL.path)")
+        throw CLIError.missingArguments("Could not open axn file editor for \(fileURL.path)")
     }
 }
 

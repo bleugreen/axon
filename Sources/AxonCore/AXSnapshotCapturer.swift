@@ -20,6 +20,8 @@ public struct AXSnapshotCapturer {
     public static let defaultMaxChildrenPerNode = 24
     public static let defaultMaxWindows = 8
     public static let defaultMessagingTimeout: Float = 0.2
+    // Capture a few siblings beyond the display budget so observation compaction can
+    // drop low-information AX chrome without hiding useful children behind pagination.
     private static let rawChildCaptureSlack = 4
 
     private let appResolver: AppResolver

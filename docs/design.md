@@ -69,6 +69,24 @@ Example handle:
 
 That handle is valid only while the referenced snapshot is still retained.
 
+### Capture Pipeline
+
+Axon has three capture strategies, each optimized for a different kind of caller. `AXHierarchyBulkCapturer` is the opportunistic fast path around the private `AXUIElementCopyHierarchy` entry point loaded by `AXUIElementCopyHierarchyLoader`. `AXFullTreeCapturer` is the default app observation capturer: it first tries `AXHierarchyBulkCapturer`, then falls back to a dynamic Accessibility walk when the bulk result is missing or suspicious. `AXSnapshotCapturer` is the retained-handle paging capturer: it can capture only top-level windows for app roots and later re-read direct child pages from stored `AXUIElement` handles.
+
+The primary `look` app snapshot enters through `CommandRouter.captureSnapshotWithChildDepth`. When no `childDepth` is supplied, `CommandRouter` uses `AXFullTreeCapturer.capture(app:screenshot:)`. When `childDepth != 0`, it also uses `AXFullTreeCapturer`; the currently meaningful non-default value is the special case below. When `childDepth == 0`, `CommandRouter` intentionally switches to `AXSnapshotCapturer.capture(app:screenshot:childDepth:)`, which serializes top-level windows with no descendants and stores their live `AXUIElement` references in `AXElementStore`. A later handle-targeted `look`, recognized by parsing the target as `SnapshotHandle`, calls `AXSnapshotCapturer.captureChildren(parentHandle:offset:limit:direct:allDirectChildren:)` to page children from that retained live element.
+
+`AXFullTreeCapturer` uses bulk capture only when it looks safe. At the app root, it calls `AXHierarchyBulkCapturer.capture(appElement:)` only if `AXHierarchyBulkCapturer.permitsBulkHierarchy(bundleIdentifier:)` allows the app, then accepts the result only if `AXHierarchyBulkCapture.looksLikeCompleteAppTree` is true. That heuristic treats a captured `AXWebArea` as evidence that web content came through, or accepts a substantial non-menu tree with more than 64 nodes and no `AXMenuBar` or `AXMenuItem`. It guards against app-root bulk captures that return menu-bar chrome while omitting the useful window content. If app-root bulk capture is unavailable, denied, or fails that completeness check, `AXFullTreeCapturer.dynamicCapture(appElement:allowBulkHierarchy:)` walks from root windows instead. During that dynamic walk, `scopedWindowNode(element:retainedElements:allowBulkHierarchy:)` may still use scoped `AXHierarchyBulkCapturer` calls for discovered `AXWebArea` elements when bulk hierarchy is allowed, because those scoped web-area captures are the useful case the dynamic fallback is trying to recover.
+
+Firefox is explicitly denied for app-root bulk capture by `AXHierarchyBulkCapturer.deniedBundleIdentifiers` containing `org.mozilla.firefox`. The code-level contract is conservative: local captures showed Firefox app-root bulk hierarchy could be misleadingly partial, while the dynamic window walk plus scoped web-area capture path gives better access to Firefox content. This denial also means `AXSnapshotCapturer.captureUsingBulkHierarchy` declines Firefox through `AXHierarchyBulkCapturer.capture(appElement:)` and falls back to its per-node window serialization.
+
+Depth and child limits apply at different layers. `childDepth` is a capture-mode switch in `CommandRouter`, not the observation display depth. `depth` is consumed by `SnapshotObservationFormatter.observation(from:frames:maxDepth:)` after capture and hides rendered descendants with explicit truncation markers. Broad sibling sets are handled by capture and handle paging: `AXSnapshotCapturer.defaultMaxChildrenPerNode` is 24, and `childCaptureLimit(childCount:maxChildrenPerNode:)` adds a small raw slack so `SnapshotObservationFormatter` can compact low-information chrome before presenting the first page. Nodes record their underlying `childCount` and a `truncationReason`, so rendered observations can show continuation doors such as another handle-targeted `look` with `offset` and `limit`. The history behind this split is in `docs/issues/2026-05-14-mcp-look-ergonomics.md`: capture should keep enough live handles to page honestly, while observation formatting should make every display limit visible.
+
+Locator consumers do not reuse a previously displayed observation. `AXLiveLocatorResolver.resolve(app:locator:scrollToVisible:)`, used by `find` and locator-targeted primitive actions, first tries a live fast path: cached elements, host predicate search, and bounded descendant scans inside narrowed scopes. If those fail, `AXLiveLocatorResolver.captureSnapshot(app:)` calls `AXFullTreeCapturer.capture(app:screenshot:)` and runs `LocatorResolver` over that fresh snapshot. The `run` command uses the same long-lived resolver through `CommandRouter.batchSnapshotProvider`, so debug pause snapshots and changed-fact verification also capture fresh app state with `AXFullTreeCapturer` rather than relying on an earlier `look` tree.
+
+The editor AX tree sidebar currently participates in this same shipped pipeline. `AXTreeInspector.FullAXTreeReader` sends a JSON-RPC `look` request with `target` and `tree: true`, so its primary tree is whatever `CommandRouter` and `AXFullTreeCapturer` return for an app snapshot. Its acted-on-target cue sends `find`, which goes through `AXLiveLocatorResolver`. The open design issue `docs/issues/2026-05-17-live-ax-inspector-sidebar.md` deliberately calls this out as not yet being the future live inspector architecture.
+
+`SnapshotObservationFormatter` is not a capturer. It renders captured snapshot JSON and children-page JSON into the observation DSL used by MCP and the CLI. `MCPRouter` applies MCP defaults for `look`, routes app snapshots, app lists, and handle-child pages through the formatter unless `format: "debug"` is requested, and the CLI `look` command uses the same formatter for non-JSON output.
+
 ### Locator Resolver
 
 Durable operation should be based on locators, not indexes.
@@ -78,7 +96,7 @@ Locators should be AX-native and honest about macOS semantics. They can borrow u
 ```json
 {
   "role": "AXButton",
-  "title": { "contains": "Profile concurrent batch exploration" },
+  "title": { "contains": "Profile concurrent axn exploration" },
   "actions": ["AXPress"],
   "ancestors": [
     { "role": "AXWindow", "title": { "contains": "cairn" } },
@@ -101,6 +119,12 @@ Resolution should score candidates using multiple signals:
 4. nearby labels and section context
 5. ancestry and sibling structure
 6. normalized geometry as a tie-breaker
+
+Role, subrole, title, label, description, identifier, non-editable value, and
+ancestor requirements are hard filters. Supported actions and editable text
+values are replay signals: they explain and score a candidate when present, but
+they do not make an otherwise stable editable text target disappear just because
+the current field value or host-reported action list changed.
 
 The resolver should return one of:
 
@@ -185,19 +209,19 @@ Tool names should stay plain. MCP clients already namespace tools by server, so 
 
 Screenshot-returning tools should embed image data in their response. File output can exist as a CLI/debug convenience later, but clients should not need filesystem coordination to inspect the visual state.
 
-### Action Batches and `.axn` Files
+### `run` and `.axn` Files
 
-`run` is an invocation-scoped composition layer. A batch is an ordered list of tool calls — each action is just `tool:` plus that tool's normal arguments. There is no separate plan language to learn, and no separate semantics for batched actions vs. standalone calls.
+`run` is an invocation-scoped composition layer. An axn is an ordered list of tool calls — each action is just `tool:` plus that tool's normal arguments. There is no separate plan language to learn, and no separate semantics for axn actions vs. standalone calls.
 
-`.axn` files (axon // action) are batches saved to disk. They are the project's primary persisted artifact: a recorded sequence of past tool calls that can be replayed, edited, and shared. `save` generates them from observed sessions rather than expecting agents to hand-author scripts. The file shape mirrors `run` exactly, so `axon run path.axn` and an inline batch are interchangeable.
+`.axn` files (axon // action) are axn artifacts saved to disk. They are the project's primary persisted artifact: a recorded sequence of past tool calls that can be replayed, edited, and shared. `save` generates them from observed sessions rather than expecting agents to hand-author scripts. The file shape mirrors `run` exactly, so `axon run path.axn` and an inline axn object are interchangeable.
 
-The daemon executes a submitted batch, traces it, and forgets it. It does not own a recipe registry or persistent script cache. Reusable `.axn` files live wherever the user or repo wants them.
+The daemon executes a submitted axn object, traces it, and forgets it. It does not own a axn registry or persistent script cache. Reusable `.axn` files live wherever the user or repo wants them.
 
-YAML is the preferred on-disk format because it is compact and human-editable. JSON-RPC remains the daemon transport, and structured JSON batch objects remain acceptable when a caller already has data in memory.
+YAML is the preferred on-disk format because it is compact and human-editable. JSON-RPC remains the daemon transport, and structured JSON axn objects remain acceptable when a caller already has data in memory.
 
-Failures are part of the batch trace, not MCP transport failures. A failed batch stops at the first failing action unless `continueOnError: true`, preserves completed trace entries, and returns `success: false` with the failing action's index, tool, and error. Locator failures preserve the resolution status, snapshot id, candidate count, and candidate summaries so an agent can repair the batch without another broad state read.
+Failures are part of the axn trace, not MCP transport failures. A failed axn run stops at the first failing action unless `continueOnError: true`, preserves completed trace entries, and returns `success: false` with the failing action's index, tool, and error. Locator failures preserve the resolution status, snapshot id, candidate count, and candidate summaries so an agent can repair the axn file without another broad state read.
 
-Higher-order control flow (conditionals, polling waits, repeat loops, assertions, output binding) is intentionally not part of the batch surface. If those primitives prove necessary, they should be added to the underlying tool set so that batches remain a flat sequence of normal tool calls.
+Higher-order control flow (conditionals, polling waits, repeat loops, assertions, output binding) is intentionally not part of the axn surface. If those primitives prove necessary, they should be added to the underlying tool set so that axn files remain a flat sequence of normal tool calls.
 
 ### Technology Direction
 

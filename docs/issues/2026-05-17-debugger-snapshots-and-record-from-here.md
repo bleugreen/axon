@@ -11,7 +11,8 @@ The corrected implementation keeps the useful execution engine but reworks the p
 ## Decisions
 
 - Paused snapshots are captured only for intentional pauses: saved breakpoints, run-to-selection, and failure. The editor does not render them as a bottom raw-tree panel; app inspection lives in the live AX Tree sidebar layer.
-- The AX Tree sidebar is backed by live retained AX elements: top-level windows are shown first, and expanding a row fetches that node's direct children only.
+- The AX Tree sidebar is the editor's inspection surface rather than a raw pause-snapshot panel.
+- Correction, 2026-05-22: the current sidebar is still backed by socket `look`/`find` calls, not live editor-retained AX elements. The direct live inspector remains tracked in [Really Good Live AX Inspector Sidebar](2026-05-17-live-ax-inspector-sidebar.md).
 - Record-from-here inserts new recorded blocks at the paused point by default. Existing following blocks remain after the insertion.
 - Debug sessions carry a caller-supplied `documentId` so app-side recording can target the active editor window without a new IPC layer.
 - Breakpoints must be editable during a live session and after a run has produced trace status.
@@ -34,7 +35,7 @@ The corrected implementation keeps the useful execution engine but reworks the p
 - Ordinary `debug.step` pauses do not capture snapshots.
 - Failed actions capture a `pauseSnapshot` with reason `failure`, keep the debug session alive, and can be retried with `debug.retry`.
 - The editor exposes Retry / Record From Here while failed.
-- The editor has a live AX Tree sidebar layer with refresh, search over loaded nodes, direct child expansion, node details, selected-node frame highlighting, and acted-on target highlighting while playback/debugging advances.
+- The editor has an AX Tree sidebar layer with refresh, search over loaded nodes, node details, selected-node frame highlighting, and acted-on target highlighting while playback/debugging advances. The direct live AX implementation remains a follow-up.
 
 ## Follow-Up Candidates
 

@@ -4,18 +4,18 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 extension UTType {
-    static let axonRecipe = UTType(exportedAs: "com.bleugreen.axon.recipe", conformingTo: .yaml)
+    static let axnFile = UTType(exportedAs: "com.bleugreen.axon.axn", conformingTo: .yaml)
 }
 
-struct AxonDocument: FileDocument {
-    static var readableContentTypes: [UTType] { [.axonRecipe, UTType(filenameExtension: "axn") ?? .yaml] }
-    static var writableContentTypes: [UTType] { [.axonRecipe] }
+struct AxnEditorDocument: FileDocument {
+    static var readableContentTypes: [UTType] { [.axnFile, UTType(filenameExtension: "axn") ?? .yaml] }
+    static var writableContentTypes: [UTType] { [.axnFile] }
 
-    var recipe: AxonRecipe
+    var axn: Axn
 
-    init(recipe: AxonRecipe = AxonRecipe()) {
-        self.recipe = recipe
-        self.recipe.assignMissingBlockIDs()
+    init(axn: Axn = Axn()) {
+        self.axn = axn
+        self.axn.assignMissingBlockIDs()
     }
 
     init(configuration: ReadConfiguration) throws {
@@ -24,12 +24,12 @@ struct AxonDocument: FileDocument {
         else {
             throw CocoaError(.fileReadCorruptFile)
         }
-        recipe = try AxonRecipe(source: source)
-        recipe.assignMissingBlockIDs()
+        axn = try Axn(source: source)
+        axn.assignMissingBlockIDs()
     }
 
     func fileWrapper(configuration: WriteConfiguration) throws -> FileWrapper {
-        let source = try recipe.yamlString()
+        let source = try axn.yamlString()
         guard let data = source.data(using: .utf8) else {
             throw CocoaError(.fileWriteInapplicableStringEncoding)
         }

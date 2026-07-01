@@ -1,8 +1,8 @@
 import AxonCore
 import SwiftUI
 
-struct RecipeStepEditor: View {
-    @Binding var action: AxonRecipeAction
+struct AxnStepEditor: View {
+    @Binding var action: AxnAction
     let inputNames: [String]
 
     var body: some View {
@@ -31,7 +31,7 @@ struct RecipeStepEditor: View {
     }
 }
 
-extension AxonRecipeAction {
+extension AxnAction {
     var hasPrimaryEditor: Bool {
         switch tool {
         case "type", "keyboard", "scroll", "drag", "invoke", "look":
@@ -45,22 +45,22 @@ extension AxonRecipeAction {
 }
 
 struct NoteStepEditor: View {
-    @Binding var note: AxonRecipeNote
+    @Binding var note: AxnNote
 
     var body: some View {
-        RecipeTextField(
+        AxnTextField(
             label: "Note",
             value: Binding(
                 get: { note.text ?? "" },
                 set: { note.text = $0 }
             ),
-            prompt: "Add context for this part of the recipe"
+            prompt: "Add context for this part of the axn file"
         )
     }
 }
 
 private struct TypeActionEditor: View {
-    @Binding var action: AxonRecipeAction
+    @Binding var action: AxnAction
     let inputNames: [String]
 
     var body: some View {
@@ -84,7 +84,7 @@ private struct ClickActionEditor: View {
 }
 
 private struct KeyboardActionEditor: View {
-    @Binding var action: AxonRecipeAction
+    @Binding var action: AxnAction
     let inputNames: [String]
 
     var body: some View {
@@ -103,13 +103,13 @@ private struct KeyboardActionEditor: View {
 }
 
 private struct ScrollActionEditor: View {
-    @Binding var action: AxonRecipeAction
+    @Binding var action: AxnAction
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(spacing: 12) {
-                RecipeTextField(label: "Delta X", value: field("deltaX"))
-                RecipeTextField(label: "Delta Y", value: field("deltaY"))
+                AxnTextField(label: "Delta X", value: field("deltaX"))
+                AxnTextField(label: "Delta Y", value: field("deltaY"))
             }
         }
     }
@@ -123,11 +123,11 @@ private struct ScrollActionEditor: View {
 }
 
 private struct DragActionEditor: View {
-    @Binding var action: AxonRecipeAction
+    @Binding var action: AxnAction
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            RecipeTextField(label: "Duration ms", value: field("durationMs"))
+            AxnTextField(label: "Duration ms", value: field("durationMs"))
         }
     }
 
@@ -140,11 +140,11 @@ private struct DragActionEditor: View {
 }
 
 private struct InvokeActionEditor: View {
-    @Binding var action: AxonRecipeAction
+    @Binding var action: AxnAction
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            RecipeTextField(label: "Action", value: field("name"))
+            AxnTextField(label: "Action", value: field("name"))
         }
     }
 
@@ -157,12 +157,12 @@ private struct InvokeActionEditor: View {
 }
 
 private struct LookActionEditor: View {
-    @Binding var action: AxonRecipeAction
+    @Binding var action: AxnAction
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            RecipeToggleField(label: "Screenshot", value: field("screenshot"))
-            RecipeToggleField(label: "Screen text", value: field("screenText"))
+            AxnToggleField(label: "Screenshot", value: field("screenshot"))
+            AxnToggleField(label: "Screen text", value: field("screenText"))
         }
     }
 
@@ -181,10 +181,10 @@ private struct FindActionEditor: View {
 }
 
 private struct UnsupportedActionEditor: View {
-    let action: AxonRecipeAction
+    let action: AxnAction
 
     var body: some View {
-        Text("The editor doesn't render this action's fields yet. The recipe will still replay; open an issue at github.com/bleugreen/axon if you'd like editing support.")
+        Text("The editor doesn't render this action's fields yet. The axn file will still replay; open an issue at github.com/bleugreen/axon if you'd like editing support.")
             .font(.caption)
             .foregroundStyle(.secondary)
             .fixedSize(horizontal: false, vertical: true)
