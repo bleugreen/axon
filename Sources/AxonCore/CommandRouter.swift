@@ -323,7 +323,7 @@ public struct CommandRouter {
             return actionResponse(id: request.id) {
                 let params = try paramsObject(in: request)
                 let decoder = ToolParamDecoder(toolName: "invoke", params: params)
-                try actions.invoke(
+                return try actions.invoke(
                     resolveElementTarget(try requiredToolTarget("target", in: params, acceptedKinds: .element)),
                     try decoder.requiredString("name")
                 )
@@ -332,7 +332,7 @@ public struct CommandRouter {
             return actionResponse(id: request.id) {
                 let params = try paramsObject(in: request)
                 let decoder = ToolParamDecoder(toolName: "type", params: params)
-                try actions.type(
+                return try actions.type(
                     resolveElementTarget(try requiredToolTarget("target", in: params, acceptedKinds: .element)),
                     try decoder.requiredString("value")
                 )
