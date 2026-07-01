@@ -102,13 +102,14 @@ public struct CommandRouter {
         case "look":
             do {
                 let params = try paramsObject(in: request)
+                let decoder = ToolParamDecoder(toolName: "look", params: params)
                 let activeSecretRedactor = activeSecretRedactor()
                 if params["since"] != nil {
                     return try changedSinceResponse(id: request.id, params: params)
                 }
-                guard let target = try optionalStringParam("target", in: params) ?? optionalStringParam("app", in: params) else {
-                    let format = try optionalStringParam("format", in: params)
-                    let includeAllApps = (boolParam("all", in: params) ?? false) || format == "debug"
+                guard let target = try decoder.string("target") ?? optionalStringParam("app", in: params) else {
+                    let format = try decoder.string("format")
+                    let includeAllApps = (try decoder.bool("all") ?? false) || format == "debug"
                     return JSONRPCResponse(
                         id: request.id,
                         result: [
@@ -117,10 +118,10 @@ public struct CommandRouter {
                     )
                 }
                 if (try? SnapshotHandle(target)) != nil {
-                    let offset = intParam("offset", in: params) ?? 0
-                    let limit = intParam("limit", in: params) ?? AXSnapshotCapturer.defaultMaxChildrenPerNode
-                    let direct = boolParam("direct", in: params) ?? false
-                    let allDirectChildren = boolParam("all", in: params) ?? false
+                    let offset = try decoder.int("offset") ?? 0
+                    let limit = try decoder.int("limit") ?? AXSnapshotCapturer.defaultMaxChildrenPerNode
+                    let direct = try decoder.bool("direct") ?? false
+                    let allDirectChildren = try decoder.bool("all") ?? false
                     let children = try AXSnapshotCapturer(elementStore: elementStore).captureChildren(
                         parentHandle: target,
                         offset: offset,
@@ -133,10 +134,10 @@ public struct CommandRouter {
                         result: ["children": children.jsonValue(activeSecretRedactor: activeSecretRedactor)]
                     )
                 }
-                let screenshot = boolParam("screenshot", in: params) ?? false
-                let screenText = boolParam("screenText", in: params) ?? false
-                let includeTree = boolParam("tree", in: params) ?? true
-                let childDepth = intParam("childDepth", in: params)
+                let screenshot = try decoder.bool("screenshot") ?? false
+                let screenText = try decoder.bool("screenText") ?? false
+                let includeTree = try decoder.bool("tree") ?? true
+                let childDepth = try decoder.int("childDepth")
                 let snapshot = try captureSnapshotWithChildDepth(target, screenshot || screenText, childDepth)
                 elementStore.store(summary: observedSummary(for: snapshot))
                 var snapshotJSON = snapshot.jsonValue(
@@ -264,17 +265,18 @@ public struct CommandRouter {
         case "save":
             do {
                 let params = try paramsObject(in: request)
-                let sessionID = try optionalStringParam("sessionId", in: params) ?? "default"
-                let includeReads = boolParam("includeReads", in: request) ?? false
-                let from = try optionalStringParam("from", in: params)
-                let to = try optionalStringParam("to", in: params)
+                let decoder = ToolParamDecoder(toolName: "save", params: params)
+                let sessionID = try decoder.string("sessionId") ?? "default"
+                let includeReads = try decoder.bool("includeReads") ?? false
+                let from = try decoder.string("from")
+                let to = try decoder.string("to")
                 let exported = try history.exportScript(sessionID: sessionID, includeReads: includeReads, from: from, to: to)
                 var result: [String: JSONValue] = [
                     "script": .string(exported.script),
                     "actionCount": .int(exported.actionCount),
                     "recordCount": .int(exported.recordCount)
                 ]
-                if let path = try optionalStringParam("path", in: params) {
+                if let path = try decoder.string("path") {
                     try exported.script.write(toFile: path, atomically: true, encoding: .utf8)
                     result["path"] = .string(path)
                 }
@@ -286,8 +288,10 @@ public struct CommandRouter {
             }
         case "find":
             do {
-                let app = try requiredStringParam("app", in: request)
-                let locator = try requiredLocatorParam(in: request)
+                let params = try paramsObject(in: request)
+                let decoder = ToolParamDecoder(toolName: "find", params: params)
+                let app = try decoder.requiredString("app")
+                let locator = try decoder.requiredLocator("locator")
                 let resolution = try resolveLocator(app, locator, false)
                 let activeSecretRedactor = activeSecretRedactor()
                 return JSONRPCResponse(
@@ -304,59 +308,68 @@ public struct CommandRouter {
         case "click":
             return actionResponse(id: request.id) {
                 let params = try paramsObject(in: request)
-                if let target = params["target"], let point = try pointTarget(from: target) {
+                let target = try requiredToolTarget("target", in: params, acceptedKinds: .pointer)
+                switch target {
+                case let .point(point):
                     return try actions.clickPoint(point)
-                }
-                if let target = params["target"], let location = try textLocationTarget(from: target) {
+                case let .textLocation(location):
                     let resolution = try resolveTextLocationTarget(location)
                     return try withLocationResolution(actions.clickPoint(resolution.point), resolution: resolution)
+                case .handle, .locator:
+                    return try actions.click(resolveElementTarget(target))
                 }
-                return try actions.click(resolveTargetParam(in: request))
             }
         case "invoke":
             return actionResponse(id: request.id) {
+                let params = try paramsObject(in: request)
+                let decoder = ToolParamDecoder(toolName: "invoke", params: params)
                 try actions.invoke(
-                    resolveTargetParam(in: request),
-                    requiredStringParam("name", in: request)
+                    resolveElementTarget(try requiredToolTarget("target", in: params, acceptedKinds: .element)),
+                    try decoder.requiredString("name")
                 )
             }
         case "type":
             return actionResponse(id: request.id) {
+                let params = try paramsObject(in: request)
+                let decoder = ToolParamDecoder(toolName: "type", params: params)
                 try actions.type(
-                    resolveTargetParam(in: request),
-                    requiredStringParam("value", in: request)
+                    resolveElementTarget(try requiredToolTarget("target", in: params, acceptedKinds: .element)),
+                    try decoder.requiredString("value")
                 )
             }
         case "keyboard":
             return actionResponse(id: request.id) {
                 let params = try paramsObject(in: request)
+                let decoder = ToolParamDecoder(toolName: "keyboard", params: params)
                 return try actions.keyboard(
-                    try optionalStringParam("app", in: params),
-                    requiredString("keys", in: params)
+                    try decoder.string("app"),
+                    try decoder.requiredString("keys")
                 )
             }
         case "scroll":
             return actionResponse(id: request.id) {
                 let params = try paramsObject(in: request)
+                let decoder = ToolParamDecoder(toolName: "scroll", params: params)
                 let target = try optionalResolvedPointerTarget("target", in: params)
                 let result = try actions.scroll(
                     target?.target,
-                    optionalStringParam("app", in: params),
-                    doubleParam("deltaX", in: params) ?? 0,
-                    doubleParam("deltaY", in: params) ?? -120
+                    try decoder.string("app"),
+                    try decoder.number("deltaX") ?? 0,
+                    try decoder.number("deltaY") ?? -120
                 )
                 return withLocationResolution(result, resolution: target?.locationResolution)
             }
         case "drag":
             return actionResponse(id: request.id) {
                 let params = try paramsObject(in: request)
+                let decoder = ToolParamDecoder(toolName: "drag", params: params)
                 let from = try requiredResolvedPointerTarget("from", in: params)
                 let to = try requiredResolvedPointerTarget("to", in: params)
                 let result = try actions.drag(
                     from.target,
                     to.target,
-                    optionalStringParam("app", in: params),
-                    intParam("durationMs", in: params)
+                    try decoder.string("app"),
+                    try decoder.int("durationMs")
                 )
                 return withLocationResolutions(result, resolutions: [from.locationResolution, to.locationResolution])
             }
