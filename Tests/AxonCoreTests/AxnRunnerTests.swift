@@ -1575,3 +1575,176 @@ private func temporaryAxnFile(_ source: String) throws -> String {
     try source.write(toFile: path, atomically: true, encoding: .utf8)
     return path
 }
+
+@Test func runRejectsImpossibleISODateBeforeDispatch() throws {
+    var requests: [JSONRPCRequest] = []
+    let runner = AxnRunner { request in
+        requests.append(request)
+        return JSONRPCResponse(id: request.id, result: ["action": .object(["success": .bool(true)])])
+    }
+
+    let source = """
+    version: 1
+    args:
+      - name: report_date
+        type: date
+    actions:
+      - tool: type
+        target: s1:2
+        value: "{{report_date}}"
+    """
+    let path = try temporaryAxnFile(source)
+    defer { try? FileManager.default.removeItem(atPath: path) }
+
+    do {
+        _ = try runner.run(params: [
+            "path": .string(path),
+            "argValues": .object(["report_date": .string("2026-02-30")])
+        ])
+        Issue.record("impossible ISO-shaped date should fail before dispatch")
+    } catch let error as AxnRunError {
+        #expect(error.description == "arg report_date must be an ISO date, today, or yesterday")
+    }
+    #expect(requests.isEmpty)
+}
+
+@Test func runKeepsSecretTaintScopedAcrossContinueOnError() throws {
+    var requests: [JSONRPCRequest] = []
+    let runner = AxnRunner { request in
+        requests.append(request)
+        if request.method == "type" {
+            let value = request.params?["value"]?.stringValue ?? "missing"
+            return JSONRPCResponse(id: request.id, error: .invalidParams("failed with \(value)"))
+        }
+        return JSONRPCResponse(id: request.id, result: [
+            "action": .object([
+                "success": .bool(true),
+                "target": request.params?["target"] ?? .null
+            ])
+        ])
+    }
+
+    let source = """
+    version: 1
+    args:
+      - name: password
+        type: secret
+    actions:
+      - tool: type
+        target: s1:2
+        value: "{{password}}"
+      - tool: click
+        target: s1:3
+    """
+    let path = try temporaryAxnFile(source)
+    defer { try? FileManager.default.removeItem(atPath: path) }
+
+    let result = try runner.run(params: [
+        "path": .string(path),
+        "continueOnError": .bool(true),
+        "argValues": .object(["password": .string("s3cr3t!")])
+    ])
+
+    #expect(result["success"] == .bool(false))
+    #expect(result["trace"]?[0]?["success"] == .bool(false))
+    #expect(result["trace"]?[0]?["error"] == .string("<redacted: contains-secret>"))
+    #expect(result["trace"]?[1]?["success"] == .bool(true))
+    #expect(result["trace"]?[1]?["result"]?["target"] == .string("s1:3"))
+    #expect(requests.map(\.method) == ["type", "click"])
+    #expect(requests[0].params?["value"] == .string("s3cr3t!"))
+}
+
+@Test func runAppendedActionsShareDeclaredArgumentsAndSecretTaint() throws {
+    var requests: [JSONRPCRequest] = []
+    let runner = AxnRunner { request in
+        requests.append(request)
+        return JSONRPCResponse(id: request.id, result: [
+            "action": .object([
+                "success": .bool(true),
+                "echo": request.params ?? .null
+            ])
+        ])
+    }
+
+    let source = """
+    version: 1
+    args:
+      - name: password
+        type: secret
+    actions:
+      - tool: click
+        target: s1:1
+    """
+    let path = try temporaryAxnFile(source)
+    defer { try? FileManager.default.removeItem(atPath: path) }
+
+    let result = try runner.run(params: [
+        "path": .string(path),
+        "actions": .array([
+            .object([
+                "tool": .string("type"),
+                "target": .string("s1:2"),
+                "value": .string("pw={{password}}")
+            ])
+        ]),
+        "argValues": .object(["password": .string("s3cr3t!")])
+    ])
+
+    #expect(result["success"] == .bool(true))
+    #expect(requests.map(\.method) == ["click", "type"])
+    #expect(requests[1].params?["value"] == .string("pw=s3cr3t!"))
+    #expect(result["trace"]?[0]?["result"]?["echo"]?["target"] == .string("s1:1"))
+    #expect(result["trace"]?[1]?["result"] == .string("<redacted: contains-secret>"))
+}
+
+@Test func commandRouterDebugPauseSnapshotRedactsActiveCredentials() throws {
+    let secret = "correct horse battery staple"
+    let router = CommandRouter(
+        axnSnapshotProvider: { app in
+            AppSnapshot(
+                id: SnapshotID("debug-redaction"),
+                app: AppIdentity(bundleIdentifier: "com.example.App", name: app, processIdentifier: 42),
+                windows: [
+                    AXNode(role: "AXWindow", title: "Main", children: [
+                        AXNode(role: "AXTextField", value: secret)
+                    ])
+                ],
+                screenshot: nil
+            )
+        },
+        actions: PrimitiveActionHandlers(),
+        activeCredentialFilter: try axnActiveCredentialFilter(values: [secret])
+    )
+
+    let response = router.handle(JSONRPCRequest(
+        id: .string("debug-start"),
+        method: "debug.start",
+        params: .object([
+            "pauseBefore": .string("a001"),
+            "actions": .array([
+                .object([
+                    "id": .string("a001"),
+                    "tool": .string("click"),
+                    "app": .string("Example"),
+                    "target": .string("s1:1")
+                ])
+            ])
+        ])
+    ))
+    let encoded = String(decoding: try JSONEncoder().encode(JSONValue.object(response.result ?? [:])), as: UTF8.self)
+
+    #expect(response.error == nil)
+    #expect(encoded.contains(secret) == false)
+    #expect(encoded.contains("<redacted: active-credential>") == true)
+}
+
+private func axnActiveCredentialFilter(values: [String]) throws -> ActiveCredentialIndex {
+    try ActiveCredentialIndex(
+        secrets: values.map {
+            ActiveCredentialSecret(value: $0, provider: "test", reference: "op://Axn/Active/secret")
+        },
+        hmacKey: Data(repeating: 0x3C, count: 32),
+        provider: "test",
+        createdAt: Date(timeIntervalSince1970: 1_775_000_000)
+    )
+}

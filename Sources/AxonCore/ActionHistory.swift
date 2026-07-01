@@ -28,6 +28,20 @@ public struct ActionHistoryRecord: Equatable, Sendable {
     }
 }
 
+public enum ActionHistoryError: Error, CustomStringConvertible, Equatable {
+    case unknownRangeBoundary(label: String, id: String)
+    case reversedRange(from: String, to: String)
+
+    public var description: String {
+        switch self {
+        case let .unknownRangeBoundary(label, id):
+            return "Unknown history range boundary: \(label) \(id)"
+        case let .reversedRange(from, to):
+            return "History range starts after it ends: from \(from) to \(to)"
+        }
+    }
+}
+
 public final class ActionHistoryStore: @unchecked Sendable {
     public static let shared = ActionHistoryStore()
 
@@ -49,11 +63,22 @@ public final class ActionHistoryStore: @unchecked Sendable {
         )
     }
 
-    public func record(request: JSONRPCRequest, response: JSONRPCResponse, sessionID: String) {
+    public func record(
+        request: JSONRPCRequest,
+        response: JSONRPCResponse,
+        sessionID: String,
+        activeSecretRedactor: ActiveSecretRedactor = ActiveSecretRedactor(),
+        deterministicRedactor: DeterministicRedactor = .standard
+    ) {
         guard shouldRecord(method: request.method) else {
             return
         }
-        let historyRequest = request.withParams(strippingSensitiveHistoryKeysFrom: request.params)
+        let strippedRequest = request.withParams(strippingSensitiveHistoryKeysFrom: request.params)
+        let historyRequest = strippedRequest.withParams(
+            redactingSensitiveHistoryValuesFrom: strippedRequest.params,
+            activeSecretRedactor: activeSecretRedactor,
+            deterministicRedactor: deterministicRedactor
+        )
         let params: [String: JSONValue]
         if case let .object(object)? = historyRequest.params {
             params = object
@@ -94,7 +119,7 @@ public final class ActionHistoryStore: @unchecked Sendable {
     }
 
     public func exportScript(sessionID: String, includeReads: Bool = false, from: String? = nil, to: String? = nil) throws -> ActionHistoryExport {
-        let records = slicedRecords(sessionID: sessionID, from: from, to: to)
+        let records = try slicedRecords(sessionID: sessionID, from: from, to: to)
         let actions = records.compactMap { actionObject(for: $0, includeReads: includeReads) }
         let script = try AxnDocumentCodec.yamlString(from: .object([
             "version": .int(1),
@@ -103,15 +128,40 @@ public final class ActionHistoryStore: @unchecked Sendable {
         return ActionHistoryExport(script: script, actionCount: actions.count, recordCount: records.count)
     }
 
-    private func slicedRecords(sessionID: String, from: String?, to: String?) -> [ActionHistoryRecord] {
+    private func slicedRecords(sessionID: String, from: String?, to: String?) throws -> [ActionHistoryRecord] {
         let records = self.records(sessionID: sessionID)
-        guard !records.isEmpty else {
+        if records.isEmpty {
+            if let from {
+                throw ActionHistoryError.unknownRangeBoundary(label: "from", id: from)
+            }
+            if let to {
+                throw ActionHistoryError.unknownRangeBoundary(label: "to", id: to)
+            }
             return []
         }
-        let start = from.flatMap { id in records.firstIndex { $0.id == id } } ?? records.startIndex
-        let end = to.flatMap { id in records.firstIndex { $0.id == id } } ?? records.index(before: records.endIndex)
+
+        let start: Int
+        if let from {
+            guard let index = records.firstIndex(where: { $0.id == from }) else {
+                throw ActionHistoryError.unknownRangeBoundary(label: "from", id: from)
+            }
+            start = index
+        } else {
+            start = records.startIndex
+        }
+
+        let end: Int
+        if let to {
+            guard let index = records.firstIndex(where: { $0.id == to }) else {
+                throw ActionHistoryError.unknownRangeBoundary(label: "to", id: to)
+            }
+            end = index
+        } else {
+            end = records.index(before: records.endIndex)
+        }
+
         guard start <= end else {
-            return []
+            throw ActionHistoryError.reversedRange(from: from ?? records[start].id, to: to ?? records[end].id)
         }
         return Array(records[start...end])
     }
@@ -194,5 +244,79 @@ private extension JSONRPCRequest {
             object.removeValue(forKey: "argValues")
         }
         return JSONRPCRequest(id: id, method: method, params: .object(object))
+    }
+
+    func withParams(
+        redactingSensitiveHistoryValuesFrom params: JSONValue?,
+        activeSecretRedactor: ActiveSecretRedactor,
+        deterministicRedactor: DeterministicRedactor
+    ) -> JSONRPCRequest {
+        guard let params else {
+            return self
+        }
+        return JSONRPCRequest(
+            id: id,
+            method: method,
+            params: params.redactingSensitiveHistoryValues(
+                activeSecretRedactor: activeSecretRedactor,
+                deterministicRedactor: deterministicRedactor
+            )
+        )
+    }
+}
+
+private extension JSONValue {
+    func redactingSensitiveHistoryValues(
+        activeSecretRedactor: ActiveSecretRedactor,
+        deterministicRedactor: DeterministicRedactor,
+        field: String = "value"
+    ) -> JSONValue {
+        switch self {
+        case let .string(value):
+            if let active = activeSecretRedactor.redaction(for: value) {
+                return .string(active.value)
+            }
+            if let deterministic = deterministicRedactor.redaction(
+                for: field,
+                value: value,
+                context: DeterministicRedactionContext(
+                    title: field,
+                    value: value,
+                    identifier: field
+                )
+            ) {
+                return .string(deterministic.value)
+            }
+            return self
+        case let .array(values):
+            return .array(values.map {
+                $0.redactingSensitiveHistoryValues(
+                    activeSecretRedactor: activeSecretRedactor,
+                    deterministicRedactor: deterministicRedactor,
+                    field: field
+                )
+            })
+        case let .object(object):
+            return .object(object.mapValuesWithKeys { key, value in
+                value.redactingSensitiveHistoryValues(
+                    activeSecretRedactor: activeSecretRedactor,
+                    deterministicRedactor: deterministicRedactor,
+                    field: key
+                )
+            })
+        case .int, .double, .bool, .null:
+            return self
+        }
+    }
+}
+
+private extension Dictionary {
+    func mapValuesWithKeys<T>(_ transform: (Key, Value) throws -> T) rethrows -> [Key: T] {
+        var result: [Key: T] = [:]
+        result.reserveCapacity(count)
+        for (key, value) in self {
+            result[key] = try transform(key, value)
+        }
+        return result
     }
 }

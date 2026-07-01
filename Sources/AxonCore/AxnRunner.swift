@@ -16,6 +16,7 @@ public struct AxnRunner {
     public typealias ActionRecorder = (JSONRPCRequest, JSONRPCResponse) -> Void
     public typealias SnapshotProvider = RecordedFactEvaluator.SnapshotProvider
     public typealias ParameterSourceResolver = (URL) throws -> String?
+    public typealias ActiveSecretRedactorProvider = @Sendable () -> ActiveSecretRedactor
 
     private static let redactedSecretValue = "<redacted: contains-secret>"
     private let commandHandler: CommandHandler
@@ -25,6 +26,7 @@ public struct AxnRunner {
     private let changeTimeoutMs: Int
     private let parameterSourceResolvers: [String: ParameterSourceResolver]
     private let actionRecorder: ActionRecorder?
+    private let activeSecretRedactorProvider: ActiveSecretRedactorProvider
 
     public init(
         commandHandler: @escaping CommandHandler,
@@ -32,7 +34,8 @@ public struct AxnRunner {
         changePollIntervalMs: Int = 100,
         changeTimeoutMs: Int = 5_000,
         parameterSourceResolvers: [String: ParameterSourceResolver] = AxnRunner.defaultParameterSourceResolvers(),
-        actionRecorder: ActionRecorder? = nil
+        actionRecorder: ActionRecorder? = nil,
+        activeSecretRedactorProvider: @escaping ActiveSecretRedactorProvider = { ActiveSecretRedactor() }
     ) {
         self.commandHandler = commandHandler
         self.snapshotProvider = snapshotProvider
@@ -41,6 +44,7 @@ public struct AxnRunner {
         self.changeTimeoutMs = max(0, changeTimeoutMs)
         self.parameterSourceResolvers = parameterSourceResolvers
         self.actionRecorder = actionRecorder
+        self.activeSecretRedactorProvider = activeSecretRedactorProvider
     }
 
     public func run(params: [String: JSONValue]) throws -> JSONValue {
@@ -118,7 +122,10 @@ public struct AxnRunner {
 
         do {
             let snapshot = try snapshotProvider(app)
-            let snapshotJSON = snapshot.jsonValue(includeTree: true)
+            let snapshotJSON = snapshot.jsonValue(
+                includeTree: true,
+                activeSecretRedactor: activeSecretRedactorProvider()
+            )
             return .object([
                 "reason": .string(reason),
                 "snapshotId": .string(snapshot.id.rawValue),

@@ -123,7 +123,12 @@ public struct CommandRouter {
     public func handle(_ request: JSONRPCRequest) -> JSONRPCResponse {
         let context = services.history.context(for: request)
         let response = handleCommand(context.request, historySessionID: context.sessionID)
-        services.history.record(request: context.request, response: response, sessionID: context.sessionID)
+        services.history.record(
+            request: context.request,
+            response: response,
+            sessionID: context.sessionID,
+            activeSecretRedactor: ActiveSecretRedactor(filter: services.activeCredentialFilterProvider())
+        )
         return response
     }
 
@@ -498,11 +503,7 @@ private struct PrimitiveActionCommandHandler {
         }
 
         let summaries = resolution.candidates.prefix(5).map { candidate in
-            let matchedText = activeSecretRedactor()
-                .redaction(
-                    for: candidate.matchedText
-                )?
-                .value ?? candidate.matchedText
+            let matchedText = redactedTextLocationSummaryText(candidate)
             return "[\(candidate.index)] \(candidate.role) \"\(matchedText)\" frame=\(frameDescription(candidate.frame))"
         }
         message += " (\(resolution.candidates.count) candidates: \(summaries.joined(separator: "; "))"
@@ -511,6 +512,24 @@ private struct PrimitiveActionCommandHandler {
         }
         message += ")"
         return message
+    }
+
+    private func redactedTextLocationSummaryText(_ candidate: TextLocationCandidate) -> String {
+        if let active = activeSecretRedactor().redaction(for: candidate.matchedText) {
+            return active.value
+        }
+        if let deterministic = DeterministicRedactor.standard.redaction(
+            for: "value",
+            value: candidate.matchedText,
+            context: DeterministicRedactionContext(
+                role: candidate.role,
+                title: candidate.matchedText,
+                value: candidate.matchedText
+            )
+        ) {
+            return deterministic.value
+        }
+        return candidate.matchedText
     }
 
     private func frameDescription(_ frame: AXFrame) -> String {
@@ -687,16 +706,27 @@ private struct AxnRunCommandHandler {
     }
 
     private func runner() -> AxnRunner {
-        AxnRunner(
+        let credentialFilterProvider = services.activeCredentialFilterProvider
+        return AxnRunner(
             commandHandler: commandHandler,
             snapshotProvider: services.axnSnapshotProvider,
             actionRecorder: { childRequest, childResponse in
                 guard let historySessionID else {
                     return
                 }
-                services.history.record(request: childRequest, response: childResponse, sessionID: historySessionID)
-            }
+                services.history.record(
+                    request: childRequest,
+                    response: childResponse,
+                    sessionID: historySessionID,
+                    activeSecretRedactor: activeSecretRedactor()
+                )
+            },
+            activeSecretRedactorProvider: { ActiveSecretRedactor(filter: credentialFilterProvider()) }
         )
+    }
+
+    private func activeSecretRedactor() -> ActiveSecretRedactor {
+        ActiveSecretRedactor(filter: services.activeCredentialFilterProvider())
     }
 
     private func isTerminalDebugStatus(_ status: JSONValue) -> Bool {
@@ -731,6 +761,8 @@ private struct HistoryCommandHandler {
                 result["path"] = .string(path)
             }
             return JSONRPCResponse(id: request.id, result: result)
+        } catch let error as ActionHistoryError {
+            return JSONRPCResponse(id: request.id, error: .invalidParams(error.description))
         } catch let error as JSONRPCError {
             return JSONRPCResponse(id: request.id, error: error)
         } catch {

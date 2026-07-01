@@ -259,15 +259,25 @@ public enum AxnArgumentValueCoercer {
         guard value.count == 10 else {
             return false
         }
-        let parts = value.split(separator: "-")
+        let parts = value.split(separator: "-", omittingEmptySubsequences: false)
         guard parts.count == 3,
               parts[0].count == 4,
               parts[1].count == 2,
-              parts[2].count == 2
+              parts[2].count == 2,
+              let year = Int(parts[0]),
+              let month = Int(parts[1]),
+              let day = Int(parts[2])
         else {
             return false
         }
-        return parts.allSatisfy { Int($0) != nil }
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0) ?? calendar.timeZone
+        let components = DateComponents(calendar: calendar, timeZone: calendar.timeZone, year: year, month: month, day: day)
+        guard let date = calendar.date(from: components) else {
+            return false
+        }
+        let roundTrip = calendar.dateComponents([.year, .month, .day], from: date)
+        return roundTrip.year == year && roundTrip.month == month && roundTrip.day == day
     }
 
     private static func isoDateString(_ date: Date) -> String {

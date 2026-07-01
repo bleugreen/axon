@@ -1,3 +1,4 @@
+import Foundation
 import Testing
 @testable import AxonCore
 
@@ -254,6 +255,84 @@ import Testing
     #expect(response.error?.code == -32602)
     #expect(response.error?.message.contains("Text location did not resolve uniquely: ambiguous") == true)
     #expect(response.error?.message.contains("2 candidates") == true)
+}
+
+@Test func clickRequestRedactsDeterministicSecretsInAmbiguousTextLocationError() {
+    let token = "sk-proj-abcdef1234567890SECRET"
+    let router = CommandRouter(
+        captureSnapshot: { _, _ in
+            actionTextLocationFixtureSnapshot(labels: [
+                "Generated token \(token)",
+                "Backup token \(token)"
+            ])
+        },
+        actions: PrimitiveActionHandlers(
+            clickPoint: { _ in
+                Issue.record("ambiguous text location should not dispatch a click")
+                return PrimitiveActionResult(action: "click", target: "bad", strategy: "bad", success: false)
+            }
+        )
+    )
+
+    let response = router.handle(JSONRPCRequest(
+        id: .string("click-location-secret-ambiguous"),
+        method: "click",
+        params: .object([
+            "target": .object([
+                "location": .object([
+                    "app": .string("com.example.App"),
+                    "text": .object(["contains": .string(token)])
+                ])
+            ])
+        ])
+    ))
+
+    #expect(response.error?.code == -32602)
+    #expect(response.error?.message.contains(token) == false)
+    #expect(response.error?.message.contains("<redacted: auth-credential>") == true)
+}
+
+@Test func dragRequestRedactsActiveCredentialsInAmbiguousTextLocationError() throws {
+    let secret = "correct horse battery staple"
+    let router = CommandRouter(
+        captureSnapshot: { _, _ in
+            actionTextLocationFixtureSnapshot(labels: [
+                secret,
+                secret,
+                "Drop target"
+            ])
+        },
+        actions: PrimitiveActionHandlers(
+            drag: { _, _, _, _ in
+                Issue.record("ambiguous text location should not dispatch a drag")
+                return PrimitiveActionResult(action: "drag", target: "bad", strategy: "bad", success: false)
+            }
+        ),
+        activeCredentialFilter: try actionRouterActiveCredentialFilter(values: [secret])
+    )
+
+    let response = router.handle(JSONRPCRequest(
+        id: .string("drag-location-secret-ambiguous"),
+        method: "drag",
+        params: .object([
+            "from": .object([
+                "location": .object([
+                    "app": .string("com.example.App"),
+                    "text": .string(secret)
+                ])
+            ]),
+            "to": .object([
+                "location": .object([
+                    "app": .string("com.example.App"),
+                    "text": .string("Drop target")
+                ])
+            ])
+        ])
+    ))
+
+    #expect(response.error?.code == -32602)
+    #expect(response.error?.message.contains(secret) == false)
+    #expect(response.error?.message.contains("<redacted: active-credential>") == true)
 }
 
 @Test func clickRequestRejectsAmbiguousLocatorTarget() {
@@ -614,5 +693,16 @@ private func actionTextLocationFixtureSnapshot(
             )
         ],
         screenshot: screenshot
+    )
+}
+
+private func actionRouterActiveCredentialFilter(values: [String]) throws -> ActiveCredentialIndex {
+    try ActiveCredentialIndex(
+        secrets: values.map {
+            ActiveCredentialSecret(value: $0, provider: "test", reference: "op://Router/Active/secret")
+        },
+        hmacKey: Data(repeating: 0x44, count: 32),
+        provider: "test",
+        createdAt: Date(timeIntervalSince1970: 1_775_000_000)
     )
 }
