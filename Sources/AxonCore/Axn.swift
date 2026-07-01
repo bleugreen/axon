@@ -262,12 +262,67 @@ public struct AxnArgument: Equatable, Sendable {
         string("type")
     }
 
+    public var argumentType: AxnArgumentType? {
+        type.flatMap(AxnArgumentType.init(rawValue:))
+    }
+
+    public var defaultValue: JSONValue? {
+        let value = fields["default"]
+        return value == .null ? nil : value
+    }
+
     public var source: String? {
         string("source")
     }
 
+    public var sourceURL: URL? {
+        source.flatMap(URL.init(string:))
+    }
+
     public var jsonValue: JSONValue {
         .object(fields)
+    }
+
+    public static func validated(_ arguments: [AxnArgument]) throws -> [AxnArgument] {
+        var seenNames: Set<String> = []
+        return try arguments.enumerated().map { index, argument in
+            guard let name = argument.name, isValidName(name) else {
+                throw AxnRunError.invalidParams("args[\(index)] requires snake_case name")
+            }
+            guard seenNames.insert(name).inserted else {
+                throw AxnRunError.invalidParams("duplicate arg: \(name)")
+            }
+            guard argument.argumentType != nil else {
+                throw AxnRunError.invalidParams("args[\(index)] requires type")
+            }
+            if argument.argumentType == .secret, argument.defaultValue != nil {
+                throw AxnRunError.invalidParams("secret arg cannot have default: \(name)")
+            }
+            if let sourceValue = argument.fields["source"], sourceValue != .null {
+                guard case let .string(rawSource) = sourceValue,
+                      let url = URL(string: rawSource),
+                      url.scheme != nil
+                else {
+                    throw AxnRunError.invalidParams("arg \(name) source must be a URL")
+                }
+                _ = url
+            }
+            return argument
+        }
+    }
+
+    private static func isValidName(_ name: String) -> Bool {
+        guard let first = name.unicodeScalars.first,
+              first >= "a",
+              first <= "z"
+        else {
+            return false
+        }
+        return name.unicodeScalars.allSatisfy { scalar in
+            (scalar >= "a" && scalar <= "z")
+                || (scalar >= "0" && scalar <= "9")
+                || scalar == "_"
+        }
     }
 
     private func string(_ key: String) -> String? {
