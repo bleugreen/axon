@@ -195,7 +195,7 @@ public struct CommandRouter {
         case "debug.create", "debug.start":
             do {
                 let params = try paramsObject(in: request)
-                let breakpoints = try stringArrayParam("breakpoints", in: params)
+                let breakpoints = try ToolParamDecoder(toolName: request.method, params: params).stringArray("breakpoints")
                 let session = try AxnRunner(
                     commandHandler: { handleCommand($0) },
                     snapshotProvider: batchSnapshotProvider,
@@ -249,7 +249,7 @@ public struct CommandRouter {
         case "debug.setBreakpoints":
             do {
                 let params = try paramsObject(in: request)
-                let breakpoints = try stringArrayParam("breakpoints", in: params)
+                let breakpoints = try ToolParamDecoder(toolName: request.method, params: params).stringArray("breakpoints")
                 return debugSessionResponse(id: request.id, request: request) { session in
                     session.setBreakpoints(Set(breakpoints))
                 }
@@ -510,74 +510,69 @@ public struct CommandRouter {
         return try AXLocator(jsonValue: locator)
     }
 
-    private func resolveTargetParam(in request: JSONRPCRequest) throws -> String {
-        let params = try paramsObject(in: request)
-        guard let target = params["target"] else {
-            throw JSONRPCError.invalidParams("Missing target parameter")
-        }
-
-        if case let .string(handle) = target {
-            return handle
-        }
-        return try resolveLocatorTarget(target)
-    }
-
-    private func requiredResolvedPointerTarget(_ key: String, in params: [String: JSONValue]) throws -> ResolvedPointerTarget {
-        guard let value = params[key] else {
+    private func requiredToolTarget(
+        _ key: String,
+        in params: [String: JSONValue],
+        acceptedKinds: ToolTargetKindSet
+    ) throws -> ToolTarget {
+        guard let value = params[key], value != .null else {
             throw JSONRPCError.invalidParams("Missing target parameter: \(key)")
         }
-        return try resolvedPointerTarget(from: value)
+        return try ToolTarget(jsonValue: value, acceptedKinds: acceptedKinds, fieldName: key)
     }
 
-    private func optionalResolvedPointerTarget(_ key: String, in params: [String: JSONValue]) throws -> ResolvedPointerTarget? {
+    private func optionalToolTarget(
+        _ key: String,
+        in params: [String: JSONValue],
+        acceptedKinds: ToolTargetKindSet
+    ) throws -> ToolTarget? {
         guard let value = params[key], value != .null else {
             return nil
         }
-        return try resolvedPointerTarget(from: value)
+        return try ToolTarget(jsonValue: value, acceptedKinds: acceptedKinds, fieldName: key)
     }
 
-    private func resolvedPointerTarget(from value: JSONValue) throws -> ResolvedPointerTarget {
-        if case let .string(handle) = value {
+    private func resolveElementTarget(_ target: ToolTarget) throws -> String {
+        switch target {
+        case let .handle(handle):
+            return handle
+        case let .locator(app, locator):
+            let resolution = try resolveLocator(app, locator, true)
+            guard resolution.status == .unique, let handle = resolution.best?.handle else {
+                throw JSONRPCError.invalidParams("Locator did not resolve uniquely: \(resolution.status.rawValue)")
+            }
+            return handle.rawValue
+        case .point:
+            throw JSONRPCError.invalidParams("target does not accept point targets; accepted target kinds: handle, locator")
+        case .textLocation:
+            throw JSONRPCError.invalidParams("target does not accept textLocation targets; accepted target kinds: handle, locator")
+        }
+    }
+
+    private func requiredResolvedPointerTarget(_ key: String, in params: [String: JSONValue]) throws -> ResolvedPointerTarget {
+        try resolvedPointerTarget(from: requiredToolTarget(key, in: params, acceptedKinds: .pointer))
+    }
+
+    private func optionalResolvedPointerTarget(_ key: String, in params: [String: JSONValue]) throws -> ResolvedPointerTarget? {
+        guard let target = try optionalToolTarget(key, in: params, acceptedKinds: .pointer) else {
+            return nil
+        }
+        return try resolvedPointerTarget(from: target)
+    }
+
+    private func resolvedPointerTarget(from target: ToolTarget) throws -> ResolvedPointerTarget {
+        switch target {
+        case let .handle(handle):
             return ResolvedPointerTarget(target: .handle(handle), locationResolution: nil)
-        }
-        if let point = try pointTarget(from: value) {
+        case let .locator(app, locator):
+            let resolved = try resolveElementTarget(.locator(app: app, locator: locator))
+            return ResolvedPointerTarget(target: .handle(resolved), locationResolution: nil)
+        case let .point(point):
             return ResolvedPointerTarget(target: .point(point), locationResolution: nil)
-        }
-        if let location = try textLocationTarget(from: value) {
+        case let .textLocation(location):
             let resolution = try resolveTextLocationTarget(location)
             return ResolvedPointerTarget(target: .point(resolution.point), locationResolution: resolution)
         }
-        return ResolvedPointerTarget(target: .handle(try resolveLocatorTarget(value)), locationResolution: nil)
-    }
-
-    private func pointTarget(from value: JSONValue) throws -> ActionPoint? {
-        guard case let .object(object) = value else {
-            return nil
-        }
-        if let point = object["point"] {
-            return try pointValue(point)
-        }
-        if object["x"] != nil || object["y"] != nil {
-            return try pointValue(value)
-        }
-        return nil
-    }
-
-    private func pointValue(_ value: JSONValue) throws -> ActionPoint {
-        guard case let .object(object) = value else {
-            throw JSONRPCError.invalidParams("point must be an object")
-        }
-        guard let x = numericValue("x", in: object), let y = numericValue("y", in: object) else {
-            throw JSONRPCError.invalidParams("point requires numeric x and y")
-        }
-        return ActionPoint(x: x, y: y)
-    }
-
-    private func textLocationTarget(from value: JSONValue) throws -> TextLocationTarget? {
-        guard case let .object(object) = value, let location = object["location"] else {
-            return nil
-        }
-        return try TextLocationTarget(jsonValue: location)
     }
 
     private func resolveTextLocationTarget(_ target: TextLocationTarget) throws -> TextLocationResolvedPoint {
