@@ -515,10 +515,10 @@ struct DocumentView: View {
             lastError = error.message
             return
         }
-        let batch = response.result?["batch"]
-        lastTrace = batch?["trace"]?.arrayValue ?? []
+        let runResult = response.result?["batch"]
+        lastTrace = runResult?["trace"]?.arrayValue ?? []
         actedOnTarget = targetForActedOnBlock()
-        if batch?["success"] == .bool(true) {
+        if runResult?["success"] == .bool(true) {
             runStatus = isReview ? "Replay completed" : "Completed"
             lastError = nil
         } else {
