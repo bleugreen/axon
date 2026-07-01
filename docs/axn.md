@@ -24,7 +24,7 @@ actions:
     target: s1:20
 ```
 
-`run` stops on the first failed action by default and returns a trace:
+`run` stops on the first failed action by default and returns a run result with a trace. `AxnRunner` and the CLI summary operate on this unwrapped shape; socket and MCP tool-call responses preserve the legacy externally visible `{"batch": ...}` envelope around it.
 
 ```json
 {

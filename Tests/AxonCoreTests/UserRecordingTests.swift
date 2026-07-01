@@ -20,15 +20,15 @@ import Testing
         ])
     ])
 
-    let batch = try translator.batch(from: [
+    let axnDocument = try translator.axnDocument(from: [
         RecordedUserEventGroup(action: .setValue(target: target, value: "Mitch"))
     ])
 
-    #expect(batch["version"] == .int(1))
-    #expect(batch["actions"]?[0]?["id"] == .string("a001"))
-    #expect(batch["actions"]?[0]?["tool"] == .string("type"))
-    #expect(batch["actions"]?[0]?["expects"]?[0]?["id"] == .string("a001.value.0"))
-    #expect(batch["actions"]?[0]?["expects"]?[0]?["state"]?["value"]?["contains"] == .string("Mitch"))
+    #expect(axnDocument["version"] == .int(1))
+    #expect(axnDocument["actions"]?[0]?["id"] == .string("a001"))
+    #expect(axnDocument["actions"]?[0]?["tool"] == .string("type"))
+    #expect(axnDocument["actions"]?[0]?["expects"]?[0]?["id"] == .string("a001.value.0"))
+    #expect(axnDocument["actions"]?[0]?["expects"]?[0]?["state"]?["value"]?["contains"] == .string("Mitch"))
 }
 
 @Test func recordingTranslatorUsesPostActionTargetForValueExpectation() throws {
@@ -48,12 +48,12 @@ import Testing
         ])
     ])
 
-    let batch = try translator.batch(from: [
+    let axnDocument = try translator.axnDocument(from: [
         RecordedUserEventGroup(action: .setValue(target: actionTarget, value: "wikipedia.org", factTarget: factTarget))
     ])
 
-    #expect(batch["actions"]?[0]?["target"] == actionTarget)
-    #expect(batch["actions"]?[0]?["expects"]?[0]?["target"] == factTarget)
+    #expect(axnDocument["actions"]?[0]?["target"] == actionTarget)
+    #expect(axnDocument["actions"]?[0]?["expects"]?[0]?["target"] == factTarget)
 }
 
 @Test func recordingTranslatorAddsConservativeValueDependencyForSubmitKey() throws {
@@ -66,13 +66,13 @@ import Testing
         ])
     ])
 
-    let batch = try translator.batch(from: [
+    let axnDocument = try translator.axnDocument(from: [
         RecordedUserEventGroup(action: .setValue(target: target, value: "Mitch")),
         RecordedUserEventGroup(action: .pressKey(app: "Example", key: "Return"))
     ])
 
-    #expect(batch["actions"]?[1]?["id"] == .string("a002"))
-    #expect(batch["actions"]?[1]?["requires"]?[0] == .string("a001.value.0"))
+    #expect(axnDocument["actions"]?[1]?["id"] == .string("a002"))
+    #expect(axnDocument["actions"]?[1]?["requires"]?[0] == .string("a001.value.0"))
 }
 
 @Test func recordingTranslatorConsumesValueDependencyAfterSubmitKey() throws {
@@ -92,14 +92,14 @@ import Testing
         ])
     ])
 
-    let batch = try translator.batch(from: [
+    let axnDocument = try translator.axnDocument(from: [
         RecordedUserEventGroup(action: .setValue(target: field, value: "wikipedia.com")),
         RecordedUserEventGroup(action: .pressKey(app: "Example", key: "Return")),
         RecordedUserEventGroup(action: .click(target: link))
     ])
 
-    #expect(batch["actions"]?[1]?["requires"]?[0] == .string("a001.value.0"))
-    #expect(batch["actions"]?[2]?["requires"] == nil)
+    #expect(axnDocument["actions"]?[1]?["requires"]?[0] == .string("a001.value.0"))
+    #expect(axnDocument["actions"]?[2]?["requires"] == nil)
 }
 
 @Test func recordingTranslatorConsumesValueDependencyAfterSubmitClick() throws {
@@ -126,14 +126,14 @@ import Testing
         ])
     ])
 
-    let batch = try translator.batch(from: [
+    let axnDocument = try translator.axnDocument(from: [
         RecordedUserEventGroup(action: .setValue(target: field, value: "wikipedia.com")),
         RecordedUserEventGroup(action: .click(target: button)),
         RecordedUserEventGroup(action: .click(target: link))
     ])
 
-    #expect(batch["actions"]?[1]?["requires"]?[0] == .string("a001.value.0"))
-    #expect(batch["actions"]?[2]?["requires"] == nil)
+    #expect(axnDocument["actions"]?[1]?["requires"]?[0] == .string("a001.value.0"))
+    #expect(axnDocument["actions"]?[2]?["requires"] == nil)
 }
 
 @Test func recordingTranslatorDoesNotSpendValueDependencyOnNonSubmitClick() throws {
@@ -153,20 +153,20 @@ import Testing
         ])
     ])
 
-    let batch = try translator.batch(from: [
+    let axnDocument = try translator.axnDocument(from: [
         RecordedUserEventGroup(action: .setValue(target: field, value: "wikipedia.com")),
         RecordedUserEventGroup(action: .click(target: link)),
         RecordedUserEventGroup(action: .pressKey(app: "Example", key: "Return"))
     ])
 
-    #expect(batch["actions"]?[1]?["requires"] == nil)
-    #expect(batch["actions"]?[2]?["requires"]?[0] == .string("a001.value.0"))
+    #expect(axnDocument["actions"]?[1]?["requires"] == nil)
+    #expect(axnDocument["actions"]?[2]?["requires"]?[0] == .string("a001.value.0"))
 }
 
 @Test func recordingTranslatorRecordsWarningsWithoutEnforcingObservedEvidence() throws {
     let translator = UserRecordingTranslator()
 
-    let batch = try translator.batch(from: [
+    let axnDocument = try translator.axnDocument(from: [
         RecordedUserEventGroup(
             action: .click(target: .object(["point": .object(["x": .double(10), "y": .double(20)])])),
             observed: [.object(["kind": .string("raw-pointer")])],
@@ -174,22 +174,22 @@ import Testing
         )
     ])
 
-    #expect(batch["actions"]?[0]?["tool"] == .string("click"))
-    #expect(batch["actions"]?[0]?["observed"]?[0]?["kind"] == .string("raw-pointer"))
-    #expect(batch["actions"]?[0]?["warnings"]?[0] == .string("point fallback"))
-    #expect(batch["actions"]?[0]?["expects"] == nil)
+    #expect(axnDocument["actions"]?[0]?["tool"] == .string("click"))
+    #expect(axnDocument["actions"]?[0]?["observed"]?[0]?["kind"] == .string("raw-pointer"))
+    #expect(axnDocument["actions"]?[0]?["warnings"]?[0] == .string("point fallback"))
+    #expect(axnDocument["actions"]?[0]?["expects"] == nil)
 }
 
 @Test func recordingTranslatorAddsChangedExpectationForSubmitKey() throws {
     let translator = UserRecordingTranslator()
 
-    let batch = try translator.batch(from: [
+    let axnDocument = try translator.axnDocument(from: [
         RecordedUserEventGroup(action: .pressKey(app: "Example", key: "Return"))
     ])
 
-    #expect(batch["actions"]?[0]?["expects"]?[0]?["id"] == .string("a001.changed.0"))
-    #expect(batch["actions"]?[0]?["expects"]?[0]?["kind"] == .string("changed"))
-    #expect(batch["actions"]?[0]?["expects"]?[0]?["target"]?["app"] == .string("Example"))
+    #expect(axnDocument["actions"]?[0]?["expects"]?[0]?["id"] == .string("a001.changed.0"))
+    #expect(axnDocument["actions"]?[0]?["expects"]?[0]?["kind"] == .string("changed"))
+    #expect(axnDocument["actions"]?[0]?["expects"]?[0]?["target"]?["app"] == .string("Example"))
 }
 
 @Test func recordingTranslatorAddsChangedExpectationForObservedNavigationClick() throws {
@@ -199,7 +199,7 @@ import Testing
         "point": .object(["x": .double(10), "y": .double(20)])
     ])
 
-    let batch = try translator.batch(from: [
+    let axnDocument = try translator.axnDocument(from: [
         RecordedUserEventGroup(
             action: .click(target: target),
             observed: [
@@ -212,8 +212,8 @@ import Testing
         )
     ])
 
-    #expect(batch["actions"]?[0]?["expects"]?[0]?["id"] == .string("a001.changed.0"))
-    #expect(batch["actions"]?[0]?["expects"]?[0]?["kind"] == .string("changed"))
+    #expect(axnDocument["actions"]?[0]?["expects"]?[0]?["id"] == .string("a001.changed.0"))
+    #expect(axnDocument["actions"]?[0]?["expects"]?[0]?["kind"] == .string("changed"))
 }
 
 @Test func recordingTranslatorDoesNotTreatFocusChurnAsNavigationChange() throws {
@@ -226,7 +226,7 @@ import Testing
         ])
     ])
 
-    let batch = try translator.batch(from: [
+    let axnDocument = try translator.axnDocument(from: [
         RecordedUserEventGroup(
             action: .setValue(target: target, value: "wikipedia.org"),
             observed: [
@@ -245,7 +245,7 @@ import Testing
     ])
 
     let expects: [JSONValue]
-    if case let .array(values)? = batch["actions"]?[0]?["expects"] {
+    if case let .array(values)? = axnDocument["actions"]?[0]?["expects"] {
         expects = values
     } else {
         expects = []
@@ -264,7 +264,7 @@ import Testing
         ])
     ])
 
-    let batch = try translator.batch(from: [
+    let axnDocument = try translator.axnDocument(from: [
         RecordedUserEventGroup(
             action: .setValue(target: target, value: "wikipedia.org"),
             observed: [
@@ -283,7 +283,7 @@ import Testing
     ])
 
     let expects: [JSONValue]
-    if case let .array(values)? = batch["actions"]?[0]?["expects"] {
+    if case let .array(values)? = axnDocument["actions"]?[0]?["expects"] {
         expects = values
     } else {
         expects = []
@@ -302,23 +302,23 @@ import Testing
         ])
     ])
 
-    let batch = try translator.batch(from: [
+    let axnDocument = try translator.axnDocument(from: [
         RecordedUserEventGroup(action: .scroll(target: target, app: "Example", deltaX: 0, deltaY: -1)),
         RecordedUserEventGroup(action: .scroll(target: target, app: "Example", deltaX: 0, deltaY: -4)),
         RecordedUserEventGroup(action: .scroll(target: target, app: "Example", deltaX: 0, deltaY: -120))
     ])
 
     let actions: [JSONValue]
-    if case let .array(values)? = batch["actions"] {
+    if case let .array(values)? = axnDocument["actions"] {
         actions = values
     } else {
         actions = []
     }
 
     #expect(actions.count == 1)
-    #expect(batch["actions"]?[0]?["id"] == .string("a001"))
-    #expect(batch["actions"]?[0]?["tool"] == .string("scroll"))
-    #expect(batch["actions"]?[0]?["deltaY"] == .double(-125))
+    #expect(axnDocument["actions"]?[0]?["id"] == .string("a001"))
+    #expect(axnDocument["actions"]?[0]?["tool"] == .string("scroll"))
+    #expect(axnDocument["actions"]?[0]?["deltaY"] == .double(-125))
 }
 
 @Test func recordingTranslatorCoalescesAlternatingWheelJitterIntoSingleRevealScroll() throws {
@@ -338,7 +338,7 @@ import Testing
         ])
     ])
 
-    let batch = try translator.batch(from: [
+    let axnDocument = try translator.axnDocument(from: [
         RecordedUserEventGroup(action: .scroll(target: scrollSurface, app: "Example", deltaX: 0, deltaY: -120)),
         RecordedUserEventGroup(action: .scroll(target: scrollSurface, app: "Example", deltaX: 0, deltaY: 120)),
         RecordedUserEventGroup(action: .scroll(target: scrollSurface, app: "Example", deltaX: 0, deltaY: -120)),
@@ -347,13 +347,13 @@ import Testing
         RecordedUserEventGroup(action: .click(target: link))
     ])
 
-    #expect(batch["actions"]?[0]?["tool"] == .string("click"))
-    #expect(batch["actions"]?[0]?["target"] == link)
-    #expect(batch["actions"]?[0]?["resolve"]?["reveal"]?["app"] == .string("Example"))
-    #expect(batch["actions"]?[0]?["resolve"]?["reveal"]?["surface"] == nil)
-    #expect(batch["actions"]?[0]?["resolve"]?["reveal"]?["direction"] == .string("down"))
-    #expect(batch["actions"]?[0]?["resolve"]?["reveal"]?["deltaY"] == .double(-120))
-    #expect(batch["actions"]?[1] == nil)
+    #expect(axnDocument["actions"]?[0]?["tool"] == .string("click"))
+    #expect(axnDocument["actions"]?[0]?["target"] == link)
+    #expect(axnDocument["actions"]?[0]?["resolve"]?["reveal"]?["app"] == .string("Example"))
+    #expect(axnDocument["actions"]?[0]?["resolve"]?["reveal"]?["surface"] == nil)
+    #expect(axnDocument["actions"]?[0]?["resolve"]?["reveal"]?["direction"] == .string("down"))
+    #expect(axnDocument["actions"]?[0]?["resolve"]?["reveal"]?["deltaY"] == .double(-120))
+    #expect(axnDocument["actions"]?[1] == nil)
 }
 
 @Test func recordingTranslatorMakesScrollBurstRevealNextActionTarget() throws {
@@ -372,20 +372,20 @@ import Testing
         ])
     ])
 
-    let batch = try translator.batch(from: [
+    let axnDocument = try translator.axnDocument(from: [
         RecordedUserEventGroup(action: .scroll(target: scrollSurface, app: "Example", deltaX: 0, deltaY: -1)),
         RecordedUserEventGroup(action: .scroll(target: scrollSurface, app: "Example", deltaX: 0, deltaY: -4)),
         RecordedUserEventGroup(action: .click(target: link))
     ])
 
-    #expect(batch["actions"]?[0]?["id"] == .string("a001"))
-    #expect(batch["actions"]?[0]?["tool"] == .string("click"))
-    #expect(batch["actions"]?[0]?["target"] == link)
-    #expect(batch["actions"]?[0]?["resolve"]?["reveal"]?["surface"] == scrollSurface)
-    #expect(batch["actions"]?[0]?["resolve"]?["reveal"]?["direction"] == .string("down"))
-    #expect(batch["actions"]?[0]?["resolve"]?["reveal"]?["deltaY"] == .double(-120))
-    #expect(batch["actions"]?[0]?["expects"] == nil)
-    #expect(batch["actions"]?[1] == nil)
+    #expect(axnDocument["actions"]?[0]?["id"] == .string("a001"))
+    #expect(axnDocument["actions"]?[0]?["tool"] == .string("click"))
+    #expect(axnDocument["actions"]?[0]?["target"] == link)
+    #expect(axnDocument["actions"]?[0]?["resolve"]?["reveal"]?["surface"] == scrollSurface)
+    #expect(axnDocument["actions"]?[0]?["resolve"]?["reveal"]?["direction"] == .string("down"))
+    #expect(axnDocument["actions"]?[0]?["resolve"]?["reveal"]?["deltaY"] == .double(-120))
+    #expect(axnDocument["actions"]?[0]?["expects"] == nil)
+    #expect(axnDocument["actions"]?[1] == nil)
 }
 
 @Test func recordingTranslatorFoldsChangingScrollTargetsIntoNextActionReveal() throws {
@@ -419,19 +419,19 @@ import Testing
         ])
     ])
 
-    let batch = try translator.batch(from: [
+    let axnDocument = try translator.axnDocument(from: [
         RecordedUserEventGroup(action: .scroll(target: window, app: "Example", deltaX: 0, deltaY: -120)),
         RecordedUserEventGroup(action: .scroll(target: incidentalLink, app: "Example", deltaX: 0, deltaY: -120)),
         RecordedUserEventGroup(action: .scroll(target: point, app: "Example", deltaX: 0, deltaY: -120)),
         RecordedUserEventGroup(action: .click(target: targetLink))
     ])
 
-    #expect(batch["actions"]?[0]?["tool"] == .string("click"))
-    #expect(batch["actions"]?[0]?["target"] == targetLink)
-    #expect(batch["actions"]?[0]?["resolve"]?["reveal"]?["app"] == .string("Example"))
-    #expect(batch["actions"]?[0]?["resolve"]?["reveal"]?["surface"] == nil)
-    #expect(batch["actions"]?[0]?["resolve"]?["reveal"]?["deltaY"] == .double(-360))
-    #expect(batch["actions"]?[1] == nil)
+    #expect(axnDocument["actions"]?[0]?["tool"] == .string("click"))
+    #expect(axnDocument["actions"]?[0]?["target"] == targetLink)
+    #expect(axnDocument["actions"]?[0]?["resolve"]?["reveal"]?["app"] == .string("Example"))
+    #expect(axnDocument["actions"]?[0]?["resolve"]?["reveal"]?["surface"] == nil)
+    #expect(axnDocument["actions"]?[0]?["resolve"]?["reveal"]?["deltaY"] == .double(-360))
+    #expect(axnDocument["actions"]?[1] == nil)
 }
 
 @Test func recordedLocatorDoesNotIncludeVolatileWindowTitle() {

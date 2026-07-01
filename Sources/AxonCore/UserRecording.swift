@@ -25,7 +25,7 @@ public struct RecordedUserEventGroup: Equatable, Sendable {
 public struct UserRecordingTranslator {
     public init() {}
 
-    public func batch(from groups: [RecordedUserEventGroup]) throws -> JSONValue {
+    public func axnDocument(from groups: [RecordedUserEventGroup]) throws -> JSONValue {
         var actions: [JSONValue] = []
         var lastValueFactID: String?
         let semanticGroups = coalescedScrollBursts(from: groups)
@@ -101,8 +101,8 @@ public struct UserRecordingTranslator {
     }
 
     public func yaml(from groups: [RecordedUserEventGroup]) throws -> String {
-        let batch = try batch(from: groups)
-        return try AxnDocumentCodec.yamlString(from: batch)
+        let axnDocument = try axnDocument(from: groups)
+        return try AxnDocumentCodec.yamlString(from: axnDocument)
     }
 
     private func coalescedScrollBursts(from groups: [RecordedUserEventGroup]) -> [RecordedUserEventGroup] {

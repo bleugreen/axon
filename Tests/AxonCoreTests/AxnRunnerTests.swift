@@ -580,7 +580,7 @@ private func articleSnapshot(children: [AXNode]) -> AppSnapshot {
     #expect(batch["success"] == .bool(true))
     #expect(requests == [
         JSONRPCRequest(
-            id: .string("batch.0.keyboard"),
+            id: .string("run.0.keyboard"),
             method: "keyboard",
             params: .object([
                 "app": .string("Firefox"),
@@ -588,7 +588,7 @@ private func articleSnapshot(children: [AXNode]) -> AppSnapshot {
             ])
         ),
         JSONRPCRequest(
-            id: .string("batch.1.click"),
+            id: .string("run.1.click"),
             method: "click",
             params: .object([
                 "target": .string("s1:2")

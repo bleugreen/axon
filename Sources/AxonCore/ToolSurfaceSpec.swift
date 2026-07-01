@@ -157,16 +157,16 @@ public enum ToolSurfaceSpec {
             description: "Run a sequence of Axon actions from inline actions, a .axn path, or a path loaded first with inline actions appended.",
             params: [
                 ToolParameterSpec("actions", .array, description: "Ordered action objects, each with a tool field and that tool's normal arguments."),
-                ToolParameterSpec("path", .string, description: "Local .axn batch file path for the Axon daemon to read."),
+                ToolParameterSpec("path", .string, description: "Local .axn file path for the Axon daemon to read."),
                 ToolParameterSpec("argValues", .freeformObject, description: "Caller-supplied .axn argument values keyed by declared arg name. Valid only for args without a declared source."),
                 ToolParameterSpec("continueOnError", .boolean, default: .bool(false), description: "Continue after an action fails. Defaults to false."),
-                ToolParameterSpec("dryRun", .boolean, description: "Trace the batch without dispatching actions.")
+                ToolParameterSpec("dryRun", .boolean, description: "Trace the run without dispatching actions.")
             ],
             cliUsage: "axon run <path.axn> [--arg name=value] [--dry-run] [--continue-on-error]"
         ),
         ToolSpec(
             name: "save",
-            description: "Save recent recorded Axon calls as an editable .axn action batch. Read calls are omitted unless includeReads is true.",
+            description: "Save recent recorded Axon calls as an editable .axn action file. Read calls are omitted unless includeReads is true.",
             params: [
                 ToolParameterSpec("sessionId", .string, default: .string("default"), description: "History session to export. Defaults to the daemon's default session."),
                 ToolParameterSpec("from", .string, description: "Optional starting call id, inclusive."),

@@ -351,7 +351,7 @@ public struct AxnRunner {
         secretTaintedFields: Set<String>
     ) -> JSONRPCResponse {
         let request = JSONRPCRequest(
-            id: .string("batch.\(index).\(tool)"),
+            id: .string("run.\(index).\(tool)"),
             method: method,
             params: .object(object)
         )

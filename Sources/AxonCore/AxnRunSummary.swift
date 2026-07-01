@@ -7,8 +7,8 @@ public enum AxnRunSummary {
         stdout: String,
         stderr: String
     ) -> String? {
-        if let batchFailure = batchFailureMessage(fileName: fileName, stdout: stdout) {
-            return batchFailure
+        if let runFailure = runFailureMessage(fileName: fileName, stdout: stdout) {
+            return runFailure
         }
 
         guard terminationStatus != 0 else {
@@ -19,7 +19,7 @@ public enum AxnRunSummary {
         return "\(fileName) exited with status \(terminationStatus).\n\n\(detail)"
     }
 
-    private static func batchFailureMessage(fileName: String, stdout: String) -> String? {
+    private static func runFailureMessage(fileName: String, stdout: String) -> String? {
         guard let data = stdout.data(using: .utf8),
               let response = try? JSONDecoder().decode(JSONValue.self, from: data)
         else {
