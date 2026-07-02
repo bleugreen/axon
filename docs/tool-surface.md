@@ -78,9 +78,11 @@ available and always compares a fresh summary.
 `find(app, locator)` resolves an AX locator against a fresh app snapshot and
 returns `unique`, `ambiguous`, or `missing` with candidate summaries.
 Locator fields are not all equally durable: role, subrole, title, label,
-description, identifier, non-editable value, and ancestors filter candidates;
-actions and editable text values contribute to candidate reasons and scoring
-when present.
+description, identifier, non-editable value, first-class window scope, and
+ancestors filter candidates; actions, editable text values, and nearby text
+contribute to candidate reasons and scoring when present. Frame hints are weak
+normalized-distance tie-breakers, and resolution results include a named
+confidence.
 
 `wait_for_value(target, contains|equals|matches)` repeatedly resolves a locator
 target and reads the unique target's readable AX state until one predicate holds
