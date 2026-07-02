@@ -156,7 +156,7 @@ public struct CommandRouter {
         switch request.method {
         case "health", "permit":
             return SystemCommandHandler(services: services).handle(request)
-        case "look", "find":
+        case "look", "find", "wait_for_value":
             return PerceptionCommandHandler(services: services).handle(request)
         case "click", "invoke", "type", "keyboard", "scroll", "drag":
             return PrimitiveActionCommandHandler(services: services).handle(request)
@@ -216,6 +216,8 @@ private struct PerceptionCommandHandler {
             return lookResponse(request)
         case "find":
             return findResponse(request)
+        case "wait_for_value":
+            return waitForValueResponse(request)
         default:
             return JSONRPCResponse(id: request.id, error: .methodNotFound(request.method))
         }
@@ -315,6 +317,79 @@ private struct PerceptionCommandHandler {
             return JSONRPCResponse(id: request.id, error: error)
         } catch {
             return JSONRPCResponse(id: request.id, error: .internalError(String(describing: error)))
+        }
+    }
+
+    private func waitForValueResponse(_ request: JSONRPCRequest) -> JSONRPCResponse {
+        do {
+            let params = try CommandRouterRequestSupport.paramsObject(in: request)
+            let waiter = try WaitForValueRequest(params: params)
+            let result = try waitForValue(waiter)
+            return JSONRPCResponse(id: request.id, result: ["wait": result.jsonValue(activeSecretRedactor: activeSecretRedactor())])
+        } catch let error as JSONRPCError {
+            return JSONRPCResponse(id: request.id, error: error)
+        } catch let error as AXElementStoreError {
+            return JSONRPCResponse(id: request.id, error: .invalidParams(error.description))
+        } catch {
+            return JSONRPCResponse(id: request.id, error: .internalError(String(describing: error)))
+        }
+    }
+
+    private func waitForValue(_ request: WaitForValueRequest) throws -> WaitForValueResult {
+        let startedAt = services.now()
+        let deadline = startedAt.addingTimeInterval(Double(request.timeoutMs) / 1_000)
+        var lastResolvedState: ReadableAXState?
+        var lastResolution: LocatorResolution?
+
+        while true {
+            let elapsedMs = max(0, Int((services.now().timeIntervalSince(startedAt) * 1_000).rounded()))
+            let resolution = try services.resolveLocator(request.app, request.locator, false)
+            lastResolution = resolution
+            if resolution.status == .unique, let handle = resolution.best?.handle {
+                let state = try services.readableAXState(handle)
+                lastResolvedState = state
+                if let match = state.firstMatch(using: request.predicate) {
+                    return WaitForValueResult(
+                        success: true,
+                        status: "satisfied",
+                        predicate: request.predicate,
+                        elapsedMs: elapsedMs,
+                        match: match,
+                        lastObserved: state,
+                        resolution: resolution,
+                        message: "wait_for_value predicate satisfied"
+                    )
+                }
+            }
+
+            let now = services.now()
+            guard now < deadline else {
+                if let lastResolvedState {
+                    return WaitForValueResult(
+                        success: false,
+                        status: "predicate_timeout",
+                        predicate: request.predicate,
+                        elapsedMs: max(0, Int((now.timeIntervalSince(startedAt) * 1_000).rounded())),
+                        match: nil,
+                        lastObserved: lastResolvedState,
+                        resolution: lastResolution,
+                        message: "wait_for_value timed out before the predicate matched"
+                    )
+                }
+                return WaitForValueResult(
+                    success: false,
+                    status: "target_unresolved_timeout",
+                    predicate: request.predicate,
+                    elapsedMs: max(0, Int((now.timeIntervalSince(startedAt) * 1_000).rounded())),
+                    match: nil,
+                    lastObserved: nil,
+                    resolution: lastResolution,
+                    message: "wait_for_value timed out before the target resolved uniquely"
+                )
+            }
+
+            let remainingMs = max(0, Int((deadline.timeIntervalSince(now) * 1_000).rounded(.up)))
+            services.sleepMilliseconds(min(request.intervalMs, remainingMs))
         }
     }
 
