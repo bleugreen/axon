@@ -762,6 +762,108 @@ import Testing
     #expect(response.result?["action"]?["locationResolutions"]?[1]?["best"]?["matchedText"] == .string("Done"))
 }
 
+@Test func dragRequestConvertsWindowRelativePointsThroughCapturedWindowFrame() {
+    let router = CommandRouter(
+        captureSnapshot: { app, screenshot in
+            #expect(app == "com.example.App")
+            #expect(screenshot == false)
+            return actionTextLocationFixtureSnapshot(labels: [])
+        },
+        actions: PrimitiveActionHandlers(
+            drag: { from, to, _, _ in
+                #expect(from == .point(ActionPoint(x: 60, y: 80, coordinateSpace: .screen, app: "com.example.App")))
+                #expect(to == .point(ActionPoint(x: 150, y: 260, coordinateSpace: .screen, app: "com.example.App")))
+                return PrimitiveActionResult(action: "drag", target: "converted", strategy: "CGEventDrag", success: true)
+            }
+        )
+    )
+
+    let response = router.handle(JSONRPCRequest(
+        id: .string("drag-window-points"),
+        method: "drag",
+        params: .object([
+            "app": .string("com.example.App"),
+            "from": .object(["point": .object([
+                "x": .int(10),
+                "y": .int(20),
+                "coordinateSpace": .string("window")
+            ])]),
+            "to": .object(["point": .object([
+                "x": .int(100),
+                "y": .int(200),
+                "coordinateSpace": .string("window")
+            ])])
+        ])
+    ))
+
+    #expect(response.error == nil)
+}
+
+@Test func dragRequestConvertsScreenshotPixelsThroughCapturedWindowFrame() {
+    let router = CommandRouter(
+        captureSnapshot: { _, screenshot in
+            #expect(screenshot == true)
+            return actionTextLocationFixtureSnapshot(
+                labels: [],
+                screenshot: EncodedScreenshot(mediaType: "image/png", base64Data: "", width: 1_000, height: 800)
+            )
+        },
+        actions: PrimitiveActionHandlers(
+            drag: { from, to, _, _ in
+                #expect(from == .point(ActionPoint(x: 100, y: 85, coordinateSpace: .screen, app: "com.example.App")))
+                #expect(to == .point(ActionPoint(x: 550, y: 460, coordinateSpace: .screen, app: "com.example.App")))
+                return PrimitiveActionResult(action: "drag", target: "converted", strategy: "CGEventDrag", success: true)
+            }
+        )
+    )
+
+    let response = router.handle(JSONRPCRequest(
+        id: .string("drag-screenshot-points"),
+        method: "drag",
+        params: .object([
+            "from": .object(["point": .object([
+                "app": .string("com.example.App"),
+                "x": .int(100),
+                "y": .int(50),
+                "coordinateSpace": .string("screenshot")
+            ])]),
+            "to": .object(["point": .object([
+                "app": .string("com.example.App"),
+                "x": .int(1_000),
+                "y": .int(800),
+                "coordinateSpace": .string("screenshot")
+            ])])
+        ])
+    ))
+
+    #expect(response.error == nil)
+}
+
+@Test func dragRequestRejectsRelativePointWithoutApp() {
+    let router = CommandRouter(actions: PrimitiveActionHandlers(
+        drag: { _, _, _, _ in
+            Issue.record("relative point without app should fail before dispatch")
+            return PrimitiveActionResult(action: "drag", target: "bad", strategy: "bad", success: true)
+        }
+    ))
+
+    let response = router.handle(JSONRPCRequest(
+        id: .string("drag-relative-no-app"),
+        method: "drag",
+        params: .object([
+            "from": .object(["point": .object([
+                "x": .int(10),
+                "y": .int(20),
+                "coordinateSpace": .string("window")
+            ])]),
+            "to": .object(["point": .object(["x": .int(30), "y": .int(40)])])
+        ])
+    ))
+
+    #expect(response.error?.code == -32602)
+    #expect(response.error?.message == "from point coordinateSpace window requires app")
+}
+
 private func waitUniqueResolution() -> LocatorResolution {
     LocatorResolution(
         status: .unique,
