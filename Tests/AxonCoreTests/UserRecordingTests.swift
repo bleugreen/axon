@@ -102,10 +102,10 @@ final class RecorderSettleTestElement: @unchecked Sendable {}
         now: { now },
         runUntil: { deadline in
             waits += 1
-            buffer.append(.object(["notification": .string("AXValueChanged")]), notification: "AXValueChanged", element: other)
             now = deadline
         }
     )
+    buffer.append(.object(["notification": .string("AXValueChanged")]), notification: "AXValueChanged", element: other)
 
     buffer.waitForValueChange(on: target, timeout: 0.15)
 
