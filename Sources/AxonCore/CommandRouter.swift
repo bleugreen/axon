@@ -39,7 +39,10 @@ public struct CommandRouterServices {
         recognizeText: @escaping TextRecognitionHandler = VisionTextRecognizer.recognizeText(in:),
         activeCredentialFilter: any ActiveCredentialFilter = EmptyActiveCredentialFilter(),
         activeCredentialFilterProvider: (@Sendable () -> any ActiveCredentialFilter)? = nil,
-        debugSessions: AxnDebugSessionStore = AxnDebugSessionStore()
+        debugSessions: AxnDebugSessionStore = AxnDebugSessionStore(),
+        readableAXState: ReadableAXStateProvider? = nil,
+        now: @escaping () -> Date = Date.init,
+        sleepMilliseconds: @escaping (Int) -> Void = { Thread.sleep(forTimeInterval: Double($0) / 1_000) }
     ) {
         let defaultCaptureSnapshot: (String, Bool) throws -> AppSnapshot = captureSnapshot ?? { app, screenshot in
             try AXFullTreeCapturer(elementStore: elementStore).capture(app: app, screenshot: screenshot)
