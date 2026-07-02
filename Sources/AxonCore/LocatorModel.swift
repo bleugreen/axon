@@ -83,6 +83,9 @@ public struct AXLocator: Codable, Equatable, Sendable {
     public let identifier: TextMatch?
     public let actions: [String]
     public let ancestors: [AXAncestorLocator]
+    public let window: AXAncestorLocator?
+    public let nearbyText: [TextMatch]
+    public let frame: AXFrame?
 
     public init(
         role: String? = nil,
@@ -93,7 +96,10 @@ public struct AXLocator: Codable, Equatable, Sendable {
         description: TextMatch? = nil,
         identifier: TextMatch? = nil,
         actions: [String] = [],
-        ancestors: [AXAncestorLocator] = []
+        ancestors: [AXAncestorLocator] = [],
+        window: AXAncestorLocator? = nil,
+        nearbyText: [TextMatch] = [],
+        frame: AXFrame? = nil
     ) {
         self.role = role
         self.subrole = subrole
@@ -104,6 +110,9 @@ public struct AXLocator: Codable, Equatable, Sendable {
         self.identifier = identifier
         self.actions = actions
         self.ancestors = ancestors
+        self.window = window
+        self.nearbyText = nearbyText
+        self.frame = frame
     }
 }
 
@@ -111,6 +120,13 @@ public enum LocatorResolutionStatus: String, Codable, Equatable, Sendable {
     case unique
     case ambiguous
     case missing
+}
+
+public enum LocatorConfidence: String, Codable, Equatable, Sendable {
+    case none
+    case low
+    case medium
+    case high
 }
 
 public struct LocatorCandidate: Codable, Equatable, Sendable {
@@ -146,14 +162,17 @@ public struct LocatorResolution: Codable, Equatable, Sendable {
     public let snapshotID: SnapshotID
     public let best: LocatorCandidate?
     public let candidates: [LocatorCandidate]
+    public let confidence: LocatorConfidence
 
     init(snapshotID: SnapshotID, candidates: [LocatorCandidate]) {
         let best = Self.uniqueHighestScoringCandidate(in: candidates)
+        let status: LocatorResolutionStatus = candidates.isEmpty ? .missing : (best == nil ? .ambiguous : .unique)
         self.init(
-            status: candidates.isEmpty ? .missing : (best == nil ? .ambiguous : .unique),
+            status: status,
             snapshotID: snapshotID,
             best: best,
-            candidates: candidates
+            candidates: candidates,
+            confidence: Self.confidence(status: status, best: best)
         )
     }
 
@@ -161,12 +180,14 @@ public struct LocatorResolution: Codable, Equatable, Sendable {
         status: LocatorResolutionStatus,
         snapshotID: SnapshotID,
         best: LocatorCandidate?,
-        candidates: [LocatorCandidate]
+        candidates: [LocatorCandidate],
+        confidence: LocatorConfidence? = nil
     ) {
         self.status = status
         self.snapshotID = snapshotID
         self.best = best
         self.candidates = candidates
+        self.confidence = confidence ?? Self.confidence(status: status, best: best)
     }
 
     private static func uniqueHighestScoringCandidate(in candidates: [LocatorCandidate]) -> LocatorCandidate? {
@@ -175,6 +196,20 @@ public struct LocatorResolution: Codable, Equatable, Sendable {
         }
         let highestScoring = candidates.filter { $0.score == highestScore }
         return highestScoring.count == 1 ? highestScoring[0] : nil
+    }
+
+    private static func confidence(status: LocatorResolutionStatus, best: LocatorCandidate?) -> LocatorConfidence {
+        guard status == .unique, let best else {
+            return .none
+        }
+        let semanticScore = best.score / 1_000
+        if semanticScore >= 4 {
+            return .high
+        }
+        if semanticScore >= 2 {
+            return .medium
+        }
+        return semanticScore >= 1 ? .low : .none
     }
 }
 
@@ -188,12 +223,26 @@ public struct LocatorResolver: Sendable {
         "AXPopUpButton",
         "AXRadioButton"
     ]
+    private static let nearbyTextRoles: Set<String> = [
+        "AXHeading",
+        "AXStaticText",
+        "AXTextArea",
+        "AXTextField"
+    ]
+    private static let sectionLikeRoles: Set<String> = [
+        "AXGroup",
+        "AXOutline",
+        "AXScrollArea",
+        "AXTable",
+        "AXToolbar",
+        "AXWebArea"
+    ]
 
     public init() {}
 
     public func resolve(_ locator: AXLocator, in snapshot: AppSnapshot) -> LocatorResolution {
-        let candidates = indexedNodesWithAncestors(in: snapshot).compactMap { indexed, ancestors -> LocatorCandidate? in
-            candidate(for: indexed, ancestors: ancestors, locator: locator, snapshot: snapshot)
+        let candidates = indexedNodesWithContext(in: snapshot).compactMap { indexed, context -> LocatorCandidate? in
+            candidate(for: indexed, context: context, locator: locator, snapshot: snapshot)
         }
 
         return LocatorResolution(snapshotID: snapshot.id, candidates: candidates)
@@ -201,7 +250,7 @@ public struct LocatorResolver: Sendable {
 
     private func candidate(
         for indexed: IndexedAXNode,
-        ancestors: [AXNode],
+        context: LocatorNodeContext,
         locator: AXLocator,
         snapshot: AppSnapshot
     ) -> LocatorCandidate? {
@@ -215,12 +264,16 @@ public struct LocatorResolver: Sendable {
               matchesValue(locator.value, node: node, reasons: &reasons),
               matches(locator.description, actual: node.description, label: "description", reasons: &reasons),
               matches(locator.identifier, actual: node.identifier, label: "identifier", reasons: &reasons),
-              matchesAncestors(locator.ancestors, actual: ancestors, snapshot: snapshot, reasons: &reasons)
+              matchesWindow(locator.window, node: node, ancestors: context.ancestors, reasons: &reasons),
+              matchesAncestors(locator.ancestors, actual: context.ancestors, snapshot: snapshot, reasons: &reasons)
         else {
             return nil
         }
         addActionReasons(locator.actions, actual: node.actions, reasons: &reasons)
-        addPrimaryWindowReason(for: indexed.node, ancestors: ancestors, snapshot: snapshot, reasons: &reasons)
+        addPrimaryWindowReason(for: indexed.node, ancestors: context.ancestors, snapshot: snapshot, reasons: &reasons)
+        addNearbyTextReasons(locator.nearbyText, context: context, reasons: &reasons)
+        let score = score(for: locator, node: node, reasons: reasons)
+        addGeometryReason(locator.frame, nodeFrame: node.frame, baseScore: score.base, reasons: &reasons)
 
         return LocatorCandidate(
             index: indexed.index,
@@ -228,17 +281,18 @@ public struct LocatorResolver: Sendable {
             role: node.role,
             title: node.title,
             frame: node.frame,
-            score: score(for: locator, node: node, reasons: reasons),
+            score: score.total,
             reasons: reasons
         )
     }
 
-    private func score(for locator: AXLocator, node: AXNode, reasons: [String]) -> Int {
-        var score = reasons.count
+    private func score(for locator: AXLocator, node: AXNode, reasons: [String]) -> LocatorScore {
+        var baseScore = reasons.count
         if let value = locator.value, value.matches(node.value) {
-            score += 2
+            baseScore += 2
         }
-        return score
+        let geometryScore = geometryScore(expected: locator.frame, actual: node.frame, baseScore: baseScore)
+        return LocatorScore(base: baseScore, geometry: geometryScore)
     }
 
     private func matchesExact(_ expected: String?, actual: String?, label: String, reasons: inout [String]) -> Bool {
@@ -327,6 +381,81 @@ public struct LocatorResolver: Sendable {
         }
     }
 
+    private func matchesWindow(
+        _ expected: AXAncestorLocator?,
+        node: AXNode,
+        ancestors: [AXNode],
+        reasons: inout [String]
+    ) -> Bool {
+        guard let expected else {
+            return true
+        }
+        let windowMatcher = AXAncestorLocator(
+            role: "AXWindow",
+            subrole: expected.subrole,
+            identifier: expected.identifier,
+            title: expected.title,
+            label: expected.label
+        )
+        let window = node.role == "AXWindow" ? node : ancestors.first { $0.role == "AXWindow" }
+        guard let window, windowMatcher.matches(window) else {
+            return false
+        }
+        reasons.append("window role AXWindow")
+        if let subrole = windowMatcher.subrole {
+            reasons.append("window subrole \(subrole)")
+        }
+        if let identifier = windowMatcher.identifier {
+            reasons.append("window identifier \(identifier.reasonFragment)")
+        }
+        if let title = windowMatcher.title {
+            reasons.append("window title \(title.reasonFragment)")
+        }
+        if let label = windowMatcher.label {
+            reasons.append("window label \(label.reasonFragment)")
+        }
+        return true
+    }
+
+    private func addNearbyTextReasons(_ expected: [TextMatch], context: LocatorNodeContext, reasons: inout [String]) {
+        guard !expected.isEmpty else {
+            return
+        }
+        let nearbyStrings = nearbyTextStrings(in: context)
+        guard !nearbyStrings.isEmpty else {
+            return
+        }
+        for matcher in expected where nearbyStrings.contains(where: matcher.matches) {
+            reasons.append("nearby text \(matcher.reasonFragment)")
+        }
+    }
+
+    private func nearbyTextStrings(in context: LocatorNodeContext) -> [String] {
+        var strings: [String] = []
+        for sibling in context.siblings where Self.nearbyTextRoles.contains(sibling.role) {
+            if let label = sibling.displayLabel {
+                strings.append(label)
+            }
+        }
+        for ancestor in context.ancestors where Self.sectionLikeRoles.contains(ancestor.role) {
+            if let label = ancestor.displayLabel {
+                strings.append(label)
+            }
+        }
+        return strings
+    }
+
+    private func addGeometryReason(_ expected: AXFrame?, nodeFrame: AXFrame?, baseScore: Int, reasons: inout [String]) {
+        guard let expected, let nodeFrame, baseScore > 0 else {
+            return
+        }
+        let distance = normalizedFrameDistance(expected: expected, actual: nodeFrame)
+        guard geometryScore(forNormalizedDistance: distance) > 0 else {
+            return
+        }
+        reasons.append("frame distance \(String(format: "%.2f", distance))")
+    }
+
     private func matchesAncestors(
         _ expected: [AXAncestorLocator],
         actual ancestors: [AXNode],
@@ -396,11 +525,35 @@ public struct LocatorResolver: Sendable {
         }
     }
 
-    private func indexedNodesWithAncestors(in snapshot: AppSnapshot) -> [(IndexedAXNode, [AXNode])] {
-        var result: [(IndexedAXNode, [AXNode])] = []
+    private func geometryScore(expected: AXFrame?, actual: AXFrame?, baseScore: Int) -> Int {
+        guard let expected, let actual, baseScore > 0 else {
+            return 0
+        }
+        return geometryScore(forNormalizedDistance: normalizedFrameDistance(expected: expected, actual: actual))
+    }
+
+    private func geometryScore(forNormalizedDistance distance: Double) -> Int {
+        max(0, 100 - Int((distance * 100).rounded()))
+    }
+
+    private func normalizedFrameDistance(expected: AXFrame, actual: AXFrame) -> Double {
+        let expectedCenterX = expected.x + expected.width / 2
+        let expectedCenterY = expected.y + expected.height / 2
+        let actualCenterX = actual.x + actual.width / 2
+        let actualCenterY = actual.y + actual.height / 2
+        let centerDistance = hypot(expectedCenterX - actualCenterX, expectedCenterY - actualCenterY)
+        let diagonal = max(hypot(expected.width, expected.height), 1)
+        return centerDistance / diagonal
+    }
+
+    private func indexedNodesWithContext(in snapshot: AppSnapshot) -> [(IndexedAXNode, LocatorNodeContext)] {
+        var result: [(IndexedAXNode, LocatorNodeContext)] = []
         var nextIndex = 0
-        for window in snapshot.windows {
-            append(window, ancestors: [], nextIndex: &nextIndex, to: &result)
+        for (windowIndex, window) in snapshot.windows.enumerated() {
+            let siblings = snapshot.windows.enumerated().compactMap { index, sibling in
+                index == windowIndex ? nil : sibling
+            }
+            append(window, ancestors: [], siblings: siblings, nextIndex: &nextIndex, to: &result)
         }
         return result
     }
@@ -408,17 +561,36 @@ public struct LocatorResolver: Sendable {
     private func append(
         _ node: AXNode,
         ancestors: [AXNode],
+        siblings: [AXNode],
         nextIndex: inout Int,
-        to result: inout [(IndexedAXNode, [AXNode])]
+        to result: inout [(IndexedAXNode, LocatorNodeContext)]
     ) {
         let index = nextIndex
         nextIndex += 1
-        result.append((IndexedAXNode(index: index, node: node), ancestors))
+        let context = LocatorNodeContext(ancestors: ancestors, siblings: siblings)
+        result.append((IndexedAXNode(index: index, node: node), context))
 
         let childAncestors = ancestors + [node]
-        for child in node.children {
-            append(child, ancestors: childAncestors, nextIndex: &nextIndex, to: &result)
+        for (childIndex, child) in node.children.enumerated() {
+            let childSiblings = node.children.enumerated().compactMap { index, sibling in
+                index == childIndex ? nil : sibling
+            }
+            append(child, ancestors: childAncestors, siblings: childSiblings, nextIndex: &nextIndex, to: &result)
         }
+    }
+}
+
+private struct LocatorNodeContext {
+    let ancestors: [AXNode]
+    let siblings: [AXNode]
+}
+
+private struct LocatorScore {
+    let base: Int
+    let geometry: Int
+
+    var total: Int {
+        base * 1_000 + geometry
     }
 }
 
