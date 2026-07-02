@@ -135,6 +135,15 @@ do {
         ))
         try printResponse(response)
 
+    case "wait_for_value":
+        let response = try SocketClient(path: socketPath, responseTimeoutSeconds: SocketClient.defaultRunResponseTimeoutSeconds)
+            .send(JSONRPCRequest(
+                id: .string("wait_for_value"),
+                method: "wait_for_value",
+                params: .object(try waitForValueParams(arguments: arguments))
+            ))
+        try printResponse(response)
+
     case "run":
         let command = try runCommand(arguments: arguments)
         let response = try SocketClient(path: socketPath, responseTimeoutSeconds: SocketClient.defaultRunResponseTimeoutSeconds)
@@ -340,6 +349,45 @@ private func lookDepth(in params: [String: JSONValue]) -> Int? {
         return nil
     }
     return max(0, depth)
+}
+
+private func waitForValueParams(arguments: [String]) throws -> [String: JSONValue] {
+    guard arguments.count >= 4 else {
+        throw CLIError.missingArguments("wait_for_value requires a target JSON and exactly one predicate")
+    }
+    var params: [String: JSONValue] = ["target": try decodeJSONValue(arguments[1])]
+    var index = 2
+    while index < arguments.count {
+        switch arguments[index] {
+        case "--contains":
+            guard index + 1 < arguments.count else { throw CLIError.missingArguments("wait_for_value --contains requires text") }
+            params["contains"] = .string(arguments[index + 1])
+            index += 2
+        case "--equals":
+            guard index + 1 < arguments.count else { throw CLIError.missingArguments("wait_for_value --equals requires text") }
+            params["equals"] = .string(arguments[index + 1])
+            index += 2
+        case "--matches":
+            guard index + 1 < arguments.count else { throw CLIError.missingArguments("wait_for_value --matches requires a regex") }
+            params["matches"] = .string(arguments[index + 1])
+            index += 2
+        case "--timeout-ms":
+            guard index + 1 < arguments.count, let value = Int(arguments[index + 1]) else {
+                throw CLIError.missingArguments("wait_for_value --timeout-ms requires an integer")
+            }
+            params["timeoutMs"] = .int(value)
+            index += 2
+        case "--interval-ms":
+            guard index + 1 < arguments.count, let value = Int(arguments[index + 1]) else {
+                throw CLIError.missingArguments("wait_for_value --interval-ms requires an integer")
+            }
+            params["intervalMs"] = .int(value)
+            index += 2
+        default:
+            throw CLIError.missingArguments("unexpected wait_for_value argument: \(arguments[index])")
+        }
+    }
+    return params
 }
 
 private func keyboardParams(arguments: [String]) throws -> [String: JSONValue] {

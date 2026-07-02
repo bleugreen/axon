@@ -942,6 +942,117 @@ public final class AxnDebugSessionStore: @unchecked Sendable {
     }
 }
 
+private struct WaitForValueRequest {
+    static let defaultTimeoutMs = 5_000
+    static let maxTimeoutMs = 60_000
+    static let defaultIntervalMs = 100
+    static let minIntervalMs = 10
+
+    let app: String
+    let locator: AXLocator
+    let predicate: WaitValuePredicate
+    let timeoutMs: Int
+    let intervalMs: Int
+
+    init(params: [String: JSONValue]) throws {
+        let target = try CommandRouterRequestSupport.requiredToolTarget("target", in: params, acceptedKinds: .locator)
+        guard case let .locator(app, locator) = target else {
+            throw JSONRPCError.invalidParams("target must be a locator target")
+        }
+        self.app = app
+        self.locator = locator
+        self.predicate = try Self.predicate(in: params)
+        self.timeoutMs = try Self.boundedMilliseconds(
+            "timeoutMs",
+            in: params,
+            defaultValue: Self.defaultTimeoutMs,
+            minimum: 0,
+            maximum: Self.maxTimeoutMs
+        )
+        self.intervalMs = try Self.boundedMilliseconds(
+            "intervalMs",
+            in: params,
+            defaultValue: Self.defaultIntervalMs,
+            minimum: Self.minIntervalMs,
+            maximum: max(Self.minIntervalMs, self.timeoutMs == 0 ? Self.defaultIntervalMs : self.timeoutMs)
+        )
+    }
+
+    private static func predicate(in params: [String: JSONValue]) throws -> WaitValuePredicate {
+        var predicates: [WaitValuePredicate] = []
+        if let contains = try optionalString("contains", in: params) {
+            predicates.append(.contains(contains))
+        }
+        if let equals = try optionalString("equals", in: params) {
+            predicates.append(.equals(equals))
+        }
+        if let matches = try optionalString("matches", in: params) {
+            _ = try NSRegularExpression(pattern: matches)
+            predicates.append(.matches(matches))
+        }
+        guard predicates.count == 1, let predicate = predicates.first else {
+            throw JSONRPCError.invalidParams("wait_for_value requires exactly one of contains, equals, or matches")
+        }
+        return predicate
+    }
+
+    private static func optionalString(_ key: String, in params: [String: JSONValue]) throws -> String? {
+        guard let value = params[key], value != .null else {
+            return nil
+        }
+        guard case let .string(string) = value, !string.isEmpty else {
+            throw JSONRPCError.invalidParams("\(key) must be a non-empty string")
+        }
+        return string
+    }
+
+    private static func boundedMilliseconds(
+        _ key: String,
+        in params: [String: JSONValue],
+        defaultValue: Int,
+        minimum: Int,
+        maximum: Int
+    ) throws -> Int {
+        guard let value = params[key], value != .null else {
+            return defaultValue
+        }
+        guard case let .int(milliseconds) = value else {
+            throw JSONRPCError.invalidParams("\(key) must be an integer")
+        }
+        guard milliseconds >= minimum else {
+            throw JSONRPCError.invalidParams("\(key) must be at least \(minimum)")
+        }
+        return min(milliseconds, maximum)
+    }
+}
+
+private struct WaitForValueResult {
+    let success: Bool
+    let status: String
+    let predicate: WaitValuePredicate
+    let elapsedMs: Int
+    let match: WaitValueMatch?
+    let lastObserved: ReadableAXState?
+    let resolution: LocatorResolution?
+    let message: String
+
+    func jsonValue(activeSecretRedactor: ActiveSecretRedactor) -> JSONValue {
+        var object: [String: JSONValue] = [
+            "success": .bool(success),
+            "status": .string(status),
+            "predicate": predicate.jsonValue,
+            "elapsedMs": .int(elapsedMs),
+            "message": .string(message),
+            "matched": match?.jsonValue ?? .null,
+            "lastObserved": lastObserved?.jsonValue ?? .null
+        ]
+        if let resolution {
+            object["resolution"] = resolution.jsonValue(activeSecretRedactor: activeSecretRedactor)
+        }
+        return .object(object)
+    }
+}
+
 private struct ResolvedPointerTarget {
     let target: PointerTarget
     let locationResolution: TextLocationResolvedPoint?

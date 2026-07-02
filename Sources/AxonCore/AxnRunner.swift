@@ -538,7 +538,7 @@ public struct AxnRunner {
 
     private func commandMethod(for tool: String) throws -> String {
         switch tool {
-        case "look", "find", "click", "scroll", "drag", "invoke", "type", "keyboard":
+        case "look", "find", "wait_for_value", "click", "scroll", "drag", "invoke", "type", "keyboard":
             return tool
         default:
             throw AxnRunError.invalidParams("unknown axn tool: \(tool)")
