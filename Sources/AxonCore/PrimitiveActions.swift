@@ -86,7 +86,8 @@ public struct ActionPoint: Codable, Equatable, Sendable {
     }
 
     public var targetDescription: String {
-        "point:\(format(x)),\(format(y))[\(coordinateSpace.rawValue)]"
+        let base = "point:\(format(x)),\(format(y))"
+        return coordinateSpace == .legacyScreen ? base : "\(base)[\(coordinateSpace.rawValue)]"
     }
 
     private func format(_ value: Double) -> String {

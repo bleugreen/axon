@@ -177,7 +177,7 @@ import Testing
                 ])
             ])
         },
-        snapshotProvider: { _ in valueFactSnapshot(value: "Bravo, Alpha") }
+        snapshotProvider: { _ in reorderListFactSnapshot(value: "Bravo, Alpha") }
     )
 
     let fact: JSONValue = .object([
@@ -495,6 +495,19 @@ import Testing
     #expect(batch["success"] == .bool(false))
     #expect(batch["trace"]?.arrayValue?.count == 1)
     #expect(requests.count == 1)
+}
+
+private func reorderListFactSnapshot(value: String) -> AppSnapshot {
+    AppSnapshot(
+        id: SnapshotID("reorder-fact-fixture"),
+        app: AppIdentity(bundleIdentifier: "com.example.App", name: "Example", processIdentifier: 42),
+        windows: [
+            AXNode(role: "AXWindow", title: "Main", children: [
+                AXNode(role: "AXList", value: value, identifier: "reorder-list")
+            ])
+        ],
+        screenshot: nil
+    )
 }
 
 private func valueFactSnapshot(value: String) -> AppSnapshot {

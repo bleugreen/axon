@@ -16,7 +16,7 @@ click(target)
 type(target, value)
 keyboard(keys, app?)
 scroll(target?, app?, deltaX?, deltaY?)
-drag(from, to, app?, durationMs?)
+drag(from, to, app?, durationMs?, expects?)
 invoke(target, name)
 ```
 
@@ -109,6 +109,14 @@ target:
 ```
 
 `click` accepts handles, locator targets, point targets, and text locations.
+`drag` accepts the same pointer target vocabulary for `from` and `to`. Point
+coordinates may explicitly use `screen`, `window`, or `screenshot` coordinate
+spaces; legacy point payloads without `coordinateSpace` remain screen points for
+wire compatibility. Direct drag results separate pointer dispatch from semantic
+success. A drag is semantically successful only when `run` verifies supplied
+`expects` facts after dispatch, such as an AX list value exposing the new row
+order.
+
 `type` fills writable fields by setting `AXValue`; use it when the desired
 intent is "make this field contain this value." `keyboard` posts keyboard input
 for shortcuts, special keys, or raw text when keystroke behavior is the intent.
