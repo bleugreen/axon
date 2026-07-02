@@ -7,17 +7,23 @@ public final class AXPrimitiveActionExecutor {
     private let appResolver: AppResolver
     private let overlay: VisualOverlay?
     private let overlayConfiguration: VisualOverlayConfiguration
+    private let postMouseEvent: (CGEvent) -> Void
+    private let sleepMilliseconds: (Int) -> Void
 
     public init(
         elementStore: AXElementStore,
         appResolver: AppResolver = AppResolver(),
         overlay: VisualOverlay? = VisualOverlayFactory.makeFromEnvironment(),
-        overlayConfiguration: VisualOverlayConfiguration = .fromEnvironment()
+        overlayConfiguration: VisualOverlayConfiguration = .fromEnvironment(),
+        postMouseEvent: @escaping (CGEvent) -> Void = { $0.post(tap: .cghidEventTap) },
+        sleepMilliseconds: @escaping (Int) -> Void = { Thread.sleep(forTimeInterval: Double($0) / 1_000) }
     ) {
         self.elementStore = elementStore
         self.appResolver = appResolver
         self.overlay = overlay
         self.overlayConfiguration = overlayConfiguration
+        self.postMouseEvent = postMouseEvent
+        self.sleepMilliseconds = sleepMilliseconds
     }
 
     public func handlers() -> PrimitiveActionHandlers {
