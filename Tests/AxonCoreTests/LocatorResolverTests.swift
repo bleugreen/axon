@@ -255,10 +255,157 @@ import Testing
     #expect(resolution.best?.reasons.contains("descendant title exact co-operation with Russia") == true)
 }
 
-@Test func locatorJSONParsesLabelMatchersForTargetsAndAncestors() throws {
+@Test func locatorResolverUsesNearbyTextAsPositiveContextOnly() {
+    let snapshot = AppSnapshot(
+        id: SnapshotID("locator-fixture"),
+        app: AppIdentity(bundleIdentifier: "com.example.App", name: "Example", processIdentifier: 42),
+        windows: [
+            AXNode(role: "AXWindow", title: "Main", children: [
+                AXNode(role: "AXGroup", children: [
+                    AXNode(role: "AXStaticText", title: "Billing"),
+                    AXNode(role: "AXButton", title: "Edit", actions: ["AXPress"])
+                ]),
+                AXNode(role: "AXGroup", children: [
+                    AXNode(role: "AXStaticText", title: "Profile"),
+                    AXNode(role: "AXButton", title: "Edit", actions: ["AXPress"])
+                ])
+            ])
+        ],
+        screenshot: nil
+    )
+    let locator = AXLocator(role: "AXButton", title: .exact("Edit"), nearbyText: [.exact("Billing")])
+
+    let resolution = LocatorResolver().resolve(locator, in: snapshot)
+
+    #expect(resolution.status == .unique)
+    #expect(resolution.best?.handle?.rawValue == "locator-fixture:3")
+    #expect(resolution.best?.reasons.contains("nearby text exact Billing") == true)
+}
+
+@Test func locatorResolverDoesNotPenalizeMissingNearbyTextContext() {
+    let snapshot = AppSnapshot(
+        id: SnapshotID("locator-fixture"),
+        app: AppIdentity(bundleIdentifier: "com.example.App", name: "Example", processIdentifier: 42),
+        windows: [
+            AXNode(role: "AXButton", title: "Edit", actions: ["AXPress"])
+        ],
+        screenshot: nil
+    )
+    let locator = AXLocator(role: "AXButton", title: .exact("Edit"), nearbyText: [.exact("Billing")])
+
+    let resolution = LocatorResolver().resolve(locator, in: snapshot)
+
+    #expect(resolution.status == .unique)
+    #expect(resolution.best?.handle?.rawValue == "locator-fixture:0")
+    #expect(resolution.best?.reasons.contains { $0.hasPrefix("nearby text ") } == false)
+}
+
+@Test func locatorResolverUsesGeometryOnlyAsWeakTieBreaker() {
+    let snapshot = AppSnapshot(
+        id: SnapshotID("locator-fixture"),
+        app: AppIdentity(bundleIdentifier: "com.example.App", name: "Example", processIdentifier: 42),
+        windows: [
+            AXNode(role: "AXWindow", title: "Main", children: [
+                AXNode(role: "AXButton", title: "Edit", frame: AXFrame(x: 20, y: 20, width: 80, height: 30)),
+                AXNode(role: "AXButton", title: "Edit", frame: AXFrame(x: 220, y: 20, width: 80, height: 30))
+            ])
+        ],
+        screenshot: nil
+    )
+    let locator = AXLocator(
+        role: "AXButton",
+        title: .exact("Edit"),
+        frame: AXFrame(x: 222, y: 18, width: 80, height: 30)
+    )
+
+    let resolution = LocatorResolver().resolve(locator, in: snapshot)
+
+    #expect(resolution.status == .unique)
+    #expect(resolution.best?.handle?.rawValue == "locator-fixture:2")
+    #expect(resolution.best?.reasons.contains { $0.hasPrefix("frame distance ") } == true)
+}
+
+@Test func locatorResolverKeepsSemanticSignalsAheadOfGeometry() {
+    let snapshot = AppSnapshot(
+        id: SnapshotID("locator-fixture"),
+        app: AppIdentity(bundleIdentifier: "com.example.App", name: "Example", processIdentifier: 42),
+        windows: [
+            AXNode(role: "AXWindow", title: "Main", children: [
+                AXNode(role: "AXGroup", children: [
+                    AXNode(role: "AXStaticText", title: "Billing"),
+                    AXNode(role: "AXButton", title: "Edit", frame: AXFrame(x: 20, y: 20, width: 80, height: 30))
+                ]),
+                AXNode(role: "AXGroup", children: [
+                    AXNode(role: "AXButton", title: "Edit", frame: AXFrame(x: 220, y: 20, width: 80, height: 30))
+                ])
+            ])
+        ],
+        screenshot: nil
+    )
+    let locator = AXLocator(
+        role: "AXButton",
+        title: .exact("Edit"),
+        nearbyText: [.exact("Billing")],
+        frame: AXFrame(x: 220, y: 20, width: 80, height: 30)
+    )
+
+    let resolution = LocatorResolver().resolve(locator, in: snapshot)
+
+    #expect(resolution.status == .unique)
+    #expect(resolution.best?.handle?.rawValue == "locator-fixture:3")
+    #expect(resolution.best?.reasons.contains("nearby text exact Billing") == true)
+}
+
+@Test func locatorResolverMatchesFirstClassWindowScope() {
+    let snapshot = AppSnapshot(
+        id: SnapshotID("locator-fixture"),
+        app: AppIdentity(bundleIdentifier: "com.example.App", name: "Example", processIdentifier: 42),
+        windows: [
+            AXNode(role: "AXWindow", title: "Main", children: [
+                AXNode(role: "AXButton", title: "Deploy", actions: ["AXPress"])
+            ]),
+            AXNode(role: "AXWindow", title: "Build", children: [
+                AXNode(role: "AXGroup", children: [
+                    AXNode(role: "AXButton", title: "Deploy", actions: ["AXPress"])
+                ])
+            ])
+        ],
+        screenshot: nil
+    )
+    let locator = AXLocator(
+        role: "AXButton",
+        title: .exact("Deploy"),
+        window: AXAncestorLocator(title: .exact("Build"))
+    )
+
+    let resolution = LocatorResolver().resolve(locator, in: snapshot)
+
+    #expect(resolution.status == .unique)
+    #expect(resolution.best?.handle?.rawValue == "locator-fixture:4")
+    #expect(resolution.best?.reasons.contains("window title exact Build") == true)
+    #expect(resolution.confidence == .high)
+}
+
+@Test func locatorJSONParsesAdditiveScoringSignalsAndDefaultsOldPayloads() throws {
+    let legacyLocator = try AXLocator(jsonValue: .object([
+        "role": .string("AXButton"),
+        "title": .string("Save")
+    ]))
+    #expect(legacyLocator.window == nil)
+    #expect(legacyLocator.nearbyText.isEmpty)
+    #expect(legacyLocator.frame == nil)
+
     let locator = try AXLocator(jsonValue: .object([
         "role": .string("AXComboBox"),
         "label": .object(["contains": .string("example.com")]),
+        "window": .object(["title": .string("Build")]),
+        "nearbyText": .array([.string("Billing"), .object(["contains": .string("Invoice")])]),
+        "frame": .object([
+            "x": .int(10),
+            "y": .double(20.5),
+            "width": .int(300),
+            "height": .int(24)
+        ]),
         "ancestors": .array([
             .object([
                 "role": .string("AXToolbar"),
@@ -269,6 +416,22 @@ import Testing
 
     #expect(locator.label?.matches("https://example.com") == true)
     #expect(locator.ancestors.first?.label?.matches("Navigation") == true)
+    #expect(locator.window?.title?.matches("Build") == true)
+    #expect(locator.nearbyText.count == 2)
+    #expect(locator.nearbyText[0].matches("Billing") == true)
+    #expect(locator.nearbyText[1].matches("Paid Invoice") == true)
+    #expect(locator.frame == AXFrame(x: 10, y: 20.5, width: 300, height: 24))
+}
+
+@Test func locatorResolutionJSONIncludesNamedConfidence() throws {
+    let snapshot = locatorFixtureSnapshot(buttons: ["NEW"])
+    let locator = AXLocator(role: "AXButton", title: .exact("NEW"))
+
+    let resolution = LocatorResolver().resolve(locator, in: snapshot)
+    let json = resolution.jsonValue
+
+    #expect(resolution.confidence == .medium)
+    #expect(json["confidence"] == .string("medium"))
 }
 
 @Test func locatorResolverMatchesAncestorSubroleAndIdentifier() throws {
