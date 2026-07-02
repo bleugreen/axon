@@ -91,6 +91,44 @@ import Testing
     #expect(reparsed.blocks == axn.blocks)
 }
 
+@Test func axnFileRoundTripsAdditiveLocatorScoringFields() throws {
+    let axn = try Axn(source: """
+    version: 1
+    actions:
+      - id: a001
+        tool: click
+        target:
+          app: Example
+          locator:
+            role: AXButton
+            title: Deploy
+            window:
+              title: Build
+            nearbyText:
+              - Billing
+              - contains: Invoice
+            frame:
+              x: 10
+              y: 20
+              width: 100
+              height: 30
+    """)
+
+    let rendered = try axn.yamlString(includeEditorMetadata: false)
+    let reparsed = try Axn(source: rendered)
+
+    #expect(reparsed.blocks == axn.blocks)
+    guard case let .action(action) = reparsed.blocks.first else {
+        Issue.record("expected action block")
+        return
+    }
+    let locator = action.fields["target"]?["locator"]
+    #expect(locator?["window"]?["title"] == .string("Build"))
+    #expect(locator?["nearbyText"]?[0] == .string("Billing"))
+    #expect(locator?["nearbyText"]?[1]?["contains"] == .string("Invoice"))
+    #expect(locator?["frame"]?["x"] == .int(10))
+}
+
 @Test func axnFileSerializationUsesCanonicalDocumentOrder() throws {
     let axn = try Axn(source: """
     owner: local-test
