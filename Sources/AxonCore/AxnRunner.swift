@@ -609,6 +609,8 @@ public struct AxnRunner {
             return .object([:])
         case "find":
             return result["resolution"] ?? .object([:])
+        case "wait_for_value":
+            return result["wait"] ?? .object(result)
         default:
             return result["action"] ?? .object(result)
         }
@@ -618,14 +620,14 @@ public struct AxnRunner {
         guard let result else {
             return nil
         }
-        return bool("success", in: objectValue(result["action"]) ?? result)
+        return bool("success", in: objectValue(result["action"]) ?? objectValue(result["wait"]) ?? result)
     }
 
     private func primitiveActionFailureMessage(in result: [String: JSONValue]?) -> String? {
         guard let result else {
             return nil
         }
-        let action = objectValue(result["action"]) ?? result
+        let action = objectValue(result["action"]) ?? objectValue(result["wait"]) ?? result
         return optionalString("message", in: action)
     }
 
