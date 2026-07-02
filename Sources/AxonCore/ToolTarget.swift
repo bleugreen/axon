@@ -82,7 +82,38 @@ public enum ToolTarget: Equatable, Sendable {
         guard let x = numericValue("x", in: object), let y = numericValue("y", in: object) else {
             throw JSONRPCError.invalidParams("\(fieldName) point requires numeric x and y")
         }
-        return ActionPoint(x: x, y: y)
+        let coordinateSpace = try coordinateSpaceValue(in: object, fieldName: fieldName)
+        let app: String?
+        if case let .string(value)? = object["app"], !value.isEmpty {
+            app = value
+        } else {
+            app = nil
+        }
+        return ActionPoint(x: x, y: y, coordinateSpace: coordinateSpace, app: app)
+    }
+
+    private static func coordinateSpaceValue(
+        in object: [String: JSONValue],
+        fieldName: String
+    ) throws -> ActionPointCoordinateSpace {
+        let rawValue: String?
+        if case let .string(value)? = object["coordinateSpace"] {
+            rawValue = value
+        } else if case let .string(value)? = object["space"] {
+            rawValue = value
+        } else {
+            return .legacyScreen
+        }
+        switch rawValue {
+        case "screen":
+            return .screen
+        case "window":
+            return .window
+        case "screenshot":
+            return .screenshot
+        default:
+            throw JSONRPCError.invalidParams("\(fieldName) point coordinateSpace must be screen, window, or screenshot")
+        }
     }
 
     private static func numericValue(_ key: String, in params: [String: JSONValue]) -> Double? {

@@ -1,8 +1,10 @@
+import ApplicationServices
 import Foundation
 
 public struct CommandRouterServices {
     public typealias LocatorResolutionProvider = (_ app: String, _ locator: AXLocator, _ scrollToVisible: Bool) throws -> LocatorResolution
     public typealias SnapshotWithChildDepthProvider = (_ app: String, _ screenshot: Bool, _ childDepth: Int?) throws -> AppSnapshot
+    public typealias ReadableAXStateProvider = (_ handle: SnapshotHandle) throws -> ReadableAXState
 
     public let listApps: () -> [AppIdentity]
     public let listAllApps: () -> [AppIdentity]
@@ -18,6 +20,9 @@ public struct CommandRouterServices {
     public let recognizeText: TextRecognitionHandler
     public let activeCredentialFilterProvider: @Sendable () -> any ActiveCredentialFilter
     public let debugSessions: AxnDebugSessionStore
+    public let readableAXState: ReadableAXStateProvider
+    public let now: () -> Date
+    public let sleepMilliseconds: (Int) -> Void
 
     public init(
         listApps: @escaping () -> [AppIdentity] = { AppResolver().recordableApps() },
@@ -34,7 +39,10 @@ public struct CommandRouterServices {
         recognizeText: @escaping TextRecognitionHandler = VisionTextRecognizer.recognizeText(in:),
         activeCredentialFilter: any ActiveCredentialFilter = EmptyActiveCredentialFilter(),
         activeCredentialFilterProvider: (@Sendable () -> any ActiveCredentialFilter)? = nil,
-        debugSessions: AxnDebugSessionStore = AxnDebugSessionStore()
+        debugSessions: AxnDebugSessionStore = AxnDebugSessionStore(),
+        readableAXState: ReadableAXStateProvider? = nil,
+        now: @escaping () -> Date = Date.init,
+        sleepMilliseconds: @escaping (Int) -> Void = { Thread.sleep(forTimeInterval: Double($0) / 1_000) }
     ) {
         let defaultCaptureSnapshot: (String, Bool) throws -> AppSnapshot = captureSnapshot ?? { app, screenshot in
             try AXFullTreeCapturer(elementStore: elementStore).capture(app: app, screenshot: screenshot)
@@ -74,6 +82,12 @@ public struct CommandRouterServices {
         self.recognizeText = recognizeText
         self.activeCredentialFilterProvider = activeCredentialFilterProvider ?? { activeCredentialFilter }
         self.debugSessions = debugSessions
+        self.readableAXState = readableAXState ?? { handle in
+            let element = try elementStore.element(for: handle)
+            return ReadableAXState(element: element)
+        }
+        self.now = now
+        self.sleepMilliseconds = sleepMilliseconds
     }
 }
 
@@ -100,7 +114,10 @@ public struct CommandRouter {
         recognizeText: @escaping TextRecognitionHandler = VisionTextRecognizer.recognizeText(in:),
         activeCredentialFilter: any ActiveCredentialFilter = EmptyActiveCredentialFilter(),
         activeCredentialFilterProvider: (@Sendable () -> any ActiveCredentialFilter)? = nil,
-        debugSessions: AxnDebugSessionStore = AxnDebugSessionStore()
+        debugSessions: AxnDebugSessionStore = AxnDebugSessionStore(),
+        readableAXState: CommandRouterServices.ReadableAXStateProvider? = nil,
+        now: @escaping () -> Date = Date.init,
+        sleepMilliseconds: @escaping (Int) -> Void = { Thread.sleep(forTimeInterval: Double($0) / 1_000) }
     ) {
         self.init(services: CommandRouterServices(
             listApps: listApps,
@@ -116,7 +133,10 @@ public struct CommandRouter {
             recognizeText: recognizeText,
             activeCredentialFilter: activeCredentialFilter,
             activeCredentialFilterProvider: activeCredentialFilterProvider,
-            debugSessions: debugSessions
+            debugSessions: debugSessions,
+            readableAXState: readableAXState,
+            now: now,
+            sleepMilliseconds: sleepMilliseconds
         ))
     }
 
@@ -136,7 +156,7 @@ public struct CommandRouter {
         switch request.method {
         case "health", "permit":
             return SystemCommandHandler(services: services).handle(request)
-        case "look", "find":
+        case "look", "find", "wait_for_value":
             return PerceptionCommandHandler(services: services).handle(request)
         case "click", "invoke", "type", "keyboard", "scroll", "drag":
             return PrimitiveActionCommandHandler(services: services).handle(request)
@@ -196,6 +216,8 @@ private struct PerceptionCommandHandler {
             return lookResponse(request)
         case "find":
             return findResponse(request)
+        case "wait_for_value":
+            return waitForValueResponse(request)
         default:
             return JSONRPCResponse(id: request.id, error: .methodNotFound(request.method))
         }
@@ -295,6 +317,79 @@ private struct PerceptionCommandHandler {
             return JSONRPCResponse(id: request.id, error: error)
         } catch {
             return JSONRPCResponse(id: request.id, error: .internalError(String(describing: error)))
+        }
+    }
+
+    private func waitForValueResponse(_ request: JSONRPCRequest) -> JSONRPCResponse {
+        do {
+            let params = try CommandRouterRequestSupport.paramsObject(in: request)
+            let waiter = try WaitForValueRequest(params: params)
+            let result = try waitForValue(waiter)
+            return JSONRPCResponse(id: request.id, result: ["wait": result.jsonValue(activeSecretRedactor: activeSecretRedactor())])
+        } catch let error as JSONRPCError {
+            return JSONRPCResponse(id: request.id, error: error)
+        } catch let error as AXElementStoreError {
+            return JSONRPCResponse(id: request.id, error: .invalidParams(error.description))
+        } catch {
+            return JSONRPCResponse(id: request.id, error: .internalError(String(describing: error)))
+        }
+    }
+
+    private func waitForValue(_ request: WaitForValueRequest) throws -> WaitForValueResult {
+        let startedAt = services.now()
+        let deadline = startedAt.addingTimeInterval(Double(request.timeoutMs) / 1_000)
+        var lastResolvedState: ReadableAXState?
+        var lastResolution: LocatorResolution?
+
+        while true {
+            let elapsedMs = max(0, Int((services.now().timeIntervalSince(startedAt) * 1_000).rounded()))
+            let resolution = try services.resolveLocator(request.app, request.locator, false)
+            lastResolution = resolution
+            if resolution.status == .unique, let handle = resolution.best?.handle {
+                let state = try services.readableAXState(handle)
+                lastResolvedState = state
+                if let match = state.firstMatch(using: request.predicate) {
+                    return WaitForValueResult(
+                        success: true,
+                        status: "satisfied",
+                        predicate: request.predicate,
+                        elapsedMs: elapsedMs,
+                        match: match,
+                        lastObserved: state,
+                        resolution: resolution,
+                        message: "wait_for_value predicate satisfied"
+                    )
+                }
+            }
+
+            let now = services.now()
+            guard now < deadline else {
+                if let lastResolvedState {
+                    return WaitForValueResult(
+                        success: false,
+                        status: "predicate_timeout",
+                        predicate: request.predicate,
+                        elapsedMs: max(0, Int((now.timeIntervalSince(startedAt) * 1_000).rounded())),
+                        match: nil,
+                        lastObserved: lastResolvedState,
+                        resolution: lastResolution,
+                        message: "wait_for_value timed out before the predicate matched"
+                    )
+                }
+                return WaitForValueResult(
+                    success: false,
+                    status: "target_unresolved_timeout",
+                    predicate: request.predicate,
+                    elapsedMs: max(0, Int((now.timeIntervalSince(startedAt) * 1_000).rounded())),
+                    match: nil,
+                    lastObserved: nil,
+                    resolution: lastResolution,
+                    message: "wait_for_value timed out before the target resolved uniquely"
+                )
+            }
+
+            let remainingMs = max(0, Int((deadline.timeIntervalSince(now) * 1_000).rounded(.up)))
+            services.sleepMilliseconds(min(request.intervalMs, remainingMs))
         }
     }
 
@@ -416,12 +511,13 @@ private struct PrimitiveActionCommandHandler {
             return actionResponse(id: request.id) {
                 let params = try CommandRouterRequestSupport.paramsObject(in: request)
                 let decoder = ToolParamDecoder(toolName: "drag", params: params)
-                let from = try requiredResolvedPointerTarget("from", in: params)
-                let to = try requiredResolvedPointerTarget("to", in: params)
+                let app = try decoder.string("app")
+                let from = try requiredResolvedPointerTarget("from", in: params, defaultApp: app)
+                let to = try requiredResolvedPointerTarget("to", in: params, defaultApp: app)
                 let result = try services.actions.drag(
                     from.target,
                     to.target,
-                    try decoder.string("app"),
+                    app,
                     try decoder.int("durationMs")
                 )
                 return withLocationResolutions(result, resolutions: [from.locationResolution, to.locationResolution])
@@ -448,18 +544,30 @@ private struct PrimitiveActionCommandHandler {
         }
     }
 
-    private func requiredResolvedPointerTarget(_ key: String, in params: [String: JSONValue]) throws -> ResolvedPointerTarget {
-        try resolvedPointerTarget(from: CommandRouterRequestSupport.requiredToolTarget(key, in: params, acceptedKinds: .pointer))
+    private func requiredResolvedPointerTarget(
+        _ key: String,
+        in params: [String: JSONValue],
+        defaultApp: String? = nil
+    ) throws -> ResolvedPointerTarget {
+        try resolvedPointerTarget(
+            from: CommandRouterRequestSupport.requiredToolTarget(key, in: params, acceptedKinds: .pointer),
+            defaultApp: defaultApp,
+            fieldName: key
+        )
     }
 
     private func optionalResolvedPointerTarget(_ key: String, in params: [String: JSONValue]) throws -> ResolvedPointerTarget? {
         guard let target = try CommandRouterRequestSupport.optionalToolTarget(key, in: params, acceptedKinds: .pointer) else {
             return nil
         }
-        return try resolvedPointerTarget(from: target)
+        return try resolvedPointerTarget(from: target, fieldName: key)
     }
 
-    private func resolvedPointerTarget(from target: ToolTarget) throws -> ResolvedPointerTarget {
+    private func resolvedPointerTarget(
+        from target: ToolTarget,
+        defaultApp: String? = nil,
+        fieldName: String = "target"
+    ) throws -> ResolvedPointerTarget {
         switch target {
         case let .handle(handle):
             return ResolvedPointerTarget(target: .handle(handle), locationResolution: nil)
@@ -467,10 +575,45 @@ private struct PrimitiveActionCommandHandler {
             let resolved = try resolveElementTarget(.locator(app: app, locator: locator))
             return ResolvedPointerTarget(target: .handle(resolved), locationResolution: nil)
         case let .point(point):
-            return ResolvedPointerTarget(target: .point(point), locationResolution: nil)
+            return ResolvedPointerTarget(
+                target: .point(try screenPoint(for: point, defaultApp: defaultApp, fieldName: fieldName)),
+                locationResolution: nil
+            )
         case let .textLocation(location):
             let resolution = try resolveTextLocationTarget(location)
             return ResolvedPointerTarget(target: .point(resolution.point), locationResolution: resolution)
+        }
+    }
+
+    private func screenPoint(for point: ActionPoint, defaultApp: String?, fieldName: String) throws -> ActionPoint {
+        switch point.coordinateSpace {
+        case .screen, .legacyScreen:
+            return point
+        case .window, .screenshot:
+            let app = point.app ?? defaultApp
+            guard let app, !app.isEmpty else {
+                throw JSONRPCError.invalidParams("\(fieldName) point coordinateSpace \(point.coordinateSpace.rawValue) requires app")
+            }
+            let snapshot = try services.captureSnapshot(app, point.coordinateSpace == .screenshot)
+            guard let windowFrame = snapshot.windows.compactMap(\.frame).first else {
+                throw JSONRPCError.invalidParams("\(fieldName) point coordinateSpace \(point.coordinateSpace.rawValue) requires a captured window frame")
+            }
+            let screenX: Double
+            let screenY: Double
+            switch point.coordinateSpace {
+            case .window:
+                screenX = windowFrame.x + point.x
+                screenY = windowFrame.y + point.y
+            case .screenshot:
+                guard let screenshot = snapshot.screenshot else {
+                    throw JSONRPCError.invalidParams("\(fieldName) point coordinateSpace screenshot requires a screenshot capture")
+                }
+                screenX = windowFrame.x + point.x / Double(screenshot.width) * windowFrame.width
+                screenY = windowFrame.y + point.y / Double(screenshot.height) * windowFrame.height
+            case .screen, .legacyScreen:
+                fatalError("handled before conversion")
+            }
+            return ActionPoint(x: screenX, y: screenY, coordinateSpace: .screen, app: app)
         }
     }
 
@@ -844,6 +987,117 @@ public final class AxnDebugSessionStore: @unchecked Sendable {
         _ = lock.withLock {
             sessions.removeValue(forKey: id)
         }
+    }
+}
+
+private struct WaitForValueRequest {
+    static let defaultTimeoutMs = 5_000
+    static let maxTimeoutMs = 60_000
+    static let defaultIntervalMs = 100
+    static let minIntervalMs = 10
+
+    let app: String
+    let locator: AXLocator
+    let predicate: WaitValuePredicate
+    let timeoutMs: Int
+    let intervalMs: Int
+
+    init(params: [String: JSONValue]) throws {
+        let target = try CommandRouterRequestSupport.requiredToolTarget("target", in: params, acceptedKinds: .locator)
+        guard case let .locator(app, locator) = target else {
+            throw JSONRPCError.invalidParams("target must be a locator target")
+        }
+        self.app = app
+        self.locator = locator
+        self.predicate = try Self.predicate(in: params)
+        self.timeoutMs = try Self.boundedMilliseconds(
+            "timeoutMs",
+            in: params,
+            defaultValue: Self.defaultTimeoutMs,
+            minimum: 0,
+            maximum: Self.maxTimeoutMs
+        )
+        self.intervalMs = try Self.boundedMilliseconds(
+            "intervalMs",
+            in: params,
+            defaultValue: Self.defaultIntervalMs,
+            minimum: Self.minIntervalMs,
+            maximum: max(Self.minIntervalMs, self.timeoutMs == 0 ? Self.defaultIntervalMs : self.timeoutMs)
+        )
+    }
+
+    private static func predicate(in params: [String: JSONValue]) throws -> WaitValuePredicate {
+        var predicates: [WaitValuePredicate] = []
+        if let contains = try optionalString("contains", in: params) {
+            predicates.append(.contains(contains))
+        }
+        if let equals = try optionalString("equals", in: params) {
+            predicates.append(.equals(equals))
+        }
+        if let matches = try optionalString("matches", in: params) {
+            _ = try NSRegularExpression(pattern: matches)
+            predicates.append(.matches(matches))
+        }
+        guard predicates.count == 1, let predicate = predicates.first else {
+            throw JSONRPCError.invalidParams("wait_for_value requires exactly one of contains, equals, or matches")
+        }
+        return predicate
+    }
+
+    private static func optionalString(_ key: String, in params: [String: JSONValue]) throws -> String? {
+        guard let value = params[key], value != .null else {
+            return nil
+        }
+        guard case let .string(string) = value, !string.isEmpty else {
+            throw JSONRPCError.invalidParams("\(key) must be a non-empty string")
+        }
+        return string
+    }
+
+    private static func boundedMilliseconds(
+        _ key: String,
+        in params: [String: JSONValue],
+        defaultValue: Int,
+        minimum: Int,
+        maximum: Int
+    ) throws -> Int {
+        guard let value = params[key], value != .null else {
+            return defaultValue
+        }
+        guard case let .int(milliseconds) = value else {
+            throw JSONRPCError.invalidParams("\(key) must be an integer")
+        }
+        guard milliseconds >= minimum else {
+            throw JSONRPCError.invalidParams("\(key) must be at least \(minimum)")
+        }
+        return min(milliseconds, maximum)
+    }
+}
+
+private struct WaitForValueResult {
+    let success: Bool
+    let status: String
+    let predicate: WaitValuePredicate
+    let elapsedMs: Int
+    let match: WaitValueMatch?
+    let lastObserved: ReadableAXState?
+    let resolution: LocatorResolution?
+    let message: String
+
+    func jsonValue(activeSecretRedactor: ActiveSecretRedactor) -> JSONValue {
+        var object: [String: JSONValue] = [
+            "success": .bool(success),
+            "status": .string(status),
+            "predicate": predicate.jsonValue,
+            "elapsedMs": .int(elapsedMs),
+            "message": .string(message),
+            "matched": match?.jsonValue ?? .null,
+            "lastObserved": lastObserved?.jsonValue ?? .null
+        ]
+        if let resolution {
+            object["resolution"] = resolution.jsonValue(activeSecretRedactor: activeSecretRedactor)
+        }
+        return .object(object)
     }
 }
 

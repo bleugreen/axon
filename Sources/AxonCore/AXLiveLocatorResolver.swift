@@ -541,6 +541,20 @@ public final class AXLiveLocatorResolver: @unchecked Sendable {
         parts.append("description=\(locator.description?.cacheFragment ?? "")")
         parts.append("identifier=\(locator.identifier?.cacheFragment ?? "")")
         parts.append("actions=\(locator.actions.joined(separator: ","))")
+        if let window = locator.window {
+            parts.append([
+                "window",
+                window.role ?? "",
+                window.subrole ?? "",
+                window.identifier?.cacheFragment ?? "",
+                window.title?.cacheFragment ?? "",
+                window.label?.cacheFragment ?? ""
+            ].joined(separator: ":"))
+        }
+        parts.append("nearby=\(locator.nearbyText.map(\.cacheFragment).joined(separator: ","))")
+        if let frame = locator.frame {
+            parts.append("frame=\(frame.x),\(frame.y),\(frame.width),\(frame.height)")
+        }
         for ancestor in locator.ancestors {
             parts.append([
                 "ancestor",

@@ -7,6 +7,7 @@ public extension LocatorResolution {
         .object([
             "status": .string(status.rawValue),
             "snapshotID": .string(snapshotID.rawValue),
+            "confidence": .string(confidence.rawValue),
             "best": best.map { $0.jsonValue(activeSecretRedactor: activeSecretRedactor) } ?? .null,
             "candidates": .array(candidates.map { $0.jsonValue(activeSecretRedactor: activeSecretRedactor) })
         ])
@@ -62,7 +63,10 @@ public extension AXLocator {
             description: try optionalTextMatch("description", in: object),
             identifier: try optionalTextMatch("identifier", in: object),
             actions: try stringArray("actions", in: object),
-            ancestors: try ancestorArray("ancestors", in: object)
+            ancestors: try ancestorArray("ancestors", in: object),
+            window: try optionalAncestor("window", in: object),
+            nearbyText: try textMatchArray("nearbyText", in: object),
+            frame: try optionalFrame("frame", in: object)
         )
     }
 }
@@ -110,13 +114,66 @@ private func ancestorArray(_ key: String, in object: [String: JSONValue]) throws
         guard case let .object(ancestor) = value else {
             throw JSONRPCError.invalidParams("\(key) must be an array of objects")
         }
-        return AXAncestorLocator(
-            role: try optionalString("role", in: ancestor),
-            subrole: try optionalString("subrole", in: ancestor),
-            identifier: try optionalTextMatch("identifier", in: ancestor),
-            title: try optionalTextMatch("title", in: ancestor),
-            label: try optionalTextMatch("label", in: ancestor)
-        )
+        return try ancestorLocator(from: ancestor)
+    }
+}
+
+private func optionalAncestor(_ key: String, in object: [String: JSONValue]) throws -> AXAncestorLocator? {
+    guard let value = object[key], value != .null else {
+        return nil
+    }
+    guard case let .object(ancestor) = value else {
+        throw JSONRPCError.invalidParams("\(key) must be an object")
+    }
+    return try ancestorLocator(from: ancestor)
+}
+
+private func ancestorLocator(from object: [String: JSONValue]) throws -> AXAncestorLocator {
+    AXAncestorLocator(
+        role: try optionalString("role", in: object),
+        subrole: try optionalString("subrole", in: object),
+        identifier: try optionalTextMatch("identifier", in: object),
+        title: try optionalTextMatch("title", in: object),
+        label: try optionalTextMatch("label", in: object)
+    )
+}
+
+private func textMatchArray(_ key: String, in object: [String: JSONValue]) throws -> [TextMatch] {
+    guard let value = object[key], value != .null else {
+        return []
+    }
+    guard case let .array(values) = value else {
+        throw JSONRPCError.invalidParams("\(key) must be an array of strings or matcher objects")
+    }
+    return try values.map { try TextMatch(jsonValue: $0, field: key) }
+}
+
+private func optionalFrame(_ key: String, in object: [String: JSONValue]) throws -> AXFrame? {
+    guard let value = object[key], value != .null else {
+        return nil
+    }
+    guard case let .object(frame) = value else {
+        throw JSONRPCError.invalidParams("\(key) must be an object")
+    }
+    return AXFrame(
+        x: try requiredDouble("x", in: frame, parent: key),
+        y: try requiredDouble("y", in: frame, parent: key),
+        width: try requiredDouble("width", in: frame, parent: key),
+        height: try requiredDouble("height", in: frame, parent: key)
+    )
+}
+
+private func requiredDouble(_ key: String, in object: [String: JSONValue], parent: String) throws -> Double {
+    guard let value = object[key] else {
+        throw JSONRPCError.invalidParams("\(parent).\(key) is required")
+    }
+    switch value {
+    case let .double(double):
+        return double
+    case let .int(int):
+        return Double(int)
+    default:
+        throw JSONRPCError.invalidParams("\(parent).\(key) must be a number")
     }
 }
 

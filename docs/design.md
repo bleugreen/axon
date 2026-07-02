@@ -98,15 +98,16 @@ Locators should be AX-native and honest about macOS semantics. They can borrow u
   "role": "AXButton",
   "title": { "contains": "Profile concurrent axn exploration" },
   "actions": ["AXPress"],
+  "window": { "title": { "contains": "cairn" } },
   "ancestors": [
-    { "role": "AXWindow", "title": { "contains": "cairn" } },
     { "role": "AXScrollArea" }
   ],
-  "geometryHint": {
-    "xPct": 0.42,
-    "yPct": 0.31,
-    "wPct": 0.28,
-    "hPct": 0.04
+  "nearbyText": ["Billing"],
+  "frame": {
+    "x": 320,
+    "y": 240,
+    "width": 180,
+    "height": 32
   }
 }
 ```
@@ -120,11 +121,12 @@ Resolution should score candidates using multiple signals:
 5. ancestry and sibling structure
 6. normalized geometry as a tie-breaker
 
-Role, subrole, title, label, description, identifier, non-editable value, and
-ancestor requirements are hard filters. Supported actions and editable text
-values are replay signals: they explain and score a candidate when present, but
-they do not make an otherwise stable editable text target disappear just because
-the current field value or host-reported action list changed.
+Role, subrole, title, label, description, identifier, non-editable value,
+first-class window scope, and ancestor requirements are hard filters. Supported
+actions, editable text values, and nearby text are replay signals: they explain
+and score a candidate when present, but they do not make an otherwise stable
+target disappear just because the current field value, host-reported action
+list, or captured nearby context changed.
 
 The resolver should return one of:
 
@@ -143,13 +145,16 @@ The implemented locator subset is intentionally AX-native:
   "description": { "contains": "Issue" },
   "identifier": "new-issue-button",
   "actions": ["AXPress"],
+  "window": { "title": { "contains": "cairn" } },
   "ancestors": [
-    { "role": "AXWindow", "title": { "contains": "cairn" } }
-  ]
+    { "role": "AXScrollArea" }
+  ],
+  "nearbyText": ["Toolbar"],
+  "frame": { "x": 12, "y": 34, "width": 100, "height": 28 }
 }
 ```
 
-Text fields accept either a string, which means exact case-insensitive match, or `{ "exact": "..." }` / `{ "contains": "..." }` with optional `"caseSensitive": true`. Geometry and nearby-text signals remain future scoring inputs, not hidden behavior.
+Text fields accept either a string, which means exact case-insensitive match, or `{ "exact": "..." }` / `{ "contains": "..." }` with optional `"caseSensitive": true`. Nearby text is a positive context signal derived from captured sibling text and section-like ancestor labels; if a small live validation snapshot does not contain that context, the candidate simply earns no nearby-text reason. Frame matching uses normalized distance as a weak tie-breaker after semantic signals and cannot replace them. Resolution results include a named confidence level alongside `unique`, `ambiguous`, or `missing`.
 
 ### Action Executor
 

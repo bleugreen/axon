@@ -33,6 +33,7 @@ import Testing
     #expect(toolNames(in: tools).contains("look"))
     #expect(toolNames(in: tools).contains("run"))
     #expect(toolNames(in: tools).contains("save"))
+    #expect(toolNames(in: tools).contains("wait_for_value"))
     #expect(!toolNames(in: tools).contains("run_plan"))
     #expect(toolNames(in: tools).contains("look"))
     #expect(toolNames(in: tools).contains("click"))
@@ -48,6 +49,9 @@ import Testing
     #expect(tool(named: "click", in: tools)?["inputSchema"]?["properties"]?["target"]?["anyOf"]?[3] != nil)
     #expect(tool(named: "invoke", in: tools)?["inputSchema"]?["properties"]?["target"]?["anyOf"]?[2] == nil)
     #expect(tool(named: "type", in: tools)?["inputSchema"]?["properties"]?["target"]?["anyOf"]?[2] == nil)
+    #expect(tool(named: "wait_for_value", in: tools)?["inputSchema"]?["required"] == .array([.string("target")]))
+    #expect(tool(named: "wait_for_value", in: tools)?["inputSchema"]?["properties"]?["target"]?["anyOf"]?[0]?["type"] == .string("object"))
+    #expect(tool(named: "wait_for_value", in: tools)?["inputSchema"]?["properties"]?["target"]?["anyOf"]?[0]?["additionalProperties"] == .bool(true))
 }
 
 @Test func mcpLookChildrenReturnsOnlyRequestedChildListObservation() {

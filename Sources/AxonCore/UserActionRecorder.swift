@@ -51,7 +51,7 @@ public final class UserActionRecorder {
     private var mouseDown: CGPoint?
     private var pendingText = ""
     private var pendingTextContext: PendingTextContext?
-    private var notificationEvidence: [JSONValue] = []
+    private let notificationEvidence = AXNotificationEvidenceBuffer()
 
     public convenience init(targetApp: AppIdentity) {
         self.init(scope: .app(targetApp))
@@ -202,6 +202,7 @@ public final class UserActionRecorder {
         else {
             return
         }
+        notificationEvidence.waitForValueChange(on: context.element, timeout: 0.15)
         let factTarget = targetForElement(context.element, app: context.app)
         if let value: String = attribute(kAXValueAttribute, from: context.element), !value.isEmpty {
             groups.append(RecordedUserEventGroup(
@@ -265,12 +266,11 @@ public final class UserActionRecorder {
         if let role: String = attribute(kAXRoleAttribute, from: element) {
             object["role"] = .string(role)
         }
-        notificationEvidence.append(.object(object))
+        notificationEvidence.append(.object(object), notification: notification as String, element: element)
     }
 
     private func drainNotificationEvidence() -> [JSONValue] {
-        defer { notificationEvidence.removeAll() }
-        return notificationEvidence
+        notificationEvidence.drain()
     }
 
     private func targetAtPoint(_ point: CGPoint) -> (target: JSONValue, observed: [JSONValue], warnings: [String], app: AppIdentity?) {
@@ -501,6 +501,73 @@ public final class UserActionRecorder {
 
     private func distance(_ lhs: CGPoint, _ rhs: CGPoint) -> CGFloat {
         hypot(lhs.x - rhs.x, lhs.y - rhs.y)
+    }
+}
+
+final class AXNotificationEvidenceBuffer {
+    private struct Entry {
+        let evidence: JSONValue
+        let notification: String
+        let element: AnyObject
+    }
+
+    private var entries: [Entry] = []
+    private let runLoop: CFRunLoop
+    private let runLoopMode: CFRunLoopMode
+    private let elementMatches: (AnyObject, AnyObject) -> Bool
+    private let now: () -> Date
+    private let runUntil: (Date) -> Void
+
+    init(
+        runLoop: CFRunLoop = CFRunLoopGetMain(),
+        runLoopMode: CFRunLoopMode = CFRunLoopMode.defaultMode,
+        elementMatches: @escaping (AnyObject, AnyObject) -> Bool = { CFEqual($0, $1) },
+        now: @escaping () -> Date = Date.init,
+        runUntil: ((Date) -> Void)? = nil
+    ) {
+        self.runLoop = runLoop
+        self.runLoopMode = runLoopMode
+        self.elementMatches = elementMatches
+        self.now = now
+        self.runUntil = runUntil ?? { deadline in
+            let interval = max(0, deadline.timeIntervalSinceNow)
+            guard interval > 0 else {
+                return
+            }
+            CFRunLoopRunInMode(runLoopMode, interval, true)
+        }
+    }
+
+    func append(_ evidence: JSONValue, notification: String, element: AnyObject) {
+        entries.append(Entry(evidence: evidence, notification: notification, element: element))
+    }
+
+    func drain() -> [JSONValue] {
+        defer { entries.removeAll() }
+        return entries.map(\.evidence)
+    }
+
+    func waitForValueChange(on element: AnyObject, timeout: TimeInterval) {
+        waitForNotification(kAXValueChangedNotification as String, on: element, timeout: timeout)
+    }
+
+    func waitForNotification(_ notification: String, on element: AnyObject, timeout: TimeInterval) {
+        guard timeout > 0 else {
+            return
+        }
+        let deadline = now().addingTimeInterval(timeout)
+        while now() < deadline {
+            if contains(notification: notification, element: element) {
+                return
+            }
+            runUntil(deadline)
+        }
+    }
+
+    private func contains(notification: String, element: AnyObject) -> Bool {
+        entries.contains { entry in
+            entry.notification == notification && elementMatches(entry.element, element)
+        }
     }
 }
 

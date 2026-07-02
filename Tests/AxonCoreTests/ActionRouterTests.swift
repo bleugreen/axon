@@ -98,6 +98,120 @@ import Testing
     #expect(response.result?["resolution"]?["best"]?["handle"] == .string("live-locator:2"))
 }
 
+@Test func waitForValueSucceedsWhenDescriptionMatches() {
+    var nowMs = 0
+    var sleeps: [Int] = []
+    var reads = 0
+    let router = CommandRouter(
+        resolveLocator: { app, locator, scrollToVisible in
+            #expect(app == "Firefox")
+            #expect(locator.role == "AXButton")
+            #expect(scrollToVisible == false)
+            return waitUniqueResolution()
+        },
+        readableAXState: { handle in
+            #expect(handle.rawValue == "wait:0")
+            reads += 1
+            return ReadableAXState(fields: [
+                "title": "",
+                "description": reads < 2 ? "Loading" : "View site information"
+            ])
+        },
+        now: { Date(timeIntervalSince1970: Double(nowMs) / 1_000) },
+        sleepMilliseconds: { milliseconds in
+            sleeps.append(milliseconds)
+            nowMs += milliseconds
+        }
+    )
+
+    let response = router.handle(JSONRPCRequest(
+        id: .string("wait-description"),
+        method: "wait_for_value",
+        params: .object([
+            "target": .object([
+                "app": .string("Firefox"),
+                "locator": .object(["role": .string("AXButton")])
+            ]),
+            "contains": .string("View site information"),
+            "timeoutMs": .int(500),
+            "intervalMs": .int(100)
+        ])
+    ))
+
+    #expect(response.error == nil)
+    #expect(response.result?["wait"]?["success"] == .bool(true))
+    #expect(response.result?["wait"]?["status"] == .string("satisfied"))
+    #expect(response.result?["wait"]?["matched"]?["field"] == .string("description"))
+    #expect(response.result?["wait"]?["matched"]?["value"] == .string("View site information"))
+    #expect(response.result?["wait"]?["elapsedMs"] == .int(100))
+    #expect(sleeps == [100])
+}
+
+@Test func waitForValueTimesOutWithLastObservedState() {
+    var nowMs = 0
+    let router = CommandRouter(
+        resolveLocator: { _, _, _ in waitUniqueResolution() },
+        readableAXState: { _ in ReadableAXState(fields: ["value": "about:blank"]) },
+        now: { Date(timeIntervalSince1970: Double(nowMs) / 1_000) },
+        sleepMilliseconds: { nowMs += $0 }
+    )
+
+    let response = router.handle(JSONRPCRequest(
+        id: .string("wait-timeout"),
+        method: "wait_for_value",
+        params: .object([
+            "target": .object([
+                "app": .string("Firefox"),
+                "locator": .object(["role": .string("AXComboBox")])
+            ]),
+            "equals": .string("https://example.com/"),
+            "timeoutMs": .int(250),
+            "intervalMs": .int(100)
+        ])
+    ))
+
+    #expect(response.error == nil)
+    #expect(response.result?["wait"]?["success"] == .bool(false))
+    #expect(response.result?["wait"]?["status"] == .string("predicate_timeout"))
+    #expect(response.result?["wait"]?["lastObserved"]?["value"] == .string("about:blank"))
+    #expect(response.result?["wait"]?["elapsedMs"] == .int(250))
+}
+
+@Test func waitForValueTimesOutWhenTargetNeverResolves() {
+    var nowMs = 0
+    let router = CommandRouter(
+        resolveLocator: { _, _, _ in
+            LocatorResolution(status: .missing, snapshotID: SnapshotID("wait"), best: nil, candidates: [])
+        },
+        readableAXState: { _ in
+            Issue.record("wait_for_value should not read state when the locator never resolves uniquely")
+            return ReadableAXState(fields: [:])
+        },
+        now: { Date(timeIntervalSince1970: Double(nowMs) / 1_000) },
+        sleepMilliseconds: { nowMs += $0 }
+    )
+
+    let response = router.handle(JSONRPCRequest(
+        id: .string("wait-unresolved"),
+        method: "wait_for_value",
+        params: .object([
+            "target": .object([
+                "app": .string("Firefox"),
+                "locator": .object(["role": .string("AXComboBox")])
+            ]),
+            "matches": .string("example\\.com"),
+            "timeoutMs": .int(200),
+            "intervalMs": .int(100)
+        ])
+    ))
+
+    #expect(response.error == nil)
+    #expect(response.result?["wait"]?["success"] == .bool(false))
+    #expect(response.result?["wait"]?["status"] == .string("target_unresolved_timeout"))
+    #expect(response.result?["wait"]?["lastObserved"] == .null)
+    #expect(response.result?["wait"]?["resolution"]?["status"] == .string("missing"))
+}
+
 @Test func clickRequestAcceptsLocatorTarget() {
     let router = CommandRouter(
         resolveLocator: { app, locator, scrollToVisible in
@@ -646,6 +760,124 @@ import Testing
     #expect(response.error == nil)
     #expect(response.result?["action"]?["locationResolutions"]?[0]?["best"]?["matchedText"] == .string("Backlog"))
     #expect(response.result?["action"]?["locationResolutions"]?[1]?["best"]?["matchedText"] == .string("Done"))
+}
+
+@Test func dragRequestConvertsWindowRelativePointsThroughCapturedWindowFrame() {
+    let router = CommandRouter(
+        captureSnapshot: { app, screenshot in
+            #expect(app == "com.example.App")
+            #expect(screenshot == false)
+            return actionTextLocationFixtureSnapshot(labels: [])
+        },
+        actions: PrimitiveActionHandlers(
+            drag: { from, to, _, _ in
+                #expect(from == .point(ActionPoint(x: 60, y: 80, coordinateSpace: .screen, app: "com.example.App")))
+                #expect(to == .point(ActionPoint(x: 150, y: 260, coordinateSpace: .screen, app: "com.example.App")))
+                return PrimitiveActionResult(action: "drag", target: "converted", strategy: "CGEventDrag", success: true)
+            }
+        )
+    )
+
+    let response = router.handle(JSONRPCRequest(
+        id: .string("drag-window-points"),
+        method: "drag",
+        params: .object([
+            "app": .string("com.example.App"),
+            "from": .object(["point": .object([
+                "x": .int(10),
+                "y": .int(20),
+                "coordinateSpace": .string("window")
+            ])]),
+            "to": .object(["point": .object([
+                "x": .int(100),
+                "y": .int(200),
+                "coordinateSpace": .string("window")
+            ])])
+        ])
+    ))
+
+    #expect(response.error == nil)
+}
+
+@Test func dragRequestConvertsScreenshotPixelsThroughCapturedWindowFrame() {
+    let router = CommandRouter(
+        captureSnapshot: { _, screenshot in
+            #expect(screenshot == true)
+            return actionTextLocationFixtureSnapshot(
+                labels: [],
+                screenshot: EncodedScreenshot(mediaType: "image/png", base64Data: "", width: 1_000, height: 800)
+            )
+        },
+        actions: PrimitiveActionHandlers(
+            drag: { from, to, _, _ in
+                #expect(from == .point(ActionPoint(x: 100, y: 85, coordinateSpace: .screen, app: "com.example.App")))
+                #expect(to == .point(ActionPoint(x: 550, y: 460, coordinateSpace: .screen, app: "com.example.App")))
+                return PrimitiveActionResult(action: "drag", target: "converted", strategy: "CGEventDrag", success: true)
+            }
+        )
+    )
+
+    let response = router.handle(JSONRPCRequest(
+        id: .string("drag-screenshot-points"),
+        method: "drag",
+        params: .object([
+            "from": .object(["point": .object([
+                "app": .string("com.example.App"),
+                "x": .int(100),
+                "y": .int(50),
+                "coordinateSpace": .string("screenshot")
+            ])]),
+            "to": .object(["point": .object([
+                "app": .string("com.example.App"),
+                "x": .int(1_000),
+                "y": .int(800),
+                "coordinateSpace": .string("screenshot")
+            ])])
+        ])
+    ))
+
+    #expect(response.error == nil)
+}
+
+@Test func dragRequestRejectsRelativePointWithoutApp() {
+    let router = CommandRouter(actions: PrimitiveActionHandlers(
+        drag: { _, _, _, _ in
+            Issue.record("relative point without app should fail before dispatch")
+            return PrimitiveActionResult(action: "drag", target: "bad", strategy: "bad", success: true)
+        }
+    ))
+
+    let response = router.handle(JSONRPCRequest(
+        id: .string("drag-relative-no-app"),
+        method: "drag",
+        params: .object([
+            "from": .object(["point": .object([
+                "x": .int(10),
+                "y": .int(20),
+                "coordinateSpace": .string("window")
+            ])]),
+            "to": .object(["point": .object(["x": .int(30), "y": .int(40)])])
+        ])
+    ))
+
+    #expect(response.error?.code == -32602)
+    #expect(response.error?.message == "from point coordinateSpace window requires app")
+}
+
+private func waitUniqueResolution() -> LocatorResolution {
+    LocatorResolution(
+        status: .unique,
+        snapshotID: SnapshotID("wait"),
+        best: LocatorCandidate(
+            index: 0,
+            handle: SnapshotHandle(snapshotID: SnapshotID("wait"), nodeIndex: 0),
+            role: "AXButton",
+            title: nil,
+            score: 1,
+            reasons: []
+        ),
+        candidates: []
+    )
 }
 
 private func actionLocatorFixtureSnapshot(buttons: [String]) -> AppSnapshot {

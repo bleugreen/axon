@@ -316,7 +316,11 @@ public struct AxnRunner {
                 record["error"] = traceError(error.message, hasSecretTaint: !secretTaintedFields.isEmpty)
                 return .object(record)
             }
-            if primitiveActionSucceeded(in: response.result) == false {
+            let primitiveSucceeded = primitiveActionSucceeded(in: response.result)
+            let dragCanVerifyDispatchOnly = method == "drag"
+                && !expectedFacts.isEmpty
+                && dragDispatchedWithoutSemanticVerification(in: response.result)
+            if primitiveSucceeded == false && !dragCanVerifyDispatchOnly {
                 record["success"] = .bool(false)
                 record["result"] = traceResult(method: method, result: response.result ?? [:], hasSecretTaint: !secretTaintedFields.isEmpty)
                 record["error"] = traceError(
@@ -326,7 +330,10 @@ public struct AxnRunner {
                 return .object(record)
             }
             try verifyExpectedFacts(expectedFacts, changeBaselines: changeBaselines, facts: &facts)
-            record["result"] = traceResult(method: method, result: response.result ?? [:], hasSecretTaint: !secretTaintedFields.isEmpty)
+            let result = dragCanVerifyDispatchOnly
+                ? semanticallyVerifiedDragResult(response.result ?? [:])
+                : (response.result ?? [:])
+            record["result"] = traceResult(method: method, result: result, hasSecretTaint: !secretTaintedFields.isEmpty)
             return .object(record)
         } catch let error as RecordedFactError {
             var record: [String: JSONValue] = [
@@ -538,7 +545,7 @@ public struct AxnRunner {
 
     private func commandMethod(for tool: String) throws -> String {
         switch tool {
-        case "look", "find", "click", "scroll", "drag", "invoke", "type", "keyboard":
+        case "look", "find", "wait_for_value", "click", "scroll", "drag", "invoke", "type", "keyboard":
             return tool
         default:
             throw AxnRunError.invalidParams("unknown axn tool: \(tool)")
@@ -609,6 +616,8 @@ public struct AxnRunner {
             return .object([:])
         case "find":
             return result["resolution"] ?? .object([:])
+        case "wait_for_value":
+            return result["wait"] ?? .object(result)
         default:
             return result["action"] ?? .object(result)
         }
@@ -618,14 +627,36 @@ public struct AxnRunner {
         guard let result else {
             return nil
         }
-        return bool("success", in: objectValue(result["action"]) ?? result)
+        return bool("success", in: objectValue(result["action"]) ?? objectValue(result["wait"]) ?? result)
+    }
+
+    private func dragDispatchedWithoutSemanticVerification(in result: [String: JSONValue]?) -> Bool {
+        guard let action = objectValue(result?["action"]) else {
+            return false
+        }
+        return action["dispatchSuccess"] == .bool(true)
+            && action["semanticSuccess"] == .null
+            && action["semanticStatus"] == .string("unverified")
+    }
+
+    private func semanticallyVerifiedDragResult(_ result: [String: JSONValue]) -> [String: JSONValue] {
+        guard var action = objectValue(result["action"]) else {
+            return result
+        }
+        action["success"] = .bool(true)
+        action["semanticSuccess"] = .bool(true)
+        action["semanticStatus"] = .string("verified")
+        action["message"] = .string("Drag semantic outcome verified by postcondition")
+        var updated = result
+        updated["action"] = .object(action)
+        return updated
     }
 
     private func primitiveActionFailureMessage(in result: [String: JSONValue]?) -> String? {
         guard let result else {
             return nil
         }
-        let action = objectValue(result["action"]) ?? result
+        let action = objectValue(result["action"]) ?? objectValue(result["wait"]) ?? result
         return optionalString("message", in: action)
     }
 

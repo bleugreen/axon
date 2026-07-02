@@ -46,7 +46,7 @@ public enum RecordedLocatorBuilder {
         if let identifier, !identifier.isEmpty {
             locator["identifier"] = .string(identifier)
         }
-        if let title, !title.isEmpty {
+        if let title, !title.isEmpty, !AXRoleSemantics.isEditableTextRole(role) {
             locator["title"] = .string(title)
         }
         if let value, !value.isEmpty, !AXRoleSemantics.isEditableTextRole(role) {
