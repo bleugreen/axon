@@ -511,12 +511,13 @@ private struct PrimitiveActionCommandHandler {
             return actionResponse(id: request.id) {
                 let params = try CommandRouterRequestSupport.paramsObject(in: request)
                 let decoder = ToolParamDecoder(toolName: "drag", params: params)
-                let from = try requiredResolvedPointerTarget("from", in: params)
-                let to = try requiredResolvedPointerTarget("to", in: params)
+                let app = try decoder.string("app")
+                let from = try requiredResolvedPointerTarget("from", in: params, defaultApp: app)
+                let to = try requiredResolvedPointerTarget("to", in: params, defaultApp: app)
                 let result = try services.actions.drag(
                     from.target,
                     to.target,
-                    try decoder.string("app"),
+                    app,
                     try decoder.int("durationMs")
                 )
                 return withLocationResolutions(result, resolutions: [from.locationResolution, to.locationResolution])
@@ -543,18 +544,30 @@ private struct PrimitiveActionCommandHandler {
         }
     }
 
-    private func requiredResolvedPointerTarget(_ key: String, in params: [String: JSONValue]) throws -> ResolvedPointerTarget {
-        try resolvedPointerTarget(from: CommandRouterRequestSupport.requiredToolTarget(key, in: params, acceptedKinds: .pointer))
+    private func requiredResolvedPointerTarget(
+        _ key: String,
+        in params: [String: JSONValue],
+        defaultApp: String? = nil
+    ) throws -> ResolvedPointerTarget {
+        try resolvedPointerTarget(
+            from: CommandRouterRequestSupport.requiredToolTarget(key, in: params, acceptedKinds: .pointer),
+            defaultApp: defaultApp,
+            fieldName: key
+        )
     }
 
     private func optionalResolvedPointerTarget(_ key: String, in params: [String: JSONValue]) throws -> ResolvedPointerTarget? {
         guard let target = try CommandRouterRequestSupport.optionalToolTarget(key, in: params, acceptedKinds: .pointer) else {
             return nil
         }
-        return try resolvedPointerTarget(from: target)
+        return try resolvedPointerTarget(from: target, fieldName: key)
     }
 
-    private func resolvedPointerTarget(from target: ToolTarget) throws -> ResolvedPointerTarget {
+    private func resolvedPointerTarget(
+        from target: ToolTarget,
+        defaultApp: String? = nil,
+        fieldName: String = "target"
+    ) throws -> ResolvedPointerTarget {
         switch target {
         case let .handle(handle):
             return ResolvedPointerTarget(target: .handle(handle), locationResolution: nil)
@@ -562,10 +575,45 @@ private struct PrimitiveActionCommandHandler {
             let resolved = try resolveElementTarget(.locator(app: app, locator: locator))
             return ResolvedPointerTarget(target: .handle(resolved), locationResolution: nil)
         case let .point(point):
-            return ResolvedPointerTarget(target: .point(point), locationResolution: nil)
+            return ResolvedPointerTarget(
+                target: .point(try screenPoint(for: point, defaultApp: defaultApp, fieldName: fieldName)),
+                locationResolution: nil
+            )
         case let .textLocation(location):
             let resolution = try resolveTextLocationTarget(location)
             return ResolvedPointerTarget(target: .point(resolution.point), locationResolution: resolution)
+        }
+    }
+
+    private func screenPoint(for point: ActionPoint, defaultApp: String?, fieldName: String) throws -> ActionPoint {
+        switch point.coordinateSpace {
+        case .screen, .legacyScreen:
+            return point
+        case .window, .screenshot:
+            let app = point.app ?? defaultApp
+            guard let app, !app.isEmpty else {
+                throw JSONRPCError.invalidParams("\(fieldName) point coordinateSpace \(point.coordinateSpace.rawValue) requires app")
+            }
+            let snapshot = try services.captureSnapshot(app, point.coordinateSpace == .screenshot)
+            guard let windowFrame = snapshot.windows.compactMap(\.frame).first else {
+                throw JSONRPCError.invalidParams("\(fieldName) point coordinateSpace \(point.coordinateSpace.rawValue) requires a captured window frame")
+            }
+            let screenX: Double
+            let screenY: Double
+            switch point.coordinateSpace {
+            case .window:
+                screenX = windowFrame.x + point.x
+                screenY = windowFrame.y + point.y
+            case .screenshot:
+                guard let screenshot = snapshot.screenshot else {
+                    throw JSONRPCError.invalidParams("\(fieldName) point coordinateSpace screenshot requires a screenshot capture")
+                }
+                screenX = windowFrame.x + point.x / Double(screenshot.width) * windowFrame.width
+                screenY = windowFrame.y + point.y / Double(screenshot.height) * windowFrame.height
+            case .screen, .legacyScreen:
+                fatalError("handled before conversion")
+            }
+            return ActionPoint(x: screenX, y: screenY, coordinateSpace: .screen, app: app)
         }
     }
 
