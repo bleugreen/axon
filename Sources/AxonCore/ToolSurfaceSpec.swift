@@ -226,7 +226,7 @@ public enum ToolSurfaceSpec {
         ),
         ToolSpec(
             name: "drag",
-            description: "Drag from one point, snapshot handle, locator target, or text location to another. Pointer dispatch and verified semantic outcome are reported separately."
+            description: "Drag from one point, snapshot handle, locator target, or text location to another. Pointer dispatch and verified semantic outcome are reported separately.",
             params: [
                 ToolParameterSpec("from", .target(.pointer), required: true, description: "Starting handle, locator, point, or text location."),
                 ToolParameterSpec("to", .target(.pointer), required: true, description: "Ending handle, locator, point, or text location."),
