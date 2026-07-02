@@ -148,6 +148,19 @@ public enum ToolSurfaceSpec {
             cliUsage: "axon find <app> '<locator-json>'"
         ),
         ToolSpec(
+            name: "wait_for_value",
+            description: "Poll readable AX state from a resolved locator until a contains, equals, or regex predicate holds, or a bounded timeout reports the last observed state.",
+            params: [
+                ToolParameterSpec("target", .target(.locator), required: true, description: "Locator target object with app and locator fields."),
+                ToolParameterSpec("contains", .string, description: "Succeed when any readable field contains this text."),
+                ToolParameterSpec("equals", .string, description: "Succeed when any readable field exactly equals this text."),
+                ToolParameterSpec("matches", .string, description: "Succeed when any readable field matches this regular expression."),
+                ToolParameterSpec("timeoutMs", .integer, default: .int(5_000), description: "Maximum time to poll before returning a failed timeout result. Defaults to 5000 ms and is capped at 60000 ms."),
+                ToolParameterSpec("intervalMs", .integer, default: .int(100), description: "Delay between polls. Defaults to 100 ms and is capped by the remaining timeout.")
+            ],
+            cliUsage: "axon wait_for_value '<target-json>' (--contains text | --equals text | --matches regex) [--timeout-ms n] [--interval-ms n]"
+        ),
+        ToolSpec(
             name: "permit",
             description: "Ask macOS to show the Accessibility permission prompt for the running Axon daemon identity.",
             cliUsage: "axon permit"
