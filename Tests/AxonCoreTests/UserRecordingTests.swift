@@ -570,18 +570,22 @@ final class RecorderSettleTestElement: @unchecked Sendable {}
     #expect(ancestors[1]["role"] == .string("AXToolbar"))
 }
 
-@Test func recordedTargetSelectorOmitsEditableElementValueFromLocator() throws {
+@Test func recordedTargetSelectorOmitsEditableElementTextFromLocator() throws {
     let selection = try #require(RecordedTargetSelector.select(from: [
         RecordedElementCandidate(
             role: "AXComboBox",
+            title: "wikipedia.org",
             value: "wikipedia.org",
+            description: "Search with Google or enter address",
             windowTitle: "Example",
             hasWindowAncestor: true
         )
     ]))
 
     #expect(selection.locator["role"] == .string("AXComboBox"))
+    #expect(selection.locator["title"] == nil)
     #expect(selection.locator["value"] == nil)
+    #expect(selection.locator["description"] == .string("Search with Google or enter address"))
 }
 
 @Test func recordedLocatorRejectsElementsOutsideWindowSnapshots() {

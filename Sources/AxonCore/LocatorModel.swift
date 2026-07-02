@@ -372,7 +372,7 @@ public struct LocatorResolver: Sendable {
         guard Self.descendantLabelRoles.contains(node.role),
               descendantLabels(of: node).contains(where: matcher.matches)
         else {
-            return false
+            return AXRoleSemantics.isEditableTextRole(node.role)
         }
         reasons.append("descendant title \(matcher.reasonFragment)")
         return true
@@ -387,7 +387,7 @@ public struct LocatorResolver: Sendable {
             return true
         }
         guard descendantLabels(of: node).contains(where: matcher.matches) else {
-            return false
+            return AXRoleSemantics.isEditableTextRole(node.role)
         }
         reasons.append("descendant label \(matcher.reasonFragment)")
         return true
