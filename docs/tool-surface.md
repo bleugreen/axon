@@ -8,6 +8,7 @@ files, and the CLI. There are no compatibility aliases for previous tool names.
 ```text
 look(target?, since?, screenshot?, screenText?, tree?, offset?, limit?, direct?, childDepth?, depth?, all?, format?, frames?)
 find(app, locator)
+wait_for_value(target, contains?, equals?, matches?, timeoutMs?, intervalMs?)
 permit()
 run(actions?, path?, argValues?, continueOnError?, dryRun?)
 save(sessionId?, from?, to?, path?, includeReads?)
@@ -26,6 +27,7 @@ axon permit
 axon refresh-secrets [--json]
 axon look [target] [--since snapshot-id] [--screenshot] [--screen-text] [--frames] [--json] [--details] [--debug] [--no-tree] [--offset n] [--limit n] [--depth n]
 axon find <app> '<locator-json>'
+axon wait_for_value '<target-json>' (--contains text | --equals text | --matches regex) [--timeout-ms n] [--interval-ms n]
 axon run <path.axn> [--arg name=value] [--dry-run] [--continue-on-error]
 axon save [--session id] [--from call] [--to call] [--path file.axn] [--include-reads]
 
@@ -79,6 +81,16 @@ Locator fields are not all equally durable: role, subrole, title, label,
 description, identifier, non-editable value, and ancestors filter candidates;
 actions and editable text values contribute to candidate reasons and scoring
 when present.
+
+`wait_for_value(target, contains|equals|matches)` repeatedly resolves a locator
+target and reads the unique target's readable AX state until one predicate holds
+or the bounded timeout elapses. It checks readable text fields including
+`AXValue`, `AXTitle`, `AXDescription`, identifier, and help, so browser controls
+whose user-facing label is exposed as `AXDescription` can be waited on honestly.
+Timeouts return `success: false` with elapsed milliseconds and either the last
+observed readable state (`predicate_timeout`) or the last missing/ambiguous
+locator resolution (`target_unresolved_timeout`). This is a settled-state wait;
+`look(since:)` remains the coarse app/window change check.
 
 ## Actions
 

@@ -35,6 +35,39 @@ import Testing
     #expect(requests[0].params?["value"] == .string("Mitch"))
 }
 
+@Test func runDispatchesWaitForValueAndTreatsTimeoutAsFailure() {
+    var requests: [JSONRPCRequest] = []
+    let executor = AxnRunner { request in
+        requests.append(request)
+        return JSONRPCResponse(id: request.id, result: [
+            "wait": .object([
+                "success": .bool(false),
+                "status": .string("predicate_timeout"),
+                "message": .string("wait_for_value timed out before the predicate matched")
+            ])
+        ])
+    }
+
+    let batch = try! executor.run(params: [
+        "actions": .array([
+            .object([
+                "tool": .string("wait_for_value"),
+                "target": .object([
+                    "app": .string("Firefox"),
+                    "locator": .object(["role": .string("AXComboBox")])
+                ]),
+                "contains": .string("example.com")
+            ])
+        ])
+    ])
+
+    #expect(batch["success"] == .bool(false))
+    #expect(batch["trace"]?[0]?["tool"] == .string("wait_for_value"))
+    #expect(batch["trace"]?[0]?["success"] == .bool(false))
+    #expect(batch["trace"]?[0]?["error"] == .string("wait_for_value timed out before the predicate matched"))
+    #expect(requests.map(\.method) == ["wait_for_value"])
+}
+
 @Test func runStripsVerificationMetadataBeforeDispatch() {
     var requests: [JSONRPCRequest] = []
     let executor = AxnRunner { request in
