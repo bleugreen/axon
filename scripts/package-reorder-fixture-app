@@ -1,0 +1,51 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+if [[ -n "${SWIFT:-}" ]]; then
+  SWIFT="$SWIFT"
+elif [[ -x "$HOME/.swiftly/bin/swift" ]]; then
+  SWIFT="$HOME/.swiftly/bin/swift"
+else
+  SWIFT="$(command -v swift)"
+fi
+
+APP_NAME="Axon Reorder Fixture"
+BUNDLE_ID="com.bleugreen.axon.reorder-fixture"
+DIST_DIR="$ROOT/dist"
+APP_DIR="$DIST_DIR/$APP_NAME.app"
+
+cd "$ROOT"
+"$SWIFT" build -c release --product AxonReorderFixtureApp
+rm -rf "$APP_DIR"
+mkdir -p "$APP_DIR/Contents/MacOS"
+cp "$ROOT/.build/release/AxonReorderFixtureApp" "$APP_DIR/Contents/MacOS/AxonReorderFixtureApp"
+chmod 755 "$APP_DIR/Contents/MacOS/AxonReorderFixtureApp"
+cat > "$APP_DIR/Contents/Info.plist" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleDevelopmentRegion</key>
+  <string>en</string>
+  <key>CFBundleExecutable</key>
+  <string>AxonReorderFixtureApp</string>
+  <key>CFBundleIdentifier</key>
+  <string>$BUNDLE_ID</string>
+  <key>CFBundleInfoDictionaryVersion</key>
+  <string>6.0</string>
+  <key>CFBundleName</key>
+  <string>$APP_NAME</string>
+  <key>CFBundlePackageType</key>
+  <string>APPL</string>
+  <key>CFBundleShortVersionString</key>
+  <string>0.1.0</string>
+  <key>CFBundleVersion</key>
+  <string>0.1.0</string>
+  <key>LSMinimumSystemVersion</key>
+  <string>14.0</string>
+</dict>
+</plist>
+PLIST
+/usr/bin/codesign --force --sign - "$APP_DIR"
+printf 'fixture app: %s\n' "$APP_DIR"

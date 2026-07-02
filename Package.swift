@@ -35,6 +35,9 @@ let package = Package(
             name: "AxonEditorApp",
             dependencies: ["AxonCore"]
         ),
+        .executableTarget(
+            name: "AxonReorderFixtureApp"
+        ),
         .testTarget(
             name: "AxonCoreTests",
             dependencies: ["AxonCore"]
