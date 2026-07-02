@@ -13,7 +13,7 @@ public enum ToolTargetKind: String, CaseIterable, Sendable {
         case .locator:
             return "Locator target object with app and locator fields. Locator may use label, title, value, description, identifier, actions, and ancestors."
         case .point:
-            return "Point target object: { point: { x, y } } or { x, y } in screen coordinates."
+            return "Point target object: { point: { x, y, coordinateSpace } } or { x, y, coordinateSpace }. coordinateSpace is screen, window, or screenshot; window and screenshot points require app when no top-level app is provided. Legacy { x, y } still resolves as screen coordinates for compatibility."
         case .textLocation:
             return "Text location target object: { location: { app, text, source? } }. Resolves visible text to a click/drag/scroll point using AX text or screenshot OCR without callers providing coordinates."
         }
@@ -226,12 +226,13 @@ public enum ToolSurfaceSpec {
         ),
         ToolSpec(
             name: "drag",
-            description: "Drag from one point, snapshot handle, or locator target to another.",
+            description: "Drag from one point, snapshot handle, locator target, or text location to another. Pointer dispatch and verified semantic outcome are reported separately."
             params: [
                 ToolParameterSpec("from", .target(.pointer), required: true, description: "Starting handle, locator, point, or text location."),
                 ToolParameterSpec("to", .target(.pointer), required: true, description: "Ending handle, locator, point, or text location."),
                 ToolParameterSpec("app", .string, description: "Optional app to activate before dragging."),
-                ToolParameterSpec("durationMs", .integer, description: "Optional drag hold duration in milliseconds.")
+                ToolParameterSpec("durationMs", .integer, description: "Optional drag duration in milliseconds. The pointer path still emits threshold and intermediate drag events."),
+                ToolParameterSpec("expects", .array, description: "Optional post-action facts used by run to verify semantic success. Direct drag calls without a verified postcondition report an unverified semantic outcome.")
             ],
             cliUsage: "axon drag [--app app] [--duration-ms n] <from-json> <to-json>"
         ),

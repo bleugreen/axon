@@ -22,6 +22,19 @@ public struct PrimitiveActionResult: Codable, Equatable, Sendable {
         self.details = details
     }
 
+    public func withSuccess(_ success: Bool, message: String? = nil, details extraDetails: [String: JSONValue] = [:]) -> PrimitiveActionResult {
+        var mergedDetails = details
+        mergedDetails.merge(extraDetails) { _, detail in detail }
+        return PrimitiveActionResult(
+            action: action,
+            target: target,
+            strategy: strategy,
+            success: success,
+            message: message ?? self.message,
+            details: mergedDetails
+        )
+    }
+
     public var jsonValue: JSONValue {
         var object: [String: JSONValue] = [
             "action": .string(action),
@@ -35,24 +48,45 @@ public struct PrimitiveActionResult: Codable, Equatable, Sendable {
     }
 }
 
+public enum ActionPointCoordinateSpace: String, Codable, Equatable, Sendable {
+    case screen
+    case window
+    case screenshot
+    case legacyScreen
+}
+
 public struct ActionPoint: Codable, Equatable, Sendable {
     public let x: Double
     public let y: Double
+    public let coordinateSpace: ActionPointCoordinateSpace
+    public let app: String?
 
-    public init(x: Double, y: Double) {
+    public init(
+        x: Double,
+        y: Double,
+        coordinateSpace: ActionPointCoordinateSpace = .legacyScreen,
+        app: String? = nil
+    ) {
         self.x = x
         self.y = y
+        self.coordinateSpace = coordinateSpace
+        self.app = app
     }
 
     public var jsonValue: JSONValue {
-        .object([
+        var object: [String: JSONValue] = [
             "x": .double(x),
-            "y": .double(y)
-        ])
+            "y": .double(y),
+            "coordinateSpace": .string(coordinateSpace.rawValue)
+        ]
+        if let app {
+            object["app"] = .string(app)
+        }
+        return .object(object)
     }
 
     public var targetDescription: String {
-        "point:\(format(x)),\(format(y))"
+        "point:\(format(x)),\(format(y))[\(coordinateSpace.rawValue)]"
     }
 
     private func format(_ value: Double) -> String {
