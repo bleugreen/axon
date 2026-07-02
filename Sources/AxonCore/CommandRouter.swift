@@ -111,7 +111,10 @@ public struct CommandRouter {
         recognizeText: @escaping TextRecognitionHandler = VisionTextRecognizer.recognizeText(in:),
         activeCredentialFilter: any ActiveCredentialFilter = EmptyActiveCredentialFilter(),
         activeCredentialFilterProvider: (@Sendable () -> any ActiveCredentialFilter)? = nil,
-        debugSessions: AxnDebugSessionStore = AxnDebugSessionStore()
+        debugSessions: AxnDebugSessionStore = AxnDebugSessionStore(),
+        readableAXState: CommandRouterServices.ReadableAXStateProvider? = nil,
+        now: @escaping () -> Date = Date.init,
+        sleepMilliseconds: @escaping (Int) -> Void = { Thread.sleep(forTimeInterval: Double($0) / 1_000) }
     ) {
         self.init(services: CommandRouterServices(
             listApps: listApps,
