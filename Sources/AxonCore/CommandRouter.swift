@@ -1,8 +1,10 @@
+import ApplicationServices
 import Foundation
 
 public struct CommandRouterServices {
     public typealias LocatorResolutionProvider = (_ app: String, _ locator: AXLocator, _ scrollToVisible: Bool) throws -> LocatorResolution
     public typealias SnapshotWithChildDepthProvider = (_ app: String, _ screenshot: Bool, _ childDepth: Int?) throws -> AppSnapshot
+    public typealias ReadableAXStateProvider = (_ handle: SnapshotHandle) throws -> ReadableAXState
 
     public let listApps: () -> [AppIdentity]
     public let listAllApps: () -> [AppIdentity]
@@ -18,6 +20,9 @@ public struct CommandRouterServices {
     public let recognizeText: TextRecognitionHandler
     public let activeCredentialFilterProvider: @Sendable () -> any ActiveCredentialFilter
     public let debugSessions: AxnDebugSessionStore
+    public let readableAXState: ReadableAXStateProvider
+    public let now: () -> Date
+    public let sleepMilliseconds: (Int) -> Void
 
     public init(
         listApps: @escaping () -> [AppIdentity] = { AppResolver().recordableApps() },
@@ -74,6 +79,12 @@ public struct CommandRouterServices {
         self.recognizeText = recognizeText
         self.activeCredentialFilterProvider = activeCredentialFilterProvider ?? { activeCredentialFilter }
         self.debugSessions = debugSessions
+        self.readableAXState = readableAXState ?? { handle in
+            let element = try elementStore.element(for: handle)
+            return ReadableAXState(element: element)
+        }
+        self.now = now
+        self.sleepMilliseconds = sleepMilliseconds
     }
 }
 
@@ -116,7 +127,10 @@ public struct CommandRouter {
             recognizeText: recognizeText,
             activeCredentialFilter: activeCredentialFilter,
             activeCredentialFilterProvider: activeCredentialFilterProvider,
-            debugSessions: debugSessions
+            debugSessions: debugSessions,
+            readableAXState: readableAXState,
+            now: now,
+            sleepMilliseconds: sleepMilliseconds
         ))
     }
 
