@@ -134,6 +134,87 @@ import Testing
     #expect(requests.map(\.method) == ["scroll"])
 }
 
+@Test func runReportsBareDragAsDispatchOnlyFailure() {
+    let executor = AxnRunner { request in
+        #expect(request.method == "drag")
+        return JSONRPCResponse(id: request.id, result: [
+            "action": .object([
+                "success": .bool(false),
+                "dispatchSuccess": .bool(true),
+                "semanticSuccess": .null,
+                "semanticStatus": .string("unverified"),
+                "message": .string("Drag pointer events were dispatched, but semantic outcome is unverified without a postcondition")
+            ])
+        ])
+    }
+
+    let batch = try! executor.run(params: [
+        "actions": .array([
+            .object([
+                "tool": .string("drag"),
+                "from": .object(["point": .object(["x": .int(10), "y": .int(20)])]),
+                "to": .object(["point": .object(["x": .int(30), "y": .int(40)])])
+            ])
+        ])
+    ])
+
+    #expect(batch["success"] == .bool(false))
+    #expect(batch["trace"]?[0]?["success"] == .bool(false))
+    #expect(batch["trace"]?[0]?["result"]?["dispatchSuccess"] == .bool(true))
+    #expect(batch["trace"]?[0]?["result"]?["semanticSuccess"] == .null)
+}
+
+@Test func runMarksDragSemanticSuccessAfterExpectedFactVerifies() {
+    let executor = AxnRunner(
+        commandHandler: { request in
+            #expect(request.method == "drag")
+            return JSONRPCResponse(id: request.id, result: [
+                "action": .object([
+                    "success": .bool(false),
+                    "dispatchSuccess": .bool(true),
+                    "semanticSuccess": .null,
+                    "semanticStatus": .string("unverified")
+                ])
+            ])
+        },
+        snapshotProvider: { _ in valueFactSnapshot(value: "Bravo, Alpha") }
+    )
+
+    let fact: JSONValue = .object([
+        "id": .string("a001.value.0"),
+        "kind": .string("value"),
+        "target": .object([
+            "app": .string("Example"),
+            "locator": .object([
+                "role": .string("AXList"),
+                "identifier": .string("reorder-list")
+            ])
+        ]),
+        "state": .object([
+            "value": .object(["equals": .string("Bravo, Alpha")])
+        ])
+    ])
+
+    let batch = try! executor.run(params: [
+        "actions": .array([
+            .object([
+                "id": .string("a001"),
+                "tool": .string("drag"),
+                "from": .object(["point": .object(["x": .int(10), "y": .int(20)])]),
+                "to": .object(["point": .object(["x": .int(30), "y": .int(40)])]),
+                "expects": .array([fact])
+            ])
+        ])
+    ])
+
+    #expect(batch["success"] == .bool(true))
+    #expect(batch["trace"]?[0]?["success"] == .bool(true))
+    #expect(batch["trace"]?[0]?["result"]?["success"] == .bool(true))
+    #expect(batch["trace"]?[0]?["result"]?["dispatchSuccess"] == .bool(true))
+    #expect(batch["trace"]?[0]?["result"]?["semanticSuccess"] == .bool(true))
+    #expect(batch["trace"]?[0]?["result"]?["semanticStatus"] == .string("verified"))
+}
+
 @Test func runWaitsForChangedExpectationBeforeNextAction() {
     var snapshots = [
         changeFactSnapshot(title: "Before"),
