@@ -201,6 +201,76 @@ import Testing
     #expect(resolution.best?.reasons.contains { $0.hasPrefix("value ") } == false)
 }
 
+@Test func locatorResolverTreatsEditableTitleAndLabelAsReplayHints() throws {
+    let snapshot = AppSnapshot(
+        id: SnapshotID("locator-fixture"),
+        app: AppIdentity(bundleIdentifier: "org.mozilla.firefox", name: "Firefox", processIdentifier: 42),
+        windows: [
+            AXNode(role: "AXWindow", children: [
+                AXNode(
+                    role: "AXComboBox",
+                    value: "example.org",
+                    description: "Search with Google or enter address"
+                )
+            ])
+        ],
+        screenshot: nil
+    )
+    let titleLocator = AXLocator(
+        role: "AXComboBox",
+        title: .exact("wikipedia.org"),
+        description: .exact("Search with Google or enter address")
+    )
+    let labelLocator = AXLocator(
+        role: "AXComboBox",
+        label: .exact("wikipedia.org"),
+        description: .exact("Search with Google or enter address")
+    )
+
+    let titleResolution = LocatorResolver().resolve(titleLocator, in: snapshot)
+    let labelResolution = LocatorResolver().resolve(labelLocator, in: snapshot)
+
+    #expect(titleResolution.status == .unique)
+    #expect(titleResolution.best?.handle?.rawValue == "locator-fixture:1")
+    #expect(titleResolution.best?.reasons.contains { $0.hasPrefix("title ") } == false)
+    #expect(labelResolution.status == .unique)
+    #expect(labelResolution.best?.handle?.rawValue == "locator-fixture:1")
+    #expect(labelResolution.best?.reasons.contains { $0.hasPrefix("label ") } == false)
+}
+
+@Test func locatorResolverUsesEditableTextMatchesAsPositiveScoringHints() throws {
+    let snapshot = AppSnapshot(
+        id: SnapshotID("locator-fixture"),
+        app: AppIdentity(bundleIdentifier: "org.mozilla.firefox", name: "Firefox", processIdentifier: 42),
+        windows: [
+            AXNode(role: "AXWindow", children: [
+                AXNode(
+                    role: "AXComboBox",
+                    value: "example.org",
+                    description: "Search with Google or enter address"
+                ),
+                AXNode(
+                    role: "AXComboBox",
+                    value: "wikipedia.org",
+                    description: "Search with Google or enter address"
+                )
+            ])
+        ],
+        screenshot: nil
+    )
+    let locator = AXLocator(
+        role: "AXComboBox",
+        label: .exact("wikipedia.org"),
+        description: .exact("Search with Google or enter address")
+    )
+
+    let resolution = LocatorResolver().resolve(locator, in: snapshot)
+
+    #expect(resolution.status == .unique)
+    #expect(resolution.best?.handle?.rawValue == "locator-fixture:2")
+    #expect(resolution.best?.reasons.contains("label exact wikipedia.org") == true)
+}
+
 @Test func locatorResolverKeepsTitleMatchingRawTitleOnly() {
     let snapshot = AppSnapshot(
         id: SnapshotID("locator-fixture"),
