@@ -98,6 +98,120 @@ import Testing
     #expect(response.result?["resolution"]?["best"]?["handle"] == .string("live-locator:2"))
 }
 
+@Test func waitForValueSucceedsWhenDescriptionMatches() {
+    var nowMs = 0
+    var sleeps: [Int] = []
+    var reads = 0
+    let router = CommandRouter(
+        resolveLocator: { app, locator, scrollToVisible in
+            #expect(app == "Firefox")
+            #expect(locator.role == "AXButton")
+            #expect(scrollToVisible == false)
+            return waitUniqueResolution()
+        },
+        readableAXState: { handle in
+            #expect(handle.rawValue == "wait:0")
+            reads += 1
+            return ReadableAXState(fields: [
+                "title": "",
+                "description": reads < 2 ? "Loading" : "View site information"
+            ])
+        },
+        now: { Date(timeIntervalSince1970: Double(nowMs) / 1_000) },
+        sleepMilliseconds: { milliseconds in
+            sleeps.append(milliseconds)
+            nowMs += milliseconds
+        }
+    )
+
+    let response = router.handle(JSONRPCRequest(
+        id: .string("wait-description"),
+        method: "wait_for_value",
+        params: .object([
+            "target": .object([
+                "app": .string("Firefox"),
+                "locator": .object(["role": .string("AXButton")])
+            ]),
+            "contains": .string("View site information"),
+            "timeoutMs": .int(500),
+            "intervalMs": .int(100)
+        ])
+    ))
+
+    #expect(response.error == nil)
+    #expect(response.result?["wait"]?["success"] == .bool(true))
+    #expect(response.result?["wait"]?["status"] == .string("satisfied"))
+    #expect(response.result?["wait"]?["matched"]?["field"] == .string("description"))
+    #expect(response.result?["wait"]?["matched"]?["value"] == .string("View site information"))
+    #expect(response.result?["wait"]?["elapsedMs"] == .int(100))
+    #expect(sleeps == [100])
+}
+
+@Test func waitForValueTimesOutWithLastObservedState() {
+    var nowMs = 0
+    let router = CommandRouter(
+        resolveLocator: { _, _, _ in waitUniqueResolution() },
+        readableAXState: { _ in ReadableAXState(fields: ["value": "about:blank"]) },
+        now: { Date(timeIntervalSince1970: Double(nowMs) / 1_000) },
+        sleepMilliseconds: { nowMs += $0 }
+    )
+
+    let response = router.handle(JSONRPCRequest(
+        id: .string("wait-timeout"),
+        method: "wait_for_value",
+        params: .object([
+            "target": .object([
+                "app": .string("Firefox"),
+                "locator": .object(["role": .string("AXComboBox")])
+            ]),
+            "equals": .string("https://example.com/"),
+            "timeoutMs": .int(250),
+            "intervalMs": .int(100)
+        ])
+    ))
+
+    #expect(response.error == nil)
+    #expect(response.result?["wait"]?["success"] == .bool(false))
+    #expect(response.result?["wait"]?["status"] == .string("predicate_timeout"))
+    #expect(response.result?["wait"]?["lastObserved"]?["value"] == .string("about:blank"))
+    #expect(response.result?["wait"]?["elapsedMs"] == .int(250))
+}
+
+@Test func waitForValueTimesOutWhenTargetNeverResolves() {
+    var nowMs = 0
+    let router = CommandRouter(
+        resolveLocator: { _, _, _ in
+            LocatorResolution(status: .missing, snapshotID: SnapshotID("wait"), best: nil, candidates: [])
+        },
+        readableAXState: { _ in
+            Issue.record("wait_for_value should not read state when the locator never resolves uniquely")
+            return ReadableAXState(fields: [:])
+        },
+        now: { Date(timeIntervalSince1970: Double(nowMs) / 1_000) },
+        sleepMilliseconds: { nowMs += $0 }
+    )
+
+    let response = router.handle(JSONRPCRequest(
+        id: .string("wait-unresolved"),
+        method: "wait_for_value",
+        params: .object([
+            "target": .object([
+                "app": .string("Firefox"),
+                "locator": .object(["role": .string("AXComboBox")])
+            ]),
+            "matches": .string("example\\.com"),
+            "timeoutMs": .int(200),
+            "intervalMs": .int(100)
+        ])
+    ))
+
+    #expect(response.error == nil)
+    #expect(response.result?["wait"]?["success"] == .bool(false))
+    #expect(response.result?["wait"]?["status"] == .string("target_unresolved_timeout"))
+    #expect(response.result?["wait"]?["lastObserved"] == .null)
+    #expect(response.result?["wait"]?["resolution"]?["status"] == .string("missing"))
+}
+
 @Test func clickRequestAcceptsLocatorTarget() {
     let router = CommandRouter(
         resolveLocator: { app, locator, scrollToVisible in
@@ -646,6 +760,22 @@ import Testing
     #expect(response.error == nil)
     #expect(response.result?["action"]?["locationResolutions"]?[0]?["best"]?["matchedText"] == .string("Backlog"))
     #expect(response.result?["action"]?["locationResolutions"]?[1]?["best"]?["matchedText"] == .string("Done"))
+}
+
+private func waitUniqueResolution() -> LocatorResolution {
+    LocatorResolution(
+        status: .unique,
+        snapshotID: SnapshotID("wait"),
+        best: LocatorCandidate(
+            index: 0,
+            handle: SnapshotHandle(snapshotID: SnapshotID("wait"), nodeIndex: 0),
+            role: "AXButton",
+            title: nil,
+            score: 1,
+            reasons: []
+        ),
+        candidates: []
+    )
 }
 
 private func actionLocatorFixtureSnapshot(buttons: [String]) -> AppSnapshot {
