@@ -195,16 +195,25 @@ public final class AXPrimitiveActionExecutor {
         }
         let start = try point(for: from)
         let end = try point(for: to)
-        postMouseDrag(from: start, to: end, durationMs: durationMs)
+        let eventSteps = postMouseDrag(from: start, to: end, durationMs: durationMs)
         return PrimitiveActionResult(
             action: "drag",
             target: "\(from.targetDescription)->\(to.targetDescription)",
             strategy: "CGEventDrag",
-            success: true,
+            success: false,
+            message: "Drag pointer events were dispatched, but semantic outcome is unverified without a postcondition",
             details: [
-                "from": ActionPoint(x: start.x, y: start.y).jsonValue,
-                "to": ActionPoint(x: end.x, y: end.y).jsonValue,
-                "durationMs": durationMs.map(JSONValue.int) ?? .null
+                "dispatchSuccess": .bool(true),
+                "semanticSuccess": .null,
+                "semanticStatus": .string("unverified"),
+                "from": ActionPoint(x: start.x, y: start.y, coordinateSpace: .screen).jsonValue,
+                "to": ActionPoint(x: end.x, y: end.y, coordinateSpace: .screen).jsonValue,
+                "durationMs": durationMs.map(JSONValue.int) ?? .null,
+                "eventPath": .object([
+                    "eventCount": .int(eventSteps.count),
+                    "updates": .int(eventSteps.filter { $0.type == .leftMouseDragged }.count),
+                    "hasThresholdMotion": .bool(eventSteps.count > 2)
+                ])
             ]
         )
     }
@@ -429,20 +438,24 @@ public final class AXPrimitiveActionExecutor {
     private func postMouseClick(at point: CGPoint) {
         let down = CGEvent(mouseEventSource: nil, mouseType: .leftMouseDown, mouseCursorPosition: point, mouseButton: .left)
         let up = CGEvent(mouseEventSource: nil, mouseType: .leftMouseUp, mouseCursorPosition: point, mouseButton: .left)
-        down?.post(tap: .cghidEventTap)
-        up?.post(tap: .cghidEventTap)
+        if let down { postMouseEvent(down) }
+        if let up { postMouseEvent(up) }
     }
 
-    private func postMouseDrag(from start: CGPoint, to end: CGPoint, durationMs: Int?) {
-        let down = CGEvent(mouseEventSource: nil, mouseType: .leftMouseDown, mouseCursorPosition: start, mouseButton: .left)
-        let drag = CGEvent(mouseEventSource: nil, mouseType: .leftMouseDragged, mouseCursorPosition: end, mouseButton: .left)
-        let up = CGEvent(mouseEventSource: nil, mouseType: .leftMouseUp, mouseCursorPosition: end, mouseButton: .left)
-        down?.post(tap: .cghidEventTap)
-        if let durationMs, durationMs > 0 {
-            Thread.sleep(forTimeInterval: Double(durationMs) / 1_000)
+    @discardableResult
+    private func postMouseDrag(from start: CGPoint, to end: CGPoint, durationMs: Int?) -> [DragEventStep] {
+        let steps = DragEventPathSynthesizer.path(from: start, to: end, durationMs: durationMs)
+        let delayMs = max((durationMs ?? 250) / max(steps.count - 1, 1), 0)
+        for (index, step) in steps.enumerated() {
+            let event = CGEvent(mouseEventSource: nil, mouseType: step.type, mouseCursorPosition: step.point, mouseButton: .left)
+            if let event {
+                postMouseEvent(event)
+            }
+            if index < steps.count - 1, delayMs > 0 {
+                sleepMilliseconds(delayMs)
+            }
         }
-        drag?.post(tap: .cghidEventTap)
-        up?.post(tap: .cghidEventTap)
+        return steps
     }
 
     private func postKeyStroke(_ keyStroke: KeyStroke) {
@@ -450,8 +463,8 @@ public final class AXPrimitiveActionExecutor {
         let up = CGEvent(keyboardEventSource: nil, virtualKey: keyStroke.keyCode, keyDown: false)
         down?.flags = keyStroke.flags
         up?.flags = keyStroke.flags
-        down?.post(tap: .cghidEventTap)
-        up?.post(tap: .cghidEventTap)
+        if let down { postMouseEvent(down) }
+        if let up { postMouseEvent(up) }
     }
 
     private func postKeyboardText(_ text: String) -> Bool {
