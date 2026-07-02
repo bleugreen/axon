@@ -76,14 +76,14 @@ import Testing
     var now = Date(timeIntervalSinceReferenceDate: 0)
     var waits = 0
     let buffer = AXNotificationEvidenceBuffer(
-        elementMatches: { $0 === $1 },
+        elementMatches: { lhs, rhs in waits > 0 && lhs === rhs },
         now: { now },
         runUntil: { _ in
             waits += 1
-            buffer.append(.object(["notification": .string("AXValueChanged")]), notification: "AXValueChanged", element: target)
             now = now.addingTimeInterval(0.01)
         }
     )
+    buffer.append(.object(["notification": .string("AXValueChanged")]), notification: "AXValueChanged", element: target)
 
     buffer.waitForValueChange(on: target, timeout: 1)
 
