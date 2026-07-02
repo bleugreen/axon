@@ -114,6 +114,39 @@ public struct AXLocator: Codable, Equatable, Sendable {
         self.nearbyText = nearbyText
         self.frame = frame
     }
+
+    private enum CodingKeys: String, CodingKey {
+        case role
+        case subrole
+        case title
+        case label
+        case value
+        case description
+        case identifier
+        case actions
+        case ancestors
+        case window
+        case nearbyText
+        case frame
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            role: try container.decodeIfPresent(String.self, forKey: .role),
+            subrole: try container.decodeIfPresent(String.self, forKey: .subrole),
+            title: try container.decodeIfPresent(TextMatch.self, forKey: .title),
+            label: try container.decodeIfPresent(TextMatch.self, forKey: .label),
+            value: try container.decodeIfPresent(TextMatch.self, forKey: .value),
+            description: try container.decodeIfPresent(TextMatch.self, forKey: .description),
+            identifier: try container.decodeIfPresent(TextMatch.self, forKey: .identifier),
+            actions: try container.decodeIfPresent([String].self, forKey: .actions) ?? [],
+            ancestors: try container.decodeIfPresent([AXAncestorLocator].self, forKey: .ancestors) ?? [],
+            window: try container.decodeIfPresent(AXAncestorLocator.self, forKey: .window),
+            nearbyText: try container.decodeIfPresent([TextMatch].self, forKey: .nearbyText) ?? [],
+            frame: try container.decodeIfPresent(AXFrame.self, forKey: .frame)
+        )
+    }
 }
 
 public enum LocatorResolutionStatus: String, Codable, Equatable, Sendable {
