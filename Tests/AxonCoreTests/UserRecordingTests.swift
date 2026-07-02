@@ -2,6 +2,8 @@ import Foundation
 import Testing
 @testable import AxonCore
 
+final class RecorderSettleTestElement: @unchecked Sendable {}
+
 @Test func recordingScopePickerListsAllAppsLast() {
     let editor = AppIdentity(bundleIdentifier: "com.example.Editor", name: "Editor", processIdentifier: 10)
     let browser = AppIdentity(bundleIdentifier: "com.example.Browser", name: "Browser", processIdentifier: 11)
@@ -58,7 +60,7 @@ import Testing
 }
 
 @Test func recorderSettleReturnsImmediatelyWhenTargetValueChangeWasAlreadyObserved() {
-    let target = NSObject()
+    let target = RecorderSettleTestElement()
     let buffer = AXNotificationEvidenceBuffer(
         elementMatches: { $0 === $1 },
         runUntil: { _ in Issue.record("settle should not wait when notification is already buffered") }
@@ -72,7 +74,7 @@ import Testing
 }
 
 @Test func recorderSettleWaitsUntilTargetValueChangeArrives() {
-    let target = NSObject()
+    let target = RecorderSettleTestElement()
     var now = Date(timeIntervalSinceReferenceDate: 0)
     var waits = 0
     let buffer = AXNotificationEvidenceBuffer(
@@ -91,8 +93,8 @@ import Testing
 }
 
 @Test func recorderSettleFallsThroughAfterBoundedTimeout() {
-    let target = NSObject()
-    let other = NSObject()
+    let target = RecorderSettleTestElement()
+    let other = RecorderSettleTestElement()
     var now = Date(timeIntervalSinceReferenceDate: 0)
     var waits = 0
     let buffer = AXNotificationEvidenceBuffer(
