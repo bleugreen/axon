@@ -215,6 +215,47 @@ import Testing
     ]])
 }
 
+@Test func daemonBinaryInstallerInstallsRegularFileWhenSourceIsSymlink() throws {
+    let root = FileManager.default.temporaryDirectory
+        .appendingPathComponent("axon-daemon-installer-symlink-\(UUID().uuidString)")
+    let source = root.appendingPathComponent("source/axon")
+    let link = root.appendingPathComponent("bin/axon")
+    let bundleURL = root.appendingPathComponent("install/Axon Daemon.app")
+    let installURL = bundleURL.appendingPathComponent("Contents/MacOS/axon")
+    defer {
+        try? FileManager.default.removeItem(at: root)
+    }
+
+    try FileManager.default.createDirectory(
+        at: source.deletingLastPathComponent(),
+        withIntermediateDirectories: true
+    )
+    try FileManager.default.createDirectory(
+        at: link.deletingLastPathComponent(),
+        withIntermediateDirectories: true
+    )
+    try Data("binary".utf8).write(to: source)
+    try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: source.path)
+    // Mirrors the Homebrew cask, which links `axon` into the app bundle.
+    try FileManager.default.createSymbolicLink(at: link, withDestinationURL: source)
+
+    let installer = DaemonBinaryInstaller(
+        sourcePath: link.path,
+        installURL: installURL,
+        signingIdentifier: "dev.axon.test",
+        runCodesign: { _ in ProcessResult(exitCode: 0) },
+        resolveSigningIdentity: { "ABCDEF123456" }
+    )
+
+    try installer.install()
+
+    // codesign refuses a bundle whose main executable is a symlink.
+    let attributes = try FileManager.default.attributesOfItem(atPath: installURL.path)
+    #expect(attributes[.type] as? FileAttributeType == .typeRegular)
+    #expect(try String(contentsOf: installURL, encoding: .utf8) == "binary")
+    #expect(FileManager.default.isExecutableFile(atPath: installURL.path))
+}
+
 @Test func daemonBinaryInstallerFallsBackToAdHocSigningWhenNoIdentityExists() throws {
     let root = FileManager.default.temporaryDirectory
         .appendingPathComponent("axon-daemon-installer-adhoc-\(UUID().uuidString)")

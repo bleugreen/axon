@@ -37,7 +37,9 @@ public struct DaemonBinaryInstaller {
         runCodesign: @escaping ([String]) throws -> ProcessResult = DaemonBinaryInstaller.runCodesign(arguments:),
         resolveSigningIdentity: @escaping () -> String? = DaemonBinaryInstaller.defaultSigningIdentity
     ) {
-        self.sourceURL = URL(fileURLWithPath: sourcePath)
+        // Resolved eagerly: copying a symlink source would install a symlink as the bundle's
+        // main executable, and codesign rejects a bundle it cannot sign a regular file for.
+        self.sourceURL = URL(fileURLWithPath: sourcePath).resolvingSymlinksInPath()
         self.installURL = installURL
         self.signingIdentifier = signingIdentifier
         self.fileManager = fileManager

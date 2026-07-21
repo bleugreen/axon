@@ -749,16 +749,23 @@ private func daemonBinaryInstaller() throws -> DaemonBinaryInstaller {
     DaemonBinaryInstaller(sourcePath: try resolvedExecutablePath())
 }
 
+/// The real path of the running executable, with every symlink resolved.
+///
+/// Resolution matters because the Homebrew cask installs `axon` as a symlink into the app
+/// bundle. Callers copy this path into the daemon bundle and walk it to find the enclosing
+/// `.app`; an unresolved link breaks both.
 private func resolvedExecutablePath() throws -> String {
     let rawPath = CommandLine.arguments[0]
+    let candidate: String
     if rawPath.hasPrefix("/") {
-        return rawPath
+        candidate = rawPath
+    } else if !rawPath.contains("/"), let pathExecutable = executablePathFromPATH(rawPath) {
+        candidate = pathExecutable
+    } else {
+        let currentDirectory = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+        candidate = currentDirectory.appendingPathComponent(rawPath).standardizedFileURL.path
     }
-    if !rawPath.contains("/"), let pathExecutable = executablePathFromPATH(rawPath) {
-        return pathExecutable
-    }
-    let currentDirectory = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
-    return currentDirectory.appendingPathComponent(rawPath).standardizedFileURL.path
+    return URL(fileURLWithPath: candidate).resolvingSymlinksInPath().path
 }
 
 private func executablePathFromPATH(_ executableName: String) -> String? {
