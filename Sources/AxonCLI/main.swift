@@ -21,7 +21,20 @@ do {
         ScreenCaptureRuntime.bootstrapSynchronously()
         print("axon serving on \(socketPath)")
         fflush(stdout)
-        try SocketServer(path: socketPath).run()
+        // The main dispatch queue must stay drained: the visual overlay and any
+        // other AppKit work hops to it from socket workers. Serving on the main
+        // thread would block those hops forever, so the server runs on its own
+        // queue and the main thread parks in dispatchMain(), which never returns.
+        let serverQueue = DispatchQueue(label: "dev.axon.socket-server", qos: .userInitiated)
+        serverQueue.async {
+            do {
+                try SocketServer(path: socketPath).run()
+            } catch {
+                FileHandle.standardError.write(Data("axon serve failed: \(error)\n".utf8))
+                exit(1)
+            }
+        }
+        dispatchMain()
 
     case "mcp":
         try MCPStdioServer().run()

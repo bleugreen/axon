@@ -83,6 +83,10 @@ public enum VisualOverlayFactory {
 }
 
 public final class AppKitTargetBadgeOverlay: VisualOverlay, @unchecked Sendable {
+    /// Headroom over the badge's own display interval before a blocked main
+    /// queue is treated as unavailable.
+    static let displayWaitSlack: TimeInterval = 1.0
+
     private var panel: NSPanel?
     private var view: TargetBadgeView?
     private let waitsForDisplay: Bool
@@ -99,19 +103,23 @@ public final class AppKitTargetBadgeOverlay: VisualOverlay, @unchecked Sendable 
             MainActor.assumeIsolated {
                 showTargetOnMainActor(target)
             }
-        } else if waitsForDisplay {
-            DispatchQueue.main.sync {
-                MainActor.assumeIsolated {
-                    self.showTargetOnMainActor(target)
-                }
-            }
-        } else {
-            DispatchQueue.main.async {
-                MainActor.assumeIsolated {
-                    self.showTargetOnMainActor(target)
-                }
-            }
+            return
         }
+
+        let displayed = DispatchSemaphore(value: 0)
+        DispatchQueue.main.async {
+            MainActor.assumeIsolated {
+                self.showTargetOnMainActor(target)
+            }
+            displayed.signal()
+        }
+        guard waitsForDisplay else {
+            return
+        }
+        // The badge is decoration: never let it hold up the action it annotates.
+        // If the host never drains its main queue, the wait expires and the
+        // action proceeds (the badge may still render late, which is harmless).
+        _ = displayed.wait(timeout: .now() + target.duration + Self.displayWaitSlack)
     }
 
     @MainActor
