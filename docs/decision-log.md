@@ -57,6 +57,18 @@ A batch is a flat list of `{ tool, ...args }` objects using the same shape as th
 
 YAML is the preferred on-disk format for `.axn` files because it is compact and easy to edit. JSON-RPC remains the daemon transport, and structured JSON batch objects remain acceptable when a caller already has data in memory.
 
+## Daemon Main Thread
+
+Decision: every daemon entry point keeps the real main thread free to drain the main dispatch queue.
+
+The daemon does AppKit work from socket workers — today the visual target badge, tomorrow anything else with a UI. AppKit demands the actual main thread, so a worker's hop to `DispatchQueue.main` has to be serviced there. `axon serve` originally ran the accept loop on the main thread, which meant those hops could never complete: an element-target `click`, `invoke`, or `type` deadlocked its worker forever while the main thread sat in `accept()`. The menu bar app never showed the bug because it had the structure right already, with the server on a background queue and the run loop on main.
+
+Both entry points now share one shape: the socket server runs on its own queue, and the main thread runs an accessory AppKit run loop. `dispatchMain()` is not a substitute — it parks the main thread in `sigsuspend` and lets a worker thread drain the main queue, so main-actor AppKit work trips its isolation assertion and the process traps.
+
+Decision: waits on main-queue work are deadline-bounded.
+
+Decoration must never be able to hold up the action it annotates. The overlay hands its badge to the main queue and waits with a deadline just past the badge's own display interval; if the main queue is not being serviced, the action proceeds without the badge instead of hanging. A badge that renders late is acceptable, a hung action is not.
+
 ## Deferred Design Notes
 
 These are not blocking questions. They are details that should be decided when implementation reaches the relevant layer.
