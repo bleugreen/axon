@@ -21,10 +21,13 @@ do {
         ScreenCaptureRuntime.bootstrapSynchronously()
         print("axon serving on \(socketPath)")
         fflush(stdout)
-        // The main dispatch queue must stay drained: the visual overlay and any
-        // other AppKit work hops to it from socket workers. Serving on the main
-        // thread would block those hops forever, so the server runs on its own
-        // queue and the main thread parks in dispatchMain(), which never returns.
+        // The main thread must stay free to drain the main queue: the visual
+        // overlay and any other AppKit work hops there from socket workers, and
+        // AppKit demands the real main thread. So the server runs on its own
+        // queue while the main thread runs an accessory AppKit run loop, the
+        // same structure the menu bar app uses. `run()` never returns.
+        // (dispatchMain() is not a substitute: it parks the main thread and lets
+        // a worker thread drain the main queue, which traps AppKit main-actor work.)
         let serverQueue = DispatchQueue(label: "dev.axon.socket-server", qos: .userInitiated)
         serverQueue.async {
             do {
@@ -34,7 +37,9 @@ do {
                 exit(1)
             }
         }
-        dispatchMain()
+        let application = NSApplication.shared
+        application.setActivationPolicy(.accessory)
+        application.run()
 
     case "mcp":
         try MCPStdioServer().run()
