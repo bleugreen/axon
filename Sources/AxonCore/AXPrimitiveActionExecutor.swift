@@ -7,23 +7,27 @@ public final class AXPrimitiveActionExecutor {
     private let appResolver: AppResolver
     private let overlay: VisualOverlay?
     private let overlayConfiguration: VisualOverlayConfiguration
-    private let postMouseEvent: (CGEvent) -> Void
+    private let postEvent: (CGEvent) -> Void
     private let sleepMilliseconds: (Int) -> Void
+    /// Re-read per text action so a mid-session input source switch is picked up.
+    private let makeKeyboardLayout: () -> KeyboardLayoutMap
 
     public init(
         elementStore: AXElementStore,
         appResolver: AppResolver = AppResolver(),
         overlay: VisualOverlay? = VisualOverlayFactory.makeFromEnvironment(),
         overlayConfiguration: VisualOverlayConfiguration = .fromEnvironment(),
-        postMouseEvent: @escaping (CGEvent) -> Void = { $0.post(tap: .cghidEventTap) },
-        sleepMilliseconds: @escaping (Int) -> Void = { Thread.sleep(forTimeInterval: Double($0) / 1_000) }
+        postEvent: @escaping (CGEvent) -> Void = { $0.post(tap: .cghidEventTap) },
+        sleepMilliseconds: @escaping (Int) -> Void = { Thread.sleep(forTimeInterval: Double($0) / 1_000) },
+        makeKeyboardLayout: @escaping () -> KeyboardLayoutMap = { KeyboardLayoutMap.current() }
     ) {
         self.elementStore = elementStore
         self.appResolver = appResolver
         self.overlay = overlay
         self.overlayConfiguration = overlayConfiguration
-        self.postMouseEvent = postMouseEvent
+        self.postEvent = postEvent
         self.sleepMilliseconds = sleepMilliseconds
+        self.makeKeyboardLayout = makeKeyboardLayout
     }
 
     public func handlers() -> PrimitiveActionHandlers {
@@ -444,8 +448,8 @@ public final class AXPrimitiveActionExecutor {
     private func postMouseClick(at point: CGPoint) {
         let down = CGEvent(mouseEventSource: nil, mouseType: .leftMouseDown, mouseCursorPosition: point, mouseButton: .left)
         let up = CGEvent(mouseEventSource: nil, mouseType: .leftMouseUp, mouseCursorPosition: point, mouseButton: .left)
-        if let down { postMouseEvent(down) }
-        if let up { postMouseEvent(up) }
+        if let down { postEvent(down) }
+        if let up { postEvent(up) }
     }
 
     @discardableResult
@@ -455,7 +459,7 @@ public final class AXPrimitiveActionExecutor {
         for (index, step) in steps.enumerated() {
             let event = CGEvent(mouseEventSource: nil, mouseType: step.type, mouseCursorPosition: step.point, mouseButton: .left)
             if let event {
-                postMouseEvent(event)
+                postEvent(event)
             }
             if index < steps.count - 1, delayMs > 0 {
                 sleepMilliseconds(delayMs)
@@ -469,22 +473,31 @@ public final class AXPrimitiveActionExecutor {
         let up = CGEvent(keyboardEventSource: nil, virtualKey: keyStroke.keyCode, keyDown: false)
         down?.flags = keyStroke.flags
         up?.flags = keyStroke.flags
-        if let down { postMouseEvent(down) }
-        if let up { postMouseEvent(up) }
+        if let down { postEvent(down) }
+        if let up { postEvent(up) }
     }
 
     private func postKeyboardText(_ text: String) -> Bool {
+        let layout = makeKeyboardLayout()
         for scalar in text.unicodeScalars {
-            var value = UniChar(scalar.value)
-            guard let down = CGEvent(keyboardEventSource: nil, virtualKey: 0, keyDown: true),
-                  let up = CGEvent(keyboardEventSource: nil, virtualKey: 0, keyDown: false)
+            // The layout stroke is what keycode-reading consumers see; the Unicode payload is what
+            // native controls read. Characters the layout cannot produce keep keycode 0 and travel
+            // on the payload alone, which is all that ever worked for them.
+            let stroke = layout.stroke(for: scalar)
+            var utf16 = Array(String(scalar).utf16)
+            guard let down = CGEvent(keyboardEventSource: nil, virtualKey: stroke?.keyCode ?? 0, keyDown: true),
+                  let up = CGEvent(keyboardEventSource: nil, virtualKey: stroke?.keyCode ?? 0, keyDown: false)
             else {
                 return false
             }
-            down.keyboardSetUnicodeString(stringLength: 1, unicodeString: &value)
-            up.keyboardSetUnicodeString(stringLength: 1, unicodeString: &value)
-            down.post(tap: .cghidEventTap)
-            up.post(tap: .cghidEventTap)
+            if let stroke {
+                down.flags = stroke.flags
+                up.flags = stroke.flags
+            }
+            down.keyboardSetUnicodeString(stringLength: utf16.count, unicodeString: &utf16)
+            up.keyboardSetUnicodeString(stringLength: utf16.count, unicodeString: &utf16)
+            postEvent(down)
+            postEvent(up)
         }
         return true
     }

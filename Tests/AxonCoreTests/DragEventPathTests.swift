@@ -23,7 +23,7 @@ import Testing
     let executor = AXPrimitiveActionExecutor(
         elementStore: AXElementStore(),
         overlay: nil,
-        postMouseEvent: { event in posted.append((event.type, event.location)) },
+        postEvent: { event in posted.append((event.type, event.location)) },
         sleepMilliseconds: { sleeps.append($0) }
     )
 
