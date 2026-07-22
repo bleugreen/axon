@@ -100,7 +100,10 @@ public final class AppKitTargetBadgeOverlay: VisualOverlay, @unchecked Sendable 
                 showTargetOnMainActor(target)
             }
         } else if waitsForDisplay {
-            DispatchQueue.main.sync {
+            // Deadline-bounded rather than `main.sync`: the badge annotates an action, so it must
+            // never be able to outlive or block one. If the main queue is busy the badge is late
+            // or skipped, and the action proceeds.
+            MainQueueHandoff.run {
                 MainActor.assumeIsolated {
                     self.showTargetOnMainActor(target)
                 }

@@ -21,7 +21,7 @@ do {
         ScreenCaptureRuntime.bootstrapSynchronously()
         print("axon serving on \(socketPath)")
         fflush(stdout)
-        try SocketServer(path: socketPath).run()
+        serveUntilTerminated(socketPath: socketPath)
 
     case "mcp":
         try MCPStdioServer().run()
@@ -743,6 +743,41 @@ private func launchAgentConfiguration() throws -> LaunchAgentConfiguration {
         socketPath: socketPath,
         environment: ProcessInfo.processInfo.environment
     )
+}
+
+/// Serves the socket with the accept loop off the main thread, leaving main to run AppKit.
+///
+/// Actions reach the main queue for AppKit work — the target badge overlay is drawn there, and it
+/// is enabled unless `AXON_VISUAL_OVERLAY` explicitly disables it. Accepting connections on the
+/// main thread parks it in `accept()`, so that hop never completes and every element action hangs
+/// until the caller times out, while `health` and `look` keep answering from worker threads.
+///
+/// `AxonDaemonApp` has always run the server this way; `serve` now matches it.
+@MainActor
+private func serveUntilTerminated(socketPath: String) -> Never {
+    let server = SocketServer(path: socketPath)
+    let accepting = Thread {
+        do {
+            try server.run()
+            fail("socket server stopped accepting connections")
+        } catch {
+            fail("socket server failed: \(error)")
+        }
+    }
+    accepting.name = "dev.axon.socket-accept"
+    accepting.start()
+
+    // An accessory-policy NSApplication, not a bare run loop: the overlay draws NSPanels, which
+    // need a real AppKit event loop rather than only a draining main queue.
+    let application = NSApplication.shared
+    application.setActivationPolicy(.accessory)
+    application.run()
+    fail("AppKit event loop exited")
+}
+
+private func fail(_ message: String) -> Never {
+    FileHandle.standardError.write(Data("axon: \(message)\n".utf8))
+    exit(1)
 }
 
 private func daemonBinaryInstaller() throws -> DaemonBinaryInstaller {
