@@ -66,7 +66,6 @@ impl Options {
         }
         Ok(options)
     }
-
 }
 
 fn value(args: &mut impl Iterator<Item = String>, flag: &str) -> Result<String, String> {

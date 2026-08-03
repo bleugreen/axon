@@ -130,16 +130,16 @@ fn print_stats(nodes: &[Node]) {
         .count();
     let mut control_types = BTreeMap::new();
     for node in nodes {
-        *control_types.entry(node.control_type.as_str()).or_insert(0usize) += 1;
+        *control_types
+            .entry(node.control_type.as_str())
+            .or_insert(0usize) += 1;
     }
     let types = control_types
         .into_iter()
         .map(|(name, count)| format!("{name}:{count}"))
         .collect::<Vec<_>>()
         .join(",");
-    println!(
-        "stats named_nodes={named} automation_id_nodes={identified} control_types={types}"
-    );
+    println!("stats named_nodes={named} automation_id_nodes={identified} control_types={types}");
 }
 
 mod msaa {
@@ -208,12 +208,7 @@ mod msaa {
         result.attempted += 1;
         let mut object = std::ptr::null_mut();
         let status = unsafe {
-            AccessibleObjectFromWindow(
-                hwnd,
-                OBJID_CLIENT as u32,
-                &IID_IACCESSIBLE,
-                &mut object,
-            )
+            AccessibleObjectFromWindow(hwnd, OBJID_CLIENT as u32, &IID_IACCESSIBLE, &mut object)
         };
         if status >= 0 && !object.is_null() {
             result.succeeded += 1;
