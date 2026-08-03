@@ -37,7 +37,7 @@ mod lifecycle {
     }
 
     fn register() -> io::Result<()> {
-        let executable = env::current_exe()?.canonicalize()?;
+        let executable = env::current_exe()?;
         let user = command_output("whoami", &[])?;
         let action = task_action(&executable);
         command(
