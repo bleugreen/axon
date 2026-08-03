@@ -161,6 +161,18 @@ public enum ToolSurfaceSpec {
             cliUsage: "axon wait_for_value '<target-json>' (--contains text | --equals text | --matches regex) [--timeout-ms n] [--interval-ms n]"
         ),
         ToolSpec(
+            name: "wait_for_stability",
+            description: "Poll full app observations until the accessibility surface remains unchanged for a stability window or changes from its initial state; timeout returns the final observation.",
+            params: [
+                ToolParameterSpec("app", .string, required: true, description: "Bundle id, pid, exact app name, or partial app name."),
+                ToolParameterSpec("condition", .string, default: .string("stable"), description: "stable waits for an unchanged stability window; changed waits for an observable app, tree, or focus change."),
+                ToolParameterSpec("stableMs", .integer, default: .int(300), description: "Required unchanged duration for the stable condition. Defaults to 300 ms and is capped at 10000 ms."),
+                ToolParameterSpec("timeoutMs", .integer, default: .int(5_000), description: "Maximum wait. Defaults to 5000 ms and is capped at 60000 ms."),
+                ToolParameterSpec("intervalMs", .integer, default: .int(100), description: "Delay between observations. At least 10 ms and capped by the remaining timeout.")
+            ],
+            cliUsage: "axon wait_for_stability <app> [--condition stable|changed] [--stable-ms n] [--timeout-ms n] [--interval-ms n]"
+        ),
+        ToolSpec(
             name: "permit",
             description: "Ask macOS to show the Accessibility permission prompt for the running Axon daemon identity.",
             cliUsage: "axon permit"

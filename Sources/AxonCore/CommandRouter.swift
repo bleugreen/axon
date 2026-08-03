@@ -89,6 +89,62 @@ public struct CommandRouterServices {
         self.now = now
         self.sleepMilliseconds = sleepMilliseconds
     }
+
+
+
+}
+
+private struct AppObservationSignature: Equatable {
+    let app: AppIdentity
+    let windows: [AXNode]
+    let focus: FocusObservation
+
+    init(snapshot: AppSnapshot) {
+        app = snapshot.app
+        windows = snapshot.windows
+        focus = snapshot.focus
+    }
+}
+
+private struct WaitForStabilityRequest {
+    enum Condition: String { case stable, changed }
+    let app: String
+    let condition: Condition
+    let timeoutMs: Int
+    let intervalMs: Int
+    let stableMs: Int
+
+    init(params: [String: JSONValue]) throws {
+        app = try CommandRouterRequestSupport.requiredString("app", in: params)
+        let rawCondition = try CommandRouterRequestSupport.optionalString("condition", in: params) ?? Condition.stable.rawValue
+        guard let condition = Condition(rawValue: rawCondition) else {
+            throw JSONRPCError.invalidParams("condition must be stable or changed")
+        }
+        self.condition = condition
+        timeoutMs = try WaitForValueRequest.boundedMilliseconds("timeoutMs", in: params, defaultValue: 5_000, minimum: 0, maximum: 60_000)
+        intervalMs = try WaitForValueRequest.boundedMilliseconds("intervalMs", in: params, defaultValue: 100, minimum: 10, maximum: max(10, timeoutMs == 0 ? 100 : timeoutMs))
+        stableMs = try WaitForValueRequest.boundedMilliseconds("stableMs", in: params, defaultValue: 300, minimum: 0, maximum: 10_000)
+    }
+}
+
+private struct WaitForStabilityResult {
+    let success: Bool
+    let status: String
+    let condition: WaitForStabilityRequest.Condition
+    let elapsedMs: Int
+    let stableMs: Int
+    let snapshot: AppSnapshot
+
+    func jsonValue(activeSecretRedactor: ActiveSecretRedactor) -> JSONValue {
+        .object([
+            "success": .bool(success),
+            "status": .string(status),
+            "condition": .string(condition.rawValue),
+            "elapsedMs": .int(elapsedMs),
+            "stableMs": .int(stableMs),
+            "finalObservation": snapshot.jsonValue(includeTree: true, activeSecretRedactor: activeSecretRedactor)
+        ])
+    }
 }
 
 public struct CommandRouter {
@@ -156,7 +212,7 @@ public struct CommandRouter {
         switch request.method {
         case "health", "permit":
             return SystemCommandHandler(services: services).handle(request)
-        case "look", "find", "wait_for_value":
+        case "look", "find", "wait_for_value", "wait_for_stability":
             return PerceptionCommandHandler(services: services).handle(request)
         case "click", "invoke", "type", "keyboard", "scroll", "drag":
             return PrimitiveActionCommandHandler(services: services).handle(request)
@@ -218,6 +274,8 @@ private struct PerceptionCommandHandler {
             return findResponse(request)
         case "wait_for_value":
             return waitForValueResponse(request)
+        case "wait_for_stability":
+            return waitForStabilityResponse(request)
         default:
             return JSONRPCResponse(id: request.id, error: .methodNotFound(request.method))
         }
@@ -388,6 +446,49 @@ private struct PerceptionCommandHandler {
                 )
             }
 
+            let remainingMs = max(0, Int((deadline.timeIntervalSince(now) * 1_000).rounded(.up)))
+            services.sleepMilliseconds(min(request.intervalMs, remainingMs))
+        }
+    }
+
+    private func waitForStabilityResponse(_ request: JSONRPCRequest) -> JSONRPCResponse {
+        do {
+            let params = try CommandRouterRequestSupport.paramsObject(in: request)
+            let waiter = try WaitForStabilityRequest(params: params)
+            let result = try waitForStability(waiter)
+            return JSONRPCResponse(id: request.id, result: ["wait": result.jsonValue(activeSecretRedactor: activeSecretRedactor())])
+        } catch let error as JSONRPCError {
+            return JSONRPCResponse(id: request.id, error: error)
+        } catch {
+            return JSONRPCResponse(id: request.id, error: .internalError(String(describing: error)))
+        }
+    }
+
+    private func waitForStability(_ request: WaitForStabilityRequest) throws -> WaitForStabilityResult {
+        let startedAt = services.now()
+        let deadline = startedAt.addingTimeInterval(Double(request.timeoutMs) / 1_000)
+        var initialSignature: AppObservationSignature?
+        var lastSignature: AppObservationSignature?
+        var stableSince = startedAt
+
+        while true {
+            let snapshot = try services.captureSnapshot(request.app, false)
+            let signature = AppObservationSignature(snapshot: snapshot)
+            if initialSignature == nil { initialSignature = signature }
+            let now = services.now()
+            if signature != lastSignature {
+                lastSignature = signature
+                stableSince = now
+            }
+            let elapsedMs = max(0, Int((now.timeIntervalSince(startedAt) * 1_000).rounded()))
+            let stableMs = max(0, Int((now.timeIntervalSince(stableSince) * 1_000).rounded()))
+            let satisfied = request.condition == .changed ? signature != initialSignature : stableMs >= request.stableMs
+            if satisfied {
+                return WaitForStabilityResult(success: true, status: "satisfied", condition: request.condition, elapsedMs: elapsedMs, stableMs: stableMs, snapshot: snapshot)
+            }
+            guard now < deadline else {
+                return WaitForStabilityResult(success: false, status: "timeout", condition: request.condition, elapsedMs: elapsedMs, stableMs: stableMs, snapshot: snapshot)
+            }
             let remainingMs = max(0, Int((deadline.timeIntervalSince(now) * 1_000).rounded(.up)))
             services.sleepMilliseconds(min(request.intervalMs, remainingMs))
         }
@@ -1054,7 +1155,7 @@ private struct WaitForValueRequest {
         return string
     }
 
-    private static func boundedMilliseconds(
+    fileprivate static func boundedMilliseconds(
         _ key: String,
         in params: [String: JSONValue],
         defaultValue: Int,
