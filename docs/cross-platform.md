@@ -199,6 +199,17 @@ unattended configuration. Confirm the runner is online and carries `self-hosted`
 system and architecture labels, and its dedicated `axon-live-*` label before
 dispatching the workflow.
 
+The Windows service remains under `NETWORK SERVICE`. Re-enrollment also
+requires recreating its localhost SSH key and installing that public key for the
+desktop user with a forced command that runs only
+`C:\\ProgramData\\Axon\\live-probe.cmd`; disable forwarding and pseudo-terminal
+allocation with the authorized-key `restrict` option. Give the private key only
+to `NETWORK SERVICE` and `SYSTEM`, pin the localhost host key in the runner's
+`known_hosts`, and verify an arbitrary SSH command is rejected before enabling
+the runner. This narrow relay is necessary because Windows services run in
+session 0 while UI Automation and the daemon's scheduled task must run as the
+logged-in desktop user.
+
 Registration tokens are short-lived secrets. Generate one immediately before
 configuration with:
 
