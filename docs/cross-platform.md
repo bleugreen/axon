@@ -193,8 +193,9 @@ repository's **New self-hosted runner** page, request a fresh registration token
 and configure the replacement as the desktop user with exactly one dedicated
 label: `axon-live-mac`, `axon-live-linux`, or `axon-live-windows`. Install and
 start it with the runner package's platform service command (`svc.sh install`
-and `svc.sh start` on macOS/Linux, `svc.cmd install` and `svc.cmd start` on
-Windows). Confirm the runner is online and carries `self-hosted`, its operating
+and `svc.sh start` on macOS/Linux). On Windows, run `config.cmd` from an
+elevated prompt and select service mode, or pass `--runasservice` during
+unattended configuration. Confirm the runner is online and carries `self-hosted`, its operating
 system and architecture labels, and its dedicated `axon-live-*` label before
 dispatching the workflow.
 
