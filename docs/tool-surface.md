@@ -7,6 +7,9 @@ files, and the CLI. There are no compatibility aliases for previous tool names.
 
 ```text
 look(target?, since?, screenshot?, screenText?, tree?, offset?, limit?, direct?, childDepth?, depth?, all?, format?, frames?)
+navigate(app, url)
+windows(app)
+tabs(app, window?)
 find(app, locator)
 wait_for_value(target, contains?, equals?, matches?, timeoutMs?, intervalMs?)
 wait_for_stability(app, condition?, stableMs?, timeoutMs?, intervalMs?)
@@ -90,6 +93,19 @@ ancestors filter candidates; actions, editable text values, and nearby text
 contribute to candidate reasons and scoring when present. Frame hints are weak
 normalized-distance tie-breakers, and resolution results include a named
 confidence.
+
+`navigate`, `windows`, and `tabs` are the narrow semantic browser layer for
+Safari and Google Chrome. They use each application's scripting dictionary when
+AX does not model navigation or tabs. Navigation accepts only absolute `http`
+and `https` URLs and succeeds only when the browser dictionary reads the
+requested URL back from the active tab. Window and tab IDs are one-call,
+index-based references and must be refreshed by enumerating again. Browser
+enumeration is authoritative from application scripting; `windows` also reports
+an AX title/count cross-check when Accessibility access is available, while
+`tabs` explicitly reports that a portable AX tab cross-check is unavailable.
+Automation consent is separate from Accessibility consent and permission errors
+direct callers to System Settings. Apple Events are bounded by a 15-second
+timeout. These operations never accept script source.
 
 `wait_for_value(target, contains|equals|matches)` repeatedly resolves a locator
 target and reads the unique target's readable AX state until one predicate holds

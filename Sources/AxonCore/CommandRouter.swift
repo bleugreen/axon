@@ -21,6 +21,7 @@ public struct CommandRouterServices {
     public let activeCredentialFilterProvider: @Sendable () -> any ActiveCredentialFilter
     public let debugSessions: AxnDebugSessionStore
     public let readableAXState: ReadableAXStateProvider
+    public let browserAutomation: any BrowserAutomationServing
     public let now: () -> Date
     public let sleepMilliseconds: (Int) -> Void
 
@@ -41,6 +42,7 @@ public struct CommandRouterServices {
         activeCredentialFilterProvider: (@Sendable () -> any ActiveCredentialFilter)? = nil,
         debugSessions: AxnDebugSessionStore = AxnDebugSessionStore(),
         readableAXState: ReadableAXStateProvider? = nil,
+        browserAutomation: any BrowserAutomationServing = AppleScriptBrowserAutomation(),
         now: @escaping () -> Date = Date.init,
         sleepMilliseconds: @escaping (Int) -> Void = { Thread.sleep(forTimeInterval: Double($0) / 1_000) }
     ) {
@@ -86,6 +88,7 @@ public struct CommandRouterServices {
             let element = try elementStore.element(for: handle)
             return ReadableAXState(element: element)
         }
+        self.browserAutomation = browserAutomation
         self.now = now
         self.sleepMilliseconds = sleepMilliseconds
     }
@@ -220,6 +223,7 @@ public struct CommandRouter {
         activeCredentialFilterProvider: (@Sendable () -> any ActiveCredentialFilter)? = nil,
         debugSessions: AxnDebugSessionStore = AxnDebugSessionStore(),
         readableAXState: CommandRouterServices.ReadableAXStateProvider? = nil,
+        browserAutomation: any BrowserAutomationServing = AppleScriptBrowserAutomation(),
         now: @escaping () -> Date = Date.init,
         sleepMilliseconds: @escaping (Int) -> Void = { Thread.sleep(forTimeInterval: Double($0) / 1_000) }
     ) {
@@ -239,6 +243,7 @@ public struct CommandRouter {
             activeCredentialFilterProvider: activeCredentialFilterProvider,
             debugSessions: debugSessions,
             readableAXState: readableAXState,
+            browserAutomation: browserAutomation,
             now: now,
             sleepMilliseconds: sleepMilliseconds
         ))
@@ -260,7 +265,7 @@ public struct CommandRouter {
         switch request.method {
         case "health", "permit":
             return SystemCommandHandler(services: services).handle(request)
-        case "look", "find", "wait_for_value", "wait_for_stability":
+        case "look", "find", "wait_for_value", "wait_for_stability", "navigate", "windows", "tabs":
             return PerceptionCommandHandler(services: services).handle(request)
         case "click", "invoke", "type", "keyboard", "scroll", "drag":
             return PrimitiveActionCommandHandler(services: services).handle(request)
@@ -324,8 +329,61 @@ private struct PerceptionCommandHandler {
             return waitForValueResponse(request)
         case "wait_for_stability":
             return waitForStabilityResponse(request)
+        case "navigate", "windows", "tabs":
+            return browserResponse(request)
         default:
             return JSONRPCResponse(id: request.id, error: .methodNotFound(request.method))
+        }
+    }
+
+    private func browserResponse(_ request: JSONRPCRequest) -> JSONRPCResponse {
+        do {
+            let params = try CommandRouterRequestSupport.paramsObject(in: request)
+            let decoder = ToolParamDecoder(toolName: request.method, params: params)
+            let app = try decoder.requiredString("app")
+            switch request.method {
+            case "navigate":
+                let result = try services.browserAutomation.navigate(app: app, url: try decoder.requiredString("url"))
+                return JSONRPCResponse(id: request.id, result: ["navigation": .object([
+                    "app": .string(result.app), "requestedURL": .string(result.requestedURL), "url": .string(result.url), "title": .string(result.title), "success": .bool(result.url == result.requestedURL),
+                    "verification": .string(result.url == result.requestedURL ? "dictionary_readback" : "dictionary_mismatch")
+                ])])
+            case "windows":
+                let windows = try services.browserAutomation.windows(app: app)
+                return JSONRPCResponse(id: request.id, result: ["windows": .array(windows.map { .object([
+                    "id": .string($0.id), "index": .int($0.index), "title": .string($0.title), "active": .bool($0.active)
+                ]) }), "authority": .string("application_scripting"), "crossCheck": crossCheck(app: app, scriptedTitles: windows.map(\.title))])
+            default:
+                let tabs = try services.browserAutomation.tabs(app: app, window: try decoder.int("window"))
+                return JSONRPCResponse(id: request.id, result: ["tabs": .array(tabs.map { .object([
+                    "id": .string($0.id), "windowID": .string($0.windowID), "windowIndex": .int($0.windowIndex), "index": .int($0.index), "title": .string($0.title), "url": .string($0.url), "active": .bool($0.active)
+                ]) }), "authority": .string("application_scripting"), "crossCheck": .object(["status": .string("unavailable"), "reason": .string("AX does not expose a portable authoritative tab model")])])
+            }
+        } catch let error as BrowserAutomationError {
+            let invalid: Bool
+            switch error { case .unsupportedApp, .invalidURL, .invalidWindow: invalid = true; default: invalid = false }
+            return JSONRPCResponse(id: request.id, error: invalid ? .invalidParams(error.description) : .internalError(error.description))
+        } catch let error as JSONRPCError {
+            return JSONRPCResponse(id: request.id, error: error)
+        } catch {
+            return JSONRPCResponse(id: request.id, error: .internalError(String(describing: error)))
+        }
+    }
+
+    private func crossCheck(app: String, scriptedTitles: [String]) -> JSONValue {
+        do {
+            let snapshot = try services.captureSnapshot(app, false)
+            var unmatchedAXTitles = snapshot.windows.compactMap(\.title)
+            let matches = scriptedTitles.reduce(into: 0) { count, title in
+                if let index = unmatchedAXTitles.firstIndex(of: title) {
+                    count += 1
+                    unmatchedAXTitles.remove(at: index)
+                }
+            }
+            let axTitles = snapshot.windows.compactMap(\.title)
+            return .object(["status": .string(matches == scriptedTitles.count && axTitles.count == scriptedTitles.count ? "matched" : "partial"), "scriptedWindowCount": .int(scriptedTitles.count), "axWindowCount": .int(axTitles.count), "matchingTitles": .int(matches)])
+        } catch {
+            return .object(["status": .string("unavailable"), "reason": .string("Accessibility cross-check unavailable: \(error)")])
         }
     }
 

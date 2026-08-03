@@ -141,6 +141,17 @@ public enum ToolSurfaceSpec {
             ],
             cliUsage: "axon look [target] [--since snapshot-id] [--screenshot] [--screen-text] [--frames] [--json] [--details] [--debug] [--no-tree] [--offset n] [--limit n] [--depth n]"
         ),
+        ToolSpec(name: "navigate", description: "Navigate the active tab of a supported browser through its application scripting dictionary and verify the URL by read-back.", params: [
+            ToolParameterSpec("app", .string, required: true, description: "Safari or Google Chrome, by name or exact bundle identifier."),
+            ToolParameterSpec("url", .string, required: true, description: "Absolute http or https URL, limited to 8192 bytes.")
+        ]),
+        ToolSpec(name: "windows", description: "Enumerate browser windows authoritatively through the supported app's scripting dictionary and cross-check them against AX when available.", params: [
+            ToolParameterSpec("app", .string, required: true, description: "Safari or Google Chrome, by name or exact bundle identifier.")
+        ]),
+        ToolSpec(name: "tabs", description: "Enumerate browser tabs authoritatively through the supported app's scripting dictionary.", params: [
+            ToolParameterSpec("app", .string, required: true, description: "Safari or Google Chrome, by name or exact bundle identifier."),
+            ToolParameterSpec("window", .integer, description: "Optional one-based window index from windows().")
+        ]),
         ToolSpec(
             name: "find",
             description: "Resolve an AX locator against a fresh app snapshot.",

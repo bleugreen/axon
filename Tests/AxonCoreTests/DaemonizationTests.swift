@@ -207,6 +207,7 @@ import Testing
     #expect(plist?["CFBundleIdentifier"] as? String == "dev.axon.test")
     #expect(plist?["CFBundleExecutable"] as? String == "axon")
     #expect(plist?["LSBackgroundOnly"] as? Bool == true)
+    #expect(plist?["NSAppleEventsUsageDescription"] as? String == "Axon uses browser automation to navigate and enumerate browser windows and tabs.")
     #expect(codesignArguments == [[
         "--force",
         "--sign",
