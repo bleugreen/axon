@@ -719,20 +719,8 @@ private extension AXNode {
     }
 
     func withInferredActions() -> AXNode {
-        AXNode(
-            role: role,
-            subrole: subrole,
-            title: title,
-            value: value,
-            description: description,
-            help: help,
-            identifier: identifier,
-            enabled: enabled,
-            focused: focused,
-            frame: frame,
+        replacing(
             actions: actions.isEmpty ? Self.inferredActions(role: role) : actions,
-            childCount: childCount,
-            truncationReason: truncationReason,
             children: children.map { $0.withInferredActions() }
         )
     }

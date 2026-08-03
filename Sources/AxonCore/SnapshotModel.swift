@@ -204,6 +204,27 @@ public struct AXFrame: Codable, Equatable, Sendable {
 }
 
 public extension AXNode {
+    func replacing(actions: [String]? = nil, children: [AXNode]? = nil) -> AXNode {
+        AXNode(
+            role: role,
+            subrole: subrole,
+            title: title,
+            label: label,
+            value: value,
+            description: description,
+            help: help,
+            identifier: identifier,
+            enabled: enabled,
+            focused: focused,
+            frame: frame,
+            actions: actions ?? self.actions,
+            editable: editable,
+            childCount: childCount,
+            truncationReason: truncationReason,
+            children: children ?? self.children
+        )
+    }
+
     func withAdditionalTruncationReason(_ reason: String) -> AXNode {
         let combinedReason: String
         if let truncationReason, !truncationReason.isEmpty {

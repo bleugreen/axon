@@ -2,6 +2,19 @@ import Testing
 import ApplicationServices
 @testable import AxonCore
 
+@Test func replacingSnapshotNodePreservesSharedSemanticFields() {
+    let node = AXNode(role: "Edit", label: "Recipient", editable: true)
+    let replacement = node.replacing(
+        actions: ["SetValue"],
+        children: [AXNode(role: "Text", title: "child")]
+    )
+
+    #expect(replacement.label == "Recipient")
+    #expect(replacement.editable == true)
+    #expect(replacement.actions == ["SetValue"])
+    #expect(replacement.children.map(\.title) == ["child"])
+}
+
 @Test func snapshotIndexesTreeDepthFirstAndCreatesHandles() {
     let root = AXNode(
         role: "AXWindow",
