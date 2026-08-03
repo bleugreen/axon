@@ -233,3 +233,175 @@ typed pattern lookup, event-handler lifetime management, and HRESULT-to-domain
 error mapping. These are backend policy rather than generic convenience, so
 owning them is preferable to accepting a wider wrapper boundary whose caching,
 timeouts, features, and threading behavior Axon cannot control.
+
+
+# Linux AT-SPI spike findings
+
+Tested on `bglab-ub` on 2026-08-03.
+
+## Interactive desktop and session topology
+
+The executor has a real interactive Ubuntu GNOME desktop. `loginctl` reported:
+
+    session 6:   user=dev seat=seat0 type=wayland remote=no active=yes
+    session 453: user=dev            type=tty     remote=yes active=yes
+
+The executor command ran in remote TTY session 453, not in the graphical
+session. GNOME Shell PID 4357 and `gdm-wayland-session` ran in session 6.
+The desktop used `WAYLAND_DISPLAY=wayland-0`; `/run/user/1000/wayland-0`
+existed, and GNOME also supplied Xwayland on `DISPLAY=:0`.
+
+Unlike the Windows session-0 boundary, the SSH/executor shell and desktop were
+owned by the same uid and user systemd manager. The shell already inherited:
+
+    XDG_RUNTIME_DIR=/run/user/1000
+    DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/1000/bus
+
+It did not inherit `WAYLAND_DISPLAY`, but AT-SPI does not require that display
+variable. The user D-Bus owned `org.a11y.Bus`; `GetAddress` returned:
+
+    unix:path=/run/user/1000/at-spi/bus,guid=bdc28049d1addc1f27e9d8df6a6bba08
+
+The matching socket, `at-spi-bus-launcher`, accessibility-bus
+`dbus-daemon`, and `at-spi2-registryd` were all live. A daemon launched by
+the same user manager can therefore reach this desktop's accessibility bus
+directly. A daemon launched as another uid, or without the desktop user's
+runtime directory and session-bus address, would not have the measured
+topology.
+
+At the start, `org.a11y.Status.IsEnabled=false` and
+`ScreenReaderEnabled=false`, despite the AT-SPI bus and registry running.
+The registry still listed four native application roots before any spike apps
+were launched.
+
+## Crate assessment
+
+The spike uses `atspi` 0.30.0 with its `connection`, `proxies`, and
+`tokio` features. This is the current pure-Rust, zbus-based facade over
+`atspi-connection`, `atspi-proxies`, and `atspi-common`. It was preferable
+to handwritten zbus calls for the spike because the generated proxies encode
+AT-SPI object-reference pairs, interface names, enum wire values, and the
+Action/Component method signatures while retaining direct access to the zbus
+connection.
+
+The API was concise for connecting, obtaining application roots, walking
+children, reading role/name/state/text, acquiring optional Component and
+Action interfaces, and dispatching `DoAction`. Calls are still individual
+D-Bus round trips. The production backend must evaluate AT-SPI cache and
+Collection paths, bounded per-provider calls, stale object references, and
+embedded-application peers rather than copying this breadth-first probe.
+
+## Native capture
+
+With accessibility status enabled, GNOME Calculator exposed a bounded tree of
+107 nodes at depth 20. The capture included role, name, states, screen-coordinate
+extents when Component was available, and text when Text was available. It
+contained:
+
+- an application root and `Calculator` window;
+- editable and read-only text boxes;
+- digit, arithmetic, clear, backspace, history, and window controls;
+- named digit buttons `0` through `9`;
+- state flags such as Focusable, Sensitive, Showing, Visible, Editable, and
+  ReadOnly.
+
+Observed full 107-node capture times varied from 582.028 ms to 1042.612 ms.
+The verified action run measured 671.931 ms before dispatch and 686.264 ms
+after dispatch. This sequential property-by-property walker is evidence of
+correctness, not a performance design: each node can incur children, role,
+name, state, interface, Component, and Text D-Bus calls.
+
+A geometry sharp edge appeared under GNOME's Wayland session. Cairn's GTK3
+native shell returned plausible absolute rectangles, including a
+`1252x899` frame and title-bar buttons. GNOME Calculator's GTK4 tree returned
+the correct sizes but `(0, 0)` for nearly every descendant. AT-SPI Component
+geometry therefore cannot yet be assumed to provide usable screen positions
+for pointer targeting on this stack.
+
+## Action dispatch and independent verification
+
+The locator `role=button, name contains=1` resolved Calculator's `1` button.
+Its Action interface reported:
+
+    Action { name: "Click", description: "Clicks the button", keybinding: ";;" }
+
+The probe resolved the reported `Click` action by name (index 0 for this control) and
+`DoAction(0)` returned:
+
+    dispatch_success=true
+
+After 500 ms, a new bounded capture still contained 107 nodes but the editable
+text object's content had changed:
+
+    before text="1"
+    after  text="11"
+    verified_outcome=true
+
+This is action-specific evidence that AT-SPI dispatched a real control action
+and the application processed it. It is stronger than node-count or whole-tree
+inequality alone. The executable exits unsuccessfully if dispatch is rejected, no Click/Activate
+action exists, or the explicitly expected before/after values are not observed
+on the same AT-SPI object reference. A final hardened-probe run verified
+`"111"` to `"1111"` on Calculator object
+`/org/gnome/Calculator/a11y/a6c5a1b4_fe9b_4a78_9414_0085d7c09a7c`. Dispatch success and observed outcome remain separate facts;
+the real backend needs a bounded, action-specific postcondition rather than
+the spike's fixed delay.
+
+## Cairn WebKitGTK activation observation
+
+The installed desktop Cairn is a GTK3/WebKitGTK 4.1 application. Launched with
+accessibility disabled, it exposed 14 nodes: application, frame, native layout,
+title, and Minimize/Maximize/Close controls. No web document, page text, or web
+controls appeared.
+
+The following activation attempts all left the capture at the same 14 native
+nodes, including at depth 30 and a 1000-node bound:
+
+1. set `org.a11y.Status.IsEnabled=true` while Cairn was running and wait three
+   seconds;
+2. restart Cairn with `ACCESSIBILITY_ENABLED=1` while IsEnabled was true;
+3. set both `IsEnabled=true` and `ScreenReaderEnabled=true`, then restart
+   with `ACCESSIBILITY_ENABLED=1`.
+
+During traversal after activation, the client repeatedly reported:
+
+    Failed to create peer for Some(":1.19"): Invalid address string
+
+The honest result is that WebKit activation was **not proven**. The evidence
+suggests that the native tree contains an embedded WebKit AT-SPI peer which
+the current `atspi` connection path fails to follow because `:1.19` is a
+D-Bus unique name, not a complete bus address. The follow-up backend work must
+investigate AT-SPI Socket/Plug peer connections and compare against libatspi
+before deciding whether this is an `atspi` crate limitation, a WebKitGTK
+provider defect, or missing peer-address discovery. The three flags above
+must not be presented as a working activation recipe for this runtime.
+
+## Wayland evidence
+
+Semantic AT-SPI capture and Action dispatch worked from the non-graphical SSH
+session without X11 or Wayland input access. That establishes that ordinary
+control actions should prefer AT-SPI interfaces over synthesized pointer
+events.
+
+The desktop is GNOME Shell/Mutter on Wayland. Its session D-Bus advertises
+`org.gnome.Mutter.RemoteDesktop`, `org.gnome.Mutter.ScreenCast`, and the
+freedesktop desktop portal. Those are evidence for portal/compositor-mediated
+pointer and screenshot paths; they are not proof that Axon can use them
+unattended. The spike did not synthesize a pointer or capture a screenshot.
+Together with Calculator's unusable descendant origins, this leaves the
+pointer and screenshot question open and makes an X11-style global-coordinate
+fallback inappropriate to assume.
+
+## Conclusion
+
+The Linux core loop is viable in Rust on the real Ubuntu executor: a daemon
+running as the desktop user can connect from an SSH-originated process to the
+user's AT-SPI bus, capture a bounded semantic native tree, invoke a real Action,
+and verify the application-specific effect by recapture.
+
+The implementation-shaping facts are now concrete: run in the desktop user's
+D-Bus/runtime context, treat capture as asynchronous cross-process work,
+optimize beyond sequential property calls, keep semantic actions separate from
+Wayland pointer mechanisms, and explicitly solve embedded WebKit AT-SPI peer
+traversal before claiming web-content support. The spike intentionally does
+not implement `PlatformBackend`.
