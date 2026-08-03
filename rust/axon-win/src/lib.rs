@@ -73,10 +73,10 @@ impl<B: PlatformBackend> Router<B> {
             "click" => {
                 let (handle, resolution) = self.resolve(params)?;
                 let point = self.node_center(&handle)?;
-                let target = self.node(&handle)?;
+                let target = self.node(&handle)?.clone();
                 let hit = self.backend.hit_test(point).map_err(backend_error)?;
                 let hit = hit.ok_or_else(|| rpc_error(-32003, "click point hit no element"))?;
-                if !same_semantic_node(target, &hit) {
+                if !same_semantic_node(&target, &hit) {
                     return Err(rpc_error(
                         -32003,
                         "click target moved, is covered, or no longer matches the resolved element",
@@ -263,66 +263,6 @@ impl<B: PlatformBackend> Router<B> {
             .map_err(|e| rpc_error(-32602, e.to_string()))?;
         serde_json::to_value(RunEnvelope { batch: result }).map_err(internal_error)
     }
-    #[test]
-    fn ambiguous_locator_cannot_dispatch() {
-        let mut router = Router::new(backend(vec![node("same"), node("same")], None));
-        let response = router.request(request("click", json!({"target":{"app":"App","locator":{"role":"Button"}}}))).unwrap();
-        let JsonRpcResponse::Failure(error) = response else { panic!() };
-        assert!(error.error.message.contains("Ambiguous"));
-        assert_eq!(*router.backend.clicks.borrow(), 0);
-    }
-    #[test]
-    fn click_rejects_mismatched_immediate_hit_before_send_input() {
-        let mut backend = backend(vec![], None);
-        let handle = backend.snapshot.handle(0);
-        backend.hit = Some(node("cover"));
-        let clicks = backend.clicks.clone();
-        let mut router = Router::new(backend);
-        router.snapshot = Some(router.backend.snapshot.clone());
-        let response = router.request(request("click", json!({"target":handle.0}))).unwrap();
-        assert!(matches!(response, JsonRpcResponse::Failure(_)));
-        assert_eq!(*clicks.borrow(), 0);
-    }
-    #[test]
-    fn axn_value_facts_drive_expects_requires_dry_run_and_continue_on_error() {
-        let mut backend = backend(vec![], Some("ready now"));
-        let handle = backend.snapshot.handle(0).0;
-        let mut router = Router::new(backend.clone());
-        router.snapshot = Some(backend.snapshot.clone());
-        let source = format!(r#"version: 1
-actions:
-  - id: pass
-    tool: invoke
-    target: {handle}
-    expects:
-      - id: ready
-        kind: value
-        target: {handle}
-        contains: ready
-  - tool: invoke
-    target: {handle}
-    requires: [ready]
-    expects:
-      - id: exact
-        kind: value
-        target: {handle}
-        equals: wrong
-  - tool: invoke
-    target: {handle}
-"#);
-        let response = router.request(request("run", json!({"source":source,"options":{"continueOnError":true}}))).unwrap();
-        let JsonRpcResponse::Success(success) = response else { panic!() };
-        let batch = &success.result["batch"];
-        assert!(!batch["success"].as_bool().unwrap());
-        assert_eq!(batch["trace"].as_array().unwrap().len(), 3);
-        assert!(batch["trace"][1]["error"].as_str().unwrap().contains("expected"));
-
-        let dry = router.request(request("run", json!({"source":source,"options":{"dryRun":true}}))).unwrap();
-        let JsonRpcResponse::Success(dry) = dry else { panic!() };
-        assert!(dry.result["batch"]["dryRun"].as_bool().unwrap());
-        assert!(!dry.result["batch"]["success"].as_bool().unwrap());
-        assert!(dry.result["batch"]["trace"][1]["error"].as_str().unwrap().contains("required fact"));
-    }
 }
 
 impl<B: PlatformBackend> ToolDispatcher for Router<B> {
@@ -488,4 +428,65 @@ mod tests {
         };
         assert_eq!(e.error.code, -32700);
     }
++    #[test]
+    fn ambiguous_locator_cannot_dispatch() {
+        let mut router = Router::new(backend(vec![node("same"), node("same")], None));
+        let response = router.request(request("click", json!({"target":{"app":"App","locator":{"role":"Button"}}}))).unwrap();
+        let JsonRpcResponse::Failure(error) = response else { panic!() };
+        assert!(error.error.message.contains("Ambiguous"));
+        assert_eq!(*router.backend.clicks.borrow(), 0);
+    }
+    #[test]
+    fn click_rejects_mismatched_immediate_hit_before_send_input() {
+        let mut backend = backend(vec![], None);
+        let handle = backend.snapshot.handle(0);
+        backend.hit = Some(node("cover"));
+        let clicks = backend.clicks.clone();
+        let mut router = Router::new(backend);
+        router.snapshot = Some(router.backend.snapshot.clone());
+        let response = router.request(request("click", json!({"target":handle.0}))).unwrap();
+        assert!(matches!(response, JsonRpcResponse::Failure(_)));
+        assert_eq!(*clicks.borrow(), 0);
+    }
+    #[test]
+    fn axn_value_facts_drive_expects_requires_dry_run_and_continue_on_error() {
+        let mut backend = backend(vec![], Some("ready now"));
+        let handle = backend.snapshot.handle(0).0;
+        let mut router = Router::new(backend.clone());
+        router.snapshot = Some(backend.snapshot.clone());
+        let source = format!(r#"version: 1
+actions:
+  - id: pass
+    tool: invoke
+    target: {handle}
+    expects:
+      - id: ready
+        kind: value
+        target: {handle}
+        contains: ready
+  - tool: invoke
+    target: {handle}
+    requires: [ready]
+    expects:
+      - id: exact
+        kind: value
+        target: {handle}
+        equals: wrong
+  - tool: invoke
+    target: {handle}
+"#);
+        let response = router.request(request("run", json!({"source":source,"options":{"continueOnError":true}}))).unwrap();
+        let JsonRpcResponse::Success(success) = response else { panic!() };
+        let batch = &success.result["batch"];
+        assert!(!batch["success"].as_bool().unwrap());
+        assert_eq!(batch["trace"].as_array().unwrap().len(), 3);
+        assert!(batch["trace"][1]["error"].as_str().unwrap().contains("expected"));
+
+        let dry = router.request(request("run", json!({"source":source,"options":{"dryRun":true}}))).unwrap();
+        let JsonRpcResponse::Success(dry) = dry else { panic!() };
+        assert!(dry.result["batch"]["dryRun"].as_bool().unwrap());
+        assert!(!dry.result["batch"]["success"].as_bool().unwrap());
+        assert!(dry.result["batch"]["trace"][1]["error"].as_str().unwrap().contains("required fact"));
+    }
+
 }
