@@ -8,7 +8,9 @@ settled project structure.
 
 axon-spike-win enumerates top-level UI Automation elements, captures a bounded
 control-view subtree, resolves a control-type and name-contains locator, and can
-dispatch InvokePattern. Dispatch and verification are always printed separately.
+dispatch InvokePattern. Dispatch and verification fields are always printed
+separately. Failed dispatch or an unchanged verification capture produces a
+nonzero exit status.
 
     cd rust
     cargo run -p axon-spike-win

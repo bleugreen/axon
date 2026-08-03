@@ -80,8 +80,10 @@ pub(super) fn run(options: &Options) -> Result<(), Box<dyn std::error::Error>> {
         Ok(()) => println!("dispatch_success=true"),
         Err(error) => println!("dispatch_success=false error={error}"),
     }
-    if dispatch.is_err() {
-        return Ok(());
+    if let Err(error) = dispatch {
+        println!("verification_attempted=false");
+        println!("verified_outcome=false reason=dispatch_failed");
+        return Err(format!("InvokePattern dispatch failed: {error}").into());
     }
 
     thread::sleep(Duration::from_millis(500));
@@ -95,12 +97,17 @@ pub(super) fn run(options: &Options) -> Result<(), Box<dyn std::error::Error>> {
         &mut after_elements,
     );
     let after = snapshot(&after_elements);
-    println!("verified_outcome={}", before != after);
+    let changed = before != after;
+    println!("verification_attempted=true");
+    println!("verified_outcome={changed}");
     println!(
         "verification=bounded_tree_changed before_nodes={} after_nodes={}",
         before.len(),
         after.len()
     );
+    if !changed {
+        return Err("InvokePattern dispatched, but the bounded tree did not change".into());
+    }
     Ok(())
 }
 
