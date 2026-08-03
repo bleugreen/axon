@@ -1,0 +1,71 @@
+#[cfg(not(windows))]
+fn main() { eprintln!("axon-win runs only on Windows"); std::process::exit(1); }
+
+#[cfg(windows)]
+fn main() {
+    if let Err(error) = windows_main() { eprintln!("axon-win: {error}"); std::process::exit(1); }
+}
+
+#[cfg(windows)]
+fn windows_main() -> Result<(), Box<dyn std::error::Error>> {
+    use axon_win::{IntegrationProbe, Router, WindowsBackend};
+    let command = std::env::args().nth(1).unwrap_or_else(|| "serve".into());
+    match command.as_str() {
+        "serve" => pipe::serve(Router::new(WindowsBackend::start()?))?,
+        "mcp" => pipe::mcp()?,
+        "probe" => println!("{}", serde_json::to_string_pretty(&IntegrationProbe::run()?)?),
+        other => return Err(format!("unknown subcommand {other:?}; expected serve, mcp, or probe").into()),
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+mod pipe {
+    use axon_core::{JsonRpcId, JsonRpcRequest};
+    use axon_win::{parse_request, Router, WindowsBackend};
+    use serde_json::{Value, json};
+    use std::{ffi::c_void, fs::OpenOptions, io::{self, BufRead, BufReader, Read, Write}, ptr};
+
+    const PIPE: &str = r"\\.\pipe\axon-v1";
+    const PIPE_WIDE: &[u16] = &[92,92,46,92,112,105,112,101,92,97,120,111,110,45,118,49,0];
+    const INVALID_HANDLE_VALUE: isize = -1;
+    const PIPE_ACCESS_DUPLEX: u32 = 3;
+    const PIPE_TYPE_BYTE: u32 = 0;
+    const PIPE_READMODE_BYTE: u32 = 0;
+    const PIPE_WAIT: u32 = 0;
+    const PIPE_REJECT_REMOTE_CLIENTS: u32 = 8;
+
+    #[link(name="kernel32")]
+    unsafe extern "system" {
+        fn CreateNamedPipeW(name:*const u16,open_mode:u32,pipe_mode:u32,max_instances:u32,out_size:u32,in_size:u32,timeout:u32,security:*const c_void)->isize;
+        fn ConnectNamedPipe(pipe:isize,overlapped:*mut c_void)->i32;
+        fn DisconnectNamedPipe(pipe:isize)->i32;
+        fn CloseHandle(handle:isize)->i32;
+        fn ReadFile(handle:isize,buffer:*mut c_void,len:u32,read:*mut u32,overlapped:*mut c_void)->i32;
+        fn WriteFile(handle:isize,buffer:*const c_void,len:u32,written:*mut u32,overlapped:*mut c_void)->i32;
+    }
+
+    pub fn serve(mut router: Router<WindowsBackend>) -> io::Result<()> {
+        loop {
+            let handle=unsafe{CreateNamedPipeW(PIPE_WIDE.as_ptr(),PIPE_ACCESS_DUPLEX,PIPE_TYPE_BYTE|PIPE_READMODE_BYTE|PIPE_WAIT|PIPE_REJECT_REMOTE_CLIENTS,1,1024*1024,1024*1024,0,ptr::null())};
+            if handle==INVALID_HANDLE_VALUE{return Err(io::Error::last_os_error())}
+            let connected=unsafe{ConnectNamedPipe(handle,ptr::null_mut())}!=0||io::Error::last_os_error().raw_os_error()==Some(535);
+            if connected { let _=connection(handle,&mut router); }
+            unsafe{DisconnectNamedPipe(handle);CloseHandle(handle);}
+        }
+    }
+
+    fn connection(handle:isize,router:&mut Router<WindowsBackend>)->io::Result<()> {
+        let mut pending=Vec::new();let mut buf=[0u8;8192];
+        loop{let mut n=0; if unsafe{ReadFile(handle,buf.as_mut_ptr().cast(),buf.len()as u32,&mut n,ptr::null_mut())}==0||n==0{return Ok(())} pending.extend_from_slice(&buf[..n as usize]);while let Some(pos)=pending.iter().position(|b|*b==b'\n'){let line=pending.drain(..=pos).collect::<Vec<_>>();let line=String::from_utf8_lossy(&line);let response=match parse_request(line.trim()){Ok(req)=>router.request(req),Err(e)=>Some(e)};if let Some(response)=response{let mut out=serde_json::to_vec(&response)?;out.push(b'\n');let mut written=0;if unsafe{WriteFile(handle,out.as_ptr().cast(),out.len()as u32,&mut written,ptr::null_mut())}==0{return Err(io::Error::last_os_error())}}}}
+    }
+
+    pub fn mcp()->io::Result<()> {
+        let stdin=io::stdin();let mut stdout=io::stdout();
+        for line in stdin.lock().lines(){let line=line?;let input:Value=match serde_json::from_str(&line){Ok(v)=>v,Err(e)=>{writeln!(stdout,"{}",json!({"jsonrpc":"2.0","id":null,"error":{"code":-32700,"message":e.to_string()}}))?;continue}};let id=input.get("id").cloned().unwrap_or(Value::Null);let method=input.get("method").and_then(Value::as_str).unwrap_or("");
+            let output=match method{"initialize"=>json!({"jsonrpc":"2.0","id":id,"result":{"protocolVersion":"2025-06-18","capabilities":{"tools":{}},"serverInfo":{"name":"axon-win","version":env!("CARGO_PKG_VERSION")}}}),"tools/list"=>json!({"jsonrpc":"2.0","id":id,"result":{"tools":tool_list()}}),"tools/call"=>forward(&input)?,_=>{if input.get("id").is_none(){continue}else{json!({"jsonrpc":"2.0","id":id,"error":{"code":-32601,"message":format!("unknown MCP method {method}")}})}}};writeln!(stdout,"{output}")?;stdout.flush()?;
+        }Ok(())
+    }
+    fn forward(input:&Value)->io::Result<Value>{let params=input.get("params").and_then(Value::as_object).ok_or_else(||io::Error::new(io::ErrorKind::InvalidInput,"tools/call requires params"))?;let name=params.get("name").and_then(Value::as_str).ok_or_else(||io::Error::new(io::ErrorKind::InvalidInput,"tools/call requires name"))?;let arguments=params.get("arguments").cloned().unwrap_or_else(||json!({}));let rpc=JsonRpcRequest::new(Some(JsonRpcId::Integer(1)),name,Some(arguments));let mut stream=OpenOptions::new().read(true).write(true).open(PIPE)?;writeln!(stream,"{}",serde_json::to_string(&rpc)?)?;stream.flush()?;let mut reader=BufReader::new(stream);let mut line=String::new();reader.read_line(&mut line)?;let response:Value=serde_json::from_str(&line)?;let id=input.get("id").cloned().unwrap_or(Value::Null);if let Some(error)=response.get("error"){Ok(json!({"jsonrpc":"2.0","id":id,"result":{"content":[{"type":"text","text":error.get("message").and_then(Value::as_str).unwrap_or("Axon error")}],"isError":true}}))}else{let result=response.get("result").cloned().unwrap_or(Value::Null);Ok(json!({"jsonrpc":"2.0","id":id,"result":{"content":[{"type":"text","text":serde_json::to_string(&result).unwrap()}],"structuredContent":result,"isError":false}}))}}
+    fn tool_list()->Value{Value::Array(["look","find","click","type","keyboard","invoke","scroll","run"].into_iter().map(|name|json!({"name":name,"description":format!("Axon Windows {name} tool"),"inputSchema":{"type":"object","additionalProperties":true}})).collect())}
+}
