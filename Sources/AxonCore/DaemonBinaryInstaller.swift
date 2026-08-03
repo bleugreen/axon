@@ -96,7 +96,8 @@ public struct DaemonBinaryInstaller {
             "CFBundlePackageType": "APPL",
             "CFBundleShortVersionString": AxonVersion.current,
             "CFBundleVersion": AxonVersion.current,
-            "LSBackgroundOnly": true
+            "LSBackgroundOnly": true,
+            "NSAppleEventsUsageDescription": "Axon uses browser automation to navigate and enumerate browser windows and tabs."
         ]
         let data = try PropertyListSerialization.data(
             fromPropertyList: plist,

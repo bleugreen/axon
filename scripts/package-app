@@ -58,6 +58,8 @@ write_daemon_info_plist() {
   <string>14.0</string>
   <key>LSUIElement</key>
   <true/>
+  <key>NSAppleEventsUsageDescription</key>
+  <string>Axon uses browser automation to navigate and enumerate browser windows and tabs.</string>
 </dict>
 </plist>
 PLIST
