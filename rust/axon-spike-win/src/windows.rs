@@ -108,7 +108,7 @@ fn children(walker: &UITreeWalker, parent: &UIElement) -> Vec<UIElement> {
 fn snapshot(elements: &[(usize, UIElement)]) -> Vec<Node> {
     elements.iter().map(|(depth, element)| Node {
         depth: *depth,
-        control_type: property(element.get_control_type()).to_string(),
+        control_type: element.get_control_type().map(|value| value.to_string()).unwrap_or_else(|_| "<unavailable>".to_owned()),
         name: property(element.get_name()),
         automation_id: property(element.get_automation_id()),
         rect: property(element.get_bounding_rectangle()).to_string(),
@@ -118,7 +118,7 @@ fn snapshot(elements: &[(usize, UIElement)]) -> Vec<Node> {
 fn describe(element: &UIElement, depth: usize) -> String {
     format_node(&Node {
         depth,
-        control_type: property(element.get_control_type()).to_string(),
+        control_type: element.get_control_type().map(|value| value.to_string()).unwrap_or_else(|_| "<unavailable>".to_owned()),
         name: property(element.get_name()),
         automation_id: property(element.get_automation_id()),
         rect: property(element.get_bounding_rectangle()).to_string(),
