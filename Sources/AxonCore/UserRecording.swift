@@ -293,9 +293,9 @@ public struct UserRecordingTranslator {
         case let .setValue(target, value, _):
             return ["tool": .string("type"), "target": target, "value": .string(value)]
         case let .typeText(app, text):
-            return ["tool": .string("keyboard"), "app": .string(app), "keys": .string(text)]
+            return ["tool": .string("keyboard"), "app": .string(app), "text": .string(text)]
         case let .pressKey(app, key):
-            return ["tool": .string("keyboard"), "app": .string(app), "keys": .string(key)]
+            return ["tool": .string("keyboard"), "app": .string(app), "key": .string(key)]
         case let .scroll(target, app, deltaX, deltaY):
             var object: [String: JSONValue] = [
                 "tool": .string("scroll"),

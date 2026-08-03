@@ -55,7 +55,7 @@ import Testing
       - id: existing
         tool: keyboard
         app: Safari
-        keys: Return
+        key: Return
     """)
 
     axn.assignMissingBlockIDs(prefix: "x")
@@ -251,7 +251,7 @@ import Testing
       - id: a002
         tool: keyboard
         app: Example
-        keys: Return
+        key: Return
         requires:
           - a001.value.0
     """)

@@ -44,7 +44,7 @@ appends the inline actions. That supports parameterized replays without a second
 plan language.
 
 `.axn` parameters live in the top-level `args:` list. References use
-`{{name}}` inside string `value` and `keys` fields, and all parameters resolve
+`{{name}}` inside string `value`, `text`, and `key` fields, and all parameters resolve
 before any action runs. Caller-provided values are passed as `argValues` over
 MCP/socket calls or with repeated CLI `--arg name=value` flags. Declared
 `source:` URLs such as `env://NAME` and `op://vault/item/field` bind a parameter
@@ -74,7 +74,7 @@ actions:
         equals: Draft issue title
   - tool: keyboard
     app: Safari
-    keys: Return
+    key: Return
     requires:
       - title.value
 ```

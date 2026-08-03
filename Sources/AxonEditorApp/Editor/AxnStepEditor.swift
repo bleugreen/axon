@@ -89,7 +89,7 @@ private struct KeyboardActionEditor: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            ParameterTokenField(label: "Keys", value: field("keys"), inputNames: inputNames)
+            ParameterTokenField(label: "Key", value: field("key"), inputNames: inputNames)
             ParameterTokenField(label: "Text", value: field("text"), inputNames: inputNames)
         }
     }

@@ -30,7 +30,7 @@ public struct AxnArgumentReferenceSubstitution: Equatable, Sendable {
 }
 
 public enum AxnArgumentReferenceSyntax {
-    public static let substitutableStringFields: Set<String> = ["value", "keys"]
+    public static let substitutableStringFields: Set<String> = ["value", "text", "key"]
 
     private static let parameterReferenceRegex = try! NSRegularExpression(
         pattern: #"\{\{\s*([A-Za-z][A-Za-z0-9_]*)\s*\}\}"#

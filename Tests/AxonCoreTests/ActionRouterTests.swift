@@ -22,6 +22,24 @@ import Testing
     #expect(response.result?["action"]?["strategy"] == .string("AXPress"))
 }
 
+@Test func keyboardRejectsUnknownMixedAndAbsentIntent() {
+    let router = CommandRouter(actions: PrimitiveActionHandlers())
+    let requests: [[String: JSONValue]] = [
+        ["key": .string("DefinitelyNotAKey")],
+        ["key": .string("Return"), "text": .string("hello")],
+        [:]
+    ]
+
+    for (index, params) in requests.enumerated() {
+        let response = router.handle(JSONRPCRequest(
+            id: .int(index),
+            method: "keyboard",
+            params: .object(params)
+        ))
+        #expect(response.error?.code == JSONRPCError.invalidParams("").code)
+    }
+}
+
 @Test func clickRequestAcceptsPointTarget() {
     let router = CommandRouter(
         actions: PrimitiveActionHandlers(
@@ -550,9 +568,9 @@ import Testing
 @Test func keyboardTextRequestPassesAppAndText() {
     let router = CommandRouter(
         actions: PrimitiveActionHandlers(
-            keyboard: { app, text in
+            keyboard: { app, intent in
                 #expect(app == "com.example.App")
-                #expect(text == "hello")
+                #expect(intent == .text("hello"))
                 return PrimitiveActionResult(action: "keyboard", target: app ?? "frontmost", strategy: "CGEventKeyboard", success: true)
             }
         )
@@ -563,7 +581,7 @@ import Testing
         method: "keyboard",
         params: .object([
             "app": .string("com.example.App"),
-            "keys": .string("hello")
+            "text": .string("hello")
         ])
     ))
 
@@ -574,9 +592,9 @@ import Testing
 @Test func keyboardKeyRequestPassesAppAndKey() {
     let router = CommandRouter(
         actions: PrimitiveActionHandlers(
-            keyboard: { app, key in
+            keyboard: { app, intent in
                 #expect(app == "com.example.App")
-                #expect(key == "Return")
+                #expect(intent == .key("End"))
                 return PrimitiveActionResult(action: "keyboard", target: app ?? "frontmost", strategy: "CGEventKeyboard", success: true)
             }
         )
@@ -587,7 +605,7 @@ import Testing
         method: "keyboard",
         params: .object([
             "app": .string("com.example.App"),
-            "keys": .string("Return")
+            "key": .string("End")
         ])
     ))
 

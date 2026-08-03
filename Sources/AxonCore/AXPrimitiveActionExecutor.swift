@@ -36,7 +36,7 @@ public final class AXPrimitiveActionExecutor {
             clickPoint: click(point:),
             invoke: invoke(target:name:),
             type: type(target:value:),
-            keyboard: keyboard(app:keys:),
+            keyboard: keyboard(app:intent:),
             scroll: scroll(target:app:deltaX:deltaY:),
             drag: drag(from:to:app:durationMs:)
         )
@@ -92,7 +92,11 @@ public final class AXPrimitiveActionExecutor {
         let element = try elementStore.element(for: target)
         showTargetBeforeAction(element, label: "AXValue")
         let result = AXUIElementSetAttributeValue(element, kAXValueAttribute as CFString, value as CFTypeRef)
-        if result == .success, stringValue(copyRawAttribute(kAXValueAttribute, from: element)) == value {
+        if Self.axValueWasVerified(
+            setResult: result,
+            readValue: stringValue(copyRawAttribute(kAXValueAttribute, from: element)),
+            expected: value
+        ) {
             return PrimitiveActionResult(
                 action: "type",
                 target: target,
@@ -115,43 +119,56 @@ public final class AXPrimitiveActionExecutor {
 
         postMouseClick(at: point)
         Thread.sleep(forTimeInterval: 0.05)
+        let selectAllDispatched: Bool
         if let selectAll = KeyStroke("command+a") {
-            postKeyStroke(selectAll)
+            selectAllDispatched = postKeyStroke(selectAll)
             Thread.sleep(forTimeInterval: 0.02)
+        } else {
+            selectAllDispatched = false
         }
-        let typed = postKeyboardText(value)
-        return PrimitiveActionResult(
+        let textDispatched = postKeyboardText(value)
+        let dispatched = selectAllDispatched && textDispatched
+        return PrimitiveActionResult.unverifiedDispatch(
             action: "type",
             target: target,
             strategy: "CGEventKeyboard",
-            success: typed,
-            message: typed ? nil : "Unable to create keyboard events for text fallback"
+            dispatched: dispatched,
+            message: dispatched
+                ? "Keyboard fallback events were dispatched, but the field value could not be verified"
+                : "Unable to create keyboard events for text fallback",
+            details: [:]
         )
     }
 
-    public func keyboard(app: String?, keys: String) throws -> PrimitiveActionResult {
+    public func keyboard(app: String?, intent: KeyboardIntent) throws -> PrimitiveActionResult {
         if let app {
             try activate(app: app)
         }
         let target = app ?? "frontmost"
-        if let keyStroke = keyStrokeIntent(from: keys) {
-            postKeyStroke(keyStroke)
-            return PrimitiveActionResult(
-                action: "keyboard",
-                target: target,
-                strategy: "CGEventKeyboard",
-                success: true,
-                details: ["keys": .string(keys), "mode": .string("keystroke")]
-            )
+        let dispatched: Bool
+        var intentDetails: [String: JSONValue]
+        switch intent {
+        case let .key(key):
+            dispatched = postKeyStroke(try KeyStroke(validating: key))
+            intentDetails = ["key": .string(key), "mode": .string("key")]
+        case let .text(text):
+            dispatched = postKeyboardText(text)
+            intentDetails = ["text": .string(text), "mode": .string("text")]
         }
-        let success = postKeyboardText(keys)
-        return PrimitiveActionResult(
+        return PrimitiveActionResult.unverifiedDispatch(
             action: "keyboard",
             target: target,
             strategy: "CGEventKeyboard",
-            success: success,
-            details: ["keys": .string(keys), "mode": .string("text")]
+            dispatched: dispatched,
+            message: dispatched
+                ? "Keyboard events were dispatched, but semantic outcome is unverified without a postcondition"
+                : "Unable to create keyboard events",
+            details: intentDetails
         )
+    }
+
+    static func axValueWasVerified(setResult: AXError, readValue: String?, expected: String) -> Bool {
+        setResult == .success && readValue == expected
     }
 
     public func scroll(
@@ -468,13 +485,18 @@ public final class AXPrimitiveActionExecutor {
         return steps
     }
 
-    private func postKeyStroke(_ keyStroke: KeyStroke) {
-        let down = CGEvent(keyboardEventSource: nil, virtualKey: keyStroke.keyCode, keyDown: true)
-        let up = CGEvent(keyboardEventSource: nil, virtualKey: keyStroke.keyCode, keyDown: false)
-        down?.flags = keyStroke.flags
-        up?.flags = keyStroke.flags
-        if let down { postEvent(down) }
-        if let up { postEvent(up) }
+    @discardableResult
+    private func postKeyStroke(_ keyStroke: KeyStroke) -> Bool {
+        guard let down = CGEvent(keyboardEventSource: nil, virtualKey: keyStroke.keyCode, keyDown: true),
+              let up = CGEvent(keyboardEventSource: nil, virtualKey: keyStroke.keyCode, keyDown: false)
+        else {
+            return false
+        }
+        down.flags = keyStroke.flags
+        up.flags = keyStroke.flags
+        postEvent(down)
+        postEvent(up)
+        return true
     }
 
     private func postKeyboardText(_ text: String) -> Bool {
@@ -502,17 +524,6 @@ public final class AXPrimitiveActionExecutor {
         return true
     }
 
-    private func keyStrokeIntent(from keys: String) -> KeyStroke? {
-        if keys.contains("+") {
-            return KeyStroke(keys)
-        }
-        switch keys.lowercased() {
-        case "return", "enter", "tab", "space", "delete", "backspace", "escape", "esc", "left", "right", "down", "up":
-            return KeyStroke(keys)
-        default:
-            return nil
-        }
-    }
 }
 
 private struct ScrollToVisibleTarget {
@@ -527,7 +538,7 @@ private extension AXFrame {
     var midY: Double { y + height / 2 }
 }
 
-private struct KeyStroke {
+struct KeyStroke {
     let keyCode: CGKeyCode
     let flags: CGEventFlags
 
@@ -560,6 +571,17 @@ private struct KeyStroke {
         self.flags = flags
     }
 
+    init(validating rawValue: String) throws {
+        guard let stroke = KeyStroke(rawValue) else {
+            throw JSONRPCError.invalidParams("Unknown keyboard key or keystroke: \(rawValue)")
+        }
+        self = stroke
+    }
+
+    static func isValid(_ rawValue: String) -> Bool {
+        KeyStroke(rawValue) != nil
+    }
+
     private static let keyCodes: [String: CGKeyCode] = [
         "a": 0, "s": 1, "d": 2, "f": 3, "h": 4, "g": 5, "z": 6, "x": 7,
         "c": 8, "v": 9, "b": 11, "q": 12, "w": 13, "e": 14, "r": 15,
@@ -569,6 +591,7 @@ private struct KeyStroke {
         "enter": 36, "l": 37, "j": 38, "'": 39, "k": 40, ";": 41, "\\": 42,
         ",": 43, "/": 44, "n": 45, "m": 46, ".": 47, "tab": 48, "space": 49,
         "`": 50, "delete": 51, "backspace": 51, "escape": 53, "esc": 53,
+        "home": 115, "end": 119, "pageup": 116, "pagedown": 121,
         "left": 123, "right": 124, "down": 125, "up": 126
     ]
 }

@@ -491,7 +491,10 @@ private struct PrimitiveActionCommandHandler {
                 let decoder = ToolParamDecoder(toolName: "keyboard", params: params)
                 return try services.actions.keyboard(
                     try decoder.string("app"),
-                    try decoder.requiredString("keys")
+                    try KeyboardIntent.validated(
+                        text: decoder.string("text"),
+                        key: decoder.string("key")
+                    )
                 )
             }
         case "scroll":
