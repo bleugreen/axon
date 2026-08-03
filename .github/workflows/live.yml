@@ -1,0 +1,163 @@
+name: Live desktop verification
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  macos:
+    name: macOS live loop
+    runs-on: [self-hosted, axon-live-mac]
+    concurrency:
+      group: axon-live-mac
+      cancel-in-progress: false
+    timeout-minutes: 30
+    steps:
+      - name: Check out Axon
+        uses: actions/checkout@v4
+
+      - name: Build the signed app
+        env:
+          AXON_CODESIGN_IDENTITY: 2A1FE6185D48E55E22FA9DB390B452D2E06AD665
+        run: ./scripts/package-app
+
+      - name: Capture, resolve, act, and verify
+        run: |
+          set -euo pipefail
+          cli="$PWD/dist/Axon.app/Contents/Resources/bin/axon"
+
+          restore_desktop() {
+            "$cli" quit >/dev/null 2>&1 || true
+            killall Calculator >/dev/null 2>&1 || true
+            open -a /Applications/Axon.app >/dev/null 2>&1 || true
+          }
+          trap restore_desktop EXIT
+
+          /opt/homebrew/bin/axon quit >/dev/null 2>&1 || true
+          open -n "$PWD/dist/Axon.app"
+          for _ in {1..40}; do
+            if "$cli" status | grep -q 'Accessibility: trusted'; then
+              break
+            fi
+            sleep 0.25
+          done
+          "$cli" status | grep -q 'Accessibility: trusted'
+
+          open -a Calculator
+          for _ in {1..40}; do
+            if "$cli" look Calculator --json >/dev/null 2>&1; then
+              break
+            fi
+            sleep 0.25
+          done
+
+          clear_result="$("$cli" find Calculator '{"role":"AXButton","description":"All Clear","actions":["AXPress"]}')"
+          clear_handle="$(printf '%s' "$clear_result" | jq -er '.result.resolution.best.handle')"
+          "$cli" invoke "$clear_handle" AXPress | jq -e '.result.action.success == true' >/dev/null
+
+          one_result="$("$cli" find Calculator '{"role":"AXButton","description":"1","actions":["AXPress"]}')"
+          one_handle="$(printf '%s' "$one_result" | jq -er '.result.resolution.best.handle')"
+          "$cli" invoke "$one_handle" AXPress | jq -e '.result.action.success == true' >/dev/null
+
+          "$cli" look Calculator --json \
+            | jq -e '.indexedNodes | any(.role == "AXStaticText" and (.value | strings | contains("1")))'
+
+  linux:
+    name: Linux live loop
+    runs-on: [self-hosted, axon-live-linux]
+    concurrency:
+      group: axon-live-linux
+      cancel-in-progress: false
+    timeout-minutes: 20
+    env:
+      XDG_RUNTIME_DIR: /run/user/1000
+      DBUS_SESSION_BUS_ADDRESS: unix:path=/run/user/1000/bus
+      DISPLAY: ":0"
+      WAYLAND_DISPLAY: wayland-0
+    steps:
+      - name: Check out Axon
+        uses: actions/checkout@v4
+
+      - name: Capture, resolve, act, and verify
+        working-directory: rust
+        run: |
+          set -euo pipefail
+          test -S /run/user/1000/at-spi/bus
+
+          calculator_was_running=false
+          if pgrep -u "$(id -u)" -x gnome-calculator >/dev/null; then
+            calculator_was_running=true
+          fi
+          cleanup() {
+            if [[ "$calculator_was_running" == false ]]; then
+              pkill -u "$(id -u)" -x gnome-calculator >/dev/null 2>&1 || true
+            fi
+          }
+          trap cleanup EXIT
+
+          gnome-calculator --equation 0 >/dev/null 2>&1 &
+          for _ in {1..40}; do
+            if cargo run --quiet --locked -p axon-spike-linux -- --application calculator --max-depth 1 --max-nodes 5 >/dev/null 2>&1; then
+              break
+            fi
+            sleep 0.25
+          done
+
+          cargo run --quiet --locked -p axon-spike-linux -- \
+            --application calculator \
+            --max-depth 20 \
+            --max-nodes 500 \
+            --role button \
+            --name-contains 1 \
+            --action \
+            --expect-text-before 0 \
+            --expect-text-after 1 \
+            | tee /tmp/axon-linux-live-probe.log
+          grep -q 'verification=same_object_text_transition' /tmp/axon-linux-live-probe.log
+
+  windows:
+    name: Windows live loop
+    runs-on: [self-hosted, axon-live-windows]
+    concurrency:
+      group: axon-live-windows
+      cancel-in-progress: false
+    timeout-minutes: 25
+    env:
+      CARGO_HOME: C:\Users\mitch\.cargo
+    steps:
+      - name: Check out Axon
+        uses: actions/checkout@v4
+
+      - name: Build the Windows daemon
+        shell: pwsh
+        working-directory: rust
+        run: |
+          $env:Path = "$env:CARGO_HOME\bin;$env:Path"
+          cargo build --locked -p axon-win
+
+      - name: Restart the interactive daemon and inspect a real window
+        shell: pwsh
+        working-directory: rust
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $exe = (Resolve-Path 'target\debug\axon-win.exe').Path
+          & $exe daemon restart
+
+          $request = '{"jsonrpc":"2.0","id":1,"method":"look","params":{}}'
+          $response = $request | & $exe mcp | ConvertFrom-Json -Depth 100
+          if ($null -ne $response.error) {
+            throw "look returned an RPC error: $($response.error | ConvertTo-Json -Compress)"
+          }
+          if ($null -eq $response.result.snapshot) {
+            throw 'look did not return a snapshot'
+          }
+          $window = $response.result.snapshot.roots | Where-Object role -eq 'Window' | Select-Object -First 1
+          if ($null -eq $window) {
+            throw 'look did not return a Window root from the interactive desktop'
+          }
+          Write-Output "isError:false snapshot=$($response.result.snapshot.id) root=$($window.role)"
