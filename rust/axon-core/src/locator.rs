@@ -395,9 +395,23 @@ fn candidate(
 }
 
 fn window_matches(locator: &AncestorLocator, window: &crate::Window) -> bool {
-    locator.role.as_ref().is_none_or(|role| role == &window.root.role)
-        && locator.subrole.as_ref().is_none_or(|subrole| window.root.subrole.as_ref() == Some(subrole))
-        && locator.identifier.as_ref().is_none_or(|matcher| matcher.matches(window.root.identifier.as_deref()))
-        && locator.title.as_ref().is_none_or(|matcher| matcher.matches(window.title.as_deref().or(window.root.title.as_deref())))
-        && locator.label.as_ref().is_none_or(|matcher| matcher.matches(window.root.label.as_deref()))
+    locator
+        .role
+        .as_ref()
+        .is_none_or(|role| role == &window.root.role)
+        && locator
+            .subrole
+            .as_ref()
+            .is_none_or(|subrole| window.root.subrole.as_ref() == Some(subrole))
+        && locator
+            .identifier
+            .as_ref()
+            .is_none_or(|matcher| matcher.matches(window.root.identifier.as_deref()))
+        && locator.title.as_ref().is_none_or(|matcher| {
+            matcher.matches(window.title.as_deref().or(window.root.title.as_deref()))
+        })
+        && locator
+            .label
+            .as_ref()
+            .is_none_or(|matcher| matcher.matches(window.root.label.as_deref()))
 }
