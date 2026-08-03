@@ -79,10 +79,11 @@ events with a close conceptual fit to AX.
   transport and MCP-facade topology can carry over. Installation must still use
   Windows-native access controls and lifecycle management.
 - The implemented Windows daemon uses `\\.\pipe\axon-v1` instead of `AF_UNIX`.
-  Named pipes allow the interactive-session process to reject remote clients and
-  use Windows security descriptors without translating Unix ownership semantics.
-  Run `axon-win serve` once in the logged-in desktop session and point short-lived
-  `axon-win mcp` processes at that pipe.
+  Named pipes allow the interactive-session process to reject remote clients. At
+  startup, `axon-win serve` reads the user SID from its process token and installs
+  a protected DACL granting pipe access only to that SID; it does not rely on the
+  process default security descriptor. Run `axon-win serve` once in the logged-in
+  desktop session and point short-lived `axon-win mcp` processes at that pipe.
 - Chromium renderer accessibility may remain disabled even after a UI Automation
   client starts. Before capturing a WebView2 target, the backend must query
   `OBJID_CLIENT` through MSAA on the selected target HWND and all of its descendant

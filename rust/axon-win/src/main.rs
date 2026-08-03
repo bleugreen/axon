@@ -44,6 +44,18 @@ mod pipe {
         ptr,
     };
 
+    #[repr(C)]
+    struct SecurityAttributes {
+        length: u32,
+        descriptor: *mut c_void,
+        inherit_handle: i32,
+    }
+    #[repr(C)]
+    struct SidAndAttributes {
+        sid: *mut c_void,
+        attributes: u32,
+    }
+
     const PIPE: &str = r"\\.\pipe\axon-v1";
     const PIPE_WIDE: &[u16] = &[
         92, 92, 46, 92, 112, 105, 112, 101, 92, 97, 120, 111, 110, 45, 118, 49, 0,
@@ -84,9 +96,62 @@ mod pipe {
             written: *mut u32,
             overlapped: *mut c_void,
         ) -> i32;
+        fn LocalFree(memory: *mut c_void) -> *mut c_void;
+    }
+    #[link(name = "advapi32")]
+    unsafe extern "system" {
+        fn GetTokenInformation(token: isize, class: u32, info: *mut c_void, len: u32, needed: *mut u32) -> i32;
+        fn ConvertSidToStringSidW(sid: *mut c_void, string_sid: *mut *mut u16) -> i32;
+        fn ConvertStringSecurityDescriptorToSecurityDescriptorW(
+            text: *const u16, revision: u32, descriptor: *mut *mut c_void, size: *mut u32,
+        ) -> i32;
+    }
+
+    struct PipeSecurity {
+        attributes: SecurityAttributes,
+        sid_string: *mut u16,
+    }
+    impl PipeSecurity {
+        fn current_user() -> io::Result<Self> {
+            const TOKEN_USER: u32 = 1;
+            const TOKEN: isize = -4; // GetCurrentProcessToken pseudo-handle.
+            let mut needed = 0;
+            unsafe { GetTokenInformation(TOKEN, TOKEN_USER, ptr::null_mut(), 0, &mut needed) };
+            if needed == 0 { return Err(io::Error::last_os_error()); }
+            let mut token_user = vec![0u8; needed as usize];
+            if unsafe { GetTokenInformation(TOKEN, TOKEN_USER, token_user.as_mut_ptr().cast(), needed, &mut needed) } == 0 {
+                return Err(io::Error::last_os_error());
+            }
+            let sid = unsafe { (*(token_user.as_ptr() as *const SidAndAttributes)).sid };
+            let mut sid_string = ptr::null_mut();
+            if unsafe { ConvertSidToStringSidW(sid, &mut sid_string) } == 0 {
+                return Err(io::Error::last_os_error());
+            }
+            let sid_len = unsafe { (0..).find(|&i| *sid_string.add(i) == 0).unwrap() };
+            let sid_text = unsafe { String::from_utf16_lossy(std::slice::from_raw_parts(sid_string, sid_len)) };
+            // Protected DACL: only the process token's user SID receives generic-all.
+            let sddl: Vec<u16> = format!("D:P(A;;GA;;;{sid_text})\0").encode_utf16().collect();
+            let mut descriptor = ptr::null_mut();
+            if unsafe { ConvertStringSecurityDescriptorToSecurityDescriptorW(sddl.as_ptr(), 1, &mut descriptor, ptr::null_mut()) } == 0 {
+                unsafe { LocalFree(sid_string.cast()); }
+                return Err(io::Error::last_os_error());
+            }
+            Ok(Self { attributes: SecurityAttributes {
+                length: std::mem::size_of::<SecurityAttributes>() as u32,
+                descriptor,
+                inherit_handle: 0,
+            }, sid_string })
+        }
+    }
+    impl Drop for PipeSecurity {
+        fn drop(&mut self) { unsafe {
+            LocalFree(self.attributes.descriptor);
+            LocalFree(self.sid_string.cast());
+        }; }
     }
 
     pub fn serve(mut router: Router<WindowsBackend>) -> io::Result<()> {
+        let mut security = PipeSecurity::current_user()?;
         loop {
             let handle = unsafe {
                 CreateNamedPipeW(
@@ -97,7 +162,7 @@ mod pipe {
                     1024 * 1024,
                     1024 * 1024,
                     0,
-                    ptr::null(),
+                    (&mut security.attributes as *mut SecurityAttributes).cast(),
                 )
             };
             if handle == INVALID_HANDLE_VALUE {
