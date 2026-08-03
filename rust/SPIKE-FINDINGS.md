@@ -115,3 +115,121 @@ an MSAA `OBJID_CLIENT` activation touch. The implementation-shaping requirements
 are now concrete: the daemon must run per user session, activate Chromium-backed
 window subtrees before capture, wait boundedly for `RootWebArea`, and capture deep
 enough to reach the web document.
+
+
+## Binding evaluation: direct `windows` COM
+
+AXN-29 added the experimental `uia-binding-eval` workspace crate and tested
+`windows` 0.62.2 directly on `bglab-win` in interactive session 1. The crate
+uses an explicit feature set rather than `uiautomation`'s coupled defaults. It
+initializes an MTA, configures UIA provider timeouts, performs the proven MSAA
+activation, polls for `RootWebArea`, and exposes benchmark, pattern, and event
+probes.
+
+### Capture and search measurements
+
+A Cairn `RootWebArea` capture returned 26 descendants (27 nodes including the
+root). One interactive run measured:
+
+    FindAll + four Current property reads:       18.230 ms
+    FindAllBuildCache + four Cached reads:        9.787 ms
+    manual ControlView TreeWalker (no properties): 13.261 ms
+
+The cached path fetched ControlType, Name, AutomationId, and BoundingRectangle in
+one build-cache operation and was 46% faster than the equivalent uncached
+property path on this small tree. The difference should grow with tree size and
+provider-process boundaries. The manual walker number is not directly comparable
+because it intentionally reads no properties; it demonstrates that recursion is
+already slower than condition-based bulk search before adding property round
+trips.
+
+The wrapper's existing bounded depth-30 capture took 1954.954 ms end to end for
+49 nodes. That includes its fixed 1500 ms post-MSAA sleep, leaving roughly 455 ms
+for capture and printing, so it is code-shape and end-to-end context rather than
+a same-workload performance comparison. The wrapper spike has no public bulk
+cache path equivalent; a production benchmark must use identical roots, nodes,
+properties, and timing boundaries.
+
+A subtle COM semantic matters: the cache request passed to
+`FindAllBuildCache` must use `TreeScope_Element` to populate each returned
+match. `TreeScope_Descendants` asks for each match's descendants instead;
+attempting `CachedControlType` on the match then fails with `E_INVALIDARG`.
+Direct bindings expose this precisely, but require tests around cache shape.
+
+`CreatePropertyCondition` plus `FindFirst` found `RootWebArea` during a
+bounded poll and found a named Cairn control for pattern testing.
+`CreateTrueCondition` plus `FindAll` supplied bulk capture. For known
+properties and bounded subtrees this is both clearer and faster than recursive
+`TreeWalker`; retain the walker only where hierarchy reconstruction requires
+parent/child edges.
+
+### Pattern ergonomics
+
+On Cairn's `Collapse sidebar` control, typed
+`GetCurrentPatternAs<T>` calls reported:
+
+    Invoke=true, Value=false, ScrollItem=true
+    ScrollIntoView succeeded
+    Invoke succeeded
+
+Unsupported patterns arrive as failed typed interface queries and are mapped to
+an `Unsupported` operation error when the requested action requires one. Value
+set is implemented by the evaluator but was not issued against Cairn because the
+chosen control correctly lacked ValuePattern and changing an arbitrary editable
+field would be destructive. Value get/set remains a backend integration-test
+requirement. Compared with the wrapper, direct pattern dispatch
+adds a generic interface query and explicit HRESULT mapping; the resulting code
+is still small and makes unsupported-pattern behavior unambiguous.
+
+### Events and threading
+
+A focus-changed handler was registered and removed from an MTA owner thread for
+20 seconds while the user clicked in the interactive desktop. Seven callbacks
+arrived. One callback ran on the registration thread and six ran on another COM
+callback thread.
+
+The daemon must therefore own UIA clients, elements, cache requests, and patterns
+on a dedicated MTA thread, but must not assume callbacks run there. Handler
+implementations must do no blocking work and no UIA re-entry. They should copy
+the minimal event data into owned records and enqueue those records to the
+daemon. Registration lifetime and explicit removal remain the owner's
+responsibility. Automation-event and structure-changed handlers have the same
+generated ownership shape, but live registration and delivery were only
+observed for focus changes. The real backend must integration-test all three.
+
+### Timeouts, cancellation, and typed errors
+
+The evaluator queries `IUIAutomation2` and sets both connection and transaction
+timeouts to 1000 ms. These are UIA's controls for disconnected or non-responsive
+providers, but this evaluation did not have a controlled hung provider and did
+not observe their elapsed-time behavior. The `RootWebArea` activation poll has
+a five-second operation deadline and checks it between calls. The prototype
+does not cancel an individual in-flight COM call. The real backend should
+combine these provider timeouts with operation deadlines and cancellation checks
+between calls, rather than moving UIA interfaces across worker threads.
+
+The prototype maps element-unavailable HRESULTs to
+`ProviderUnavailable`, deadline expiry to `Timeout`, absent patterns to
+`Unsupported`, and lookup misses to `NotFound`. Other native failures become
+a typed `Native` operation error with the Windows message retained only as
+diagnostic detail. No HRESULT is part of the public error category, matching the
+cross-platform contract.
+
+### Decision
+
+**Use direct `windows` crate COM bindings for the real Windows backend.**
+
+The decisive reasons are the public `CacheRequest` bulk path, explicit
+`IUIAutomation2` timeout control, transparent apartment and callback ownership,
+precise typed pattern queries, and freedom from `uiautomation` 0.25.0's default
+feature coupling. The direct path is more verbose and unsafe at generated call
+sites, but the backend's surface is narrow enough to contain that cost in one
+adapter.
+
+That adapter must rebuild the wrapper conveniences deliberately: COM apartment
+RAII, exact-then-contains window selection, property and control-type conversion,
+cache-request construction, bounded condition search, hierarchy reconstruction,
+typed pattern lookup, event-handler lifetime management, and HRESULT-to-domain
+error mapping. These are backend policy rather than generic convenience, so
+owning them is preferable to accepting a wider wrapper boundary whose caching,
+timeouts, features, and threading behavior Axon cannot control.
