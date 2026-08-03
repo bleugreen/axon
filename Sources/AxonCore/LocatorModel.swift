@@ -8,19 +8,6 @@ public enum TextMatch: Codable, Equatable, Sendable {
         guard let value else {
             return false
         }
-        if !usesMacOSCompensations {
-            let window = node == contextWindow(node: node, ancestors: ancestors) ? node : ancestors.first
-            guard let window, expected.matches(window) else {
-                return false
-            }
-            reasons.append("window scope")
-            addAncestorReasons(expected, prefix: "window", reasons: &reasons)
-            return true
-        }
-        guard usesMacOSCompensations else {
-            return false
-        }
-
         switch self {
         case let .exact(expected, caseSensitive):
             return normalized(value, caseSensitive: caseSensitive) == normalized(expected, caseSensitive: caseSensitive)
@@ -28,18 +15,6 @@ public enum TextMatch: Codable, Equatable, Sendable {
             return normalized(value, caseSensitive: caseSensitive)
                 .contains(normalized(needle, caseSensitive: caseSensitive))
         }
-    }
-
-    private func contextWindow(node: AXNode, ancestors: [AXNode]) -> AXNode {
-        ancestors.first ?? node
-    }
-
-    private func addAncestorReasons(_ locator: AXAncestorLocator, prefix: String, reasons: inout [String]) {
-        if prefix == "ancestor", let role = locator.role { reasons.append("ancestor role \(role)") }
-        if let subrole = locator.subrole { reasons.append("\(prefix) subrole \(subrole)") }
-        if let identifier = locator.identifier { reasons.append("\(prefix) identifier \(identifier.reasonFragment)") }
-        if let title = locator.title { reasons.append("\(prefix) title \(title.reasonFragment)") }
-        if let label = locator.label { reasons.append("\(prefix) label \(label.reasonFragment)") }
     }
 
     public var reasonFragment: String {
@@ -95,6 +70,7 @@ public struct AXAncestorLocator: Codable, Equatable, Sendable {
         }
         return true
     }
+
 }
 
 public struct AXLocator: Codable, Equatable, Sendable {
@@ -402,6 +378,9 @@ public struct LocatorResolver: Sendable {
             reasons.append("title \(matcher.reasonFragment)")
             return true
         }
+        guard usesMacOSCompensations else {
+            return false
+        }
         // Unlike UIA Name, AXTitle does not derive an actionable element's name from descendants.
         // Consult descendant labels only for AX roles whose name is commonly represented by child
         // static text. This is an AX-backend compensation, not shared locator semantics.
@@ -429,7 +408,7 @@ public struct LocatorResolver: Sendable {
         guard usesMacOSCompensations,
               descendantLabels(of: node).contains(where: matcher.matches)
         else {
-            return AXRoleSemantics.isEditableTextRole(node.role)
+            return usesMacOSCompensations && AXRoleSemantics.isEditableTextRole(node.role)
         }
         reasons.append("descendant label \(matcher.reasonFragment)")
         return true
@@ -465,6 +444,15 @@ public struct LocatorResolver: Sendable {
         guard let expected else {
             return true
         }
+        if !usesMacOSCompensations {
+            let window = ancestors.first ?? node
+            guard ancestorMatches(expected, node: window) else {
+                return false
+            }
+            reasons.append("window scope")
+            addScopedReasons(expected, prefix: "window", reasons: &reasons)
+            return true
+        }
         // AX represents top-level windows as AXWindow. The shared `window.role` field carries native
         // vocabulary for other backends, so it has no additional discriminating meaning on macOS.
         let windowMatcher = AXAncestorLocator(
@@ -492,6 +480,26 @@ public struct LocatorResolver: Sendable {
             reasons.append("window label \(label.reasonFragment)")
         }
         return true
+    }
+
+    private func addScopedReasons(_ locator: AXAncestorLocator, prefix: String, reasons: inout [String]) {
+        if prefix == "ancestor", let role = locator.role { reasons.append("ancestor role \(role)") }
+        if let subrole = locator.subrole { reasons.append("\(prefix) subrole \(subrole)") }
+        if let identifier = locator.identifier { reasons.append("\(prefix) identifier \(identifier.reasonFragment)") }
+        if let title = locator.title { reasons.append("\(prefix) title \(title.reasonFragment)") }
+        if let label = locator.label { reasons.append("\(prefix) label \(label.reasonFragment)") }
+    }
+
+    private func ancestorMatches(_ locator: AXAncestorLocator, node: AXNode) -> Bool {
+        guard locator.role == nil || locator.role == node.role,
+              locator.subrole == nil || locator.subrole == node.subrole,
+              locator.identifier == nil || locator.identifier?.matches(node.identifier) == true,
+              locator.title == nil || locator.title?.matches(node.title) == true
+        else {
+            return false
+        }
+        let label = usesMacOSCompensations ? node.displayLabel : node.label
+        return locator.label == nil || locator.label?.matches(label) == true
     }
 
     private func addNearbyTextReasons(_ expected: [TextMatch], context: LocatorNodeContext, reasons: inout [String]) {
@@ -544,11 +552,11 @@ public struct LocatorResolver: Sendable {
     ) -> Bool {
         var searchStart = 0
         for locator in expected {
-            if matchesAppAncestor(locator, snapshot: snapshot) {
+            if usesMacOSCompensations, matchesAppAncestor(locator, snapshot: snapshot) {
                 reasons.append("ancestor role AXApplication")
                 continue
             }
-            guard let matchIndex = ancestors[searchStart...].firstIndex(where: locator.matches) else {
+            guard let matchIndex = ancestors[searchStart...].firstIndex(where: { ancestorMatches(locator, node: $0) }) else {
                 return false
             }
             searchStart = ancestors.index(after: matchIndex)
