@@ -178,8 +178,12 @@ impl<'a, D: ToolDispatcher> AxnRunner<'a, D> {
         options: RunOptions,
     ) -> Result<RunResult, AxnError> {
         let bindings = self.bind(&doc.arguments, arg_values)?;
-        let dry_run = options.dry_run.unwrap_or_else(|| document_flag(doc, "dryRun"));
-        let continue_on_error = options.continue_on_error.unwrap_or_else(|| document_flag(doc, "continueOnError"));
+        let dry_run = options
+            .dry_run
+            .unwrap_or_else(|| document_flag(doc, "dryRun"));
+        let continue_on_error = options
+            .continue_on_error
+            .unwrap_or_else(|| document_flag(doc, "continueOnError"));
         let mut trace = Vec::new();
         let mut facts = HashSet::new();
         let mut success = true;

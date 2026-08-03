@@ -262,7 +262,9 @@ fn ancestor_matches(l: &AncestorLocator, n: &Node) -> bool {
         && l.title
             .as_ref()
             .is_none_or(|x| x.matches(n.title.as_deref()))
-        && l.label.as_ref().is_none_or(|x| x.matches(n.label.as_deref()))
+        && l.label
+            .as_ref()
+            .is_none_or(|x| x.matches(n.label.as_deref()))
 }
 fn add_match(
     m: &Option<TextMatcher>,
