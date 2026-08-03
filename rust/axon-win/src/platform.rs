@@ -132,16 +132,18 @@ fn immediate_node(e: &IUIAutomationElement) -> Result<Node, BackendError> {
         truncation_reason: None,
     })
 }
-fn call<T>(
-    &self,
+impl WindowsBackend {
+    fn call<T>(
+        &self,
     make: impl FnOnce(mpsc::Sender<Result<T, BackendError>>) -> Command,
 ) -> Result<T, BackendError> {
     let (tx, rx) = mpsc::channel();
     self.tx
         .send(make(tx))
         .map_err(|e| op("send UIA command", e.to_string()))?;
-    rx.recv()
-        .map_err(|e| op("receive UIA result", e.to_string()))?
+        rx.recv()
+            .map_err(|e| op("receive UIA result", e.to_string()))?
+    }
 }
 
 struct UiaState {
