@@ -102,7 +102,8 @@ impl WindowsBackend {
             .map_err(BackendError::from)?;
         Ok(Self { tx })
     }
-    fn immediate_node(&self, e: &IUIAutomationElement) -> Result<Node, BackendError> {
+}
+fn immediate_node(e: &IUIAutomationElement) -> Result<Node, BackendError> {
         let ct =
             unsafe { e.CurrentControlType() }.map_err(|e| operation("read hit ControlType", e))?;
         let text = |value: windows::core::Result<BSTR>| {
@@ -143,7 +144,6 @@ impl WindowsBackend {
         rx.recv()
             .map_err(|e| op("receive UIA result", e.to_string()))?
     }
-}
 
 struct UiaState {
     automation: IUIAutomation,
@@ -199,7 +199,7 @@ impl UiaState {
                         })
                     }
                     .map_err(|e| operation("hit test", e))
-                    .and_then(|element| self.immediate_node(&element).map(Some)),
+                    .and_then(|element| immediate_node(&element).map(Some)),
                 );
             }
             Command::Read(h, tx) => {
