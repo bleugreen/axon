@@ -544,7 +544,7 @@ mod tests {
     }
     #[test]
     fn axn_value_facts_drive_expects_requires_dry_run_and_continue_on_error() {
-        let mut backend = backend(vec![], Some("ready now"));
+        let backend = backend(vec![], Some("ready now"));
         let handle = backend.snapshot.handle(0).0;
         let mut router = Router::new(backend.clone());
         router.snapshot = Some(backend.snapshot.clone());
