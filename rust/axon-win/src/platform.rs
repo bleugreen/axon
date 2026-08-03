@@ -19,12 +19,14 @@ use windows::{
         },
         UI::{
             Accessibility::{
-                CUIAutomation, IUIAutomation, IUIAutomation2, IUIAutomationElement,
-                IUIAutomationInvokePattern, IUIAutomationScrollItemPattern,
-                IUIAutomationTreeWalker, IUIAutomationValuePattern, TreeScope_Children,
-                TreeScope_Descendants, UIA_AutomationIdPropertyId, UIA_ButtonControlTypeId,
+                AutomationElementMode_Full, CUIAutomation, IUIAutomation, IUIAutomation2,
+                IUIAutomationCacheRequest, IUIAutomationElement, IUIAutomationInvokePattern,
+                IUIAutomationScrollItemPattern, IUIAutomationTreeWalker, IUIAutomationValuePattern,
+                TreeScope_Children, TreeScope_Descendants, TreeScope_Element,
+                UIA_AutomationIdPropertyId, UIA_BoundingRectanglePropertyId, UIA_ButtonControlTypeId,
                 UIA_CheckBoxControlTypeId, UIA_ComboBoxControlTypeId, UIA_CustomControlTypeId,
-                UIA_DocumentControlTypeId, UIA_EditControlTypeId, UIA_GroupControlTypeId,
+                UIA_ControlTypePropertyId, UIA_DocumentControlTypeId, UIA_EditControlTypeId,
+                UIA_GroupControlTypeId, UIA_NamePropertyId,
                 UIA_HyperlinkControlTypeId, UIA_ImageControlTypeId, UIA_InvokePatternId,
                 UIA_ListControlTypeId, UIA_ListItemControlTypeId, UIA_MenuControlTypeId,
                 UIA_MenuItemControlTypeId, UIA_PaneControlTypeId, UIA_ProgressBarControlTypeId,
@@ -244,8 +246,11 @@ impl UiaState {
             .wait_for_root_web_area(&window, Duration::from_secs(2))
             .unwrap_or_else(|| window.clone());
         self.elements.clear();
+        let cache = self.capture_cache_request()?;
+        let capture_root = unsafe { capture_root.BuildUpdatedCache(&cache) }
+            .map_err(|e| operation("cache capture root", e))?;
         let mut count = 0;
-        let root = self.capture_node(&capture_root, 0, &mut count)?;
+        let root = self.capture_node(&capture_root, &cache, 0, &mut count)?;
         let title = unsafe { window.CurrentName() }.ok().map(|x| x.to_string());
         let snapshot = Snapshot::new(Application {
             name: title.clone().unwrap_or_else(|| query.clone()),
@@ -279,15 +284,35 @@ impl UiaState {
             thread::sleep(Duration::from_millis(50));
         }
     }
+    fn capture_cache_request(&self) -> Result<IUIAutomationCacheRequest, BackendError> {
+        let cache = unsafe { self.automation.CreateCacheRequest() }
+            .map_err(|e| operation("create capture cache request", e))?;
+        unsafe {
+            cache.SetAutomationElementMode(AutomationElementMode_Full)
+                .map_err(|e| operation("set capture cache element mode", e))?;
+            // FindAllBuildCache applies this scope to every matched element. Descendants here
+            // would cache each match's subtree rather than the match itself.
+            cache.SetTreeScope(TreeScope_Element)
+                .map_err(|e| operation("set capture cache tree scope", e))?;
+            for property in [UIA_ControlTypePropertyId, UIA_NamePropertyId,
+                UIA_AutomationIdPropertyId, UIA_BoundingRectanglePropertyId] {
+                cache.AddProperty(property)
+                    .map_err(|e| operation("add capture cached property", e))?;
+            }
+        }
+        Ok(cache)
+    }
     fn capture_node(
         &mut self,
         e: &IUIAutomationElement,
+        cache: &IUIAutomationCacheRequest,
         depth: usize,
         count: &mut usize,
     ) -> Result<Node, BackendError> {
         *count += 1;
         self.elements.push(e.clone());
-        let ct = unsafe { e.CurrentControlType() }.unwrap_or_default();
+        let ct = unsafe { e.CachedControlType() }
+            .map_err(|e| operation("read cached ControlType", e))?;
         let mut actions = Vec::new();
         if unsafe { e.GetCurrentPatternAs::<IUIAutomationInvokePattern>(UIA_InvokePatternId) }
             .is_ok()
@@ -348,10 +373,7 @@ impl UiaState {
             title: name.clone(),
             label: name,
             value,
-            description: unsafe { e.CurrentHelpText() }
-                .ok()
-                .map(|x| x.to_string())
-                .filter(|x| !x.is_empty()),
+            description: None,
             identifier: id,
             actions,
             frame: r.map(|x| Rect {
