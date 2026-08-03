@@ -78,6 +78,12 @@ events with a close conceptual fit to AX.
 - Windows 10 and later support `AF_UNIX`, so the local Unix-domain socket
   transport and MCP-facade topology can carry over. Installation must still use
   Windows-native access controls and lifecycle management.
+- Chromium renderer accessibility may remain disabled even after a UI Automation
+  client starts. Before capturing a WebView2 target, the backend must query
+  `OBJID_CLIENT` through MSAA on its child native windows, then wait boundedly for
+  UI Automation to expose the `RootWebArea` document. Cairn testing established
+  that this client-side activation exposes the full semantic page subtree without
+  requiring application restart flags.
 
 ## Linux backend
 
