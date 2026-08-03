@@ -8,19 +8,29 @@ $workspaceRoot = 'C:\actions-runner-axon\_work\'
 $liveDirectory = 'C:\ProgramData\Axon\live'
 $probeExecutable = Join-Path $liveDirectory 'axon-win.exe'
 
-function Stop-LiveProbeDaemons {
-    Get-CimInstance Win32_Process -Filter "Name = 'axon-win.exe'" |
+function Get-LiveProbeDaemons {
+    @(Get-CimInstance Win32_Process -Filter "Name = 'axon-win.exe'" |
         Where-Object {
             $path = $_.ExecutablePath
             $null -ne $path -and (
                 $path.StartsWith($workspaceRoot, [System.StringComparison]::OrdinalIgnoreCase) -or
                 $path.StartsWith("$liveDirectory\", [System.StringComparison]::OrdinalIgnoreCase)
             )
-        } |
-        ForEach-Object {
-            Write-Output "Stopping live-probe daemon pid=$($_.ProcessId) path=$($_.ExecutablePath)"
-            Stop-Process -Id $_.ProcessId -Force -ErrorAction Stop
+        })
+}
+
+function Stop-LiveProbeDaemons {
+    foreach ($attempt in 1..3) {
+        foreach ($process in Get-LiveProbeDaemons) {
+            Write-Output "Stopping live-probe daemon pid=$($process.ProcessId) path=$($process.ExecutablePath)"
+            try { Stop-Process -Id $process.ProcessId -Force -ErrorAction Stop }
+            catch { Write-Warning "Could not stop pid=$($process.ProcessId) on attempt ${attempt}: $_" }
         }
+        if ((Get-LiveProbeDaemons).Count -eq 0) { return }
+        Start-Sleep -Milliseconds 250
+    }
+    $remaining = Get-LiveProbeDaemons
+    throw "Scoped live-probe daemons remain: $($remaining.ExecutablePath -join ', ')"
 }
 
 try {
