@@ -6,7 +6,7 @@ use std::{
 
 use atspi::{
     proxy::{
-        accessible::{AccessibleProxy, ObjectRefExt},
+        accessible::ObjectRefExt,
         proxy_ext::ProxyExt,
     },
     AccessibilityConnection, CoordType, ObjectRefOwned,
