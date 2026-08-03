@@ -19,7 +19,7 @@ jobs:
     timeout-minutes: 30
     steps:
       - name: Check out Axon
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Build the signed app
         env:
@@ -31,10 +31,20 @@ jobs:
           set -euo pipefail
           cli="$PWD/dist/Axon.app/Contents/Resources/bin/axon"
 
+          if pgrep -x Calculator >/dev/null; then
+            echo '::error::Calculator is already running; refusing to alter an existing desktop session.'
+            exit 1
+          fi
+          axon_was_running=false
+          if pgrep -x Axon >/dev/null; then
+            axon_was_running=true
+          fi
           restore_desktop() {
             "$cli" quit >/dev/null 2>&1 || true
             killall Calculator >/dev/null 2>&1 || true
-            open -a /Applications/Axon.app >/dev/null 2>&1 || true
+            if [[ "$axon_was_running" == true ]]; then
+              open -a /Applications/Axon.app >/dev/null 2>&1 || true
+            fi
           }
           trap restore_desktop EXIT
 
@@ -81,7 +91,7 @@ jobs:
       WAYLAND_DISPLAY: wayland-0
     steps:
       - name: Check out Axon
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Capture, resolve, act, and verify
         working-directory: rust
@@ -130,7 +140,7 @@ jobs:
       RUSTUP_HOME: C:\Users\mitch\.rustup
     steps:
       - name: Check out Axon
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Build the Windows daemon
         shell: pwsh
