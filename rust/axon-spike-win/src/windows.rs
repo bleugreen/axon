@@ -32,7 +32,7 @@ pub(super) fn run(options: &Options) -> Result<(), Box<dyn std::error::Error>> {
 
     if options.activate_msaa {
         let hwnd = window.get_native_window_handle()?;
-        let activation = msaa::activate(hwnd);
+        let activation = msaa::activate(hwnd.into());
         println!(
             "msaa_activation attempted_hwnds={} successful_queries={}",
             activation.attempted, activation.succeeded
