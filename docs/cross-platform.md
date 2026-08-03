@@ -80,7 +80,8 @@ events with a close conceptual fit to AX.
   Windows-native access controls and lifecycle management.
 - Chromium renderer accessibility may remain disabled even after a UI Automation
   client starts. Before capturing a WebView2 target, the backend must query
-  `OBJID_CLIENT` through MSAA on its child native windows, then wait boundedly for
+  `OBJID_CLIENT` through MSAA on the selected target HWND and all of its descendant
+  HWNDs, then wait boundedly for
   UI Automation to expose the `RootWebArea` document. Testing against Cairn's
   WebView2 runtime established that this client-side activation exposes a usable
   semantic page subtree without requiring application restart flags.

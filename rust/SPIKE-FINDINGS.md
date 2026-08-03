@@ -92,8 +92,8 @@ variable. AutomationIds remain sparse; activation exposes the identifiers suppli
 by Chromium and the page but cannot manufacture developer identifiers absent from
 the markup.
 
-The real Windows backend should MSAA-touch a target window's child HWNDs before
-capturing WebView2 content. It should then poll UI Automation for the
+The real Windows backend should MSAA-touch the selected target HWND and all of
+its descendant HWNDs before capturing WebView2 content. It should then poll UI Automation for the
 `RootWebArea` document, within a bounded deadline, instead of copying the spike's
 fixed sleep. Capture must also avoid a shallow global depth limit: Cairn's document
 started twelve control-view edges below the native window. A targeted subtree walk
