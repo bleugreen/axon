@@ -339,8 +339,11 @@ text object's content had changed:
 
 This is action-specific evidence that AT-SPI dispatched a real control action
 and the application processed it. It is stronger than node-count or whole-tree
-inequality alone. The executable exits unsuccessfully if dispatch is rejected,
-no Click/Activate action exists, or the recapture has no text transition. Dispatch success and observed outcome remain separate facts;
+inequality alone. The executable exits unsuccessfully if dispatch is rejected, no Click/Activate
+action exists, or the explicitly expected before/after values are not observed
+on the same AT-SPI object reference. A final hardened-probe run verified
+`"111"` to `"1111"` on Calculator object
+`/org/gnome/Calculator/a11y/a6c5a1b4_fe9b_4a78_9414_0085d7c09a7c`. Dispatch success and observed outcome remain separate facts;
 the real backend needs a bounded, action-specific postcondition rather than
 the spike's fixed delay.
 
