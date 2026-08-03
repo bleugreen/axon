@@ -326,7 +326,7 @@ fn candidate(
             return None;
         }
     }
-    if let Some(window) = &locator.window {
+    if locator.window.is_some() {
         let window = snapshot.app.windows.iter().find(|window| {
             std::iter::once(node)
                 .chain(ancestors.iter().copied())
