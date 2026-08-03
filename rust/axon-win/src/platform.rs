@@ -5,7 +5,6 @@ use axon_core::{
 use std::{ffi::c_void, sync::mpsc, thread, time::Duration};
 use windows::{
     Win32::{
-        Foundation::POINT,
         System::Com::{
             CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED, CoCreateInstance, CoInitializeEx,
             CoUninitialize,
@@ -29,7 +28,7 @@ use windows::{
             },
             HiDpi::{DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, SetProcessDpiAwarenessContext},
             Input::KeyboardAndMouse::{
-                INPUT, INPUT_0, INPUT_KEYBOARD, INPUT_MOUSE, KEYBD_EVENT_FLAGS, KEYBDINPUT,
+                INPUT, INPUT_0, INPUT_KEYBOARD, INPUT_MOUSE, KEYBDINPUT,
                 KEYEVENTF_KEYUP, KEYEVENTF_UNICODE, MOUSEEVENTF_ABSOLUTE, MOUSEEVENTF_LEFTDOWN,
                 MOUSEEVENTF_LEFTUP, MOUSEEVENTF_MOVE, MOUSEINPUT, SendInput, VIRTUAL_KEY,
             },
@@ -323,10 +322,10 @@ impl UiaState {
             identifier: id,
             actions,
             frame: r.map(|x| Rect {
-                x: x.left,
-                y: x.top,
-                width: x.right - x.left,
-                height: x.bottom - x.top,
+                x: x.left as f64,
+                y: x.top as f64,
+                width: (x.right - x.left) as f64,
+                height: (x.bottom - x.top) as f64,
             }),
             editable: ct == UIA_EditControlTypeId || ct == UIA_DocumentControlTypeId,
             children,
