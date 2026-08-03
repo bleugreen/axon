@@ -169,22 +169,40 @@ fn rpc_envelopes_preserve_jsonrpc_and_batch_wire_shape() {
 
 struct NoDispatch;
 impl ToolDispatcher for NoDispatch {
-    fn dispatch(&mut self, _tool: &str, _params: &Map<String, Value>) -> DispatchOutcome { panic!("dry run dispatched") }
-    fn verify(&mut self, _fact: &ExpectedFact) -> Result<(), String> { panic!("dry run verified") }
+    fn dispatch(&mut self, _tool: &str, _params: &Map<String, Value>) -> DispatchOutcome {
+        panic!("dry run dispatched")
+    }
+    fn verify(&mut self, _fact: &ExpectedFact) -> Result<(), String> {
+        panic!("dry run verified")
+    }
 }
 
 #[test]
 fn document_flags_drive_dry_run_without_backend_verification() {
     let mut doc = AxnCodec::parse(include_str!("../fixtures/workflow.axn")).unwrap();
     doc.flags.insert("dryRun".into(), Value::Bool(true));
-    doc.flags.insert("continueOnError".into(), Value::Bool(true));
+    doc.flags
+        .insert("continueOnError".into(), Value::Bool(true));
     let mut dispatcher = NoDispatch;
-    let mut runner = AxnRunner::new(&mut dispatcher).with_source("env", |_: &str| Ok(Some("secret".into())));
+    let mut runner =
+        AxnRunner::new(&mut dispatcher).with_source("env", |_: &str| Ok(Some("secret".into())));
     let args = serde_json::from_value(json!({"recipient":"ada@example.com"})).unwrap();
-    let result = runner.run(&doc, &args, RunOptions { dry_run: None, continue_on_error: None }).unwrap();
+    let result = runner
+        .run(
+            &doc,
+            &args,
+            RunOptions {
+                dry_run: None,
+                continue_on_error: None,
+            },
+        )
+        .unwrap();
     assert!(result.dry_run);
     assert!(result.continue_on_error);
     assert_eq!(result.trace.len(), 3);
     assert!(!result.success);
-    assert_eq!(result.trace[1].error.as_deref(), Some("required fact is unavailable: email.value"));
+    assert_eq!(
+        result.trace[1].error.as_deref(),
+        Some("required fact is unavailable: email.value")
+    );
 }
