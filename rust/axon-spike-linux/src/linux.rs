@@ -21,6 +21,7 @@ struct Node {
     name: String,
     states: String,
     rect: Option<(i32, i32, i32, i32)>,
+    text: Option<String>,
     object: ObjectRefOwned,
 }
 
@@ -144,12 +145,19 @@ async fn capture(
             .await
             .map(|states| format!("{states:?}"))
             .unwrap_or_else(|_| "<error>".to_owned());
-        let rect = match proxy.proxies().await {
-            Ok(proxies) => match proxies.component().await {
-                Ok(component) => component.get_extents(CoordType::Screen).await.ok(),
-                Err(_) => None,
-            },
-            Err(_) => None,
+        let (rect, text) = match proxy.proxies().await {
+            Ok(proxies) => {
+                let rect = match proxies.component().await {
+                    Ok(component) => component.get_extents(CoordType::Screen).await.ok(),
+                    Err(_) => None,
+                };
+                let text = match proxies.text().await {
+                    Ok(text) => text.get_text(0, -1).await.ok(),
+                    Err(_) => None,
+                };
+                (rect, text)
+            }
+            Err(_) => (None, None),
         };
         nodes.push(Node {
             depth,
@@ -157,6 +165,7 @@ async fn capture(
             name,
             states,
             rect,
+            text,
             object: object.clone(),
         });
         if depth < max_depth {
@@ -172,12 +181,13 @@ fn print_capture(label: &str, nodes: &[Node], elapsed: Duration) {
     println!("{label}_nodes={} {label}_capture_ms={:.3}", nodes.len(), elapsed.as_secs_f64() * 1000.0);
     for node in nodes {
         println!(
-            "{}role={:?} name={:?} states={} rect={:?}",
+            "{}role={:?} name={:?} states={} rect={:?} text={:?}",
             "  ".repeat(node.depth),
             node.role,
             node.name,
             node.states,
-            node.rect
+            node.rect,
+            node.text
         );
     }
 }
