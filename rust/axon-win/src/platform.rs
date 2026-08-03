@@ -166,25 +166,6 @@ impl UiaState {
                     .SetTransactionTimeout(1500)
                     .map_err(|e| operation("set UIA transaction timeout", e))?;
             }
-            for pattern in [
-                UIA_InvokePatternId,
-                UIA_ValuePatternId,
-                UIA_ScrollItemPatternId,
-            ] {
-                cache
-                    .AddPattern(pattern)
-                    .map_err(|e| operation("add capture cached pattern", e))?;
-            }
-            Command::Hit((x, y), tx) => {
-                let _ = tx.send(unsafe {
-                    self.automation.ElementFromPoint(POINT {
-                        x: x.round() as i32,
-                        y: y.round() as i32,
-                    })
-                }
-                .map_err(|e| operation("hit test", e))
-                .and_then(|element| self.immediate_node(&element).map(Some)));
-            }
         }
         Ok(Self {
             automation,
@@ -208,6 +189,16 @@ impl UiaState {
                             .map_err(|e| operation("get InvokePattern", e))?;
                     unsafe { p.Invoke() }.map_err(|e| operation("invoke", e))
                 }));
+            }
+            Command::Hit((x, y), tx) => {
+                let _ = tx.send(unsafe {
+                    self.automation.ElementFromPoint(POINT {
+                        x: x.round() as i32,
+                        y: y.round() as i32,
+                    })
+                }
+                .map_err(|e| operation("hit test", e))
+                .and_then(|element| self.immediate_node(&element).map(Some)));
             }
             Command::Read(h, tx) => {
                 let _ = tx.send(self.element(&h).and_then(|e| {
@@ -355,6 +346,15 @@ impl UiaState {
                 cache
                     .AddProperty(property)
                     .map_err(|e| operation("add capture cached property", e))?;
+            }
+            for pattern in [
+                UIA_InvokePatternId,
+                UIA_ValuePatternId,
+                UIA_ScrollItemPatternId,
+            ] {
+                cache
+                    .AddPattern(pattern)
+                    .map_err(|e| operation("add capture cached pattern", e))?;
             }
         }
         Ok(cache)
