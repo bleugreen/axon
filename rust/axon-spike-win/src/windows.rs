@@ -1,8 +1,8 @@
 use std::{thread, time::Duration};
 
-use uiautomation::{patterns::UIInvokePattern, UIAutomation, UIElement, UITreeWalker};
+use uiautomation::{UIAutomation, UIElement, UITreeWalker, patterns::UIInvokePattern};
 
-use crate::{matches_locator, Node, Options};
+use crate::{Node, Options, matches_locator};
 
 pub(super) fn run(options: &Options) -> Result<(), Box<dyn std::error::Error>> {
     let automation = UIAutomation::new()?;
@@ -23,38 +23,57 @@ pub(super) fn run(options: &Options) -> Result<(), Box<dyn std::error::Error>> {
         .iter()
         .find(|element| property(element.get_name()).to_lowercase() == query)
         .or_else(|| {
-            windows.iter().find(|element| {
-                property(element.get_name()).to_lowercase().contains(&query)
-            })
+            windows
+                .iter()
+                .find(|element| property(element.get_name()).to_lowercase().contains(&query))
         })
         .cloned()
         .ok_or_else(|| format!("no top-level window name contains {window_query:?}"))?;
 
     let mut elements = Vec::new();
-    capture(&walker, &window, 0, options.max_depth, options.max_nodes, &mut elements);
+    capture(
+        &walker,
+        &window,
+        0,
+        options.max_depth,
+        options.max_nodes,
+        &mut elements,
+    );
     let before = snapshot(&elements);
     println!(
         "capture window={:?} nodes={} max_depth={} max_nodes={}",
-        property(window.get_name()), before.len(), options.max_depth, options.max_nodes
+        property(window.get_name()),
+        before.len(),
+        options.max_depth,
+        options.max_nodes
     );
     for node in &before {
-        println!("{:indent$}{}", "", format_node(node), indent = node.depth * 2);
+        println!(
+            "{:indent$}{}",
+            "",
+            format_node(node),
+            indent = node.depth * 2
+        );
     }
 
-    let (Some(control_type), Some(name_contains)) =
-        (&options.control_type, &options.name_contains) else { return Ok(()) };
-    let match_index = before.iter().position(|node| {
-        matches_locator(node, control_type, name_contains)
-    }).ok_or_else(|| {
-        format!("locator did not match: type={control_type:?}, name_contains={name_contains:?}")
-    })?;
+    let (Some(control_type), Some(name_contains)) = (&options.control_type, &options.name_contains)
+    else {
+        return Ok(());
+    };
+    let match_index = before
+        .iter()
+        .position(|node| matches_locator(node, control_type, name_contains))
+        .ok_or_else(|| {
+            format!("locator did not match: type={control_type:?}, name_contains={name_contains:?}")
+        })?;
     println!("locator_match {}", format_node(&before[match_index]));
 
     if !options.invoke {
         return Ok(());
     }
 
-    let dispatch = elements[match_index].1
+    let dispatch = elements[match_index]
+        .1
         .get_pattern::<UIInvokePattern>()
         .and_then(|pattern| pattern.invoke());
     match &dispatch {
@@ -67,12 +86,20 @@ pub(super) fn run(options: &Options) -> Result<(), Box<dyn std::error::Error>> {
 
     thread::sleep(Duration::from_millis(500));
     let mut after_elements = Vec::new();
-    capture(&walker, &window, 0, options.max_depth, options.max_nodes, &mut after_elements);
+    capture(
+        &walker,
+        &window,
+        0,
+        options.max_depth,
+        options.max_nodes,
+        &mut after_elements,
+    );
     let after = snapshot(&after_elements);
     println!("verified_outcome={}", before != after);
     println!(
         "verification=bounded_tree_changed before_nodes={} after_nodes={}",
-        before.len(), after.len()
+        before.len(),
+        after.len()
     );
     Ok(())
 }
@@ -114,19 +141,28 @@ fn children(walker: &UITreeWalker, parent: &UIElement) -> Vec<UIElement> {
 }
 
 fn snapshot(elements: &[(usize, UIElement)]) -> Vec<Node> {
-    elements.iter().map(|(depth, element)| Node {
-        depth: *depth,
-        control_type: element.get_control_type().map(|value| value.to_string()).unwrap_or_else(|_| "<unavailable>".to_owned()),
-        name: property(element.get_name()),
-        automation_id: property(element.get_automation_id()),
-        rect: property(element.get_bounding_rectangle()).to_string(),
-    }).collect()
+    elements
+        .iter()
+        .map(|(depth, element)| Node {
+            depth: *depth,
+            control_type: element
+                .get_control_type()
+                .map(|value| value.to_string())
+                .unwrap_or_else(|_| "<unavailable>".to_owned()),
+            name: property(element.get_name()),
+            automation_id: property(element.get_automation_id()),
+            rect: property(element.get_bounding_rectangle()).to_string(),
+        })
+        .collect()
 }
 
 fn describe(element: &UIElement, depth: usize) -> String {
     format_node(&Node {
         depth,
-        control_type: element.get_control_type().map(|value| value.to_string()).unwrap_or_else(|_| "<unavailable>".to_owned()),
+        control_type: element
+            .get_control_type()
+            .map(|value| value.to_string())
+            .unwrap_or_else(|_| "<unavailable>".to_owned()),
         name: property(element.get_name()),
         automation_id: property(element.get_automation_id()),
         rect: property(element.get_bounding_rectangle()).to_string(),

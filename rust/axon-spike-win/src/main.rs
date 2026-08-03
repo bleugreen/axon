@@ -37,13 +37,19 @@ impl Options {
             match arg.as_str() {
                 "--window" => options.window_name = Some(value(&mut args, "--window")?),
                 "--type" => options.control_type = Some(value(&mut args, "--type")?),
-                "--name-contains" => options.name_contains = Some(value(&mut args, "--name-contains")?),
+                "--name-contains" => {
+                    options.name_contains = Some(value(&mut args, "--name-contains")?)
+                }
                 "--invoke" => options.invoke = true,
-                "--max-depth" => options.max_depth = value(&mut args, "--max-depth")?
-                    .parse().map_err(|_| "--max-depth must be a non-negative integer".to_owned())?,
+                "--max-depth" => {
+                    options.max_depth = value(&mut args, "--max-depth")?
+                        .parse()
+                        .map_err(|_| "--max-depth must be a non-negative integer".to_owned())?
+                }
                 "--max-nodes" => {
                     options.max_nodes = value(&mut args, "--max-nodes")?
-                        .parse().map_err(|_| "--max-nodes must be a positive integer".to_owned())?;
+                        .parse()
+                        .map_err(|_| "--max-nodes must be a positive integer".to_owned())?;
                     if options.max_nodes == 0 {
                         return Err("--max-nodes must be a positive integer".to_owned());
                     }
@@ -60,12 +66,16 @@ impl Options {
 }
 
 fn value(args: &mut impl Iterator<Item = String>, flag: &str) -> Result<String, String> {
-    args.next().ok_or_else(|| format!("{flag} requires a value"))
+    args.next()
+        .ok_or_else(|| format!("{flag} requires a value"))
 }
 
 fn matches_locator(node: &Node, control_type: &str, name_contains: &str) -> bool {
     node.control_type.eq_ignore_ascii_case(control_type)
-        && node.name.to_lowercase().contains(&name_contains.to_lowercase())
+        && node
+            .name
+            .to_lowercase()
+            .contains(&name_contains.to_lowercase())
 }
 
 fn usage() -> &'static str {
@@ -120,6 +130,9 @@ mod tests {
     #[test]
     fn invoke_requires_a_complete_locator() {
         let result = Options::parse(["--invoke".to_owned()]);
-        assert_eq!(result.unwrap_err(), "--invoke requires both --type and --name-contains");
+        assert_eq!(
+            result.unwrap_err(),
+            "--invoke requires both --type and --name-contains"
+        );
     }
 }
