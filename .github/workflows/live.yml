@@ -89,14 +89,12 @@ jobs:
           set -euo pipefail
           test -S /run/user/1000/at-spi/bus
 
-          calculator_was_running=false
-          if pgrep -u "$(id -u)" -x gnome-calculator >/dev/null; then
-            calculator_was_running=true
+          if pgrep -u "$(id -u)" -f '[/]usr/bin/gnome-calculator' >/dev/null; then
+            echo '::error::GNOME Calculator is already running; refusing to alter an existing desktop session.'
+            exit 1
           fi
           cleanup() {
-            if [[ "$calculator_was_running" == false ]]; then
-              pkill -u "$(id -u)" -x gnome-calculator >/dev/null 2>&1 || true
-            fi
+            pkill -u "$(id -u)" -f '[/]usr/bin/gnome-calculator' >/dev/null 2>&1 || true
           }
           trap cleanup EXIT
 
@@ -148,16 +146,28 @@ jobs:
           $exe = (Resolve-Path 'target\debug\axon-win.exe').Path
           & $exe daemon restart
 
-          $request = '{"jsonrpc":"2.0","id":1,"method":"look","params":{}}'
-          $response = $request | & $exe mcp | ConvertFrom-Json -Depth 100
-          if ($null -ne $response.error) {
-            throw "look returned an RPC error: $($response.error | ConvertTo-Json -Compress)"
+          $listRequest = '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"look","arguments":{}}}'
+          $listResponse = $listRequest | & $exe mcp | ConvertFrom-Json -Depth 100
+          if ($listResponse.result.isError -ne $false) {
+            throw 'the app-list look request failed'
           }
-          if ($null -eq $response.result.snapshot) {
-            throw 'look did not return a snapshot'
+
+          $verified = $null
+          foreach ($app in $listResponse.result.structuredContent) {
+            $request = @{
+              jsonrpc = '2.0'
+              id = 1
+              method = 'tools/call'
+              params = @{ name = 'look'; arguments = @{ app = $app.name } }
+            } | ConvertTo-Json -Compress -Depth 10
+            $response = $request | & $exe mcp | ConvertFrom-Json -Depth 100
+            $window = $response.result.structuredContent.app.windows | ForEach-Object root | Where-Object role -eq 'Window' | Select-Object -First 1
+            if ($response.result.isError -eq $false -and $null -ne $window) {
+              $verified = @{ response = $response; window = $window; app = $app.name }
+              break
+            }
           }
-          $window = $response.result.snapshot.roots | Where-Object role -eq 'Window' | Select-Object -First 1
-          if ($null -eq $window) {
+          if ($null -eq $verified) {
             throw 'look did not return a Window root from the interactive desktop'
           }
-          Write-Output "isError:false snapshot=$($response.result.snapshot.id) root=$($window.role)"
+          Write-Output "isError:false snapshot=$($verified.response.result.structuredContent.id) root=$($verified.window.role) app=$($verified.app)"
