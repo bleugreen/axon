@@ -19,11 +19,12 @@ use windows::{
         },
         UI::{
             Accessibility::{
-                AutomationElementMode_Full, CUIAutomation, CUIAutomation8, IUIAutomation, IUIAutomation2,
-                IUIAutomationCacheRequest, IUIAutomationElement, IUIAutomationEventHandler,
-                IUIAutomationEventHandler_Impl, IUIAutomationFocusChangedEventHandler,
-                IUIAutomationFocusChangedEventHandler_Impl, IUIAutomationInvokePattern,
-                IUIAutomationScrollItemPattern, IUIAutomationStructureChangedEventHandler,
+                AutomationElementMode_Full, CUIAutomation, CUIAutomation8, IUIAutomation,
+                IUIAutomation2, IUIAutomationCacheRequest, IUIAutomationElement,
+                IUIAutomationEventHandler, IUIAutomationEventHandler_Impl,
+                IUIAutomationFocusChangedEventHandler, IUIAutomationFocusChangedEventHandler_Impl,
+                IUIAutomationInvokePattern, IUIAutomationScrollItemPattern,
+                IUIAutomationStructureChangedEventHandler,
                 IUIAutomationStructureChangedEventHandler_Impl, IUIAutomationValuePattern,
                 StructureChangeType, TreeScope_Children, TreeScope_Descendants, TreeScope_Element,
                 UIA_AutomationIdPropertyId, UIA_BoundingRectanglePropertyId,
