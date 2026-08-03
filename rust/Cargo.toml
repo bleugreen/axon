@@ -1,0 +1,3 @@
+[workspace]
+members = ["axon-spike-win"]
+resolver = "2"
