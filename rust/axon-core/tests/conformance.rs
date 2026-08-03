@@ -165,6 +165,12 @@ fn rpc_envelopes_preserve_jsonrpc_and_batch_wire_shape() {
     assert!(
         serde_json::from_value::<JsonRpcResponse>(json!({"jsonrpc":"2.0","result":{}})).is_err()
     );
+    assert!(
+        serde_json::from_value::<JsonRpcResponse>(
+            json!({"jsonrpc":"1.0","id":7,"result":{}})
+        )
+        .is_err()
+    );
 }
 
 struct NoDispatch;
