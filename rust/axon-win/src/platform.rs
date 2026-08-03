@@ -312,19 +312,19 @@ impl UiaState {
         while let Some(c) = child {
             child_count += 1;
             if depth >= MAX_DEPTH || children.len() >= MAX_CHILDREN || *count >= MAX_NODES {
-                trunc = Some(
-                    if depth >= MAX_DEPTH {
+                trunc.get_or_insert_with(||
+                    (if depth >= MAX_DEPTH {
                         "maxDepth"
                     } else if *count >= MAX_NODES {
                         "maxNodes"
                     } else {
                         "maxChildren"
-                    }
-                    .into(),
+                    })
+                    .into()
                 );
-                break;
+            } else {
+                children.push(self.capture_node(&c, depth + 1, count)?);
             }
-            children.push(self.capture_node(&c, depth + 1, count)?);
             child = unsafe { self.walker.GetNextSiblingElement(&c) }.ok();
         }
         let r = unsafe { e.CurrentBoundingRectangle() }.ok();
