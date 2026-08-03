@@ -1,3 +1,4 @@
+use crate::PointerTargetVerifier;
 use axon_core::{
     AppQuery, Application, BackendError, Capability, CapabilityInfo, Node, Observation,
     PlatformBackend, RecordedCall, Rect, Screenshot, Snapshot, SnapshotHandle, Window,
@@ -45,9 +46,12 @@ use windows::{
             Input::KeyboardAndMouse::{
                 INPUT, INPUT_0, INPUT_KEYBOARD, INPUT_MOUSE, KEYBDINPUT, KEYEVENTF_KEYUP,
                 KEYEVENTF_UNICODE, MOUSEEVENTF_ABSOLUTE, MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP,
-                MOUSEEVENTF_MOVE, MOUSEINPUT, SendInput, VIRTUAL_KEY,
+                MOUSEEVENTF_MOVE, MOUSEEVENTF_VIRTUALDESK, MOUSEINPUT, SendInput, VIRTUAL_KEY,
             },
-            WindowsAndMessaging::{GetSystemMetrics, SM_CXSCREEN, SM_CYSCREEN},
+            WindowsAndMessaging::{
+                GetSystemMetrics, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN,
+                SM_YVIRTUALSCREEN,
+            },
         },
     },
     core::{BSTR, Interface, Ref, Result as WinResult, implement},
@@ -73,6 +77,69 @@ enum Command {
     Focus(SnapshotHandle, mpsc::Sender<Result<(), BackendError>>),
     Scroll(SnapshotHandle, mpsc::Sender<Result<(), BackendError>>),
     Hit((f64, f64), mpsc::Sender<Result<Option<Node>, BackendError>>),
+    VerifyPointerTarget(
+        SnapshotHandle,
+        (f64, f64),
+        mpsc::Sender<Result<bool, BackendError>>,
+    ),
+}
+
+fn normalize_virtual_desktop_point(
+    (x, y): (f64, f64),
+    (origin_x, origin_y): (i32, i32),
+    (width, height): (i32, i32),
+) -> (i32, i32) {
+    fn axis(value: f64, origin: i32, extent: i32) -> i32 {
+        if extent <= 1 {
+            return 0;
+        }
+        (((value - f64::from(origin)) * 65535.0 / f64::from(extent - 1)).round())
+            .clamp(0.0, 65535.0) as i32
+    }
+    (axis(x, origin_x, width), axis(y, origin_y, height))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::normalize_virtual_desktop_point;
+
+    #[test]
+    fn virtual_desktop_normalization_accounts_for_negative_origin_and_endpoints() {
+        let origin = (-1920, -1080);
+        let size = (3840, 2160);
+        assert_eq!(
+            normalize_virtual_desktop_point((-1920.0, -1080.0), origin, size),
+            (0, 0)
+        );
+        assert_eq!(
+            normalize_virtual_desktop_point((1919.0, 1079.0), origin, size),
+            (65535, 65535)
+        );
+    }
+
+    #[test]
+    fn virtual_desktop_normalization_accounts_for_nonzero_positive_origin() {
+        let origin = (100, 200);
+        let size = (101, 201);
+        assert_eq!(
+            normalize_virtual_desktop_point((100.0, 200.0), origin, size),
+            (0, 0)
+        );
+        assert_eq!(
+            normalize_virtual_desktop_point((200.0, 400.0), origin, size),
+            (65535, 65535)
+        );
+    }
+}
+
+impl PointerTargetVerifier for WindowsBackend {
+    fn verify_pointer_target(
+        &mut self,
+        handle: &SnapshotHandle,
+        point: (f64, f64),
+    ) -> Result<bool, BackendError> {
+        self.call(|tx| Command::VerifyPointerTarget(handle.clone(), point, tx))
+    }
 }
 
 pub struct WindowsBackend {
@@ -190,6 +257,21 @@ impl UiaState {
                             .map_err(|e| operation("get InvokePattern", e))?;
                     unsafe { p.Invoke() }.map_err(|e| operation("invoke", e))
                 }));
+            }
+            Command::VerifyPointerTarget(handle, (x, y), tx) => {
+                let result = self.element(&handle).and_then(|target| {
+                    let hit = unsafe {
+                        self.automation.ElementFromPoint(POINT {
+                            x: x.round() as i32,
+                            y: y.round() as i32,
+                        })
+                    }
+                    .map_err(|e| operation("hit test", e))?;
+                    unsafe { self.automation.CompareElements(&target, &hit) }
+                        .map(|same| same.as_bool())
+                        .map_err(|e| operation("compare pointer target identity", e))
+                });
+                let _ = tx.send(result);
             }
             Command::Hit((x, y), tx) => {
                 let _ = tx.send(
@@ -945,14 +1027,17 @@ fn send_text(text: &str) -> Result<(), BackendError> {
     Ok(())
 }
 fn send_click((x, y): (f64, f64)) -> Result<(), BackendError> {
-    let w = unsafe { GetSystemMetrics(SM_CXSCREEN) }.max(1) as f64;
-    let h = unsafe { GetSystemMetrics(SM_CYSCREEN) }.max(1) as f64;
+    let origin_x = unsafe { GetSystemMetrics(SM_XVIRTUALSCREEN) };
+    let origin_y = unsafe { GetSystemMetrics(SM_YVIRTUALSCREEN) };
+    let width = unsafe { GetSystemMetrics(SM_CXVIRTUALSCREEN) };
+    let height = unsafe { GetSystemMetrics(SM_CYVIRTUALSCREEN) };
+    let (dx, dy) = normalize_virtual_desktop_point((x, y), (origin_x, origin_y), (width, height));
     let mi = |flags| INPUT {
         r#type: INPUT_MOUSE,
         Anonymous: INPUT_0 {
             mi: MOUSEINPUT {
-                dx: (x * 65535.0 / w) as i32,
-                dy: (y * 65535.0 / h) as i32,
+                dx,
+                dy,
                 mouseData: 0,
                 dwFlags: flags,
                 time: 0,
@@ -961,9 +1046,9 @@ fn send_click((x, y): (f64, f64)) -> Result<(), BackendError> {
         },
     };
     let inputs = [
-        mi(MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE),
-        mi(MOUSEEVENTF_LEFTDOWN | MOUSEEVENTF_ABSOLUTE),
-        mi(MOUSEEVENTF_LEFTUP | MOUSEEVENTF_ABSOLUTE),
+        mi(MOUSEEVENTF_MOVE | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK),
+        mi(MOUSEEVENTF_LEFTDOWN | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK),
+        mi(MOUSEEVENTF_LEFTUP | MOUSEEVENTF_ABSOLUTE | MOUSEEVENTF_VIRTUALDESK),
     ];
     let sent = unsafe { SendInput(&inputs, std::mem::size_of::<INPUT>() as i32) };
     if sent != 3 {

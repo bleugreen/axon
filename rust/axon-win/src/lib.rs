@@ -25,22 +25,22 @@ pub struct Router<B> {
     backend: B,
     snapshot: Option<Snapshot>,
 }
-fn same_semantic_node(target: &axon_core::Node, hit: &axon_core::Node) -> bool {
-    target.role == hit.role
-        && match (&target.identifier, &hit.identifier) {
-            (Some(target), Some(hit)) => target == hit,
-            _ => target.name == hit.name,
-        }
+
+pub trait PointerTargetVerifier: PlatformBackend {
+    fn verify_pointer_target(
+        &mut self,
+        handle: &SnapshotHandle,
+        point: (f64, f64),
+    ) -> Result<bool, axon_core::BackendError>;
 }
 
-impl<B: PlatformBackend> Router<B> {
+impl<B: PointerTargetVerifier> Router<B> {
     pub fn new(backend: B) -> Self {
         Self {
             backend,
             snapshot: None,
         }
     }
-
     pub fn request(&mut self, request: JsonRpcRequest) -> Option<JsonRpcResponse> {
         let id = request.id?;
         let params = request
@@ -73,16 +73,14 @@ impl<B: PlatformBackend> Router<B> {
             "click" => {
                 let (handle, resolution) = self.resolve(params)?;
                 let point = self.node_center(&handle)?;
-                let target = self.node(&handle)?.clone();
-                let hit = self.backend.hit_test(point).map_err(backend_error)?;
-                let hit = hit.ok_or_else(|| rpc_error(-32003, "click point hit no element"))?;
-                if !same_semantic_node(&target, &hit) {
+                if !self
+                    .backend
+                    .verify_pointer_target(&handle, point)
+                    .map_err(backend_error)?
+                {
                     return Err(rpc_error(
                         -32003,
-                        format!(
-                            "click target moved, is covered, or no longer matches the resolved element: target={:?}/{:?}/{:?} hit={:?}/{:?}/{:?}",
-                            target.role, target.name, target.identifier, hit.role, hit.name, hit.identifier
-                        ),
+                        "click target moved, is covered, or no longer matches the resolved element",
                     ));
                 }
                 self.backend.pointer_click(point).map_err(backend_error)?;
@@ -268,7 +266,7 @@ impl<B: PlatformBackend> Router<B> {
     }
 }
 
-impl<B: PlatformBackend> ToolDispatcher for Router<B> {
+impl<B: PointerTargetVerifier> ToolDispatcher for Router<B> {
     fn dispatch(&mut self, tool: &str, params: &Map<String, Value>) -> DispatchOutcome {
         match self.dispatch_tool(tool, params) {
             Ok(result) => DispatchOutcome {
@@ -389,9 +387,20 @@ mod tests {
     #[derive(Clone)]
     struct FakeBackend {
         snapshot: Snapshot,
-        hit: Option<Node>,
+        pointer_target_matches: bool,
+        verified_handles: Rc<RefCell<Vec<SnapshotHandle>>>,
         value: Rc<RefCell<Option<String>>>,
         clicks: Rc<RefCell<usize>>,
+    }
+    impl PointerTargetVerifier for FakeBackend {
+        fn verify_pointer_target(
+            &mut self,
+            handle: &SnapshotHandle,
+            _: (f64, f64),
+        ) -> Result<bool, BackendError> {
+            self.verified_handles.borrow_mut().push(handle.clone());
+            Ok(self.pointer_target_matches)
+        }
     }
     impl PlatformBackend for FakeBackend {
         fn capabilities(&self) -> Result<Vec<CapabilityInfo>, BackendError> {
@@ -449,7 +458,7 @@ mod tests {
             unreachable!()
         }
         fn hit_test(&mut self, _: (f64, f64)) -> Result<Option<Node>, BackendError> {
-            Ok(self.hit.clone())
+            Ok(None)
         }
         fn recorded_calls(&self) -> Result<Vec<RecordedCall>, BackendError> {
             unreachable!()
@@ -495,7 +504,8 @@ mod tests {
                 identifier: None,
                 windows: vec![Window { title: None, root }],
             }),
-            hit: None,
+            pointer_target_matches: true,
+            verified_handles: Rc::new(RefCell::new(vec![])),
             value: Rc::new(RefCell::new(value.map(str::to_owned))),
             clicks: Rc::new(RefCell::new(0)),
         }
@@ -535,7 +545,7 @@ mod tests {
     fn click_rejects_mismatched_immediate_hit_before_send_input() {
         let mut backend = backend(vec![], None);
         let handle = backend.snapshot.handle(0);
-        backend.hit = Some(node("cover"));
+        backend.pointer_target_matches = false;
         let clicks = backend.clicks.clone();
         let mut router = Router::new(backend);
         router.snapshot = Some(router.backend.snapshot.clone());
@@ -543,6 +553,24 @@ mod tests {
             .request(request("click", json!({"target":handle.0})))
             .unwrap();
         assert!(matches!(response, JsonRpcResponse::Failure(_)));
+        assert_eq!(*clicks.borrow(), 0);
+    }
+    #[test]
+    fn click_rejects_duplicate_name_sibling_when_native_identity_differs() {
+        let mut backend = backend(vec![node("duplicate"), node("duplicate")], None);
+        let target = backend.snapshot.handle(1);
+        backend.pointer_target_matches = false;
+        let verified_handles = backend.verified_handles.clone();
+        let clicks = backend.clicks.clone();
+        let mut router = Router::new(backend);
+        router.snapshot = Some(router.backend.snapshot.clone());
+
+        let response = router
+            .request(request("click", json!({"target":target.0})))
+            .unwrap();
+
+        assert!(matches!(response, JsonRpcResponse::Failure(_)));
+        assert_eq!(&*verified_handles.borrow(), &[target]);
         assert_eq!(*clicks.borrow(), 0);
     }
     #[test]
