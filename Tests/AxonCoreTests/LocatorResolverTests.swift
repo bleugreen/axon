@@ -21,6 +21,13 @@ import Testing
     #expect(resolution.best?.reasons.contains("title exact NEW") == true)
 }
 
+@Test func textMatchUsesLocaleIndependentUnicodeLowercasingWithoutRemovingDiacritics() {
+    #expect(TextMatch.exact("ärger").matches("ÄRGER"))
+    #expect(TextMatch.contains("CAFÉ").matches("Un café noir"))
+    #expect(TextMatch.exact("CAFÉ").matches("cafe\u{301}"))
+    #expect(TextMatch.exact("cafe").matches("café") == false)
+}
+
 @Test func locatorResolverReportsAmbiguousMatches() {
     let snapshot = locatorFixtureSnapshot(buttons: ["NEW", "NEW"])
     let locator = AXLocator(role: "AXButton", title: .exact("NEW"))
@@ -32,7 +39,7 @@ import Testing
     #expect(resolution.candidates.map(\.index) == [2, 3])
 }
 
-@Test func locatorResolverUsesPrimaryWindowAsTieBreaker() {
+@Test func locatorResolverDoesNotInferPrimaryWindowFromEnumerationOrder() {
     let snapshot = AppSnapshot(
         id: SnapshotID("locator-fixture"),
         app: AppIdentity(bundleIdentifier: "org.mozilla.firefox", name: "Firefox", processIdentifier: 42),
@@ -53,12 +60,12 @@ import Testing
 
     let resolution = LocatorResolver().resolve(locator, in: snapshot)
 
-    #expect(resolution.status == .unique)
-    #expect(resolution.best?.handle?.rawValue == "locator-fixture:1")
-    #expect(resolution.best?.reasons.contains("primary window") == true)
+    #expect(resolution.status == .ambiguous)
+    #expect(resolution.best == nil)
+    #expect(resolution.candidates.map(\.handle?.rawValue) == ["locator-fixture:1", "locator-fixture:3"])
 }
 
-@Test func locatorResolverPrefersValueMatchOverPrimaryWindowHint() {
+@Test func locatorResolverUsesEditableValueMatchAsPositiveSignal() {
     let snapshot = AppSnapshot(
         id: SnapshotID("locator-fixture"),
         app: AppIdentity(bundleIdentifier: "org.mozilla.firefox", name: "Firefox", processIdentifier: 42),

@@ -1,5 +1,6 @@
 use crate::{Node, Rect, Snapshot, SnapshotHandle, SnapshotId};
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use unicode_normalization::UnicodeNormalization;
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum TextMatcher {
@@ -23,7 +24,10 @@ impl TextMatcher {
         let (actual, expected) = if sensitive {
             (actual.to_owned(), expected.to_owned())
         } else {
-            (actual.to_lowercase(), expected.to_lowercase())
+            (
+                actual.to_lowercase().nfc().collect(),
+                expected.to_lowercase().nfc().collect(),
+            )
         };
         if contains {
             actual.contains(&expected)

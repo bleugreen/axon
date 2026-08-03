@@ -54,6 +54,11 @@ Locator *structure* is shared across platforms:
 - `nearbyText`, which is a positive-only replay signal; and
 - normalized `frame`, used only as a weak distance tie-breaker.
 
+A case-insensitive matcher applies the Unicode default lowercase mapping and then
+Unicode Normalization Form C (NFC) to both operands before comparison. This
+mapping is locale-independent and does not remove diacritics. Implementations
+must not use the process or user locale when resolving a locator.
+
 The distinction between filtering and scoring is part of the contract. Role,
 subrole, title, label, description, identifier, non-editable value, window scope,
 and ancestors are hard filters. Actions, editable values, and nearby text are
@@ -81,6 +86,16 @@ Locator resolution returns exactly one status: `unique`, `ambiguous`, or
 `high`. Ambiguous and missing resolutions do not dispatch an action. Candidate
 summaries and reasons should make the outcome diagnosable; a backend must not
 silently pick the first native element returned by its API.
+
+Candidates are ranked by semantic score before the frame tie-breaker. The frame
+tie-breaker occupies only the sub-semantic part of the score and therefore cannot
+overcome a one-point semantic difference. A result is `unique` only when exactly
+one candidate has the highest complete score, `ambiguous` when multiple
+candidates share it, and `missing` when no candidate survives hard filtering.
+`ambiguous` and `missing` always have `none` confidence. A unique result has
+`high` confidence at four or more semantic points, `medium` at two or three,
+`low` at one, and `none` at zero. Thus `unique` with `none` confidence is valid
+when a sole candidate wins without any semantic criterion.
 
 Action results distinguish **dispatch success** from **goal success**. Posting a
 native action or input event proves only that dispatch occurred. `success` means

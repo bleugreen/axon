@@ -28,7 +28,7 @@ public enum TextMatch: Codable, Equatable, Sendable {
     }
 
     private func normalized(_ value: String, caseSensitive: Bool) -> String {
-        caseSensitive ? value : value.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
+        caseSensitive ? value : value.lowercased().precomposedStringWithCanonicalMapping
     }
 }
 
@@ -303,7 +303,6 @@ public struct LocatorResolver: Sendable {
             return nil
         }
         addActionReasons(locator.actions, actual: node.actions, reasons: &reasons)
-        addPrimaryWindowReason(for: indexed.node, ancestors: context.ancestors, snapshot: snapshot, reasons: &reasons)
         addNearbyTextReasons(locator.nearbyText, context: context, reasons: &reasons)
         let score = score(for: locator, node: node, reasons: reasons)
         addGeometryReason(locator.frame, nodeFrame: node.frame, baseScore: score.base, reasons: &reasons)
@@ -362,6 +361,9 @@ public struct LocatorResolver: Sendable {
     }
 
     private func matchesTitle(_ matcher: TextMatch?, node: AXNode, reasons: inout [String]) -> Bool {
+        // macOS AX often leaves an editable control's accessible name unset and exposes its useful
+        // text only through AXValue. Treating a stale recorded title as a positive signal avoids
+        // rejecting that control. This is an AX-backend compensation, not shared locator semantics.
         guard let matcher else {
             return true
         }
@@ -369,6 +371,9 @@ public struct LocatorResolver: Sendable {
             reasons.append("title \(matcher.reasonFragment)")
             return true
         }
+        // Unlike UIA Name, AXTitle does not derive an actionable element's name from descendants.
+        // Consult descendant labels only for AX roles whose name is commonly represented by child
+        // static text. This is an AX-backend compensation, not shared locator semantics.
         guard Self.descendantLabelRoles.contains(node.role),
               descendantLabels(of: node).contains(where: matcher.matches)
         else {
@@ -379,6 +384,9 @@ public struct LocatorResolver: Sendable {
     }
 
     private func matchesLabel(_ matcher: TextMatch?, node: AXNode, reasons: inout [String]) -> Bool {
+        // AX snapshots have no computed, cross-role Name field. displayLabel and descendant text
+        // reconstruct the human-facing label that macOS exposes across several attributes/nodes.
+        // Editable-role mismatch handling is likewise AX-local; the shared contract remains strict.
         guard let matcher else {
             return true
         }
@@ -423,6 +431,8 @@ public struct LocatorResolver: Sendable {
         guard let expected else {
             return true
         }
+        // AX represents top-level windows as AXWindow. The shared `window.role` field carries native
+        // vocabulary for other backends, so it has no additional discriminating meaning on macOS.
         let windowMatcher = AXAncestorLocator(
             role: "AXWindow",
             subrole: expected.subrole,
@@ -525,6 +535,9 @@ public struct LocatorResolver: Sendable {
     }
 
     private func matchesAppAncestor(_ locator: AXAncestorLocator, snapshot: AppSnapshot) -> Bool {
+        // AppSnapshot stores application identity outside the captured AX window trees. Resolve an
+        // AXApplication constraint against that metadata without pretending it is ordinary ancestry.
+        // This is a macOS snapshot-shape compensation, not shared ordered-ancestor semantics.
         guard locator.role == "AXApplication" else {
             return false
         }
@@ -541,21 +554,6 @@ public struct LocatorResolver: Sendable {
             return false
         }
         return true
-    }
-
-    private func addPrimaryWindowReason(
-        for node: AXNode,
-        ancestors: [AXNode],
-        snapshot: AppSnapshot,
-        reasons: inout [String]
-    ) {
-        guard snapshot.windows.count > 1, let firstWindow = snapshot.windows.first else {
-            return
-        }
-        let candidateWindow = node.role == "AXWindow" ? node : ancestors.first
-        if candidateWindow == firstWindow {
-            reasons.append("primary window")
-        }
     }
 
     private func geometryScore(expected: AXFrame?, actual: AXFrame?, baseScore: Int) -> Int {

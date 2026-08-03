@@ -43,6 +43,14 @@
                     "role": "Edit",
                     "value": "old",
                     "editable": true
+                  },
+                  {
+                    "role": "Status",
+                    "title": "ÄRGER"
+                  },
+                  {
+                    "role": "Status",
+                    "title": "café"
                   }
                 ]
               }
@@ -79,6 +87,16 @@
       "confidence": "none"
     },
     {
+      "name": "case-insensitive matching normalizes canonical equivalents",
+      "locator": {
+        "role": "Status",
+        "title": "CAFÉ"
+      },
+      "status": "unique",
+      "confidence": "medium",
+      "bestIndex": 6
+    },
+    {
       "name": "label does not fall back to title",
       "locator": { "role": "Button", "label": "Deploy" },
       "status": "missing",
@@ -102,6 +120,25 @@
       "status": "unique",
       "confidence": "low",
       "bestIndex": 4
+    },
+    {
+      "name": "locale-independent Unicode lowercase mapping",
+      "locator": {
+        "role": "Status",
+        "title": "ärger"
+      },
+      "status": "unique",
+      "confidence": "medium",
+      "bestIndex": 5
+    },
+    {
+      "name": "case-insensitive matching preserves diacritics",
+      "locator": {
+        "role": "Status",
+        "title": "cafe"
+      },
+      "status": "missing",
+      "confidence": "none"
     },
     {
       "name": "window and ancestors",
