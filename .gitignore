@@ -2,6 +2,7 @@
 .swiftpm/
 .superpowers/
 dist/
+rust/target/
 
 .DS_Store
 .codex/
