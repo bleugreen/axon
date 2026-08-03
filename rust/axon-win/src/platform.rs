@@ -331,13 +331,19 @@ impl UiaState {
             actions.push("ScrollItem".into())
         }
         let mut children = Vec::new();
-        let mut child_count = 0;
         let mut trunc = None;
-        let mut child = unsafe { self.walker.GetFirstChildElement(e) }.ok();
-        while let Some(c) = child {
-            child_count += 1;
+        let condition = unsafe { self.automation.CreateTrueCondition() }
+            .map_err(|e| operation("create child capture condition", e))?;
+        let child_array = unsafe { e.FindAllBuildCache(TreeScope_Children, &condition, cache) }
+            .map_err(|e| operation("bulk cache child properties", e))?;
+        let child_count = unsafe { child_array.Length() }
+            .map_err(|e| operation("read cached child count", e))?
+            .max(0) as usize;
+        for index in 0..child_count {
+            let c = unsafe { child_array.GetElement(index as i32) }
+                .map_err(|e| operation("read cached child", e))?;
             if depth >= MAX_DEPTH || children.len() >= MAX_CHILDREN || *count >= MAX_NODES {
-                trunc.get_or_insert_with(||
+                trunc.get_or_insert_with(|| {
                     (if depth >= MAX_DEPTH {
                         "maxDepth"
                     } else if *count >= MAX_NODES {
@@ -346,18 +352,17 @@ impl UiaState {
                         "maxChildren"
                     })
                     .into()
-                );
+                });
             } else {
-                children.push(self.capture_node(&c, depth + 1, count)?);
+                children.push(self.capture_node(&c, cache, depth + 1, count)?);
             }
-            child = unsafe { self.walker.GetNextSiblingElement(&c) }.ok();
         }
-        let r = unsafe { e.CurrentBoundingRectangle() }.ok();
-        let name = unsafe { e.CurrentName() }
+        let r = unsafe { e.CachedBoundingRectangle() }.ok();
+        let name = unsafe { e.CachedName() }
             .ok()
             .map(|x| x.to_string())
             .filter(|x| !x.is_empty());
-        let id = unsafe { e.CurrentAutomationId() }
+        let id = unsafe { e.CachedAutomationId() }
             .ok()
             .map(|x| x.to_string())
             .filter(|x| !x.is_empty());
