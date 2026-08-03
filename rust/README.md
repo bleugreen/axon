@@ -14,12 +14,11 @@ from the logged-in desktop user's session, not a service or SSH session:
     target\release\axon-win.exe serve
 
 The daemon owns UI Automation objects on a dedicated multithreaded COM apartment
-and listens on `\\.\pipe\axon-v1`. The pipe rejects remote network clients; Windows
-named-pipe access checks additionally apply the launching user's default security
-descriptor. Start `axon-win.exe mcp` as the short-lived JSON-lines MCP facade.
+and listens on `\\.\pipe\axon-v1`. The pipe rejects remote network clients and
+uses a protected access control list granting access only to the user SID from the
+launching process token. Start `axon-win.exe mcp` as the short-lived JSON-lines MCP facade.
 The facade preserves daemon results under `structuredContent`, including the
 canonical `batch` wrapper returned by `run`.
-
 Run the live probes from the interactive session before integration:
 
     axon-win.exe probe value Notepad
