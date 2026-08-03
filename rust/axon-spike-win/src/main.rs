@@ -18,6 +18,7 @@ struct Options {
     control_type: Option<String>,
     name_contains: Option<String>,
     invoke: bool,
+    activate_msaa: bool,
     max_depth: usize,
     max_nodes: usize,
 }
@@ -29,6 +30,7 @@ impl Options {
             control_type: None,
             name_contains: None,
             invoke: false,
+            activate_msaa: false,
             max_depth: 6,
             max_nodes: 250,
         };
@@ -41,6 +43,7 @@ impl Options {
                     options.name_contains = Some(value(&mut args, "--name-contains")?)
                 }
                 "--invoke" => options.invoke = true,
+                "--activate-msaa" => options.activate_msaa = true,
                 "--max-depth" => {
                     options.max_depth = value(&mut args, "--max-depth")?
                         .parse()
@@ -63,6 +66,12 @@ impl Options {
         }
         Ok(options)
     }
+
+    #[test]
+    fn parses_msaa_activation() {
+        let options = Options::parse(["--activate-msaa".to_owned()]).unwrap();
+        assert!(options.activate_msaa);
+    }
 }
 
 fn value(args: &mut impl Iterator<Item = String>, flag: &str) -> Result<String, String> {
@@ -79,11 +88,12 @@ fn matches_locator(node: &Node, control_type: &str, name_contains: &str) -> bool
 }
 
 fn usage() -> &'static str {
-    "Usage: axon-spike-win [--window TEXT] [--max-depth N] [--max-nodes N]\n\
+    "Usage: axon-spike-win [--window TEXT] [--max-depth N] [--max-nodes N] [--activate-msaa]\n\
      Locator: --type TYPE --name-contains TEXT [--invoke]\n\n\
      Without --window, prints top-level UIA windows. With --window, captures the first\n\
      matching window. --invoke dispatches InvokePattern and independently verifies a\n\
-     change in the recaptured bounded tree."
+     change in the recaptured bounded tree. --activate-msaa sends an OBJID_CLIENT\n\
+     MSAA query to the selected window and all of its child HWNDs before capture."
 }
 
 fn main() {
