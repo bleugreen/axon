@@ -82,8 +82,17 @@ events with a close conceptual fit to AX.
   Named pipes allow the interactive-session process to reject remote clients. At
   startup, `axon-win serve` reads the user SID from its process token and installs
   a protected DACL granting pipe access only to that SID; it does not rely on the
-  process default security descriptor. Run `axon-win serve` once in the logged-in
-  desktop session and point short-lived `axon-win mcp` processes at that pipe.
+  process default security descriptor. `axon-win daemon install` registers an
+  interactive `ONLOGON` scheduled task for the current user and starts it; this
+  is the canonical installation path because Task Scheduler launches `serve` in
+  the logged-in desktop session even when the command is issued over an SSH
+  session-0 shell. `axon-win daemon restart` sends the authenticated `shutdown`
+  RPC, updates the task to the current executable, and relaunches it. The daemon
+  acknowledges shutdown before closing the pipe, joins its UIA thread so that
+  the COM apartment is torn down, and exits successfully. `axon-win daemon
+  uninstall` stops the daemon and removes the task. All three commands are
+  scriptable and `install`/`restart` wait until the pipe is ready before returning.
+  Short-lived `axon-win mcp` processes connect to that pipe.
 - Run the session-1 integration probes from a logged-in desktop with exactly:
   `axon-win probe value <app-query>`, `axon-win probe events <app-query> [seconds]`,
   and `axon-win probe timeout [app-query] [milliseconds]`. Each command emits JSON;

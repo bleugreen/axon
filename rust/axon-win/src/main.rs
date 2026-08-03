@@ -5,6 +5,122 @@ fn main() {
 }
 
 #[cfg(windows)]
+mod lifecycle {
+    use super::pipe;
+    use std::{env, io, path::Path, process::Command, time::Duration};
+
+    const TASK_NAME: &str = "Axon Windows Daemon";
+
+    pub fn run(mut args: impl Iterator<Item = String>) -> Result<(), Box<dyn std::error::Error>> {
+        match args.next().as_deref() {
+            Some("install") => {
+                register()?;
+                start()?;
+            }
+            Some("restart") => {
+                stop_if_running()?;
+                register()?;
+                start()?;
+            }
+            Some("uninstall") => {
+                stop_if_running()?;
+                delete()?;
+            }
+            other => {
+                return Err(format!(
+                    "unknown daemon command {other:?}; expected install, restart, or uninstall"
+                )
+                .into());
+            }
+        }
+        Ok(())
+    }
+
+    fn register() -> io::Result<()> {
+        let executable = env::current_exe()?.canonicalize()?;
+        let user = command_output("whoami", &[])?;
+        let action = task_action(&executable);
+        command(
+            "schtasks",
+            &[
+                "/create", "/tn", TASK_NAME, "/tr", &action, "/sc", "ONLOGON", "/ru", &user, "/it",
+                "/f",
+            ],
+        )
+    }
+
+    fn start() -> io::Result<()> {
+        command("schtasks", &["/run", "/tn", TASK_NAME])?;
+        pipe::wait_until_ready(Duration::from_secs(10))
+    }
+
+    fn stop_if_running() -> io::Result<()> {
+        match pipe::shutdown() {
+            Ok(()) => pipe::wait_until_stopped(Duration::from_secs(10)),
+            Err(error) if pipe::is_daemon_absent(&error) => Ok(()),
+            Err(error) => Err(error),
+        }
+    }
+
+    fn delete() -> io::Result<()> {
+        let output = Command::new("schtasks")
+            .args(["/delete", "/tn", TASK_NAME, "/f"])
+            .output()?;
+        if output.status.success()
+            || String::from_utf8_lossy(&output.stderr).contains("cannot find")
+        {
+            Ok(())
+        } else {
+            Err(command_error("schtasks", &output))
+        }
+    }
+
+    fn task_action(executable: &Path) -> String {
+        format!("\"{}\" serve", executable.display())
+    }
+
+    fn command(program: &str, args: &[&str]) -> io::Result<()> {
+        let output = Command::new(program).args(args).output()?;
+        if output.status.success() {
+            Ok(())
+        } else {
+            Err(command_error(program, &output))
+        }
+    }
+
+    fn command_output(program: &str, args: &[&str]) -> io::Result<String> {
+        let output = Command::new(program).args(args).output()?;
+        if output.status.success() {
+            Ok(String::from_utf8_lossy(&output.stdout).trim().to_owned())
+        } else {
+            Err(command_error(program, &output))
+        }
+    }
+
+    fn command_error(program: &str, output: &std::process::Output) -> io::Error {
+        let detail = String::from_utf8_lossy(&output.stderr);
+        io::Error::other(format!(
+            "{program} failed with {}: {}",
+            output.status,
+            detail.trim()
+        ))
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn scheduled_task_action_quotes_executable_paths() {
+            assert_eq!(
+                task_action(Path::new(r"C:\Program Files\Axon\axon-win.exe")),
+                r#""C:\Program Files\Axon\axon-win.exe" serve"#
+            );
+        }
+    }
+}
+
+#[cfg(windows)]
 fn main() {
     if let Err(error) = windows_main() {
         eprintln!("axon-win: {error}");
@@ -19,6 +135,8 @@ fn windows_main() -> Result<(), Box<dyn std::error::Error>> {
     match command.as_str() {
         "serve" => pipe::serve(Router::new(WindowsBackend::start()?))?,
         "mcp" => pipe::mcp()?,
+        "shutdown" => pipe::shutdown()?,
+        "daemon" => lifecycle::run(std::env::args().skip(2))?,
         "probe" => {
             let args = std::env::args().skip(2).collect::<Vec<_>>();
             println!(
@@ -27,9 +145,10 @@ fn windows_main() -> Result<(), Box<dyn std::error::Error>> {
             )
         }
         other => {
-            return Err(
-                format!("unknown subcommand {other:?}; expected serve, mcp, or probe").into(),
-            );
+            return Err(format!(
+                "unknown subcommand {other:?}; expected serve, mcp, shutdown, daemon, or probe"
+            )
+            .into());
         }
     }
     Ok(())
@@ -44,7 +163,8 @@ mod pipe {
         ffi::c_void,
         fs::OpenOptions,
         io::{self, BufRead, BufReader, Write},
-        ptr,
+        ptr, thread,
+        time::{Duration, Instant},
     };
 
     #[repr(C)]
@@ -213,7 +333,15 @@ mod pipe {
             let connected = unsafe { ConnectNamedPipe(handle, ptr::null_mut()) } != 0
                 || io::Error::last_os_error().raw_os_error() == Some(535);
             if connected {
-                let _ = connection(handle, &mut router);
+                let shutdown = connection(handle, &mut router).unwrap_or(false);
+                unsafe {
+                    DisconnectNamedPipe(handle);
+                    CloseHandle(handle);
+                }
+                if shutdown {
+                    return Ok(());
+                }
+                continue;
             }
             unsafe {
                 DisconnectNamedPipe(handle);
@@ -222,7 +350,7 @@ mod pipe {
         }
     }
 
-    fn connection(handle: isize, router: &mut Router<WindowsBackend>) -> io::Result<()> {
+    fn connection(handle: isize, router: &mut Router<WindowsBackend>) -> io::Result<bool> {
         let mut pending = Vec::new();
         let mut buf = [0u8; 8192];
         loop {
@@ -238,13 +366,19 @@ mod pipe {
             } == 0
                 || n == 0
             {
-                return Ok(());
+                return Ok(false);
             }
             pending.extend_from_slice(&buf[..n as usize]);
             while let Some(pos) = pending.iter().position(|b| *b == b'\n') {
                 let line = pending.drain(..=pos).collect::<Vec<_>>();
                 let line = String::from_utf8_lossy(&line);
-                let response = match parse_request(line.trim()) {
+                let parsed = parse_request(line.trim());
+                let shutdown =
+                    matches!(&parsed, Ok(req) if req.method == "shutdown" && req.id.is_some());
+                let response = match parsed {
+                    Ok(req) if shutdown => req.id.map(|id| {
+                        axon_core::JsonRpcResponse::success(id, json!({"shutdown": true}))
+                    }),
                     Ok(req) => router.request(req),
                     Err(e) => Some(e),
                 };
@@ -265,8 +399,69 @@ mod pipe {
                         return Err(io::Error::last_os_error());
                     }
                 }
+                if shutdown {
+                    return Ok(true);
+                }
             }
         }
+    }
+
+    pub fn shutdown() -> io::Result<()> {
+        let response = send_rpc(&JsonRpcRequest::new(
+            Some(JsonRpcId::Integer(1)),
+            "shutdown",
+            Some(json!({})),
+        ))?;
+        if response.pointer("/result/shutdown") == Some(&Value::Bool(true)) {
+            Ok(())
+        } else {
+            Err(io::Error::other(format!(
+                "daemon rejected shutdown: {response}"
+            )))
+        }
+    }
+
+    pub fn wait_until_ready(timeout: Duration) -> io::Result<()> {
+        wait_for_pipe(timeout, true)
+    }
+
+    pub fn wait_until_stopped(timeout: Duration) -> io::Result<()> {
+        wait_for_pipe(timeout, false)
+    }
+
+    fn wait_for_pipe(timeout: Duration, ready: bool) -> io::Result<()> {
+        let start = Instant::now();
+        loop {
+            let present = OpenOptions::new().read(true).write(true).open(PIPE).is_ok();
+            if present == ready {
+                return Ok(());
+            }
+            if start.elapsed() >= timeout {
+                return Err(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    if ready {
+                        "daemon pipe did not become ready"
+                    } else {
+                        "daemon pipe did not stop"
+                    },
+                ));
+            }
+            thread::sleep(Duration::from_millis(50));
+        }
+    }
+
+    pub fn is_daemon_absent(error: &io::Error) -> bool {
+        matches!(error.raw_os_error(), Some(2 | 3 | 231))
+    }
+
+    fn send_rpc(request: &JsonRpcRequest) -> io::Result<Value> {
+        let mut stream = OpenOptions::new().read(true).write(true).open(PIPE)?;
+        writeln!(stream, "{}", serde_json::to_string(request)?)?;
+        stream.flush()?;
+        let mut reader = BufReader::new(stream);
+        let mut line = String::new();
+        reader.read_line(&mut line)?;
+        Ok(serde_json::from_str(&line)?)
     }
 
     pub fn mcp() -> io::Result<()> {
@@ -321,13 +516,7 @@ mod pipe {
             .cloned()
             .unwrap_or_else(|| json!({}));
         let rpc = JsonRpcRequest::new(Some(JsonRpcId::Integer(1)), name, Some(arguments));
-        let mut stream = OpenOptions::new().read(true).write(true).open(PIPE)?;
-        writeln!(stream, "{}", serde_json::to_string(&rpc)?)?;
-        stream.flush()?;
-        let mut reader = BufReader::new(stream);
-        let mut line = String::new();
-        reader.read_line(&mut line)?;
-        let response: Value = serde_json::from_str(&line)?;
+        let response = send_rpc(&rpc)?;
         let id = input.get("id").cloned().unwrap_or(Value::Null);
         if let Some(error) = response.get("error") {
             Ok(

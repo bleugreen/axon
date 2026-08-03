@@ -143,7 +143,8 @@ impl PointerTargetVerifier for WindowsBackend {
 }
 
 pub struct WindowsBackend {
-    tx: mpsc::Sender<Command>,
+    tx: Option<mpsc::Sender<Command>>,
+    thread: Option<thread::JoinHandle<()>>,
 }
 
 impl WindowsBackend {
@@ -152,7 +153,7 @@ impl WindowsBackend {
             .map_err(|e| operation("set per-monitor DPI awareness", e))?;
         let (tx, rx) = mpsc::channel();
         let (ready_tx, ready_rx) = mpsc::sync_channel(1);
-        thread::Builder::new()
+        let thread = thread::Builder::new()
             .name("axon-uia-mta".into())
             .spawn(move || {
                 let result = UiaState::new();
@@ -167,7 +168,20 @@ impl WindowsBackend {
             .recv()
             .map_err(|e| op("start UIA thread", e.to_string()))?
             .map_err(BackendError::from)?;
-        Ok(Self { tx })
+        Ok(Self {
+            tx: Some(tx),
+            thread: Some(thread),
+        })
+    }
+}
+impl Drop for WindowsBackend {
+    fn drop(&mut self) {
+        // Closing the command channel makes the MTA thread drop UiaState and its
+        // COM apartment before the daemon reports a clean process exit.
+        self.tx.take();
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
     }
 }
 fn immediate_node(e: &IUIAutomationElement) -> Result<Node, BackendError> {
@@ -206,6 +220,8 @@ impl WindowsBackend {
     ) -> Result<T, BackendError> {
         let (tx, rx) = mpsc::channel();
         self.tx
+            .as_ref()
+            .expect("UIA command channel is available until backend drop")
             .send(make(tx))
             .map_err(|e| op("send UIA command", e.to_string()))?;
         rx.recv()
