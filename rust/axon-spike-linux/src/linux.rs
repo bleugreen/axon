@@ -87,39 +87,39 @@ pub async fn run(options: Options) -> Result<(), Box<dyn Error>> {
             "selected_action_index={action_index} selected_action={:?}",
             selected_action.name
         );
-+        let dispatch_success = action.do_action(action_index as i32).await?;
-+        println!("dispatch_success={dispatch_success}");
-+        if !dispatch_success {
-+            return Err("AT-SPI Action.DoAction rejected the action".into());
-+        }
-+        tokio::time::sleep(Duration::from_millis(500)).await;
-+
-+        let started = Instant::now();
-+        let after = capture(
-+            connection.connection(),
-+            root,
-+            options.max_depth,
-+            options.max_nodes,
-+        )
-+        .await;
-+        let elapsed = started.elapsed();
-+        print_capture("after", &after, elapsed);
-+        let text_changes: Vec<_> = before
-+            .iter()
-+            .zip(&after)
-+            .filter_map(|(old, new)| {
-+                (old.text != new.text && (old.text.is_some() || new.text.is_some()))
-+                    .then(|| (old.text.as_deref(), new.text.as_deref()))
-+            })
-+            .collect();
-+        if text_changes.is_empty() {
-+            return Err("action dispatched, but recapture observed no text change".into());
-+        }
-+        println!(
-+            "verified_outcome=true verification=text_changed changes={text_changes:?} before_nodes={} after_nodes={}",
-+            before.len(),
-+            after.len()
-+        );
+        let dispatch_success = action.do_action(action_index as i32).await?;
+        println!("dispatch_success={dispatch_success}");
+        if !dispatch_success {
+            return Err("AT-SPI Action.DoAction rejected the action".into());
+        }
+        tokio::time::sleep(Duration::from_millis(500)).await;
+
+        let started = Instant::now();
+        let after = capture(
+            connection.connection(),
+            root,
+            options.max_depth,
+            options.max_nodes,
+        )
+        .await;
+        let elapsed = started.elapsed();
+        print_capture("after", &after, elapsed);
+        let text_changes: Vec<_> = before
+            .iter()
+            .zip(&after)
+            .filter_map(|(old, new)| {
+                (old.text != new.text && (old.text.is_some() || new.text.is_some()))
+                    .then(|| (old.text.as_deref(), new.text.as_deref()))
+            })
+            .collect();
+        if text_changes.is_empty() {
+            return Err("action dispatched, but recapture observed no text change".into());
+        }
+        println!(
+            "verified_outcome=true verification=text_changed changes={text_changes:?} before_nodes={} after_nodes={}",
+            before.len(),
+            after.len()
+        );
     }
 
     Ok(())
