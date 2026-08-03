@@ -19,10 +19,13 @@ fn windows_main() -> Result<(), Box<dyn std::error::Error>> {
     match command.as_str() {
         "serve" => pipe::serve(Router::new(WindowsBackend::start()?))?,
         "mcp" => pipe::mcp()?,
-        "probe" => println!(
-            "{}",
-            serde_json::to_string_pretty(&IntegrationProbe::run()?)?
-        ),
+        "probe" => {
+            let args = std::env::args().skip(2).collect::<Vec<_>>();
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&IntegrationProbe::run(&args)?)?
+            )
+        }
         other => {
             return Err(
                 format!("unknown subcommand {other:?}; expected serve, mcp, or probe").into(),

@@ -84,6 +84,11 @@ events with a close conceptual fit to AX.
   a protected DACL granting pipe access only to that SID; it does not rely on the
   process default security descriptor. Run `axon-win serve` once in the logged-in
   desktop session and point short-lived `axon-win mcp` processes at that pipe.
+- Run the session-1 integration probes from a logged-in desktop with exactly:
+  `axon-win probe value <app-query>`, `axon-win probe events <app-query> [seconds]`,
+  and `axon-win probe timeout [app-query] [milliseconds]`. Each command emits JSON;
+  the events probe expects the user to edit, restructure, and focus UI during its
+  bounded wait.
 - Chromium renderer accessibility may remain disabled even after a UI Automation
   client starts. Before capturing a WebView2 target, the backend must query
   `OBJID_CLIENT` through MSAA on the selected target HWND and all of its descendant

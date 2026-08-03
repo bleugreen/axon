@@ -20,21 +20,24 @@ use windows::{
         UI::{
             Accessibility::{
                 AutomationElementMode_Full, CUIAutomation, IUIAutomation, IUIAutomation2,
-                IUIAutomationCacheRequest, IUIAutomationElement, IUIAutomationInvokePattern,
-                IUIAutomationScrollItemPattern, IUIAutomationValuePattern, TreeScope_Children,
-                TreeScope_Descendants, TreeScope_Element, UIA_AutomationIdPropertyId,
-                UIA_BoundingRectanglePropertyId, UIA_ButtonControlTypeId,
-                UIA_CheckBoxControlTypeId, UIA_ComboBoxControlTypeId, UIA_ControlTypePropertyId,
-                UIA_CustomControlTypeId, UIA_DocumentControlTypeId, UIA_EditControlTypeId,
-                UIA_GroupControlTypeId, UIA_HyperlinkControlTypeId, UIA_ImageControlTypeId,
-                UIA_InvokePatternId, UIA_ListControlTypeId, UIA_ListItemControlTypeId,
-                UIA_MenuControlTypeId, UIA_MenuItemControlTypeId, UIA_NamePropertyId,
-                UIA_PaneControlTypeId, UIA_ProgressBarControlTypeId, UIA_RadioButtonControlTypeId,
-                UIA_ScrollBarControlTypeId, UIA_ScrollItemPatternId, UIA_SliderControlTypeId,
-                UIA_TabControlTypeId, UIA_TabItemControlTypeId, UIA_TextControlTypeId,
-                UIA_ThumbControlTypeId, UIA_ToolBarControlTypeId, UIA_ToolTipControlTypeId,
-                UIA_TreeControlTypeId, UIA_TreeItemControlTypeId, UIA_ValuePatternId,
-                UIA_WindowControlTypeId,
+                IUIAutomationCacheRequest, IUIAutomationElement, IUIAutomationEventHandler,
+                IUIAutomationEventHandler_Impl, IUIAutomationFocusChangedEventHandler,
+                IUIAutomationFocusChangedEventHandler_Impl, IUIAutomationInvokePattern,
+                IUIAutomationScrollItemPattern, IUIAutomationStructureChangedEventHandler,
+                IUIAutomationStructureChangedEventHandler_Impl, IUIAutomationValuePattern,
+                StructureChangeType, TreeScope_Children, TreeScope_Descendants, TreeScope_Element,
+                UIA_AutomationIdPropertyId, UIA_BoundingRectanglePropertyId,
+                UIA_ButtonControlTypeId, UIA_CheckBoxControlTypeId, UIA_ComboBoxControlTypeId,
+                UIA_ControlTypePropertyId, UIA_CustomControlTypeId, UIA_DocumentControlTypeId,
+                UIA_EditControlTypeId, UIA_GroupControlTypeId, UIA_HyperlinkControlTypeId,
+                UIA_ImageControlTypeId, UIA_InvokePatternId, UIA_ListControlTypeId,
+                UIA_ListItemControlTypeId, UIA_MenuControlTypeId, UIA_MenuItemControlTypeId,
+                UIA_NamePropertyId, UIA_PaneControlTypeId, UIA_ProgressBarControlTypeId,
+                UIA_RadioButtonControlTypeId, UIA_ScrollBarControlTypeId, UIA_ScrollItemPatternId,
+                UIA_SliderControlTypeId, UIA_TabControlTypeId, UIA_TabItemControlTypeId,
+                UIA_Text_TextChangedEventId, UIA_TextControlTypeId, UIA_ThumbControlTypeId,
+                UIA_ToolBarControlTypeId, UIA_ToolTipControlTypeId, UIA_TreeControlTypeId,
+                UIA_TreeItemControlTypeId, UIA_ValuePatternId, UIA_WindowControlTypeId,
             },
             HiDpi::{DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, SetProcessDpiAwarenessContext},
             Input::KeyboardAndMouse::{
@@ -45,7 +48,7 @@ use windows::{
             WindowsAndMessaging::{GetSystemMetrics, SM_CXSCREEN, SM_CYSCREEN},
         },
     },
-    core::{BSTR, Interface},
+    core::{BSTR, Interface, Ref, Result as WinResult, implement},
 };
 
 const MAX_DEPTH: usize = 18;
@@ -501,12 +504,347 @@ impl PlatformBackend for WindowsBackend {
 
 pub struct IntegrationProbe;
 impl IntegrationProbe {
-    pub fn run() -> Result<serde_json::Value, BackendError> {
-        let _backend = WindowsBackend::start()?;
-        Ok(
-            serde_json::json!({"uiaThread":"MTA","connectionTimeoutMs":1500,"transactionTimeoutMs":1500,"valuePattern":{"status":"requires --app/--locator live target"},"automationEvents":{"status":"manual session-1 interaction required"},"structureEvents":{"status":"manual session-1 interaction required"}}),
+    pub fn run(args: &[String]) -> Result<serde_json::Value, BackendError> {
+        let command = args.first().map(String::as_str).ok_or_else(|| {
+            op("probe", "expected value <app-query>, events <app-query> [seconds], or timeout [app-query] [milliseconds]")
+        })?;
+        let _com = ComApartment::mta()?;
+        let automation: IUIAutomation =
+            unsafe { CoCreateInstance(&CUIAutomation, None, CLSCTX_INPROC_SERVER) }
+                .map_err(|e| operation("create UI Automation client", e))?;
+        match command {
+            "value" => probe_value(&automation, required_probe_arg(args, 1, "app-query")?),
+            "events" => {
+                let seconds = probe_number(args.get(2), 15, "seconds")?;
+                probe_events(
+                    &automation,
+                    required_probe_arg(args, 1, "app-query")?,
+                    seconds,
+                )
+            }
+            "timeout" => {
+                let app = args.get(1).map(String::as_str);
+                let milliseconds = probe_number(args.get(2), 1500, "milliseconds")?;
+                probe_timeout(&automation, app, milliseconds)
+            }
+            other => Err(op("probe", format!("unknown probe {other:?}"))),
+        }
+    }
+}
+
+fn required_probe_arg<'a>(
+    args: &'a [String],
+    index: usize,
+    name: &str,
+) -> Result<&'a str, BackendError> {
+    args.get(index)
+        .map(String::as_str)
+        .ok_or_else(|| op("probe", format!("missing {name}")))
+}
+
+fn probe_number(value: Option<&String>, default: u64, name: &str) -> Result<u64, BackendError> {
+    value.map_or(Ok(default), |value| {
+        value
+            .parse()
+            .map_err(|_| op("probe", format!("invalid {name} {value:?}")))
+    })
+}
+
+fn probe_window(
+    automation: &IUIAutomation,
+    query: &str,
+) -> Result<IUIAutomationElement, BackendError> {
+    let root =
+        unsafe { automation.GetRootElement() }.map_err(|e| operation("get desktop root", e))?;
+    let condition = unsafe { automation.CreateTrueCondition() }
+        .map_err(|e| operation("create condition", e))?;
+    let windows = unsafe { root.FindAll(TreeScope_Children, &condition) }
+        .map_err(|e| operation("enumerate windows", e))?;
+    let count = unsafe { windows.Length() }.map_err(|e| operation("read window count", e))?;
+    let query = query.to_lowercase();
+    for index in 0..count {
+        let element =
+            unsafe { windows.GetElement(index) }.map_err(|e| operation("read window", e))?;
+        let name = unsafe { element.CurrentName() }
+            .unwrap_or_default()
+            .to_string();
+        let pid = unsafe { element.CurrentProcessId() }
+            .unwrap_or_default()
+            .to_string();
+        if name.to_lowercase().contains(&query) || pid == query {
+            return Ok(element);
+        }
+    }
+    Err(op(
+        "probe",
+        format!("no top-level window matches {query:?}"),
+    ))
+}
+
+fn probe_value(automation: &IUIAutomation, query: &str) -> Result<serde_json::Value, BackendError> {
+    let window = probe_window(automation, query)?;
+    let condition = unsafe { automation.CreateTrueCondition() }
+        .map_err(|e| operation("create condition", e))?;
+    let elements = unsafe { window.FindAll(TreeScope_Descendants, &condition) }
+        .map_err(|e| operation("find editable elements", e))?;
+    let count = unsafe { elements.Length() }.map_err(|e| operation("read element count", e))?;
+    for index in 0..count {
+        let element =
+            unsafe { elements.GetElement(index) }.map_err(|e| operation("read element", e))?;
+        let Ok(pattern) = (unsafe {
+            element.GetCurrentPatternAs::<IUIAutomationValuePattern>(UIA_ValuePatternId)
+        }) else {
+            continue;
+        };
+        if bool::from(unsafe { pattern.CurrentIsReadOnly() }.unwrap_or(true.into())) {
+            continue;
+        }
+        let original = unsafe { pattern.CurrentValue() }
+            .map_err(|e| operation("read original value", e))?
+            .to_string();
+        let sentinel = format!(
+            "axon-value-probe-{}-{}",
+            std::process::id(),
+            Instant::now().elapsed().as_nanos()
+        );
+        let mut restore = ValueRestore {
+            pattern: pattern.clone(),
+            original: original.clone(),
+            restored: false,
+        };
+        let result = (|| {
+            unsafe { pattern.SetValue(&BSTR::from(&sentinel)) }
+                .map_err(|e| operation("set sentinel value", e))?;
+            let observed = unsafe { pattern.CurrentValue() }
+                .map_err(|e| operation("read sentinel value", e))?
+                .to_string();
+            if observed != sentinel {
+                return Err(op("value probe", "sentinel readback did not match"));
+            }
+            restore.restore()?;
+            let restored = unsafe { pattern.CurrentValue() }
+                .map_err(|e| operation("read restored value", e))?
+                .to_string();
+            if restored != original {
+                return Err(op("value probe", "restored value readback did not match"));
+            }
+            Ok(
+                serde_json::json!({"probe":"value","appQuery":query,"elementIndex":index,"original":original,"sentinel":sentinel,"sentinelObserved":observed,"sentinelValidated":true,"restoredObserved":restored,"restoreValidated":true}),
+            )
+        })();
+        return result;
+    }
+    Err(op("value probe", "no editable ValuePattern element found"))
+}
+
+struct ValueRestore {
+    pattern: IUIAutomationValuePattern,
+    original: String,
+    restored: bool,
+}
+impl ValueRestore {
+    fn restore(&mut self) -> Result<(), BackendError> {
+        unsafe { self.pattern.SetValue(&BSTR::from(&self.original)) }
+            .map_err(|e| operation("restore original value", e))?;
+        self.restored = true;
+        Ok(())
+    }
+}
+impl Drop for ValueRestore {
+    fn drop(&mut self) {
+        if !self.restored {
+            let _ = unsafe { self.pattern.SetValue(&BSTR::from(&self.original)) };
+        }
+    }
+}
+
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ProbeEvent {
+    kind: &'static str,
+    native_kind: i32,
+    callback_thread: String,
+}
+
+#[implement(IUIAutomationEventHandler)]
+struct AutomationProbeHandler {
+    tx: mpsc::Sender<ProbeEvent>,
+}
+impl IUIAutomationEventHandler_Impl for AutomationProbeHandler_Impl {
+    fn HandleAutomationEvent(
+        &self,
+        _sender: Ref<IUIAutomationElement>,
+        eventid: windows::Win32::UI::Accessibility::UIA_EVENT_ID,
+    ) -> WinResult<()> {
+        let _ = self.tx.send(ProbeEvent {
+            kind: "automation",
+            native_kind: eventid.0,
+            callback_thread: format!("{:?}", thread::current().id()),
+        });
+        Ok(())
+    }
+}
+#[implement(IUIAutomationStructureChangedEventHandler)]
+struct StructureProbeHandler {
+    tx: mpsc::Sender<ProbeEvent>,
+}
+impl IUIAutomationStructureChangedEventHandler_Impl for StructureProbeHandler_Impl {
+    fn HandleStructureChangedEvent(
+        &self,
+        _sender: Ref<IUIAutomationElement>,
+        change: StructureChangeType,
+        _runtime_id: *const windows::Win32::System::Com::SAFEARRAY,
+    ) -> WinResult<()> {
+        let _ = self.tx.send(ProbeEvent {
+            kind: "structure",
+            native_kind: change.0,
+            callback_thread: format!("{:?}", thread::current().id()),
+        });
+        Ok(())
+    }
+}
+#[implement(IUIAutomationFocusChangedEventHandler)]
+struct FocusProbeHandler {
+    tx: mpsc::Sender<ProbeEvent>,
+}
+impl IUIAutomationFocusChangedEventHandler_Impl for FocusProbeHandler_Impl {
+    fn HandleFocusChangedEvent(&self, _sender: Ref<IUIAutomationElement>) -> WinResult<()> {
+        let _ = self.tx.send(ProbeEvent {
+            kind: "focus",
+            native_kind: 0,
+            callback_thread: format!("{:?}", thread::current().id()),
+        });
+        Ok(())
+    }
+}
+
+fn probe_events(
+    automation: &IUIAutomation,
+    query: &str,
+    seconds: u64,
+) -> Result<serde_json::Value, BackendError> {
+    let window = probe_window(automation, query)?;
+    let root =
+        unsafe { automation.GetRootElement() }.map_err(|e| operation("get desktop root", e))?;
+    let (tx, rx) = mpsc::channel();
+    let automation_handler: IUIAutomationEventHandler =
+        AutomationProbeHandler { tx: tx.clone() }.into();
+    let structure_handler: IUIAutomationStructureChangedEventHandler =
+        StructureProbeHandler { tx: tx.clone() }.into();
+    let focus_handler: IUIAutomationFocusChangedEventHandler = FocusProbeHandler { tx }.into();
+    unsafe {
+        automation.AddAutomationEventHandler(
+            UIA_Text_TextChangedEventId,
+            &window,
+            TreeScope_Descendants,
+            None,
+            &automation_handler,
         )
     }
+    .map_err(|e| operation("register automation event handler", e))?;
+    let mut cleanup = EventCleanup {
+        automation,
+        automation_element: window.clone(),
+        structure_element: root.clone(),
+        automation_handler: Some(automation_handler),
+        structure_handler: None,
+        focus_handler: None,
+    };
+    unsafe {
+        automation.AddStructureChangedEventHandler(
+            &root,
+            TreeScope_Descendants,
+            None,
+            &structure_handler,
+        )
+    }
+    .map_err(|e| operation("register structure event handler", e))?;
+    cleanup.structure_handler = Some(structure_handler);
+    unsafe { automation.AddFocusChangedEventHandler(None, &focus_handler) }
+        .map_err(|e| operation("register focus event handler", e))?;
+    cleanup.focus_handler = Some(focus_handler);
+    let deadline = Instant::now() + Duration::from_secs(seconds);
+    let mut records = Vec::new();
+    while let Some(remaining) = deadline.checked_duration_since(Instant::now()) {
+        match rx.recv_timeout(remaining) {
+            Ok(record) => records.push(record),
+            Err(mpsc::RecvTimeoutError::Timeout) => break,
+            Err(_) => break,
+        }
+    }
+    cleanup.remove()?;
+    let count = |kind| records.iter().filter(|record| record.kind == kind).count();
+    Ok(
+        serde_json::json!({"probe":"events","appQuery":query,"timeoutSeconds":seconds,"registered":{"automation":"Text_TextChanged","structure":"desktop descendants","focus":true},"counts":{"automation":count("automation"),"structure":count("structure"),"focus":count("focus")},"records":records,"handlersRemoved":true}),
+    )
+}
+
+struct EventCleanup<'a> {
+    automation: &'a IUIAutomation,
+    automation_element: IUIAutomationElement,
+    structure_element: IUIAutomationElement,
+    automation_handler: Option<IUIAutomationEventHandler>,
+    structure_handler: Option<IUIAutomationStructureChangedEventHandler>,
+    focus_handler: Option<IUIAutomationFocusChangedEventHandler>,
+}
+impl EventCleanup<'_> {
+    fn remove(&mut self) -> Result<(), BackendError> {
+        if let Some(handler) = self.focus_handler.take() {
+            unsafe { self.automation.RemoveFocusChangedEventHandler(&handler) }
+                .map_err(|e| operation("remove focus event handler", e))?;
+        }
+        if let Some(handler) = self.structure_handler.take() {
+            unsafe {
+                self.automation
+                    .RemoveStructureChangedEventHandler(&self.structure_element, &handler)
+            }
+            .map_err(|e| operation("remove structure event handler", e))?;
+        }
+        if let Some(handler) = self.automation_handler.take() {
+            unsafe {
+                self.automation.RemoveAutomationEventHandler(
+                    UIA_Text_TextChangedEventId,
+                    &self.automation_element,
+                    &handler,
+                )
+            }
+            .map_err(|e| operation("remove automation event handler", e))?;
+        }
+        Ok(())
+    }
+}
+impl Drop for EventCleanup<'_> {
+    fn drop(&mut self) {
+        let _ = self.remove();
+    }
+}
+
+fn probe_timeout(
+    automation: &IUIAutomation,
+    app: Option<&str>,
+    milliseconds: u64,
+) -> Result<serde_json::Value, BackendError> {
+    let timeout =
+        u32::try_from(milliseconds).map_err(|_| op("timeout probe", "milliseconds exceeds u32"))?;
+    let automation2: IUIAutomation2 = automation
+        .cast()
+        .map_err(|e| operation("query IUIAutomation2", e))?;
+    unsafe { automation2.SetConnectionTimeout(timeout) }
+        .map_err(|e| operation("set connection timeout", e))?;
+    unsafe { automation2.SetTransactionTimeout(timeout) }
+        .map_err(|e| operation("set transaction timeout", e))?;
+    let element = match app {
+        Some(query) => probe_window(automation, query)?,
+        None => {
+            unsafe { automation.GetRootElement() }.map_err(|e| operation("get desktop root", e))?
+        }
+    };
+    let started = Instant::now();
+    let result = unsafe { element.CurrentName() };
+    let elapsed = started.elapsed().as_millis();
+    Ok(
+        serde_json::json!({"probe":"timeout","connectionTimeoutMs":timeout,"transactionTimeoutMs":timeout,"controlledHungProviderAvailable":false,"controlledHungProviderNote":"no controlled hung provider was supplied; result measures a bounded live provider call only","providerTarget":app.unwrap_or("desktop-root"),"operation":"CurrentName","elapsedMs":elapsed,"result":match result { Ok(value) => serde_json::json!({"status":"ok","value":value.to_string()}), Err(error) => serde_json::json!({"status":"error","diagnostic":error.to_string()}) }}),
+    )
 }
 
 fn send_text(text: &str) -> Result<(), BackendError> {
