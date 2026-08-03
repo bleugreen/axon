@@ -158,3 +158,64 @@ verify capability and honest-result semantics.
 Native integration tests remain necessary because no fixture can prove UIA or
 AT-SPI exposure. Conformance establishes that implementations mean the same
 thing; native tests establish that each backend can deliver it.
+
+## Continuous integration lanes
+
+The hosted `Test` workflow is the merge gate. It runs deterministic Swift and
+Rust tests on GitHub-hosted machines for pull requests and pushes to `main`.
+
+The separate `Live desktop verification` workflow is a reporting lane. It runs
+only after a push to `main` or an explicit manual dispatch, never for a pull
+request. Its self-hosted jobs use dedicated `axon-live-*` labels and serialize
+per machine because the same desktops also serve as Cairn executors. A live-lane
+failure reports a real integration regression without blocking a pull request:
+
+- macOS builds and Developer-ID-signs the checked-out app, starts that app under
+  the stable Accessibility-approved identity, then captures Calculator, resolves
+  a button, invokes `AXPress`, and verifies the display changed;
+- Linux connects to the logged-in GNOME session's AT-SPI bus and runs the
+  hardened Calculator probe, which verifies the expected text transition on the
+  same AT-SPI object that was captured before dispatch;
+- Windows uses a localhost-only, forced-command SSH key to cross from the
+  runner's session-0 service into the desktop user's process context. The fixed
+  probe rebuilds `axon-win`, snapshots and temporarily replaces the scheduled
+  interactive-session daemon, sends `look` through `\\\\.\\pipe\\axon-v1`,
+  requires a real window root, and restores the prior task and running state in
+  a `finally` block.
+
+The repository's Actions policy requires approval for every outside
+contributor's workflow runs. This is defense in depth: the live workflow's lack
+of a `pull_request` trigger is the boundary that prevents fork code from reaching
+the self-hosted desktops.
+
+### Re-enrolling a live runner
+
+Remove the offline runner in **Settings > Actions > Runners**, then stop and
+uninstall its local runner service. Download the current runner package from the
+repository's **New self-hosted runner** page, request a fresh registration token,
+and configure the replacement as the desktop user with exactly one dedicated
+label: `axon-live-mac`, `axon-live-linux`, or `axon-live-windows`. Install and
+start it with the runner package's platform service command (`svc.sh install`
+and `svc.sh start` on macOS/Linux). On Windows, run `config.cmd` from an
+elevated prompt and select service mode, or pass `--runasservice` during
+unattended configuration. Confirm the runner is online and carries `self-hosted`, its operating
+system and architecture labels, and its dedicated `axon-live-*` label before
+dispatching the workflow.
+
+The Windows service remains under `NETWORK SERVICE`. Re-enrollment also
+requires recreating its localhost SSH key and installing that public key for the
+desktop user with a forced command that runs only
+`C:\\ProgramData\\Axon\\live-probe.cmd`; disable forwarding and pseudo-terminal
+allocation with the authorized-key `restrict` option. Give the private key only
+to `NETWORK SERVICE` and `SYSTEM`, pin the localhost host key in the runner's
+`known_hosts`, and verify an arbitrary SSH command is rejected before enabling
+the runner. This narrow relay is necessary because Windows services run in
+session 0 while UI Automation and the daemon's scheduled task must run as the
+logged-in desktop user.
+
+Registration tokens are short-lived secrets. Generate one immediately before
+configuration with:
+
+```sh
+gh api repos/bleugreen/axon/actions/runners/registration-token -X POST --jq .token
+```

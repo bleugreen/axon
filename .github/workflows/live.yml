@@ -1,0 +1,161 @@
+name: Live desktop verification
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  macos:
+    name: macOS live loop
+    runs-on: [self-hosted, axon-live-mac]
+    concurrency:
+      group: axon-live-mac
+      cancel-in-progress: false
+    timeout-minutes: 30
+    steps:
+      - name: Check out Axon
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Build the signed app
+        env:
+          AXON_CODESIGN_IDENTITY: 2A1FE6185D48E55E22FA9DB390B452D2E06AD665
+        run: ./scripts/package-app
+
+      - name: Capture, resolve, act, and verify
+        run: |
+          set -euo pipefail
+          cli="$PWD/dist/Axon.app/Contents/Resources/bin/axon"
+
+          if pgrep -x Calculator >/dev/null; then
+            echo '::error::Calculator is already running; refusing to alter an existing desktop session.'
+            exit 1
+          fi
+          axon_was_running=false
+          if pgrep -x Axon >/dev/null; then
+            axon_was_running=true
+          fi
+          restore_desktop() {
+            "$cli" quit >/dev/null 2>&1 || true
+            killall Calculator >/dev/null 2>&1 || true
+            if [[ "$axon_was_running" == true ]]; then
+              open -a /Applications/Axon.app >/dev/null 2>&1 || true
+            fi
+          }
+          trap restore_desktop EXIT
+
+          /opt/homebrew/bin/axon quit >/dev/null 2>&1 || true
+          open -n "$PWD/dist/Axon.app"
+          for _ in {1..40}; do
+            if "$cli" status | grep -q 'Accessibility: trusted'; then
+              break
+            fi
+            sleep 0.25
+          done
+          "$cli" status | grep -q 'Accessibility: trusted'
+
+          open -a Calculator
+          for _ in {1..40}; do
+            if "$cli" look Calculator --json >/dev/null 2>&1; then
+              break
+            fi
+            sleep 0.25
+          done
+
+          clear_result="$("$cli" find Calculator '{"role":"AXButton","description":"All Clear","actions":["AXPress"]}')"
+          clear_handle="$(printf '%s' "$clear_result" | jq -er '.result.resolution.best.handle')"
+          "$cli" invoke "$clear_handle" AXPress | jq -e '.result.action.success == true' >/dev/null
+
+          one_result="$("$cli" find Calculator '{"role":"AXButton","description":"1","actions":["AXPress"]}')"
+          one_handle="$(printf '%s' "$one_result" | jq -er '.result.resolution.best.handle')"
+          "$cli" invoke "$one_handle" AXPress | jq -e '.result.action.success == true' >/dev/null
+
+          "$cli" look Calculator --json \
+            | jq -e '.indexedNodes | any(.role == "AXStaticText" and (.value | strings | contains("1")))'
+
+  linux:
+    name: Linux live loop
+    runs-on: [self-hosted, axon-live-linux]
+    concurrency:
+      group: axon-live-linux
+      cancel-in-progress: false
+    timeout-minutes: 20
+    env:
+      XDG_RUNTIME_DIR: /run/user/1000
+      DBUS_SESSION_BUS_ADDRESS: unix:path=/run/user/1000/bus
+      DISPLAY: ":0"
+      WAYLAND_DISPLAY: wayland-0
+    steps:
+      - name: Check out Axon
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Capture, resolve, act, and verify
+        working-directory: rust
+        run: |
+          set -euo pipefail
+          test -S /run/user/1000/at-spi/bus
+
+          if pgrep -u "$(id -u)" -f '[/]usr/bin/gnome-calculator' >/dev/null; then
+            echo '::error::GNOME Calculator is already running; refusing to alter an existing desktop session.'
+            exit 1
+          fi
+          cleanup() {
+            pkill -u "$(id -u)" -f '[/]usr/bin/gnome-calculator' >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+
+          gnome-calculator --equation 0 >/dev/null 2>&1 &
+          for _ in {1..40}; do
+            if cargo run --quiet --locked -p axon-spike-linux -- --application calculator --max-depth 1 --max-nodes 5 >/dev/null 2>&1; then
+              break
+            fi
+            sleep 0.25
+          done
+
+          cargo run --quiet --locked -p axon-spike-linux -- \
+            --application calculator \
+            --max-depth 20 \
+            --max-nodes 500 \
+            --role button \
+            --name-contains 1 \
+            --action \
+            --expect-text-before 0 \
+            --expect-text-after 01 \
+            | tee /tmp/axon-linux-live-probe.log
+          grep -q 'verification=same_object_text_transition' /tmp/axon-linux-live-probe.log
+
+  windows:
+    name: Windows live loop
+    runs-on: [self-hosted, axon-live-windows]
+    concurrency:
+      group: axon-live-windows
+      cancel-in-progress: false
+    timeout-minutes: 25
+    steps:
+      - name: Check out Axon
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Restart the interactive daemon and inspect a real window
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $ssh = 'C:\Program Files\Git\usr\bin\ssh.exe'
+          $arguments = @(
+            '-F', 'C:\actions-runner-axon\.ssh\empty_config',
+            '-i', 'C:\actions-runner-axon\.ssh\axon-live-probe',
+            '-o', 'BatchMode=yes',
+            '-o', 'IdentitiesOnly=yes',
+            '-o', 'ConnectTimeout=5',
+            '-o', 'StrictHostKeyChecking=yes',
+            '-o', 'UserKnownHostsFile=C:\actions-runner-axon\.ssh\known_hosts',
+            'mitch@localhost',
+            'probe'
+          )
+          & $ssh @arguments
+          if ($LASTEXITCODE -ne 0) {
+            throw "interactive probe failed with exit code $LASTEXITCODE"
+          }
