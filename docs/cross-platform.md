@@ -78,6 +78,17 @@ events with a close conceptual fit to AX.
 - Windows 10 and later support `AF_UNIX`, so the local Unix-domain socket
   transport and MCP-facade topology can carry over. Installation must still use
   Windows-native access controls and lifecycle management.
+- The implemented Windows daemon uses `\\.\pipe\axon-v1` instead of `AF_UNIX`.
+  Named pipes allow the interactive-session process to reject remote clients. At
+  startup, `axon-win serve` reads the user SID from its process token and installs
+  a protected DACL granting pipe access only to that SID; it does not rely on the
+  process default security descriptor. Run `axon-win serve` once in the logged-in
+  desktop session and point short-lived `axon-win mcp` processes at that pipe.
+- Run the session-1 integration probes from a logged-in desktop with exactly:
+  `axon-win probe value <app-query>`, `axon-win probe events <app-query> [seconds]`,
+  and `axon-win probe timeout [app-query] [milliseconds]`. Each command emits JSON;
+  the events probe expects the user to edit, restructure, and focus UI during its
+  bounded wait.
 - Chromium renderer accessibility may remain disabled even after a UI Automation
   client starts. Before capturing a WebView2 target, the backend must query
   `OBJID_CLIENT` through MSAA on the selected target HWND and all of its descendant
