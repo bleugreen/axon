@@ -19,7 +19,7 @@ use windows::{
         },
         UI::{
             Accessibility::{
-                AutomationElementMode_Full, CUIAutomation, IUIAutomation, IUIAutomation2,
+                AutomationElementMode_Full, CUIAutomation, CUIAutomation8, IUIAutomation, IUIAutomation2,
                 IUIAutomationCacheRequest, IUIAutomationElement, IUIAutomationEventHandler,
                 IUIAutomationEventHandler_Impl, IUIAutomationFocusChangedEventHandler,
                 IUIAutomationFocusChangedEventHandler_Impl, IUIAutomationInvokePattern,
@@ -121,19 +121,18 @@ struct UiaState {
 impl UiaState {
     fn new() -> Result<Self, BackendError> {
         let com = ComApartment::mta()?;
-        let automation: IUIAutomation =
-            unsafe { CoCreateInstance(&CUIAutomation, None, CLSCTX_INPROC_SERVER) }
-                .map_err(|e| operation("create UI Automation client", e))?;
-        let automation2: IUIAutomation2 = automation
-            .cast()
-            .map_err(|e| operation("query IUIAutomation2", e))?;
-        unsafe {
-            automation2
-                .SetConnectionTimeout(1500)
-                .map_err(|e| operation("set UIA connection timeout", e))?;
-            automation2
-                .SetTransactionTimeout(1500)
-                .map_err(|e| operation("set UIA transaction timeout", e))?;
+        let automation = create_automation()?;
+        // Provider timeouts improve resilience but are not a prerequisite for UIA itself.
+        // Older providers may expose only IUIAutomation; service startup must still work.
+        if let Ok(automation2) = automation.cast::<IUIAutomation2>() {
+            unsafe {
+                automation2
+                    .SetConnectionTimeout(1500)
+                    .map_err(|e| operation("set UIA connection timeout", e))?;
+                automation2
+                    .SetTransactionTimeout(1500)
+                    .map_err(|e| operation("set UIA transaction timeout", e))?;
+            }
         }
         Ok(Self {
             automation,
@@ -509,9 +508,7 @@ impl IntegrationProbe {
             op("probe", "expected value <app-query>, events <app-query> [seconds], or timeout [app-query] [milliseconds]")
         })?;
         let _com = ComApartment::mta()?;
-        let automation: IUIAutomation =
-            unsafe { CoCreateInstance(&CUIAutomation, None, CLSCTX_INPROC_SERVER) }
-                .map_err(|e| operation("create UI Automation client", e))?;
+        let automation = create_automation()?;
         match command {
             "value" => probe_value(&automation, required_probe_arg(args, 1, "app-query")?),
             "events" => {
@@ -826,9 +823,20 @@ fn probe_timeout(
 ) -> Result<serde_json::Value, BackendError> {
     let timeout =
         u32::try_from(milliseconds).map_err(|_| op("timeout probe", "milliseconds exceeds u32"))?;
-    let automation2: IUIAutomation2 = automation
-        .cast()
-        .map_err(|e| operation("query IUIAutomation2", e))?;
+    let automation2: IUIAutomation2 = match automation.cast() {
+        Ok(value) => value,
+        Err(error) => {
+            return Ok(serde_json::json!({
+                "probe":"timeout",
+                "connectionTimeoutMs":timeout,
+                "transactionTimeoutMs":timeout,
+                "configured":false,
+                "controlledHungProviderAvailable":false,
+                "reason":"IUIAutomation2 is unavailable from the installed UI Automation provider",
+                "diagnostic":error.to_string()
+            }));
+        }
+    };
     unsafe { automation2.SetConnectionTimeout(timeout) }
         .map_err(|e| operation("set connection timeout", e))?;
     unsafe { automation2.SetTransactionTimeout(timeout) }
@@ -845,6 +853,12 @@ fn probe_timeout(
     Ok(
         serde_json::json!({"probe":"timeout","connectionTimeoutMs":timeout,"transactionTimeoutMs":timeout,"controlledHungProviderAvailable":false,"controlledHungProviderNote":"no controlled hung provider was supplied; result measures a bounded live provider call only","providerTarget":app.unwrap_or("desktop-root"),"operation":"CurrentName","elapsedMs":elapsed,"result":match result { Ok(value) => serde_json::json!({"status":"ok","value":value.to_string()}), Err(error) => serde_json::json!({"status":"error","diagnostic":error.to_string()}) }}),
     )
+}
+
+fn create_automation() -> Result<IUIAutomation, BackendError> {
+    unsafe { CoCreateInstance(&CUIAutomation8, None, CLSCTX_INPROC_SERVER) }
+        .or_else(|_| unsafe { CoCreateInstance(&CUIAutomation, None, CLSCTX_INPROC_SERVER) })
+        .map_err(|e| operation("create UI Automation client", e))
 }
 
 fn send_text(text: &str) -> Result<(), BackendError> {
