@@ -183,16 +183,41 @@ public struct AXFullTreeCapturer {
             capture.looksLikeCompleteAppTree ? capture : nil
         } : nil
         let capture = bulkCapture ?? dynamicCapture(appElement: appElement, allowBulkHierarchy: allowBulkHierarchy)
+        let focus = focusedElement(from: appElement, retainedElements: capture.retainedElements)
 
         let encodedScreenshot = screenshot ? screenshotCapturer.capture(app: appIdentity, axWindows: capture.windows) : nil
         let snapshot = AppSnapshot(
             id: SnapshotID.next(),
             app: appIdentity,
             windows: capture.windows,
-            screenshot: encodedScreenshot
+            screenshot: encodedScreenshot,
+            focus: focus
         )
         elementStore?.store(snapshotID: snapshot.id, elements: capture.retainedElements, summary: SnapshotSummary(snapshot: snapshot))
         return snapshot
+    }
+
+    private func focusedElement(from appElement: AXUIElement, retainedElements: [AXUIElement]) -> FocusObservation {
+        var value: CFTypeRef?
+        let error = AXUIElementCopyAttributeValue(appElement, kAXFocusedUIElementAttribute as CFString, &value)
+        guard error == .success else {
+            if error == .noValue || error == .attributeUnsupported {
+                return .none
+            }
+            return .inaccessible(error: "AXFocusedUIElement query failed (AXError \(error.rawValue))")
+        }
+        guard let value else {
+            return .none
+        }
+        guard CFGetTypeID(value) == AXUIElementGetTypeID() else {
+            return .inaccessible(error: "AXFocusedUIElement returned an unexpected value type")
+        }
+        let element = unsafeDowncast(value, to: AXUIElement.self)
+        AXUIElementSetMessagingTimeout(element, Self.messagingTimeout)
+        let node = nodeSummary(element: element, childCount: 0, children: [])
+        let index = retainedElements.firstIndex { CFEqual($0, element) }
+        let handle = index.map { SnapshotHandle(snapshotID: SnapshotID("pending"), nodeIndex: $0) }
+        return .available(element: node, handle: handle)
     }
 
     private func dynamicCapture(appElement: AXUIElement, allowBulkHierarchy: Bool) -> AXHierarchyBulkCapture {

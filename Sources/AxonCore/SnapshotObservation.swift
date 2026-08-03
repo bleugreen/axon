@@ -34,6 +34,9 @@ public struct SnapshotObservationFormatter {
         if let bundle = string("bundleIdentifier", in: app) {
             observation["bundle"] = .string(bundle)
         }
+        if let focus = object["focus"] {
+            observation["focus"] = compactFocus(focus, snapshotID: snapshotID, frames: frames)
+        }
         if let screenshot = object["screenshot"], screenshot != .null {
             observation["screenshot"] = screenshot
         }
@@ -99,6 +102,18 @@ public struct SnapshotObservationFormatter {
         if let snapshot = string("snapshot", in: object) {
             lines.append("snapshot: \(snapshot)")
         }
+        if let focus = object["focus"]?.objectValue {
+            switch string("status", in: focus) {
+            case "available":
+                let handle = string("handle", in: focus).map { " \($0)" } ?? ""
+                let identity = focus["element"]?.objectValue.map(focusIdentity) ?? "unknown"
+                lines.append("focus: available\(handle) \(identity)")
+            case "inaccessible":
+                lines.append("focus: inaccessible \(yamlString(string("error", in: focus) ?? "unknown error"))")
+            default:
+                lines.append("focus: none")
+            }
+        }
         if let screenshot = object["screenshot"]?.objectValue {
             let width = screenshot["width"]?.scalarText ?? "?"
             let height = screenshot["height"]?.scalarText ?? "?"
@@ -140,6 +155,28 @@ public struct SnapshotObservationFormatter {
             }
         }
         return lines.joined(separator: "\n")
+    }
+
+    private func compactFocus(_ value: JSONValue, snapshotID: String, frames: Bool) -> JSONValue {
+        guard case let .object(focus) = value else { return value }
+        guard string("status", in: focus) == "available", let element = focus["element"]?.objectValue else { return value }
+        var compact = element
+        compact.removeValue(forKey: "children")
+        compact.removeValue(forKey: "childCount")
+        compact.removeValue(forKey: "index")
+        if !frames { compact.removeValue(forKey: "frame") }
+        return .object([
+            "status": .string("available"),
+            "handle": focus["handle"] ?? .null,
+            "target": focus["target"] ?? .null,
+            "element": .object(compact)
+        ])
+    }
+
+    private func focusIdentity(_ object: [String: JSONValue]) -> String {
+        let role = normalizedRole(string("role", in: object))
+        let identity = label(in: object).map { " \(yamlString($0))" } ?? ""
+        return "\(role)\(identity)"
     }
 
     private func compactScreenText(from value: JSONValue?, frames: Bool) -> JSONValue? {

@@ -11,6 +11,9 @@ import Testing
     #expect(tool(named: "invoke", in: tools)?["inputSchema"]?["properties"]?["target"]?["anyOf"]?[1] != nil)
     #expect(tool(named: "invoke", in: tools)?["inputSchema"]?["properties"]?["target"]?["anyOf"]?[2] == nil)
     #expect(tool(named: "type", in: tools)?["inputSchema"]?["required"] == .array([.string("target"), .string("value")]))
+    #expect(tool(named: "wait_for_stability", in: tools)?["inputSchema"]?["properties"]?["stableMs"]?["type"] == .string("integer"))
+    #expect(tool(named: "wait_for_stability", in: tools)?["inputSchema"]?["properties"]?["timeoutMs"]?["type"] == .string("integer"))
+    #expect(tool(named: "wait_for_stability", in: tools)?["inputSchema"]?["properties"]?["intervalMs"]?["type"] == .string("integer"))
 }
 
 @Test func toolSurfaceDocsSignatureBlockMatchesSpec() throws {
