@@ -74,9 +74,10 @@ impl<'a,D:ToolDispatcher> AxnRunner<'a,D>{
         let bindings=self.bind(&doc.arguments,arg_values)?;let mut trace=Vec::new();let mut facts=HashSet::new();let mut success=true;
         for (index,action) in doc.actions.iter().enumerate(){
             if let Some(missing)=action.requires.iter().find(|id|!facts.contains(*id)){let e=format!("required fact is unavailable: {missing}");trace.push(TraceEntry{index,tool:action.tool.clone(),success:false,action_id:action.id.clone(),result:None,error:Some(e),resolution:None});success=false;if !options.continue_on_error{break}else{continue}}
-            let params=substitute_map(&action.params,&bindings)?;
-            let outcome=if options.dry_run{DispatchOutcome{success:true,result:Value::Object(params.clone()),error:None,resolution:None}}else{self.dispatcher.dispatch(&action.tool,&params)};
-            let entry=TraceEntry{index,tool:action.tool.clone(),success:outcome.success,action_id:action.id.clone(),result:(!outcome.result.is_null()).then_some(outcome.result),error:outcome.error.or_else(||(!outcome.success).then(||"action failed".into())),resolution:outcome.resolution};
+            let (params,secret_fields)=substitute_map(&action.params,&bindings)?;
+            let outcome=if options.dry_run{let mut shown=params.clone();for key in &secret_fields{shown.insert(key.clone(),Value::String("<redacted: contains-secret>".into()));}DispatchOutcome{success:true,result:Value::Object(shown),error:None,resolution:None}}else{self.dispatcher.dispatch(&action.tool,&params)};
+            let redacted=if secret_fields.is_empty(){outcome.result}else{Value::String("<redacted: contains-secret>".into())};
+            let entry=TraceEntry{index,tool:action.tool.clone(),success:outcome.success,action_id:action.id.clone(),result:(!redacted.is_null()).then_some(redacted),error:outcome.error.map(|e|if secret_fields.is_empty(){e}else{"<redacted: contains-secret>".into()}).or_else(||(!outcome.success).then(||"action failed".into())),resolution:outcome.resolution};
             if entry.success{facts.extend(action.expects.iter().map(|f|f.id.clone()))}else{success=false}
             let failed=!entry.success;trace.push(entry);if failed&&!options.continue_on_error{break}
         }
@@ -91,4 +92,4 @@ impl<'a,D:ToolDispatcher> AxnRunner<'a,D>{
     }
 }
 fn render_arg(kind:&ArgumentType,v:&Value)->Option<String>{match kind{ArgumentType::Number=>v.as_f64().map(|n|if n.fract()==0.0{format!("{}",n as i64)}else{n.to_string()}),ArgumentType::Email=>v.as_str().filter(|s|s.contains('@')).map(str::to_owned),_=>v.as_str().map(str::to_owned)}}
-fn substitute_map(map:&Map<String,Value>,bindings:&HashMap<String,(String,bool)>)->Result<Map<String,Value>,AxnError>{let mut out=map.clone();for key in ["value","text","key"]{if let Some(Value::String(s))=out.get(key){let mut next=s.clone();for (name,(value,_)) in bindings{next=next.replace(&format!("{{{{{name}}}}}"),value)}out.insert(key.into(),Value::String(next));}}Ok(out)}
+fn substitute_map(map:&Map<String,Value>,bindings:&HashMap<String,(String,bool)>)->Result<(Map<String,Value>,HashSet<String>),AxnError>{let mut out=map.clone();let mut tainted=HashSet::new();for key in ["value","text","key"]{if let Some(Value::String(s))=out.get(key){let mut next=s.clone();for (name,(value,secret)) in bindings{let token=format!("{{{{{name}}}}}");if next.contains(&token)&&*secret{tainted.insert(key.into());}next=next.replace(&token,value)}out.insert(key.into(),Value::String(next));}}Ok((out,tainted))}

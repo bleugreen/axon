@@ -83,7 +83,7 @@ fn candidate(locator:&Locator,snapshot:&Snapshot,index:usize,node:&Node,ancestor
     for action in &locator.actions{if node.actions.contains(action){reasons.push(format!("action {action}"))}}
     for matcher in &locator.nearby_text{if siblings.iter().chain(ancestors.iter()).any(|n|matcher.matches(node_label(n))){reasons.push(format!("nearby text {}",matcher.reason()))}}
     let mut base=reasons.len() as i64;if locator.value.as_ref().is_some_and(|m|m.matches(node.value.as_deref())){base+=2}
-    let geometry=match (locator.frame,node.frame){(Some(e),Some(a))if base>0=>{let dx=(e.x+e.width/2.0)-(a.x+a.width/2.0);let dy=(e.y+e.height/2.0)-(a.y+a.height/2.0);let d=(dx.hypot(dy)/e.width.hypot(e.height).max(1.0));(100-(d*100.0).round() as i64).max(0)},_=>0};
+    let geometry=match (locator.frame,node.frame){(Some(e),Some(a))if base>0=>{let dx=(e.x+e.width/2.0)-(a.x+a.width/2.0);let dy=(e.y+e.height/2.0)-(a.y+a.height/2.0);let d=dx.hypot(dy)/e.width.hypot(e.height).max(1.0);(100-(d*100.0).round() as i64).max(0)},_=>0};
     if geometry>0{reasons.push(format!("frame proximity {geometry}"))}
     Some(Candidate{index,handle:snapshot.handle(index),role:node.role.clone(),title:node.title.clone(),frame:node.frame,score:base*1000+geometry,reasons})
 }
