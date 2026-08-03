@@ -75,6 +75,41 @@ import Testing
     #expect(batch["trace"]?[0]?["result"]?["semanticStatus"] == .string("verified"))
 }
 
+@Test func runDoesNotVerifyPostconditionWhenKeyboardDispatchFails() {
+    var snapshots = [
+        reorderListFactSnapshot(value: "Alpha, Bravo"),
+        reorderListFactSnapshot(value: "Bravo, Alpha")
+    ]
+    let executor = AxnRunner(
+        commandHandler: { request in
+            JSONRPCResponse(id: request.id, result: ["action": .object([
+                "success": .bool(false),
+                "dispatchSuccess": .bool(false),
+                "semanticSuccess": .null,
+                "semanticStatus": .string("unverified")
+            ])])
+        },
+        snapshotProvider: { _ in snapshots.removeFirst() }
+    )
+    let fact: JSONValue = .object([
+        "id": .string("a001.value.0"),
+        "kind": .string("value"),
+        "target": .object([
+            "app": .string("Example"),
+            "locator": .object(["role": .string("AXList")])
+        ]),
+        "state": .object(["value": .object(["equals": .string("Bravo, Alpha")])])
+    ])
+
+    let batch = try! executor.run(params: ["actions": .array([.object([
+        "tool": .string("keyboard"), "key": .string("End"), "expects": .array([fact])
+    ])])])
+
+    #expect(batch["success"] == .bool(false))
+    #expect(batch["trace"]?[0]?["result"]?["dispatchSuccess"] == .bool(false))
+    #expect(batch["trace"]?[0]?["result"]?["semanticSuccess"] == .null)
+}
+
 @Test func runDoesNotTreatAlreadySatisfiedPostconditionAsKeyboardSuccess() {
     var dispatched = false
     let executor = AxnRunner(
