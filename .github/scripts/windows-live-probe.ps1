@@ -81,12 +81,16 @@ try {
     Write-Output "isError:false snapshot=$($verified.response.result.structuredContent.id) root=$($verified.window.role) app=$($verified.app)"
 }
 finally {
+    $cleanupError = $null
     if (Test-Path $probeExecutable) {
         try { & $probeExecutable shutdown *> $null }
         catch { Write-Warning "Could not stop the probe daemon: $_" }
     }
     try { Stop-LiveProbeDaemons }
-    catch { Write-Warning "Could not clean up live-probe daemon processes: $_" }
+    catch {
+        $cleanupError = $_
+        Write-Warning "Could not clean up live-probe daemon processes: $_"
+    }
 
     if ($null -ne $taskXml) {
         Register-ScheduledTask -TaskName $taskName -Xml $taskXml -Force | Out-Null
@@ -95,4 +99,5 @@ finally {
     else {
         Unregister-ScheduledTask -TaskName $taskName -Confirm:$false -ErrorAction SilentlyContinue
     }
+    if ($null -ne $cleanupError) { throw $cleanupError }
 }
