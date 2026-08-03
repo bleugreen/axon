@@ -112,7 +112,11 @@ target:
 `drag` accepts the same pointer target vocabulary for `from` and `to`. Point
 coordinates may explicitly use `screen`, `window`, or `screenshot` coordinate
 spaces; legacy point payloads without `coordinateSpace` remain screen points for
-wire compatibility. Direct drag results separate pointer dispatch from semantic
+wire compatibility. Handle- and locator-derived pointer events are hit-tested
+again immediately before dispatch and fail closed if the intended element moved,
+is occluded, or cannot be resolved. Explicit point targets carry no intended
+element identity, so they dispatch as unverified coordinates; use a handle or
+locator when fail-closed target validation is required. Direct drag results separate pointer dispatch from semantic
 success. A drag is semantically successful only when `run` verifies supplied
 `expects` facts after dispatch, such as an AX list value exposing the new row
 order.
