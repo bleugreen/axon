@@ -427,7 +427,6 @@ private func waitForValueParams(arguments: [String]) throws -> [String: JSONValu
 
 private func keyboardParams(arguments: [String]) throws -> [String: JSONValue] {
     var params: [String: JSONValue] = [:]
-    var keys: [String] = []
     var index = 1
     while index < arguments.count {
         switch arguments[index] {
@@ -437,15 +436,23 @@ private func keyboardParams(arguments: [String]) throws -> [String: JSONValue] {
             }
             params["app"] = .string(arguments[index + 1])
             index += 2
+        case "--text", "--key":
+            let option = String(arguments[index].dropFirst(2))
+            guard index + 1 < arguments.count else {
+                throw CLIError.missingArguments("keyboard --\(option) requires a value")
+            }
+            guard params[option] == nil else {
+                throw CLIError.missingArguments("keyboard --\(option) may only be provided once")
+            }
+            params[option] = .string(arguments[index + 1])
+            index += 2
         default:
-            keys.append(arguments[index])
-            index += 1
+            throw CLIError.missingArguments("unexpected keyboard argument: \(arguments[index]); use --text or --key")
         }
     }
-    guard !keys.isEmpty else {
-        throw CLIError.missingArguments("keyboard requires keys or text")
+    guard (params["text"] == nil) != (params["key"] == nil) else {
+        throw CLIError.missingArguments("keyboard requires exactly one of --text or --key")
     }
-    params["keys"] = .string(keys.joined(separator: " "))
     return params
 }
 

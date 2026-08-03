@@ -11,9 +11,15 @@ import Testing
     #expect(tool(named: "invoke", in: tools)?["inputSchema"]?["properties"]?["target"]?["anyOf"]?[1] != nil)
     #expect(tool(named: "invoke", in: tools)?["inputSchema"]?["properties"]?["target"]?["anyOf"]?[2] == nil)
     #expect(tool(named: "type", in: tools)?["inputSchema"]?["required"] == .array([.string("target"), .string("value")]))
+<<<<<<< ours
     #expect(tool(named: "wait_for_stability", in: tools)?["inputSchema"]?["properties"]?["stableMs"]?["type"] == .string("integer"))
     #expect(tool(named: "wait_for_stability", in: tools)?["inputSchema"]?["properties"]?["timeoutMs"]?["type"] == .string("integer"))
     #expect(tool(named: "wait_for_stability", in: tools)?["inputSchema"]?["properties"]?["intervalMs"]?["type"] == .string("integer"))
+=======
+    #expect(tool(named: "keyboard", in: tools)?["inputSchema"]?["properties"]?["keys"] == nil)
+    #expect(tool(named: "keyboard", in: tools)?["inputSchema"]?["oneOf"]?[0]?["required"] == .array([.string("text")]))
+    #expect(tool(named: "keyboard", in: tools)?["inputSchema"]?["oneOf"]?[1]?["required"] == .array([.string("key")]))
+>>>>>>> theirs
 }
 
 @Test func toolSurfaceDocsSignatureBlockMatchesSpec() throws {

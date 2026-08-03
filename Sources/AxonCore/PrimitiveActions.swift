@@ -22,6 +22,28 @@ public struct PrimitiveActionResult: Codable, Equatable, Sendable {
         self.details = details
     }
 
+    public static func unverifiedDispatch(
+        action: String,
+        target: String,
+        strategy: String,
+        dispatched: Bool,
+        message: String,
+        details: [String: JSONValue] = [:]
+    ) -> PrimitiveActionResult {
+        var resultDetails = details
+        resultDetails["dispatchSuccess"] = .bool(dispatched)
+        resultDetails["semanticSuccess"] = .null
+        resultDetails["semanticStatus"] = .string("unverified")
+        return PrimitiveActionResult(
+            action: action,
+            target: target,
+            strategy: strategy,
+            success: false,
+            message: message,
+            details: resultDetails
+        )
+    }
+
     public func withSuccess(_ success: Bool, message: String? = nil, details extraDetails: [String: JSONValue] = [:]) -> PrimitiveActionResult {
         var mergedDetails = details
         mergedDetails.merge(extraDetails) { _, detail in detail }
@@ -45,6 +67,27 @@ public struct PrimitiveActionResult: Codable, Equatable, Sendable {
         ]
         object.merge(details) { _, detail in detail }
         return .object(object)
+    }
+}
+
+public enum KeyboardIntent: Equatable, Sendable {
+    case text(String)
+    case key(String)
+
+    public static func validated(text: String?, key: String?) throws -> KeyboardIntent {
+        switch (text, key) {
+        case let (.some(text), .none):
+            return .text(text)
+        case let (.none, .some(key)):
+            guard KeyStroke.isValid(key) else {
+                throw JSONRPCError.invalidParams("Unknown keyboard key or keystroke: \(key)")
+            }
+            return .key(key)
+        case (.some, .some):
+            throw JSONRPCError.invalidParams("keyboard requires exactly one of text or key; both were provided")
+        case (.none, .none):
+            throw JSONRPCError.invalidParams("keyboard requires exactly one of text or key")
+        }
     }
 }
 
@@ -123,7 +166,7 @@ public struct PrimitiveActionHandlers {
     public var clickPoint: (ActionPoint) throws -> PrimitiveActionResult
     public var invoke: (String, String) throws -> PrimitiveActionResult
     public var type: (String, String) throws -> PrimitiveActionResult
-    public var keyboard: (String?, String) throws -> PrimitiveActionResult
+    public var keyboard: (String?, KeyboardIntent) throws -> PrimitiveActionResult
     public var scroll: (PointerTarget?, String?, Double, Double) throws -> PrimitiveActionResult
     public var drag: (PointerTarget, PointerTarget, String?, Int?) throws -> PrimitiveActionResult
 
@@ -132,7 +175,7 @@ public struct PrimitiveActionHandlers {
         clickPoint: @escaping (ActionPoint) throws -> PrimitiveActionResult = { _ in throw JSONRPCError.methodNotFound("click") },
         invoke: @escaping (String, String) throws -> PrimitiveActionResult = { _, _ in throw JSONRPCError.methodNotFound("invoke") },
         type: @escaping (String, String) throws -> PrimitiveActionResult = { _, _ in throw JSONRPCError.methodNotFound("type") },
-        keyboard: @escaping (String?, String) throws -> PrimitiveActionResult = { _, _ in throw JSONRPCError.methodNotFound("keyboard") },
+        keyboard: @escaping (String?, KeyboardIntent) throws -> PrimitiveActionResult = { _, _ in throw JSONRPCError.methodNotFound("keyboard") },
         scroll: @escaping (PointerTarget?, String?, Double, Double) throws -> PrimitiveActionResult = { _, _, _, _ in throw JSONRPCError.methodNotFound("scroll") },
         drag: @escaping (PointerTarget, PointerTarget, String?, Int?) throws -> PrimitiveActionResult = { _, _, _, _ in throw JSONRPCError.methodNotFound("drag") }
     ) {

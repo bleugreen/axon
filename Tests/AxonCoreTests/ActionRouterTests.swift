@@ -22,6 +22,7 @@ import Testing
     #expect(response.result?["action"]?["strategy"] == .string("AXPress"))
 }
 
+<<<<<<< ours
 @Test func waitForStabilityIgnoresSubToleranceFrameJitter() {
     var nowMs = 0
     var captures = 0
@@ -129,6 +130,24 @@ private func stabilitySnapshot(id: String, title: String) -> AppSnapshot {
     #expect(response.result?["wait"]?["elapsedMs"] == .int(250))
     #expect(response.result?["wait"]?["finalObservation"]?["id"] == .string("timeout-4"))
     #expect(sleeps == [100, 100, 50])
+=======
+@Test func keyboardRejectsUnknownMixedAndAbsentIntent() {
+    let router = CommandRouter(actions: PrimitiveActionHandlers())
+    let requests: [[String: JSONValue]] = [
+        ["key": .string("DefinitelyNotAKey")],
+        ["key": .string("Return"), "text": .string("hello")],
+        [:]
+    ]
+
+    for (index, params) in requests.enumerated() {
+        let response = router.handle(JSONRPCRequest(
+            id: .int(index),
+            method: "keyboard",
+            params: .object(params)
+        ))
+        #expect(response.error?.code == JSONRPCError.invalidParams("").code)
+    }
+>>>>>>> theirs
 }
 
 @Test func clickRequestAcceptsPointTarget() {
@@ -659,9 +678,9 @@ private func stabilitySnapshot(id: String, title: String) -> AppSnapshot {
 @Test func keyboardTextRequestPassesAppAndText() {
     let router = CommandRouter(
         actions: PrimitiveActionHandlers(
-            keyboard: { app, text in
+            keyboard: { app, intent in
                 #expect(app == "com.example.App")
-                #expect(text == "hello")
+                #expect(intent == .text("hello"))
                 return PrimitiveActionResult(action: "keyboard", target: app ?? "frontmost", strategy: "CGEventKeyboard", success: true)
             }
         )
@@ -672,7 +691,7 @@ private func stabilitySnapshot(id: String, title: String) -> AppSnapshot {
         method: "keyboard",
         params: .object([
             "app": .string("com.example.App"),
-            "keys": .string("hello")
+            "text": .string("hello")
         ])
     ))
 
@@ -683,9 +702,9 @@ private func stabilitySnapshot(id: String, title: String) -> AppSnapshot {
 @Test func keyboardKeyRequestPassesAppAndKey() {
     let router = CommandRouter(
         actions: PrimitiveActionHandlers(
-            keyboard: { app, key in
+            keyboard: { app, intent in
                 #expect(app == "com.example.App")
-                #expect(key == "Return")
+                #expect(intent == .key("End"))
                 return PrimitiveActionResult(action: "keyboard", target: app ?? "frontmost", strategy: "CGEventKeyboard", success: true)
             }
         )
@@ -696,7 +715,7 @@ private func stabilitySnapshot(id: String, title: String) -> AppSnapshot {
         method: "keyboard",
         params: .object([
             "app": .string("com.example.App"),
-            "keys": .string("Return")
+            "key": .string("End")
         ])
     ))
 

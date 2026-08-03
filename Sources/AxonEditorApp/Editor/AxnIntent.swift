@@ -66,8 +66,8 @@ struct AxnIntent {
             if let text = action.fields["text"]?.editableString.nilIfEmpty {
                 return "Type \(text)"
             }
-            let keys = action.fields["keys"]?.editableString.nilIfEmpty ?? "keys"
-            return "Press \(keys)"
+            let key = action.fields["key"]?.editableString.nilIfEmpty ?? "key"
+            return "Press \(key)"
         case "scroll":
             let target = LocatorSummary(target: action.fields["target"]).intentName ?? action.fields["app"]?.editableString.nilIfEmpty ?? "current view"
             return "Scroll \(target)"
@@ -154,7 +154,7 @@ struct AxnIntent {
 
     private static func parameters(in action: AxnAction) -> [String] {
         var names: [String] = []
-        for key in ["value", "keys", "text"] {
+        for key in ["value", "key", "text"] {
             if let value = action.fields[key]?.editableString {
                 names.append(contentsOf: parameterTokenNames(in: value))
             }

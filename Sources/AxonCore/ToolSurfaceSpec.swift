@@ -96,19 +96,22 @@ public struct ToolSpec: Equatable, Sendable {
     public let description: String
     public let params: [ToolParameterSpec]
     public let cliUsage: String?
+    public let exactlyOneOf: [String]
 
     public init(
         name: String,
         socketMethod: String? = nil,
         description: String,
         params: [ToolParameterSpec] = [],
-        cliUsage: String? = nil
+        cliUsage: String? = nil,
+        exactlyOneOf: [String] = []
     ) {
         self.name = name
         self.socketMethod = socketMethod ?? name
         self.description = description
         self.params = params
         self.cliUsage = cliUsage
+        self.exactlyOneOf = exactlyOneOf
     }
 
     public var requiredParamNames: [String] {
@@ -220,10 +223,12 @@ public enum ToolSurfaceSpec {
             name: "keyboard",
             description: "Post keyboard input for shortcuts, special keys, or raw text when field-level type is not the right intent.",
             params: [
-                ToolParameterSpec("keys", .string, required: true, description: "Text, special key, or combo, for example Return or cmd+shift+p."),
+                ToolParameterSpec("text", .string, description: "Arbitrary text to enter exactly as provided."),
+                ToolParameterSpec("key", .string, description: "Recognized key or keystroke, for example End, Return, or cmd+shift+p. Unknown names are rejected."),
                 ToolParameterSpec("app", .string, description: "Optional app to activate before posting keyboard input.")
             ],
-            cliUsage: "axon keyboard [--app app] <keys-or-text>"
+            cliUsage: "axon keyboard [--app app] (--text text | --key keystroke)",
+            exactlyOneOf: ["text", "key"]
         ),
         ToolSpec(
             name: "scroll",
@@ -310,6 +315,11 @@ public enum ToolSurfaceSchema {
         let required = tool.requiredParamNames
         if !required.isEmpty {
             object["required"] = .array(required.map(JSONValue.string))
+        }
+        if !tool.exactlyOneOf.isEmpty {
+            object["oneOf"] = .array(tool.exactlyOneOf.map { name in
+                .object(["required": .array([.string(name)])])
+            })
         }
         return .object(object)
     }

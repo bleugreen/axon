@@ -279,10 +279,11 @@ import Testing
                     "value": .string(value)
                 ])
             },
-            keyboard: { app, keys in
-                keyedValues.append(keys)
+            keyboard: { app, intent in
+                guard case let .text(text) = intent else { return PrimitiveActionResult(action: "keyboard", target: "invalid", strategy: "test", success: false) }
+                keyedValues.append(text)
                 return PrimitiveActionResult(action: "keyboard", target: app ?? "frontmost", strategy: "test", success: true, details: [
-                    "keys": .string(keys)
+                    "text": .string(text)
                 ])
             }
         ),
@@ -305,7 +306,7 @@ import Testing
         params: .object([
             "_session": .string("thread-a"),
             "app": .string("Example"),
-            "keys": .string("paste \(token)")
+            "text": .string("paste \(token)")
         ])
     ))
 
