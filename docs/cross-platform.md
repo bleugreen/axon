@@ -176,9 +176,12 @@ failure reports a real integration regression without blocking a pull request:
 - Linux connects to the logged-in GNOME session's AT-SPI bus and runs the
   hardened Calculator probe, which verifies the expected text transition on the
   same AT-SPI object that was captured before dispatch;
-- Windows rebuilds `axon-win`, restarts its scheduled interactive-session daemon
-  from the runner's session-0 service, sends `look` through
-  `\\.\pipe\axon-v1`, and requires a real window root.
+- Windows uses a localhost-only, forced-command SSH key to cross from the
+  runner's session-0 service into the desktop user's process context. The fixed
+  probe rebuilds `axon-win`, snapshots and temporarily replaces the scheduled
+  interactive-session daemon, sends `look` through `\\\\.\\pipe\\axon-v1`,
+  requires a real window root, and restores the prior task and running state in
+  a `finally` block.
 
 The repository's Actions policy requires approval for every outside
 contributor's workflow runs. This is defense in depth: the live workflow's lack
