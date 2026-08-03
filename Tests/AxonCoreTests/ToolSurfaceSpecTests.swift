@@ -14,6 +14,9 @@ import Testing
     #expect(tool(named: "keyboard", in: tools)?["inputSchema"]?["properties"]?["keys"] == nil)
     #expect(tool(named: "keyboard", in: tools)?["inputSchema"]?["oneOf"]?[0]?["required"] == .array([.string("text")]))
     #expect(tool(named: "keyboard", in: tools)?["inputSchema"]?["oneOf"]?[1]?["required"] == .array([.string("key")]))
+    #expect(tool(named: "wait_for_stability", in: tools)?["inputSchema"]?["properties"]?["stableMs"]?["type"] == .string("integer"))
+    #expect(tool(named: "wait_for_stability", in: tools)?["inputSchema"]?["properties"]?["timeoutMs"]?["type"] == .string("integer"))
+    #expect(tool(named: "wait_for_stability", in: tools)?["inputSchema"]?["properties"]?["intervalMs"]?["type"] == .string("integer"))
 }
 
 @Test func toolSurfaceDocsSignatureBlockMatchesSpec() throws {

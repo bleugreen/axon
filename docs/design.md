@@ -57,6 +57,7 @@ The snapshot engine captures the active state for a target app or window:
 - app identity: bundle id, localized name, pid
 - window identity: title, role, subrole, frame, focus/main status
 - accessibility tree: roles, labels, values, descriptions, help text, actions, frames, children
+- focused UI element: an explicit available, none, or inaccessible state, with a retained handle when the focused element is in the captured tree
 - embedded screenshot data for coordinate fallback, visual debugging, and human inspection
 
 Every snapshot receives an opaque id. Tree indexes are scoped to that snapshot only.
@@ -86,6 +87,8 @@ Locator consumers do not reuse a previously displayed observation. `AXLiveLocato
 The editor AX tree sidebar currently participates in this same shipped pipeline. `AXTreeInspector.FullAXTreeReader` sends a JSON-RPC `look` request with `target` and `tree: true`, so its primary tree is whatever `CommandRouter` and `AXFullTreeCapturer` return for an app snapshot. Its acted-on-target cue sends `find`, which goes through `AXLiveLocatorResolver`. The open design issue `docs/issues/2026-05-17-live-ax-inspector-sidebar.md` deliberately calls this out as not yet being the future live inspector architecture.
 
 `SnapshotObservationFormatter` is not a capturer. It renders captured snapshot JSON and children-page JSON into the observation DSL used by MCP and the CLI. `MCPRouter` applies MCP defaults for `look`, routes app snapshots, app lists, and handle-child pages through the formatter unless `format: "debug"` is requested, and the CLI `look` command uses the same formatter for non-JSON output.
+
+Bounded readiness waits reuse the command router's clock and interval seams. `wait_for_value` repeatedly resolves one locator and evaluates readable AX fields. `wait_for_stability` instead compares complete app observation signatures, including the accessibility tree and focused element, so navigation readiness is not forced into a value-only predicate. Stability means the signature has remained unchanged for a caller-bounded window; change means it differs from the initial signature. Every timeout returns the final captured observation.
 
 ### Locator Resolver
 

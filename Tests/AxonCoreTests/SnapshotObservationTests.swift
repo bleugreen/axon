@@ -2,6 +2,22 @@ import Foundation
 import Testing
 @testable import AxonCore
 
+@Test func observationReportsAvailableMissingAndInaccessibleFocusHonestly() {
+    let formatter = SnapshotObservationFormatter()
+    let app = AppIdentity(bundleIdentifier: "com.example.App", name: "Example", processIdentifier: 7)
+    let focused = AppSnapshot(
+        id: SnapshotID("focus"), app: app, windows: [AXNode(role: "AXWindow")], screenshot: nil,
+        focus: .available(element: AXNode(role: "AXTextField", title: "Search"), handle: SnapshotHandle(snapshotID: SnapshotID("pending"), nodeIndex: 0))
+    )
+    let missing = AppSnapshot(id: SnapshotID("none"), app: app, windows: [], screenshot: nil, focus: .none)
+    let inaccessible = AppSnapshot(id: SnapshotID("error"), app: app, windows: [], screenshot: nil, focus: .inaccessible(error: "AX query failed"))
+
+    #expect(formatter.text(from: formatter.observation(from: focused.jsonValue, frames: false)).contains("focus: available focus:0 field \"Search\""))
+    #expect(formatter.observation(from: focused.jsonValue, frames: false)["focus"]?["target"]?["locator"]?["title"] == .string("Search"))
+    #expect(formatter.text(from: formatter.observation(from: missing.jsonValue, frames: false)).contains("focus: none"))
+    #expect(formatter.text(from: formatter.observation(from: inaccessible.jsonValue, frames: false)).contains("focus: inaccessible \"AX query failed\""))
+}
+
 @Test func observationPagesBroadSiblingSetsWithoutDroppingFollowingContent() {
     let tabs = (1...30).map { index in
         AXNode(role: "AXRadioButton", title: "Tab \(index)", actions: ["AXPress"], children: [

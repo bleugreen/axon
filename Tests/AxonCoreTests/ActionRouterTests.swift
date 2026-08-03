@@ -38,6 +38,113 @@ import Testing
         ))
         #expect(response.error?.code == JSONRPCError.invalidParams("").code)
     }
+@Test func waitForStabilityIgnoresSubToleranceFrameJitter() {
+    var nowMs = 0
+    var captures = 0
+    let router = CommandRouter(
+        captureSnapshot: { _, _ in
+            captures += 1
+            let frame = AXFrame(x: Double(captures) * 0.4, y: 0, width: 100, height: 20)
+            return AppSnapshot(
+                id: SnapshotID("jitter-\(captures)"),
+                app: AppIdentity(bundleIdentifier: "com.example.App", name: "Example", processIdentifier: 7),
+                windows: [AXNode(role: "AXWindow", title: "Ready", frame: frame)],
+                screenshot: nil
+            )
+        },
+        now: { Date(timeIntervalSince1970: Double(nowMs) / 1_000) },
+        sleepMilliseconds: { nowMs += $0 }
+    )
+
+    let response = router.handle(JSONRPCRequest(
+        id: .string("jitter"), method: "wait_for_stability",
+        params: .object(["app": .string("Example"), "stableMs": .int(200), "timeoutMs": .int(500), "intervalMs": .int(100)])
+    ))
+
+    #expect(response.result?["wait"]?["success"] == .bool(true))
+    #expect(response.result?["wait"]?["elapsedMs"] == .int(200))
+}
+
+private func stabilitySnapshot(id: String, title: String) -> AppSnapshot {
+    AppSnapshot(
+        id: SnapshotID(id),
+        app: AppIdentity(bundleIdentifier: "com.example.App", name: "Example", processIdentifier: 7),
+        windows: [AXNode(role: "AXWindow", title: title)],
+        screenshot: nil
+    )
+}
+
+@Test func waitForStabilityReturnsAfterBoundedUnchangedWindow() {
+    var nowMs = 0
+    var sleeps: [Int] = []
+    var captures = 0
+    let router = CommandRouter(
+        captureSnapshot: { app, screenshot in
+            #expect(app == "Example")
+            #expect(screenshot == false)
+            captures += 1
+            return stabilitySnapshot(id: "stable-\(captures)", title: "Ready")
+        },
+        now: { Date(timeIntervalSince1970: Double(nowMs) / 1_000) },
+        sleepMilliseconds: { milliseconds in sleeps.append(milliseconds); nowMs += milliseconds }
+    )
+
+    let response = router.handle(JSONRPCRequest(
+        id: .string("stable"), method: "wait_for_stability",
+        params: .object(["app": .string("Example"), "stableMs": .int(200), "timeoutMs": .int(500), "intervalMs": .int(100)])
+    ))
+
+    #expect(response.error == nil)
+    #expect(response.result?["wait"]?["success"] == .bool(true))
+    #expect(response.result?["wait"]?["elapsedMs"] == .int(200))
+    #expect(response.result?["wait"]?["finalObservation"]?["id"] == .string("stable-3"))
+    #expect(sleeps == [100, 100])
+}
+
+@Test func waitForStabilityChangedConditionReturnsChangedObservation() {
+    var nowMs = 0
+    var captures = 0
+    let router = CommandRouter(
+        captureSnapshot: { _, _ in
+            captures += 1
+            return stabilitySnapshot(id: "change-\(captures)", title: captures < 2 ? "Loading" : "Ready")
+        },
+        now: { Date(timeIntervalSince1970: Double(nowMs) / 1_000) },
+        sleepMilliseconds: { nowMs += $0 }
+    )
+
+    let response = router.handle(JSONRPCRequest(
+        id: .string("changed"), method: "wait_for_stability",
+        params: .object(["app": .string("Example"), "condition": .string("changed"), "timeoutMs": .int(500), "intervalMs": .int(100)])
+    ))
+
+    #expect(response.result?["wait"]?["success"] == .bool(true))
+    #expect(response.result?["wait"]?["elapsedMs"] == .int(100))
+    #expect(response.result?["wait"]?["finalObservation"]?["id"] == .string("change-2"))
+}
+
+@Test func waitForStabilityTimeoutReturnsFinalObservationAndCapsLastSleep() {
+    var nowMs = 0
+    var captures = 0
+    var sleeps: [Int] = []
+    let router = CommandRouter(
+        captureSnapshot: { _, _ in
+            captures += 1
+            return stabilitySnapshot(id: "timeout-\(captures)", title: "State \(captures)")
+        },
+        now: { Date(timeIntervalSince1970: Double(nowMs) / 1_000) },
+        sleepMilliseconds: { sleeps.append($0); nowMs += $0 }
+    )
+
+    let response = router.handle(JSONRPCRequest(
+        id: .string("timeout"), method: "wait_for_stability",
+        params: .object(["app": .string("Example"), "stableMs": .int(200), "timeoutMs": .int(250), "intervalMs": .int(100)])
+    ))
+
+    #expect(response.result?["wait"]?["success"] == .bool(false))
+    #expect(response.result?["wait"]?["elapsedMs"] == .int(250))
+    #expect(response.result?["wait"]?["finalObservation"]?["id"] == .string("timeout-4"))
+    #expect(sleeps == [100, 100, 50])
 }
 
 @Test func clickRequestAcceptsPointTarget() {

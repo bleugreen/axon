@@ -13,7 +13,7 @@ public enum ToolTargetKind: String, CaseIterable, Sendable {
         case .locator:
             return "Locator target object with app and locator fields. Locator may use label, title, value, description, identifier, actions, and ancestors."
         case .point:
-            return "Point target object: { point: { x, y, coordinateSpace } } or { x, y, coordinateSpace }. coordinateSpace is screen, window, or screenshot; window and screenshot points require app when no top-level app is provided. Legacy { x, y } still resolves as screen coordinates for compatibility."
+            return "Point target object: { point: { x, y, coordinateSpace } } or { x, y, coordinateSpace }. coordinateSpace is screen, window, or screenshot; window and screenshot points require app when no top-level app is provided. Legacy { x, y } still resolves as screen coordinates for compatibility. Raw points dispatch without element identity or occlusion verification; use a handle or locator when fail-closed target validation is required."
         case .textLocation:
             return "Text location target object: { location: { app, text, source? } }. Resolves visible text to a click/drag/scroll point using AX text or screenshot OCR without callers providing coordinates."
         }
@@ -162,6 +162,18 @@ public enum ToolSurfaceSpec {
                 ToolParameterSpec("intervalMs", .integer, default: .int(100), description: "Delay between polls. Defaults to 100 ms and is capped by the remaining timeout.")
             ],
             cliUsage: "axon wait_for_value '<target-json>' (--contains text | --equals text | --matches regex) [--timeout-ms n] [--interval-ms n]"
+        ),
+        ToolSpec(
+            name: "wait_for_stability",
+            description: "Poll full app observations until the accessibility surface remains unchanged for a stability window or changes from its initial state; timeout returns the final observation.",
+            params: [
+                ToolParameterSpec("app", .string, required: true, description: "Bundle id, pid, exact app name, or partial app name."),
+                ToolParameterSpec("condition", .string, default: .string("stable"), description: "stable waits for an unchanged stability window; changed waits for an observable app, tree, or focus change."),
+                ToolParameterSpec("stableMs", .integer, default: .int(300), description: "Required unchanged duration for the stable condition. Defaults to 300 ms and is capped at 10000 ms."),
+                ToolParameterSpec("timeoutMs", .integer, default: .int(5_000), description: "Maximum wait. Defaults to 5000 ms and is capped at 60000 ms."),
+                ToolParameterSpec("intervalMs", .integer, default: .int(100), description: "Delay between observations. At least 10 ms and capped by the remaining timeout.")
+            ],
+            cliUsage: "axon wait_for_stability <app> [--condition stable|changed] [--stable-ms n] [--timeout-ms n] [--interval-ms n]"
         ),
         ToolSpec(
             name: "permit",
@@ -318,7 +330,9 @@ public enum ToolSurfaceSchema {
             return scalarSchema(type: "string", description: param.description)
         case .boolean:
             return scalarSchema(type: "boolean", description: param.description)
-        case .integer, .number:
+        case .integer:
+            return scalarSchema(type: "integer", description: param.description)
+        case .number:
             return scalarSchema(type: "number", description: param.description)
         case .object:
             return .object([

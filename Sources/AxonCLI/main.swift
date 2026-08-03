@@ -57,6 +57,15 @@ do {
             .send(JSONRPCRequest(id: .string("health"), method: "health"))
         try printResponse(response)
 
+    case "wait_for_stability":
+        let response = try SocketClient(path: socketPath, responseTimeoutSeconds: SocketClient.defaultRunResponseTimeoutSeconds)
+            .send(JSONRPCRequest(
+                id: .string("wait_for_stability"),
+                method: "wait_for_stability",
+                params: .object(try waitForStabilityParams(arguments: arguments))
+            ))
+        try printResponse(response)
+
     case "permit":
         let response = try SocketClient(path: socketPath)
             .send(JSONRPCRequest(id: .string("permit"), method: "permit"))
@@ -224,6 +233,32 @@ do {
 } catch {
     fputs("axon: \(error)\n", stderr)
     exit(1)
+}
+
+private func waitForStabilityParams(arguments: [String]) throws -> [String: JSONValue] {
+    guard arguments.count >= 2 else { throw CLIError.missingArguments("wait_for_stability requires an app") }
+    var params: [String: JSONValue] = ["app": .string(arguments[1])]
+    var index = 2
+    while index < arguments.count {
+        let key: String
+        switch arguments[index] {
+        case "--condition": key = "condition"
+        case "--stable-ms": key = "stableMs"
+        case "--timeout-ms": key = "timeoutMs"
+        case "--interval-ms": key = "intervalMs"
+        default: throw CLIError.missingArguments("unexpected wait_for_stability argument: \(arguments[index])")
+        }
+        guard index + 1 < arguments.count else { throw CLIError.missingArguments("wait_for_stability \(arguments[index]) requires a value") }
+        if key == "condition" {
+            params[key] = .string(arguments[index + 1])
+        } else if let value = Int(arguments[index + 1]) {
+            params[key] = .int(value)
+        } else {
+            throw CLIError.missingArguments("wait_for_stability \(arguments[index]) requires an integer")
+        }
+        index += 2
+    }
+    return params
 }
 
 private func requiredArgument(after command: String, in arguments: [String]) throws -> String {

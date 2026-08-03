@@ -9,6 +9,7 @@ files, and the CLI. There are no compatibility aliases for previous tool names.
 look(target?, since?, screenshot?, screenText?, tree?, offset?, limit?, direct?, childDepth?, depth?, all?, format?, frames?)
 find(app, locator)
 wait_for_value(target, contains?, equals?, matches?, timeoutMs?, intervalMs?)
+wait_for_stability(app, condition?, stableMs?, timeoutMs?, intervalMs?)
 permit()
 run(actions?, path?, argValues?, continueOnError?, dryRun?)
 save(sessionId?, from?, to?, path?, includeReads?)
@@ -28,6 +29,7 @@ axon refresh-secrets [--json]
 axon look [target] [--since snapshot-id] [--screenshot] [--screen-text] [--frames] [--json] [--details] [--debug] [--no-tree] [--offset n] [--limit n] [--depth n]
 axon find <app> '<locator-json>'
 axon wait_for_value '<target-json>' (--contains text | --equals text | --matches regex) [--timeout-ms n] [--interval-ms n]
+axon wait_for_stability <app> [--condition stable|changed] [--stable-ms n] [--timeout-ms n] [--interval-ms n]
 axon run <path.axn> [--arg name=value] [--dry-run] [--continue-on-error]
 axon save [--session id] [--from call] [--to call] [--path file.axn] [--include-reads]
 
@@ -50,6 +52,11 @@ agent-facing observation by default; `format: "debug"` returns the raw snapshot.
 The observation tree is a DSL string with retained handles, roles, labels,
 actions, and explicit truncation markers. Screenshots are opt-in with
 `screenshot: true`. `screenText: true` OCRs visible text from the screenshot.
+App observations also report `focus`. `available` includes the focused element's
+role and label plus a retained handle when that element belongs to the captured
+tree. `none` means the app reported no focused UI element. `inaccessible` means
+the `AXFocusedUIElement` query itself failed and includes the Accessibility error;
+it is never collapsed into `none`.
 
 Active credential redaction is always on when a provider-backed index has been
 refreshed with `axon refresh-secrets`. Redacted active credentials appear as
@@ -94,6 +101,15 @@ observed readable state (`predicate_timeout`) or the last missing/ambiguous
 locator resolution (`target_unresolved_timeout`). This is a settled-state wait;
 `look(since:)` remains the coarse app/window change check.
 
+`wait_for_stability(app, condition)` polls full app observations rather than a
+single element value. The default `stable` condition succeeds after the tree and
+focused element remain unchanged for `stableMs` (300 ms by default). `changed`
+succeeds when those observable fields differ from the initial observation. Both
+conditions use a bounded interval of at least 10 ms, cap the timeout at 60 seconds,
+and return `finalObservation` on success or timeout. This is the post-navigation
+settle primitive; use `wait_for_value` when readiness has a specific semantic
+field predicate instead.
+
 ## Actions
 
 Targets may be snapshot handles or locator objects:
@@ -112,7 +128,11 @@ target:
 `drag` accepts the same pointer target vocabulary for `from` and `to`. Point
 coordinates may explicitly use `screen`, `window`, or `screenshot` coordinate
 spaces; legacy point payloads without `coordinateSpace` remain screen points for
-wire compatibility. Direct drag results separate pointer dispatch from semantic
+wire compatibility. Handle- and locator-derived pointer events are hit-tested
+again immediately before dispatch and fail closed if the intended element moved,
+is occluded, or cannot be resolved. Explicit point targets carry no intended
+element identity, so they dispatch as unverified coordinates; use a handle or
+locator when fail-closed target validation is required. Direct drag results separate pointer dispatch from semantic
 success. A drag is semantically successful only when `run` verifies supplied
 `expects` facts after dispatch, such as an AX list value exposing the new row
 order.
