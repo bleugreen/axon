@@ -79,7 +79,10 @@ impl<B: PlatformBackend> Router<B> {
                 if !same_semantic_node(&target, &hit) {
                     return Err(rpc_error(
                         -32003,
-                        "click target moved, is covered, or no longer matches the resolved element",
+                        format!(
+                            "click target moved, is covered, or no longer matches the resolved element: target={:?}/{:?}/{:?} hit={:?}/{:?}/{:?}",
+                            target.role, target.name, target.identifier, hit.role, hit.name, hit.identifier
+                        ),
                     ));
                 }
                 self.backend.pointer_click(point).map_err(backend_error)?;
