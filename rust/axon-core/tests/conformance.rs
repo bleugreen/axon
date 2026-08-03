@@ -40,9 +40,6 @@ fn locator_fixture_covers_filtering_scoring_and_explanations() {
             assert!(!candidate.reasons.is_empty(), "{} explanation", case.name)
         }
     }
-    fn verify(&mut self, _fact: &ExpectedFact) -> Result<(), String> {
-        Ok(())
-    }
 }
 
 #[test]
@@ -82,6 +79,7 @@ impl ToolDispatcher for Dispatcher {
             }
         }
     }
+    fn verify(&mut self, _fact: &ExpectedFact) -> Result<(), String> { Ok(()) }
 }
 
 #[test]
@@ -102,8 +100,8 @@ fn axn_round_trip_binding_and_trace_semantics() {
             &doc,
             &args,
             RunOptions {
-                dry_run: false,
-                continue_on_error: false,
+                dry_run: Some(false),
+                continue_on_error: Some(false),
             },
         )
         .unwrap();
@@ -129,8 +127,8 @@ fn continue_on_error_preserves_trace_and_secret_is_redacted() {
             &doc,
             &args,
             RunOptions {
-                dry_run: false,
-                continue_on_error: true,
+                dry_run: Some(false),
+                continue_on_error: Some(true),
             },
         )
         .unwrap();
@@ -146,7 +144,7 @@ fn continue_on_error_preserves_trace_and_secret_is_redacted() {
 #[test]
 fn rpc_envelopes_preserve_jsonrpc_and_batch_wire_shape() {
     let response = JsonRpcResponse::success(
-        Some(JsonRpcId::Integer(7)),
+        JsonRpcId::Integer(7),
         serde_json::to_value(RunEnvelope {
             batch: json!({"success":true}),
         })

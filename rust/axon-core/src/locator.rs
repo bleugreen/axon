@@ -262,7 +262,7 @@ fn ancestor_matches(l: &AncestorLocator, n: &Node) -> bool {
         && l.title
             .as_ref()
             .is_none_or(|x| x.matches(n.title.as_deref()))
-        && l.label.as_ref().is_none_or(|x| x.matches(node_label(n)))
+        && l.label.as_ref().is_none_or(|x| x.matches(n.label.as_deref()))
 }
 fn add_match(
     m: &Option<TextMatcher>,
@@ -301,7 +301,7 @@ fn candidate(
         reasons.push(format!("subrole {subrole}"));
     }
     if !add_match(&locator.title, node.title.as_deref(), "title", &mut reasons)
-        || !add_match(&locator.label, node_label(node), "label", &mut reasons)
+        || !add_match(&locator.label, node.label.as_deref(), "label", &mut reasons)
         || !add_match(
             &locator.description,
             node.description.as_deref(),

@@ -3,8 +3,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::time::Duration;
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Capability {
     Enumerate,
     Capture,
@@ -23,7 +22,7 @@ pub enum Capability {
     ObserveGlobalInput,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CapabilityInfo {
     pub capability: Capability,
     pub usable: bool,

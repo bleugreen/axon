@@ -124,9 +124,9 @@ pub trait ToolDispatcher {
 #[serde(rename_all = "camelCase")]
 pub struct RunOptions {
     #[serde(default)]
-    pub dry_run: bool,
+    pub dry_run: Option<bool>,
     #[serde(default)]
-    pub continue_on_error: bool,
+    pub continue_on_error: Option<bool>,
 }
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -178,6 +178,8 @@ impl<'a, D: ToolDispatcher> AxnRunner<'a, D> {
         options: RunOptions,
     ) -> Result<RunResult, AxnError> {
         let bindings = self.bind(&doc.arguments, arg_values)?;
+        let dry_run = dry_run.unwrap_or_else(|| document_flag(doc, "dryRun"));
+        let continue_on_error = continue_on_error.unwrap_or_else(|| document_flag(doc, "continueOnError"));
         let mut trace = Vec::new();
         let mut facts = HashSet::new();
         let mut success = true;
@@ -194,14 +196,14 @@ impl<'a, D: ToolDispatcher> AxnRunner<'a, D> {
                     resolution: None,
                 });
                 success = false;
-                if !options.continue_on_error {
+                if !continue_on_error {
                     break;
                 } else {
                     continue;
                 }
             }
             let (params, secret_fields) = substitute_map(&action.params, &bindings)?;
-            let outcome = if options.dry_run {
+            let outcome = if dry_run {
                 let mut shown = params.clone();
                 for key in &secret_fields {
                     shown.insert(
@@ -223,7 +225,7 @@ impl<'a, D: ToolDispatcher> AxnRunner<'a, D> {
             } else {
                 Value::String("<redacted: contains-secret>".into())
             };
-            let verification_error = if outcome.success {
+            let verification_error = if outcome.success && !dry_run {
                 action
                     .expects
                     .iter()
@@ -250,21 +252,21 @@ impl<'a, D: ToolDispatcher> AxnRunner<'a, D> {
                     .or_else(|| (!outcome.success).then(|| "action failed".into()))),
                 resolution: outcome.resolution,
             };
-            if entry.success {
+            if entry.success && !dry_run {
                 facts.extend(action.expects.iter().map(|f| f.id.clone()))
             } else {
                 success = false
             }
             let failed = !entry.success;
             trace.push(entry);
-            if failed && !options.continue_on_error {
+            if failed && !continue_on_error {
                 break;
             }
         }
         Ok(RunResult {
             success,
-            dry_run: options.dry_run,
-            continue_on_error: options.continue_on_error,
+            dry_run: dry_run,
+            continue_on_error: continue_on_error,
             trace,
         })
     }
@@ -344,4 +346,8 @@ fn substitute_map(
         }
     }
     Ok((out, tainted))
+}
+
+fn document_flag(doc: &AxnDocument, key: &str) -> bool {
+    doc.flags.get(key).and_then(Value::as_bool).unwrap_or(false)
 }
