@@ -96,13 +96,61 @@ public struct CommandRouterServices {
 
 private struct AppObservationSignature: Equatable {
     let app: AppIdentity
-    let windows: [AXNode]
-    let focus: FocusObservation
+    let windows: [ObservationNodeSignature]
+    let focus: FocusSignature
 
     init(snapshot: AppSnapshot) {
         app = snapshot.app
-        windows = snapshot.windows
-        focus = snapshot.focus
+        windows = snapshot.windows.map(ObservationNodeSignature.init)
+        focus = FocusSignature(snapshot.focus)
+    }
+}
+
+private struct ObservationNodeSignature: Equatable {
+    let role: String
+    let subrole: String?
+    let title: String?
+    let value: String?
+    let description: String?
+    let help: String?
+    let identifier: String?
+    let enabled: Bool?
+    let focused: Bool?
+    let frame: FrameSignature?
+    let actions: [String]
+    let childCount: Int?
+    let truncationReason: String?
+    let children: [ObservationNodeSignature]
+
+    init(_ node: AXNode) {
+        role = node.role
+        subrole = node.subrole
+        title = node.title
+        value = node.value
+        description = node.description
+        help = node.help
+        identifier = node.identifier
+        enabled = node.enabled
+        focused = node.focused
+        frame = node.frame.map(FrameSignature.init(frame:))
+        actions = node.actions
+        childCount = node.childCount
+        truncationReason = node.truncationReason
+        children = node.children.map(ObservationNodeSignature.init)
+    }
+}
+
+private enum FocusSignature: Equatable {
+    case available(ObservationNodeSignature)
+    case none
+    case inaccessible(String)
+
+    init(_ focus: FocusObservation) {
+        switch focus {
+        case let .available(element, _): self = .available(ObservationNodeSignature(element))
+        case .none: self = .none
+        case let .inaccessible(error): self = .inaccessible(error)
+        }
     }
 }
 

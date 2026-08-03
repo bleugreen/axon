@@ -320,7 +320,9 @@ public enum ToolSurfaceSchema {
             return scalarSchema(type: "string", description: param.description)
         case .boolean:
             return scalarSchema(type: "boolean", description: param.description)
-        case .integer, .number:
+        case .integer:
+            return scalarSchema(type: "integer", description: param.description)
+        case .number:
             return scalarSchema(type: "number", description: param.description)
         case .object:
             return .object([

@@ -206,8 +206,11 @@ public struct AXFullTreeCapturer {
             }
             return .inaccessible(error: "AXFocusedUIElement query failed (AXError \(error.rawValue))")
         }
-        guard let value, CFGetTypeID(value) == AXUIElementGetTypeID() else {
+        guard let value else {
             return .none
+        }
+        guard CFGetTypeID(value) == AXUIElementGetTypeID() else {
+            return .inaccessible(error: "AXFocusedUIElement returned an unexpected value type")
         }
         let element = unsafeDowncast(value, to: AXUIElement.self)
         AXUIElementSetMessagingTimeout(element, Self.messagingTimeout)

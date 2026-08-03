@@ -22,6 +22,33 @@ import Testing
     #expect(response.result?["action"]?["strategy"] == .string("AXPress"))
 }
 
+@Test func waitForStabilityIgnoresSubToleranceFrameJitter() {
+    var nowMs = 0
+    var captures = 0
+    let router = CommandRouter(
+        captureSnapshot: { _, _ in
+            captures += 1
+            let frame = AXFrame(x: Double(captures) * 0.4, y: 0, width: 100, height: 20)
+            return AppSnapshot(
+                id: SnapshotID("jitter-\(captures)"),
+                app: AppIdentity(bundleIdentifier: "com.example.App", name: "Example", processIdentifier: 7),
+                windows: [AXNode(role: "AXWindow", title: "Ready", frame: frame)],
+                screenshot: nil
+            )
+        },
+        now: { Date(timeIntervalSince1970: Double(nowMs) / 1_000) },
+        sleepMilliseconds: { nowMs += $0 }
+    )
+
+    let response = router.handle(JSONRPCRequest(
+        id: .string("jitter"), method: "wait_for_stability",
+        params: .object(["app": .string("Example"), "stableMs": .int(200), "timeoutMs": .int(500), "intervalMs": .int(100)])
+    ))
+
+    #expect(response.result?["wait"]?["success"] == .bool(true))
+    #expect(response.result?["wait"]?["elapsedMs"] == .int(200))
+}
+
 private func stabilitySnapshot(id: String, title: String) -> AppSnapshot {
     AppSnapshot(
         id: SnapshotID(id),
