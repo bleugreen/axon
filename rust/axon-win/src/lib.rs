@@ -2,8 +2,9 @@
 
 use axon_core::{
     AppQuery, AxnCodec, AxnRunner, DispatchOutcome, ExpectedFact, JsonRpcError, JsonRpcId,
-    JsonRpcRequest, JsonRpcResponse, Locator, LocatorResolver, PlatformBackend, RunEnvelope,
-    RunOptions, Snapshot, SnapshotHandle, ToolDispatcher,
+    Candidate, Confidence, JsonRpcRequest, JsonRpcResponse, Locator, LocatorResolver,
+    PlatformBackend, Resolution, ResolutionStatus, RunEnvelope, RunOptions, Snapshot,
+    SnapshotHandle, ToolDispatcher,
 };
 use serde_json::{Map, Value, json};
 
@@ -150,8 +151,31 @@ impl<B: PlatformBackend> Router<B> {
             snapshot
                 .index_for_handle(&handle)
                 .map_err(|e| rpc_error(-32002, e.to_string()))?;
-            let empty = Locator::default();
-            return Ok((handle, LocatorResolver::resolve(&empty, snapshot)));
+            let index = snapshot
+                .index_for_handle(&handle)
+                .map_err(|e| rpc_error(-32002, e.to_string()))?;
+            let node = flattened(snapshot)
+                .nth(index)
+                .ok_or_else(|| rpc_error(-32002, "handle index is outside snapshot"))?;
+            let candidate = Candidate {
+                index,
+                handle: handle.clone(),
+                role: node.role.clone(),
+                title: node.title.clone(),
+                frame: node.frame,
+                score: 0,
+                reasons: vec!["snapshot-bound handle".into()],
+            };
+            return Ok((
+                handle,
+                Resolution {
+                    status: ResolutionStatus::Unique,
+                    snapshot_id: snapshot.id.clone(),
+                    confidence: Confidence::High,
+                    best: Some(candidate.clone()),
+                    candidates: vec![candidate],
+                },
+            ));
         }
         let locator_value = target
             .get("locator")

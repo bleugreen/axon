@@ -20,11 +20,19 @@ descriptor. Start `axon-win.exe mcp` as the short-lived JSON-lines MCP facade.
 The facade preserves daemon results under `structuredContent`, including the
 canonical `batch` wrapper returned by `run`.
 
-Run `axon-win.exe probe` from the interactive session before integration. It
-reports the active UI Automation connection and transaction timeouts and marks
-the ValuePattern and event checks that require a visible disposable target and
-manual interaction. UI Automation cannot cross session 0/session 1, and controls
-above the daemon's integrity level require matching elevation or signed UIAccess.
+Run the live probes from the interactive session before integration:
+
+    axon-win.exe probe value Notepad
+    axon-win.exe probe events cairn 15
+    axon-win.exe probe timeout cairn 1000
+
+The value probe validates set/read/restore on an editable ValuePattern target. The
+event probe separately records automation, structure, and focus callbacks while
+the user interacts with the target. The timeout probe reports the configured
+IUIAutomation2 provider timeouts and measured call, or honestly reports that the
+extended interface is unavailable. UI Automation cannot cross session 0/session
+1, and controls above the daemon's integrity level require matching elevation or
+signed UIAccess.
 
 Capture matches an application by top-level window title (exact then substring)
 or process identifier. Locator `role` values use native UIA control type names
