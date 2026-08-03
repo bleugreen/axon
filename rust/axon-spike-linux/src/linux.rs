@@ -5,11 +5,8 @@ use std::{
 };
 
 use atspi::{
-    proxy::{
-        accessible::ObjectRefExt,
-        proxy_ext::ProxyExt,
-    },
     AccessibilityConnection, CoordType, ObjectRefOwned,
+    proxy::{accessible::ObjectRefExt, proxy_ext::ProxyExt},
 };
 
 use crate::Options;
@@ -74,7 +71,10 @@ pub async fn run(options: Options) -> Result<(), Box<dyn Error>> {
             .await?;
         let action = proxy.proxies().await?.action().await?;
         let actions = action.get_actions().await?;
-        println!("matched role={:?} name={:?} actions={actions:?}", target.role, target.name);
+        println!(
+            "matched role={:?} name={:?} actions={actions:?}",
+            target.role, target.name
+        );
         if actions.is_empty() {
             return Err("matched control exposes no AT-SPI actions".into());
         }
@@ -138,7 +138,10 @@ async fn capture(
         let Ok(proxy) = object.as_accessible_proxy(connection).await else {
             continue;
         };
-        let role = proxy.get_role_name().await.unwrap_or_else(|_| "<error>".to_owned());
+        let role = proxy
+            .get_role_name()
+            .await
+            .unwrap_or_else(|_| "<error>".to_owned());
         let name = proxy.name().await.unwrap_or_else(|_| "<error>".to_owned());
         let states = proxy
             .get_state()
@@ -178,7 +181,11 @@ async fn capture(
 }
 
 fn print_capture(label: &str, nodes: &[Node], elapsed: Duration) {
-    println!("{label}_nodes={} {label}_capture_ms={:.3}", nodes.len(), elapsed.as_secs_f64() * 1000.0);
+    println!(
+        "{label}_nodes={} {label}_capture_ms={:.3}",
+        nodes.len(),
+        elapsed.as_secs_f64() * 1000.0
+    );
     for node in nodes {
         println!(
             "{}role={:?} name={:?} states={} rect={:?} text={:?}",
