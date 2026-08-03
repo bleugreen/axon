@@ -5,4 +5,4 @@ edition = "2024"
 publish = false
 
 [target.'cfg(windows)'.dependencies]
-uiautomation = { version = "0.25.0", default-features = false, features = ["input", "pattern"] }
+uiautomation = "0.25.0"
