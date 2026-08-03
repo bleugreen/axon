@@ -38,6 +38,8 @@ import Testing
         ))
         #expect(response.error?.code == JSONRPCError.invalidParams("").code)
     }
+}
+
 @Test func waitForStabilityIgnoresSubToleranceFrameJitter() {
     var nowMs = 0
     var captures = 0
