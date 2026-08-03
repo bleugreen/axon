@@ -114,7 +114,7 @@ jobs:
             --name-contains 1 \
             --action \
             --expect-text-before 0 \
-            --expect-text-after 1 \
+            --expect-text-after 01 \
             | tee /tmp/axon-linux-live-probe.log
           grep -q 'verification=same_object_text_transition' /tmp/axon-linux-live-probe.log
 
@@ -127,6 +127,7 @@ jobs:
     timeout-minutes: 25
     env:
       CARGO_HOME: C:\Users\mitch\.cargo
+      RUSTUP_HOME: C:\Users\mitch\.rustup
     steps:
       - name: Check out Axon
         uses: actions/checkout@v4
