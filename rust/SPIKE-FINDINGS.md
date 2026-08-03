@@ -99,10 +99,11 @@ fixed sleep. Capture must also avoid a shallow global depth limit: Cairn's docum
 started twelve control-view edges below the native window. A targeted subtree walk
 or cache request rooted at the web document is preferable once it appears.
 
-Because client-side MSAA activation yielded the full semantic tree, the more
-intrusive restart-time `WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS` experiments and an
-MSAA/IA2 capture fallback were not necessary. UI Automation is sufficient for this
-WebView2 runtime once renderer accessibility is activated.
+Because client-side MSAA activation yielded a usable semantic tree for the tested
+Cairn page and runtime, the more intrusive restart-time
+`WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS` experiments and an MSAA/IA2 capture
+fallback were not necessary. UI Automation is sufficient for this WebView2 runtime
+once renderer accessibility is activated.
 
 ## Conclusion
 

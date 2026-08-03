@@ -81,9 +81,9 @@ events with a close conceptual fit to AX.
 - Chromium renderer accessibility may remain disabled even after a UI Automation
   client starts. Before capturing a WebView2 target, the backend must query
   `OBJID_CLIENT` through MSAA on its child native windows, then wait boundedly for
-  UI Automation to expose the `RootWebArea` document. Cairn testing established
-  that this client-side activation exposes the full semantic page subtree without
-  requiring application restart flags.
+  UI Automation to expose the `RootWebArea` document. Testing against Cairn's
+  WebView2 runtime established that this client-side activation exposes a usable
+  semantic page subtree without requiring application restart flags.
 
 ## Linux backend
 
