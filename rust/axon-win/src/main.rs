@@ -40,7 +40,7 @@ mod pipe {
     use std::{
         ffi::c_void,
         fs::OpenOptions,
-        io::{self, BufRead, BufReader, Read, Write},
+        io::{self, BufRead, BufReader, Write},
         ptr,
     };
 

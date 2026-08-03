@@ -2,18 +2,19 @@ use axon_core::{
     AppQuery, Application, BackendError, Capability, CapabilityInfo, Node, Observation,
     PlatformBackend, RecordedCall, Rect, Screenshot, Snapshot, SnapshotHandle, Window,
 };
-use std::{ffi::c_void, sync::mpsc, thread, time::Duration};
+use std::{ffi::c_void, sync::mpsc, thread, time::{Duration, Instant}};
 use windows::{
     Win32::{
-        System::Com::{
-            CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED, CoCreateInstance, CoInitializeEx,
-            CoUninitialize,
+        System::{
+            Com::{CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED, CoCreateInstance, CoInitializeEx, CoUninitialize},
+            Variant::VARIANT,
         },
         UI::{
             Accessibility::{
                 CUIAutomation, IUIAutomation, IUIAutomation2, IUIAutomationElement,
                 IUIAutomationInvokePattern, IUIAutomationScrollItemPattern,
                 IUIAutomationTreeWalker, IUIAutomationValuePattern, TreeScope_Children,
+                TreeScope_Descendants, UIA_AutomationIdPropertyId,
                 UIA_ButtonControlTypeId, UIA_CheckBoxControlTypeId, UIA_ComboBoxControlTypeId,
                 UIA_CustomControlTypeId, UIA_DocumentControlTypeId, UIA_EditControlTypeId,
                 UIA_GroupControlTypeId, UIA_HyperlinkControlTypeId, UIA_ImageControlTypeId,
@@ -232,9 +233,10 @@ impl UiaState {
         if let Ok(hwnd) = unsafe { window.CurrentNativeWindowHandle() } {
             msaa::activate(hwnd.0 as isize);
         }
+        let capture_root = self.wait_for_root_web_area(&window, Duration::from_secs(2)).unwrap_or_else(|| window.clone());
         self.elements.clear();
         let mut count = 0;
-        let root = self.capture_node(&window, 0, &mut count)?;
+        let root = self.capture_node(&capture_root, 0, &mut count)?;
         let title = unsafe { window.CurrentName() }.ok().map(|x| x.to_string());
         let snapshot = Snapshot::new(Application {
             name: title.clone().unwrap_or_else(|| query.clone()),
@@ -245,6 +247,16 @@ impl UiaState {
         });
         self.snapshot = Some(snapshot.clone());
         Ok(snapshot)
+    }
+    fn wait_for_root_web_area(&self, window: &IUIAutomationElement, timeout: Duration) -> Option<IUIAutomationElement> {
+        let value = VARIANT::from(BSTR::from("RootWebArea"));
+        let condition = unsafe { self.automation.CreatePropertyCondition(UIA_AutomationIdPropertyId, &value) }.ok()?;
+        let started = Instant::now();
+        loop {
+            if let Ok(root) = unsafe { window.FindFirst(TreeScope_Descendants, &condition) } { return Some(root); }
+            if started.elapsed() >= timeout { return None; }
+            thread::sleep(Duration::from_millis(50));
+        }
     }
     fn capture_node(
         &mut self,
