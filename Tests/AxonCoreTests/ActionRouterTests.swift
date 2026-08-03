@@ -22,7 +22,6 @@ import Testing
     #expect(response.result?["action"]?["strategy"] == .string("AXPress"))
 }
 
-<<<<<<< ours
 @Test func waitForStabilityIgnoresSubToleranceFrameJitter() {
     var nowMs = 0
     var captures = 0
@@ -130,7 +129,8 @@ private func stabilitySnapshot(id: String, title: String) -> AppSnapshot {
     #expect(response.result?["wait"]?["elapsedMs"] == .int(250))
     #expect(response.result?["wait"]?["finalObservation"]?["id"] == .string("timeout-4"))
     #expect(sleeps == [100, 100, 50])
-=======
+}
+
 @Test func keyboardRejectsUnknownMixedAndAbsentIntent() {
     let router = CommandRouter(actions: PrimitiveActionHandlers())
     let requests: [[String: JSONValue]] = [
@@ -147,7 +147,6 @@ private func stabilitySnapshot(id: String, title: String) -> AppSnapshot {
         ))
         #expect(response.error?.code == JSONRPCError.invalidParams("").code)
     }
->>>>>>> theirs
 }
 
 @Test func clickRequestAcceptsPointTarget() {
