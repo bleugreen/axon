@@ -104,46 +104,45 @@ impl WindowsBackend {
     }
 }
 fn immediate_node(e: &IUIAutomationElement) -> Result<Node, BackendError> {
-        let ct =
-            unsafe { e.CurrentControlType() }.map_err(|e| operation("read hit ControlType", e))?;
-        let text = |value: windows::core::Result<BSTR>| {
-            value.ok().map(|x| x.to_string()).filter(|x| !x.is_empty())
-        };
-        let name = text(unsafe { e.CurrentName() });
-        let r = unsafe { e.CurrentBoundingRectangle() }.ok();
-        Ok(Node {
-            role: control_type_name(ct.0).into(),
-            subrole: None,
-            name: name.clone(),
-            title: name.clone(),
-            label: name,
-            value: None,
-            description: None,
-            identifier: text(unsafe { e.CurrentAutomationId() }),
-            actions: vec![],
-            frame: r.map(|x| Rect {
-                x: x.left as f64,
-                y: x.top as f64,
-                width: (x.right - x.left) as f64,
-                height: (x.bottom - x.top) as f64,
-            }),
-            editable: ct == UIA_EditControlTypeId || ct == UIA_DocumentControlTypeId,
-            children: vec![],
-            child_count: None,
-            truncation_reason: None,
-        })
-    }
-    fn call<T>(
-        &self,
-        make: impl FnOnce(mpsc::Sender<Result<T, BackendError>>) -> Command,
-    ) -> Result<T, BackendError> {
-        let (tx, rx) = mpsc::channel();
-        self.tx
-            .send(make(tx))
-            .map_err(|e| op("send UIA command", e.to_string()))?;
-        rx.recv()
-            .map_err(|e| op("receive UIA result", e.to_string()))?
-    }
+    let ct = unsafe { e.CurrentControlType() }.map_err(|e| operation("read hit ControlType", e))?;
+    let text = |value: windows::core::Result<BSTR>| {
+        value.ok().map(|x| x.to_string()).filter(|x| !x.is_empty())
+    };
+    let name = text(unsafe { e.CurrentName() });
+    let r = unsafe { e.CurrentBoundingRectangle() }.ok();
+    Ok(Node {
+        role: control_type_name(ct.0).into(),
+        subrole: None,
+        name: name.clone(),
+        title: name.clone(),
+        label: name,
+        value: None,
+        description: None,
+        identifier: text(unsafe { e.CurrentAutomationId() }),
+        actions: vec![],
+        frame: r.map(|x| Rect {
+            x: x.left as f64,
+            y: x.top as f64,
+            width: (x.right - x.left) as f64,
+            height: (x.bottom - x.top) as f64,
+        }),
+        editable: ct == UIA_EditControlTypeId || ct == UIA_DocumentControlTypeId,
+        children: vec![],
+        child_count: None,
+        truncation_reason: None,
+    })
+}
+fn call<T>(
+    &self,
+    make: impl FnOnce(mpsc::Sender<Result<T, BackendError>>) -> Command,
+) -> Result<T, BackendError> {
+    let (tx, rx) = mpsc::channel();
+    self.tx
+        .send(make(tx))
+        .map_err(|e| op("send UIA command", e.to_string()))?;
+    rx.recv()
+        .map_err(|e| op("receive UIA result", e.to_string()))?
+}
 
 struct UiaState {
     automation: IUIAutomation,
