@@ -325,6 +325,7 @@ Its Action interface reported:
 
     Action { name: "Click", description: "Clicks the button", keybinding: ";;" }
 
+The probe resolved the reported `Click` action by name (index 0 for this control) and
 `DoAction(0)` returned:
 
     dispatch_success=true
@@ -338,7 +339,8 @@ text object's content had changed:
 
 This is action-specific evidence that AT-SPI dispatched a real control action
 and the application processed it. It is stronger than node-count or whole-tree
-inequality alone. Dispatch success and observed outcome remain separate facts;
+inequality alone. The executable exits unsuccessfully if dispatch is rejected,
+no Click/Activate action exists, or the recapture has no text transition. Dispatch success and observed outcome remain separate facts;
 the real backend needs a bounded, action-specific postcondition rather than
 the spike's fixed delay.
 
