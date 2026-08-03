@@ -34,6 +34,7 @@ import Testing
     #expect(toolNames(in: tools).contains("run"))
     #expect(toolNames(in: tools).contains("save"))
     #expect(toolNames(in: tools).contains("wait_for_value"))
+    #expect(toolNames(in: tools).contains("wait_for_stability"))
     #expect(!toolNames(in: tools).contains("run_plan"))
     #expect(toolNames(in: tools).contains("look"))
     #expect(toolNames(in: tools).contains("click"))
