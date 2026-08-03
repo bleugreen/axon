@@ -21,7 +21,7 @@ use windows::{
             Accessibility::{
                 AutomationElementMode_Full, CUIAutomation, IUIAutomation, IUIAutomation2,
                 IUIAutomationCacheRequest, IUIAutomationElement, IUIAutomationInvokePattern,
-                IUIAutomationScrollItemPattern, IUIAutomationTreeWalker, IUIAutomationValuePattern,
+                IUIAutomationScrollItemPattern, IUIAutomationValuePattern,
                 TreeScope_Children, TreeScope_Descendants, TreeScope_Element,
                 UIA_AutomationIdPropertyId, UIA_BoundingRectanglePropertyId,
                 UIA_ButtonControlTypeId, UIA_CheckBoxControlTypeId, UIA_ComboBoxControlTypeId,
@@ -111,7 +111,6 @@ impl WindowsBackend {
 
 struct UiaState {
     automation: IUIAutomation,
-    walker: IUIAutomationTreeWalker,
     snapshot: Option<Snapshot>,
     elements: Vec<IUIAutomationElement>,
     _com: ComApartment,
@@ -133,11 +132,8 @@ impl UiaState {
                 .SetTransactionTimeout(1500)
                 .map_err(|e| operation("set UIA transaction timeout", e))?;
         }
-        let walker = unsafe { automation.ControlViewWalker() }
-            .map_err(|e| operation("create control-view walker", e))?;
         Ok(Self {
             automation,
-            walker,
             snapshot: None,
             elements: vec![],
             _com: com,
