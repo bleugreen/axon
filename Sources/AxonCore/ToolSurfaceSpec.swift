@@ -13,7 +13,7 @@ public enum ToolTargetKind: String, CaseIterable, Sendable {
         case .locator:
             return "Locator target object with app and locator fields. Locator may use label, title, value, description, identifier, actions, and ancestors."
         case .point:
-            return "Point target object: { point: { x, y, coordinateSpace } } or { x, y, coordinateSpace }. coordinateSpace is screen, window, or screenshot; window and screenshot points require app when no top-level app is provided. Legacy { x, y } still resolves as screen coordinates for compatibility."
+            return "Point target object: { point: { x, y, coordinateSpace } } or { x, y, coordinateSpace }. coordinateSpace is screen, window, or screenshot; window and screenshot points require app when no top-level app is provided. Legacy { x, y } still resolves as screen coordinates for compatibility. Raw points dispatch without element identity or occlusion verification; use a handle or locator when fail-closed target validation is required."
         case .textLocation:
             return "Text location target object: { location: { app, text, source? } }. Resolves visible text to a click/drag/scroll point using AX text or screenshot OCR without callers providing coordinates."
         }

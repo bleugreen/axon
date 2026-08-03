@@ -11,6 +11,10 @@ public final class AXPrimitiveActionExecutor {
     private let sleepMilliseconds: (Int) -> Void
     /// Re-read per text action so a mid-session input source switch is picked up.
     private let makeKeyboardLayout: () -> KeyboardLayoutMap
+    private let hitTest: (CGPoint) -> AXUIElement?
+    private let frameProvider: (AXUIElement) -> AXFrame?
+    private let parentProvider: (AXUIElement) -> AXUIElement?
+    private let elementsEqual: (AXUIElement, AXUIElement) -> Bool
 
     public init(
         elementStore: AXElementStore,
@@ -19,7 +23,11 @@ public final class AXPrimitiveActionExecutor {
         overlayConfiguration: VisualOverlayConfiguration = .fromEnvironment(),
         postEvent: @escaping (CGEvent) -> Void = { $0.post(tap: .cghidEventTap) },
         sleepMilliseconds: @escaping (Int) -> Void = { Thread.sleep(forTimeInterval: Double($0) / 1_000) },
-        makeKeyboardLayout: @escaping () -> KeyboardLayoutMap = { KeyboardLayoutMap.current() }
+        makeKeyboardLayout: @escaping () -> KeyboardLayoutMap = { KeyboardLayoutMap.current() },
+        hitTest: ((CGPoint) -> AXUIElement?)? = nil,
+        frameProvider: ((AXUIElement) -> AXFrame?)? = nil,
+        parentProvider: ((AXUIElement) -> AXUIElement?)? = nil,
+        elementsEqual: @escaping (AXUIElement, AXUIElement) -> Bool = { CFEqual($0, $1) }
     ) {
         self.elementStore = elementStore
         self.appResolver = appResolver
@@ -28,6 +36,18 @@ public final class AXPrimitiveActionExecutor {
         self.postEvent = postEvent
         self.sleepMilliseconds = sleepMilliseconds
         self.makeKeyboardLayout = makeKeyboardLayout
+        self.hitTest = hitTest ?? Self.systemHitTest
+        self.frameProvider = frameProvider ?? Self.copyFrame
+        self.parentProvider = parentProvider ?? Self.copyParent
+        self.elementsEqual = elementsEqual
+    }
+
+    private static func copyParent(_ element: AXUIElement) -> AXUIElement? {
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(element, kAXParentAttribute as CFString, &value) == .success else {
+            return nil
+        }
+        return (value as! AXUIElement?)
     }
 
     public func handlers() -> PrimitiveActionHandlers {
@@ -48,6 +68,7 @@ public final class AXPrimitiveActionExecutor {
             return try invoke(target: target, name: kAXPressAction)
         }
 
+        showTargetBeforeAction(element, label: "CGClick")
         guard let point = centerPoint(of: element) else {
             return PrimitiveActionResult(
                 action: "click",
@@ -58,9 +79,14 @@ public final class AXPrimitiveActionExecutor {
             )
         }
 
-        showTargetBeforeAction(element, label: "CGClick")
-        postMouseClick(at: point)
-        return PrimitiveActionResult(action: "click", target: target, strategy: "CGEvent", success: true)
+        guard let failure = pointerValidationFailure(element: element, point: point) else {
+            postMouseClick(at: point)
+            return PrimitiveActionResult(action: "click", target: target, strategy: "CGEvent", success: true)
+        }
+        return PrimitiveActionResult(
+            action: "click", target: target, strategy: "CGEvent", success: false,
+            message: failure
+        )
     }
 
     public func click(point: ActionPoint) throws -> PrimitiveActionResult {
@@ -113,6 +139,12 @@ public final class AXPrimitiveActionExecutor {
             )
         }
 
+        if let failure = pointerValidationFailure(element: element, point: point) {
+            return PrimitiveActionResult(
+                action: "type", target: target, strategy: "CGEventKeyboard", success: false,
+                message: failure
+            )
+        }
         postMouseClick(at: point)
         Thread.sleep(forTimeInterval: 0.05)
         if let selectAll = KeyStroke("command+a") {
@@ -203,9 +235,30 @@ public final class AXPrimitiveActionExecutor {
         if let app {
             try activate(app: app)
         }
-        let start = try point(for: from)
-        let end = try point(for: to)
-        let eventSteps = postMouseDrag(from: start, to: end, durationMs: durationMs)
+        let start = try resolvedPointerTarget(from)
+        let end = try resolvedPointerTarget(to)
+        if let failure = start.validationFailure ?? end.validationFailure {
+            return PrimitiveActionResult(
+                action: "drag",
+                target: "\(from.targetDescription)->\(to.targetDescription)",
+                strategy: "CGEventDrag",
+                success: false,
+                message: failure,
+                details: ["dispatchSuccess": .bool(false)]
+            )
+        }
+        let dispatch = postMouseDrag(from: start, to: end, durationMs: durationMs)
+        if let failure = dispatch.validationFailure {
+            return PrimitiveActionResult(
+                action: "drag",
+                target: "\(from.targetDescription)->\(to.targetDescription)",
+                strategy: "CGEventDrag",
+                success: false,
+                message: failure,
+                details: ["dispatchSuccess": .bool(false), "cancelledSafely": .bool(true)]
+            )
+        }
+        let eventSteps = dispatch.steps
         return PrimitiveActionResult(
             action: "drag",
             target: "\(from.targetDescription)->\(to.targetDescription)",
@@ -216,8 +269,8 @@ public final class AXPrimitiveActionExecutor {
                 "dispatchSuccess": .bool(true),
                 "semanticSuccess": .null,
                 "semanticStatus": .string("unverified"),
-                "from": ActionPoint(x: start.x, y: start.y, coordinateSpace: .screen).jsonValue,
-                "to": ActionPoint(x: end.x, y: end.y, coordinateSpace: .screen).jsonValue,
+                "from": ActionPoint(x: start.point.x, y: start.point.y, coordinateSpace: .screen).jsonValue,
+                "to": ActionPoint(x: end.point.x, y: end.point.y, coordinateSpace: .screen).jsonValue,
                 "durationMs": durationMs.map(JSONValue.int) ?? .null,
                 "eventPath": .object([
                     "eventCount": .int(eventSteps.count),
@@ -242,23 +295,60 @@ public final class AXPrimitiveActionExecutor {
     }
 
     private func centerPoint(of element: AXUIElement) -> CGPoint? {
-        guard let frame = frame(of: element) else {
+        guard let frame = frameProvider(element) else {
             return nil
         }
         return CGPoint(x: frame.x + frame.width / 2, y: frame.y + frame.height / 2)
     }
 
-    private func point(for target: PointerTarget) throws -> CGPoint {
+    private func resolvedPointerTarget(_ target: PointerTarget) throws -> ResolvedPointerTarget {
         switch target {
         case let .point(point):
-            return CGPoint(x: point.x, y: point.y)
+            return ResolvedPointerTarget(point: CGPoint(x: point.x, y: point.y), element: nil, validationFailure: nil)
         case let .handle(handle):
             let element = try elementStore.element(for: handle)
             guard let point = centerPoint(of: element) else {
                 throw JSONRPCError.invalidParams("Element has no usable frame: \(handle)")
             }
-            return point
+            return ResolvedPointerTarget(
+                point: point,
+                element: element,
+                validationFailure: pointerValidationFailure(element: element, point: point)
+            )
         }
+    }
+
+    private func pointerValidationFailure(element: AXUIElement, point: CGPoint) -> String? {
+        guard let hit = hitTest(point) else {
+            return "Pointer target validation failed: accessibility hit test was unresolvable"
+        }
+        guard elementsShareAncestry(element, hit) else {
+            if centerPoint(of: element) != point {
+                return "Pointer target validation failed: target moved before dispatch"
+            }
+            return "Pointer target validation failed: target is occluded or hit testing resolved an unrelated element"
+        }
+        // Close the small race between the initial frame read and the hit test.
+        guard centerPoint(of: element) == point else {
+            return "Pointer target validation failed: target moved before dispatch"
+        }
+        return nil
+    }
+
+    private func elementsShareAncestry(_ intended: AXUIElement, _ hit: AXUIElement) -> Bool {
+        // Hit testing commonly returns a more specific child (for example static text inside a
+        // button). A parent hit does not prove that the intended descendant still occupies the point.
+        isSameOrAncestor(intended, of: hit)
+    }
+
+    private func isSameOrAncestor(_ candidate: AXUIElement, of element: AXUIElement) -> Bool {
+        var current: AXUIElement? = element
+        for _ in 0..<64 {
+            guard let value = current else { return false }
+            if elementsEqual(candidate, value) { return true }
+            current = parentProvider(value)
+        }
+        return false
     }
 
     private func scrollToVisibleTarget(
@@ -367,6 +457,10 @@ public final class AXPrimitiveActionExecutor {
     }
 
     private func element(at point: CGPoint) -> AXUIElement? {
+        hitTest(point)
+    }
+
+    private static func systemHitTest(_ point: CGPoint) -> AXUIElement? {
         let systemWide = AXUIElementCreateSystemWide()
         var element: AXUIElement?
         let result = AXUIElementCopyElementAtPosition(systemWide, Float(point.x), Float(point.y), &element)
@@ -396,9 +490,18 @@ public final class AXPrimitiveActionExecutor {
     }
 
     private func frame(of element: AXUIElement) -> AXFrame? {
+        frameProvider(element)
+    }
+
+    private static func copyFrame(_ element: AXUIElement) -> AXFrame? {
+        func attribute<T>(_ name: String) -> T? {
+            var value: CFTypeRef?
+            guard AXUIElementCopyAttributeValue(element, name as CFString, &value) == .success else { return nil }
+            return value as? T
+        }
         guard
-            let position: AXValue = copyAttribute(kAXPositionAttribute, from: element),
-            let size: AXValue = copyAttribute(kAXSizeAttribute, from: element)
+            let position: AXValue = attribute(kAXPositionAttribute),
+            let size: AXValue = attribute(kAXSizeAttribute)
         else {
             return nil
         }
@@ -453,19 +556,36 @@ public final class AXPrimitiveActionExecutor {
     }
 
     @discardableResult
-    private func postMouseDrag(from start: CGPoint, to end: CGPoint, durationMs: Int?) -> [DragEventStep] {
-        let steps = DragEventPathSynthesizer.path(from: start, to: end, durationMs: durationMs)
+    private func postMouseDrag(
+        from start: ResolvedPointerTarget,
+        to end: ResolvedPointerTarget,
+        durationMs: Int?
+    ) -> DragDispatch {
+        let steps = DragEventPathSynthesizer.path(from: start.point, to: end.point, durationMs: durationMs)
         let delayMs = max((durationMs ?? 250) / max(steps.count - 1, 1), 0)
+        var postedSteps: [DragEventStep] = []
         for (index, step) in steps.enumerated() {
+            let validationElement: AXUIElement? = index == 0
+                ? start.element
+                : (step.point == end.point ? end.element : nil)
+            if let validationElement,
+               let failure = pointerValidationFailure(element: validationElement, point: step.point) {
+                if !postedSteps.isEmpty, let lastPoint = postedSteps.last?.point,
+                   let cancel = CGEvent(mouseEventSource: nil, mouseType: .leftMouseUp, mouseCursorPosition: lastPoint, mouseButton: .left) {
+                    postEvent(cancel)
+                }
+                return DragDispatch(steps: postedSteps, validationFailure: failure)
+            }
             let event = CGEvent(mouseEventSource: nil, mouseType: step.type, mouseCursorPosition: step.point, mouseButton: .left)
             if let event {
                 postEvent(event)
+                postedSteps.append(step)
             }
             if index < steps.count - 1, delayMs > 0 {
                 sleepMilliseconds(delayMs)
             }
         }
-        return steps
+        return DragDispatch(steps: postedSteps, validationFailure: nil)
     }
 
     private func postKeyStroke(_ keyStroke: KeyStroke) {
@@ -513,6 +633,17 @@ public final class AXPrimitiveActionExecutor {
             return nil
         }
     }
+}
+
+private struct ResolvedPointerTarget {
+    let point: CGPoint
+    let element: AXUIElement?
+    let validationFailure: String?
+}
+
+private struct DragDispatch {
+    let steps: [DragEventStep]
+    let validationFailure: String?
 }
 
 private struct ScrollToVisibleTarget {
