@@ -168,6 +168,7 @@ public struct SnapshotObservationFormatter {
         return .object([
             "status": .string("available"),
             "handle": focus["handle"] ?? .null,
+            "target": focus["target"] ?? .null,
             "element": .object(compact)
         ])
     }

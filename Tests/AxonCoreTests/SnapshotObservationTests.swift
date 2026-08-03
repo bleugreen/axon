@@ -13,6 +13,7 @@ import Testing
     let inaccessible = AppSnapshot(id: SnapshotID("error"), app: app, windows: [], screenshot: nil, focus: .inaccessible(error: "AX query failed"))
 
     #expect(formatter.text(from: formatter.observation(from: focused.jsonValue, frames: false)).contains("focus: available focus:0 field \"Search\""))
+    #expect(formatter.observation(from: focused.jsonValue, frames: false)["focus"]?["target"]?["locator"]?["title"] == .string("Search"))
     #expect(formatter.text(from: formatter.observation(from: missing.jsonValue, frames: false)).contains("focus: none"))
     #expect(formatter.text(from: formatter.observation(from: inaccessible.jsonValue, frames: false)).contains("focus: inaccessible \"AX query failed\""))
 }

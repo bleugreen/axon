@@ -56,7 +56,7 @@ public extension AppSnapshot {
             }),
             "screenshot": screenshot.map(\.jsonValue) ?? .null
         ]
-        object["focus"] = focus.jsonValue(snapshotID: id, activeSecretRedactor: activeSecretRedactor)
+        object["focus"] = focus.jsonValue(snapshotID: id, app: app, activeSecretRedactor: activeSecretRedactor)
         if includeTree {
             var nextIndex = 0
             object["windows"] = .array(windows.map {
@@ -74,7 +74,7 @@ public extension AppSnapshot {
 }
 
 private extension FocusObservation {
-    func jsonValue(snapshotID: SnapshotID, activeSecretRedactor: ActiveSecretRedactor) -> JSONValue {
+    func jsonValue(snapshotID: SnapshotID, app: AppIdentity, activeSecretRedactor: ActiveSecretRedactor) -> JSONValue {
         switch self {
         case .none:
             return .object(["status": .string("none")])
@@ -82,21 +82,40 @@ private extension FocusObservation {
             return .object(["status": .string("inaccessible"), "error": .string(error)])
         case let .available(element, pendingHandle):
             var index = pendingHandle?.nodeIndex ?? 0
+            let elementJSON = element.jsonValue(
+                snapshotID: snapshotID,
+                nextIndex: &index,
+                activeSecretRedactor: activeSecretRedactor,
+                deterministicRedactor: .standard,
+                includeHandle: pendingHandle != nil
+            )
             var object: [String: JSONValue] = [
                 "status": .string("available"),
-                "element": element.jsonValue(
-                    snapshotID: snapshotID,
-                    nextIndex: &index,
-                    activeSecretRedactor: activeSecretRedactor,
-                    deterministicRedactor: .standard,
-                    includeHandle: pendingHandle != nil
-                )
+                "target": locatorTarget(element: elementJSON, app: app),
+                "element": elementJSON
             ]
             if let pendingHandle {
                 object["handle"] = .string(SnapshotHandle(snapshotID: snapshotID, nodeIndex: pendingHandle.nodeIndex).rawValue)
             }
             return .object(object)
         }
+    }
+
+    private func locatorTarget(element: JSONValue, app: AppIdentity) -> JSONValue {
+        guard case let .object(fields) = element else {
+            return .null
+        }
+        var locator: [String: JSONValue] = ["role": fields["role"] ?? .string("AXUnknown")]
+        for key in ["subrole", "identifier", "title", "description"] where fields[key] != nil && fields[key] != JSONValue.null {
+            locator[key] = fields[key]
+        }
+        if locator["title"] == nil, locator["description"] == nil, let value = fields["value"], value != JSONValue.null {
+            locator["value"] = value
+        }
+        return .object([
+            "app": .string(app.bundleIdentifier ?? "pid:\(app.processIdentifier)"),
+            "locator": .object(locator)
+        ])
     }
 }
 
