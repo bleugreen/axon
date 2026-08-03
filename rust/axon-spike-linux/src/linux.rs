@@ -109,7 +109,9 @@ pub async fn run(options: Options) -> Result<(), Box<dyn Error>> {
         let text_object = before
             .iter()
             .find(|node| node.text.as_deref() == Some(expected_before))
-            .ok_or_else(|| format!("no text object contained expected before value {expected_before:?}"))?;
+            .ok_or_else(|| {
+                format!("no text object contained expected before value {expected_before:?}")
+            })?;
         let observed_after = after
             .iter()
             .find(|node| node.object == text_object.object)

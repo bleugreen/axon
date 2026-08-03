@@ -37,9 +37,7 @@ impl Options {
                 "--expect-text-before" => {
                     options.expect_text_before = Some(value(&mut args, &arg)?)
                 }
-                "--expect-text-after" => {
-                    options.expect_text_after = Some(value(&mut args, &arg)?)
-                }
+                "--expect-text-after" => options.expect_text_after = Some(value(&mut args, &arg)?),
                 "--max-depth" => {
                     options.max_depth = value(&mut args, &arg)?
                         .parse()
