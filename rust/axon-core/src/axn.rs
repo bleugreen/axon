@@ -117,6 +117,7 @@ pub struct DispatchOutcome {
 }
 pub trait ToolDispatcher {
     fn dispatch(&mut self, tool: &str, params: &Map<String, Value>) -> DispatchOutcome;
+    fn verify(&mut self, fact: &ExpectedFact) -> Result<(), String>;
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -222,13 +223,17 @@ impl<'a, D: ToolDispatcher> AxnRunner<'a, D> {
             } else {
                 Value::String("<redacted: contains-secret>".into())
             };
+            let verification_error = if outcome.success {
+                action.expects.iter().find_map(|fact| self.dispatcher.verify(fact).err())
+            } else { None };
+            let action_success = outcome.success && verification_error.is_none();
             let entry = TraceEntry {
                 index,
                 tool: action.tool.clone(),
-                success: outcome.success,
+                success: action_success,
                 action_id: action.id.clone(),
                 result: (!redacted.is_null()).then_some(redacted),
-                error: outcome
+                error: verification_error.or(outcome
                     .error
                     .map(|e| {
                         if secret_fields.is_empty() {
@@ -237,7 +242,7 @@ impl<'a, D: ToolDispatcher> AxnRunner<'a, D> {
                             "<redacted: contains-secret>".into()
                         }
                     })
-                    .or_else(|| (!outcome.success).then(|| "action failed".into())),
+                    .or_else(|| (!outcome.success).then(|| "action failed".into()))),
                 resolution: outcome.resolution,
             };
             if entry.success {
