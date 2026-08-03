@@ -428,7 +428,7 @@ mod tests {
         };
         assert_eq!(e.error.code, -32700);
     }
-+    #[test]
+    #[test]
     fn ambiguous_locator_cannot_dispatch() {
         let mut router = Router::new(backend(vec![node("same"), node("same")], None));
         let response = router.request(request("click", json!({"target":{"app":"App","locator":{"role":"Button"}}}))).unwrap();
