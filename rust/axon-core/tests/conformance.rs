@@ -154,4 +154,6 @@ fn rpc_envelopes_preserve_jsonrpc_and_batch_wire_shape() {
         serde_json::to_value(response).unwrap(),
         json!({"jsonrpc":"2.0","id":7,"result":{"batch":{"success":true}}})
     );
+    assert!(serde_json::from_value::<JsonRpcResponse>(json!({"jsonrpc":"2.0","id":7,"result":{},"error":{"code":-1,"message":"bad"}})).is_err());
+    assert!(serde_json::from_value::<JsonRpcResponse>(json!({"jsonrpc":"2.0","result":{}})).is_err());
 }

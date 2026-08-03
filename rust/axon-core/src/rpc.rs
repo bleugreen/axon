@@ -28,17 +28,20 @@ pub struct JsonRpcError {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct JsonRpcSuccess { pub jsonrpc: String, pub id: JsonRpcId, pub result: Value }
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct JsonRpcFailure { pub jsonrpc: String, pub id: JsonRpcId, pub error: JsonRpcError }
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(untagged)]
-pub enum JsonRpcResponse {
-    Success { jsonrpc: String, id: JsonRpcId, result: Value },
-    Failure { jsonrpc: String, id: JsonRpcId, error: JsonRpcError },
-}
+pub enum JsonRpcResponse { Success(JsonRpcSuccess), Failure(JsonRpcFailure) }
 impl JsonRpcResponse {
     pub fn success(id: JsonRpcId, result: Value) -> Self {
-        Self::Success { jsonrpc: "2.0".into(), id, result }
+        Self::Success(JsonRpcSuccess { jsonrpc: "2.0".into(), id, result })
     }
     pub fn failure(id: JsonRpcId, error: JsonRpcError) -> Self {
-        Self::Failure { jsonrpc: "2.0".into(), id, error }
+        Self::Failure(JsonRpcFailure { jsonrpc: "2.0".into(), id, error })
     }
 }
 
