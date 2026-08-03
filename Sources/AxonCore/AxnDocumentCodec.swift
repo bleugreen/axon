@@ -133,7 +133,7 @@ enum AxnDocumentCodec {
                 return 4
             case "locator":
                 return 5
-            case "name", "value", "keys":
+            case "name", "value", "text", "key":
                 return 6
             case "deltaX", "deltaY", "durationMs":
                 return 7

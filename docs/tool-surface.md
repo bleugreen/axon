@@ -15,7 +15,7 @@ run(actions?, path?, argValues?, continueOnError?, dryRun?)
 save(sessionId?, from?, to?, path?, includeReads?)
 click(target)
 type(target, value)
-keyboard(keys, app?)
+keyboard(text?, key?, app?)
 scroll(target?, app?, deltaX?, deltaY?)
 drag(from, to, app?, durationMs?, expects?)
 invoke(target, name)
@@ -35,7 +35,7 @@ axon save [--session id] [--from call] [--to call] [--path file.axn] [--include-
 
 axon click <handle|target-json>
 axon type <handle> <value>
-axon keyboard [--app app] <keys-or-text>
+axon keyboard [--app app] (--text text | --key keystroke)
 axon scroll [--app app] [--target target-json] [--dx n] [--dy n]
 axon drag [--app app] [--duration-ms n] <from-json> <to-json>
 axon invoke <handle> <action-name>
@@ -138,8 +138,15 @@ success. A drag is semantically successful only when `run` verifies supplied
 order.
 
 `type` fills writable fields by setting `AXValue`; use it when the desired
-intent is "make this field contain this value." `keyboard` posts keyboard input
-for shortcuts, special keys, or raw text when keystroke behavior is the intent.
+intent is "make this field contain this value." Its exact AXValue readback is a
+verified success. If it must fall back to click-and-keyboard events, dispatch is
+reported separately and success remains false unless a `run` postcondition
+proves a causal transition. For a type fallback, that requires an explicit
+`changed` expectation because the before-state cannot be reconstructed after
+dispatch. `keyboard` requires exactly one explicit
+intent: `text` accepts arbitrary text, while `key` accepts only recognized keys
+and keystrokes such as `End`, `Return`, or `cmd+shift+p`. Keyboard event dispatch
+alone is likewise unverified and does not set `success` to true.
 `invoke` runs a named AX action such as `AXPress` or `AXShowMenu`.
 
 ## Recordings
@@ -161,10 +168,10 @@ actions:
     value: "{{user_name}}"
   - tool: keyboard
     app: Safari
-    keys: Return
+    key: Return
 ```
 
-Parameter references are substituted inside string `value` and `keys` fields
+Parameter references are substituted inside string `value`, `text`, and `key` fields
 before the first action runs. Supported v1 parameter types are `string`,
 `secret`, `number`, `date`, `email`, and `path`. `env://NAME` and
 `op://vault/item/field` sources can bind declared args; caller args cannot

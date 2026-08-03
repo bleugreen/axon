@@ -35,6 +35,135 @@ import Testing
     #expect(requests[0].params?["value"] == .string("Mitch"))
 }
 
+@Test func runCanVerifyDispatchOnlyKeyboardOutcomeWithPostcondition() {
+    var snapshots = [
+        reorderListFactSnapshot(value: "Alpha, Bravo"),
+        reorderListFactSnapshot(value: "Bravo, Alpha")
+    ]
+    let executor = AxnRunner(
+        commandHandler: { request in
+            #expect(request.method == "keyboard")
+            return JSONRPCResponse(id: request.id, result: [
+                "action": .object([
+                    "success": .bool(false),
+                    "dispatchSuccess": .bool(true),
+                    "semanticSuccess": .null,
+                    "semanticStatus": .string("unverified")
+                ])
+            ])
+        },
+        snapshotProvider: { _ in snapshots.removeFirst() }
+    )
+    let fact: JSONValue = .object([
+        "id": .string("a001.value.0"),
+        "kind": .string("value"),
+        "target": .object([
+            "app": .string("Example"),
+            "locator": .object(["role": .string("AXList")])
+        ]),
+        "state": .object(["value": .object(["equals": .string("Bravo, Alpha")])])
+    ])
+
+    let batch = try! executor.run(params: ["actions": .array([.object([
+        "tool": .string("keyboard"),
+        "key": .string("End"),
+        "expects": .array([fact])
+    ])])])
+
+    #expect(batch["success"] == .bool(true))
+    #expect(batch["trace"]?[0]?["result"]?["semanticSuccess"] == .bool(true))
+    #expect(batch["trace"]?[0]?["result"]?["semanticStatus"] == .string("verified"))
+}
+
+@Test func runDoesNotVerifyPostconditionWhenKeyboardDispatchFails() {
+    var snapshots = [
+        reorderListFactSnapshot(value: "Alpha, Bravo"),
+        reorderListFactSnapshot(value: "Bravo, Alpha")
+    ]
+    let executor = AxnRunner(
+        commandHandler: { request in
+            JSONRPCResponse(id: request.id, result: ["action": .object([
+                "success": .bool(false),
+                "dispatchSuccess": .bool(false),
+                "semanticSuccess": .null,
+                "semanticStatus": .string("unverified")
+            ])])
+        },
+        snapshotProvider: { _ in snapshots.removeFirst() }
+    )
+    let fact: JSONValue = .object([
+        "id": .string("a001.value.0"),
+        "kind": .string("value"),
+        "target": .object([
+            "app": .string("Example"),
+            "locator": .object(["role": .string("AXList")])
+        ]),
+        "state": .object(["value": .object(["equals": .string("Bravo, Alpha")])])
+    ])
+
+    let batch = try! executor.run(params: ["actions": .array([.object([
+        "tool": .string("keyboard"), "key": .string("End"), "expects": .array([fact])
+    ])])])
+
+    #expect(batch["success"] == .bool(false))
+    #expect(batch["trace"]?[0]?["result"]?["dispatchSuccess"] == .bool(false))
+    #expect(batch["trace"]?[0]?["result"]?["semanticSuccess"] == .null)
+}
+
+@Test func runDoesNotTreatAlreadySatisfiedPostconditionAsKeyboardSuccess() {
+    var dispatched = false
+    let executor = AxnRunner(
+        commandHandler: { request in
+            dispatched = true
+            return JSONRPCResponse(id: request.id, result: ["action": .object([
+                "success": .bool(false),
+                "dispatchSuccess": .bool(true),
+                "semanticSuccess": .null,
+                "semanticStatus": .string("unverified")
+            ])])
+        },
+        snapshotProvider: { _ in reorderListFactSnapshot(value: "Bravo, Alpha") }
+    )
+    let fact: JSONValue = .object([
+        "id": .string("a001.value.0"),
+        "kind": .string("value"),
+        "target": .object([
+            "app": .string("Example"),
+            "locator": .object(["role": .string("AXList")])
+        ]),
+        "state": .object(["value": .object(["equals": .string("Bravo, Alpha")])])
+    ])
+
+    let batch = try! executor.run(params: ["actions": .array([.object([
+        "tool": .string("keyboard"), "key": .string("End"), "expects": .array([fact])
+    ])])])
+
+    #expect(dispatched)
+    #expect(batch["success"] == .bool(false))
+    #expect(batch["trace"]?[0]?["result"]?["semanticSuccess"] == .null)
+}
+
+@Test func dryRunRejectsInvalidKeyboardIntentBeforeDispatch() {
+    let executor = AxnRunner { _ in
+        Issue.record("dry run must not dispatch")
+        return JSONRPCResponse(id: nil, result: [:])
+    }
+    let invalidActions: [[String: JSONValue]] = [
+        ["tool": .string("keyboard")],
+        ["tool": .string("keyboard"), "text": .string("hello"), "key": .string("Return")],
+        ["tool": .string("keyboard"), "key": .string("DefinitelyNotAKey")]
+    ]
+
+    for action in invalidActions {
+        let params: [String: JSONValue] = [
+            "dryRun": .bool(true),
+            "actions": .array([.object(action)])
+        ]
+        let batch = try! executor.run(params: params)
+        #expect(batch["success"] == .bool(false))
+    }
+}
+
 @Test func runDispatchesWaitForValueAndTreatsTimeoutAsFailure() {
     var requests: [JSONRPCRequest] = []
     let executor = AxnRunner { request in
@@ -165,6 +294,10 @@ import Testing
 }
 
 @Test func runMarksDragSemanticSuccessAfterExpectedFactVerifies() {
+    var snapshots = [
+        reorderListFactSnapshot(value: "Alpha, Bravo"),
+        reorderListFactSnapshot(value: "Bravo, Alpha")
+    ]
     let executor = AxnRunner(
         commandHandler: { request in
             #expect(request.method == "drag")
@@ -177,7 +310,7 @@ import Testing
                 ])
             ])
         },
-        snapshotProvider: { _ in reorderListFactSnapshot(value: "Bravo, Alpha") }
+        snapshotProvider: { _ in snapshots.removeFirst() }
     )
 
     let fact: JSONValue = .object([
@@ -363,7 +496,7 @@ import Testing
                 "id": .string("a002"),
                 "tool": .string("keyboard"),
                 "app": .string("Example"),
-                "keys": .string("Return"),
+                "key": .string("Return"),
                 "requires": .array([.string("a001.value.0")])
             ])
     ])
@@ -415,7 +548,7 @@ import Testing
                 "id": .string("a002"),
                 "tool": .string("keyboard"),
                 "app": .string("Firefox"),
-                "keys": .string("Return"),
+                "key": .string("Return"),
                 "requires": .array([.string("a001.value.0")])
             ])
         ])
@@ -466,7 +599,7 @@ import Testing
                 "id": .string("a002"),
                 "tool": .string("keyboard"),
                 "app": .string("Example"),
-                "keys": .string("Return"),
+                "key": .string("Return"),
                 "requires": .array([.string("a001.value.0")])
             ])
     ])
@@ -650,7 +783,7 @@ private func articleSnapshot(children: [AXNode]) -> AppSnapshot {
       - id: a001
         tool: keyboard
         app: Firefox
-        keys: Return
+        key: Return
     """
     let path = try temporaryAxnFile(source)
     defer { try? FileManager.default.removeItem(atPath: path) }
@@ -686,7 +819,7 @@ private func articleSnapshot(children: [AXNode]) -> AppSnapshot {
     actions:
       - tool: keyboard
         app: Firefox
-        keys: Return
+        key: Return
     """
     let path = FileManager.default.temporaryDirectory
         .appendingPathComponent("axon-\(UUID().uuidString).axn")
@@ -711,7 +844,7 @@ private func articleSnapshot(children: [AXNode]) -> AppSnapshot {
             method: "keyboard",
             params: .object([
                 "app": .string("Firefox"),
-                "keys": .string("Return")
+                "key": .string("Return")
             ])
         ),
         JSONRPCRequest(
