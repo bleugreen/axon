@@ -135,50 +135,27 @@ jobs:
       group: axon-live-windows
       cancel-in-progress: false
     timeout-minutes: 25
-    env:
-      CARGO_HOME: C:\Users\mitch\.cargo
-      RUSTUP_HOME: C:\Users\mitch\.rustup
     steps:
       - name: Check out Axon
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
-      - name: Build the Windows daemon
-        shell: pwsh
-        working-directory: rust
-        run: |
-          $env:Path = "$env:CARGO_HOME\bin;$env:Path"
-          cargo build --locked -p axon-win
-
       - name: Restart the interactive daemon and inspect a real window
         shell: pwsh
-        working-directory: rust
         run: |
           $ErrorActionPreference = 'Stop'
-          $exe = (Resolve-Path 'target\debug\axon-win.exe').Path
-          & $exe daemon restart
-
-          $listRequest = '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"look","arguments":{}}}'
-          $listResponse = $listRequest | & $exe mcp | ConvertFrom-Json -Depth 100
-          if ($listResponse.result.isError -ne $false) {
-            throw 'the app-list look request failed'
+          $ssh = 'C:\Program Files\Git\usr\bin\ssh.exe'
+          $arguments = @(
+            '-F', 'C:\actions-runner-axon\.ssh\empty_config',
+            '-i', 'C:\actions-runner-axon\.ssh\axon-live-probe',
+            '-o', 'BatchMode=yes',
+            '-o', 'IdentitiesOnly=yes',
+            '-o', 'ConnectTimeout=5',
+            '-o', 'StrictHostKeyChecking=yes',
+            '-o', 'UserKnownHostsFile=C:\actions-runner-axon\.ssh\known_hosts',
+            'mitch@localhost',
+            'probe'
+          )
+          & $ssh @arguments
+          if ($LASTEXITCODE -ne 0) {
+            throw "interactive probe failed with exit code $LASTEXITCODE"
           }
-
-          $verified = $null
-          foreach ($app in $listResponse.result.structuredContent) {
-            $request = @{
-              jsonrpc = '2.0'
-              id = 1
-              method = 'tools/call'
-              params = @{ name = 'look'; arguments = @{ app = $app.name } }
-            } | ConvertTo-Json -Compress -Depth 10
-            $response = $request | & $exe mcp | ConvertFrom-Json -Depth 100
-            $window = $response.result.structuredContent.app.windows | ForEach-Object root | Where-Object role -eq 'Window' | Select-Object -First 1
-            if ($response.result.isError -eq $false -and $null -ne $window) {
-              $verified = @{ response = $response; window = $window; app = $app.name }
-              break
-            }
-          }
-          if ($null -eq $verified) {
-            throw 'look did not return a Window root from the interactive desktop'
-          }
-          Write-Output "isError:false snapshot=$($verified.response.result.structuredContent.id) root=$($verified.window.role) app=$($verified.app)"
