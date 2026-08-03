@@ -29,7 +29,7 @@ fn same_semantic_node(target: &axon_core::Node, hit: &axon_core::Node) -> bool {
     target.role == hit.role
         && match (&target.identifier, &hit.identifier) {
             (Some(target), Some(hit)) => target == hit,
-            _ => target.name == hit.name && target.frame == hit.frame,
+            _ => target.name == hit.name,
         }
 }
 
