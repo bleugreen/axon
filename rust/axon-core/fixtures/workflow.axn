@@ -1,0 +1,24 @@
+version: 1
+args:
+  - name: recipient
+    type: email
+  - name: token
+    type: secret
+    source: env://TOKEN
+continueOnError: false
+actions:
+  - id: type-email
+    tool: type
+    target: fixture-1:4
+    value: "{{recipient}}"
+    expects:
+      - id: email.value
+        kind: value
+  - id: submit
+    tool: click
+    target: fixture-1:2
+    requires: [email.value]
+  - id: secret
+    tool: type
+    target: fixture-1:4
+    value: "Bearer {{token}}"

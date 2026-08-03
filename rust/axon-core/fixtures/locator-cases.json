@@ -1,0 +1,129 @@
+{
+  "snapshot": {
+    "id": "fixture-1",
+    "app": {
+      "name": "Example",
+      "windows": [
+        {
+          "title": "Build",
+          "root": {
+            "role": "Window",
+            "children": [
+              {
+                "role": "Group",
+                "title": "Billing",
+                "children": [
+                  {
+                    "role": "Button",
+                    "title": "Deploy",
+                    "identifier": "primary",
+                    "actions": [
+                      "Invoke"
+                    ],
+                    "frame": {
+                      "x": 10,
+                      "y": 10,
+                      "width": 100,
+                      "height": 30
+                    }
+                  },
+                  {
+                    "role": "Button",
+                    "title": "Deploy",
+                    "identifier": "secondary",
+                    "actions": [],
+                    "frame": {
+                      "x": 300,
+                      "y": 10,
+                      "width": 100,
+                      "height": 30
+                    }
+                  },
+                  {
+                    "role": "Edit",
+                    "value": "old",
+                    "editable": true
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      ]
+    }
+  },
+  "cases": [
+    {
+      "name": "semantic winner",
+      "locator": {
+        "role": "Button",
+        "title": "deploy",
+        "actions": [
+          "Invoke"
+        ],
+        "nearbyText": [
+          "Billing"
+        ]
+      },
+      "status": "unique",
+      "confidence": "high",
+      "bestIndex": 2
+    },
+    {
+      "name": "ambiguous hard filters",
+      "locator": {
+        "role": "Button",
+        "title": "Deploy"
+      },
+      "status": "ambiguous",
+      "confidence": "none"
+    },
+    {
+      "name": "label does not fall back to title",
+      "locator": { "role": "Button", "label": "Deploy" },
+      "status": "missing",
+      "confidence": "none"
+    },
+    {
+      "name": "missing hard filter",
+      "locator": {
+        "role": "Button",
+        "identifier": "absent"
+      },
+      "status": "missing",
+      "confidence": "none"
+    },
+    {
+      "name": "editable value positive only",
+      "locator": {
+        "role": "Edit",
+        "value": "new"
+      },
+      "status": "unique",
+      "confidence": "low",
+      "bestIndex": 4
+    },
+    {
+      "name": "window and ancestors",
+      "locator": {
+        "role": "Button",
+        "identifier": "primary",
+        "window": {
+          "title": "Build"
+        },
+        "ancestors": [
+          {
+            "role": "Window"
+          },
+          {
+            "role": "Group",
+            "title": "Billing"
+          }
+        ]
+      },
+      "status": "unique",
+      "confidence": "high",
+      "bestIndex": 2
+    }
+  ]
+}
