@@ -80,7 +80,12 @@ pub trait PlatformBackend {
     fn focus(&mut self, target: &SnapshotHandle) -> Result<(), BackendError>;
     fn scroll(&mut self, target: &SnapshotHandle, delta: (f64, f64)) -> Result<(), BackendError>;
     fn observe(&mut self, app: &AppQuery, timeout: Duration) -> Result<Observation, BackendError>;
-    fn wait_for_value(&mut self, target: &SnapshotHandle, predicate: &Value, timeout: Duration) -> Result<Observation, BackendError>;
+    fn wait_for_value(
+        &mut self,
+        target: &SnapshotHandle,
+        predicate: &Value,
+        timeout: Duration,
+    ) -> Result<Observation, BackendError>;
     fn pointer_click(&mut self, point: (f64, f64)) -> Result<(), BackendError>;
     fn pointer_drag(
         &mut self,
@@ -93,5 +98,8 @@ pub trait PlatformBackend {
     fn hit_test(&mut self, point: (f64, f64)) -> Result<Option<Node>, BackendError>;
     fn recorded_calls(&self) -> Result<Vec<RecordedCall>, BackendError>;
     fn set_recording(&mut self, enabled: bool) -> Result<(), BackendError>;
-    fn observe_global_input(&mut self, timeout: Duration) -> Result<Vec<RecordedCall>, BackendError>;
+    fn observe_global_input(
+        &mut self,
+        timeout: Duration,
+    ) -> Result<Vec<RecordedCall>, BackendError>;
 }

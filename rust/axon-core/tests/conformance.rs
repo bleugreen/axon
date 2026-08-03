@@ -40,7 +40,9 @@ fn locator_fixture_covers_filtering_scoring_and_explanations() {
             assert!(!candidate.reasons.is_empty(), "{} explanation", case.name)
         }
     }
-    fn verify(&mut self, _fact: &ExpectedFact) -> Result<(), String> { Ok(()) }
+    fn verify(&mut self, _fact: &ExpectedFact) -> Result<(), String> {
+        Ok(())
+    }
 }
 
 #[test]

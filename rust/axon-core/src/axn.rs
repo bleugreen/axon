@@ -224,8 +224,13 @@ impl<'a, D: ToolDispatcher> AxnRunner<'a, D> {
                 Value::String("<redacted: contains-secret>".into())
             };
             let verification_error = if outcome.success {
-                action.expects.iter().find_map(|fact| self.dispatcher.verify(fact).err())
-            } else { None };
+                action
+                    .expects
+                    .iter()
+                    .find_map(|fact| self.dispatcher.verify(fact).err())
+            } else {
+                None
+            };
             let action_success = outcome.success && verification_error.is_none();
             let entry = TraceEntry {
                 index,
