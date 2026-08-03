@@ -2,11 +2,19 @@ use axon_core::{
     AppQuery, Application, BackendError, Capability, CapabilityInfo, Node, Observation,
     PlatformBackend, RecordedCall, Rect, Screenshot, Snapshot, SnapshotHandle, Window,
 };
-use std::{ffi::c_void, sync::mpsc, thread, time::{Duration, Instant}};
+use std::{
+    ffi::c_void,
+    sync::mpsc,
+    thread,
+    time::{Duration, Instant},
+};
 use windows::{
     Win32::{
         System::{
-            Com::{CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED, CoCreateInstance, CoInitializeEx, CoUninitialize},
+            Com::{
+                CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED, CoCreateInstance, CoInitializeEx,
+                CoUninitialize,
+            },
             Variant::VARIANT,
         },
         UI::{
@@ -14,24 +22,23 @@ use windows::{
                 CUIAutomation, IUIAutomation, IUIAutomation2, IUIAutomationElement,
                 IUIAutomationInvokePattern, IUIAutomationScrollItemPattern,
                 IUIAutomationTreeWalker, IUIAutomationValuePattern, TreeScope_Children,
-                TreeScope_Descendants, UIA_AutomationIdPropertyId,
-                UIA_ButtonControlTypeId, UIA_CheckBoxControlTypeId, UIA_ComboBoxControlTypeId,
-                UIA_CustomControlTypeId, UIA_DocumentControlTypeId, UIA_EditControlTypeId,
-                UIA_GroupControlTypeId, UIA_HyperlinkControlTypeId, UIA_ImageControlTypeId,
-                UIA_InvokePatternId, UIA_ListControlTypeId, UIA_ListItemControlTypeId,
-                UIA_MenuControlTypeId, UIA_MenuItemControlTypeId, UIA_PaneControlTypeId,
-                UIA_ProgressBarControlTypeId, UIA_RadioButtonControlTypeId,
-                UIA_ScrollBarControlTypeId, UIA_ScrollItemPatternId, UIA_SliderControlTypeId,
-                UIA_TabControlTypeId, UIA_TabItemControlTypeId, UIA_TextControlTypeId,
-                UIA_ThumbControlTypeId, UIA_ToolBarControlTypeId, UIA_ToolTipControlTypeId,
-                UIA_TreeControlTypeId, UIA_TreeItemControlTypeId, UIA_ValuePatternId,
-                UIA_WindowControlTypeId,
+                TreeScope_Descendants, UIA_AutomationIdPropertyId, UIA_ButtonControlTypeId,
+                UIA_CheckBoxControlTypeId, UIA_ComboBoxControlTypeId, UIA_CustomControlTypeId,
+                UIA_DocumentControlTypeId, UIA_EditControlTypeId, UIA_GroupControlTypeId,
+                UIA_HyperlinkControlTypeId, UIA_ImageControlTypeId, UIA_InvokePatternId,
+                UIA_ListControlTypeId, UIA_ListItemControlTypeId, UIA_MenuControlTypeId,
+                UIA_MenuItemControlTypeId, UIA_PaneControlTypeId, UIA_ProgressBarControlTypeId,
+                UIA_RadioButtonControlTypeId, UIA_ScrollBarControlTypeId, UIA_ScrollItemPatternId,
+                UIA_SliderControlTypeId, UIA_TabControlTypeId, UIA_TabItemControlTypeId,
+                UIA_TextControlTypeId, UIA_ThumbControlTypeId, UIA_ToolBarControlTypeId,
+                UIA_ToolTipControlTypeId, UIA_TreeControlTypeId, UIA_TreeItemControlTypeId,
+                UIA_ValuePatternId, UIA_WindowControlTypeId,
             },
             HiDpi::{DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, SetProcessDpiAwarenessContext},
             Input::KeyboardAndMouse::{
-                INPUT, INPUT_0, INPUT_KEYBOARD, INPUT_MOUSE, KEYBDINPUT,
-                KEYEVENTF_KEYUP, KEYEVENTF_UNICODE, MOUSEEVENTF_ABSOLUTE, MOUSEEVENTF_LEFTDOWN,
-                MOUSEEVENTF_LEFTUP, MOUSEEVENTF_MOVE, MOUSEINPUT, SendInput, VIRTUAL_KEY,
+                INPUT, INPUT_0, INPUT_KEYBOARD, INPUT_MOUSE, KEYBDINPUT, KEYEVENTF_KEYUP,
+                KEYEVENTF_UNICODE, MOUSEEVENTF_ABSOLUTE, MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP,
+                MOUSEEVENTF_MOVE, MOUSEINPUT, SendInput, VIRTUAL_KEY,
             },
             WindowsAndMessaging::{GetSystemMetrics, SM_CXSCREEN, SM_CYSCREEN},
         },
@@ -233,7 +240,9 @@ impl UiaState {
         if let Ok(hwnd) = unsafe { window.CurrentNativeWindowHandle() } {
             msaa::activate(hwnd.0 as isize);
         }
-        let capture_root = self.wait_for_root_web_area(&window, Duration::from_secs(2)).unwrap_or_else(|| window.clone());
+        let capture_root = self
+            .wait_for_root_web_area(&window, Duration::from_secs(2))
+            .unwrap_or_else(|| window.clone());
         self.elements.clear();
         let mut count = 0;
         let root = self.capture_node(&capture_root, 0, &mut count)?;
@@ -248,13 +257,25 @@ impl UiaState {
         self.snapshot = Some(snapshot.clone());
         Ok(snapshot)
     }
-    fn wait_for_root_web_area(&self, window: &IUIAutomationElement, timeout: Duration) -> Option<IUIAutomationElement> {
+    fn wait_for_root_web_area(
+        &self,
+        window: &IUIAutomationElement,
+        timeout: Duration,
+    ) -> Option<IUIAutomationElement> {
         let value = VARIANT::from(BSTR::from("RootWebArea"));
-        let condition = unsafe { self.automation.CreatePropertyCondition(UIA_AutomationIdPropertyId, &value) }.ok()?;
+        let condition = unsafe {
+            self.automation
+                .CreatePropertyCondition(UIA_AutomationIdPropertyId, &value)
+        }
+        .ok()?;
         let started = Instant::now();
         loop {
-            if let Ok(root) = unsafe { window.FindFirst(TreeScope_Descendants, &condition) } { return Some(root); }
-            if started.elapsed() >= timeout { return None; }
+            if let Ok(root) = unsafe { window.FindFirst(TreeScope_Descendants, &condition) } {
+                return Some(root);
+            }
+            if started.elapsed() >= timeout {
+                return None;
+            }
             thread::sleep(Duration::from_millis(50));
         }
     }
