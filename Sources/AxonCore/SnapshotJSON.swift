@@ -56,6 +56,7 @@ public extension AppSnapshot {
             }),
             "screenshot": screenshot.map(\.jsonValue) ?? .null
         ]
+        object["focus"] = focus.jsonValue(snapshotID: id, activeSecretRedactor: activeSecretRedactor)
         if includeTree {
             var nextIndex = 0
             object["windows"] = .array(windows.map {
@@ -69,6 +70,33 @@ public extension AppSnapshot {
             })
         }
         return .object(object)
+    }
+}
+
+private extension FocusObservation {
+    func jsonValue(snapshotID: SnapshotID, activeSecretRedactor: ActiveSecretRedactor) -> JSONValue {
+        switch self {
+        case .none:
+            return .object(["status": .string("none")])
+        case let .inaccessible(error):
+            return .object(["status": .string("inaccessible"), "error": .string(error)])
+        case let .available(element, pendingHandle):
+            var index = pendingHandle?.nodeIndex ?? 0
+            var object: [String: JSONValue] = [
+                "status": .string("available"),
+                "element": element.jsonValue(
+                    snapshotID: snapshotID,
+                    nextIndex: &index,
+                    activeSecretRedactor: activeSecretRedactor,
+                    deterministicRedactor: .standard,
+                    includeHandle: pendingHandle != nil
+                )
+            ]
+            if let pendingHandle {
+                object["handle"] = .string(SnapshotHandle(snapshotID: snapshotID, nodeIndex: pendingHandle.nodeIndex).rawValue)
+            }
+            return .object(object)
+        }
     }
 }
 

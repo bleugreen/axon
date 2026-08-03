@@ -18,6 +18,12 @@ public struct SnapshotID: RawRepresentable, Codable, Equatable, Hashable, Sendab
     }
 }
 
+public enum FocusObservation: Codable, Equatable, Sendable {
+    case available(element: AXNode, handle: SnapshotHandle?)
+    case none
+    case inaccessible(error: String)
+}
+
 private final class SnapshotIDSequence: @unchecked Sendable {
     private let lock = NSLock()
     private var value = 0
@@ -61,12 +67,14 @@ public struct AppSnapshot: Codable, Equatable, Sendable {
     public let app: AppIdentity
     public let windows: [AXNode]
     public let screenshot: EncodedScreenshot?
+    public let focus: FocusObservation
 
-    public init(id: SnapshotID, app: AppIdentity, windows: [AXNode], screenshot: EncodedScreenshot?) {
+    public init(id: SnapshotID, app: AppIdentity, windows: [AXNode], screenshot: EncodedScreenshot?, focus: FocusObservation = .none) {
         self.id = id
         self.app = app
         self.windows = windows
         self.screenshot = screenshot
+        self.focus = focus
     }
 
     public var indexedNodes: [IndexedAXNode] {
