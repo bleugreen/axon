@@ -340,7 +340,8 @@ fn candidate(
         if !window_matches(locator.window.as_ref().unwrap(), actual) {
             return None;
         }
-        reasons.push("window scope".into())
+        reasons.push("window scope".into());
+        add_scoped_match_reasons("window", locator.window.as_ref().unwrap(), &mut reasons);
     }
     let mut start = 0;
     for expected in &locator.ancestors {
@@ -351,7 +352,7 @@ fn candidate(
             return None;
         };
         start += offset + 1;
-        reasons.push("ordered ancestor".into())
+        add_scoped_match_reasons("ancestor", expected, &mut reasons);
     }
     for action in &locator.actions {
         if node.actions.contains(action) {
@@ -396,6 +397,26 @@ fn candidate(
         score: base * 1000 + geometry,
         reasons,
     })
+}
+
+fn add_scoped_match_reasons(prefix: &str, locator: &AncestorLocator, reasons: &mut Vec<String>) {
+    if let Some(subrole) = &locator.subrole {
+        reasons.push(format!("{prefix} subrole {subrole}"));
+    }
+    if let Some(identifier) = &locator.identifier {
+        reasons.push(format!("{prefix} identifier {}", identifier.reason()));
+    }
+    if let Some(title) = &locator.title {
+        reasons.push(format!("{prefix} title {}", title.reason()));
+    }
+    if let Some(label) = &locator.label {
+        reasons.push(format!("{prefix} label {}", label.reason()));
+    }
+    if prefix == "ancestor" {
+        if let Some(role) = &locator.role {
+            reasons.push(format!("ancestor role {role}"));
+        }
+    }
 }
 
 fn window_matches(locator: &AncestorLocator, window: &crate::Window) -> bool {

@@ -89,7 +89,13 @@ silently pick the first native element returned by its API.
 
 Candidates are ranked by semantic score before the frame tie-breaker. The frame
 tie-breaker occupies only the sub-semantic part of the score and therefore cannot
-overcome a one-point semantic difference. A result is `unique` only when exactly
+overcome a one-point semantic difference. Each matched top-level field, action,
+or nearby-text matcher contributes one semantic point. Window scope contributes
+one point, plus one for each populated and matched window `subrole`, `identifier`,
+`title`, or `label` field.
+Within each ancestor constraint, every populated and matched field contributes
+one point. A matching editable value contributes its field point plus two bonus
+points; a mismatching editable value contributes none. A result is `unique` only when exactly
 one candidate has the highest complete score, `ambiguous` when multiple
 candidates share it, and `missing` when no candidate survives hard filtering.
 `ambiguous` and `missing` always have `none` confidence. A unique result has

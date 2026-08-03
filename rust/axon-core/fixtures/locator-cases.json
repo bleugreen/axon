@@ -8,6 +8,7 @@
           "title": "Build",
           "root": {
             "role": "Window",
+            "identifier": "build-window",
             "children": [
               {
                 "role": "Group",
@@ -139,6 +140,19 @@
       },
       "status": "missing",
       "confidence": "none"
+    },
+    {
+      "name": "compound window fields reach high confidence boundary",
+      "locator": {
+        "identifier": "primary",
+        "window": {
+          "identifier": "build-window",
+          "title": "Build"
+        }
+      },
+      "status": "unique",
+      "confidence": "high",
+      "bestIndex": 2
     },
     {
       "name": "window and ancestors",
