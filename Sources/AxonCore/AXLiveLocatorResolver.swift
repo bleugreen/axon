@@ -346,21 +346,7 @@ public final class AXLiveLocatorResolver: @unchecked Sendable {
         var nested = nodes.last!
         if nodes.count > 1 {
             for node in nodes.dropLast().reversed() {
-                nested = AXNode(
-                    role: node.role,
-                    subrole: node.subrole,
-                    title: node.title,
-                    value: node.value,
-                    description: node.description,
-                    help: node.help,
-                    identifier: node.identifier,
-                    enabled: node.enabled,
-                    focused: node.focused,
-                    frame: node.frame,
-                    actions: node.actions,
-                    truncationReason: node.truncationReason,
-                    children: [nested]
-                )
+                nested = node.replacing(children: [nested])
             }
             return [nested]
         }

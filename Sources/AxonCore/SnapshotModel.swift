@@ -138,6 +138,7 @@ public struct AXNode: Codable, Equatable, Sendable {
     public let role: String
     public let subrole: String?
     public let title: String?
+    public let label: String?
     public let value: String?
     public let description: String?
     public let help: String?
@@ -146,6 +147,7 @@ public struct AXNode: Codable, Equatable, Sendable {
     public let focused: Bool?
     public let frame: AXFrame?
     public let actions: [String]
+    public let editable: Bool?
     public let childCount: Int?
     public let truncationReason: String?
     public let children: [AXNode]
@@ -154,6 +156,7 @@ public struct AXNode: Codable, Equatable, Sendable {
         role: String,
         subrole: String? = nil,
         title: String? = nil,
+        label: String? = nil,
         value: String? = nil,
         description: String? = nil,
         help: String? = nil,
@@ -162,6 +165,7 @@ public struct AXNode: Codable, Equatable, Sendable {
         focused: Bool? = nil,
         frame: AXFrame? = nil,
         actions: [String] = [],
+        editable: Bool? = nil,
         childCount: Int? = nil,
         truncationReason: String? = nil,
         children: [AXNode] = []
@@ -169,6 +173,7 @@ public struct AXNode: Codable, Equatable, Sendable {
         self.role = role
         self.subrole = subrole
         self.title = title
+        self.label = label
         self.value = value
         self.description = description
         self.help = help
@@ -177,6 +182,7 @@ public struct AXNode: Codable, Equatable, Sendable {
         self.focused = focused
         self.frame = frame
         self.actions = actions
+        self.editable = editable
         self.childCount = childCount
         self.truncationReason = truncationReason
         self.children = children
@@ -198,6 +204,27 @@ public struct AXFrame: Codable, Equatable, Sendable {
 }
 
 public extension AXNode {
+    func replacing(actions: [String]? = nil, children: [AXNode]? = nil) -> AXNode {
+        AXNode(
+            role: role,
+            subrole: subrole,
+            title: title,
+            label: label,
+            value: value,
+            description: description,
+            help: help,
+            identifier: identifier,
+            enabled: enabled,
+            focused: focused,
+            frame: frame,
+            actions: actions ?? self.actions,
+            editable: editable,
+            childCount: childCount,
+            truncationReason: truncationReason,
+            children: children ?? self.children
+        )
+    }
+
     func withAdditionalTruncationReason(_ reason: String) -> AXNode {
         let combinedReason: String
         if let truncationReason, !truncationReason.isEmpty {
@@ -210,6 +237,7 @@ public extension AXNode {
             role: role,
             subrole: subrole,
             title: title,
+            label: label,
             value: value,
             description: description,
             help: help,
@@ -218,6 +246,7 @@ public extension AXNode {
             focused: focused,
             frame: frame,
             actions: actions,
+            editable: editable,
             childCount: childCount,
             truncationReason: combinedReason,
             children: children
