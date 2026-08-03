@@ -67,11 +67,6 @@ impl Options {
         Ok(options)
     }
 
-    #[test]
-    fn parses_msaa_activation() {
-        let options = Options::parse(["--activate-msaa".to_owned()]).unwrap();
-        assert!(options.activate_msaa);
-    }
 }
 
 fn value(args: &mut impl Iterator<Item = String>, flag: &str) -> Result<String, String> {
@@ -144,5 +139,11 @@ mod tests {
             result.unwrap_err(),
             "--invoke requires both --type and --name-contains"
         );
+    }
+
+    #[test]
+    fn parses_msaa_activation() {
+        let options = Options::parse(["--activate-msaa".to_owned()]).unwrap();
+        assert!(options.activate_msaa);
     }
 }
