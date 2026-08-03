@@ -104,19 +104,25 @@ pub async fn run(options: Options) -> Result<(), Box<dyn Error>> {
         .await;
         let elapsed = started.elapsed();
         print_capture("after", &after, elapsed);
-        let text_changes: Vec<_> = before
+        let expected_before = options.expect_text_before.as_deref().unwrap();
+        let expected_after = options.expect_text_after.as_deref().unwrap();
+        let text_object = before
             .iter()
-            .zip(&after)
-            .filter_map(|(old, new)| {
-                (old.text != new.text && (old.text.is_some() || new.text.is_some()))
-                    .then(|| (old.text.as_deref(), new.text.as_deref()))
-            })
-            .collect();
-        if text_changes.is_empty() {
-            return Err("action dispatched, but recapture observed no text change".into());
+            .find(|node| node.text.as_deref() == Some(expected_before))
+            .ok_or_else(|| format!("no text object contained expected before value {expected_before:?}"))?;
+        let observed_after = after
+            .iter()
+            .find(|node| node.object == text_object.object)
+            .and_then(|node| node.text.as_deref());
+        if observed_after != Some(expected_after) {
+            return Err(format!(
+                "action dispatched, but text object changed from {expected_before:?} to {observed_after:?}, expected {expected_after:?}"
+            )
+            .into());
         }
         println!(
-            "verified_outcome=true verification=text_changed changes={text_changes:?} before_nodes={} after_nodes={}",
+            "verified_outcome=true verification=same_object_text_transition before={expected_before:?} after={expected_after:?} object={:?} before_nodes={} after_nodes={}",
+            text_object.object,
             before.len(),
             after.len()
         );

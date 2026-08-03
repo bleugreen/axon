@@ -9,6 +9,8 @@ struct Options {
     role: Option<String>,
     name_contains: Option<String>,
     action: bool,
+    expect_text_before: Option<String>,
+    expect_text_after: Option<String>,
     max_depth: usize,
     max_nodes: usize,
 }
@@ -20,6 +22,8 @@ impl Options {
             role: None,
             name_contains: None,
             action: false,
+            expect_text_before: None,
+            expect_text_after: None,
             max_depth: 8,
             max_nodes: 300,
         };
@@ -30,6 +34,12 @@ impl Options {
                 "--role" => options.role = Some(value(&mut args, &arg)?),
                 "--name-contains" => options.name_contains = Some(value(&mut args, &arg)?),
                 "--action" => options.action = true,
+                "--expect-text-before" => {
+                    options.expect_text_before = Some(value(&mut args, &arg)?)
+                }
+                "--expect-text-after" => {
+                    options.expect_text_after = Some(value(&mut args, &arg)?)
+                }
                 "--max-depth" => {
                     options.max_depth = value(&mut args, &arg)?
                         .parse()
@@ -47,8 +57,16 @@ impl Options {
                 other => return Err(format!("unknown argument: {other}\n\n{}", usage())),
             }
         }
-        if options.action && (options.role.is_none() || options.name_contains.is_none()) {
-            return Err("--action requires both --role and --name-contains".to_owned());
+        if options.action
+            && (options.role.is_none()
+                || options.name_contains.is_none()
+                || options.expect_text_before.is_none()
+                || options.expect_text_after.is_none())
+        {
+            return Err(
+                "--action requires --role, --name-contains, --expect-text-before, and --expect-text-after"
+                    .to_owned(),
+            );
         }
         Ok(options)
     }
@@ -61,10 +79,11 @@ fn value(args: &mut impl Iterator<Item = String>, flag: &str) -> Result<String, 
 
 fn usage() -> &'static str {
     "Usage: axon-spike-linux [--application TEXT] [--max-depth N] [--max-nodes N]\n\
-     Locator: --role ROLE --name-contains TEXT [--action]\n\n\
+     Locator: --role ROLE --name-contains TEXT [--action\n\
+       --expect-text-before TEXT --expect-text-after TEXT]\n\n\
      Without --application, lists application roots on the AT-SPI bus. With an\n\
-     application, captures a bounded tree. --action invokes the first AT-SPI Action\n\
-     on the matching control and independently recaptures the tree."
+     application, captures a bounded tree. --action resolves Click or Activate and\n\
+     verifies the expected text transition on the same AT-SPI object reference."
 }
 
 #[cfg_attr(not(target_os = "linux"), allow(unused_variables))]
@@ -98,7 +117,7 @@ mod tests {
     fn action_requires_complete_locator() {
         assert_eq!(
             Options::parse(["--action".to_owned()]).unwrap_err(),
-            "--action requires both --role and --name-contains"
+            "--action requires --role, --name-contains, --expect-text-before, and --expect-text-after"
         );
     }
 
