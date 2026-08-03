@@ -1,17 +1,25 @@
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value;
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(untagged)]
-pub enum JsonRpcId {
-    String(String),
-    Integer(i64),
-    Null,
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct JsonRpcVersion;
+impl Serialize for JsonRpcVersion {
+    fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> { serializer.serialize_str("2.0") }
+}
+impl<'de> Deserialize<'de> for JsonRpcVersion {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let value = String::deserialize(deserializer)?;
+        if value == "2.0" { Ok(Self) } else { Err(serde::de::Error::custom("jsonrpc must be 2.0")) }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(untagged)]
+pub enum JsonRpcId { String(String), Integer(i64), Null }
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct JsonRpcRequest {
-    pub jsonrpc: String,
+    pub jsonrpc: JsonRpcVersion,
     pub id: Option<JsonRpcId>,
     pub method: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -19,12 +27,7 @@ pub struct JsonRpcRequest {
 }
 impl JsonRpcRequest {
     pub fn new(id: Option<JsonRpcId>, method: impl Into<String>, params: Option<Value>) -> Self {
-        Self {
-            jsonrpc: "2.0".into(),
-            id,
-            method: method.into(),
-            params,
-        }
+        Self { jsonrpc: JsonRpcVersion, id, method: method.into(), params }
     }
 }
 
@@ -38,42 +41,21 @@ pub struct JsonRpcError {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct JsonRpcSuccess {
-    pub jsonrpc: String,
-    pub id: JsonRpcId,
-    pub result: Value,
-}
+pub struct JsonRpcSuccess { pub jsonrpc: JsonRpcVersion, pub id: JsonRpcId, pub result: Value }
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct JsonRpcFailure {
-    pub jsonrpc: String,
-    pub id: JsonRpcId,
-    pub error: JsonRpcError,
-}
+pub struct JsonRpcFailure { pub jsonrpc: JsonRpcVersion, pub id: JsonRpcId, pub error: JsonRpcError }
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(untagged)]
-pub enum JsonRpcResponse {
-    Success(JsonRpcSuccess),
-    Failure(JsonRpcFailure),
-}
+pub enum JsonRpcResponse { Success(JsonRpcSuccess), Failure(JsonRpcFailure) }
 impl JsonRpcResponse {
     pub fn success(id: JsonRpcId, result: Value) -> Self {
-        Self::Success(JsonRpcSuccess {
-            jsonrpc: "2.0".into(),
-            id,
-            result,
-        })
+        Self::Success(JsonRpcSuccess { jsonrpc: JsonRpcVersion, id, result })
     }
     pub fn failure(id: JsonRpcId, error: JsonRpcError) -> Self {
-        Self::Failure(JsonRpcFailure {
-            jsonrpc: "2.0".into(),
-            id,
-            error,
-        })
+        Self::Failure(JsonRpcFailure { jsonrpc: JsonRpcVersion, id, error })
     }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct RunEnvelope<T> {
-    pub batch: T,
-}
+pub struct RunEnvelope<T> { pub batch: T }

@@ -327,17 +327,13 @@ fn candidate(
         }
     }
     if let Some(window) = &locator.window {
-        let window_node = std::iter::once(node)
-            .chain(ancestors.iter().copied())
-            .find(|n| {
-                snapshot
-                    .app
-                    .windows
-                    .iter()
-                    .any(|w| std::ptr::eq(&w.root, *n))
-            });
-        let Some(w) = window_node else { return None };
-        if !ancestor_matches(window, w) {
+        let window = snapshot.app.windows.iter().find(|window| {
+            std::iter::once(node)
+                .chain(ancestors.iter().copied())
+                .any(|candidate| std::ptr::eq(&window.root, candidate))
+        });
+        let Some(actual) = window else { return None };
+        if !window_matches(locator.window.as_ref().unwrap(), actual) {
             return None;
         }
         reasons.push("window scope".into())
@@ -396,4 +392,12 @@ fn candidate(
         score: base * 1000 + geometry,
         reasons,
     })
+}
+
+fn window_matches(locator: &AncestorLocator, window: &crate::Window) -> bool {
+    locator.role.as_ref().is_none_or(|role| role == &window.root.role)
+        && locator.subrole.as_ref().is_none_or(|subrole| window.root.subrole.as_ref() == Some(subrole))
+        && locator.identifier.as_ref().is_none_or(|matcher| matcher.matches(window.root.identifier.as_deref()))
+        && locator.title.as_ref().is_none_or(|matcher| matcher.matches(window.title.as_deref().or(window.root.title.as_deref())))
+        && locator.label.as_ref().is_none_or(|matcher| matcher.matches(window.root.label.as_deref()))
 }
