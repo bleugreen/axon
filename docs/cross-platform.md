@@ -88,8 +88,10 @@ events with a close conceptual fit to AX.
   the logged-in desktop session even when the command is issued over an SSH
   session-0 shell. `axon-win daemon restart` sends the authenticated `shutdown`
   RPC, updates the task to the current executable, and relaunches it. The daemon
-  acknowledges shutdown before closing the pipe, joins its UIA thread so that
-  the COM apartment is torn down, and exits successfully. `axon-win daemon
+  acknowledges shutdown with its process ID before closing the pipe. Lifecycle
+  commands wait for that process to exit after its UIA thread joins and the COM
+  apartment is torn down, avoiding a Task Scheduler relaunch race. Busy pipe
+  instances are retried rather than mistaken for an absent daemon. `axon-win daemon
   uninstall` stops the daemon and removes the task. All three commands are
   scriptable and `install`/`restart` wait until the pipe is ready before returning.
   Short-lived `axon-win mcp` processes connect to that pipe.

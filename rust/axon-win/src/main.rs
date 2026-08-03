@@ -10,14 +10,20 @@ mod lifecycle {
     use std::{env, io, path::Path, process::Command, time::Duration};
 
     const TASK_NAME: &str = "Axon Windows Daemon";
+    const SYNCHRONIZE: u32 = 0x0010_0000;
+    const WAIT_OBJECT_0: u32 = 0;
+    const WAIT_TIMEOUT: u32 = 258;
+
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn OpenProcess(access: u32, inherit: i32, process_id: u32) -> isize;
+        fn WaitForSingleObject(handle: isize, milliseconds: u32) -> u32;
+        fn CloseHandle(handle: isize) -> i32;
+    }
 
     pub fn run(mut args: impl Iterator<Item = String>) -> Result<(), Box<dyn std::error::Error>> {
         match args.next().as_deref() {
-            Some("install") => {
-                register()?;
-                start()?;
-            }
-            Some("restart") => {
+            Some("install" | "restart") => {
                 stop_if_running()?;
                 register()?;
                 start()?;
@@ -33,6 +39,7 @@ mod lifecycle {
                 .into());
             }
         }
+
         Ok(())
     }
 
@@ -56,9 +63,32 @@ mod lifecycle {
 
     fn stop_if_running() -> io::Result<()> {
         match pipe::shutdown() {
-            Ok(()) => pipe::wait_until_stopped(Duration::from_secs(10)),
+            Ok(process_id) => wait_for_process_exit(process_id, Duration::from_secs(10)),
             Err(error) if pipe::is_daemon_absent(&error) => Ok(()),
             Err(error) => Err(error),
+        }
+    }
+
+    fn wait_for_process_exit(process_id: u32, timeout: Duration) -> io::Result<()> {
+        let handle = unsafe { OpenProcess(SYNCHRONIZE, 0, process_id) };
+        if handle == 0 {
+            let error = io::Error::last_os_error();
+            // ERROR_INVALID_PARAMETER means the process exited before OpenProcess.
+            return if error.raw_os_error() == Some(87) {
+                Ok(())
+            } else {
+                Err(error)
+            };
+        }
+        let wait = unsafe { WaitForSingleObject(handle, timeout.as_millis() as u32) };
+        unsafe { CloseHandle(handle) };
+        match wait {
+            WAIT_OBJECT_0 => Ok(()),
+            WAIT_TIMEOUT => Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                format!("daemon process {process_id} did not exit"),
+            )),
+            _ => Err(io::Error::last_os_error()),
         }
     }
 
@@ -117,6 +147,13 @@ mod lifecycle {
                 r#""C:\Program Files\Axon\axon-win.exe" serve"#
             );
         }
+
+        #[test]
+        fn busy_pipe_is_not_absent() {
+            assert!(!pipe::is_daemon_absent(&io::Error::from_raw_os_error(231)));
+            assert!(pipe::is_daemon_absent(&io::Error::from_raw_os_error(2)));
+            assert!(pipe::is_daemon_absent(&io::Error::from_raw_os_error(3)));
+        }
     }
 }
 
@@ -135,7 +172,9 @@ fn windows_main() -> Result<(), Box<dyn std::error::Error>> {
     match command.as_str() {
         "serve" => pipe::serve(Router::new(WindowsBackend::start()?))?,
         "mcp" => pipe::mcp()?,
-        "shutdown" => pipe::shutdown()?,
+        "shutdown" => {
+            pipe::shutdown()?;
+        }
         "daemon" => lifecycle::run(std::env::args().skip(2))?,
         "probe" => {
             let args = std::env::args().skip(2).collect::<Vec<_>>();
@@ -377,7 +416,10 @@ mod pipe {
                     matches!(&parsed, Ok(req) if req.method == "shutdown" && req.id.is_some());
                 let response = match parsed {
                     Ok(req) if shutdown => req.id.map(|id| {
-                        axon_core::JsonRpcResponse::success(id, json!({"shutdown": true}))
+                        axon_core::JsonRpcResponse::success(
+                            id,
+                            json!({"shutdown": true, "processId": std::process::id()}),
+                        )
                     }),
                     Ok(req) => router.request(req),
                     Err(e) => Some(e),
@@ -406,27 +448,21 @@ mod pipe {
         }
     }
 
-    pub fn shutdown() -> io::Result<()> {
+    pub fn shutdown() -> io::Result<u32> {
         let response = send_rpc(&JsonRpcRequest::new(
             Some(JsonRpcId::Integer(1)),
             "shutdown",
             Some(json!({})),
         ))?;
-        if response.pointer("/result/shutdown") == Some(&Value::Bool(true)) {
-            Ok(())
-        } else {
-            Err(io::Error::other(format!(
-                "daemon rejected shutdown: {response}"
-            )))
-        }
+        response
+            .pointer("/result/processId")
+            .and_then(Value::as_u64)
+            .and_then(|value| u32::try_from(value).ok())
+            .ok_or_else(|| io::Error::other(format!("daemon rejected shutdown: {response}")))
     }
 
     pub fn wait_until_ready(timeout: Duration) -> io::Result<()> {
         wait_for_pipe(timeout, true)
-    }
-
-    pub fn wait_until_stopped(timeout: Duration) -> io::Result<()> {
-        wait_for_pipe(timeout, false)
     }
 
     fn wait_for_pipe(timeout: Duration, ready: bool) -> io::Result<()> {
@@ -451,11 +487,23 @@ mod pipe {
     }
 
     pub fn is_daemon_absent(error: &io::Error) -> bool {
-        matches!(error.raw_os_error(), Some(2 | 3 | 231))
+        matches!(error.raw_os_error(), Some(2 | 3))
     }
 
     fn send_rpc(request: &JsonRpcRequest) -> io::Result<Value> {
-        let mut stream = OpenOptions::new().read(true).write(true).open(PIPE)?;
+        let start = Instant::now();
+        let mut stream = loop {
+            match OpenOptions::new().read(true).write(true).open(PIPE) {
+                Ok(stream) => break stream,
+                Err(error)
+                    if error.raw_os_error() == Some(231)
+                        && start.elapsed() < Duration::from_secs(10) =>
+                {
+                    thread::sleep(Duration::from_millis(50));
+                }
+                Err(error) => return Err(error),
+            }
+        };
         writeln!(stream, "{}", serde_json::to_string(request)?)?;
         stream.flush()?;
         let mut reader = BufReader::new(stream);
