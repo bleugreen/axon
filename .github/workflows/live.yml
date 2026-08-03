@@ -136,6 +136,26 @@ jobs:
       cancel-in-progress: false
     timeout-minutes: 25
     steps:
+      - name: Remove leaked live-probe daemons
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $workspaceRoot = 'C:\actions-runner-axon\_work\'
+          $liveRoot = 'C:\ProgramData\Axon\live\'
+
+          Get-CimInstance Win32_Process -Filter "Name = 'axon-win.exe'" |
+            Where-Object {
+              $path = $_.ExecutablePath
+              $null -ne $path -and (
+                $path.StartsWith($workspaceRoot, [System.StringComparison]::OrdinalIgnoreCase) -or
+                $path.StartsWith($liveRoot, [System.StringComparison]::OrdinalIgnoreCase)
+              )
+            } |
+            ForEach-Object {
+              Write-Output "Stopping leaked live-probe daemon pid=$($_.ProcessId) path=$($_.ExecutablePath)"
+              Stop-Process -Id $_.ProcessId -Force -ErrorAction Stop
+            }
+
       - name: Check out Axon
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
