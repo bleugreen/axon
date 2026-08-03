@@ -18,9 +18,17 @@ pub(super) fn run(options: &Options) -> Result<(), Box<dyn std::error::Error>> {
     let Some(window_query) = &options.window_name else {
         return Ok(());
     };
-    let window = windows.into_iter().find(|element| {
-        property(element.get_name()).to_lowercase().contains(&window_query.to_lowercase())
-    }).ok_or_else(|| format!("no top-level window name contains {window_query:?}"))?;
+    let query = window_query.to_lowercase();
+    let window = windows
+        .iter()
+        .find(|element| property(element.get_name()).to_lowercase() == query)
+        .or_else(|| {
+            windows.iter().find(|element| {
+                property(element.get_name()).to_lowercase().contains(&query)
+            })
+        })
+        .cloned()
+        .ok_or_else(|| format!("no top-level window name contains {window_query:?}"))?;
 
     let mut elements = Vec::new();
     capture(&walker, &window, 0, options.max_depth, options.max_nodes, &mut elements);
