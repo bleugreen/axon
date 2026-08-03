@@ -54,15 +54,64 @@ predicates and bounded waits rather than a fixed sleep.
 
 ## WebView2 observation
 
-Cairn's exact `cairn` window was reachable, but its WebView2 subtree was poor. At depth 8 the capture contained only 20 nodes. Beneath the native window it exposed `cairn - Web content` followed almost entirely by anonymous nested `Pane` elements, with no page controls, page text, or AutomationIds.
+Cairn's exact `cairn` window was reachable, but an unactivated WebView2 subtree was
+poor. At depth 12 it contained 23 nodes: native window chrome plus nested anonymous
+`Pane` elements. It had no web document, page control, or page text. This confirms
+that merely creating a UI Automation client did not activate Chromium renderer
+accessibility.
 
-This is insufficient for Axon's semantic locator model. Before relying on UI Automation for Cairn, investigate WebView2 accessibility configuration and the rendered app's accessibility markup. Edge itself was visible as a top-level window, but Cairn was the motivating and more relevant target.
+The spike's `--activate-msaa` mode calls `AccessibleObjectFromWindow` for
+`OBJID_CLIENT` on the selected top-level HWND and every child HWND, releases each
+returned `IAccessible`, and waits 1.5 seconds before the UI Automation capture. All
+six queries against Cairn returned an accessible object. At depth 12, the next UIA
+capture gained a `Document` named `cairn` with `AutomationId=RootWebArea`. This is
+direct evidence that the MSAA touch activated Chromium's renderer accessibility.
+
+The root web document was exactly at the depth-12 boundary, so a depth-30 capture
+was necessary to test semantic descendants. That capture contained 49 nodes, of
+which 32 had names and three had AutomationIds. Its control-type histogram was:
+
+    Button:13, Document:1, Group:4, MenuBar:1, MenuItem:1,
+    Pane:16, Text:11, TitleBar:1, Window:1
+
+The WebView2 subtree included real application semantics:
+
+- `Document` / `cairn` / `RootWebArea`
+- `Group` / `Navigation sidebar`
+- buttons named `Collapse sidebar`, `Go back`, `Go forward`, and
+  `Open command palette`
+- project navigation buttons named `Expand project Workspace`, `Workspace`, and
+  `Open settings for Workspace`
+- page text including `Welcome to Cairn`, `Backend Providers`, `Claude`, and
+  `Codex`
+- buttons named `Install Claude`, `Install Codex`, and `Continue`
+
+The activation test therefore produced a usable semantic UIA tree without
+restarting Cairn or forcing renderer accessibility through a WebView2 environment
+variable. AutomationIds remain sparse; activation exposes the identifiers supplied
+by Chromium and the page but cannot manufacture developer identifiers absent from
+the markup.
+
+The real Windows backend should MSAA-touch the selected target HWND and all of
+its descendant HWNDs before capturing WebView2 content. It should then poll UI Automation for the
+`RootWebArea` document, within a bounded deadline, instead of copying the spike's
+fixed sleep. Capture must also avoid a shallow global depth limit: Cairn's document
+started twelve control-view edges below the native window. A targeted subtree walk
+or cache request rooted at the web document is preferable once it appears.
+
+Because client-side MSAA activation yielded a usable semantic tree for the tested
+Cairn page and runtime, the more intrusive restart-time
+`WEBVIEW2_ADDITIONAL_BROWSER_ARGUMENTS` experiments and an MSAA/IA2 capture
+fallback were not necessary. UI Automation is sufficient for this WebView2 runtime
+once renderer accessibility is activated.
 
 ## Conclusion
 
 The core Windows loop is viable in Rust when it runs in the interactive user
-session. UI Automation gives a strong native Notepad tree, locator resolution
-is straightforward, and Invoke dispatch can be measured separately from a
-post-dispatch state signal. The implementation-shaping risks are now concrete:
-daemon placement must be per-user-session, and WebView2 cannot be assumed to
-expose a useful tree without additional work.
+session. UI Automation gives a strong native Notepad tree, locator resolution is
+straightforward, and Invoke dispatch can be measured separately from a
+post-dispatch state signal. WebView2 also exposes Cairn's semantic page tree after
+an MSAA `OBJID_CLIENT` activation touch. The implementation-shaping requirements
+are now concrete: the daemon must run per user session, activate Chromium-backed
+window subtrees before capture, wait boundedly for `RootWebArea`, and capture deep
+enough to reach the web document.

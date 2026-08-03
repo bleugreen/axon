@@ -16,6 +16,12 @@ nonzero exit status.
     cargo run -p axon-spike-win
     cargo run -p axon-spike-win -- --window Notepad --max-depth 8 --max-nodes 500
     cargo run -p axon-spike-win -- --window Notepad --type Button --name-contains Save --invoke
+    cargo run -p axon-spike-win -- --window cairn --activate-msaa --max-depth 12 --max-nodes 1000
 
 Run the executable in the logged-in desktop user's Windows session. A process
 in session 0 cannot inspect session 1's UI Automation tree.
+
+The optional MSAA activation queries `OBJID_CLIENT` on the selected native window
+and every child HWND, waits for Chromium to initialize renderer accessibility,
+and then performs the normal UI Automation capture. Capture output includes
+counts of named and identified nodes plus a control-type histogram.
