@@ -1,8 +1,8 @@
 //! Windows UI Automation backend and v1 JSON-RPC tool router.
 
 use axon_core::{
-    AppQuery, AxnCodec, AxnRunner, DispatchOutcome, ExpectedFact, JsonRpcError, JsonRpcId,
-    Candidate, Confidence, JsonRpcRequest, JsonRpcResponse, Locator, LocatorResolver,
+    AppQuery, AxnCodec, AxnRunner, Candidate, Confidence, DispatchOutcome, ExpectedFact,
+    JsonRpcError, JsonRpcId, JsonRpcRequest, JsonRpcResponse, Locator, LocatorResolver,
     PlatformBackend, Resolution, ResolutionStatus, RunEnvelope, RunOptions, Snapshot,
     SnapshotHandle, ToolDispatcher,
 };
@@ -377,7 +377,10 @@ pub fn parse_request(line: &str) -> Result<JsonRpcRequest, JsonRpcResponse> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use axon_core::{Application, BackendError, CapabilityInfo, Node, Observation, RecordedCall, Rect, Screenshot, Window};
+    use axon_core::{
+        Application, BackendError, CapabilityInfo, Node, Observation, RecordedCall, Rect,
+        Screenshot, Window,
+    };
     use std::{cell::RefCell, rc::Rc, time::Duration};
 
     #[derive(Clone)]
@@ -388,33 +391,115 @@ mod tests {
         clicks: Rc<RefCell<usize>>,
     }
     impl PlatformBackend for FakeBackend {
-        fn capabilities(&self) -> Result<Vec<CapabilityInfo>, BackendError> { Ok(vec![]) }
-        fn enumerate_applications(&self) -> Result<Vec<Application>, BackendError> { Ok(vec![]) }
-        fn capture(&mut self, _: &AppQuery) -> Result<Snapshot, BackendError> { Ok(self.snapshot.clone()) }
-        fn invoke(&mut self, _: &SnapshotHandle, _: &str) -> Result<(), BackendError> { Ok(()) }
-        fn read_value(&self, _: &SnapshotHandle) -> Result<Option<String>, BackendError> { Ok(self.value.borrow().clone()) }
-        fn set_value(&mut self, _: &SnapshotHandle, value: &str) -> Result<(), BackendError> { *self.value.borrow_mut() = Some(value.into()); Ok(()) }
-        fn focus(&mut self, _: &SnapshotHandle) -> Result<(), BackendError> { Ok(()) }
-        fn scroll(&mut self, _: &SnapshotHandle, _: (f64, f64)) -> Result<(), BackendError> { Ok(()) }
-        fn observe(&mut self, _: &AppQuery, _: Duration) -> Result<Observation, BackendError> { unreachable!() }
-        fn wait_for_value(&mut self, _: &SnapshotHandle, _: &Value, _: Duration) -> Result<Observation, BackendError> { unreachable!() }
-        fn pointer_click(&mut self, _: (f64, f64)) -> Result<(), BackendError> { *self.clicks.borrow_mut() += 1; Ok(()) }
-        fn pointer_drag(&mut self, _: (f64, f64), _: (f64, f64), _: Duration) -> Result<(), BackendError> { unreachable!() }
-        fn keyboard(&mut self, _: &AppQuery, _: &str) -> Result<(), BackendError> { Ok(()) }
-        fn screenshot(&mut self, _: &AppQuery) -> Result<Screenshot, BackendError> { unreachable!() }
-        fn hit_test(&mut self, _: (f64, f64)) -> Result<Option<Node>, BackendError> { Ok(self.hit.clone()) }
-        fn recorded_calls(&self) -> Result<Vec<RecordedCall>, BackendError> { unreachable!() }
-        fn set_recording(&mut self, _: bool) -> Result<(), BackendError> { unreachable!() }
-        fn observe_global_input(&mut self, _: Duration) -> Result<Vec<RecordedCall>, BackendError> { unreachable!() }
+        fn capabilities(&self) -> Result<Vec<CapabilityInfo>, BackendError> {
+            Ok(vec![])
+        }
+        fn enumerate_applications(&self) -> Result<Vec<Application>, BackendError> {
+            Ok(vec![])
+        }
+        fn capture(&mut self, _: &AppQuery) -> Result<Snapshot, BackendError> {
+            Ok(self.snapshot.clone())
+        }
+        fn invoke(&mut self, _: &SnapshotHandle, _: &str) -> Result<(), BackendError> {
+            Ok(())
+        }
+        fn read_value(&self, _: &SnapshotHandle) -> Result<Option<String>, BackendError> {
+            Ok(self.value.borrow().clone())
+        }
+        fn set_value(&mut self, _: &SnapshotHandle, value: &str) -> Result<(), BackendError> {
+            *self.value.borrow_mut() = Some(value.into());
+            Ok(())
+        }
+        fn focus(&mut self, _: &SnapshotHandle) -> Result<(), BackendError> {
+            Ok(())
+        }
+        fn scroll(&mut self, _: &SnapshotHandle, _: (f64, f64)) -> Result<(), BackendError> {
+            Ok(())
+        }
+        fn observe(&mut self, _: &AppQuery, _: Duration) -> Result<Observation, BackendError> {
+            unreachable!()
+        }
+        fn wait_for_value(
+            &mut self,
+            _: &SnapshotHandle,
+            _: &Value,
+            _: Duration,
+        ) -> Result<Observation, BackendError> {
+            unreachable!()
+        }
+        fn pointer_click(&mut self, _: (f64, f64)) -> Result<(), BackendError> {
+            *self.clicks.borrow_mut() += 1;
+            Ok(())
+        }
+        fn pointer_drag(
+            &mut self,
+            _: (f64, f64),
+            _: (f64, f64),
+            _: Duration,
+        ) -> Result<(), BackendError> {
+            unreachable!()
+        }
+        fn keyboard(&mut self, _: &AppQuery, _: &str) -> Result<(), BackendError> {
+            Ok(())
+        }
+        fn screenshot(&mut self, _: &AppQuery) -> Result<Screenshot, BackendError> {
+            unreachable!()
+        }
+        fn hit_test(&mut self, _: (f64, f64)) -> Result<Option<Node>, BackendError> {
+            Ok(self.hit.clone())
+        }
+        fn recorded_calls(&self) -> Result<Vec<RecordedCall>, BackendError> {
+            unreachable!()
+        }
+        fn set_recording(&mut self, _: bool) -> Result<(), BackendError> {
+            unreachable!()
+        }
+        fn observe_global_input(&mut self, _: Duration) -> Result<Vec<RecordedCall>, BackendError> {
+            unreachable!()
+        }
     }
     fn node(name: &str) -> Node {
-        Node { role: "Button".into(), subrole: None, name: Some(name.into()), title: Some(name.into()), label: Some(name.into()), value: None, description: None, identifier: Some(name.into()), actions: vec!["Invoke".into()], frame: Some(Rect { x: 0.0, y: 0.0, width: 20.0, height: 20.0 }), editable: false, children: vec![], child_count: Some(0), truncation_reason: None }
+        Node {
+            role: "Button".into(),
+            subrole: None,
+            name: Some(name.into()),
+            title: Some(name.into()),
+            label: Some(name.into()),
+            value: None,
+            description: None,
+            identifier: Some(name.into()),
+            actions: vec!["Invoke".into()],
+            frame: Some(Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 20.0,
+                height: 20.0,
+            }),
+            editable: false,
+            children: vec![],
+            child_count: Some(0),
+            truncation_reason: None,
+        }
     }
     fn backend(nodes: Vec<Node>, value: Option<&str>) -> FakeBackend {
-        let root = Node { children: nodes, ..node("root") };
-        FakeBackend { snapshot: Snapshot::new(Application { name: "App".into(), identifier: None, windows: vec![Window { title: None, root }] }), hit: None, value: Rc::new(RefCell::new(value.map(str::to_owned))), clicks: Rc::new(RefCell::new(0)) }
+        let root = Node {
+            children: nodes,
+            ..node("root")
+        };
+        FakeBackend {
+            snapshot: Snapshot::new(Application {
+                name: "App".into(),
+                identifier: None,
+                windows: vec![Window { title: None, root }],
+            }),
+            hit: None,
+            value: Rc::new(RefCell::new(value.map(str::to_owned))),
+            clicks: Rc::new(RefCell::new(0)),
+        }
     }
-    fn request(method: &str, params: Value) -> JsonRpcRequest { JsonRpcRequest::new(Some(JsonRpcId::Integer(1)), method, Some(params)) }
+    fn request(method: &str, params: Value) -> JsonRpcRequest {
+        JsonRpcRequest::new(Some(JsonRpcId::Integer(1)), method, Some(params))
+    }
     #[test]
     fn excluded_tools_fail_before_backend_dispatch() {
         assert_eq!(EXCLUDED.len(), 5);
@@ -431,8 +516,15 @@ mod tests {
     #[test]
     fn ambiguous_locator_cannot_dispatch() {
         let mut router = Router::new(backend(vec![node("same"), node("same")], None));
-        let response = router.request(request("click", json!({"target":{"app":"App","locator":{"role":"Button"}}}))).unwrap();
-        let JsonRpcResponse::Failure(error) = response else { panic!() };
+        let response = router
+            .request(request(
+                "click",
+                json!({"target":{"app":"App","locator":{"role":"Button"}}}),
+            ))
+            .unwrap();
+        let JsonRpcResponse::Failure(error) = response else {
+            panic!()
+        };
         assert!(error.error.message.contains("Ambiguous"));
         assert_eq!(*router.backend.clicks.borrow(), 0);
     }
@@ -444,7 +536,9 @@ mod tests {
         let clicks = backend.clicks.clone();
         let mut router = Router::new(backend);
         router.snapshot = Some(router.backend.snapshot.clone());
-        let response = router.request(request("click", json!({"target":handle.0}))).unwrap();
+        let response = router
+            .request(request("click", json!({"target":handle.0})))
+            .unwrap();
         assert!(matches!(response, JsonRpcResponse::Failure(_)));
         assert_eq!(*clicks.borrow(), 0);
     }
@@ -454,7 +548,8 @@ mod tests {
         let handle = backend.snapshot.handle(0).0;
         let mut router = Router::new(backend.clone());
         router.snapshot = Some(backend.snapshot.clone());
-        let source = format!(r#"version: 1
+        let source = format!(
+            r#"version: 1
 actions:
   - id: pass
     tool: invoke
@@ -474,19 +569,43 @@ actions:
         equals: wrong
   - tool: invoke
     target: {handle}
-"#);
-        let response = router.request(request("run", json!({"source":source,"options":{"continueOnError":true}}))).unwrap();
-        let JsonRpcResponse::Success(success) = response else { panic!() };
+"#
+        );
+        let response = router
+            .request(request(
+                "run",
+                json!({"source":source,"options":{"continueOnError":true}}),
+            ))
+            .unwrap();
+        let JsonRpcResponse::Success(success) = response else {
+            panic!()
+        };
         let batch = &success.result["batch"];
         assert!(!batch["success"].as_bool().unwrap());
         assert_eq!(batch["trace"].as_array().unwrap().len(), 3);
-        assert!(batch["trace"][1]["error"].as_str().unwrap().contains("expected"));
+        assert!(
+            batch["trace"][1]["error"]
+                .as_str()
+                .unwrap()
+                .contains("expected")
+        );
 
-        let dry = router.request(request("run", json!({"source":source,"options":{"dryRun":true}}))).unwrap();
-        let JsonRpcResponse::Success(dry) = dry else { panic!() };
+        let dry = router
+            .request(request(
+                "run",
+                json!({"source":source,"options":{"dryRun":true}}),
+            ))
+            .unwrap();
+        let JsonRpcResponse::Success(dry) = dry else {
+            panic!()
+        };
         assert!(dry.result["batch"]["dryRun"].as_bool().unwrap());
         assert!(!dry.result["batch"]["success"].as_bool().unwrap());
-        assert!(dry.result["batch"]["trace"][1]["error"].as_str().unwrap().contains("required fact"));
+        assert!(
+            dry.result["batch"]["trace"][1]["error"]
+                .as_str()
+                .unwrap()
+                .contains("required fact")
+        );
     }
-
 }

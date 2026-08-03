@@ -103,8 +103,8 @@ impl WindowsBackend {
         Ok(Self { tx })
     }
     fn immediate_node(&self, e: &IUIAutomationElement) -> Result<Node, BackendError> {
-        let ct = unsafe { e.CurrentControlType() }
-            .map_err(|e| operation("read hit ControlType", e))?;
+        let ct =
+            unsafe { e.CurrentControlType() }.map_err(|e| operation("read hit ControlType", e))?;
         let text = |value: windows::core::Result<BSTR>| {
             value.ok().map(|x| x.to_string()).filter(|x| !x.is_empty())
         };
@@ -191,14 +191,16 @@ impl UiaState {
                 }));
             }
             Command::Hit((x, y), tx) => {
-                let _ = tx.send(unsafe {
-                    self.automation.ElementFromPoint(POINT {
-                        x: x.round() as i32,
-                        y: y.round() as i32,
-                    })
-                }
-                .map_err(|e| operation("hit test", e))
-                .and_then(|element| self.immediate_node(&element).map(Some)));
+                let _ = tx.send(
+                    unsafe {
+                        self.automation.ElementFromPoint(POINT {
+                            x: x.round() as i32,
+                            y: y.round() as i32,
+                        })
+                    }
+                    .map_err(|e| operation("hit test", e))
+                    .and_then(|element| self.immediate_node(&element).map(Some)),
+                );
             }
             Command::Read(h, tx) => {
                 let _ = tx.send(self.element(&h).and_then(|e| {
