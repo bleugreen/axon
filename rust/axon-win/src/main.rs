@@ -331,7 +331,7 @@ mod pipe {
         let id = input.get("id").cloned().unwrap_or(Value::Null);
         if let Some(error) = response.get("error") {
             Ok(
-                json!({"jsonrpc":"2.0","id":id,"result":{"content":[{"type":"text","text":error.get("message").and_then(Value::as_str).unwrap_or("Axon error")}],"isError":true}}),
+                json!({"jsonrpc":"2.0","id":id,"result":{"content":[{"type":"text","text":error.get("message").and_then(Value::as_str).unwrap_or("Axon error")}],"structuredContent":error,"isError":true}}),
             )
         } else {
             let result = response.get("result").cloned().unwrap_or(Value::Null);

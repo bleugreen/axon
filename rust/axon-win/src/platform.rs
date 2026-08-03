@@ -10,6 +10,7 @@ use std::{
 };
 use windows::{
     Win32::{
+        Foundation::POINT,
         System::{
             Com::{
                 CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED, CoCreateInstance, CoInitializeEx,
@@ -71,6 +72,7 @@ enum Command {
     ),
     Focus(SnapshotHandle, mpsc::Sender<Result<(), BackendError>>),
     Scroll(SnapshotHandle, mpsc::Sender<Result<(), BackendError>>),
+    Hit((f64, f64), mpsc::Sender<Result<Option<Node>, BackendError>>),
 }
 
 pub struct WindowsBackend {
@@ -99,6 +101,36 @@ impl WindowsBackend {
             .map_err(|e| op("start UIA thread", e.to_string()))?
             .map_err(BackendError::from)?;
         Ok(Self { tx })
+    }
+    fn immediate_node(&self, e: &IUIAutomationElement) -> Result<Node, BackendError> {
+        let ct = unsafe { e.CurrentControlType() }
+            .map_err(|e| operation("read hit ControlType", e))?;
+        let text = |value: windows::core::Result<BSTR>| {
+            value.ok().map(|x| x.to_string()).filter(|x| !x.is_empty())
+        };
+        let name = text(unsafe { e.CurrentName() });
+        let r = unsafe { e.CurrentBoundingRectangle() }.ok();
+        Ok(Node {
+            role: control_type_name(ct.0).into(),
+            subrole: None,
+            name: name.clone(),
+            title: name.clone(),
+            label: name,
+            value: None,
+            description: None,
+            identifier: text(unsafe { e.CurrentAutomationId() }),
+            actions: vec![],
+            frame: r.map(|x| Rect {
+                x: x.left as f64,
+                y: x.top as f64,
+                width: (x.right - x.left) as f64,
+                height: (x.bottom - x.top) as f64,
+            }),
+            editable: ct == UIA_EditControlTypeId || ct == UIA_DocumentControlTypeId,
+            children: vec![],
+            child_count: None,
+            truncation_reason: None,
+        })
     }
     fn call<T>(
         &self,
@@ -133,6 +165,25 @@ impl UiaState {
                 automation2
                     .SetTransactionTimeout(1500)
                     .map_err(|e| operation("set UIA transaction timeout", e))?;
+            }
+            for pattern in [
+                UIA_InvokePatternId,
+                UIA_ValuePatternId,
+                UIA_ScrollItemPatternId,
+            ] {
+                cache
+                    .AddPattern(pattern)
+                    .map_err(|e| operation("add capture cached pattern", e))?;
+            }
+            Command::Hit((x, y), tx) => {
+                let _ = tx.send(unsafe {
+                    self.automation.ElementFromPoint(POINT {
+                        x: x.round() as i32,
+                        y: y.round() as i32,
+                    })
+                }
+                .map_err(|e| operation("hit test", e))
+                .and_then(|element| self.immediate_node(&element).map(Some)));
             }
         }
         Ok(Self {
@@ -320,17 +371,17 @@ impl UiaState {
         let ct = unsafe { e.CachedControlType() }
             .map_err(|e| operation("read cached ControlType", e))?;
         let mut actions = Vec::new();
-        if unsafe { e.GetCurrentPatternAs::<IUIAutomationInvokePattern>(UIA_InvokePatternId) }
+        if unsafe { e.GetCachedPatternAs::<IUIAutomationInvokePattern>(UIA_InvokePatternId) }
             .is_ok()
         {
             actions.push("Invoke".into())
         }
-        if unsafe { e.GetCurrentPatternAs::<IUIAutomationValuePattern>(UIA_ValuePatternId) }.is_ok()
+        if unsafe { e.GetCachedPatternAs::<IUIAutomationValuePattern>(UIA_ValuePatternId) }.is_ok()
         {
             actions.push("Value".into())
         }
         if unsafe {
-            e.GetCurrentPatternAs::<IUIAutomationScrollItemPattern>(UIA_ScrollItemPatternId)
+            e.GetCachedPatternAs::<IUIAutomationScrollItemPattern>(UIA_ScrollItemPatternId)
         }
         .is_ok()
         {
@@ -373,9 +424,9 @@ impl UiaState {
             .map(|x| x.to_string())
             .filter(|x| !x.is_empty());
         let value =
-            unsafe { e.GetCurrentPatternAs::<IUIAutomationValuePattern>(UIA_ValuePatternId) }
+            unsafe { e.GetCachedPatternAs::<IUIAutomationValuePattern>(UIA_ValuePatternId) }
                 .ok()
-                .and_then(|p| unsafe { p.CurrentValue() }.ok())
+                .and_then(|p| unsafe { p.CachedValue() }.ok())
                 .map(|x| x.to_string());
         Ok(Node {
             role: control_type_name(ct.0).into(),
@@ -427,6 +478,7 @@ impl PlatformBackend for WindowsBackend {
             Capability::Scroll,
             Capability::PointerInput,
             Capability::KeyboardInput,
+            Capability::HitTest,
         ]
         .into_iter()
         .map(|capability| CapabilityInfo {
@@ -488,8 +540,8 @@ impl PlatformBackend for WindowsBackend {
     fn screenshot(&mut self, _: &AppQuery) -> Result<Screenshot, BackendError> {
         Err(cap(Capability::Screenshot, "not implemented"))
     }
-    fn hit_test(&mut self, _: (f64, f64)) -> Result<Option<Node>, BackendError> {
-        Err(cap(Capability::HitTest, "not implemented"))
+    fn hit_test(&mut self, point: (f64, f64)) -> Result<Option<Node>, BackendError> {
+        self.call(|tx| Command::Hit(point, tx))
     }
     fn recorded_calls(&self) -> Result<Vec<RecordedCall>, BackendError> {
         Err(cap(Capability::SerializeHistory, "excluded from v1"))

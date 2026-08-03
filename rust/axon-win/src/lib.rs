@@ -25,6 +25,13 @@ pub struct Router<B> {
     backend: B,
     snapshot: Option<Snapshot>,
 }
+fn same_semantic_node(target: &axon_core::Node, hit: &axon_core::Node) -> bool {
+    target.role == hit.role
+        && match (&target.identifier, &hit.identifier) {
+            (Some(target), Some(hit)) => target == hit,
+            _ => target.name == hit.name && target.frame == hit.frame,
+        }
+}
 
 impl<B: PlatformBackend> Router<B> {
     pub fn new(backend: B) -> Self {
@@ -66,6 +73,15 @@ impl<B: PlatformBackend> Router<B> {
             "click" => {
                 let (handle, resolution) = self.resolve(params)?;
                 let point = self.node_center(&handle)?;
+                let target = self.node(&handle)?;
+                let hit = self.backend.hit_test(point).map_err(backend_error)?;
+                let hit = hit.ok_or_else(|| rpc_error(-32003, "click point hit no element"))?;
+                if !same_semantic_node(target, &hit) {
+                    return Err(rpc_error(
+                        -32003,
+                        "click target moved, is covered, or no longer matches the resolved element",
+                    ));
+                }
                 self.backend.pointer_click(point).map_err(backend_error)?;
                 Ok(
                     json!({"dispatch":{"success":true,"mechanism":"SendInput"},"verification":{"verified":false,"reason":"click has no declared postcondition"},"resolution":resolution}),
@@ -203,6 +219,14 @@ impl<B: PlatformBackend> Router<B> {
     }
 
     fn node_center(&self, handle: &SnapshotHandle) -> Result<(f64, f64), JsonRpcError> {
+        let node = self.node(handle)?;
+        let r = node
+            .frame
+            .ok_or_else(|| rpc_error(-32003, "target has no actionable frame"))?;
+        Ok((r.x + r.width / 2.0, r.y + r.height / 2.0))
+    }
+
+    fn node(&self, handle: &SnapshotHandle) -> Result<&axon_core::Node, JsonRpcError> {
         let snapshot = self
             .snapshot
             .as_ref()
@@ -210,13 +234,9 @@ impl<B: PlatformBackend> Router<B> {
         let index = snapshot
             .index_for_handle(handle)
             .map_err(|e| rpc_error(-32002, e.to_string()))?;
-        let node = flattened(snapshot)
+        flattened(snapshot)
             .nth(index)
-            .ok_or_else(|| rpc_error(-32002, "handle index is outside snapshot"))?;
-        let r = node
-            .frame
-            .ok_or_else(|| rpc_error(-32003, "target has no actionable frame"))?;
-        Ok((r.x + r.width / 2.0, r.y + r.height / 2.0))
+            .ok_or_else(|| rpc_error(-32002, "handle index is outside snapshot"))
     }
 
     fn run_axn(&mut self, params: &Map<String, Value>) -> Result<Value, JsonRpcError> {
@@ -262,8 +282,42 @@ impl<B: PlatformBackend> ToolDispatcher for Router<B> {
             },
         }
     }
-    fn verify(&mut self, _fact: &ExpectedFact) -> Result<(), String> {
-        Err("fact verification is not implemented by the Windows v1 router".into())
+    fn verify(&mut self, fact: &ExpectedFact) -> Result<(), String> {
+        if fact.fields.get("kind").and_then(Value::as_str) != Some("value") {
+            return Err(format!("unsupported expected fact kind for {}", fact.id));
+        }
+        let target = fact
+            .fields
+            .get("target")
+            .and_then(Value::as_str)
+            .ok_or_else(|| format!("expected fact {} requires a target handle", fact.id))?;
+        let observed = self
+            .backend
+            .read_value(&SnapshotHandle(target.into()))
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| format!("expected fact {} observed no value", fact.id))?;
+        if let Some(expected) = fact.fields.get("equals").and_then(Value::as_str) {
+            if observed != expected {
+                return Err(format!(
+                    "expected fact {} failed: expected {expected:?}, observed {observed:?}",
+                    fact.id
+                ));
+            }
+            return Ok(());
+        }
+        if let Some(expected) = fact.fields.get("contains").and_then(Value::as_str) {
+            if !observed.contains(expected) {
+                return Err(format!(
+                    "expected fact {} failed: {observed:?} does not contain {expected:?}",
+                    fact.id
+                ));
+            }
+            return Ok(());
+        }
+        Err(format!(
+            "expected value fact {} requires equals or contains",
+            fact.id
+        ))
     }
 }
 
