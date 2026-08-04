@@ -1,7 +1,8 @@
 use crate::PointerTargetVerifier;
 use axon_core::{
     AppQuery, Application, BackendError, Capability, CapabilityInfo, Node, Observation,
-    PlatformBackend, RecordedCall, Rect, Screenshot, Snapshot, SnapshotHandle, Window,
+    PlatformBackend, RecognizedText, RecordedCall, Rect, Screenshot, Snapshot, SnapshotHandle,
+    TextRecognitionProvider, Window,
 };
 
 #[path = "capture.rs"]
@@ -90,6 +91,21 @@ enum Command {
         (f64, f64),
         mpsc::Sender<Result<bool, BackendError>>,
     ),
+}
+
+impl TextRecognitionProvider for WindowsBackend {
+    fn recognize_text(&mut self, q: &AppQuery) -> Result<Vec<RecognizedText>, BackendError> {
+        self.recognize_window_text(q).map(|words| {
+            words
+                .into_iter()
+                .map(|word| RecognizedText {
+                    text: word.text,
+                    frame: word.frame,
+                    confidence: None,
+                })
+                .collect()
+        })
+    }
 }
 
 impl WindowsBackend {
