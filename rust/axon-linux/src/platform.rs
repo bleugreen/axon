@@ -154,7 +154,7 @@ impl Actor {
             let actions = if let Some(p) = &proxies { match timeout("action interface", p.action()).await { Ok(a) => timeout("actions", a.get_actions()).await.map(|v| v.into_iter().map(|x| x.name).collect()).unwrap_or_default(), Err(_) => vec![] } } else { vec![] };
             let value = if let Some(p) = &proxies { match timeout("text interface", p.text()).await { Ok(t) => timeout("text", t.get_text(0,-1)).await.ok(), Err(_) => None } } else { None };
             let frame = if let Some(p) = &proxies { match timeout("component interface", p.component()).await { Ok(c) => timeout("extents", c.get_extents(CoordType::Screen)).await.ok().and_then(|(x,y,w,h)| (w>0 && h>0).then_some(axon_core::Rect{x:x.into(),y:y.into(),width:w.into(),height:h.into()})), Err(_) => None } } else { None };
-            let editable = proxies.as_ref().is_some_and(|p| futures_lite::future::block_on(p.editable_text()).is_ok());
+            let editable = if let Some(p) = &proxies { timeout("editable text interface", p.editable_text()).await.is_ok() } else { false };
             let children_refs = if depth < MAX_DEPTH && *remaining > 0 { timeout("children", proxy.get_children()).await.unwrap_or_default() } else { vec![] };
             let child_count = children_refs.len();
             let mut children = Vec::new();

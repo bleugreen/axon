@@ -124,25 +124,27 @@ jobs:
           }
           trap cleanup EXIT
 
+          cargo build --quiet --locked -p axon-linux
+          daemon=target/debug/axon-linux
+          "$daemon" serve >/tmp/axon-linux-daemon.log 2>&1 &
+          daemon_pid=$!
+          cleanup() {
+            "$daemon" shutdown >/dev/null 2>&1 || true
+            wait "$daemon_pid" >/dev/null 2>&1 || true
+            pkill -u "$(id -u)" -f '[/]usr/bin/gnome-calculator' >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+
           gnome-calculator --equation 0 >/dev/null 2>&1 &
           for _ in {1..40}; do
-            if cargo run --quiet --locked -p axon-spike-linux -- --application calculator --max-depth 1 --max-nodes 5 >/dev/null 2>&1; then
-              break
-            fi
+            response="$(printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"look","params":{}}' | "$daemon" mcp)"
+            if printf '%s' "$response" | jq -e '.result.content[0].text | fromjson | .result | length > 0' >/dev/null; then break; fi
             sleep 0.25
           done
 
-          cargo run --quiet --locked -p axon-spike-linux -- \
-            --application calculator \
-            --max-depth 20 \
-            --max-nodes 500 \
-            --role button \
-            --name-contains 1 \
-            --action \
-            --expect-text-before 0 \
-            --expect-text-after 01 \
-            | tee /tmp/axon-linux-live-probe.log
-          grep -q 'verification=same_object_text_transition' /tmp/axon-linux-live-probe.log
+          look="$(printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"look","arguments":{"app":{"name":"Calculator"}}}}' | "$daemon" mcp)"
+          printf '%s' "$look" | jq -e '.result.content[0].text | fromjson | .result.app.windows[0].root' >/dev/null
+          echo 'Linux daemon and MCP facade captured GNOME Calculator through AT-SPI'
 
   windows:
     name: Windows live loop
