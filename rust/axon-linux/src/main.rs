@@ -64,7 +64,7 @@ mod socket {
                 Some("tools/list") => json!({"jsonrpc":"2.0","id":id,"result":{"tools": tools()}}),
                 Some("tools/call") => {
                     let p=&value["params"]; let name=p["name"].as_str().unwrap_or(""); let args=p.get("arguments").cloned().unwrap_or(json!({}));
-                    let rpc=serde_json::to_string(&JsonRpcRequest{jsonrpc:"2.0".into(),id:Some(JsonRpcId::Number(1)),method:name.into(),params:Some(args)}).unwrap();
+                    let rpc=serde_json::to_string(&JsonRpcRequest::new(Some(JsonRpcId::Integer(1)), name, Some(args))).unwrap();
                     match request(&rpc) { Ok(body)=>json!({"jsonrpc":"2.0","id":id,"result":{"content":[{"type":"text","text":body.trim()}]}}), Err(e)=>json!({"jsonrpc":"2.0","id":id,"error":{"code":-32000,"message":e.to_string()}}) }
                 }
                 _ => json!({"jsonrpc":"2.0","id":id,"error":{"code":-32601,"message":"method not found"}}),
