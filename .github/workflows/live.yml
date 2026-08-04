@@ -138,13 +138,29 @@ jobs:
           gnome-calculator --equation 0 >/dev/null 2>&1 &
           for _ in {1..40}; do
             response="$(printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"look","arguments":{}}}' | "$daemon" mcp)"
-            if printf '%s' "$response" | jq -e '.result.content[0].text | fromjson | .result | length > 0' >/dev/null; then break; fi
+            if printf '%s' "$response" | jq -e '.result.structuredContent | length > 0' >/dev/null; then break; fi
             sleep 0.25
           done
 
           look="$(printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"look","arguments":{"app":"Calculator"}}}' | "$daemon" mcp)"
-          printf '%s' "$look" | jq -e '.result.content[0].text | fromjson | .result.app.windows[0].root' >/dev/null
-          echo 'Linux daemon and MCP facade captured GNOME Calculator through AT-SPI'
+          printf '%s' "$look" | jq -e '.result.structuredContent.app.windows[0].root' >/dev/null
+
+          found="$(printf '%s\n' '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"find","arguments":{"target":{"app":"Calculator","locator":{"label":"1","actions":["Click"]}}}}}' | "$daemon" mcp)"
+          handle="$(printf '%s' "$found" | jq -er '.result.structuredContent.handle')"
+          invoked="$(jq -cn --arg handle "$handle" '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"invoke","arguments":{"target":$handle,"name":"Click"}}}' | "$daemon" mcp)"
+          printf '%s' "$invoked" | jq -e '.result.structuredContent.dispatch.success == true' >/dev/null
+
+          verified=false
+          for _ in {1..20}; do
+            after="$(printf '%s\n' '{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"look","arguments":{"app":"Calculator"}}}' | "$daemon" mcp)"
+            if printf '%s' "$after" | jq -e '[.result.structuredContent.app.windows[].root | .. | objects | .value? // empty] | any(contains("1"))' >/dev/null; then
+              verified=true
+              break
+            fi
+            sleep 0.1
+          done
+          test "$verified" = true
+          echo 'Linux MCP facade captured, resolved, invoked, and verified GNOME Calculator through the daemon'
 
   windows:
     name: Windows live loop

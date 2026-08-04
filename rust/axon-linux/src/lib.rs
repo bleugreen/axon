@@ -14,6 +14,8 @@ mod platform;
 pub use platform::LinuxBackend;
 
 const EXCLUDED: &[(&str, &str)] = &[
+    ("click", "PointerInput"),
+    ("keyboard", "KeyboardInput"),
     ("save", "SerializeHistory"),
     ("drag", "PointerDrag"),
     ("wait_for_value", "WaitForValue"),
@@ -113,11 +115,12 @@ impl<B: PointerTargetVerifier> Router<B> {
             }
             "invoke" => {
                 let (handle, resolution) = self.resolve(params)?;
+                let action = required_str(params, "name")?;
                 self.backend
-                    .invoke(&handle, "Invoke")
+                    .invoke(&handle, action)
                     .map_err(backend_error)?;
                 Ok(
-                    json!({"dispatch":{"success":true,"mechanism":"InvokePattern"},"verification":{"verified":false,"reason":"invoke has no declared postcondition"},"resolution":resolution}),
+                    json!({"dispatch":{"success":true,"mechanism":"AT-SPI Action.DoAction","action":action},"verification":{"verified":false,"reason":"invoke has no declared postcondition"},"resolution":resolution}),
                 )
             }
             "scroll" => {
@@ -515,8 +518,10 @@ mod tests {
     }
     #[test]
     fn excluded_tools_fail_before_backend_dispatch() {
-        assert_eq!(EXCLUDED.len(), 5);
+        assert_eq!(EXCLUDED.len(), 7);
         assert!(EXCLUDED.iter().any(|x| x.0 == "drag"));
+        assert!(EXCLUDED.iter().any(|x| x.0 == "click"));
+        assert!(EXCLUDED.iter().any(|x| x.0 == "keyboard"));
     }
     #[test]
     fn invalid_json_is_parse_error() {

@@ -65,7 +65,18 @@ mod socket {
                 Some("tools/call") => {
                     let p=&value["params"]; let name=p["name"].as_str().unwrap_or(""); let args=p.get("arguments").cloned().unwrap_or(json!({}));
                     let rpc=serde_json::to_string(&JsonRpcRequest::new(Some(JsonRpcId::Integer(1)), name, Some(args))).unwrap();
-                    match request(&rpc) { Ok(body)=>json!({"jsonrpc":"2.0","id":id,"result":{"content":[{"type":"text","text":body.trim()}]}}), Err(e)=>json!({"jsonrpc":"2.0","id":id,"error":{"code":-32000,"message":e.to_string()}}) }
+                    match request(&rpc) {
+                        Ok(body) => {
+                            let response: Value = serde_json::from_str(&body).map_err(io::Error::other)?;
+                            if let Some(error) = response.get("error") {
+                                json!({"jsonrpc":"2.0","id":id,"result":{"content":[{"type":"text","text":error.get("message").and_then(Value::as_str).unwrap_or("Axon error")}],"structuredContent":error,"isError":true}})
+                            } else {
+                                let result = response.get("result").cloned().unwrap_or(Value::Null);
+                                json!({"jsonrpc":"2.0","id":id,"result":{"content":[{"type":"text","text":serde_json::to_string(&result).unwrap()}],"structuredContent":result,"isError":false}})
+                            }
+                        }
+                        Err(e)=>json!({"jsonrpc":"2.0","id":id,"error":{"code":-32000,"message":e.to_string()}})
+                    }
                 }
                 _ => json!({"jsonrpc":"2.0","id":id,"error":{"code":-32601,"message":"method not found"}}),
             };
@@ -74,7 +85,7 @@ mod socket {
         Ok(())
     }
     fn tools() -> Vec<Value> {
-        ["look","find","click","type","keyboard","invoke","scroll","run"].into_iter().map(|name| json!({"name":name,"description":format!("Axon {name}"),"inputSchema":{"type":"object","additionalProperties":true}})).collect()
+        ["look","find","invoke","type","scroll","run"].into_iter().map(|name| json!({"name":name,"description":format!("Axon Linux {name}"),"inputSchema":{"type":"object","additionalProperties":true}})).collect()
     }
     #[cfg(test)] mod tests {
         use super::*;
