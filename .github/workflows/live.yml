@@ -21,6 +21,15 @@ jobs:
       - name: Check out Axon
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
+      - name: Unlock signing keychain
+        env:
+          KEYCHAIN_PASSWORD: ${{ secrets.BGLAB_MAC_KEYCHAIN_PASSWORD }}
+        run: |
+          if [ -z "$KEYCHAIN_PASSWORD" ]; then
+            echo '::error::BGLAB_MAC_KEYCHAIN_PASSWORD secret is not set'; exit 1
+          fi
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" ~/Library/Keychains/login.keychain-db
+
       - name: Build the signed app
         env:
           AXON_CODESIGN_IDENTITY: 2A1FE6185D48E55E22FA9DB390B452D2E06AD665
