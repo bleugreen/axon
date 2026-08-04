@@ -66,25 +66,32 @@ jobs:
             sleep 0.25
           done
           "$cli" status | grep -q 'Accessibility: trusted'
+          echo 'Axon daemon is trusted'
 
           open -a Calculator
+          clear_locator='{"role":"AXButton","description":"All Clear","actions":["AXPress"]}'
+          clear_result=""
           for _ in {1..40}; do
-            if "$cli" look Calculator --json >/dev/null 2>&1; then
+            clear_result="$("$cli" find Calculator "$clear_locator")"
+            if printf '%s' "$clear_result" | jq -e '.result.resolution.best != null' >/dev/null; then
               break
             fi
             sleep 0.25
           done
-
-          clear_result="$("$cli" find Calculator '{"role":"AXButton","description":"All Clear","actions":["AXPress"]}')"
           clear_handle="$(printf '%s' "$clear_result" | jq -er '.result.resolution.best.handle')"
+          echo 'Calculator All Clear button is resolvable'
+
           "$cli" invoke "$clear_handle" AXPress | jq -e '.result.action.success == true' >/dev/null
+          echo 'Calculator All Clear button pressed'
 
           one_result="$("$cli" find Calculator '{"role":"AXButton","description":"1","actions":["AXPress"]}')"
           one_handle="$(printf '%s' "$one_result" | jq -er '.result.resolution.best.handle')"
           "$cli" invoke "$one_handle" AXPress | jq -e '.result.action.success == true' >/dev/null
+          echo 'Calculator digit 1 pressed'
 
           "$cli" look Calculator --json \
             | jq -e '.indexedNodes | any(.role == "AXStaticText" and (.value | strings | contains("1")))'
+          echo 'Calculator display verified'
 
   linux:
     name: Linux live loop
