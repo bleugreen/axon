@@ -44,9 +44,11 @@ pub trait PointerTargetVerifier: PlatformBackend {
 
     fn verify_ocr_target(
         &mut self,
+        app: &AppQuery,
         point: (f64, f64),
         _frame: axon_core::Rect,
     ) -> Result<bool, axon_core::BackendError> {
+        let _ = app;
         Ok(self.hit_test(point)?.is_some())
     }
 }
@@ -93,7 +95,7 @@ impl<B: PointerTargetVerifier + TextRecognitionProvider> Router<B> {
                 .map_err(backend_error)?,
             None => self
                 .backend
-                .verify_ocr_target(point, candidate.frame)
+                .verify_ocr_target(&app, point, candidate.frame)
                 .map_err(backend_error)?,
         };
         if !safe {
@@ -218,11 +220,31 @@ impl<B: PointerTargetVerifier + TextRecognitionProvider> Router<B> {
             )
             .map_err(internal_error);
         }
+        let app = app_query(params);
         let snapshot = self
             .backend
-            .capture(&app_query(params))
+            .capture(&app)
             .map_err(backend_error)?;
-        let value = serde_json::to_value(&snapshot).map_err(internal_error)?;
+        let mut value = serde_json::to_value(&snapshot).map_err(internal_error)?;
+        if params.get("screenshot").and_then(Value::as_bool) == Some(true) {
+            let screenshot = self.backend.screenshot(&app).map_err(backend_error)?;
+            value.as_object_mut().expect("snapshots serialize as objects").insert(
+                "screenshot".into(),
+                json!({
+                    "mediaType": screenshot.media_type,
+                    "base64Data": base64::Engine::encode(
+                        &base64::engine::general_purpose::STANDARD,
+                        screenshot.bytes
+                    ),
+                    "frame": screenshot.frame
+                }),
+            );
+        }
+        if params.get("screenText").and_then(Value::as_bool) == Some(true) {
+            let screen_text = self.backend.recognize_text(&app).map_err(backend_error)?;
+            value.as_object_mut().expect("snapshots serialize as objects")
+                .insert("screenText".into(), json!(screen_text));
+        }
         self.snapshot = Some(snapshot);
         Ok(value)
     }

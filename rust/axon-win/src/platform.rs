@@ -73,6 +73,12 @@ enum Command {
         AppQuery,
         mpsc::Sender<Result<Vec<graphics_capture::OcrWord>, BackendError>>,
     ),
+    VerifyOcrTarget(
+        AppQuery,
+        (f64, f64),
+        Rect,
+        mpsc::Sender<Result<bool, BackendError>>,
+    ),
     Invoke(SnapshotHandle, mpsc::Sender<Result<(), BackendError>>),
     Read(
         SnapshotHandle,
@@ -172,6 +178,15 @@ impl PointerTargetVerifier for WindowsBackend {
         point: (f64, f64),
     ) -> Result<bool, BackendError> {
         self.call(|tx| Command::VerifyPointerTarget(handle.clone(), point, tx))
+    }
+
+    fn verify_ocr_target(
+        &mut self,
+        app: &AppQuery,
+        point: (f64, f64),
+        frame: Rect,
+    ) -> Result<bool, BackendError> {
+        self.call(|tx| Command::VerifyOcrTarget(app.clone(), point, frame, tx))
     }
 }
 
@@ -330,6 +345,30 @@ impl UiaState {
                         .map(|same| same.as_bool())
                         .map_err(|e| operation("compare pointer target identity", e))
                 });
+                let _ = tx.send(result);
+            }
+            Command::VerifyOcrTarget(q, (x, y), frame, tx) => {
+                let result = self.find_window(&q, "verify OCR pointer target").and_then(
+                    |(window, _)| {
+                        if x < frame.x || y < frame.y
+                            || x > frame.x + frame.width || y > frame.y + frame.height
+                        {
+                            return Ok(false);
+                        }
+                        let expected_pid = unsafe { window.CurrentProcessId() }
+                            .map_err(|e| operation("read OCR target process", e))?;
+                        let hit = unsafe {
+                            self.automation.ElementFromPoint(POINT {
+                                x: x.round() as i32,
+                                y: y.round() as i32,
+                            })
+                        }
+                        .map_err(|e| operation("hit test OCR pointer target", e))?;
+                        let hit_pid = unsafe { hit.CurrentProcessId() }
+                            .map_err(|e| operation("read OCR hit process", e))?;
+                        Ok(expected_pid == hit_pid)
+                    },
+                );
                 let _ = tx.send(result);
             }
             Command::Hit((x, y), tx) => {
