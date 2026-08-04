@@ -29,11 +29,7 @@ async fn same_bus_children(
     connection: &atspi::zbus::Connection,
     object: &ObjectRefOwned,
 ) -> Result<Vec<ObjectRefOwned>, Box<dyn Error>> {
-    use atspi::zbus::{
-        fdo::DBusProxy,
-        names::BusName,
-        zvariant::OwnedObjectPath,
-    };
+    use atspi::zbus::{fdo::DBusProxy, names::BusName, zvariant::OwnedObjectPath};
 
     let destination = object
         .name()
@@ -91,12 +87,8 @@ pub async fn run(options: Options) -> Result<(), Box<dyn Error>> {
     if options.application.is_none() {
         println!("applications={}", applications.len());
         for object in applications {
-            let proxy = accessible_proxy(
-                connection.connection(),
-                &object,
-                options.same_bus,
-            )
-            .await?;
+            let proxy =
+                accessible_proxy(connection.connection(), &object, options.same_bus).await?;
             println!(
                 "role={:?} name={:?} path={}",
                 proxy.get_role_name().await?,
@@ -137,12 +129,8 @@ pub async fn run(options: Options) -> Result<(), Box<dyn Error>> {
                     && node.name.to_lowercase().contains(&name.to_lowercase())
             })
             .ok_or_else(|| format!("no control matched role={role:?} name contains={name:?}"))?;
-        let proxy = accessible_proxy(
-            connection.connection(),
-            &target.object,
-            options.same_bus,
-        )
-        .await?;
+        let proxy =
+            accessible_proxy(connection.connection(), &target.object, options.same_bus).await?;
         let action = proxy.proxies().await?.action().await?;
         let actions = action.get_actions().await?;
         println!(
