@@ -355,8 +355,6 @@ impl UiaState {
                         {
                             return Ok(false);
                         }
-                        let expected_pid = unsafe { window.CurrentProcessId() }
-                            .map_err(|e| operation("read OCR target process", e))?;
                         let hit = unsafe {
                             self.automation.ElementFromPoint(POINT {
                                 x: x.round() as i32,
@@ -364,9 +362,20 @@ impl UiaState {
                             })
                         }
                         .map_err(|e| operation("hit test OCR pointer target", e))?;
-                        let hit_pid = unsafe { hit.CurrentProcessId() }
-                            .map_err(|e| operation("read OCR hit process", e))?;
-                        Ok(expected_pid == hit_pid)
+                        let walker = unsafe { self.automation.ControlViewWalker() }
+                            .map_err(|e| operation("get UIA control walker", e))?;
+                        let mut current = Some(hit);
+                        for _ in 0..64 {
+                            let Some(element) = current else { return Ok(false) };
+                            if unsafe { self.automation.CompareElements(&window, &element) }
+                                .map_err(|e| operation("compare OCR target ancestry", e))?
+                                .as_bool()
+                            {
+                                return Ok(true);
+                            }
+                            current = unsafe { walker.GetParentElement(&element) }.ok();
+                        }
+                        Ok(false)
                     },
                 );
                 let _ = tx.send(result);
