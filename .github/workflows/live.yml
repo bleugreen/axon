@@ -137,12 +137,12 @@ jobs:
 
           gnome-calculator --equation 0 >/dev/null 2>&1 &
           for _ in {1..40}; do
-            response="$(printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"look","params":{}}' | "$daemon" mcp)"
+            response="$(printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"look","arguments":{}}}' | "$daemon" mcp)"
             if printf '%s' "$response" | jq -e '.result.content[0].text | fromjson | .result | length > 0' >/dev/null; then break; fi
             sleep 0.25
           done
 
-          look="$(printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"look","arguments":{"app":{"name":"Calculator"}}}}' | "$daemon" mcp)"
+          look="$(printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"look","arguments":{"app":"Calculator"}}}' | "$daemon" mcp)"
           printf '%s' "$look" | jq -e '.result.content[0].text | fromjson | .result.app.windows[0].root' >/dev/null
           echo 'Linux daemon and MCP facade captured GNOME Calculator through AT-SPI'
 
