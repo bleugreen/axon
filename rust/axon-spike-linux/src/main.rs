@@ -131,4 +131,10 @@ mod tests {
             "--max-nodes must be a positive integer"
         );
     }
+
+    #[test]
+    fn same_bus_mode_is_explicit() {
+        let options = Options::parse(["--same-bus".to_owned()]).unwrap();
+        assert!(options.same_bus);
+    }
 }
