@@ -124,7 +124,11 @@ fn ax_candidates(text: &TextMatcher, snapshot: &Snapshot) -> Vec<TextLocationCan
                 ("identifier", node.identifier.as_deref()),
             ]
             .into_iter()
-            .find(|(_, value)| text.matches(*value))?;
+            .find_map(|(field, value)| {
+                value
+                    .filter(|value| text.matches(Some(value)))
+                    .map(|value| (field, value))
+            })?;
             Some(TextLocationCandidate {
                 index,
                 handle: Some(snapshot.handle(index)),
