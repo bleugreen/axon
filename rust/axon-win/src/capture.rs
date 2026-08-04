@@ -10,7 +10,6 @@ use windows::{
             Direct3D11::IDirect3DDevice, DirectXPixelFormat,
         },
         Imaging::{BitmapEncoder, SoftwareBitmap},
-        SizeInt32,
     },
     Media::Ocr::OcrEngine,
     Storage::Streams::{DataReader, InMemoryRandomAccessStream},
@@ -86,7 +85,7 @@ pub(crate) fn capture(hwnd: HWND) -> Result<CapturedBitmap, BackendError> {
     let (tx, rx) = mpsc::sync_channel(1);
     let token = pool
         .FrameArrived(&TypedEventHandler::new(move |sender, _| {
-            if let Some(sender) = sender {
+            if let Some(sender) = sender.as_ref() {
                 let _ = tx.try_send(sender.TryGetNextFrame());
             }
             Ok(())
