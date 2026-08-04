@@ -4,7 +4,8 @@ use axon_core::{
     AppQuery, AxnCodec, AxnRunner, Candidate, Confidence, DispatchOutcome, ExpectedFact,
     JsonRpcError, JsonRpcId, JsonRpcRequest, JsonRpcResponse, Locator, LocatorResolver,
     PlatformBackend, Resolution, ResolutionStatus, RunEnvelope, RunOptions, Snapshot,
-    SnapshotHandle, ToolDispatcher,
+    SnapshotHandle, TextLocationResolution, TextLocationResolver, TextLocationSource,
+    TextLocationTarget, TextRecognitionProvider, ToolDispatcher,
 };
 use serde_json::{Map, Value, json};
 
@@ -26,15 +27,80 @@ pub struct Router<B> {
     snapshot: Option<Snapshot>,
 }
 
+fn text_click_result(resolution: TextLocationResolution) -> Result<Value, JsonRpcError> {
+    Ok(json!({
+        "dispatch":{"success":true,"mechanism":"SendInput"},
+        "verification":{"verified":false,"reason":"click has no declared postcondition"},
+        "resolution": resolution
+    }))
+}
+
 pub trait PointerTargetVerifier: PlatformBackend {
     fn verify_pointer_target(
         &mut self,
         handle: &SnapshotHandle,
         point: (f64, f64),
     ) -> Result<bool, axon_core::BackendError>;
+
+    fn verify_ocr_target(
+        &mut self,
+        point: (f64, f64),
+        _frame: axon_core::Rect,
+    ) -> Result<bool, axon_core::BackendError> {
+        Ok(self.hit_test(point)?.is_some())
+    }
+
+    fn click_text_location(&mut self, value: &Value) -> Result<Value, JsonRpcError> {
+        let target: TextLocationTarget = serde_json::from_value(value.clone())
+            .map_err(|error| rpc_error(-32602, error.to_string()))?;
+        if target.app.is_empty() {
+            return Err(rpc_error(-32602, "location app must not be empty"));
+        }
+        let app = AppQuery {
+            name: Some(target.app.clone()),
+            identifier: None,
+        };
+        let snapshot = self.backend.capture(&app).map_err(backend_error)?;
+        let initial = TextLocationResolver::resolve(&target, &snapshot, &[]);
+        let resolution = if target.source == TextLocationSource::Screenshot
+            || (target.source == TextLocationSource::Auto
+                && initial.status == ResolutionStatus::Missing)
+        {
+            let recognized = self.backend.recognize_text(&app).map_err(backend_error)?;
+            TextLocationResolver::resolve(&target, &snapshot, &recognized)
+        } else {
+            initial
+        };
+        let candidate = resolution.best.as_ref().ok_or_else(|| {
+            rpc_error(
+                -32001,
+                format!("text location resolution was {:?}", resolution.status),
+            )
+        })?;
+        let point = (candidate.point.x, candidate.point.y);
+        let safe = match &candidate.handle {
+            Some(handle) => self
+                .backend
+                .verify_pointer_target(handle, point)
+                .map_err(backend_error)?,
+            None => self
+                .backend
+                .verify_ocr_target(point, candidate.frame)
+                .map_err(backend_error)?,
+        };
+        if !safe {
+            return Err(rpc_error(
+                -32003,
+                "click target moved, is covered, or no longer matches the resolved text",
+            ));
+        }
+        self.backend.pointer_click(point).map_err(backend_error)?;
+        self.snapshot = Some(snapshot);
+        text_click_result(resolution)
+    }
 }
 
-impl<B: PointerTargetVerifier> Router<B> {
+impl<B: PointerTargetVerifier + TextRecognitionProvider> Router<B> {
     pub fn new(backend: B) -> Self {
         Self {
             backend,
@@ -71,6 +137,13 @@ impl<B: PointerTargetVerifier> Router<B> {
                 Ok(json!({"handle": handle, "resolution": resolution}))
             }
             "click" => {
+                if let Some(location) = params
+                    .get("target")
+                    .and_then(|target| target.get("location"))
+                    .or_else(|| params.get("location"))
+                {
+                    return self.click_text_location(location);
+                }
                 let (handle, resolution) = self.resolve(params)?;
                 let point = self.node_center(&handle)?;
                 if !self
