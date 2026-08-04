@@ -536,8 +536,8 @@ mod tests {
         let mut router = Router::new(backend(vec![node("same"), node("same")], None));
         let response = router
             .request(request(
-                "click",
-                json!({"target":{"app":"App","locator":{"role":"Button"}}}),
+                "invoke",
+                json!({"target":{"app":"App","locator":{"role":"Button"}},"name":"Invoke"}),
             ))
             .unwrap();
         let JsonRpcResponse::Failure(error) = response else {
@@ -547,10 +547,9 @@ mod tests {
         assert_eq!(*router.backend.clicks.borrow(), 0);
     }
     #[test]
-    fn click_rejects_mismatched_immediate_hit_before_send_input() {
+    fn click_fails_at_capability_gate_before_backend_dispatch() {
         let mut backend = backend(vec![], None);
         let handle = backend.snapshot.handle(0);
-        backend.pointer_target_matches = false;
         let clicks = backend.clicks.clone();
         let mut router = Router::new(backend);
         router.snapshot = Some(router.backend.snapshot.clone());
@@ -559,24 +558,18 @@ mod tests {
             .unwrap();
         assert!(matches!(response, JsonRpcResponse::Failure(_)));
         assert_eq!(*clicks.borrow(), 0);
+        let JsonRpcResponse::Failure(error) = response else { panic!() };
+        assert_eq!(error.error.code, -32004);
     }
     #[test]
-    fn click_rejects_duplicate_name_sibling_when_native_identity_differs() {
+    fn keyboard_fails_at_capability_gate_before_backend_dispatch() {
         let mut backend = backend(vec![node("duplicate"), node("duplicate")], None);
-        let target = backend.snapshot.handle(1);
-        backend.pointer_target_matches = false;
-        let verified_handles = backend.verified_handles.clone();
-        let clicks = backend.clicks.clone();
         let mut router = Router::new(backend);
-        router.snapshot = Some(router.backend.snapshot.clone());
-
         let response = router
-            .request(request("click", json!({"target":target.0})))
+            .request(request("keyboard", json!({"input":"x"})))
             .unwrap();
-
-        assert!(matches!(response, JsonRpcResponse::Failure(_)));
-        assert_eq!(&*verified_handles.borrow(), &[target]);
-        assert_eq!(*clicks.borrow(), 0);
+        let JsonRpcResponse::Failure(error) = response else { panic!() };
+        assert_eq!(error.error.code, -32004);
     }
     #[test]
     fn axn_value_facts_drive_expects_requires_dry_run_and_continue_on_error() {
@@ -590,6 +583,7 @@ actions:
   - id: pass
     tool: invoke
     target: {handle}
+    name: Invoke
     expects:
       - id: ready
         kind: value
@@ -597,6 +591,8 @@ actions:
         contains: ready
   - tool: invoke
     target: {handle}
+    name: Invoke
+    name: Invoke
     requires: [ready]
     expects:
       - id: exact
