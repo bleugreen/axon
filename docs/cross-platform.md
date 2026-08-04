@@ -75,6 +75,21 @@ events with a close conceptual fit to AX.
 - The process must opt into per-monitor DPI awareness before interpreting UIA
   rectangles or dispatching coordinates. All conversion into shared screen,
   window, and screenshot coordinate spaces happens at the backend boundary.
+- Window screenshots use Windows Graphics Capture rather than `PrintWindow`.
+  Graphics Capture reads the DWM-composited window surface and therefore handles
+  modern compositor-backed applications and occluded windows more consistently;
+  `PrintWindow` depends on application paint behavior and can return stale or
+  blank content. The backend encodes captures as PNG and uses the built-in
+  `Windows.Media.Ocr` engine for word rectangles. OCR bitmap coordinates are
+  scaled independently on each axis into the physical `GetWindowRect` coordinate
+  space before UIA hit testing or `SendInput` dispatch.
+- Windows text-location resolution follows the shared ordering: UIA text and
+  retained element identity first, then screenshot OCR only when requested or
+  when automatic UIA resolution is missing. Both paths fail closed on ambiguity.
+  UIA candidates retain the existing immediate `ElementFromPoint` identity
+  check; OCR candidates require the hit element to remain inside the target
+  window's UIA ancestry, so a covering window cannot turn OCR into an unguarded
+  raw point.
 - Windows 10 and later support `AF_UNIX`, so the local Unix-domain socket
   transport and MCP-facade topology can carry over. Installation must still use
   Windows-native access controls and lifecycle management.
