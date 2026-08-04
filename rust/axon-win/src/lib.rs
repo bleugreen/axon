@@ -49,6 +49,101 @@ pub trait PointerTargetVerifier: PlatformBackend {
     ) -> Result<bool, axon_core::BackendError> {
         Ok(self.hit_test(point)?.is_some())
     }
+    fn recognized(text: &str, x: f64) -> axon_core::RecognizedText {
+        axon_core::RecognizedText {
+            text: text.into(),
+            frame: Rect {
+                x,
+                y: 10.0,
+                width: 40.0,
+                height: 20.0,
+            },
+            confidence: Some(0.9),
+        }
+    }
+    #[test]
+    fn unique_text_location_click_returns_macos_shaped_resolution() {
+        let mut router = Router::new(backend(vec![node("Save")], None));
+        let response = router
+            .request(request(
+                "click",
+                json!({"target":{"location":{"app":"App","text":"save"}}}),
+            ))
+            .unwrap();
+        let JsonRpcResponse::Success(success) = response else { panic!() };
+        assert_eq!(success.result["resolution"]["status"], "unique");
+        assert_eq!(success.result["resolution"]["best"]["source"], "ax");
+        assert_eq!(success.result["resolution"]["point"]["x"], 10.0);
+        assert_eq!(*router.backend.clicks.borrow(), 1);
+    }
+    #[test]
+    fn ambiguous_text_location_fails_closed() {
+        let mut router = Router::new(backend(vec![node("Save"), node("Save")], None));
+        let response = router
+            .request(request(
+                "click",
+                json!({"target":{"location":{"app":"App","text":"save"}}}),
+            ))
+            .unwrap();
+        assert!(matches!(response, JsonRpcResponse::Failure(_)));
+        assert_eq!(*router.backend.clicks.borrow(), 0);
+    }
+    #[test]
+    fn auto_prefers_uia_without_running_ocr() {
+        let mut backend = backend(vec![node("Save")], None);
+        backend.recognized = vec![recognized("Save", 100.0)];
+        let calls = backend.ocr_calls.clone();
+        let mut router = Router::new(backend);
+        let response = router
+            .request(request(
+                "click",
+                json!({"target":{"location":{"app":"App","text":"save","source":"auto"}}}),
+            ))
+            .unwrap();
+        assert!(matches!(response, JsonRpcResponse::Success(_)));
+        assert_eq!(*calls.borrow(), 0);
+    }
+    #[test]
+    fn forced_screenshot_uses_ocr_even_when_uia_matches() {
+        let mut backend = backend(vec![node("Save")], None);
+        backend.recognized = vec![recognized("Save", 100.0)];
+        let calls = backend.ocr_calls.clone();
+        let mut router = Router::new(backend);
+        let response = router
+            .request(request(
+                "click",
+                json!({"target":{"location":{"app":"App","text":"save","source":"screenshot"}}}),
+            ))
+            .unwrap();
+        let JsonRpcResponse::Success(success) = response else { panic!() };
+        assert_eq!(success.result["resolution"]["best"]["source"], "screenshot");
+        assert_eq!(*calls.borrow(), 1);
+    }
+    #[test]
+    fn ocr_click_refuses_dispatch_when_fresh_hit_test_fails() {
+        let mut backend = backend(vec![], None);
+        backend.recognized = vec![recognized("Save", 100.0)];
+        backend.ocr_hit_target = None;
+        let clicks = backend.clicks.clone();
+        let mut router = Router::new(backend);
+        let response = router
+            .request(request(
+                "click",
+                json!({"target":{"location":{"app":"App","text":"save","source":"screenshot"}}}),
+            ))
+            .unwrap();
+        assert!(matches!(response, JsonRpcResponse::Failure(_)));
+        assert_eq!(*clicks.borrow(), 0);
+    }
+    impl TextRecognitionProvider for FakeBackend {
+        fn recognize_text(
+            &mut self,
+            _: &AppQuery,
+        ) -> Result<Vec<axon_core::RecognizedText>, BackendError> {
+            *self.ocr_calls.borrow_mut() += 1;
+            Ok(self.recognized.clone())
+        }
+    }
 
     fn click_text_location(&mut self, value: &Value) -> Result<Value, JsonRpcError> {
         let target: TextLocationTarget = serde_json::from_value(value.clone())
@@ -464,6 +559,9 @@ mod tests {
         verified_handles: Rc<RefCell<Vec<SnapshotHandle>>>,
         value: Rc<RefCell<Option<String>>>,
         clicks: Rc<RefCell<usize>>,
+        recognized: Vec<axon_core::RecognizedText>,
+        ocr_calls: Rc<RefCell<usize>>,
+        ocr_hit_target: Option<Node>,
     }
     impl PointerTargetVerifier for FakeBackend {
         fn verify_pointer_target(
@@ -531,7 +629,7 @@ mod tests {
             unreachable!()
         }
         fn hit_test(&mut self, _: (f64, f64)) -> Result<Option<Node>, BackendError> {
-            Ok(None)
+            Ok(self.ocr_hit_target.clone())
         }
         fn recorded_calls(&self) -> Result<Vec<RecordedCall>, BackendError> {
             unreachable!()
@@ -581,6 +679,9 @@ mod tests {
             verified_handles: Rc::new(RefCell::new(vec![])),
             value: Rc::new(RefCell::new(value.map(str::to_owned))),
             clicks: Rc::new(RefCell::new(0)),
+            recognized: vec![],
+            ocr_calls: Rc::new(RefCell::new(0)),
+            ocr_hit_target: Some(node("hit")),
         }
     }
     fn request(method: &str, params: Value) -> JsonRpcRequest {
