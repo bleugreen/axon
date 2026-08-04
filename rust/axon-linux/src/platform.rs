@@ -189,7 +189,7 @@ impl Actor {
         let object = self.object(h)?.clone(); let proxy = timeout("accessible proxy", object.as_accessible_proxy(self.connection.connection())).await?;
         let p = timeout("interfaces", proxy.proxies()).await?;
         let editable = timeout("editable text interface", p.editable_text()).await.map_err(|_| capability(Capability::SetValue, "target is not editable"))?;
-        timeout("set text", editable.set_text_contents(content)).await
+        if timeout("set text", editable.set_text_contents(content)).await? { Ok(()) } else { Err(operation("set text", "provider rejected edit")) }
     }
     async fn focus(&self, h: &SnapshotHandle) -> Result<(), BackendError> {
         let object = self.object(h)?.clone(); let proxy = timeout("accessible proxy", object.as_accessible_proxy(self.connection.connection())).await?;
