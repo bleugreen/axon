@@ -5,8 +5,11 @@ use std::{
 };
 
 use atspi::{
-    AccessibilityConnection, CoordType, ObjectRefOwned,
-    proxy::{accessible::ObjectRefExt, proxy_ext::ProxyExt},
+    AccessibilityConnection, CoordType, ObjectRef, ObjectRefOwned,
+    proxy::{
+        accessible::{AccessibleProxy, ObjectRefExt},
+        proxy_ext::ProxyExt,
+    },
 };
 
 use crate::Options;
@@ -22,6 +25,59 @@ struct Node {
     object: ObjectRefOwned,
 }
 
+async fn same_bus_children(
+    connection: &atspi::zbus::Connection,
+    object: &ObjectRefOwned,
+) -> Result<Vec<ObjectRefOwned>, Box<dyn Error>> {
+    use atspi::zbus::{fdo::DBusProxy, names::BusName, zvariant::OwnedObjectPath};
+
+    let destination = object
+        .name()
+        .ok_or("AT-SPI object reference has no bus destination")?
+        .clone();
+    let reply = connection
+        .call_method(
+            Some(destination),
+            object.path(),
+            Some("org.a11y.atspi.Accessible"),
+            "GetChildren",
+            &(),
+        )
+        .await?;
+    let children: Vec<(String, OwnedObjectPath)> = reply.body().deserialize()?;
+    let dbus = DBusProxy::new(connection).await?;
+    let mut resolved = Vec::with_capacity(children.len());
+    for (name, path) in children {
+        let bus_name = BusName::try_from(name)?;
+        let unique_name = match bus_name {
+            BusName::Unique(name) => name.into(),
+            BusName::WellKnown(_) => dbus.get_name_owner(bus_name).await?,
+        };
+        resolved.push(ObjectRef::new_owned(unique_name, path));
+    }
+    Ok(resolved)
+}
+
+async fn accessible_proxy<'a>(
+    connection: &'a atspi::zbus::Connection,
+    object: &'a ObjectRefOwned,
+    same_bus: bool,
+) -> Result<AccessibleProxy<'a>, Box<dyn Error>> {
+    if !same_bus {
+        return Ok(object.as_accessible_proxy(connection).await?);
+    }
+
+    let destination = object
+        .name()
+        .ok_or("AT-SPI object reference has no bus destination")?
+        .clone();
+    Ok(AccessibleProxy::builder(connection)
+        .destination(destination)?
+        .path(object.path().clone())?
+        .build()
+        .await?)
+}
+
 #[tokio::main]
 pub async fn run(options: Options) -> Result<(), Box<dyn Error>> {
     let connection = AccessibilityConnection::new().await?;
@@ -31,7 +87,8 @@ pub async fn run(options: Options) -> Result<(), Box<dyn Error>> {
     if options.application.is_none() {
         println!("applications={}", applications.len());
         for object in applications {
-            let proxy = object.as_accessible_proxy(connection.connection()).await?;
+            let proxy =
+                accessible_proxy(connection.connection(), &object, options.same_bus).await?;
             println!(
                 "role={:?} name={:?} path={}",
                 proxy.get_role_name().await?,
@@ -43,13 +100,20 @@ pub async fn run(options: Options) -> Result<(), Box<dyn Error>> {
     }
 
     let needle = options.application.as_deref().unwrap();
-    let root = select_application(connection.connection(), applications, needle).await?;
+    let root = select_application(
+        connection.connection(),
+        applications,
+        needle,
+        options.same_bus,
+    )
+    .await?;
     let started = Instant::now();
     let before = capture(
         connection.connection(),
         root.clone(),
         options.max_depth,
         options.max_nodes,
+        options.same_bus,
     )
     .await;
     let elapsed = started.elapsed();
@@ -65,10 +129,8 @@ pub async fn run(options: Options) -> Result<(), Box<dyn Error>> {
                     && node.name.to_lowercase().contains(&name.to_lowercase())
             })
             .ok_or_else(|| format!("no control matched role={role:?} name contains={name:?}"))?;
-        let proxy = target
-            .object
-            .as_accessible_proxy(connection.connection())
-            .await?;
+        let proxy =
+            accessible_proxy(connection.connection(), &target.object, options.same_bus).await?;
         let action = proxy.proxies().await?.action().await?;
         let actions = action.get_actions().await?;
         println!(
@@ -100,6 +162,7 @@ pub async fn run(options: Options) -> Result<(), Box<dyn Error>> {
             root,
             options.max_depth,
             options.max_nodes,
+            options.same_bus,
         )
         .await;
         let elapsed = started.elapsed();
@@ -137,11 +200,12 @@ async fn select_application(
     connection: &atspi::zbus::Connection,
     applications: Vec<ObjectRefOwned>,
     needle: &str,
+    same_bus: bool,
 ) -> Result<ObjectRefOwned, Box<dyn Error>> {
     let needle = needle.to_lowercase();
     let mut partial = None;
     for object in applications {
-        let proxy = object.as_accessible_proxy(connection).await?;
+        let proxy = accessible_proxy(connection, &object, same_bus).await?;
         let name = proxy.name().await?;
         if name.eq_ignore_ascii_case(&needle) {
             return Ok(object);
@@ -158,6 +222,7 @@ async fn capture(
     root: ObjectRefOwned,
     max_depth: usize,
     max_nodes: usize,
+    same_bus: bool,
 ) -> Vec<Node> {
     let mut queue = VecDeque::from([(root, 0)]);
     let mut nodes = Vec::new();
@@ -165,13 +230,28 @@ async fn capture(
         if nodes.len() >= max_nodes {
             break;
         }
-        let Ok(proxy) = object.as_accessible_proxy(connection).await else {
-            continue;
+        let proxy = match accessible_proxy(connection, &object, same_bus).await {
+            Ok(proxy) => proxy,
+            Err(error) => {
+                eprintln!(
+                    "accessible_proxy_error destination={:?} path={} error={error}",
+                    object.name_as_str(),
+                    object.path()
+                );
+                continue;
+            }
         };
-        let role = proxy
-            .get_role_name()
-            .await
-            .unwrap_or_else(|_| "<error>".to_owned());
+        let role = match proxy.get_role_name().await {
+            Ok(role) if !role.is_empty() => role,
+            _ => match proxy.get_localized_role_name().await {
+                Ok(role) if !role.is_empty() => role,
+                _ => proxy
+                    .get_role()
+                    .await
+                    .map(|role| format!("{role:?}"))
+                    .unwrap_or_else(|_| "<error>".to_owned()),
+            },
+        };
         let name = proxy.name().await.unwrap_or_else(|_| "<error>".to_owned());
         let states = proxy
             .get_state()
@@ -202,7 +282,12 @@ async fn capture(
             object: object.clone(),
         });
         if depth < max_depth {
-            if let Ok(children) = proxy.get_children().await {
+            let children = if same_bus {
+                same_bus_children(connection, &object).await
+            } else {
+                proxy.get_children().await.map_err(Into::into)
+            };
+            if let Ok(children) = children {
                 queue.extend(children.into_iter().map(|child| (child, depth + 1)));
             }
         }
@@ -218,10 +303,12 @@ fn print_capture(label: &str, nodes: &[Node], elapsed: Duration) {
     );
     for node in nodes {
         println!(
-            "{}role={:?} name={:?} states={} rect={:?} text={:?}",
+            "{}role={:?} name={:?} destination={:?} path={} states={} rect={:?} text={:?}",
             "  ".repeat(node.depth),
             node.role,
             node.name,
+            node.object.name_as_str(),
+            node.object.path(),
             node.states,
             node.rect,
             node.text
