@@ -548,7 +548,7 @@ mod tests {
     }
     #[test]
     fn click_fails_at_capability_gate_before_backend_dispatch() {
-        let mut backend = backend(vec![], None);
+        let backend = backend(vec![], None);
         let handle = backend.snapshot.handle(0);
         let clicks = backend.clicks.clone();
         let mut router = Router::new(backend);
@@ -563,7 +563,7 @@ mod tests {
     }
     #[test]
     fn keyboard_fails_at_capability_gate_before_backend_dispatch() {
-        let mut backend = backend(vec![node("duplicate"), node("duplicate")], None);
+        let backend = backend(vec![node("duplicate"), node("duplicate")], None);
         let mut router = Router::new(backend);
         let response = router
             .request(request("keyboard", json!({"input":"x"})))
