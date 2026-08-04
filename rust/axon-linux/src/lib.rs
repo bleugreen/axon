@@ -558,7 +558,9 @@ mod tests {
             .unwrap();
         assert!(matches!(response, JsonRpcResponse::Failure(_)));
         assert_eq!(*clicks.borrow(), 0);
-        let JsonRpcResponse::Failure(error) = response else { panic!() };
+        let JsonRpcResponse::Failure(error) = response else {
+            panic!()
+        };
         assert_eq!(error.error.code, -32004);
     }
     #[test]
@@ -568,7 +570,9 @@ mod tests {
         let response = router
             .request(request("keyboard", json!({"input":"x"})))
             .unwrap();
-        let JsonRpcResponse::Failure(error) = response else { panic!() };
+        let JsonRpcResponse::Failure(error) = response else {
+            panic!()
+        };
         assert_eq!(error.error.code, -32004);
     }
     #[test]
