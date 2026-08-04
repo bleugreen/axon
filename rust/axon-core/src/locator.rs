@@ -35,7 +35,7 @@ impl TextMatcher {
             actual == expected
         }
     }
-    fn reason(&self) -> String {
+    pub fn reason(&self) -> String {
         match self {
             Self::Exact { value, .. } => format!("exact {value}"),
             Self::Contains { value, .. } => format!("contains {value}"),

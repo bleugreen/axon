@@ -137,7 +137,7 @@ fn ax_candidates(text: &TextMatcher, snapshot: &Snapshot) -> Vec<TextLocationCan
                 source: TextLocationSource::Ax,
                 frame,
                 point: frame.center(),
-                reasons: vec![format!("{field} text match")],
+                reasons: vec![format!("{field} {}", text.reason())],
             })
         })
         .collect()
@@ -149,7 +149,7 @@ fn ocr_candidates(text: &TextMatcher, recognized: &[RecognizedText]) -> Vec<Text
         .enumerate()
         .filter(|(_, item)| text.matches(Some(&item.text)))
         .map(|(index, item)| {
-            let mut reasons = vec!["ocr text match".into()];
+            let mut reasons = vec![format!("ocr {}", text.reason())];
             if let Some(confidence) = item.confidence {
                 reasons.push(format!("confidence {confidence}"));
             }
