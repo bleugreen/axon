@@ -59,7 +59,10 @@ mod socket {
         for line in stdin.lock().lines() {
             let line = line?; let value: Value = serde_json::from_str(&line).map_err(io::Error::other)?;
             let Some(response) = mcp_response(&value)? else { continue };
-            Ok(Some(response))
+            writeln!(stdout, "{}", serde_json::to_string(&response).unwrap())?;
+            stdout.flush()?;
+        }
+        Ok(())
     }
     fn mcp_response(value: &Value) -> io::Result<Option<Value>> {
             let Some(id) = value.get("id").cloned() else { return Ok(None) };
@@ -84,9 +87,7 @@ mod socket {
                 }
                 _ => json!({"jsonrpc":"2.0","id":id,"error":{"code":-32601,"message":"method not found"}}),
             };
-            writeln!(stdout, "{}", serde_json::to_string(&response).unwrap())?; stdout.flush()?;
-        }
-        Ok(())
+            Ok(Some(response))
     }
     fn tools() -> Vec<Value> {
         ["look","find","invoke","type","scroll","run"].into_iter().map(|name| json!({"name":name,"description":format!("Axon Linux {name}"),"inputSchema":{"type":"object","additionalProperties":true}})).collect()
