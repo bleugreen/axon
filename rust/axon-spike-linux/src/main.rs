@@ -9,6 +9,7 @@ struct Options {
     role: Option<String>,
     name_contains: Option<String>,
     action: bool,
+    same_bus: bool,
     expect_text_before: Option<String>,
     expect_text_after: Option<String>,
     max_depth: usize,
@@ -22,6 +23,7 @@ impl Options {
             role: None,
             name_contains: None,
             action: false,
+            same_bus: false,
             expect_text_before: None,
             expect_text_after: None,
             max_depth: 8,
@@ -34,6 +36,7 @@ impl Options {
                 "--role" => options.role = Some(value(&mut args, &arg)?),
                 "--name-contains" => options.name_contains = Some(value(&mut args, &arg)?),
                 "--action" => options.action = true,
+                "--same-bus" => options.same_bus = true,
                 "--expect-text-before" => {
                     options.expect_text_before = Some(value(&mut args, &arg)?)
                 }
@@ -76,11 +79,13 @@ fn value(args: &mut impl Iterator<Item = String>, flag: &str) -> Result<String, 
 }
 
 fn usage() -> &'static str {
-    "Usage: axon-spike-linux [--application TEXT] [--max-depth N] [--max-nodes N]\n\
+    "Usage: axon-spike-linux [--application TEXT] [--max-depth N] [--max-nodes N] [--same-bus]\n\
      Locator: --role ROLE --name-contains TEXT [--action\n\
        --expect-text-before TEXT --expect-text-after TEXT]\n\n\
      Without --application, lists application roots on the AT-SPI bus. With an\n\
-     application, captures a bounded tree. --action resolves Click or Activate and\n\
+     application, captures a bounded tree. --same-bus addresses every object reference\n\
+     on the existing accessibility bus instead of opening advertised peer sockets.\n\
+     --action resolves Click or Activate and\n\
      verifies the expected text transition on the same AT-SPI object reference."
 }
 
