@@ -137,14 +137,13 @@ jobs:
 
           gnome-calculator --equation 0 >/dev/null 2>&1 &
           for _ in {1..40}; do
-            response="$(printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"look","arguments":{}}}' | "$daemon" mcp)"
-            if printf '%s' "$response" | jq -e '.result.structuredContent | length > 0' >/dev/null; then break; fi
+            look="$(printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"look","arguments":{"app":"Calculator"}}}' | "$daemon" mcp)"
+            if printf '%s' "$look" | jq -e '.result.structuredContent.app.windows[0].root' >/dev/null; then break; fi
             sleep 0.25
           done
 
-          look="$(printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"look","arguments":{"app":"Calculator"}}}' | "$daemon" mcp)"
           printf '%s' "$look" | jq -e '.result.structuredContent.app.windows[0].root' >/dev/null
-          display_object="$(printf '%s' "$look" | jq -er '[.result.structuredContent.app.windows[].root | .. | objects | select(.value? == "0")][0].identifier')"
+          display_object="$(printf '%s' "$look" | jq -er '[.result.structuredContent.app.windows[].root | .. | objects | select(.role == "text box" and .value? == "0")][0].identifier')"
 
           found="$(printf '%s\n' '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"find","arguments":{"target":{"app":"Calculator","locator":{"label":"1","actions":["Click"]}}}}}' | "$daemon" mcp)"
           handle="$(printf '%s' "$found" | jq -er '.result.structuredContent.handle')"
