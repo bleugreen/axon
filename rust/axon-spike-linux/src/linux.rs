@@ -254,12 +254,15 @@ async fn capture(
             }
         };
         let role = match proxy.get_role_name().await {
-            Ok(role) => role,
-            Err(_) => proxy
-                .get_role()
-                .await
-                .map(|role| format!("{role:?}"))
-                .unwrap_or_else(|_| "<error>".to_owned()),
+            Ok(role) if !role.is_empty() => role,
+            _ => match proxy.get_localized_role_name().await {
+                Ok(role) if !role.is_empty() => role,
+                _ => proxy
+                    .get_role()
+                    .await
+                    .map(|role| format!("{role:?}"))
+                    .unwrap_or_else(|_| "<error>".to_owned()),
+            },
         };
         let name = proxy.name().await.unwrap_or_else(|_| "<error>".to_owned());
         let states = proxy
