@@ -58,7 +58,7 @@ mod lifecycle {
 
     fn start() -> io::Result<()> {
         command("schtasks", &["/run", "/tn", TASK_NAME])?;
-        pipe::wait_until_ready(Duration::from_secs(10))
+        pipe::wait_until_ready(Duration::from_secs(60))
     }
 
     fn stop_if_running() -> io::Result<()> {

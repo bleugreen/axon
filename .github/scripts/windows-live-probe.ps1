@@ -4,9 +4,37 @@ $taskName = 'Axon Windows Daemon'
 $task = Get-ScheduledTask -TaskName $taskName -ErrorAction SilentlyContinue
 $taskXml = if ($null -ne $task) { Export-ScheduledTask -TaskName $taskName } else { $null }
 $taskWasRunning = $null -ne $task -and $task.State -eq 'Running'
-$probeExecutable = $null
+$workspaceRoot = 'C:\actions-runner-axon\_work\'
+$liveDirectory = 'C:\ProgramData\Axon\live'
+$probeExecutable = Join-Path $liveDirectory 'axon-win.exe'
+
+function Get-LiveProbeDaemons {
+    @(Get-CimInstance Win32_Process -Filter "Name = 'axon-win.exe'" |
+        Where-Object {
+            $path = $_.ExecutablePath
+            $null -ne $path -and (
+                $path.StartsWith($workspaceRoot, [System.StringComparison]::OrdinalIgnoreCase) -or
+                $path.StartsWith("$liveDirectory\", [System.StringComparison]::OrdinalIgnoreCase)
+            )
+        })
+}
+
+function Stop-LiveProbeDaemons {
+    foreach ($attempt in 1..3) {
+        foreach ($process in Get-LiveProbeDaemons) {
+            Write-Output "Stopping live-probe daemon pid=$($process.ProcessId) path=$($process.ExecutablePath)"
+            try { Stop-Process -Id $process.ProcessId -Force -ErrorAction Stop }
+            catch { Write-Warning "Could not stop pid=$($process.ProcessId) on attempt ${attempt}: $_" }
+        }
+        if ((Get-LiveProbeDaemons).Count -eq 0) { return }
+        Start-Sleep -Milliseconds 250
+    }
+    $remaining = Get-LiveProbeDaemons
+    throw "Scoped live-probe daemons remain: $($remaining.ExecutablePath -join ', ')"
+}
 
 try {
+    Stop-LiveProbeDaemons
     $rustDirectory = (Resolve-Path (Join-Path $PSScriptRoot '..\..\rust')).Path
     Set-Location $rustDirectory
     $env:CARGO_HOME = 'C:\Users\mitch\.cargo'
@@ -16,9 +44,18 @@ try {
     cargo build --locked -p axon-win
     if ($LASTEXITCODE -ne 0) { throw "cargo build failed with exit code $LASTEXITCODE" }
 
-    $probeExecutable = (Resolve-Path 'target\debug\axon-win.exe').Path
-    & $probeExecutable daemon restart
-    if ($LASTEXITCODE -ne 0) { throw "daemon restart failed with exit code $LASTEXITCODE" }
+    New-Item -ItemType Directory -Path $liveDirectory -Force | Out-Null
+    Copy-Item (Resolve-Path 'target\debug\axon-win.exe').Path $probeExecutable -Force
+
+    $restartTimer = [System.Diagnostics.Stopwatch]::StartNew()
+    try {
+        & $probeExecutable daemon restart
+        if ($LASTEXITCODE -ne 0) { throw "daemon restart failed with exit code $LASTEXITCODE" }
+    }
+    finally {
+        $restartTimer.Stop()
+        Write-Output "Daemon readiness completed after $([Math]::Round($restartTimer.Elapsed.TotalSeconds, 2)) seconds"
+    }
 
     $listRequest = '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"look","arguments":{}}}'
     $listResponse = $listRequest | & $probeExecutable mcp | ConvertFrom-Json -Depth 100
@@ -44,9 +81,15 @@ try {
     Write-Output "isError:false snapshot=$($verified.response.result.structuredContent.id) root=$($verified.window.role) app=$($verified.app)"
 }
 finally {
-    if ($null -ne $probeExecutable) {
+    $cleanupError = $null
+    if (Test-Path $probeExecutable) {
         try { & $probeExecutable shutdown *> $null }
         catch { Write-Warning "Could not stop the probe daemon: $_" }
+    }
+    try { Stop-LiveProbeDaemons }
+    catch {
+        $cleanupError = $_
+        Write-Warning "Could not clean up live-probe daemon processes: $_"
     }
 
     if ($null -ne $taskXml) {
@@ -56,4 +99,5 @@ finally {
     else {
         Unregister-ScheduledTask -TaskName $taskName -Confirm:$false -ErrorAction SilentlyContinue
     }
+    if ($null -ne $cleanupError) { throw $cleanupError }
 }
