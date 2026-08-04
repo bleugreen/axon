@@ -133,10 +133,11 @@ impl Actor {
     }
     async fn capture(&mut self, q: AppQuery) -> Result<Snapshot, BackendError> {
         let (root, name) = self.select(&q).await?;
+        let identifier = Some(root.path().to_string());
         let mut refs = Vec::new();
         let mut remaining = MAX_NODES;
         let node = self.node(root, 0, &mut remaining, &mut refs).await?;
-        let snapshot = Snapshot::new(Application { name, identifier: q.identifier, windows: vec![Window { title: node.name.clone(), root: node }] });
+        let snapshot = Snapshot::new(Application { name, identifier, windows: vec![Window { title: node.name.clone(), root: node }] });
         self.retained.clear();
         self.retained.insert(snapshot.id.0.clone(), refs);
         Ok(snapshot)

@@ -58,7 +58,11 @@ mod socket {
         let stdin = io::stdin(); let mut stdout = io::stdout();
         for line in stdin.lock().lines() {
             let line = line?; let value: Value = serde_json::from_str(&line).map_err(io::Error::other)?;
-            let id = value.get("id").cloned().unwrap_or(Value::Null);
+            let Some(response) = mcp_response(&value)? else { continue };
+            Ok(Some(response))
+    }
+    fn mcp_response(value: &Value) -> io::Result<Option<Value>> {
+            let Some(id) = value.get("id").cloned() else { return Ok(None) };
             let response = match value.get("method").and_then(Value::as_str) {
                 Some("initialize") => json!({"jsonrpc":"2.0","id":id,"result":{"protocolVersion":"2025-03-26","capabilities":{"tools":{}},"serverInfo":{"name":"axon-linux","version":"0.1.0"}}}),
                 Some("tools/list") => json!({"jsonrpc":"2.0","id":id,"result":{"tools": tools()}}),
@@ -91,5 +95,9 @@ mod socket {
         use super::*;
         #[test] fn socket_lives_in_private_runtime_directory() { unsafe { std::env::set_var("XDG_RUNTIME_DIR", "/run/user/123"); } assert_eq!(path().unwrap(), PathBuf::from("/run/user/123/axon-v1.sock")); }
         #[test] fn facade_exposes_supported_surface() { let names=tools().into_iter().map(|v|v["name"].as_str().unwrap().to_owned()).collect::<Vec<_>>(); assert!(names.contains(&"invoke".into())); assert!(!names.contains(&"drag".into())); }
+        #[test] fn mcp_notifications_have_no_response() {
+            let notification = json!({"jsonrpc":"2.0","method":"notifications/initialized"});
+            assert!(mcp_response(&notification).unwrap().is_none());
+        }
     }
 }
