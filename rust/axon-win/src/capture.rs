@@ -84,7 +84,10 @@ pub(crate) fn capture(hwnd: HWND) -> Result<CapturedBitmap, BackendError> {
         .map_err(|e| operation("create capture session", e))?;
     let (tx, rx) = mpsc::sync_channel(1);
     let token = pool
-        .FrameArrived(&TypedEventHandler::new(move |sender, _| {
+        .FrameArrived(&TypedEventHandler::<
+            Direct3D11CaptureFramePool,
+            windows::core::IInspectable,
+        >::new(move |sender, _| {
             if let Some(sender) = sender.as_ref() {
                 let _ = tx.try_send(sender.TryGetNextFrame());
             }
