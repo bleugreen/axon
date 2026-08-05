@@ -72,7 +72,12 @@ Values inside the shared grammar remain native to the target platform:
 
 - macOS uses Accessibility names such as `AXButton` and `AXPress`;
 - Windows uses UI Automation control types and pattern names;
-- Linux uses AT-SPI roles and action names.
+- Linux uses AT-SPI roles and action names. AT-SPI role names are emitted as
+  providers expose them (for example, `push button`), and action names are exact
+  provider strings such as `click` or `activate`. Editable controls are identified
+  by the AT-SPI EditableText interface, not by role inference. Linux semantic
+  scrolling is unavailable when the provider cannot express the requested delta;
+  it is never silently replaced with global wheel input.
 
 Axon does **not** define a normalized cross-platform role or action vocabulary.
 Normalization would hide distinctions exposed by each accessibility stack and

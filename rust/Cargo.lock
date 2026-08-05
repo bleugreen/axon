@@ -218,6 +218,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "axon-linux"
+version = "0.1.0"
+dependencies = [
+ "atspi",
+ "axon-core",
+ "serde",
+ "serde_json",
+ "tokio",
+]
+
+[[package]]
 name = "axon-spike-linux"
 version = "0.1.0"
 dependencies = [

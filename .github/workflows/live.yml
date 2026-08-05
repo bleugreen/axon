@@ -124,25 +124,43 @@ jobs:
           }
           trap cleanup EXIT
 
+          cargo build --quiet --locked -p axon-linux
+          daemon=target/debug/axon-linux
+          "$daemon" serve >/tmp/axon-linux-daemon.log 2>&1 &
+          daemon_pid=$!
+          cleanup() {
+            "$daemon" shutdown >/dev/null 2>&1 || true
+            wait "$daemon_pid" >/dev/null 2>&1 || true
+            pkill -u "$(id -u)" -f '[/]usr/bin/gnome-calculator' >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+
           gnome-calculator --equation 0 >/dev/null 2>&1 &
           for _ in {1..40}; do
-            if cargo run --quiet --locked -p axon-spike-linux -- --application calculator --max-depth 1 --max-nodes 5 >/dev/null 2>&1; then
-              break
-            fi
+            look="$(printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"look","arguments":{"app":"Calculator"}}}' | "$daemon" mcp)"
+            if printf '%s' "$look" | jq -e '[.result.structuredContent.app.windows[].root | .. | objects | select(.role == "text box" and .value? == "0")] | length == 1' >/dev/null; then break; fi
             sleep 0.25
           done
 
-          cargo run --quiet --locked -p axon-spike-linux -- \
-            --application calculator \
-            --max-depth 20 \
-            --max-nodes 500 \
-            --role button \
-            --name-contains 1 \
-            --action \
-            --expect-text-before 0 \
-            --expect-text-after 01 \
-            | tee /tmp/axon-linux-live-probe.log
-          grep -q 'verification=same_object_text_transition' /tmp/axon-linux-live-probe.log
+          printf '%s' "$look" | jq -e '.result.structuredContent.app.windows[0].root' >/dev/null
+          display_object="$(printf '%s' "$look" | jq -er '[.result.structuredContent.app.windows[].root | .. | objects | select(.role == "text box" and .value? == "0")][0].identifier')"
+
+          found="$(printf '%s\n' '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"find","arguments":{"target":{"app":"Calculator","locator":{"label":"1","actions":["Click"]}}}}}' | "$daemon" mcp)"
+          handle="$(printf '%s' "$found" | jq -er '.result.structuredContent.handle')"
+          invoked="$(jq -cn --arg handle "$handle" '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"invoke","arguments":{"target":$handle,"name":"Click"}}}' | "$daemon" mcp)"
+          printf '%s' "$invoked" | jq -e '.result.structuredContent.dispatch.success == true' >/dev/null
+
+          verified=false
+          for _ in {1..20}; do
+            after="$(printf '%s\n' '{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"look","arguments":{"app":"Calculator"}}}' | "$daemon" mcp)"
+            if printf '%s' "$after" | jq -e --arg object "$display_object" '[.result.structuredContent.app.windows[].root | .. | objects | select(.identifier? == $object and .value? == "01")] | length == 1' >/dev/null; then
+              verified=true
+              break
+            fi
+            sleep 0.1
+          done
+          test "$verified" = true
+          echo 'Linux MCP facade captured, resolved, invoked, and verified GNOME Calculator through the daemon'
 
   windows:
     name: Windows live loop
