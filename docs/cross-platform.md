@@ -110,6 +110,13 @@ events with a close conceptual fit to AX.
   uninstall` stops the daemon and removes the task. All three commands are
   scriptable and `install`/`restart` wait until the pipe is ready before returning.
   Short-lived `axon-win mcp` processes connect to that pipe.
+- `serve` creates the user-restricted pipe before initializing COM and UI
+  Automation, so lifecycle readiness is not held hostage by a slow native
+  accessibility startup. It records timestamped startup stages in
+  `%ProgramData%\Axon\axon-win-startup.log`, including DPI setup, COM apartment
+  creation, UI Automation client creation, provider-timeout setup, and pipe bind.
+  Per-monitor DPI awareness improves coordinate accuracy but is not required to
+  serve; contexts where Windows rejects changing it emit a warning and continue.
 - Run the session-1 integration probes from a logged-in desktop with exactly:
   `axon-win probe value <app-query>`, `axon-win probe events <app-query> [seconds]`,
   and `axon-win probe timeout [app-query] [milliseconds]`. Each command emits JSON;

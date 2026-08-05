@@ -218,9 +218,15 @@ fn windows_main() -> Result<(), Box<dyn std::error::Error>> {
             let startup = StartupLog::new();
             startup.stage("process startup");
             let backend_log = startup.clone();
-            let backend = WindowsBackend::start_with_logger(move |stage| backend_log.stage(stage))?;
             startup.stage("pipe bind: begin");
-            pipe::serve(Router::new(backend), || startup.stage("pipe bind: complete"))?;
+            pipe::serve(
+                move || {
+                    WindowsBackend::start_with_logger(move |stage| backend_log.stage(stage))
+                        .map(Router::new)
+                        .map_err(Into::into)
+                },
+                || startup.stage("pipe bind: complete"),
+            )?;
         }
         "mcp" => pipe::mcp()?,
         "shutdown" => {
@@ -403,11 +409,13 @@ mod pipe {
     }
 
     pub fn serve(
-        mut router: Router<WindowsBackend>,
+        start_backend: impl FnOnce() -> Result<Router<WindowsBackend>, Box<dyn std::error::Error>>,
         on_bound: impl FnOnce(),
-    ) -> io::Result<()> {
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let mut security = PipeSecurity::current_user()?;
         let mut on_bound = Some(on_bound);
+        let mut start_backend = Some(start_backend);
+        let mut router = None;
         loop {
             let handle = unsafe {
                 CreateNamedPipeW(
@@ -422,15 +430,24 @@ mod pipe {
                 )
             };
             if handle == INVALID_HANDLE_VALUE {
-                return Err(io::Error::last_os_error());
+                return Err(io::Error::last_os_error().into());
             }
             if let Some(on_bound) = on_bound.take() {
                 on_bound();
             }
+            if let Some(start_backend) = start_backend.take() {
+                router = Some(start_backend()?);
+            }
             let connected = unsafe { ConnectNamedPipe(handle, ptr::null_mut()) } != 0
                 || io::Error::last_os_error().raw_os_error() == Some(535);
             if connected {
-                let shutdown = connection(handle, &mut router).unwrap_or(false);
+                let shutdown = connection(
+                    handle,
+                    router
+                        .as_mut()
+                        .expect("backend initializes after the first pipe bind"),
+                )
+                .unwrap_or(false);
                 unsafe {
                     DisconnectNamedPipe(handle);
                     CloseHandle(handle);
