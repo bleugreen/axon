@@ -217,12 +217,14 @@ impl WindowsBackend {
         Self::start_with_logger(|_| {})
     }
 
-    pub fn start_with_logger(log: impl Fn(&str) + Send + Sync + 'static) -> Result<Self, BackendError> {
+    pub fn start_with_logger(
+        log: impl Fn(&str) + Send + Sync + 'static,
+    ) -> Result<Self, BackendError> {
         let log = Arc::new(log);
         log("DPI awareness: begin");
-        if let Err(error) = unsafe {
-            SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2)
-        } {
+        if let Err(error) =
+            unsafe { SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2) }
+        {
             let message = format!(
                 "WARNING: per-monitor DPI awareness unavailable; coordinate accuracy may be reduced: {error}"
             );
