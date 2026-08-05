@@ -5,6 +5,50 @@ fn main() {
 }
 
 #[cfg(windows)]
+#[derive(Clone)]
+struct StartupLog {
+    started: std::time::Instant,
+    path: std::path::PathBuf,
+}
+
+#[cfg(windows)]
+impl StartupLog {
+    fn new() -> Self {
+        let root = std::env::var_os("ProgramData")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| std::path::PathBuf::from(r"C:\ProgramData"));
+        Self {
+            started: std::time::Instant::now(),
+            path: root.join("Axon").join("axon-win-startup.log"),
+        }
+    }
+
+    fn stage(&self, stage: &str) {
+        use std::io::Write;
+        let unix_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis();
+        let line = format!(
+            "timestamp_unix_ms={unix_ms} elapsed_ms={} pid={} {stage}\n",
+            self.started.elapsed().as_millis(),
+            std::process::id()
+        );
+        eprint!("{line}");
+        if let Some(parent) = self.path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        if let Ok(mut file) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&self.path)
+        {
+            let _ = file.write_all(line.as_bytes());
+        }
+    }
+}
+
+#[cfg(windows)]
 mod lifecycle {
     use super::pipe;
     use std::{env, io, path::Path, process::Command, time::Duration};
@@ -65,7 +109,21 @@ mod lifecycle {
         match pipe::shutdown() {
             Ok(process_id) => wait_for_process_exit(process_id, Duration::from_secs(10)),
             Err(error) if pipe::is_daemon_absent(&error) => Ok(()),
+            Err(error) if pipe::is_unresponsive_daemon(&error) => end_task(),
             Err(error) => Err(error),
+        }
+    }
+
+    fn end_task() -> io::Result<()> {
+        let output = Command::new("schtasks")
+            .args(["/end", "/tn", TASK_NAME])
+            .output()?;
+        if output.status.success()
+            || String::from_utf8_lossy(&output.stderr).contains("not currently running")
+        {
+            Ok(())
+        } else {
+            Err(command_error("schtasks", &output))
         }
     }
 
@@ -170,7 +228,20 @@ fn windows_main() -> Result<(), Box<dyn std::error::Error>> {
     use axon_win::{IntegrationProbe, Router, WindowsBackend};
     let command = std::env::args().nth(1).unwrap_or_else(|| "serve".into());
     match command.as_str() {
-        "serve" => pipe::serve(Router::new(WindowsBackend::start()?))?,
+        "serve" => {
+            let startup = StartupLog::new();
+            startup.stage("process startup");
+            let backend_log = startup.clone();
+            startup.stage("pipe bind: begin");
+            pipe::serve(
+                move || {
+                    WindowsBackend::start_with_logger(move |stage| backend_log.stage(stage))
+                        .map(Router::new)
+                        .map_err(Into::into)
+                },
+                || startup.stage("pipe bind: complete"),
+            )?;
+        }
         "mcp" => pipe::mcp()?,
         "shutdown" => {
             pipe::shutdown()?;
@@ -202,7 +273,9 @@ mod pipe {
         ffi::c_void,
         fs::OpenOptions,
         io::{self, BufRead, BufReader, Write},
-        ptr, thread,
+        ptr,
+        sync::{Arc, mpsc},
+        thread,
         time::{Duration, Instant},
     };
 
@@ -351,8 +424,14 @@ mod pipe {
         }
     }
 
-    pub fn serve(mut router: Router<WindowsBackend>) -> io::Result<()> {
+    pub fn serve(
+        start_backend: impl FnOnce() -> Result<Router<WindowsBackend>, Box<dyn std::error::Error>>,
+        on_bound: impl FnOnce(),
+    ) -> Result<(), Box<dyn std::error::Error>> {
         let mut security = PipeSecurity::current_user()?;
+        let mut on_bound = Some(on_bound);
+        let mut start_backend = Some(start_backend);
+        let mut router = None;
         loop {
             let handle = unsafe {
                 CreateNamedPipeW(
@@ -367,12 +446,24 @@ mod pipe {
                 )
             };
             if handle == INVALID_HANDLE_VALUE {
-                return Err(io::Error::last_os_error());
+                return Err(io::Error::last_os_error().into());
+            }
+            if let Some(on_bound) = on_bound.take() {
+                on_bound();
+            }
+            if let Some(start_backend) = start_backend.take() {
+                router = Some(start_backend()?);
             }
             let connected = unsafe { ConnectNamedPipe(handle, ptr::null_mut()) } != 0
                 || io::Error::last_os_error().raw_os_error() == Some(535);
             if connected {
-                let shutdown = connection(handle, &mut router).unwrap_or(false);
+                let shutdown = connection(
+                    handle,
+                    router
+                        .as_mut()
+                        .expect("backend initializes after the first pipe bind"),
+                )
+                .unwrap_or(false);
                 unsafe {
                     DisconnectNamedPipe(handle);
                     CloseHandle(handle);
@@ -415,6 +506,9 @@ mod pipe {
                 let shutdown =
                     matches!(&parsed, Ok(req) if req.method == "shutdown" && req.id.is_some());
                 let response = match parsed {
+                    Ok(req) if req.method == "health" => req
+                        .id
+                        .map(|id| axon_core::JsonRpcResponse::success(id, json!({"ready": true}))),
                     Ok(req) if shutdown => req.id.map(|id| {
                         axon_core::JsonRpcResponse::success(
                             id,
@@ -449,6 +543,19 @@ mod pipe {
     }
 
     pub fn shutdown() -> io::Result<u32> {
+        let (tx, rx) = mpsc::sync_channel(1);
+        thread::spawn(move || {
+            let _ = tx.send(shutdown_rpc());
+        });
+        rx.recv_timeout(Duration::from_secs(35)).map_err(|error| {
+            io::Error::new(
+                io::ErrorKind::TimedOut,
+                format!("daemon shutdown RPC timed out: {error}"),
+            )
+        })?
+    }
+
+    fn shutdown_rpc() -> io::Result<u32> {
         let response = send_rpc(&JsonRpcRequest::new(
             Some(JsonRpcId::Integer(1)),
             "shutdown",
@@ -462,32 +569,109 @@ mod pipe {
     }
 
     pub fn wait_until_ready(timeout: Duration) -> io::Result<()> {
-        wait_for_pipe(timeout, true)
+        wait_until_ready_with(timeout, Arc::new(health))
     }
 
-    fn wait_for_pipe(timeout: Duration, ready: bool) -> io::Result<()> {
+    fn wait_until_ready_with(
+        timeout: Duration,
+        health: Arc<dyn Fn() -> io::Result<()> + Send + Sync>,
+    ) -> io::Result<()> {
         let start = Instant::now();
         loop {
-            let present = OpenOptions::new().read(true).write(true).open(PIPE).is_ok();
-            if present == ready {
-                return Ok(());
-            }
-            if start.elapsed() >= timeout {
+            let Some(remaining) = timeout.checked_sub(start.elapsed()) else {
                 return Err(io::Error::new(
                     io::ErrorKind::TimedOut,
-                    if ready {
-                        "daemon pipe did not become ready"
-                    } else {
-                        "daemon pipe did not stop"
-                    },
+                    "daemon did not become ready to serve requests",
                 ));
+            };
+            let (tx, rx) = mpsc::sync_channel(1);
+            let health = Arc::clone(&health);
+            thread::spawn(move || {
+                let _ = tx.send(health());
+            });
+            match rx.recv_timeout(remaining) {
+                Ok(Ok(())) => return Ok(()),
+                Ok(Err(_)) => thread::sleep(Duration::from_millis(50).min(remaining)),
+                Err(mpsc::RecvTimeoutError::Timeout) => {
+                    return Err(io::Error::new(
+                        io::ErrorKind::TimedOut,
+                        "daemon did not become ready to serve requests",
+                    ));
+                }
+                Err(mpsc::RecvTimeoutError::Disconnected) => {
+                    return Err(io::Error::other("daemon health check worker stopped"));
+                }
             }
-            thread::sleep(Duration::from_millis(50));
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        #[test]
+        fn readiness_requires_a_successful_health_response() {
+            let attempts = Arc::new(AtomicUsize::new(0));
+            let observed = Arc::clone(&attempts);
+            wait_until_ready_with(
+                Duration::from_secs(1),
+                Arc::new(move || {
+                    if observed.fetch_add(1, Ordering::SeqCst) == 0 {
+                        Err(io::Error::other("not ready"))
+                    } else {
+                        Ok(())
+                    }
+                }),
+            )
+            .unwrap();
+            assert_eq!(attempts.load(Ordering::SeqCst), 2);
+        }
+
+        #[test]
+        fn readiness_deadline_bounds_a_silent_health_check() {
+            let started = Instant::now();
+            let error = wait_until_ready_with(
+                Duration::from_millis(25),
+                Arc::new(|| {
+                    thread::sleep(Duration::from_secs(1));
+                    Ok(())
+                }),
+            )
+            .unwrap_err();
+            assert_eq!(error.kind(), io::ErrorKind::TimedOut);
+            assert!(started.elapsed() < Duration::from_millis(250));
+        }
+    }
+
+    fn health() -> io::Result<()> {
+        let response = send_rpc(&JsonRpcRequest::new(
+            Some(JsonRpcId::Integer(1)),
+            "health",
+            Some(json!({})),
+        ))?;
+        if response.pointer("/result/ready").and_then(Value::as_bool) == Some(true) {
+            Ok(())
+        } else {
+            Err(io::Error::other(format!(
+                "daemon rejected health check: {response}"
+            )))
         }
     }
 
     pub fn is_daemon_absent(error: &io::Error) -> bool {
         matches!(error.raw_os_error(), Some(2 | 3))
+    }
+
+    pub fn is_unresponsive_daemon(error: &io::Error) -> bool {
+        matches!(
+            error.kind(),
+            io::ErrorKind::TimedOut
+                | io::ErrorKind::BrokenPipe
+                | io::ErrorKind::UnexpectedEof
+                | io::ErrorKind::ConnectionAborted
+                | io::ErrorKind::ConnectionReset
+        )
     }
 
     fn send_rpc(request: &JsonRpcRequest) -> io::Result<Value> {
