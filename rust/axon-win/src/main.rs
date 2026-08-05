@@ -570,27 +570,6 @@ mod pipe {
         }
     }
 
-    fn wait_for_pipe(timeout: Duration, ready: bool) -> io::Result<()> {
-        let start = Instant::now();
-        loop {
-            let present = OpenOptions::new().read(true).write(true).open(PIPE).is_ok();
-            if present == ready {
-                return Ok(());
-            }
-            if start.elapsed() >= timeout {
-                return Err(io::Error::new(
-                    io::ErrorKind::TimedOut,
-                    if ready {
-                        "daemon pipe did not become ready"
-                    } else {
-                        "daemon pipe did not stop"
-                    },
-                ));
-            }
-            thread::sleep(Duration::from_millis(50));
-        }
-    }
-
     pub fn is_daemon_absent(error: &io::Error) -> bool {
         matches!(error.raw_os_error(), Some(2 | 3))
     }
