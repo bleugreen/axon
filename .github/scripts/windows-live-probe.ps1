@@ -19,17 +19,33 @@ function Get-LiveProbeDaemons {
         })
 }
 
+function Get-LiveProbeDaemonProcesses {
+    @(Get-LiveProbeDaemons | Where-Object {
+        $null -ne (Get-Process -Id $_.ProcessId -ErrorAction SilentlyContinue)
+    })
+}
+
 function Stop-LiveProbeDaemons {
-    foreach ($attempt in 1..3) {
-        foreach ($process in Get-LiveProbeDaemons) {
+    foreach ($attempt in 1..5) {
+        foreach ($process in Get-LiveProbeDaemonProcesses) {
             Write-Output "Stopping live-probe daemon pid=$($process.ProcessId) path=$($process.ExecutablePath)"
-            try { Stop-Process -Id $process.ProcessId -Force -ErrorAction Stop }
-            catch { Write-Warning "Could not stop pid=$($process.ProcessId) on attempt ${attempt}: $_" }
+            try {
+                Stop-Process -Id $process.ProcessId -Force -ErrorAction Stop
+            }
+            catch {
+                if ($null -ne (Get-Process -Id $process.ProcessId -ErrorAction SilentlyContinue)) {
+                    Write-Warning "Could not stop pid=$($process.ProcessId) on attempt ${attempt}: $_"
+                }
+            }
         }
-        if ((Get-LiveProbeDaemons).Count -eq 0) { return }
-        Start-Sleep -Milliseconds 250
+
+        if ((Get-LiveProbeDaemonProcesses).Count -eq 0) { return }
+        Start-Sleep -Milliseconds 500
     }
-    $remaining = Get-LiveProbeDaemons
+
+    $remaining = Get-LiveProbeDaemonProcesses
+    if ($remaining.Count -eq 0) { return }
+
     throw "Scoped live-probe daemons remain: $($remaining.ExecutablePath -join ', ')"
 }
 
