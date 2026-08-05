@@ -259,7 +259,9 @@ mod pipe {
         ffi::c_void,
         fs::OpenOptions,
         io::{self, BufRead, BufReader, Write},
-        ptr, thread,
+        ptr,
+        sync::mpsc,
+        thread,
         time::{Duration, Instant},
     };
 
@@ -542,16 +544,29 @@ mod pipe {
     pub fn wait_until_ready(timeout: Duration) -> io::Result<()> {
         let start = Instant::now();
         loop {
-            if health().is_ok() {
-                return Ok(());
-            }
-            if start.elapsed() >= timeout {
+            let Some(remaining) = timeout.checked_sub(start.elapsed()) else {
                 return Err(io::Error::new(
                     io::ErrorKind::TimedOut,
                     "daemon did not become ready to serve requests",
                 ));
+            };
+            let (tx, rx) = mpsc::sync_channel(1);
+            thread::spawn(move || {
+                let _ = tx.send(health());
+            });
+            match rx.recv_timeout(remaining) {
+                Ok(Ok(())) => return Ok(()),
+                Ok(Err(_)) => thread::sleep(Duration::from_millis(50).min(remaining)),
+                Err(mpsc::RecvTimeoutError::Timeout) => {
+                    return Err(io::Error::new(
+                        io::ErrorKind::TimedOut,
+                        "daemon did not become ready to serve requests",
+                    ));
+                }
+                Err(mpsc::RecvTimeoutError::Disconnected) => {
+                    return Err(io::Error::other("daemon health check worker stopped"));
+                }
             }
-            thread::sleep(Duration::from_millis(50));
         }
     }
 

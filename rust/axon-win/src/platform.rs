@@ -241,6 +241,9 @@ impl WindowsBackend {
             .name("axon-uia-mta".into())
             .spawn(move || {
                 let result = UiaState::new(|stage| thread_log(stage));
+                if let Err(error) = &result {
+                    thread_log(&format!("UIA initialization: failed: {error}"));
+                }
                 let _ = ready_tx.send(result.as_ref().map(|_| ()).map_err(CloneError::from));
                 let Ok(mut state) = result else { return };
                 while let Ok(command) = rx.recv() {
@@ -249,10 +252,15 @@ impl WindowsBackend {
             })
             .map_err(|e| op("start UIA thread", e.to_string()))?;
         log("UIA thread readiness: waiting");
-        ready_rx
-            .recv_timeout(Duration::from_secs(30))
-            .map_err(|e| op("start UIA thread", e.to_string()))?
-            .map_err(BackendError::from)?;
+        match ready_rx.recv_timeout(Duration::from_secs(30)) {
+            Ok(result) => result.map_err(BackendError::from)?,
+            Err(error) => {
+                log(&format!(
+                    "UIA thread readiness: failed after 30000 ms: {error}"
+                ));
+                return Err(op("start UIA thread", error.to_string()));
+            }
+        }
         log("UIA thread readiness: complete");
         Ok(Self {
             tx: Some(tx),
