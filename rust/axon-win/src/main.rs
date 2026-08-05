@@ -260,7 +260,7 @@ mod pipe {
         fs::OpenOptions,
         io::{self, BufRead, BufReader, Write},
         ptr,
-        sync::mpsc,
+        sync::{Arc, mpsc},
         thread,
         time::{Duration, Instant},
     };
@@ -542,6 +542,13 @@ mod pipe {
     }
 
     pub fn wait_until_ready(timeout: Duration) -> io::Result<()> {
+        wait_until_ready_with(timeout, Arc::new(health))
+    }
+
+    fn wait_until_ready_with(
+        timeout: Duration,
+        health: Arc<dyn Fn() -> io::Result<()> + Send + Sync>,
+    ) -> io::Result<()> {
         let start = Instant::now();
         loop {
             let Some(remaining) = timeout.checked_sub(start.elapsed()) else {
@@ -551,6 +558,7 @@ mod pipe {
                 ));
             };
             let (tx, rx) = mpsc::sync_channel(1);
+            let health = Arc::clone(&health);
             thread::spawn(move || {
                 let _ = tx.send(health());
             });
@@ -567,6 +575,45 @@ mod pipe {
                     return Err(io::Error::other("daemon health check worker stopped"));
                 }
             }
+        }
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        #[test]
+        fn readiness_requires_a_successful_health_response() {
+            let attempts = Arc::new(AtomicUsize::new(0));
+            let observed = Arc::clone(&attempts);
+            wait_until_ready_with(
+                Duration::from_secs(1),
+                Arc::new(move || {
+                    if observed.fetch_add(1, Ordering::SeqCst) == 0 {
+                        Err(io::Error::other("not ready"))
+                    } else {
+                        Ok(())
+                    }
+                }),
+            )
+            .unwrap();
+            assert_eq!(attempts.load(Ordering::SeqCst), 2);
+        }
+
+        #[test]
+        fn readiness_deadline_bounds_a_silent_health_check() {
+            let started = Instant::now();
+            let error = wait_until_ready_with(
+                Duration::from_millis(25),
+                Arc::new(|| {
+                    thread::sleep(Duration::from_secs(1));
+                    Ok(())
+                }),
+            )
+            .unwrap_err();
+            assert_eq!(error.kind(), io::ErrorKind::TimedOut);
+            assert!(started.elapsed() < Duration::from_millis(250));
         }
     }
 
