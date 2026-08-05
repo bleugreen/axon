@@ -1,8 +1,12 @@
-use crate::PointerTargetVerifier;
+use crate::{PointerTargetVerifier, VisualObservation, VisualObservationProvider};
 use axon_core::{
     AppQuery, Application, BackendError, Capability, CapabilityInfo, Node, Observation,
-    PlatformBackend, RecordedCall, Rect, Screenshot, Snapshot, SnapshotHandle, Window,
+    PlatformBackend, RecognizedText, RecordedCall, Rect, Screenshot, Snapshot, SnapshotHandle,
+    TextRecognitionProvider, Window,
 };
+
+#[path = "capture.rs"]
+mod graphics_capture;
 use std::{
     ffi::c_void,
     sync::mpsc,
@@ -11,7 +15,7 @@ use std::{
 };
 use windows::{
     Win32::{
-        Foundation::POINT,
+        Foundation::{HWND, POINT},
         System::{
             Com::{
                 CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED, CoCreateInstance, CoInitializeEx,
@@ -64,6 +68,23 @@ const MAX_NODES: usize = 2_000;
 enum Command {
     Enumerate(mpsc::Sender<Result<Vec<Application>, BackendError>>),
     Capture(AppQuery, mpsc::Sender<Result<Snapshot, BackendError>>),
+    Screenshot(AppQuery, mpsc::Sender<Result<Screenshot, BackendError>>),
+    RecognizeText(
+        AppQuery,
+        mpsc::Sender<Result<Vec<graphics_capture::OcrWord>, BackendError>>,
+    ),
+    ObserveVisuals(
+        AppQuery,
+        bool,
+        bool,
+        mpsc::Sender<Result<VisualObservation, BackendError>>,
+    ),
+    VerifyOcrTarget(
+        AppQuery,
+        (f64, f64),
+        Rect,
+        mpsc::Sender<Result<bool, BackendError>>,
+    ),
     Invoke(SnapshotHandle, mpsc::Sender<Result<(), BackendError>>),
     Read(
         SnapshotHandle,
@@ -82,6 +103,41 @@ enum Command {
         (f64, f64),
         mpsc::Sender<Result<bool, BackendError>>,
     ),
+}
+
+impl VisualObservationProvider for WindowsBackend {
+    fn observe_visuals(
+        &mut self,
+        q: &AppQuery,
+        screenshot: bool,
+        screen_text: bool,
+    ) -> Result<VisualObservation, BackendError> {
+        self.call(|tx| Command::ObserveVisuals(q.clone(), screenshot, screen_text, tx))
+    }
+}
+
+impl TextRecognitionProvider for WindowsBackend {
+    fn recognize_text(&mut self, q: &AppQuery) -> Result<Vec<RecognizedText>, BackendError> {
+        self.recognize_window_text(q).map(|words| {
+            words
+                .into_iter()
+                .map(|word| RecognizedText {
+                    text: word.text,
+                    frame: word.frame,
+                    confidence: None,
+                })
+                .collect()
+        })
+    }
+}
+
+impl WindowsBackend {
+    pub fn recognize_window_text(
+        &mut self,
+        q: &AppQuery,
+    ) -> Result<Vec<graphics_capture::OcrWord>, BackendError> {
+        self.call(|tx| Command::RecognizeText(q.clone(), tx))
+    }
 }
 
 fn normalize_virtual_desktop_point(
@@ -139,6 +195,15 @@ impl PointerTargetVerifier for WindowsBackend {
         point: (f64, f64),
     ) -> Result<bool, BackendError> {
         self.call(|tx| Command::VerifyPointerTarget(handle.clone(), point, tx))
+    }
+
+    fn verify_ocr_target(
+        &mut self,
+        app: &AppQuery,
+        point: (f64, f64),
+        frame: Rect,
+    ) -> Result<bool, BackendError> {
+        self.call(|tx| Command::VerifyOcrTarget(app.clone(), point, frame, tx))
     }
 }
 
@@ -266,6 +331,43 @@ impl UiaState {
             Command::Capture(q, tx) => {
                 let _ = tx.send(self.capture(q));
             }
+            Command::Screenshot(q, tx) => {
+                let _ = tx.send(
+                    self.capture_graphics(q)
+                        .and_then(|captured| graphics_capture::screenshot(&captured)),
+                );
+            }
+            Command::RecognizeText(q, tx) => {
+                let _ = tx.send(
+                    self.capture_graphics(q)
+                        .and_then(|captured| graphics_capture::ocr(&captured)),
+                );
+            }
+            Command::ObserveVisuals(q, wants_screenshot, wants_screen_text, tx) => {
+                let result = self.capture_graphics(q).and_then(|captured| {
+                    let screenshot = wants_screenshot
+                        .then(|| graphics_capture::screenshot(&captured))
+                        .transpose()?;
+                    let recognized_text = wants_screen_text
+                        .then(|| graphics_capture::ocr(&captured))
+                        .transpose()?
+                        .map(|words| {
+                            words
+                                .into_iter()
+                                .map(|word| RecognizedText {
+                                    text: word.text,
+                                    frame: word.frame,
+                                    confidence: None,
+                                })
+                                .collect()
+                        });
+                    Ok(VisualObservation {
+                        screenshot,
+                        recognized_text,
+                    })
+                });
+                let _ = tx.send(result);
+            }
             Command::Invoke(h, tx) => {
                 let _ = tx.send(self.element(&h).and_then(|e| {
                     let p: IUIAutomationInvokePattern =
@@ -287,6 +389,43 @@ impl UiaState {
                         .map(|same| same.as_bool())
                         .map_err(|e| operation("compare pointer target identity", e))
                 });
+                let _ = tx.send(result);
+            }
+            Command::VerifyOcrTarget(q, (x, y), frame, tx) => {
+                let result =
+                    self.find_window(&q, "verify OCR pointer target")
+                        .and_then(|(window, _)| {
+                            if x < frame.x
+                                || y < frame.y
+                                || x > frame.x + frame.width
+                                || y > frame.y + frame.height
+                            {
+                                return Ok(false);
+                            }
+                            let hit = unsafe {
+                                self.automation.ElementFromPoint(POINT {
+                                    x: x.round() as i32,
+                                    y: y.round() as i32,
+                                })
+                            }
+                            .map_err(|e| operation("hit test OCR pointer target", e))?;
+                            let walker = unsafe { self.automation.ControlViewWalker() }
+                                .map_err(|e| operation("get UIA control walker", e))?;
+                            let mut current = Some(hit);
+                            for _ in 0..64 {
+                                let Some(element) = current else {
+                                    return Ok(false);
+                                };
+                                if unsafe { self.automation.CompareElements(&window, &element) }
+                                    .map_err(|e| operation("compare OCR target ancestry", e))?
+                                    .as_bool()
+                                {
+                                    return Ok(true);
+                                }
+                                current = unsafe { walker.GetParentElement(&element) }.ok();
+                            }
+                            Ok(false)
+                        });
                 let _ = tx.send(result);
             }
             Command::Hit((x, y), tx) => {
@@ -362,25 +501,7 @@ impl UiaState {
             .collect())
     }
     fn capture(&mut self, q: AppQuery) -> Result<Snapshot, BackendError> {
-        let query = q
-            .name
-            .or(q.identifier)
-            .ok_or_else(|| op("capture", "app name or identifier is required"))?
-            .to_lowercase();
-        let window = self
-            .top_level()?
-            .into_iter()
-            .find(|e| {
-                let name = unsafe { e.CurrentName() }
-                    .unwrap_or_default()
-                    .to_string()
-                    .to_lowercase();
-                let pid = unsafe { e.CurrentProcessId() }
-                    .unwrap_or_default()
-                    .to_string();
-                name == query || name.contains(&query) || pid == query
-            })
-            .ok_or_else(|| op("capture", format!("no top-level window matches {query:?}")))?;
+        let (window, query) = self.find_window(&q, "capture")?;
         if let Ok(hwnd) = unsafe { window.CurrentNativeWindowHandle() } {
             msaa::activate(hwnd.0 as isize);
         }
@@ -403,6 +524,42 @@ impl UiaState {
         });
         self.snapshot = Some(snapshot.clone());
         Ok(snapshot)
+    }
+    fn find_window(
+        &self,
+        q: &AppQuery,
+        operation: &str,
+    ) -> Result<(IUIAutomationElement, String), BackendError> {
+        let query = q
+            .name
+            .as_ref()
+            .or(q.identifier.as_ref())
+            .ok_or_else(|| op(operation, "app name or identifier is required"))?
+            .to_lowercase();
+        let window = self
+            .top_level()?
+            .into_iter()
+            .find(|element| {
+                let name = unsafe { element.CurrentName() }
+                    .unwrap_or_default()
+                    .to_string()
+                    .to_lowercase();
+                let pid = unsafe { element.CurrentProcessId() }
+                    .unwrap_or_default()
+                    .to_string();
+                name == query || name.contains(&query) || pid == query
+            })
+            .ok_or_else(|| op(operation, format!("no top-level window matches {query:?}")))?;
+        Ok((window, query))
+    }
+    fn capture_graphics(
+        &self,
+        q: AppQuery,
+    ) -> Result<graphics_capture::CapturedBitmap, BackendError> {
+        let (window, _) = self.find_window(&q, "capture window graphics")?;
+        let native = unsafe { window.CurrentNativeWindowHandle() }
+            .map_err(|e| operation("read native window handle", e))?;
+        graphics_capture::capture(HWND(native.0 as *mut c_void))
     }
     fn wait_for_root_web_area(
         &self,
@@ -579,6 +736,7 @@ impl PlatformBackend for WindowsBackend {
             Capability::Scroll,
             Capability::PointerInput,
             Capability::KeyboardInput,
+            Capability::Screenshot,
             Capability::HitTest,
         ]
         .into_iter()
@@ -638,8 +796,8 @@ impl PlatformBackend for WindowsBackend {
     ) -> Result<(), BackendError> {
         Err(cap(Capability::PointerInput, "drag excluded from v1"))
     }
-    fn screenshot(&mut self, _: &AppQuery) -> Result<Screenshot, BackendError> {
-        Err(cap(Capability::Screenshot, "not implemented"))
+    fn screenshot(&mut self, q: &AppQuery) -> Result<Screenshot, BackendError> {
+        self.call(|tx| Command::Screenshot(q.clone(), tx))
     }
     fn hit_test(&mut self, point: (f64, f64)) -> Result<Option<Node>, BackendError> {
         self.call(|tx| Command::Hit(point, tx))
