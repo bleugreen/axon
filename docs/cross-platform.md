@@ -119,6 +119,8 @@ events with a close conceptual fit to AX.
   creation, UI Automation client creation, provider-timeout setup, and pipe bind.
   Per-monitor DPI awareness improves coordinate accuracy but is not required to
   serve; contexts where Windows rejects changing it emit a warning and continue.
+  Lifecycle shutdown RPCs are bounded as well; restart asks Task Scheduler to end
+  an unresponsive half-started task before relaunching it.
 - Run the session-1 integration probes from a logged-in desktop with exactly:
   `axon-win probe value <app-query>`, `axon-win probe events <app-query> [seconds]`,
   and `axon-win probe timeout [app-query] [milliseconds]`. Each command emits JSON;

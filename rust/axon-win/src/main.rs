@@ -109,7 +109,21 @@ mod lifecycle {
         match pipe::shutdown() {
             Ok(process_id) => wait_for_process_exit(process_id, Duration::from_secs(10)),
             Err(error) if pipe::is_daemon_absent(&error) => Ok(()),
+            Err(error) if pipe::is_unresponsive_daemon(&error) => end_task(),
             Err(error) => Err(error),
+        }
+    }
+
+    fn end_task() -> io::Result<()> {
+        let output = Command::new("schtasks")
+            .args(["/end", "/tn", TASK_NAME])
+            .output()?;
+        if output.status.success()
+            || String::from_utf8_lossy(&output.stderr).contains("not currently running")
+        {
+            Ok(())
+        } else {
+            Err(command_error("schtasks", &output))
         }
     }
 
@@ -529,6 +543,19 @@ mod pipe {
     }
 
     pub fn shutdown() -> io::Result<u32> {
+        let (tx, rx) = mpsc::sync_channel(1);
+        thread::spawn(move || {
+            let _ = tx.send(shutdown_rpc());
+        });
+        rx.recv_timeout(Duration::from_secs(35)).map_err(|error| {
+            io::Error::new(
+                io::ErrorKind::TimedOut,
+                format!("daemon shutdown RPC timed out: {error}"),
+            )
+        })?
+    }
+
+    fn shutdown_rpc() -> io::Result<u32> {
         let response = send_rpc(&JsonRpcRequest::new(
             Some(JsonRpcId::Integer(1)),
             "shutdown",
@@ -634,6 +661,17 @@ mod pipe {
 
     pub fn is_daemon_absent(error: &io::Error) -> bool {
         matches!(error.raw_os_error(), Some(2 | 3))
+    }
+
+    pub fn is_unresponsive_daemon(error: &io::Error) -> bool {
+        matches!(
+            error.kind(),
+            io::ErrorKind::TimedOut
+                | io::ErrorKind::BrokenPipe
+                | io::ErrorKind::UnexpectedEof
+                | io::ErrorKind::ConnectionAborted
+                | io::ErrorKind::ConnectionReset
+        )
     }
 
     fn send_rpc(request: &JsonRpcRequest) -> io::Result<Value> {
