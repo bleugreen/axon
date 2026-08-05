@@ -332,14 +332,16 @@ impl UiaState {
                 let _ = tx.send(self.capture(q));
             }
             Command::Screenshot(q, tx) => {
-                let _ = tx.send(self.capture_graphics(q).and_then(|captured| {
-                    graphics_capture::screenshot(&captured)
-                }));
+                let _ = tx.send(
+                    self.capture_graphics(q)
+                        .and_then(|captured| graphics_capture::screenshot(&captured)),
+                );
             }
             Command::RecognizeText(q, tx) => {
-                let _ = tx.send(self.capture_graphics(q).and_then(|captured| {
-                    graphics_capture::ocr(&captured)
-                }));
+                let _ = tx.send(
+                    self.capture_graphics(q)
+                        .and_then(|captured| graphics_capture::ocr(&captured)),
+                );
             }
             Command::ObserveVisuals(q, wants_screenshot, wants_screen_text, tx) => {
                 let result = self.capture_graphics(q).and_then(|captured| {
@@ -350,13 +352,19 @@ impl UiaState {
                         .then(|| graphics_capture::ocr(&captured))
                         .transpose()?
                         .map(|words| {
-                            words.into_iter().map(|word| RecognizedText {
-                                text: word.text,
-                                frame: word.frame,
-                                confidence: None,
-                            }).collect()
+                            words
+                                .into_iter()
+                                .map(|word| RecognizedText {
+                                    text: word.text,
+                                    frame: word.frame,
+                                    confidence: None,
+                                })
+                                .collect()
                         });
-                    Ok(VisualObservation { screenshot, recognized_text })
+                    Ok(VisualObservation {
+                        screenshot,
+                        recognized_text,
+                    })
                 });
                 let _ = tx.send(result);
             }
@@ -384,36 +392,40 @@ impl UiaState {
                 let _ = tx.send(result);
             }
             Command::VerifyOcrTarget(q, (x, y), frame, tx) => {
-                let result = self.find_window(&q, "verify OCR pointer target").and_then(
-                    |(window, _)| {
-                        if x < frame.x || y < frame.y
-                            || x > frame.x + frame.width || y > frame.y + frame.height
-                        {
-                            return Ok(false);
-                        }
-                        let hit = unsafe {
-                            self.automation.ElementFromPoint(POINT {
-                                x: x.round() as i32,
-                                y: y.round() as i32,
-                            })
-                        }
-                        .map_err(|e| operation("hit test OCR pointer target", e))?;
-                        let walker = unsafe { self.automation.ControlViewWalker() }
-                            .map_err(|e| operation("get UIA control walker", e))?;
-                        let mut current = Some(hit);
-                        for _ in 0..64 {
-                            let Some(element) = current else { return Ok(false) };
-                            if unsafe { self.automation.CompareElements(&window, &element) }
-                                .map_err(|e| operation("compare OCR target ancestry", e))?
-                                .as_bool()
+                let result =
+                    self.find_window(&q, "verify OCR pointer target")
+                        .and_then(|(window, _)| {
+                            if x < frame.x
+                                || y < frame.y
+                                || x > frame.x + frame.width
+                                || y > frame.y + frame.height
                             {
-                                return Ok(true);
+                                return Ok(false);
                             }
-                            current = unsafe { walker.GetParentElement(&element) }.ok();
-                        }
-                        Ok(false)
-                    },
-                );
+                            let hit = unsafe {
+                                self.automation.ElementFromPoint(POINT {
+                                    x: x.round() as i32,
+                                    y: y.round() as i32,
+                                })
+                            }
+                            .map_err(|e| operation("hit test OCR pointer target", e))?;
+                            let walker = unsafe { self.automation.ControlViewWalker() }
+                                .map_err(|e| operation("get UIA control walker", e))?;
+                            let mut current = Some(hit);
+                            for _ in 0..64 {
+                                let Some(element) = current else {
+                                    return Ok(false);
+                                };
+                                if unsafe { self.automation.CompareElements(&window, &element) }
+                                    .map_err(|e| operation("compare OCR target ancestry", e))?
+                                    .as_bool()
+                                {
+                                    return Ok(true);
+                                }
+                                current = unsafe { walker.GetParentElement(&element) }.ok();
+                            }
+                            Ok(false)
+                        });
                 let _ = tx.send(result);
             }
             Command::Hit((x, y), tx) => {

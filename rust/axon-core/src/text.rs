@@ -1,4 +1,6 @@
-use crate::{AppQuery, BackendError, Node, Rect, Snapshot, SnapshotHandle, SnapshotId, TextMatcher};
+use crate::{
+    AppQuery, BackendError, Node, Rect, Snapshot, SnapshotHandle, SnapshotId, TextMatcher,
+};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -95,8 +97,7 @@ impl TextLocationResolver {
             1 => crate::ResolutionStatus::Unique,
             _ => crate::ResolutionStatus::Ambiguous,
         };
-        let best = (status == crate::ResolutionStatus::Unique)
-            .then(|| candidates[0].clone());
+        let best = (status == crate::ResolutionStatus::Unique).then(|| candidates[0].clone());
         let point = best.as_ref().map(|candidate| candidate.point);
         TextLocationResolution {
             status,
@@ -117,7 +118,9 @@ fn ax_candidates(text: &TextMatcher, snapshot: &Snapshot) -> Vec<TextLocationCan
         .into_iter()
         .enumerate()
         .filter_map(|(index, node)| {
-            let frame = node.frame.filter(|frame| frame.width > 0.0 && frame.height > 0.0)?;
+            let frame = node
+                .frame
+                .filter(|frame| frame.width > 0.0 && frame.height > 0.0)?;
             let (field, matched_text) = [
                 ("title", node.title.as_deref()),
                 ("value", node.value.as_deref()),

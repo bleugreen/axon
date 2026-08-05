@@ -236,33 +236,41 @@ impl<B: PointerTargetVerifier + TextRecognitionProvider + VisualObservationProvi
             .map_err(internal_error);
         }
         let app = app_query(params);
-        let snapshot = self
-            .backend
-            .capture(&app)
-            .map_err(backend_error)?;
+        let snapshot = self.backend.capture(&app).map_err(backend_error)?;
         let mut value = serde_json::to_value(&snapshot).map_err(internal_error)?;
         let wants_screenshot = params.get("screenshot").and_then(Value::as_bool) == Some(true);
         let wants_screen_text = params.get("screenText").and_then(Value::as_bool) == Some(true);
         let visuals = (wants_screenshot || wants_screen_text)
-            .then(|| self.backend.observe_visuals(&app, wants_screenshot, wants_screen_text))
+            .then(|| {
+                self.backend
+                    .observe_visuals(&app, wants_screenshot, wants_screen_text)
+            })
             .transpose()
             .map_err(backend_error)?;
-        if let Some(screenshot) = visuals.as_ref().and_then(|result| result.screenshot.as_ref()) {
-            value.as_object_mut().expect("snapshots serialize as objects").insert(
-                "screenshot".into(),
-                json!({
-                    "mediaType": screenshot.media_type,
-                    "base64Data": base64::Engine::encode(
-                        &base64::engine::general_purpose::STANDARD,
-                        &screenshot.bytes
-                    ),
-                    "width": screenshot.frame.width as u32,
-                    "height": screenshot.frame.height as u32
-                }),
-            );
+        if let Some(screenshot) = visuals
+            .as_ref()
+            .and_then(|result| result.screenshot.as_ref())
+        {
+            value
+                .as_object_mut()
+                .expect("snapshots serialize as objects")
+                .insert(
+                    "screenshot".into(),
+                    json!({
+                        "mediaType": screenshot.media_type,
+                        "base64Data": base64::Engine::encode(
+                            &base64::engine::general_purpose::STANDARD,
+                            &screenshot.bytes
+                        ),
+                        "width": screenshot.frame.width as u32,
+                        "height": screenshot.frame.height as u32
+                    }),
+                );
         }
         if let Some(screen_text) = visuals.and_then(|result| result.recognized_text) {
-            value.as_object_mut().expect("snapshots serialize as objects")
+            value
+                .as_object_mut()
+                .expect("snapshots serialize as objects")
                 .insert("screenText".into(), json!(screen_text));
         }
         self.snapshot = Some(snapshot);
@@ -544,7 +552,12 @@ mod tests {
                 screenshot: screenshot.then(|| Screenshot {
                     bytes: vec![1, 2, 3],
                     media_type: "image/png".into(),
-                    frame: Rect { x: 4.0, y: 5.0, width: 640.0, height: 480.0 },
+                    frame: Rect {
+                        x: 4.0,
+                        y: 5.0,
+                        width: 640.0,
+                        height: 480.0,
+                    },
                 }),
                 recognized_text: screen_text.then(|| self.recognized.clone()),
             })
@@ -728,15 +741,27 @@ mod tests {
     fn recognized(text: &str, x: f64) -> axon_core::RecognizedText {
         axon_core::RecognizedText {
             text: text.into(),
-            frame: Rect { x, y: 10.0, width: 40.0, height: 20.0 },
+            frame: Rect {
+                x,
+                y: 10.0,
+                width: 40.0,
+                height: 20.0,
+            },
             confidence: Some(0.9),
         }
     }
     #[test]
     fn unique_text_location_click_returns_macos_shaped_resolution() {
         let mut router = Router::new(backend(vec![node("Save")], None));
-        let response = router.request(request("click", json!({"target":{"location":{"app":"App","text":"save"}}}))).unwrap();
-        let JsonRpcResponse::Success(success) = response else { panic!() };
+        let response = router
+            .request(request(
+                "click",
+                json!({"target":{"location":{"app":"App","text":"save"}}}),
+            ))
+            .unwrap();
+        let JsonRpcResponse::Success(success) = response else {
+            panic!()
+        };
         assert_eq!(success.result["resolution"]["status"], "unique");
         assert_eq!(success.result["resolution"]["best"]["source"], "ax");
         assert_eq!(success.result["resolution"]["point"]["x"], 10.0);
@@ -751,14 +776,26 @@ mod tests {
         backend.recognized = vec![recognized("Save", 100.0)];
         let captures = backend.visual_captures.clone();
         let mut router = Router::new(backend);
-        let response = router.request(request(
-            "look",
-            json!({"app":"App","screenshot":true,"screenText":true}),
-        )).unwrap();
-        let JsonRpcResponse::Success(success) = response else { panic!() };
+        let response = router
+            .request(request(
+                "look",
+                json!({"app":"App","screenshot":true,"screenText":true}),
+            ))
+            .unwrap();
+        let JsonRpcResponse::Success(success) = response else {
+            panic!()
+        };
         let screenshot = success.result["screenshot"].as_object().unwrap();
-        let keys = screenshot.keys().map(String::as_str).collect::<std::collections::BTreeSet<_>>();
-        assert_eq!(keys, ["base64Data", "height", "mediaType", "width"].into_iter().collect());
+        let keys = screenshot
+            .keys()
+            .map(String::as_str)
+            .collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(
+            keys,
+            ["base64Data", "height", "mediaType", "width"]
+                .into_iter()
+                .collect()
+        );
         assert_eq!(screenshot["mediaType"], "image/png");
         assert_eq!(screenshot["base64Data"], "AQID");
         assert_eq!(screenshot["width"], 640);
@@ -769,7 +806,12 @@ mod tests {
     #[test]
     fn ambiguous_text_location_fails_closed() {
         let mut router = Router::new(backend(vec![node("Save"), node("Save")], None));
-        let response = router.request(request("click", json!({"target":{"location":{"app":"App","text":"save"}}}))).unwrap();
+        let response = router
+            .request(request(
+                "click",
+                json!({"target":{"location":{"app":"App","text":"save"}}}),
+            ))
+            .unwrap();
         assert!(matches!(response, JsonRpcResponse::Failure(_)));
         assert_eq!(*router.backend.clicks.borrow(), 0);
     }
@@ -779,7 +821,12 @@ mod tests {
         backend.recognized = vec![recognized("Save", 100.0)];
         let calls = backend.ocr_calls.clone();
         let mut router = Router::new(backend);
-        let response = router.request(request("click", json!({"target":{"location":{"app":"App","text":"save","source":"auto"}}}))).unwrap();
+        let response = router
+            .request(request(
+                "click",
+                json!({"target":{"location":{"app":"App","text":"save","source":"auto"}}}),
+            ))
+            .unwrap();
         assert!(matches!(response, JsonRpcResponse::Success(_)));
         assert_eq!(*calls.borrow(), 0);
     }
@@ -789,8 +836,15 @@ mod tests {
         backend.recognized = vec![recognized("Save", 100.0)];
         let calls = backend.ocr_calls.clone();
         let mut router = Router::new(backend);
-        let response = router.request(request("click", json!({"target":{"location":{"app":"App","text":"save","source":"screenshot"}}}))).unwrap();
-        let JsonRpcResponse::Success(success) = response else { panic!() };
+        let response = router
+            .request(request(
+                "click",
+                json!({"target":{"location":{"app":"App","text":"save","source":"screenshot"}}}),
+            ))
+            .unwrap();
+        let JsonRpcResponse::Success(success) = response else {
+            panic!()
+        };
         assert_eq!(success.result["resolution"]["best"]["source"], "screenshot");
         assert_eq!(*calls.borrow(), 1);
     }
@@ -801,7 +855,12 @@ mod tests {
         backend.ocr_hit_target = None;
         let clicks = backend.clicks.clone();
         let mut router = Router::new(backend);
-        let response = router.request(request("click", json!({"target":{"location":{"app":"App","text":"save","source":"screenshot"}}}))).unwrap();
+        let response = router
+            .request(request(
+                "click",
+                json!({"target":{"location":{"app":"App","text":"save","source":"screenshot"}}}),
+            ))
+            .unwrap();
         assert!(matches!(response, JsonRpcResponse::Failure(_)));
         assert_eq!(*clicks.borrow(), 0);
     }
