@@ -317,12 +317,16 @@ fn physical_capture_frame(bounds: RECT, content_size: (i32, i32)) -> Result<Rect
 
 pub(crate) fn screenshot(captured: &CapturedBitmap) -> Result<Screenshot, BackendError> {
     let width = u32::try_from(
-        captured.bitmap.PixelWidth()
+        captured
+            .bitmap
+            .PixelWidth()
             .map_err(|e| operation("read screenshot bitmap width", e))?,
     )
     .map_err(|_| op("encode PNG", "screenshot width is negative"))?;
     let height = u32::try_from(
-        captured.bitmap.PixelHeight()
+        captured
+            .bitmap
+            .PixelHeight()
             .map_err(|e| operation("read screenshot bitmap height", e))?,
     )
     .map_err(|_| op("encode PNG", "screenshot height is negative"))?;
