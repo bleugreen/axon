@@ -9,7 +9,7 @@ use axon_core::{
 mod graphics_capture;
 use std::{
     ffi::c_void,
-    sync::mpsc,
+    sync::{Arc, mpsc},
     thread,
     time::{Duration, Instant},
 };
@@ -214,14 +214,31 @@ pub struct WindowsBackend {
 
 impl WindowsBackend {
     pub fn start() -> Result<Self, BackendError> {
-        unsafe { SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2) }
-            .map_err(|e| operation("set per-monitor DPI awareness", e))?;
+        Self::start_with_logger(|_| {})
+    }
+
+    pub fn start_with_logger(log: impl Fn(&str) + Send + Sync + 'static) -> Result<Self, BackendError> {
+        let log = Arc::new(log);
+        log("DPI awareness: begin");
+        if let Err(error) = unsafe {
+            SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2)
+        } {
+            let message = format!(
+                "WARNING: per-monitor DPI awareness unavailable; coordinate accuracy may be reduced: {error}"
+            );
+            eprintln!("axon-win: {message}");
+            log(&message);
+        } else {
+            log("DPI awareness: complete");
+        }
         let (tx, rx) = mpsc::channel();
         let (ready_tx, ready_rx) = mpsc::sync_channel(1);
+        let thread_log = Arc::clone(&log);
+        log("UIA thread spawn: begin");
         let thread = thread::Builder::new()
             .name("axon-uia-mta".into())
             .spawn(move || {
-                let result = UiaState::new();
+                let result = UiaState::new(|stage| thread_log(stage));
                 let _ = ready_tx.send(result.as_ref().map(|_| ()).map_err(CloneError::from));
                 let Ok(mut state) = result else { return };
                 while let Ok(command) = rx.recv() {
@@ -229,10 +246,12 @@ impl WindowsBackend {
                 }
             })
             .map_err(|e| op("start UIA thread", e.to_string()))?;
+        log("UIA thread readiness: waiting");
         ready_rx
             .recv()
             .map_err(|e| op("start UIA thread", e.to_string()))?
             .map_err(BackendError::from)?;
+        log("UIA thread readiness: complete");
         Ok(Self {
             tx: Some(tx),
             thread: Some(thread),
@@ -301,12 +320,17 @@ struct UiaState {
     _com: ComApartment,
 }
 impl UiaState {
-    fn new() -> Result<Self, BackendError> {
+    fn new(log: impl Fn(&str)) -> Result<Self, BackendError> {
+        log("COM MTA initialization: begin");
         let com = ComApartment::mta()?;
+        log("COM MTA initialization: complete");
+        log("UI Automation client creation: begin");
         let automation = create_automation()?;
+        log("UI Automation client creation: complete");
         // Provider timeouts improve resilience but are not a prerequisite for UIA itself.
         // Older providers may expose only IUIAutomation; service startup must still work.
         if let Ok(automation2) = automation.cast::<IUIAutomation2>() {
+            log("UI Automation timeout setup: begin");
             unsafe {
                 automation2
                     .SetConnectionTimeout(1500)
@@ -315,6 +339,9 @@ impl UiaState {
                     .SetTransactionTimeout(1500)
                     .map_err(|e| operation("set UIA transaction timeout", e))?;
             }
+            log("UI Automation timeout setup: complete");
+        } else {
+            log("UI Automation timeout setup: skipped (IUIAutomation2 unavailable)");
         }
         Ok(Self {
             automation,

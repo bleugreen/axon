@@ -5,6 +5,50 @@ fn main() {
 }
 
 #[cfg(windows)]
+#[derive(Clone)]
+struct StartupLog {
+    started: std::time::Instant,
+    path: std::path::PathBuf,
+}
+
+#[cfg(windows)]
+impl StartupLog {
+    fn new() -> Self {
+        let root = std::env::var_os("ProgramData")
+            .map(std::path::PathBuf::from)
+            .unwrap_or_else(|| std::path::PathBuf::from(r"C:\ProgramData"));
+        Self {
+            started: std::time::Instant::now(),
+            path: root.join("Axon").join("axon-win-startup.log"),
+        }
+    }
+
+    fn stage(&self, stage: &str) {
+        use std::io::Write;
+        let unix_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis();
+        let line = format!(
+            "timestamp_unix_ms={unix_ms} elapsed_ms={} pid={} {stage}\n",
+            self.started.elapsed().as_millis(),
+            std::process::id()
+        );
+        eprint!("{line}");
+        if let Some(parent) = self.path.parent() {
+            let _ = std::fs::create_dir_all(parent);
+        }
+        if let Ok(mut file) = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&self.path)
+        {
+            let _ = file.write_all(line.as_bytes());
+        }
+    }
+}
+
+#[cfg(windows)]
 mod lifecycle {
     use super::pipe;
     use std::{env, io, path::Path, process::Command, time::Duration};
@@ -170,7 +214,14 @@ fn windows_main() -> Result<(), Box<dyn std::error::Error>> {
     use axon_win::{IntegrationProbe, Router, WindowsBackend};
     let command = std::env::args().nth(1).unwrap_or_else(|| "serve".into());
     match command.as_str() {
-        "serve" => pipe::serve(Router::new(WindowsBackend::start()?))?,
+        "serve" => {
+            let startup = StartupLog::new();
+            startup.stage("process startup");
+            let backend_log = startup.clone();
+            let backend = WindowsBackend::start_with_logger(move |stage| backend_log.stage(stage))?;
+            startup.stage("pipe bind: begin");
+            pipe::serve(Router::new(backend), || startup.stage("pipe bind: complete"))?;
+        }
         "mcp" => pipe::mcp()?,
         "shutdown" => {
             pipe::shutdown()?;
@@ -351,8 +402,12 @@ mod pipe {
         }
     }
 
-    pub fn serve(mut router: Router<WindowsBackend>) -> io::Result<()> {
+    pub fn serve(
+        mut router: Router<WindowsBackend>,
+        on_bound: impl FnOnce(),
+    ) -> io::Result<()> {
         let mut security = PipeSecurity::current_user()?;
+        let mut on_bound = Some(on_bound);
         loop {
             let handle = unsafe {
                 CreateNamedPipeW(
@@ -368,6 +423,9 @@ mod pipe {
             };
             if handle == INVALID_HANDLE_VALUE {
                 return Err(io::Error::last_os_error());
+            }
+            if let Some(on_bound) = on_bound.take() {
+                on_bound();
             }
             let connected = unsafe { ConnectNamedPipe(handle, ptr::null_mut()) } != 0
                 || io::Error::last_os_error().raw_os_error() == Some(535);
