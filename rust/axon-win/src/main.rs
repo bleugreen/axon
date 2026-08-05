@@ -490,9 +490,9 @@ mod pipe {
                 let shutdown =
                     matches!(&parsed, Ok(req) if req.method == "shutdown" && req.id.is_some());
                 let response = match parsed {
-                    Ok(req) if req.method == "health" => req.id.map(|id| {
-                        axon_core::JsonRpcResponse::success(id, json!({"ready": true}))
-                    }),
+                    Ok(req) if req.method == "health" => req
+                        .id
+                        .map(|id| axon_core::JsonRpcResponse::success(id, json!({"ready": true}))),
                     Ok(req) if shutdown => req.id.map(|id| {
                         axon_core::JsonRpcResponse::success(
                             id,
