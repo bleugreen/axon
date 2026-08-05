@@ -59,6 +59,8 @@ pub struct Observation {
 pub struct Screenshot {
     pub bytes: Vec<u8>,
     pub media_type: String,
+    pub width: u32,
+    pub height: u32,
     pub frame: Rect,
 }
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

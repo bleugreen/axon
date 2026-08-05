@@ -262,8 +262,8 @@ impl<B: PointerTargetVerifier + TextRecognitionProvider + VisualObservationProvi
                             &base64::engine::general_purpose::STANDARD,
                             &screenshot.bytes
                         ),
-                        "width": screenshot.frame.width as u32,
-                        "height": screenshot.frame.height as u32
+                        "width": screenshot.width,
+                        "height": screenshot.height
                     }),
                 );
         }
@@ -552,6 +552,8 @@ mod tests {
                 screenshot: screenshot.then(|| Screenshot {
                     bytes: vec![1, 2, 3],
                     media_type: "image/png".into(),
+                    width: 640,
+                    height: 480,
                     frame: Rect {
                         x: 4.0,
                         y: 5.0,
