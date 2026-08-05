@@ -27,6 +27,21 @@ pub struct Router<B> {
     snapshot: Option<Snapshot>,
 }
 
+#[derive(Clone, Debug)]
+pub struct VisualObservation {
+    pub screenshot: Option<axon_core::Screenshot>,
+    pub recognized_text: Option<Vec<axon_core::RecognizedText>>,
+}
+
+pub trait VisualObservationProvider {
+    fn observe_visuals(
+        &mut self,
+        app: &AppQuery,
+        screenshot: bool,
+        screen_text: bool,
+    ) -> Result<VisualObservation, axon_core::BackendError>;
+}
+
 fn text_click_result(resolution: TextLocationResolution) -> Result<Value, JsonRpcError> {
     Ok(json!({
         "dispatch":{"success":true,"mechanism":"SendInput"},
@@ -53,7 +68,7 @@ pub trait PointerTargetVerifier: PlatformBackend {
     }
 }
 
-impl<B: PointerTargetVerifier + TextRecognitionProvider> Router<B> {
+impl<B: PointerTargetVerifier + TextRecognitionProvider + VisualObservationProvider> Router<B> {
     pub fn new(backend: B) -> Self {
         Self {
             backend,
@@ -226,22 +241,27 @@ impl<B: PointerTargetVerifier + TextRecognitionProvider> Router<B> {
             .capture(&app)
             .map_err(backend_error)?;
         let mut value = serde_json::to_value(&snapshot).map_err(internal_error)?;
-        if params.get("screenshot").and_then(Value::as_bool) == Some(true) {
-            let screenshot = self.backend.screenshot(&app).map_err(backend_error)?;
+        let wants_screenshot = params.get("screenshot").and_then(Value::as_bool) == Some(true);
+        let wants_screen_text = params.get("screenText").and_then(Value::as_bool) == Some(true);
+        let visuals = (wants_screenshot || wants_screen_text)
+            .then(|| self.backend.observe_visuals(&app, wants_screenshot, wants_screen_text))
+            .transpose()
+            .map_err(backend_error)?;
+        if let Some(screenshot) = visuals.as_ref().and_then(|result| result.screenshot.as_ref()) {
             value.as_object_mut().expect("snapshots serialize as objects").insert(
                 "screenshot".into(),
                 json!({
                     "mediaType": screenshot.media_type,
                     "base64Data": base64::Engine::encode(
                         &base64::engine::general_purpose::STANDARD,
-                        screenshot.bytes
+                        &screenshot.bytes
                     ),
-                    "frame": screenshot.frame
+                    "width": screenshot.frame.width as u32,
+                    "height": screenshot.frame.height as u32
                 }),
             );
         }
-        if params.get("screenText").and_then(Value::as_bool) == Some(true) {
-            let screen_text = self.backend.recognize_text(&app).map_err(backend_error)?;
+        if let Some(screen_text) = visuals.and_then(|result| result.recognized_text) {
             value.as_object_mut().expect("snapshots serialize as objects")
                 .insert("screenText".into(), json!(screen_text));
         }
@@ -361,7 +381,9 @@ impl<B: PointerTargetVerifier + TextRecognitionProvider> Router<B> {
     }
 }
 
-impl<B: PointerTargetVerifier + TextRecognitionProvider> ToolDispatcher for Router<B> {
+impl<B: PointerTargetVerifier + TextRecognitionProvider + VisualObservationProvider> ToolDispatcher
+    for Router<B>
+{
     fn dispatch(&mut self, tool: &str, params: &Map<String, Value>) -> DispatchOutcome {
         match self.dispatch_tool(tool, params) {
             Ok(result) => DispatchOutcome {
@@ -488,6 +510,7 @@ mod tests {
         clicks: Rc<RefCell<usize>>,
         recognized: Vec<axon_core::RecognizedText>,
         ocr_calls: Rc<RefCell<usize>>,
+        visual_captures: Rc<RefCell<usize>>,
         ocr_hit_target: Option<Node>,
     }
     impl PointerTargetVerifier for FakeBackend {
@@ -507,6 +530,24 @@ mod tests {
         ) -> Result<Vec<axon_core::RecognizedText>, BackendError> {
             *self.ocr_calls.borrow_mut() += 1;
             Ok(self.recognized.clone())
+        }
+    }
+    impl VisualObservationProvider for FakeBackend {
+        fn observe_visuals(
+            &mut self,
+            _: &AppQuery,
+            screenshot: bool,
+            screen_text: bool,
+        ) -> Result<VisualObservation, BackendError> {
+            *self.visual_captures.borrow_mut() += 1;
+            Ok(VisualObservation {
+                screenshot: screenshot.then(|| Screenshot {
+                    bytes: vec![1, 2, 3],
+                    media_type: "image/png".into(),
+                    frame: Rect { x: 4.0, y: 5.0, width: 640.0, height: 480.0 },
+                }),
+                recognized_text: screen_text.then(|| self.recognized.clone()),
+            })
         }
     }
     impl PlatformBackend for FakeBackend {
@@ -617,6 +658,7 @@ mod tests {
             clicks: Rc::new(RefCell::new(0)),
             recognized: vec![],
             ocr_calls: Rc::new(RefCell::new(0)),
+            visual_captures: Rc::new(RefCell::new(0)),
             ocr_hit_target: Some(node("hit")),
         }
     }
@@ -698,7 +740,31 @@ mod tests {
         assert_eq!(success.result["resolution"]["status"], "unique");
         assert_eq!(success.result["resolution"]["best"]["source"], "ax");
         assert_eq!(success.result["resolution"]["point"]["x"], 10.0);
+        let keys = success.result["resolution"].as_object().unwrap();
+        assert!(keys.contains_key("snapshotID"));
+        assert!(!keys.contains_key("snapshotId"));
         assert_eq!(*router.backend.clicks.borrow(), 1);
+    }
+    #[test]
+    fn look_screenshot_and_text_share_one_capture_and_use_canonical_keys() {
+        let mut backend = backend(vec![], None);
+        backend.recognized = vec![recognized("Save", 100.0)];
+        let captures = backend.visual_captures.clone();
+        let mut router = Router::new(backend);
+        let response = router.request(request(
+            "look",
+            json!({"app":"App","screenshot":true,"screenText":true}),
+        )).unwrap();
+        let JsonRpcResponse::Success(success) = response else { panic!() };
+        let screenshot = success.result["screenshot"].as_object().unwrap();
+        let keys = screenshot.keys().map(String::as_str).collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(keys, ["base64Data", "height", "mediaType", "width"].into_iter().collect());
+        assert_eq!(screenshot["mediaType"], "image/png");
+        assert_eq!(screenshot["base64Data"], "AQID");
+        assert_eq!(screenshot["width"], 640);
+        assert_eq!(screenshot["height"], 480);
+        assert_eq!(success.result["screenText"][0]["text"], "Save");
+        assert_eq!(*captures.borrow(), 1);
     }
     #[test]
     fn ambiguous_text_location_fails_closed() {

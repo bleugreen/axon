@@ -67,6 +67,7 @@ pub struct TextLocationCandidate {
 #[serde(rename_all = "camelCase")]
 pub struct TextLocationResolution {
     pub status: crate::ResolutionStatus,
+    #[serde(rename = "snapshotID")]
     pub snapshot_id: SnapshotId,
     pub best: Option<TextLocationCandidate>,
     pub point: Option<ActionPoint>,

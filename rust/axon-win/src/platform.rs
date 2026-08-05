@@ -1,4 +1,4 @@
-use crate::PointerTargetVerifier;
+use crate::{PointerTargetVerifier, VisualObservation, VisualObservationProvider};
 use axon_core::{
     AppQuery, Application, BackendError, Capability, CapabilityInfo, Node, Observation,
     PlatformBackend, RecognizedText, RecordedCall, Rect, Screenshot, Snapshot, SnapshotHandle,
@@ -73,6 +73,12 @@ enum Command {
         AppQuery,
         mpsc::Sender<Result<Vec<graphics_capture::OcrWord>, BackendError>>,
     ),
+    ObserveVisuals(
+        AppQuery,
+        bool,
+        bool,
+        mpsc::Sender<Result<VisualObservation, BackendError>>,
+    ),
     VerifyOcrTarget(
         AppQuery,
         (f64, f64),
@@ -97,6 +103,17 @@ enum Command {
         (f64, f64),
         mpsc::Sender<Result<bool, BackendError>>,
     ),
+}
+
+impl VisualObservationProvider for WindowsBackend {
+    fn observe_visuals(
+        &mut self,
+        q: &AppQuery,
+        screenshot: bool,
+        screen_text: bool,
+    ) -> Result<VisualObservation, BackendError> {
+        self.call(|tx| Command::ObserveVisuals(q.clone(), screenshot, screen_text, tx))
+    }
 }
 
 impl TextRecognitionProvider for WindowsBackend {
@@ -323,6 +340,25 @@ impl UiaState {
                 let _ = tx.send(self.capture_graphics(q).and_then(|captured| {
                     graphics_capture::ocr(&captured)
                 }));
+            }
+            Command::ObserveVisuals(q, wants_screenshot, wants_screen_text, tx) => {
+                let result = self.capture_graphics(q).and_then(|captured| {
+                    let screenshot = wants_screenshot
+                        .then(|| graphics_capture::screenshot(&captured))
+                        .transpose()?;
+                    let recognized_text = wants_screen_text
+                        .then(|| graphics_capture::ocr(&captured))
+                        .transpose()?
+                        .map(|words| {
+                            words.into_iter().map(|word| RecognizedText {
+                                text: word.text,
+                                frame: word.frame,
+                                confidence: None,
+                            }).collect()
+                        });
+                    Ok(VisualObservation { screenshot, recognized_text })
+                });
+                let _ = tx.send(result);
             }
             Command::Invoke(h, tx) => {
                 let _ = tx.send(self.element(&h).and_then(|e| {
