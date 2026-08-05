@@ -250,7 +250,7 @@ impl WindowsBackend {
             .map_err(|e| op("start UIA thread", e.to_string()))?;
         log("UIA thread readiness: waiting");
         ready_rx
-            .recv()
+            .recv_timeout(Duration::from_secs(30))
             .map_err(|e| op("start UIA thread", e.to_string()))?
             .map_err(BackendError::from)?;
         log("UIA thread readiness: complete");

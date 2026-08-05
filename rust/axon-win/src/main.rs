@@ -490,6 +490,9 @@ mod pipe {
                 let shutdown =
                     matches!(&parsed, Ok(req) if req.method == "shutdown" && req.id.is_some());
                 let response = match parsed {
+                    Ok(req) if req.method == "health" => req.id.map(|id| {
+                        axon_core::JsonRpcResponse::success(id, json!({"ready": true}))
+                    }),
                     Ok(req) if shutdown => req.id.map(|id| {
                         axon_core::JsonRpcResponse::success(
                             id,
@@ -537,7 +540,34 @@ mod pipe {
     }
 
     pub fn wait_until_ready(timeout: Duration) -> io::Result<()> {
-        wait_for_pipe(timeout, true)
+        let start = Instant::now();
+        loop {
+            if health().is_ok() {
+                return Ok(());
+            }
+            if start.elapsed() >= timeout {
+                return Err(io::Error::new(
+                    io::ErrorKind::TimedOut,
+                    "daemon did not become ready to serve requests",
+                ));
+            }
+            thread::sleep(Duration::from_millis(50));
+        }
+    }
+
+    fn health() -> io::Result<()> {
+        let response = send_rpc(&JsonRpcRequest::new(
+            Some(JsonRpcId::Integer(1)),
+            "health",
+            Some(json!({})),
+        ))?;
+        if response.pointer("/result/ready").and_then(Value::as_bool) == Some(true) {
+            Ok(())
+        } else {
+            Err(io::Error::other(format!(
+                "daemon rejected health check: {response}"
+            )))
+        }
     }
 
     fn wait_for_pipe(timeout: Duration, ready: bool) -> io::Result<()> {

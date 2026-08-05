@@ -111,8 +111,10 @@ events with a close conceptual fit to AX.
   scriptable and `install`/`restart` wait until the pipe is ready before returning.
   Short-lived `axon-win mcp` processes connect to that pipe.
 - `serve` creates the user-restricted pipe before initializing COM and UI
-  Automation, so lifecycle readiness is not held hostage by a slow native
-  accessibility startup. It records timestamped startup stages in
+  Automation, making the stalled stage observable, but lifecycle readiness still
+  requires a successful health RPC after initialization. Backend startup is
+  bounded to 30 seconds so a hung native initialization fails loudly instead of
+  leaving an indefinitely half-started daemon. It records timestamped stages in
   `%ProgramData%\Axon\axon-win-startup.log`, including DPI setup, COM apartment
   creation, UI Automation client creation, provider-timeout setup, and pipe bind.
   Per-monitor DPI awareness improves coordinate accuracy but is not required to
