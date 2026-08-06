@@ -142,6 +142,17 @@ public enum JSONValue: Codable, Equatable, Sendable {
 }
 
 public extension JSONValue {
+    /// The string this value holds, or nil for every other JSON type.
+    ///
+    /// Deliberately strict: a caller reading a string field wants to know when the field was a
+    /// number or an object, not to receive a stringified version of it.
+    var stringValue: String? {
+        guard case let .string(value) = self else {
+            return nil
+        }
+        return value
+    }
+
     subscript(key: String) -> JSONValue? {
         guard case let .object(values) = self else {
             return nil

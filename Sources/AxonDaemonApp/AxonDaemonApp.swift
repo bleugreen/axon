@@ -615,15 +615,6 @@ private final class RecordingAppRecencyStore {
     }
 }
 
-private extension JSONValue {
-    var stringValue: String? {
-        guard case let .string(value) = self else {
-            return nil
-        }
-        return value
-    }
-}
-
 @main
 final class AxonDaemonAppMain: NSObject {
     @MainActor
