@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::time::Duration;
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Capability {
     Enumerate,
     Capture,
@@ -20,6 +20,50 @@ pub enum Capability {
     HitTest,
     SerializeHistory,
     ObserveGlobalInput,
+}
+
+impl Capability {
+    /// The complete vocabulary in canonical order, mirrored by `knownCapabilities` in
+    /// `schema/health-v1.schema.json`. Health documents report one entry per capability, so this
+    /// list is what makes "unusable here" distinguishable from "older than your vocabulary".
+    pub const ALL: [Capability; 15] = [
+        Capability::Enumerate,
+        Capability::Capture,
+        Capability::RetainedHandles,
+        Capability::ObserveChanges,
+        Capability::Invoke,
+        Capability::ReadValue,
+        Capability::SetValue,
+        Capability::Focus,
+        Capability::Scroll,
+        Capability::PointerInput,
+        Capability::KeyboardInput,
+        Capability::Screenshot,
+        Capability::HitTest,
+        Capability::SerializeHistory,
+        Capability::ObserveGlobalInput,
+    ];
+
+    /// The wire name used in health documents.
+    pub fn key(&self) -> &'static str {
+        match self {
+            Capability::Enumerate => "enumerate",
+            Capability::Capture => "capture",
+            Capability::RetainedHandles => "retainedHandles",
+            Capability::ObserveChanges => "observeChanges",
+            Capability::Invoke => "invoke",
+            Capability::ReadValue => "readValue",
+            Capability::SetValue => "setValue",
+            Capability::Focus => "focus",
+            Capability::Scroll => "scroll",
+            Capability::PointerInput => "pointerInput",
+            Capability::KeyboardInput => "keyboardInput",
+            Capability::Screenshot => "screenshot",
+            Capability::HitTest => "hitTest",
+            Capability::SerializeHistory => "serializeHistory",
+            Capability::ObserveGlobalInput => "observeGlobalInput",
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

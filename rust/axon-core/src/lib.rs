@@ -2,6 +2,7 @@
 
 pub mod axn;
 pub mod backend;
+pub mod health;
 pub mod locator;
 pub mod rpc;
 pub mod snapshot;
@@ -9,6 +10,7 @@ pub mod text;
 
 pub use axn::*;
 pub use backend::*;
+pub use health::*;
 pub use locator::*;
 pub use rpc::*;
 pub use snapshot::*;
