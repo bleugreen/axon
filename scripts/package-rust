@@ -19,16 +19,32 @@ case "$CRATE" in
   axon-win)
     TARGET="windows-x86_64"
     BINARY="axon-win.exe"
+    EXPECTED_HOST="windows"
     ;;
   axon-linux)
     TARGET="linux-x86_64"
     BINARY="axon-linux"
+    EXPECTED_HOST="linux"
     ;;
   *)
     printf 'usage: scripts/package-rust <axon-win|axon-linux>\n' >&2
     exit 2
     ;;
 esac
+
+# Each daemon builds natively, so the host decides what is actually inside the archive. Without
+# this check a macOS build would happily produce a file named linux-x86_64 containing a Mach-O
+# binary, and the name a consumer pins would be a lie.
+case "$(uname -s)" in
+  Linux) HOST="linux" ;;
+  Darwin) HOST="macos" ;;
+  MINGW* | MSYS* | CYGWIN* | Windows_NT) HOST="windows" ;;
+  *) HOST="unknown" ;;
+esac
+if [[ "$HOST" != "$EXPECTED_HOST" ]]; then
+  printf '%s must be packaged on %s; this host is %s\n' "$CRATE" "$EXPECTED_HOST" "$HOST" >&2
+  exit 1
+fi
 
 STAGING="$DIST_DIR/$CRATE-$VERSION-$TARGET"
 rm -rf "$STAGING"
