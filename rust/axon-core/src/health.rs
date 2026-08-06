@@ -330,9 +330,10 @@ impl HealthReport {
 
     /// Describes a machine whose daemon did not answer.
     ///
-    /// Permissions cannot be confirmed without the daemon — the CLI's own process identity is not
-    /// the daemon's, so asking the operating system here would answer a different question — so
-    /// each gate is reported ungranted with the reason that it could not be determined.
+    /// The caller supplies the permissions because what the CLI can honestly say about them varies:
+    /// a gate the CLI can rule out from the session alone is worth reporting as such, while one
+    /// only the daemon could have answered is reported ungranted with the reason it could not be
+    /// determined.
     pub fn not_running(
         version: impl Into<String>,
         platform: HealthPlatform,
@@ -341,7 +342,7 @@ impl HealthReport {
         session: SessionHealth,
         code: &str,
         detail: Option<String>,
-        permission_names: &[&str],
+        permissions: Vec<PermissionState>,
     ) -> Self {
         Self {
             schema_version: HealthSchemaVersion,
@@ -357,15 +358,7 @@ impl HealthReport {
             },
             registration,
             session,
-            permissions: permission_names
-                .iter()
-                .map(|name| PermissionState {
-                    name: (*name).into(),
-                    granted: false,
-                    reason: Some(code.into()),
-                    detail: None,
-                })
-                .collect(),
+            permissions,
             capabilities: CapabilityState::all_unusable(code),
         }
     }
