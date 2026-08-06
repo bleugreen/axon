@@ -1,0 +1,142 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/bleugreen/axon/schema/health-v1.schema.json",
+  "title": "Axon health-v1",
+  "description": "The machine-readable status document Axon emits from `status --json` on every platform. Degradation is modelled as data: a daemon that is not running, a session with no graphical desktop, and a denied permission are all schema-valid documents, not transport errors. Product releases are versioned independently of this schema; `version` is the product SemVer and `schemaVersion` is this contract.",
+  "type": "object",
+  "required": [
+    "schemaVersion",
+    "version",
+    "platform",
+    "daemon",
+    "registration",
+    "session",
+    "permissions",
+    "capabilities"
+  ],
+  "properties": {
+    "schemaVersion": {
+      "description": "This contract's identity. Within health-v1 producers may add fields and capability keys, and consumers must ignore what they do not recognize. Removing or changing the meaning of a required field requires a new schema major.",
+      "const": "health-v1"
+    },
+    "version": {
+      "description": "The product SemVer, identical to the version reported by `version` and by the MCP `serverInfo`.",
+      "$ref": "#/$defs/semver"
+    },
+    "platform": {
+      "description": "The operating system family this document describes.",
+      "enum": ["macos", "windows", "linux"]
+    },
+    "daemon": { "$ref": "#/$defs/daemon" },
+    "registration": { "$ref": "#/$defs/registration" },
+    "session": { "$ref": "#/$defs/session" },
+    "permissions": {
+      "description": "Operating-system permission grants that gate automation. Absent entries mean the platform has no such gate, not that it is granted.",
+      "type": "array",
+      "items": { "$ref": "#/$defs/permission" }
+    },
+    "capabilities": {
+      "description": "The complete capability vocabulary, one entry per known capability. A capability the running build cannot serve is reported present and unusable rather than omitted, so a consumer can tell 'not supported here' from 'this build is older than my vocabulary'.",
+      "type": "array",
+      "items": { "$ref": "#/$defs/capability" }
+    }
+  },
+  "$defs": {
+    "semver": {
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+(-[0-9A-Za-z.-]+)?$"
+    },
+    "reason": {
+      "description": "A stable machine-readable reason code in kebab-case. The registry is documented in docs/embedding.md; new codes may be added within health-v1, so treat an unrecognized code as an unspecified degradation rather than a parse failure.",
+      "type": "string",
+      "pattern": "^[a-z0-9]+(-[a-z0-9]+)*$"
+    },
+    "name": {
+      "type": "string",
+      "pattern": "^[a-z][A-Za-z0-9]*$"
+    },
+    "detail": {
+      "description": "Free-form human-readable elaboration. Never parse this; parse `reason`.",
+      "type": ["string", "null"]
+    },
+    "daemon": {
+      "description": "The long-lived local daemon process. `running` means a daemon answered on the local transport; `ready` means it answered after its accessibility backend finished initializing. Socket or pipe existence is never evidence of either.",
+      "type": "object",
+      "required": ["running", "ready", "endpoint"],
+      "properties": {
+        "running": { "type": "boolean" },
+        "ready": { "type": "boolean" },
+        "endpoint": {
+          "description": "The local IPC endpoint: a Unix socket path on macOS and Linux, a named pipe on Windows. Always local; Axon has no remote transport.",
+          "type": "string"
+        },
+        "processId": { "type": ["integer", "null"], "minimum": 1 },
+        "reason": { "oneOf": [{ "$ref": "#/$defs/reason" }, { "type": "null" }] },
+        "detail": { "$ref": "#/$defs/detail" }
+      }
+    },
+    "registration": {
+      "description": "The platform-native start-at-login registration, which is owned by the CLI rather than the daemon. `path` is the executable the registration points at; a consumer that pinned a version can compare it against the permanent install path it expects.",
+      "type": "object",
+      "required": ["registered", "mechanism"],
+      "properties": {
+        "registered": { "type": "boolean" },
+        "mechanism": { "enum": ["launchd", "scheduledTask", "systemdUser"] },
+        "path": { "type": ["string", "null"] },
+        "reason": { "oneOf": [{ "$ref": "#/$defs/reason" }, { "type": "null" }] },
+        "detail": { "$ref": "#/$defs/detail" }
+      }
+    },
+    "session": {
+      "description": "The desktop session the reported daemon occupies, or the session the reporting CLI occupies when no daemon is running. `interactive` is a logged-in user session rather than a service session; `graphical` is a usable desktop rather than a greeter or headless login.",
+      "type": "object",
+      "required": ["interactive", "graphical"],
+      "properties": {
+        "interactive": { "type": "boolean" },
+        "graphical": { "type": "boolean" },
+        "reason": { "oneOf": [{ "$ref": "#/$defs/reason" }, { "type": "null" }] },
+        "detail": { "$ref": "#/$defs/detail" }
+      }
+    },
+    "permission": {
+      "type": "object",
+      "required": ["name", "granted"],
+      "properties": {
+        "name": { "$ref": "#/$defs/name" },
+        "granted": { "type": "boolean" },
+        "reason": { "oneOf": [{ "$ref": "#/$defs/reason" }, { "type": "null" }] },
+        "detail": { "$ref": "#/$defs/detail" }
+      }
+    },
+    "capability": {
+      "type": "object",
+      "required": ["capability", "usable"],
+      "properties": {
+        "capability": { "$ref": "#/$defs/name" },
+        "usable": { "type": "boolean" },
+        "reason": { "oneOf": [{ "$ref": "#/$defs/reason" }, { "type": "null" }] },
+        "restriction": { "$ref": "#/$defs/detail" }
+      }
+    },
+    "knownCapabilities": {
+      "description": "The capability vocabulary as of this schema revision, in canonical order. This list is the shared source both the Swift and Rust implementations are tested against. It grows additively within health-v1, so consumers must not treat it as closed.",
+      "enum": [
+        "enumerate",
+        "capture",
+        "retainedHandles",
+        "observeChanges",
+        "invoke",
+        "readValue",
+        "setValue",
+        "focus",
+        "scroll",
+        "pointerInput",
+        "keyboardInput",
+        "screenshot",
+        "hitTest",
+        "serializeHistory",
+        "observeGlobalInput"
+      ]
+    }
+  }
+}
