@@ -269,6 +269,23 @@ public struct DaemonReport: Codable, Equatable, Sendable {
     }
 }
 
+public extension DaemonReport {
+    /// The report as a JSON-RPC result object, which is how the daemon answers a `health` request.
+    func jsonObject() throws -> [String: JSONValue] {
+        let encoded = try JSONEncoder().encode(self)
+        guard case let .object(object) = try JSONDecoder().decode(JSONValue.self, from: encoded) else {
+            throw HealthSchemaError.unsupportedSchemaVersion("non-object daemon report")
+        }
+        return object
+    }
+
+    /// Reads a report back out of a JSON-RPC result object.
+    init(jsonObject: [String: JSONValue]) throws {
+        let encoded = try JSONEncoder().encode(JSONValue.object(jsonObject))
+        self = try JSONDecoder().decode(DaemonReport.self, from: encoded)
+    }
+}
+
 /// The published `health-v1` document.
 public struct HealthStatus: Codable, Equatable, Sendable {
     public var schemaVersion: HealthSchemaVersion
