@@ -187,6 +187,26 @@ pub struct PermissionState {
     pub detail: Option<String>,
 }
 
+impl PermissionState {
+    pub fn granted(name: &str) -> Self {
+        Self {
+            name: name.into(),
+            granted: true,
+            reason: None,
+            detail: None,
+        }
+    }
+
+    pub fn ungranted(name: &str, code: &str, detail: Option<String>) -> Self {
+        Self {
+            name: name.into(),
+            granted: false,
+            reason: Some(code.into()),
+            detail,
+        }
+    }
+}
+
 /// One capability's usability.
 ///
 /// `capability` stays a `String` rather than an enum on purpose: a consumer built against an older
