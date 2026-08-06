@@ -135,6 +135,51 @@ public struct LaunchAgentManager {
         }
     }
 
+    /// The registration as it exists on disk, for health documents.
+    ///
+    /// Reports the executable the installed agent actually points at rather than the one this
+    /// process would register, so a consumer can see when a registration still points at a build
+    /// directory that has since been deleted.
+    public func registration() -> RegistrationHealth {
+        guard
+            let data = try? Data(contentsOf: plistPath),
+            let plist = try? PropertyListSerialization.propertyList(from: data, options: [], format: nil),
+            let arguments = (plist as? [String: Any])?["ProgramArguments"] as? [String],
+            let executable = arguments.first
+        else {
+            return .absent(mechanism: .launchd)
+        }
+        return .present(mechanism: .launchd, path: executable)
+    }
+}
+
+/// Whether a path is somewhere a daemon registration should never point.
+///
+/// `daemon install` registers the invoking executable, so invoking it from a build directory
+/// registers a path that disappears on the next clean. Mirrored by `ephemeral_path_warning` in
+/// `rust/axon-core/src/lifecycle.rs`.
+public enum DaemonRegistrationPath {
+    /// Path fragments that mark a location as temporary or build-scoped.
+    static let ephemeralMarkers = [
+        "/.build/",
+        "/target/debug/",
+        "/target/release/",
+        "/DerivedData/",
+        "/.cairn/build-slots/",
+        "/var/folders/",
+        "/tmp/"
+    ]
+
+    public static func ephemeralWarning(for path: String) -> String? {
+        guard let marker = ephemeralMarkers.first(where: { path.contains($0) }) else {
+            return nil
+        }
+        return """
+        \(path) looks like a build or temporary location (matched "\(marker)").
+        Start-at-login will fail once it is cleaned up. Install from a permanent path instead.
+        """
+    }
+
     private func launchctlDomain() -> String {
         "gui/\(getuid())"
     }

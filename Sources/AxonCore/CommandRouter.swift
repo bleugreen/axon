@@ -54,7 +54,7 @@ public struct CommandRouterServices {
         sleepMilliseconds: @escaping (Int) -> Void = { Thread.sleep(forTimeInterval: Double($0) / 1_000) },
         endpoint: String = AxonEnvironment.socketPath(),
         daemonReport: ((String) -> DaemonReport)? = nil,
-        requestShutdown: @escaping () -> Void = CommandRouterServices.exitAfterRespondng
+        requestShutdown: @escaping () -> Void = CommandRouterServices.exitAfterResponding
     ) {
         let defaultCaptureSnapshot: (String, Bool) throws -> AppSnapshot = captureSnapshot ?? { app, screenshot in
             try AXFullTreeCapturer(elementStore: elementStore).capture(app: app, screenshot: screenshot)
@@ -115,7 +115,7 @@ public struct CommandRouterServices {
     /// A `shutdown` request is answered before the process ends so the caller learns which process
     /// it stopped; exiting inside the handler would close the connection first and leave every
     /// lifecycle command unable to tell a clean stop from a crash.
-    public static let exitAfterRespondng: () -> Void = {
+    public static let exitAfterResponding: () -> Void = {
         DispatchQueue.global().asyncAfter(deadline: .now() + 0.15) {
             exit(0)
         }
