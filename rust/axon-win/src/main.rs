@@ -51,9 +51,10 @@ impl StartupLog {
 #[cfg(windows)]
 mod lifecycle {
     use super::pipe;
-    use std::{env, io, path::Path, process::Command, time::Duration};
+    use axon_core::{RegistrationHealth, ephemeral_path_warning, exit_code};
+    use axon_win::lifecycle::{TASK_NAME, registration_from_task_xml, task_action};
+    use std::{env, io, process::Command, time::Duration};
 
-    const TASK_NAME: &str = "Axon Windows Daemon";
     const SYNCHRONIZE: u32 = 0x0010_0000;
     const WAIT_OBJECT_0: u32 = 0;
     const WAIT_TIMEOUT: u32 = 258;
@@ -65,30 +66,63 @@ mod lifecycle {
         fn CloseHandle(handle: isize) -> i32;
     }
 
-    pub fn run(mut args: impl Iterator<Item = String>) -> Result<(), Box<dyn std::error::Error>> {
+    pub fn run(
+        mut args: impl Iterator<Item = String>,
+    ) -> Result<i32, Box<dyn std::error::Error>> {
         match args.next().as_deref() {
-            Some("install" | "restart") => {
+            Some("install") => {
+                stop_if_running()?;
+                let executable = register()?;
+                let report = start()?;
+                println!("registered {TASK_NAME:?} -> {executable}");
+                println!(
+                    "daemon ready (pid {}, version {})",
+                    report.process_id, report.version
+                );
+            }
+            Some("restart") => {
                 stop_if_running()?;
                 register()?;
-                start()?;
+                let report = start()?;
+                println!(
+                    "restarted {TASK_NAME:?} (pid {}, version {})",
+                    report.process_id, report.version
+                );
             }
             Some("uninstall") => {
                 stop_if_running()?;
                 delete()?;
+                println!("unregistered {TASK_NAME:?}");
             }
             other => {
-                return Err(format!(
-                    "unknown daemon command {other:?}; expected install, restart, or uninstall"
-                )
-                .into());
+                eprintln!(
+                    "axon-win: daemon requires install, uninstall, or restart (got {other:?})"
+                );
+                return Ok(exit_code::USAGE);
             }
         }
 
-        Ok(())
+        Ok(exit_code::SUCCESS)
     }
 
-    fn register() -> io::Result<()> {
-        let executable = env::current_exe()?;
+    /// Registers the invoking executable and returns the path that was registered.
+    ///
+    /// Idempotent through `/f`, which replaces an existing task rather than failing, so a consumer
+    /// can run install on every deploy without checking first.
+    fn register() -> io::Result<String> {
+        let executable = env::current_exe()?
+            .canonicalize()
+            .unwrap_or(env::current_exe()?)
+            .display()
+            .to_string();
+        // `\\?\` is what canonicalize returns on Windows and Task Scheduler will not run it.
+        let executable = executable
+            .strip_prefix(r"\\?\")
+            .unwrap_or(&executable)
+            .to_owned();
+        if let Some(warning) = ephemeral_path_warning(&executable) {
+            eprintln!("axon-win: warning: {warning}");
+        }
         let user = command_output("whoami", &[])?;
         let action = task_action(&executable);
         command(
@@ -97,10 +131,17 @@ mod lifecycle {
                 "/create", "/tn", TASK_NAME, "/tr", &action, "/sc", "ONLOGON", "/ru", &user, "/it",
                 "/f",
             ],
-        )
+        )?;
+        Ok(executable)
     }
 
-    fn start() -> io::Result<()> {
+    /// The registration as Task Scheduler holds it, for health documents.
+    pub fn registration() -> RegistrationHealth {
+        let xml = command_output("schtasks", &["/query", "/tn", TASK_NAME, "/xml"]).unwrap_or_default();
+        registration_from_task_xml(&xml)
+    }
+
+    fn start() -> io::Result<axon_core::DaemonReport> {
         command("schtasks", &["/run", "/tn", TASK_NAME])?;
         pipe::wait_until_ready(Duration::from_secs(60))
     }
@@ -163,10 +204,6 @@ mod lifecycle {
         }
     }
 
-    fn task_action(executable: &Path) -> String {
-        format!("\"{}\" serve", executable.display())
-    }
-
     fn command(program: &str, args: &[&str]) -> io::Result<()> {
         let output = Command::new(program).args(args).output()?;
         if output.status.success() {
@@ -197,14 +234,6 @@ mod lifecycle {
     #[cfg(test)]
     mod tests {
         use super::*;
-
-        #[test]
-        fn scheduled_task_action_quotes_executable_paths() {
-            assert_eq!(
-                task_action(Path::new(r"C:\Program Files\Axon\axon-win.exe")),
-                r#""C:\Program Files\Axon\axon-win.exe" serve"#
-            );
-        }
 
         #[test]
         fn busy_pipe_is_not_absent() {

@@ -9,6 +9,8 @@ use axon_core::{
 };
 use serde_json::{Map, Value, json};
 
+pub mod lifecycle;
+
 #[cfg(windows)]
 mod platform;
 #[cfg(windows)]
