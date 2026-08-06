@@ -32,9 +32,7 @@
   "capabilities": [
     {
       "capability": "enumerate",
-      "usable": false,
-      "reason": "accessibility-not-granted",
-      "restriction": "macOS has not granted Accessibility trust to the daemon identity"
+      "usable": true
     },
     {
       "capability": "capture",
