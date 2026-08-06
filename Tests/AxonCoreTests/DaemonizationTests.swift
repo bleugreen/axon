@@ -165,144 +165,91 @@ import Testing
     #expect(environment?["UNRELATED"] == nil)
 }
 
-@Test func daemonBinaryInstallerCopiesAndSignsInstalledExecutable() throws {
+@Test func launchAgentRegistrationReportsTheInstalledExecutable() throws {
     let root = FileManager.default.temporaryDirectory
-        .appendingPathComponent("axon-daemon-installer-\(UUID().uuidString)")
-    let source = root.appendingPathComponent("source/axon")
-    let bundleURL = root.appendingPathComponent("install/Axon Daemon.app")
-    let installURL = bundleURL.appendingPathComponent("Contents/MacOS/axon")
-    defer {
-        try? FileManager.default.removeItem(at: root)
-    }
-
-    try FileManager.default.createDirectory(
-        at: source.deletingLastPathComponent(),
-        withIntermediateDirectories: true
-    )
-    try Data("binary".utf8).write(to: source)
-    try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: source.path)
-
-    var codesignArguments: [[String]] = []
-    let installer = DaemonBinaryInstaller(
-        sourcePath: source.path,
-        installURL: installURL,
-        signingIdentifier: "dev.axon.test",
-        runCodesign: { arguments in
-            codesignArguments.append(arguments)
-            return ProcessResult(exitCode: 0)
-        },
-        resolveSigningIdentity: { "ABCDEF123456" }
+        .appendingPathComponent("axon-registration-\(UUID().uuidString)")
+    defer { try? FileManager.default.removeItem(at: root) }
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    let plistPath = root.appendingPathComponent("dev.axon.test.plist")
+    let manager = LaunchAgentManager(
+        configuration: LaunchAgentConfiguration(
+            label: "dev.axon.test",
+            executablePath: "/Applications/Axon.app/Contents/Resources/bin/axon",
+            socketPath: "/tmp/axon-test.sock",
+            environment: [:]
+        ),
+        plistPath: plistPath
     )
 
-    let installedURL = try installer.install()
+    #expect(manager.registration() == .absent(mechanism: .launchd))
 
-    #expect(installedURL == installURL)
-    #expect(try String(contentsOf: installURL, encoding: .utf8) == "binary")
-    #expect(FileManager.default.isExecutableFile(atPath: installURL.path))
-    let plist = try PropertyListSerialization.propertyList(
-        from: Data(contentsOf: bundleURL.appendingPathComponent("Contents/Info.plist")),
-        options: [],
-        format: nil
-    ) as? [String: Any]
-    #expect(plist?["CFBundleIdentifier"] as? String == "dev.axon.test")
-    #expect(plist?["CFBundleExecutable"] as? String == "axon")
-    #expect(plist?["LSBackgroundOnly"] as? Bool == true)
-    #expect(plist?["NSAppleEventsUsageDescription"] as? String == "Axon uses browser automation to navigate and enumerate browser windows and tabs.")
-    #expect(codesignArguments == [[
-        "--force",
-        "--sign",
-        "ABCDEF123456",
-        bundleURL.path
-    ]])
+    try manager.install()
+
+    // The health document reports the path launchd will actually run, not the one this process
+    // would have registered, so a stale registration is visible instead of assumed correct.
+    #expect(manager.registration() == .present(
+        mechanism: .launchd,
+        path: "/Applications/Axon.app/Contents/Resources/bin/axon"
+    ))
 }
 
-@Test func daemonBinaryInstallerInstallsRegularFileWhenSourceIsSymlink() throws {
-    let root = FileManager.default.temporaryDirectory
-        .appendingPathComponent("axon-daemon-installer-symlink-\(UUID().uuidString)")
-    let source = root.appendingPathComponent("source/axon")
-    let link = root.appendingPathComponent("bin/axon")
-    let bundleURL = root.appendingPathComponent("install/Axon Daemon.app")
-    let installURL = bundleURL.appendingPathComponent("Contents/MacOS/axon")
-    defer {
-        try? FileManager.default.removeItem(at: root)
-    }
-
-    try FileManager.default.createDirectory(
-        at: source.deletingLastPathComponent(),
-        withIntermediateDirectories: true
-    )
-    try FileManager.default.createDirectory(
-        at: link.deletingLastPathComponent(),
-        withIntermediateDirectories: true
-    )
-    try Data("binary".utf8).write(to: source)
-    try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: source.path)
-    // Mirrors the Homebrew cask, which links `axon` into the app bundle.
-    try FileManager.default.createSymbolicLink(at: link, withDestinationURL: source)
-
-    let installer = DaemonBinaryInstaller(
-        sourcePath: link.path,
-        installURL: installURL,
-        signingIdentifier: "dev.axon.test",
-        runCodesign: { _ in ProcessResult(exitCode: 0) },
-        resolveSigningIdentity: { "ABCDEF123456" }
+@Test func buildDirectoryInstallPathsAreFlagged() {
+    // The failure this guards against: installing from a build slot registers a path that
+    // disappears, leaving a registration that can never start again.
+    let warning = DaemonRegistrationPath.ephemeralWarning(
+        for: "/Users/agent/.cairn/build-slots/AXN/slot-51/.build/debug/axon"
     )
 
-    try installer.install()
-
-    // codesign refuses a bundle whose main executable is a symlink.
-    let attributes = try FileManager.default.attributesOfItem(atPath: installURL.path)
-    #expect(attributes[.type] as? FileAttributeType == .typeRegular)
-    #expect(try String(contentsOf: installURL, encoding: .utf8) == "binary")
-    #expect(FileManager.default.isExecutableFile(atPath: installURL.path))
+    #expect(warning?.contains("permanent path") == true)
+    #expect(DaemonRegistrationPath.ephemeralWarning(for: "/tmp/axon") != nil)
+    #expect(DaemonRegistrationPath.ephemeralWarning(
+        for: "/Applications/Axon.app/Contents/Resources/bin/axon"
+    ) == nil)
 }
 
-@Test func daemonBinaryInstallerFallsBackToAdHocSigningWhenNoIdentityExists() throws {
-    let root = FileManager.default.temporaryDirectory
-        .appendingPathComponent("axon-daemon-installer-adhoc-\(UUID().uuidString)")
-    let source = root.appendingPathComponent("source/axon")
-    let bundleURL = root.appendingPathComponent("install/Axon Daemon.app")
-    let installURL = bundleURL.appendingPathComponent("Contents/MacOS/axon")
-    defer {
-        try? FileManager.default.removeItem(at: root)
-    }
+@Test func healthRequestAnswersWithTheDaemonReport() throws {
+    let router = CommandRouter(services: CommandRouterServices(
+        endpoint: "/tmp/axon-test.sock",
+        daemonReport: { endpoint in
+            Doctor.daemonReport(
+                endpoint: endpoint,
+                ready: true,
+                processId: 4210,
+                report: DoctorReport(
+                    accessibility: PermissionReport(name: "Accessibility", status: .trusted),
+                    screenRecording: PermissionReport(name: "Screen Recording", status: .denied)
+                ),
+                session: SessionHealth(interactive: true, graphical: true)
+            )
+        }
+    ))
 
-    try FileManager.default.createDirectory(
-        at: source.deletingLastPathComponent(),
-        withIntermediateDirectories: true
-    )
-    try Data("binary".utf8).write(to: source)
-    try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: source.path)
+    let response = router.handle(JSONRPCRequest(id: .string("health"), method: "health"))
+    let report = try DaemonReport(jsonObject: try #require(response.result))
 
-    var codesignArguments: [[String]] = []
-    let installer = DaemonBinaryInstaller(
-        sourcePath: source.path,
-        installURL: installURL,
-        runCodesign: { arguments in
-            codesignArguments.append(arguments)
-            return ProcessResult(exitCode: 0)
-        },
-        resolveSigningIdentity: { nil }
-    )
-
-    try installer.install()
-
-    #expect(codesignArguments == [[
-        "--force",
-        "--sign",
-        DaemonBinaryInstaller.adHocSigningIdentity,
-        bundleURL.path
-    ]])
+    #expect(report.ready)
+    #expect(report.processId == 4210)
+    #expect(report.endpoint == "/tmp/axon-test.sock")
+    #expect(report.version == AxonVersion.current)
+    #expect(report.capabilities.count == AxonCapability.allCases.count)
+    #expect(report.permissions.first { $0.name == HealthPermission.screenRecording }?.granted == false)
 }
 
-@Test func preferredSigningIdentityChoosesStableDeveloperCertificate() {
-    let output = """
-      1) AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA "Ad Hoc Something"
-      2) BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB "Developer ID Application: Example (TEAMID)"
-         2 valid identities found
-    """
+@Test func shutdownRequestIsAnsweredBeforeTheDaemonStops() {
+    // The response has to reach the caller: a lifecycle command learns which process it stopped
+    // from this reply, and cannot otherwise tell a clean stop from a crashed daemon.
+    final class ShutdownSpy: @unchecked Sendable {
+        var requested = false
+    }
+    let spy = ShutdownSpy()
+    let router = CommandRouter(services: CommandRouterServices(requestShutdown: { spy.requested = true }))
 
-    #expect(DaemonBinaryInstaller.preferredSigningIdentity(fromSecurityFindIdentityOutput: output) == "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB")
+    let response = router.handle(JSONRPCRequest(id: .string("shutdown"), method: "shutdown"))
+
+    #expect(spy.requested)
+    #expect(response.error == nil)
+    #expect(response.result?["shutdown"] == .bool(true))
+    #expect(response.result?["processId"] == .int(Int(ProcessInfo.processInfo.processIdentifier)))
 }
 
 @Test func launchAgentStartReloadsExistingServiceWhenBootstrapFails() throws {
