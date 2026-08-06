@@ -165,7 +165,7 @@ mod socket {
                 Err(_) => fs::remove_file(&path)?,
             }
         }
-        let mut backend = LinuxBackend::start().map_err(|error| io::Error::other(error.to_string()))?;
+        let backend = LinuxBackend::start().map_err(|error| io::Error::other(error.to_string()))?;
         // Captured once: the backend's capability list describes the build, not the moment, and
         // rebuilding it per request would add an AT-SPI round trip to every health check.
         let reported: Vec<CapabilityInfo> = backend.capabilities().unwrap_or_default();
