@@ -194,7 +194,10 @@ mod tests {
 
         assert!(session.interactive);
         assert!(!session.graphical);
-        assert_eq!(session.reason.as_deref(), Some(reason::NO_GRAPHICAL_SESSION));
+        assert_eq!(
+            session.reason.as_deref(),
+            Some(reason::NO_GRAPHICAL_SESSION)
+        );
     }
 
     #[test]

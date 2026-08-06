@@ -117,7 +117,10 @@ fn every_fixture_reason_code_is_a_stable_kebab_case_token() {
         codes.extend(report.capabilities.iter().map(|state| state.reason.clone()));
 
         for code in codes.into_iter().flatten() {
-            assert!(is_kebab_case(&code), "{name}: reason {code:?} is not kebab-case");
+            assert!(
+                is_kebab_case(&code),
+                "{name}: reason {code:?} is not kebab-case"
+            );
         }
     }
 }

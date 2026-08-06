@@ -97,7 +97,10 @@ pub fn session_health(env: &SessionEnvironment) -> SessionHealth {
             true,
             false,
             reason::NO_GRAPHICAL_SESSION,
-            Some("No WAYLAND_DISPLAY or DISPLAY is present; the host may be at the login greeter".into()),
+            Some(
+                "No WAYLAND_DISPLAY or DISPLAY is present; the host may be at the login greeter"
+                    .into(),
+            ),
         );
     }
     if env.session_bus.is_none() {
@@ -108,11 +111,13 @@ pub fn session_health(env: &SessionEnvironment) -> SessionHealth {
             Some("DBUS_SESSION_BUS_ADDRESS is unset, so AT-SPI cannot be reached".into()),
         );
     }
-    SessionHealth::usable(Some(
-        env.session_type
-            .clone()
-            .unwrap_or_else(|| if env.is_wayland() { "wayland".into() } else { "x11".into() }),
-    ))
+    SessionHealth::usable(Some(env.session_type.clone().unwrap_or_else(|| {
+        if env.is_wayland() {
+            "wayland".into()
+        } else {
+            "x11".into()
+        }
+    })))
 }
 
 /// Overlays the runtime restrictions the backend's static capability list cannot know about.
@@ -133,8 +138,10 @@ pub fn capabilities(reported: &[CapabilityInfo], env: &SessionEnvironment) -> Ve
         if restricted && state.usable {
             state.usable = false;
             state.reason = Some(reason::WAYLAND_RESTRICTED.into());
-            state.restriction =
-                Some("Wayland does not permit unrestricted synthetic input from an ordinary client".into());
+            state.restriction = Some(
+                "Wayland does not permit unrestricted synthetic input from an ordinary client"
+                    .into(),
+            );
         }
     }
     states
@@ -234,7 +241,10 @@ mod tests {
 
         assert!(installed.registered);
         assert_eq!(installed.mechanism, RegistrationMechanism::SystemdUser);
-        assert_eq!(installed.path.as_deref(), Some("/opt/axon/0.1.7/axon-linux"));
+        assert_eq!(
+            installed.path.as_deref(),
+            Some("/opt/axon/0.1.7/axon-linux")
+        );
         assert!(!registration(None).registered);
     }
 
@@ -261,7 +271,10 @@ mod tests {
 
         assert!(session.interactive);
         assert!(!session.graphical);
-        assert_eq!(session.reason.as_deref(), Some(reason::NO_GRAPHICAL_SESSION));
+        assert_eq!(
+            session.reason.as_deref(),
+            Some(reason::NO_GRAPHICAL_SESSION)
+        );
     }
 
     #[test]
@@ -330,7 +343,13 @@ mod tests {
 
         let states = capabilities(&reported, &env);
 
-        assert!(states.iter().find(|s| s.capability == "pointerInput").unwrap().usable);
+        assert!(
+            states
+                .iter()
+                .find(|s| s.capability == "pointerInput")
+                .unwrap()
+                .usable
+        );
     }
 
     #[test]

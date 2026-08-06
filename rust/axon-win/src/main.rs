@@ -66,9 +66,7 @@ mod lifecycle {
         fn CloseHandle(handle: isize) -> i32;
     }
 
-    pub fn run(
-        mut args: impl Iterator<Item = String>,
-    ) -> Result<i32, Box<dyn std::error::Error>> {
+    pub fn run(mut args: impl Iterator<Item = String>) -> Result<i32, Box<dyn std::error::Error>> {
         match args.next().as_deref() {
             Some("install") => {
                 stop_if_running()?;
@@ -137,7 +135,8 @@ mod lifecycle {
 
     /// The registration as Task Scheduler holds it, for health documents.
     pub fn registration() -> RegistrationHealth {
-        let xml = command_output("schtasks", &["/query", "/tn", TASK_NAME, "/xml"]).unwrap_or_default();
+        let xml =
+            command_output("schtasks", &["/query", "/tn", TASK_NAME, "/xml"]).unwrap_or_default();
         registration_from_task_xml(&xml)
     }
 

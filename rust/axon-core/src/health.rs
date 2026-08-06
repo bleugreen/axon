@@ -233,8 +233,8 @@ impl CapabilityState {
     pub fn complete(reported: &[CapabilityInfo]) -> Vec<Self> {
         Capability::ALL
             .iter()
-            .map(|capability| {
-                match reported.iter().find(|info| info.capability == *capability) {
+            .map(
+                |capability| match reported.iter().find(|info| info.capability == *capability) {
                     Some(info) if info.usable => Self {
                         capability: capability.key().into(),
                         usable: true,
@@ -258,8 +258,8 @@ impl CapabilityState {
                         reason: Some(reason::NOT_IMPLEMENTED.into()),
                         restriction: None,
                     },
-                }
-            })
+                },
+            )
             .collect()
     }
 
@@ -476,7 +476,10 @@ mod tests {
 
         assert!(report.daemon.running);
         assert!(!report.daemon.ready);
-        assert_eq!(report.daemon.reason.as_deref(), Some(reason::DAEMON_NOT_READY));
+        assert_eq!(
+            report.daemon.reason.as_deref(),
+            Some(reason::DAEMON_NOT_READY)
+        );
     }
 
     #[test]
@@ -493,7 +496,11 @@ mod tests {
         });
 
         let error = serde_json::from_value::<HealthReport>(document.clone()).unwrap_err();
-        assert!(error.to_string().contains("unsupported health schema version"));
+        assert!(
+            error
+                .to_string()
+                .contains("unsupported health schema version")
+        );
 
         // The same document at the supported major parses.
         document["schemaVersion"] = json!(HEALTH_SCHEMA_VERSION);
