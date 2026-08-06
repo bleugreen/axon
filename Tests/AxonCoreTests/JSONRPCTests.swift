@@ -2,15 +2,18 @@ import Foundation
 import Testing
 @testable import AxonCore
 
-@Test func healthRequestReturnsDaemonStatus() {
+@Test func healthRequestReturnsDaemonStatus() throws {
     let request = JSONRPCRequest(id: .string("health-1"), method: "health")
 
     let response = CommandRouter().handle(request)
 
     #expect(response.id == .string("health-1"))
     #expect(response.error == nil)
-    #expect(response.result?["status"] == .string("ok"))
-    #expect(response.result?["accessibility"] != nil)
+    // A daemon answering at all is serving, so the report it returns is always ready.
+    let report = try DaemonReport(jsonObject: try #require(response.result))
+    #expect(report.ready)
+    #expect(report.platform == .macos)
+    #expect(report.version == AxonVersion.current)
 }
 
 @Test func permitReturnsPromptStatus() {
