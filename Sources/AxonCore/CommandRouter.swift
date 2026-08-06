@@ -115,7 +115,7 @@ public struct CommandRouterServices {
     /// A `shutdown` request is answered before the process ends so the caller learns which process
     /// it stopped; exiting inside the handler would close the connection first and leave every
     /// lifecycle command unable to tell a clean stop from a crash.
-    public static let exitAfterResponding: () -> Void = {
+    public static func exitAfterResponding() {
         DispatchQueue.global().asyncAfter(deadline: .now() + 0.15) {
             exit(0)
         }

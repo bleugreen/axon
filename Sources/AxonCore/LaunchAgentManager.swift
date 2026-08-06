@@ -151,34 +151,6 @@ public struct LaunchAgentManager {
         }
         return .present(mechanism: .launchd, path: executable)
     }
-}
-
-/// Whether a path is somewhere a daemon registration should never point.
-///
-/// `daemon install` registers the invoking executable, so invoking it from a build directory
-/// registers a path that disappears on the next clean. Mirrored by `ephemeral_path_warning` in
-/// `rust/axon-core/src/lifecycle.rs`.
-public enum DaemonRegistrationPath {
-    /// Path fragments that mark a location as temporary or build-scoped.
-    static let ephemeralMarkers = [
-        "/.build/",
-        "/target/debug/",
-        "/target/release/",
-        "/DerivedData/",
-        "/.cairn/build-slots/",
-        "/var/folders/",
-        "/tmp/"
-    ]
-
-    public static func ephemeralWarning(for path: String) -> String? {
-        guard let marker = ephemeralMarkers.first(where: { path.contains($0) }) else {
-            return nil
-        }
-        return """
-        \(path) looks like a build or temporary location (matched "\(marker)").
-        Start-at-login will fail once it is cleaned up. Install from a permanent path instead.
-        """
-    }
 
     private func launchctlDomain() -> String {
         "gui/\(getuid())"
@@ -204,6 +176,34 @@ public enum DaemonRegistrationPath {
         let output = String(decoding: outputPipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
         let error = String(decoding: errorPipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
         return ProcessResult(exitCode: process.terminationStatus, output: output, error: error)
+    }
+}
+
+/// Whether a path is somewhere a daemon registration should never point.
+///
+/// `daemon install` registers the invoking executable, so invoking it from a build directory
+/// registers a path that disappears on the next clean. Mirrored by `ephemeral_path_warning` in
+/// `rust/axon-core/src/lifecycle.rs`.
+public enum DaemonRegistrationPath {
+    /// Path fragments that mark a location as temporary or build-scoped.
+    static let ephemeralMarkers = [
+        "/.build/",
+        "/target/debug/",
+        "/target/release/",
+        "/DerivedData/",
+        "/.cairn/build-slots/",
+        "/var/folders/",
+        "/tmp/"
+    ]
+
+    public static func ephemeralWarning(for path: String) -> String? {
+        guard let marker = ephemeralMarkers.first(where: { path.contains($0) }) else {
+            return nil
+        }
+        return """
+        \(path) looks like a build or temporary location (matched "\(marker)"). \
+        Start-at-login will fail once it is cleaned up. Install from a permanent path instead.
+        """
     }
 }
 
