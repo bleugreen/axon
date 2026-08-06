@@ -8,6 +8,8 @@ use axon_core::{
 };
 use serde_json::{Map, Value, json};
 
+pub mod lifecycle;
+
 #[cfg(target_os = "linux")]
 mod platform;
 #[cfg(target_os = "linux")]
