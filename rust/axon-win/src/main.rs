@@ -711,9 +711,22 @@ mod pipe {
                 let shutdown =
                     matches!(&parsed, Ok(req) if req.method == "shutdown" && req.id.is_some());
                 let response = match parsed {
-                    Ok(req) if req.method == "health" => req
-                        .id
-                        .map(|id| axon_core::JsonRpcResponse::success(id, json!({"ready": true}))),
+                    // Answering health at all means UI Automation finished initializing, because
+                    // the router only exists after it does; the pipe binds earlier so a stalled
+                    // startup stays observable, and a request arriving in that window is refused
+                    // rather than answered as ready.
+                    Ok(req) if req.method == "health" => req.id.map(|id| {
+                        let capabilities = router.capabilities().unwrap_or_default();
+                        axon_core::JsonRpcResponse::success(
+                            id,
+                            serde_json::to_value(axon_win::lifecycle::daemon_report(
+                                std::process::id(),
+                                &capabilities,
+                                super::current_session(),
+                            ))
+                            .unwrap_or(Value::Null),
+                        )
+                    }),
                     Ok(req) if shutdown => req.id.map(|id| {
                         axon_core::JsonRpcResponse::success(
                             id,
@@ -773,14 +786,18 @@ mod pipe {
             .ok_or_else(|| io::Error::other(format!("daemon rejected shutdown: {response}")))
     }
 
-    pub fn wait_until_ready(timeout: Duration) -> io::Result<()> {
-        wait_until_ready_with(timeout, Arc::new(health))
+    /// Waits for a successful health round trip.
+    ///
+    /// A pipe that exists proves only that some process created it, which is exactly what a
+    /// half-started daemon leaves behind. Answering is the readiness contract.
+    pub fn wait_until_ready(timeout: Duration) -> io::Result<axon_core::DaemonReport> {
+        wait_until_ready_with(timeout, Arc::new(daemon_health))
     }
 
-    fn wait_until_ready_with(
+    fn wait_until_ready_with<T: Send + 'static>(
         timeout: Duration,
-        health: Arc<dyn Fn() -> io::Result<()> + Send + Sync>,
-    ) -> io::Result<()> {
+        health: Arc<dyn Fn() -> io::Result<T> + Send + Sync>,
+    ) -> io::Result<T> {
         let start = Instant::now();
         loop {
             let Some(remaining) = timeout.checked_sub(start.elapsed()) else {
@@ -795,7 +812,7 @@ mod pipe {
                 let _ = tx.send(health());
             });
             match rx.recv_timeout(remaining) {
-                Ok(Ok(())) => return Ok(()),
+                Ok(Ok(value)) => return Ok(value),
                 Ok(Err(_)) => thread::sleep(Duration::from_millis(50).min(remaining)),
                 Err(mpsc::RecvTimeoutError::Timeout) => {
                     return Err(io::Error::new(
@@ -847,20 +864,42 @@ mod pipe {
             assert_eq!(error.kind(), io::ErrorKind::TimedOut);
             assert!(started.elapsed() < Duration::from_millis(250));
         }
+
+        #[test]
+        fn readiness_refuses_a_daemon_that_answers_without_being_ready() {
+            // The AXN-45 distinction, kept: a pipe that answers is not the same as a backend that
+            // finished starting, and only the second one may satisfy a lifecycle command.
+            let unready = json!({"result": {
+                "version": "0.1.7", "platform": "windows", "ready": false, "processId": 1,
+                "endpoint": r"\\.\pipe\axon-v1",
+                "session": {"interactive": true, "graphical": true},
+                "permissions": [], "capabilities": []
+            }});
+            let report: axon_core::DaemonReport =
+                serde_json::from_value(unready["result"].clone()).unwrap();
+
+            assert!(!report.ready);
+        }
     }
 
-    fn health() -> io::Result<()> {
+    /// Asks the running daemon to describe itself.
+    pub fn daemon_health() -> io::Result<axon_core::DaemonReport> {
         let response = send_rpc(&JsonRpcRequest::new(
             Some(JsonRpcId::Integer(1)),
             "health",
             Some(json!({})),
         ))?;
-        if response.pointer("/result/ready").and_then(Value::as_bool) == Some(true) {
-            Ok(())
+        let report: axon_core::DaemonReport = response
+            .get("result")
+            .cloned()
+            .map(serde_json::from_value)
+            .transpose()
+            .map_err(io::Error::other)?
+            .ok_or_else(|| io::Error::other(format!("daemon rejected health check: {response}")))?;
+        if report.ready {
+            Ok(report)
         } else {
-            Err(io::Error::other(format!(
-                "daemon rejected health check: {response}"
-            )))
+            Err(io::Error::other("daemon is not ready to serve requests"))
         }
     }
 
