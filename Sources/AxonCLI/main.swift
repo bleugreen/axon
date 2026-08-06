@@ -34,28 +34,19 @@ do {
         try openAxnEditor(arguments: arguments)
 
     case "status":
-        try printHumanStatus()
+        try printStatus(arguments: arguments)
 
     case "bootstrap", "setup":
         try runSetup()
 
-    case "quit":
-        quitAxonApp()
-        print("quit Axon.app")
-
-    case "restart":
-        quitAxonApp()
-        Thread.sleep(forTimeInterval: 0.5)
-        try launchAxonApp()
-        print("restarted Axon.app")
-
     case "daemon":
         try handleDaemonCommand(arguments: arguments)
 
-    case "health":
-        let response = try SocketClient(path: socketPath)
-            .send(JSONRPCRequest(id: .string("health"), method: "health"))
-        try printResponse(response)
+    case "shutdown":
+        try shutdownDaemon()
+
+    case "version", "--version":
+        print(AxonVersion.current)
 
     case "wait_for_stability":
         let response = try SocketClient(path: socketPath, responseTimeoutSeconds: SocketClient.defaultRunResponseTimeoutSeconds)
@@ -207,6 +198,17 @@ do {
         print("""
         usage: axon [command]
 
+        embedding lifecycle:
+          daemon install    register this executable to start at login, then wait for health
+          daemon uninstall  stop the daemon and remove the registration
+          daemon restart    restart the registered daemon and wait for health
+          shutdown          stop the running daemon, leaving the registration in place
+          status [--json]   describe daemon, registration, session, permissions, capabilities
+          version           print the product version
+
+        `daemon install` registers the path of the executable you invoked, so run it from a
+        permanent location. Installing from a build directory registers a path that disappears.
+
         commands:
           axon     launch Axon.app and request permissions when needed
           doctor   check local permissions
@@ -215,12 +217,7 @@ do {
           start    launch the installed Axon.app menu bar service
           edit <path.axn>
                   open an axn file in the visual editor
-          status   print app-backed daemon status
           setup    launch Axon.app and request permissions when needed
-          quit     quit the installed Axon.app service
-          restart  restart the installed Axon.app service
-          daemon <install|start|stop|status|uninstall>
-          health   request daemon health over the local socket
           permit   ask macOS to approve the running daemon identity
           refresh-secrets [--json]
                    refresh the active credential redaction index from 1Password
@@ -230,6 +227,9 @@ do {
     default:
         throw CLIError.missingArguments("unknown command: \(command)")
     }
+} catch let error as CLIError {
+    fputs("axon: \(error)\n", stderr)
+    exit(error.exitCode)
 } catch {
     fputs("axon: \(error)\n", stderr)
     exit(1)
@@ -896,6 +896,7 @@ private enum CLIError: Error, CustomStringConvertible {
     case missingArgument(String)
     case missingArguments(String)
     case invalidArguments(String)
+    case operationFailed(String)
 
     var description: String {
         switch self {
@@ -905,6 +906,20 @@ private enum CLIError: Error, CustomStringConvertible {
             return message
         case let .invalidArguments(message):
             return message
+        case let .operationFailed(message):
+            return message
+        }
+    }
+
+    /// The shared exit-code contract: 2 means the command was used wrongly, 1 means it was used
+    /// correctly and could not be completed. Anything a consumer scripts against depends on the
+    /// difference, so it is stated once here rather than at each throw site.
+    var exitCode: Int32 {
+        switch self {
+        case .missingArgument, .missingArguments:
+            return 2
+        case .invalidArguments, .operationFailed:
+            return 1
         }
     }
 }
