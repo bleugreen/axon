@@ -230,11 +230,11 @@ mod tests {
     fn registration_reports_the_path_systemd_will_run() {
         let unit = unit_file("/opt/axon/0.1.7/axon-linux");
 
-        let registration = registration(Some(&unit));
+        let installed = registration(Some(&unit));
 
-        assert!(registration.registered);
-        assert_eq!(registration.mechanism, RegistrationMechanism::SystemdUser);
-        assert_eq!(registration.path.as_deref(), Some("/opt/axon/0.1.7/axon-linux"));
+        assert!(installed.registered);
+        assert_eq!(installed.mechanism, RegistrationMechanism::SystemdUser);
+        assert_eq!(installed.path.as_deref(), Some("/opt/axon/0.1.7/axon-linux"));
         assert!(!registration(None).registered);
     }
 
