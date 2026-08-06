@@ -24,6 +24,13 @@ public struct CommandRouterServices {
     public let browserAutomation: any BrowserAutomationServing
     public let now: () -> Date
     public let sleepMilliseconds: (Int) -> Void
+    /// The local socket this daemon serves, reported as the endpoint in health documents.
+    public let endpoint: String
+    /// What the daemon knows about itself. Injectable so the derivation can be tested without a
+    /// logged-in Mac.
+    public let daemonReport: (String) -> DaemonReport
+    /// Ends the daemon process. Called after the shutdown response has been handed to the socket.
+    public let requestShutdown: () -> Void
 
     public init(
         listApps: @escaping () -> [AppIdentity] = { AppResolver().recordableApps() },
@@ -44,7 +51,10 @@ public struct CommandRouterServices {
         readableAXState: ReadableAXStateProvider? = nil,
         browserAutomation: any BrowserAutomationServing = AppleScriptBrowserAutomation(),
         now: @escaping () -> Date = Date.init,
-        sleepMilliseconds: @escaping (Int) -> Void = { Thread.sleep(forTimeInterval: Double($0) / 1_000) }
+        sleepMilliseconds: @escaping (Int) -> Void = { Thread.sleep(forTimeInterval: Double($0) / 1_000) },
+        endpoint: String = AxonEnvironment.socketPath(),
+        daemonReport: ((String) -> DaemonReport)? = nil,
+        requestShutdown: @escaping () -> Void = CommandRouterServices.exitAfterRespondng
     ) {
         let defaultCaptureSnapshot: (String, Bool) throws -> AppSnapshot = captureSnapshot ?? { app, screenshot in
             try AXFullTreeCapturer(elementStore: elementStore).capture(app: app, screenshot: screenshot)
@@ -91,10 +101,25 @@ public struct CommandRouterServices {
         self.browserAutomation = browserAutomation
         self.now = now
         self.sleepMilliseconds = sleepMilliseconds
+        self.endpoint = endpoint
+        // Answering a request at all proves the daemon is serving, so readiness is true here by
+        // construction. Readiness is only ever false in a document the CLI synthesized.
+        self.daemonReport = daemonReport ?? { endpoint in
+            Doctor.daemonReport(endpoint: endpoint, ready: true)
+        }
+        self.requestShutdown = requestShutdown
     }
 
-
-
+    /// Exits once the in-flight response has had time to reach the socket.
+    ///
+    /// A `shutdown` request is answered before the process ends so the caller learns which process
+    /// it stopped; exiting inside the handler would close the connection first and leave every
+    /// lifecycle command unable to tell a clean stop from a crash.
+    public static let exitAfterRespondng: () -> Void = {
+        DispatchQueue.global().asyncAfter(deadline: .now() + 0.15) {
+            exit(0)
+        }
+    }
 }
 
 private struct AppObservationSignature: Equatable {
@@ -263,7 +288,7 @@ public struct CommandRouter {
 
     private func handleCommand(_ request: JSONRPCRequest, historySessionID: String? = nil) -> JSONRPCResponse {
         switch request.method {
-        case "health", "permit":
+        case "health", "permit", "shutdown":
             return SystemCommandHandler(services: services).handle(request)
         case "look", "find", "wait_for_value", "wait_for_stability", "navigate", "windows", "tabs":
             return PerceptionCommandHandler(services: services).handle(request)
@@ -292,13 +317,24 @@ private struct SystemCommandHandler {
     func handle(_ request: JSONRPCRequest) -> JSONRPCResponse {
         switch request.method {
         case "health":
-            let doctor = Doctor.run()
+            do {
+                return JSONRPCResponse(
+                    id: request.id,
+                    result: try services.daemonReport(services.endpoint).jsonObject()
+                )
+            } catch {
+                return JSONRPCResponse(
+                    id: request.id,
+                    error: .internalError("could not describe daemon health: \(error)")
+                )
+            }
+        case "shutdown":
+            services.requestShutdown()
             return JSONRPCResponse(
                 id: request.id,
                 result: [
-                    "status": .string("ok"),
-                    "service": .string("axon"),
-                    "accessibility": .string(doctor.accessibility.status.rawValue)
+                    "shutdown": .bool(true),
+                    "processId": .int(Int(ProcessInfo.processInfo.processIdentifier))
                 ]
             )
         case "permit":
