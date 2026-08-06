@@ -1,0 +1,83 @@
+#!/usr/bin/env bash
+# Verifies that every place Axon states its version agrees with the checked-in VERSION file.
+#
+# VERSION is the single release source. Swift and Rust each need the version as a
+# compile-time literal, so those literals are derived copies that drift silently
+# unless something checks them. This is that something.
+#
+# Usage:
+#   scripts/check-version               verify agreement, exit 1 on drift
+#   scripts/check-version --write       rewrite the derived literals from VERSION
+#   scripts/check-version --tag v1.2.3  additionally require the tag to match VERSION
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$ROOT"
+
+WRITE=0
+TAG=""
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --write) WRITE=1; shift ;;
+    --tag) TAG="${2:-}"; shift 2 ;;
+    *) printf 'unknown argument: %s\n' "$1" >&2; exit 2 ;;
+  esac
+done
+
+VERSION="$(tr -d '[:space:]' < VERSION)"
+if [[ ! "$VERSION" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?$ ]]; then
+  printf 'VERSION is not SemVer: %s\n' "$VERSION" >&2
+  exit 1
+fi
+
+SWIFT_VERSION_FILE="Sources/AxonCore/AxonVersion.swift"
+CARGO_WORKSPACE_FILE="rust/Cargo.toml"
+
+read_swift_version() {
+  sed -n 's/.*public static let current = "\([^"]*\)".*/\1/p' "$SWIFT_VERSION_FILE"
+}
+
+read_cargo_version() {
+  awk '/^\[workspace\.package\]/ { in_section = 1; next }
+       /^\[/ { in_section = 0 }
+       in_section && /^version = / { gsub(/(version = |")/, ""); print; exit }' "$CARGO_WORKSPACE_FILE"
+}
+
+if [[ "$WRITE" == "1" ]]; then
+  /usr/bin/sed -i.bak "s/public static let current = \"[^\"]*\"/public static let current = \"$VERSION\"/" "$SWIFT_VERSION_FILE"
+  rm -f "$SWIFT_VERSION_FILE.bak"
+  /usr/bin/sed -i.bak "/^\[workspace\.package\]/,/^\[/ s/^version = \".*\"/version = \"$VERSION\"/" "$CARGO_WORKSPACE_FILE"
+  rm -f "$CARGO_WORKSPACE_FILE.bak"
+  printf 'wrote version %s into %s and %s\n' "$VERSION" "$SWIFT_VERSION_FILE" "$CARGO_WORKSPACE_FILE"
+fi
+
+failures=0
+check() {
+  local label="$1" actual="$2"
+  if [[ "$actual" != "$VERSION" ]]; then
+    printf 'version drift: %s is %s, VERSION is %s\n' "$label" "${actual:-<missing>}" "$VERSION" >&2
+    failures=$((failures + 1))
+  fi
+}
+
+check "$SWIFT_VERSION_FILE" "$(read_swift_version)"
+check "$CARGO_WORKSPACE_FILE [workspace.package]" "$(read_cargo_version)"
+
+# Every product crate must inherit the workspace version rather than pinning its own.
+for crate in axon-core axon-win axon-linux; do
+  if ! grep -q '^version\.workspace = true$' "rust/$crate/Cargo.toml"; then
+    printf 'version drift: rust/%s/Cargo.toml does not inherit version.workspace\n' "$crate" >&2
+    failures=$((failures + 1))
+  fi
+done
+
+if [[ -n "$TAG" ]]; then
+  check "release tag $TAG" "${TAG#v}"
+fi
+
+if [[ "$failures" -gt 0 ]]; then
+  printf 'run scripts/check-version --write to resynchronize the derived literals\n' >&2
+  exit 1
+fi
+
+printf '%s\n' "$VERSION"

@@ -10,7 +10,7 @@ else
   SWIFT="$(command -v swift)"
 fi
 
-VERSION="${AXON_VERSION:-0.1.7}"
+VERSION="${AXON_VERSION:-$("$ROOT/scripts/check-version")}"
 DIST_DIR="$ROOT/dist"
 DAEMON_APP_NAME="Axon"
 EDITOR_APP_NAME="Axon Editor"
