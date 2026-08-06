@@ -25,6 +25,17 @@ public struct Doctor {
         )
     }
 
+    /// Resolves the permission lookups once, before the daemon starts serving.
+    ///
+    /// The first `CGPreflightScreenCaptureAccess` call in a process costs several seconds while
+    /// macOS consults TCC; every later call is instant. Paying that inside the first health request
+    /// would make readiness look like a stall to whichever lifecycle command is waiting for it, so
+    /// startup pays it instead. Grants can change while the daemon runs, so this warms the lookup
+    /// rather than caching an answer.
+    public static func warmUp() {
+        _ = run()
+    }
+
     /// The daemon's answer to a `health` request: what this process, in this session, with these
     /// grants, can serve right now.
     public static func daemonReport(

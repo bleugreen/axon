@@ -19,6 +19,7 @@ do {
 
     case "serve":
         ScreenCaptureRuntime.bootstrapSynchronously()
+        Doctor.warmUp()
         print("axon serving on \(socketPath)")
         fflush(stdout)
         serveUntilTerminated(socketPath: socketPath)
@@ -813,27 +814,47 @@ private func currentStatus() -> HealthStatus {
     let registration = manager?.registration() ?? .absent(mechanism: .launchd)
 
     do {
-        let response = try SocketClient(path: socketPath, responseTimeoutSeconds: 2)
+        let response = try SocketClient(path: socketPath, responseTimeoutSeconds: statusResponseTimeoutSeconds)
             .send(JSONRPCRequest(id: .string("status"), method: "health"))
         if let error = response.error {
-            return .notRunning(
-                endpoint: socketPath,
-                registration: registration,
-                session: Doctor.currentSession(),
-                reason: HealthReason.daemonUnreachable,
-                detail: error.message
-            )
+            return unreachable(registration, HealthReason.daemonUnreachable, error.message)
         }
         return .running(daemon: try DaemonReport(jsonObject: response.result ?? [:]), registration: registration)
+    } catch let error as SocketError {
+        // Failing to connect and failing to get an answer are different machine states, and the
+        // difference is the whole point of asking: a socket file with nothing behind it means no
+        // daemon, while a daemon that accepts a connection and then says nothing is stuck.
+        return unreachable(registration, connectFailed(error) ? HealthReason.daemonNotRunning : HealthReason.daemonUnreachable, error.description)
     } catch {
-        return .notRunning(
-            endpoint: socketPath,
-            registration: registration,
-            session: Doctor.currentSession(),
-            reason: HealthReason.daemonNotRunning,
-            detail: "\(error)"
-        )
+        return unreachable(registration, HealthReason.daemonUnreachable, "\(error)")
     }
+}
+
+/// How long `status` waits for a daemon that accepted the connection to answer.
+///
+/// Long enough to outlast a genuinely busy daemon, short enough that describing a stuck one stays
+/// a fast operation. A daemon that is simply absent fails at connect and costs nothing.
+private let statusResponseTimeoutSeconds: TimeInterval = 10
+
+private func connectFailed(_ error: SocketError) -> Bool {
+    if case let .operationFailed(operation) = error {
+        return operation == "connect"
+    }
+    return false
+}
+
+private func unreachable(
+    _ registration: RegistrationHealth,
+    _ reason: String,
+    _ detail: String
+) -> HealthStatus {
+    .notRunning(
+        endpoint: socketPath,
+        registration: registration,
+        session: Doctor.currentSession(),
+        reason: reason,
+        detail: detail
+    )
 }
 
 private func warnAboutEphemeralInstall(_ path: String) {

@@ -47,6 +47,7 @@ final class AxonDaemonAppDelegate: NSObject, NSApplicationDelegate, @unchecked S
         appRecency.start()
         configureStatusItem()
         ScreenCaptureRuntime.bootstrapSynchronously()
+        Doctor.warmUp()
         startServer()
         installMenu()
         refreshTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
