@@ -19,7 +19,55 @@ const EXEC_PLACEHOLDER: &str = "@EXEC@";
 
 /// Renders the user unit for a specific executable.
 pub fn unit_file(executable: &str) -> String {
-    UNIT_TEMPLATE.replace(EXEC_PLACEHOLDER, executable)
+    UNIT_TEMPLATE.replace(EXEC_PLACEHOLDER, &systemd_quote(executable))
+}
+
+/// Renders a path as one systemd command argument.
+///
+/// systemd tokenizes `ExecStart=` on whitespace and treats `%` as a specifier prefix. An
+/// unquoted permanent install path such as `/opt/Axon Stable/axon-linux` would therefore register
+/// a unit that tries to execute `/opt/Axon`, and a literal `%` in a path would be replaced with
+/// something else. `daemon install` registers whatever path the caller invoked, so the rendering
+/// has to survive any path the filesystem allows rather than only the convenient ones.
+pub fn systemd_quote(path: &str) -> String {
+    let mut quoted = String::with_capacity(path.len() + 2);
+    quoted.push('"');
+    for character in path.chars() {
+        match character {
+            '\\' => quoted.push_str(r"\\"),
+            '"' => quoted.push_str("\\\""),
+            // A specifier is introduced by one `%`; doubling it is how systemd spells a literal.
+            '%' => quoted.push_str("%%"),
+            _ => quoted.push(character),
+        }
+    }
+    quoted.push('"');
+    quoted
+}
+
+/// Reverses [`systemd_quote`].
+pub fn systemd_unquote(value: &str) -> String {
+    let inner = value
+        .strip_prefix('"')
+        .and_then(|rest| rest.strip_suffix('"'))
+        .unwrap_or(value);
+    let mut path = String::with_capacity(inner.len());
+    let mut characters = inner.chars().peekable();
+    while let Some(character) = characters.next() {
+        match character {
+            '\\' => {
+                if let Some(escaped) = characters.next() {
+                    path.push(escaped);
+                }
+            }
+            '%' if characters.peek() == Some(&'%') => {
+                characters.next();
+                path.push('%');
+            }
+            _ => path.push(character),
+        }
+    }
+    path
 }
 
 /// Reads back the executable a rendered unit points at.
@@ -32,12 +80,8 @@ pub fn unit_executable(unit: &str) -> Option<String> {
         .lines()
         .map(str::trim)
         .find_map(|line| line.strip_prefix("ExecStart="))?;
-    Some(
-        exec_start
-            .strip_suffix(" serve")
-            .unwrap_or(exec_start)
-            .to_owned(),
-    )
+    let executable = exec_start.strip_suffix(" serve").unwrap_or(exec_start);
+    Some(systemd_unquote(executable))
 }
 
 pub fn registration(unit: Option<&str>) -> RegistrationHealth {
