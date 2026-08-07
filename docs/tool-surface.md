@@ -157,9 +157,13 @@ rather than by the API that produced it:
 
 Actions climb that ladder in order and stop at the first rung their policy and
 the runtime allow. A failed semantic attempt may advance to pixel; under
-`backgroundOnly` the ladder ends there. `invoke` and the semantic half of
-`scroll` have one rung only: an accessibility action the app refuses is a failed
-action, never a reason to send unrelated global input at the same coordinates.
+`backgroundOnly` the ladder ends there. An accessibility action the app *refuses*
+is a failed action, never a reason to send unrelated global input at the same
+coordinates, so `invoke` has one rung only. An action reported as **unsupported**
+is not a refusal: the element advertised a mechanism it does not implement, and
+nothing was ever asked to decide. `scroll` therefore advances from an unsupported
+action to its wheel rung, and stops where it stands on every other accessibility
+error.
 
 `foregroundPermitted` **raises the ceiling rather than choosing a rung**. An
 action still takes the quietest mechanism that works, so opting in costs nothing
@@ -241,10 +245,14 @@ exposing the new row order.
 target posts `CGEventScroll` wheel events at that point and never consults the
 accessibility tree, which is what makes surfaces that render their own contents —
 iPhone Mirroring, remote desktops, games, canvas views — scrollable at all. A handle,
-locator, or bare app resolves an offscreen descendant and presses `AXScrollToVisible`
-as before, and falls back to a wheel burst at the element's or window's center when the
-tree exposes no scrollable descendant. The reported `strategy` always names which one
-ran. `deltaX`/`deltaY` are pixels and negative `deltaY` scrolls down; only the wheel
+locator, or bare app resolves an offscreen descendant *that advertises*
+`AXScrollToVisible` and presses it. Advertising the action is part of being a candidate
+rather than something checked afterwards: most AppKit list rows expose no scrolling
+action at all, and choosing one on placement alone would commit the scroll to a
+mechanism that does not exist. When no descendant advertises the action — or when one
+does and then reports it unsupported — the scroll falls back to a wheel burst aimed at
+the center of the element or window the caller named, never at the ranked descendant.
+The reported `strategy` always names which one ran. `deltaX`/`deltaY` are pixels and negative `deltaY` scrolls down; only the wheel
 path honors the distance, because `AXScrollToVisible` lets the app decide how far to
 move. Both strategies report `dispatchSuccess` separately from `semanticSuccess` and
 leave `semanticStatus` unverified: a dispatched wheel, or an app acknowledging the
