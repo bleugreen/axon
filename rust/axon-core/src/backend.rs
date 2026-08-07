@@ -179,4 +179,26 @@ pub trait PlatformBackend {
             diagnostic: None,
         })
     }
+
+    /// Where the real pointer is now, in the same screen coordinates a dispatch is aimed with.
+    ///
+    /// `Ok(None)` is the answer of a backend with no pointer to speak of: a dispatch here cannot
+    /// move one, so there is nothing to put back. `Err` is a different answer — the backend has a
+    /// pointer and could not read it, which means a dispatch that moves the cursor would have
+    /// nowhere to return it to. The foreground transaction treats the two differently.
+    fn pointer_location(&mut self) -> Result<Option<(f64, f64)>, BackendError> {
+        Ok(None)
+    }
+
+    /// Puts the real pointer back at `to`. Returns whether the request was accepted; as with
+    /// activation, the caller proves the outcome by reading the location back rather than trusting
+    /// the acknowledgement.
+    fn move_pointer(&mut self, to: (f64, f64)) -> Result<bool, BackendError> {
+        let _ = to;
+        Err(BackendError::Capability {
+            capability: Capability::PointerInput,
+            reason: "this backend cannot move the pointer".into(),
+            diagnostic: None,
+        })
+    }
 }
