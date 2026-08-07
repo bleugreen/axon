@@ -58,12 +58,25 @@ mechanism.
 | --- | --- |
 | `daemon install` | Register the invoking executable to start at login, then wait for the daemon to answer a health request |
 | `daemon uninstall` | Stop the daemon and remove the registration |
-| `daemon restart` | Restart the registered daemon and wait for it to answer a health request |
+| `daemon restart` | Restart the daemon that is already registered, without changing the registration |
 | `shutdown` | Stop the running daemon, leaving the registration in place |
 
-All four are idempotent. Installing over an existing registration rewrites it, uninstalling an
-absent registration succeeds, and shutting down a daemon that is not running succeeds. A consumer
-can run `daemon install` on every deploy without checking first.
+`daemon install` is the only verb that writes a registration. **`daemon restart` never re-registers**:
+it restarts whatever is installed, regardless of which binary invokes it, and fails with exit 1
+directing the caller to `daemon install` when nothing is registered. This matters because the
+alternative reintroduces the failure the permanent-path rule exists to prevent — an agent that
+restarts from a temporary build directory would silently repoint a working installation at a path
+about to disappear.
+
+Install and uninstall are idempotent: installing over an existing registration rewrites it, and
+uninstalling an absent registration succeeds. A consumer can run `daemon install` on every deploy
+without checking first.
+
+`shutdown` is idempotent only when nothing is listening. A daemon that accepts a connection and
+then fails to answer, or a platform stop command that fails, is reported as an operational failure
+rather than success; the command confirms the endpoint is gone before claiming it stopped
+anything. Reporting a stop that did not happen would leave a process holding the endpoint while
+whoever asked believes the machine is clear.
 
 Registration is platform-native:
 
@@ -82,6 +95,11 @@ the permanent location the binary will live at.
 
 The CLI resolves symlinks before registering, and warns on stderr when the resolved path looks
 temporary or build-scoped. The warning is not a refusal; a consumer that knows better can proceed.
+
+Any path the filesystem allows is registered faithfully, including one containing spaces or a
+literal `%`. On Linux the executable is quoted and escaped for the systemd unit, because
+`ExecStart=` is tokenized on whitespace and `%` introduces a specifier; an install from
+`/opt/Axon Stable/axon-linux` would otherwise register a unit that tries to run `/opt/Axon`.
 
 `status --json` reports the registered path, so a consumer that pinned a version can compare the
 registration against the install path it expects instead of assuming they agree.
