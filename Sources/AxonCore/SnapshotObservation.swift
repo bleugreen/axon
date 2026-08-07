@@ -4,6 +4,7 @@ public struct SnapshotObservationFormatter {
     private static let maxObservedChildren = 24
     private static let maxCoalescedLabelLength = 240
     private static let maxScreenTextItems = 100
+    private static let maxOpacityDescriptors = 3
 
     public init() {}
 
@@ -59,12 +60,19 @@ public struct SnapshotObservationFormatter {
 
         let snapshotID = string("snapshot", in: object) ?? "unknown"
         let baseIndex = object["baseIndex"]?.intValue ?? 0
+        let rawChildren = object["children"]?.arrayValue ?? []
         let compactTree = compactForest(
             from: object["children"],
             snapshotID: snapshotID,
             frames: frames,
             baseIndex: baseIndex
         )
+        let tree: String
+        if compactTree.isEmpty, let opacity = opacitySummary(from: rawChildren) {
+            tree = opacityMarker(opacity)
+        } else {
+            tree = dsl(from: compactTree)
+        }
         var observation: [String: JSONValue] = [
             "format": .string("children"),
             "snapshot": .string(snapshotID),
@@ -73,7 +81,7 @@ public struct SnapshotObservationFormatter {
             "limit": object["limit"] ?? .int(0),
             "total": object["total"] ?? .int(0),
             "nextOffset": object["nextOffset"] ?? .null,
-            "tree": .string(dsl(from: compactTree))
+            "tree": .string(tree)
         ]
         if let redaction = mergedRedaction(topLevel: nil, nodes: compactTree) {
             observation["redaction"] = redaction
@@ -340,6 +348,12 @@ public struct SnapshotObservationFormatter {
             "role": .string(outputRole),
             "children": .array(compactChildren)
         ]
+        // A rendered node whose children all failed the contentful filter would otherwise be
+        // indistinguishable from a genuine leaf, which is what makes an AX-opaque surface look like
+        // a broken snapshot. Say what disappeared instead of keeping the noise.
+        if compactChildren.isEmpty, truncationReasons.isEmpty, let opacity = opacitySummary(from: rawChildren) {
+            compact["opaque"] = .string(opacity)
+        }
         if let label {
             compact["label"] = .string(label)
         }
@@ -362,6 +376,37 @@ public struct SnapshotObservationFormatter {
             compact.removeValue(forKey: "children")
         }
         return [.object(compact)]
+    }
+
+    private func opacitySummary(from rawChildren: [JSONValue]) -> String? {
+        guard !rawChildren.isEmpty else {
+            return nil
+        }
+        var descriptors: [String] = []
+        for child in rawChildren {
+            guard case let .object(object) = child else {
+                continue
+            }
+            let role = normalizedRole(string("role", in: object))
+            let subrole = string("subrole", in: object)?.trimmingCharacters(in: .whitespacesAndNewlines)
+            let descriptor = (subrole?.isEmpty == false) ? "\(role)[\(subrole ?? "")]" : role
+            if !descriptors.contains(descriptor) {
+                descriptors.append(descriptor)
+            }
+        }
+        guard !descriptors.isEmpty else {
+            return nil
+        }
+        var shown = descriptors.prefix(Self.maxOpacityDescriptors).joined(separator: ", ")
+        if descriptors.count > Self.maxOpacityDescriptors {
+            shown += ", …"
+        }
+        let count = rawChildren.count
+        return "\(count) unreadable node\(count == 1 ? "" : "s"): \(shown)"
+    }
+
+    private func opacityMarker(_ summary: String) -> String {
+        "⟨\(summary)⟩"
     }
 
     private func descendantCount(in values: [JSONValue]) -> Int {
@@ -799,6 +844,10 @@ public struct SnapshotObservationFormatter {
                 moreLine += " total=\(total)"
             }
             lines.append(moreLine)
+        }
+
+        if let opacity = string("opaque", in: object) {
+            lines.append("\(indent)  \(opacityMarker(opacity))")
         }
 
         if case let .array(children)? = object["children"] {
