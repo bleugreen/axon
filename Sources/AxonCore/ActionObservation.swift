@@ -19,8 +19,6 @@ public struct ObservedElementState: Equatable, Sendable {
     /// observations are redacted afterwards, so a comparison made later could not tell a typed
     /// secret from an unrelated string and would let it through as an assertion.
     public let valueDerivedFromInput: Bool
-    /// False when the settle loop never saw two agreeing reads inside its budget.
-    public let settled: Bool
 
     public init(
         app: String,
@@ -29,8 +27,7 @@ public struct ObservedElementState: Equatable, Sendable {
         value: String? = nil,
         focused: Bool? = nil,
         enabled: Bool? = nil,
-        valueDerivedFromInput: Bool = false,
-        settled: Bool = true
+        valueDerivedFromInput: Bool = false
     ) {
         self.app = app
         self.role = role
@@ -39,12 +36,11 @@ public struct ObservedElementState: Equatable, Sendable {
         self.focused = focused
         self.enabled = enabled
         self.valueDerivedFromInput = valueDerivedFromInput
-        self.settled = settled
     }
 
-    /// Stamps the capture-time verdicts an observer cannot reach on its own: whether this value
-    /// merely echoes the action's input, and whether the read it came from had settled.
-    func resolving(inputs: [String], settled: Bool) -> ObservedElementState {
+    /// Stamps the capture-time verdict an observer cannot reach on its own: whether this value
+    /// merely echoes the action's input.
+    func resolving(inputs: [String]) -> ObservedElementState {
         ObservedElementState(
             app: app,
             role: role,
@@ -52,8 +48,7 @@ public struct ObservedElementState: Equatable, Sendable {
             value: value,
             focused: focused,
             enabled: enabled,
-            valueDerivedFromInput: value.map { DerivedPostconditionRules.echoesInput($0, inputs: inputs) } ?? false,
-            settled: settled
+            valueDerivedFromInput: value.map { DerivedPostconditionRules.echoesInput($0, inputs: inputs) } ?? false
         )
     }
 
@@ -80,8 +75,7 @@ public struct ObservedElementState: Equatable, Sendable {
             },
             focused: focused,
             enabled: enabled,
-            valueDerivedFromInput: valueDerivedFromInput,
-            settled: settled
+            valueDerivedFromInput: valueDerivedFromInput
         )
     }
 }
@@ -89,10 +83,13 @@ public struct ObservedElementState: Equatable, Sendable {
 /// App-scoped state read alongside an action: which windows exist and what holds focus.
 public struct ObservedAppState: Equatable, Sendable {
     public let app: String
-    public let windowTitles: [String]
+    /// Nil when the window list could not be read at all, which is not the same fact as an app
+    /// with no windows. Collapsing the two would make every window look newly appeared the first
+    /// time a read succeeds.
+    public let windowTitles: [String]?
     public let focused: ObservedElementState?
 
-    public init(app: String, windowTitles: [String], focused: ObservedElementState?) {
+    public init(app: String, windowTitles: [String]?, focused: ObservedElementState?) {
         self.app = app
         self.windowTitles = windowTitles
         self.focused = focused
@@ -120,8 +117,13 @@ public struct ActionObservation: Equatable, Sendable {
     /// focus that never moved is recognised as no transition at all.
     public let focusBefore: ObservedElementState?
     public let focusAfter: ObservedElementState?
-    public let windowTitlesBefore: [String]
-    public let windowTitlesAfter: [String]
+    /// Nil on either side means the window list could not be read then, so no comparison is
+    /// possible and no window may be called new.
+    public let windowTitlesBefore: [String]?
+    public let windowTitlesAfter: [String]?
+    /// False when the settle loop never saw two agreeing reads inside its budget, which makes the
+    /// whole post-action read a snapshot of a surface still in motion.
+    public let settled: Bool
     public let warnings: [String]
 
     public init(
@@ -134,8 +136,9 @@ public struct ActionObservation: Equatable, Sendable {
         toBefore: ObservedElementState? = nil,
         focusBefore: ObservedElementState? = nil,
         focusAfter: ObservedElementState? = nil,
-        windowTitlesBefore: [String] = [],
-        windowTitlesAfter: [String] = [],
+        windowTitlesBefore: [String]? = nil,
+        windowTitlesAfter: [String]? = nil,
+        settled: Bool = true,
         warnings: [String] = []
     ) {
         self.tool = tool
@@ -149,6 +152,7 @@ public struct ActionObservation: Equatable, Sendable {
         self.focusAfter = focusAfter
         self.windowTitlesBefore = windowTitlesBefore
         self.windowTitlesAfter = windowTitlesAfter
+        self.settled = settled
         self.warnings = warnings
     }
 
@@ -162,8 +166,8 @@ public struct ActionObservation: Equatable, Sendable {
                 deterministicRedactor: deterministicRedactor
             )
         }
-        func redactTitles(_ titles: [String]) -> [String] {
-            titles.map {
+        func redactTitles(_ titles: [String]?) -> [String]? {
+            titles?.map {
                 ObservationRedaction.string(
                     $0,
                     field: "title",
@@ -191,6 +195,7 @@ public struct ActionObservation: Equatable, Sendable {
             focusAfter: redact(focusAfter),
             windowTitlesBefore: redactTitles(windowTitlesBefore),
             windowTitlesAfter: redactTitles(windowTitlesAfter),
+            settled: settled,
             warnings: warnings
         )
     }
@@ -341,21 +346,20 @@ public final class ActionObservationCollector {
 
         let settled = settledReading(for: pending)
         let inputs = pending.inputs
-        let targetAfter = settled.reading.element?.resolving(inputs: inputs, settled: settled.settled)
-        let focusAfter = settled.reading.app?.focused?.resolving(inputs: inputs, settled: settled.settled)
 
         observation = ActionObservation(
             tool: pending.tool,
             app: pending.appBefore?.app ?? settled.reading.app?.app ?? pending.targetBefore?.app,
             inputs: inputs,
             targetBefore: pending.targetBefore,
-            targetAfter: targetAfter,
+            targetAfter: settled.reading.element?.resolving(inputs: inputs),
             fromBefore: pending.fromBefore,
             toBefore: pending.toBefore,
             focusBefore: pending.appBefore?.focused,
-            focusAfter: focusAfter,
-            windowTitlesBefore: pending.appBefore?.windowTitles ?? [],
-            windowTitlesAfter: settled.reading.app?.windowTitles ?? []
+            focusAfter: settled.reading.app?.focused?.resolving(inputs: inputs),
+            windowTitlesBefore: pending.appBefore?.windowTitles,
+            windowTitlesAfter: settled.reading.app?.windowTitles,
+            settled: settled.settled
         )
     }
 
