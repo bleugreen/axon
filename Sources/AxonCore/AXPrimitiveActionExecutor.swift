@@ -38,6 +38,11 @@ public final class AXPrimitiveActionExecutor {
     private let frameProvider: (AXUIElement) -> AXFrame?
     private let parentProvider: (AXUIElement) -> AXUIElement?
     private let processProvider: (AXUIElement) -> pid_t?
+    private let attributeProvider: (AXUIElement, String) -> AnyObject?
+    private let actionNamesProvider: (AXUIElement) -> [String]?
+    /// The accessibility dispatch itself. Seamed so that what an action reported — and therefore
+    /// whether the ladder settles or advances — is observable without a live application.
+    private let performAction: (AXUIElement, String) -> AXError
     private let elementsEqual: (AXUIElement, AXUIElement) -> Bool
     private let frontmostApp: () -> ForegroundApp?
     private let activateProcess: (pid_t) -> Bool
@@ -59,6 +64,9 @@ public final class AXPrimitiveActionExecutor {
         frameProvider: ((AXUIElement) -> AXFrame?)? = nil,
         parentProvider: ((AXUIElement) -> AXUIElement?)? = nil,
         processProvider: ((AXUIElement) -> pid_t?)? = nil,
+        attributeProvider: ((AXUIElement, String) -> AnyObject?)? = nil,
+        actionNamesProvider: ((AXUIElement) -> [String]?)? = nil,
+        performAction: ((AXUIElement, String) -> AXError)? = nil,
         elementsEqual: @escaping (AXUIElement, AXUIElement) -> Bool = { CFEqual($0, $1) },
         frontmostApp: (() -> ForegroundApp?)? = nil,
         activateProcess: ((pid_t) -> Bool)? = nil,
@@ -79,6 +87,9 @@ public final class AXPrimitiveActionExecutor {
         self.frameProvider = frameProvider ?? Self.copyFrame
         self.parentProvider = parentProvider ?? Self.copyParent
         self.processProvider = processProvider ?? Self.copyProcessIdentifier
+        self.attributeProvider = attributeProvider ?? Self.copyRawAttributeValue
+        self.actionNamesProvider = actionNamesProvider ?? Self.copyActionNames
+        self.performAction = performAction ?? { element, name in AXUIElementPerformAction(element, name as CFString) }
         self.elementsEqual = elementsEqual
         self.frontmostApp = frontmostApp ?? Self.systemFrontmostApp
         self.activateProcess = activateProcess ?? Self.systemActivate
@@ -87,6 +98,11 @@ public final class AXPrimitiveActionExecutor {
         self.settleTimeoutMs = settleTimeoutMs
         self.settleIntervalMs = max(settleIntervalMs, 1)
     }
+
+    /// The action name of the accessibility scroll rung. `kAXScrollToVisibleAction` is not bridged
+    /// into Swift, so the literal exists here once rather than at both the selection and the
+    /// perform site, where the two could drift apart silently.
+    private static let scrollToVisibleAction = "AXScrollToVisible"
 
     private static func copyProcessIdentifier(_ element: AXUIElement) -> pid_t? {
         var pid: pid_t = 0
@@ -220,7 +236,7 @@ public final class AXPrimitiveActionExecutor {
         showTargetBeforeAction(element, label: name)
         // Invoke has exactly one rung. A named accessibility action that the element refuses is a
         // failed action, never a reason to send unrelated global input at its coordinates.
-        let result = AXUIElementPerformAction(element, name as CFString)
+        let result = performAction(element, name)
         return PrimitiveActionResult.dispatched(
             action: name,
             target: target,
@@ -228,7 +244,7 @@ public final class AXPrimitiveActionExecutor {
             policy: policy,
             delivery: .semantic,
             success: result == .success,
-            message: result == .success ? nil : "AXUIElementPerformAction returned \(result.rawValue)"
+            message: result == .success ? nil : "AXUIElementPerformAction returned \(result.axonDescription)"
         )
     }
 
@@ -254,7 +270,7 @@ public final class AXPrimitiveActionExecutor {
         }
         let semanticFailure = setResult == .success
             ? "AXUIElementSetAttributeValue did not update the element value"
-            : "AXUIElementSetAttributeValue returned \(setResult.rawValue)"
+            : "AXUIElementSetAttributeValue returned \(setResult.axonDescription)"
 
         let point = centerPoint(of: element)
         let process = processProvider(element)
@@ -401,30 +417,41 @@ public final class AXPrimitiveActionExecutor {
         // Only a bare app target needs the app resolved; a handle carries its own element, and
         // resolving anyway would reject a live handle because some unrelated app name went stale.
         let resolvedApp = target == nil ? try app.map(appResolver.resolve) : nil
+        // Carried down to the wheel only when the accessibility rung was attempted and turned out
+        // not to be a mechanism at all, so that a caller with no wheel rung left still hears what
+        // accessibility actually said.
+        var semanticFallback: PrimitiveActionResult?
         if let scrollTarget = try scrollToVisibleTarget(target: target, app: resolvedApp, deltaX: deltaX, deltaY: deltaY) {
             // The semantic rung. AXScrollToVisible neither focuses nor activates, so it is always
-            // allowed, and a refusal from the app is a failed scroll rather than a reason to send
-            // an unrelated wheel burst at the same coordinates.
-            let result = AXUIElementPerformAction(scrollTarget.element, "AXScrollToVisible" as CFString)
-            details["scrollTargetFrame"] = scrollTarget.frame.jsonValue
+            // allowed, and an app that refuses it has failed the scroll rather than earned an
+            // unrelated wheel burst at the same coordinates.
+            let error = performAction(scrollTarget.element, Self.scrollToVisibleAction)
+            var semanticDetails = details
+            semanticDetails["scrollTargetFrame"] = scrollTarget.frame.jsonValue
             // The app acknowledging the action is the dispatch; it is still not proof that the
             // viewport moved, and it is not a dispatch at all when the action itself errors.
-            details["semanticSuccess"] = .null
-            details["semanticStatus"] = .string("unverified")
-            return PrimitiveActionResult.dispatched(
+            semanticDetails["semanticSuccess"] = .null
+            semanticDetails["semanticStatus"] = .string("unverified")
+            let semantic = PrimitiveActionResult.dispatched(
                 action: "scroll",
                 target: description,
                 strategy: "AXScrollToVisible",
                 policy: policy,
                 delivery: .semantic,
-                success: result == .success,
-                message: result == .success ? nil : "AXScrollToVisible returned \(result.rawValue)",
-                details: details
+                success: error == .success,
+                message: error == .success ? nil : "AXScrollToVisible returned \(error.axonDescription)",
+                details: semanticDetails
             )
+            guard Self.semanticScrollAdvances(after: error) else {
+                return semantic
+            }
+            semanticFallback = semantic
         }
 
         guard let point = try wheelPoint(target: target, app: resolvedApp) else {
-            return PrimitiveActionResult(
+            // An accessibility attempt that found no mechanism is the honest answer here. The wheel
+            // having nowhere to aim is true but is not what went wrong.
+            return semanticFallback ?? PrimitiveActionResult(
                 action: "scroll",
                 target: description,
                 strategy: "CGEventScroll",
@@ -443,8 +470,19 @@ public final class AXPrimitiveActionExecutor {
             identityMessage: "The scroll target does not belong to a resolvable process, so a wheel burst cannot be bound to it",
             deltaX: deltaX,
             deltaY: deltaY,
-            details: details
+            details: details,
+            semanticFallback: semanticFallback
         )
+    }
+
+    /// Whether an accessibility scroll that failed leaves the wheel rung below it still owed a try.
+    ///
+    /// An unsupported action was never refused, because the app was never asked to decide: the
+    /// element advertised a mechanism it does not implement, and the tree is contradicting itself.
+    /// Every other error is the app answering, and a scroll it answered badly is a failed scroll
+    /// rather than a reason to send global input at the same coordinates.
+    private static func semanticScrollAdvances(after error: AXError) -> Bool {
+        error == .actionUnsupported || error == .attributeUnsupported
     }
 
     /// `scroll` never activates for the background rung, and the foreground rung activates only
@@ -460,7 +498,8 @@ public final class AXPrimitiveActionExecutor {
         identityMessage: String,
         deltaX: Double,
         deltaY: Double,
-        details: [String: JSONValue]
+        details: [String: JSONValue],
+        semanticFallback: PrimitiveActionResult? = nil
     ) -> PrimitiveActionResult {
         var wheelDetails = details
         wheelDetails["at"] = ActionPoint(x: point.x, y: point.y, coordinateSpace: .screen).jsonValue
@@ -475,6 +514,7 @@ public final class AXPrimitiveActionExecutor {
                 identityMessage: identityMessage,
                 strategy: "CGEventScroll"
             ),
+            fallback: semanticFallback,
             details: wheelDetails
         ) { candidate in
             var dispatch: ScrollDispatch?
@@ -1139,10 +1179,27 @@ public final class AXPrimitiveActionExecutor {
         return false
     }
 
+    /// What the element says it can do, or `nil` when the tree did not answer. An empty list is an
+    /// answer; a failed query is not, and the two must not be collapsed by a caller reasoning about
+    /// whether a mechanism exists.
+    private func advertisedActions(for element: AXUIElement) -> [String]? {
+        actionNamesProvider(element)
+    }
+
+    /// The advertised actions with an unanswered query read as none.
+    ///
+    /// This is what `click` wants: its semantic rung is an optimization over a pointer press it can
+    /// always fall back to, so an element that cannot say whether it takes `AXPress` is better
+    /// clicked than pressed. `scroll` cannot reason this way, because for it the accessibility rung
+    /// is the *safe* one — see `scrollToVisibleTarget`.
     private func actionNames(for element: AXUIElement) -> [String] {
+        advertisedActions(for: element) ?? []
+    }
+
+    private static func copyActionNames(_ element: AXUIElement) -> [String]? {
         var names: CFArray?
         guard AXUIElementCopyActionNames(element, &names) == .success else {
-            return []
+            return nil
         }
         return (names as? [String]) ?? []
     }
@@ -1241,21 +1298,42 @@ public final class AXPrimitiveActionExecutor {
             return nil
         }
 
-        let candidates = descendants(of: container, limit: 5_000).compactMap { element -> ScrollToVisibleTarget? in
-            guard let frame = frame(of: element), isOutside(frame, from: containerFrame, deltaX: deltaX, deltaY: deltaY) else {
-                return nil
+        // Only elements the delta could actually travel to are asked what they can do. The walk
+        // visits up to 5,000 descendants and an action-names read is a round trip each, so the
+        // cheap geometric test comes first and the capability question is asked of what survives it.
+        var elements: [AXUIElement] = []
+        var candidates: [ScrollToVisibleCandidate] = []
+        for element in descendants(of: container, limit: 5_000) {
+            guard let frame = frame(of: element),
+                  ScrollToVisibleSelector.isOutside(frame, container: containerFrame, deltaX: deltaX, deltaY: deltaY)
+            else {
+                continue
             }
-            return ScrollToVisibleTarget(element: element, frame: frame)
-        }
-        guard !candidates.isEmpty else {
-            return nil
+            elements.append(element)
+            // Only a proved absence disqualifies a candidate. A capability query that failed says
+            // nothing about the element, and dropping it on that basis would quietly convert a
+            // transient accessibility fault into a wheel burst at the named element's center —
+            // trading the rung that cannot disturb the wrong window for the one that can. Such a
+            // candidate is kept, and the action sent to it answers the question honestly.
+            let capability: ScrollToVisibleCapability
+            switch advertisedActions(for: element) {
+            case let .some(actions):
+                capability = actions.contains(Self.scrollToVisibleAction) ? .advertised : .absent
+            case .none:
+                capability = .unknown
+            }
+            candidates.append(ScrollToVisibleCandidate(frame: frame, capability: capability))
         }
 
-        let desired = desiredScrollCoordinate(from: containerFrame, deltaX: deltaX, deltaY: deltaY)
-        return candidates.min { lhs, rhs in
-            scrollDistance(lhs.frame, desired: desired, deltaX: deltaX, deltaY: deltaY)
-                < scrollDistance(rhs.frame, desired: desired, deltaX: deltaX, deltaY: deltaY)
+        guard let index = ScrollToVisibleSelector.select(
+            from: candidates,
+            container: containerFrame,
+            deltaX: deltaX,
+            deltaY: deltaY
+        ) else {
+            return nil
         }
+        return ScrollToVisibleTarget(element: elements[index], frame: candidates[index].frame)
     }
 
     private func scrollSeedElement(target: PointerTarget?, app: NSRunningApplication?) throws -> AXUIElement {
@@ -1346,25 +1424,6 @@ public final class AXPrimitiveActionExecutor {
         return element
     }
 
-    private func isOutside(_ frame: AXFrame, from container: AXFrame, deltaX: Double, deltaY: Double) -> Bool {
-        if abs(deltaY) >= abs(deltaX) {
-            return deltaY < 0 ? frame.y >= container.maxY : frame.maxY <= container.y
-        }
-        return deltaX < 0 ? frame.x >= container.maxX : frame.maxX <= container.x
-    }
-
-    private func desiredScrollCoordinate(from container: AXFrame, deltaX: Double, deltaY: Double) -> Double {
-        if abs(deltaY) >= abs(deltaX) {
-            return deltaY < 0 ? container.maxY + abs(deltaY) : container.y - abs(deltaY)
-        }
-        return deltaX < 0 ? container.maxX + abs(deltaX) : container.x - abs(deltaX)
-    }
-
-    private func scrollDistance(_ frame: AXFrame, desired: Double, deltaX: Double, deltaY: Double) -> Double {
-        let coordinate = abs(deltaY) >= abs(deltaX) ? frame.midY : frame.midX
-        return abs(coordinate - desired)
-    }
-
     private func frame(of element: AXUIElement) -> AXFrame? {
         frameProvider(element)
     }
@@ -1404,6 +1463,10 @@ public final class AXPrimitiveActionExecutor {
     }
 
     private func copyRawAttribute(_ attribute: String, from element: AXUIElement) -> AnyObject? {
+        attributeProvider(element, attribute)
+    }
+
+    private static func copyRawAttributeValue(_ element: AXUIElement, _ attribute: String) -> AnyObject? {
         var value: CFTypeRef?
         guard AXUIElementCopyAttributeValue(element, attribute as CFString, &value) == .success else {
             return nil
@@ -1593,12 +1656,6 @@ private struct ScrollToVisibleTarget {
     let frame: AXFrame
 }
 
-private extension AXFrame {
-    var maxX: Double { x + width }
-    var maxY: Double { y + height }
-    var midX: Double { x + width / 2 }
-    var midY: Double { y + height / 2 }
-}
 
 struct KeyStroke {
     let keyCode: CGKeyCode

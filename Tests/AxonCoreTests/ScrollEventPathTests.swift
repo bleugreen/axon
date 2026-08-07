@@ -284,3 +284,223 @@ private let scrollFrame = AXFrame(x: 10, y: 20, width: 100, height: 40)
     #expect(result.success == false)
     #expect(log.isEmpty)
 }
+
+// MARK: - The accessibility rung
+
+/// A stand-in accessibility subtree. Elements are identified by fake process identifiers, which is
+/// the only identity an `AXUIElement` carries when there is no live application behind it.
+private struct FakeAXNode {
+    var role: String
+    var frame: AXFrame?
+    /// `nil` stands for an element whose action list could not be read at all.
+    var actions: [String]? = []
+    var children: [pid_t] = []
+}
+
+private struct FakeAXTree {
+    let nodes: [pid_t: FakeAXNode]
+
+    func element(_ pid: pid_t) -> AXUIElement {
+        AXUIElementCreateApplication(pid)
+    }
+
+    private func node(for element: AXUIElement) -> FakeAXNode? {
+        var pid: pid_t = 0
+        guard AXUIElementGetPid(element, &pid) == .success else {
+            return nil
+        }
+        return nodes[pid]
+    }
+
+    var attributeProvider: (AXUIElement, String) -> AnyObject? {
+        { element, attribute in
+            guard let node = node(for: element) else {
+                return nil
+            }
+            switch attribute {
+            case kAXRoleAttribute:
+                return node.role as AnyObject
+            case kAXChildrenAttribute:
+                return node.children.map { AXUIElementCreateApplication($0) } as AnyObject
+            default:
+                return nil
+            }
+        }
+    }
+
+    var frameProvider: (AXUIElement) -> AXFrame? {
+        { node(for: $0)?.frame }
+    }
+
+    var actionNamesProvider: (AXUIElement) -> [String]? {
+        { node(for: $0)?.actions }
+    }
+}
+
+/// A scroll area with two descendants below the viewport. The nearer one is a plain row advertising
+/// no scrolling action, exactly as Finder's sidebar rows do; the further one advertises
+/// `AXScrollToVisible`, as Music's lists do.
+private let scrollAreaPid: pid_t = 200
+private let advertisedFrame = AXFrame(x: 0, y: 200, width: 200, height: 20)
+private let scrollTree = FakeAXTree(nodes: [
+    scrollAreaPid: FakeAXNode(
+        role: kAXScrollAreaRole,
+        frame: AXFrame(x: 0, y: 0, width: 200, height: 100),
+        children: [201, 202]
+    ),
+    201: FakeAXNode(role: "AXRow", frame: AXFrame(x: 0, y: 480, width: 200, height: 20), actions: ["AXShowDefaultUI"]),
+    202: FakeAXNode(role: "AXList", frame: advertisedFrame, actions: ["AXScrollToVisible"])
+])
+
+/// The same subtree with no descendant able to answer what it can do, as a busy or half-torn-down
+/// application produces.
+private let unreadableScrollTree = FakeAXTree(nodes: scrollTree.nodes.mapValues { node in
+    var node = node
+    if node.role != kAXScrollAreaRole {
+        node.actions = nil
+    }
+    return node
+})
+
+private func scrollExecutor(
+    tree: FakeAXTree = scrollTree,
+    performAction: @escaping (AXUIElement, String) -> AXError,
+    posted: @escaping (CGEvent) -> Void,
+    processProvider: ((AXUIElement) -> pid_t?)? = nil
+) -> AXPrimitiveActionExecutor {
+    let store = AXElementStore()
+    store.store(snapshotID: SnapshotID("scroll"), elements: [tree.element(scrollAreaPid)])
+    return AXPrimitiveActionExecutor(
+        elementStore: store,
+        overlay: nil,
+        postEvent: posted,
+        postEventToProcess: { event, _ in posted(event) },
+        sleepMilliseconds: { _ in },
+        hitTest: { _ in nil },
+        frameProvider: tree.frameProvider,
+        parentProvider: { _ in nil },
+        processProvider: processProvider,
+        attributeProvider: tree.attributeProvider,
+        actionNamesProvider: tree.actionNamesProvider,
+        performAction: performAction
+    )
+}
+
+@Test func scrollPressesTheAccessibilityActionOnTheDescendantThatAdvertisesIt() throws {
+    // The nearer row is the better geometric answer and the wrong one: it cannot perform the
+    // action. Selecting the further list is what keeps the accessibility rung working in the apps
+    // that do expose it.
+    var posted: [CGEvent] = []
+    var attempts: [String] = []
+    let executor = scrollExecutor(
+        performAction: { _, name in attempts.append(name); return .success },
+        posted: { posted.append($0) }
+    )
+
+    let result = try executor.scroll(target: .handle("scroll:0"), app: nil, deltaX: 0, deltaY: -400, policy: .foregroundPermitted)
+
+    #expect(attempts == ["AXScrollToVisible"])
+    #expect(result.strategy == "AXScrollToVisible")
+    #expect(result.delivery == .semantic)
+    #expect(result.success)
+    #expect(result.details["scrollTargetFrame"] == advertisedFrame.jsonValue)
+    #expect(posted.isEmpty)
+}
+
+@Test func scrollAdvancesToTheWheelWhenTheAccessibilityActionIsNotAMechanism() throws {
+    // An element that advertises an action and then reports it unsupported refused nothing: the app
+    // was never asked to decide, so the wheel rung below is still owed its attempt.
+    for error in [AXError.actionUnsupported, .attributeUnsupported] {
+        var posted: [CGEvent] = []
+        var attempts = 0
+        let executor = scrollExecutor(
+            performAction: { _, _ in attempts += 1; return error },
+            posted: { posted.append($0) }
+        )
+
+        let result = try executor.scroll(target: .handle("scroll:0"), app: nil, deltaX: 0, deltaY: -400, policy: .foregroundPermitted)
+
+        #expect(attempts == 1)
+        #expect(result.strategy == "CGEventScrollToPid")
+        #expect(result.delivery == .pixel)
+        #expect(result.dispatchSuccess)
+        #expect(result.details["eventPath"]?["totalDeltaY"] == .double(-400))
+        // The wheel is aimed at the element the caller named, never at the ranked descendant, so
+        // the descendant's frame has no business describing this dispatch.
+        #expect(result.details["scrollTargetFrame"] == nil)
+        #expect(posted.allSatisfy { $0.location == CGPoint(x: 100, y: 50) })
+        #expect(!posted.isEmpty)
+    }
+}
+
+@Test func scrollDoesNotAdvancePastAnAccessibilityActionTheAppAnswered() throws {
+    // The app was asked and something went wrong. That is a failed scroll, not a licence to send
+    // unrelated global input at the same coordinates.
+    var posted: [CGEvent] = []
+    let executor = scrollExecutor(
+        performAction: { _, _ in .cannotComplete },
+        posted: { posted.append($0) }
+    )
+
+    let result = try executor.scroll(target: .handle("scroll:0"), app: nil, deltaX: 0, deltaY: -400, policy: .foregroundPermitted)
+
+    #expect(result.strategy == "AXScrollToVisible")
+    #expect(result.success == false)
+    #expect(result.message == "AXScrollToVisible returned cannotComplete (-25204)")
+    #expect(posted.isEmpty)
+}
+
+@Test func scrollReportsTheAccessibilityFailureWhenNoWheelRungRemains() throws {
+    // With no process to bind to and no permission to use the shared devices, the wheel never runs.
+    // The caller must hear what accessibility said, not that the wheel had nowhere to aim.
+    var posted: [CGEvent] = []
+    let executor = scrollExecutor(
+        performAction: { _, _ in .actionUnsupported },
+        posted: { posted.append($0) },
+        processProvider: { _ in nil }
+    )
+
+    let result = try executor.scroll(target: .handle("scroll:0"), app: nil, deltaX: 0, deltaY: -400, policy: .backgroundOnly)
+
+    #expect(result.success == false)
+    #expect(result.message?.hasPrefix("AXScrollToVisible returned actionUnsupported (-25206)") == true)
+    #expect(result.refusal != nil)
+    #expect(posted.isEmpty)
+}
+
+@Test func scrollStillAttemptsAccessibilityWhenCapabilityCannotBeRead() throws {
+    // A failed capability query says nothing about the element. Dropping such a candidate would
+    // convert a transient accessibility fault into a wheel burst at the named element's center —
+    // trading the rung that cannot disturb the wrong window for the one that can — so the nearest
+    // candidate is attempted and its answer decides.
+    var posted: [CGEvent] = []
+    let refusing = scrollExecutor(
+        tree: unreadableScrollTree,
+        performAction: { _, _ in .cannotComplete },
+        posted: { posted.append($0) }
+    )
+
+    let refused = try refusing.scroll(target: .handle("scroll:0"), app: nil, deltaX: 0, deltaY: -400, policy: .foregroundPermitted)
+
+    #expect(refused.strategy == "AXScrollToVisible")
+    #expect(refused.success == false)
+    #expect(refused.message == "AXScrollToVisible returned cannotComplete (-25204)")
+    // Ranking among unproved candidates is plain geometry, so the nearer row is the one attempted —
+    // not the element that happens to advertise the action in the readable fixture.
+    #expect(refused.details["scrollTargetFrame"]?["y"] == .double(480))
+    #expect(posted.isEmpty)
+
+    // And when the attempt does prove the mechanism absent, the ordinary advance rule applies.
+    posted = []
+    let unsupported = scrollExecutor(
+        tree: unreadableScrollTree,
+        performAction: { _, _ in .actionUnsupported },
+        posted: { posted.append($0) }
+    )
+
+    let advanced = try unsupported.scroll(target: .handle("scroll:0"), app: nil, deltaX: 0, deltaY: -400, policy: .foregroundPermitted)
+
+    #expect(advanced.strategy == "CGEventScrollToPid")
+    #expect(advanced.dispatchSuccess)
+    #expect(!posted.isEmpty)
+}
