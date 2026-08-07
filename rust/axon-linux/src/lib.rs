@@ -169,14 +169,41 @@ impl<B: PointerTargetVerifier> Router<B> {
                     return Ok(self.refusal(&ladder, policy));
                 };
                 let app = app_query(params);
-                // `keyboard` without an app is explicitly addressed at whatever holds the
-                // foreground, so there is nothing to activate and nothing to restore. With an app
-                // it is aimed, and the transaction proves that app came forward first.
-                let named = app.name.clone();
+                // `keyboard` naming no application is explicitly addressed at whatever holds the
+                // foreground: nothing to activate, nothing to restore. Naming one makes it aimed,
+                // and the transaction compares and activates the backend's own identity for that
+                // application — not the display name or caller-facing identifier the request
+                // carried, which no backend answers with.
+                let aimed = app.name.is_some() || app.identifier.is_some();
+                let target = if aimed {
+                    match self
+                        .backend
+                        .resolve_application(&app)
+                        .map_err(backend_error)?
+                    {
+                        Some(identity) => Some(identity),
+                        // Falling through to the frontmost here would post keystrokes into whatever
+                        // the user happens to be working in, having been asked for something else.
+                        None => {
+                            return Ok(DeliveryOutcome::refusal_result(
+                                policy,
+                                DeliveryRefusal::new(
+                                    DeliveryRefusalReason::TargetIdentityUnavailable,
+                                    DeliveryRung::Foreground,
+                                    Some(DeliveryCapability::GlobalInput),
+                                    "the requested application could not be identified, so \
+                                     foreground delivery cannot activate and prove it",
+                                ),
+                            ));
+                        }
+                    }
+                } else {
+                    None
+                };
                 self.foreground_dispatch(
                     policy,
                     &candidate,
-                    named
+                    target
                         .as_deref()
                         .map_or(ForegroundTarget::Frontmost, ForegroundTarget::Application),
                     // Keyboard input never touches the cursor, and capturing a pointer it does not
@@ -320,10 +347,14 @@ impl<B: PointerTargetVerifier> Router<B> {
             }
             return Ok(result);
         }
-        dispatch
-            .value
-            .expect("a proved activation dispatches")
-            .map_err(backend_error)?;
+        if let Err(error) = dispatch.value.expect("a proved activation dispatches") {
+            // The transaction activated and then handed the session back around this failure, so
+            // its cleanup evidence is the only record of what happened to the user's foreground.
+            // It rides on the error rather than being dropped.
+            let mut failure = backend_error(error);
+            failure.data = Some(json!({ "foreground": dispatch.cleanup }));
+            return Err(failure);
+        }
 
         let mut result = json!({
             // Dispatch evidence survives a failed restoration, but the action as a whole did not

@@ -205,6 +205,22 @@ pub trait PlatformBackend {
         })
     }
 
+    /// The stable identity of the application an `AppQuery` names, spelled exactly the way
+    /// `frontmost_application` and `activate_application` spell it.
+    ///
+    /// A foreground escalation aimed at an application compares and activates that string, and a
+    /// request carries a display name or a caller-visible identifier instead. Without this
+    /// translation an aimed action can never match what the backend answers with, and would refuse
+    /// every time.
+    ///
+    /// `Ok(None)` means no application matched. A caller must not read that as "whatever is
+    /// frontmost": posting global input at an application the request never named is precisely what
+    /// the transaction exists to prevent.
+    fn resolve_application(&mut self, app: &AppQuery) -> Result<Option<String>, BackendError> {
+        let _ = app;
+        Ok(None)
+    }
+
     /// Where the real pointer is now, in the same screen coordinates a dispatch is aimed with.
     ///
     /// `Ok(None)` is the answer of a backend with no pointer to speak of: a dispatch here cannot
