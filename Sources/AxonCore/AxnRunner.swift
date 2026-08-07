@@ -702,7 +702,15 @@ public struct AxnRunner {
         case "wait_for_value":
             return result["wait"] ?? .object(result)
         default:
-            return result["action"] ?? .object(result)
+            guard case var .object(action)? = result["action"] else {
+                var trimmed = result
+                trimmed.removeValue(forKey: "targetResolution")
+                trimmed.removeValue(forKey: "targetResolutions")
+                return .object(trimmed)
+            }
+            action.removeValue(forKey: "targetResolution")
+            action.removeValue(forKey: "targetResolutions")
+            return .object(action)
         }
     }
 
