@@ -41,6 +41,7 @@ The four guarantees Axon tries to make:
 - [The `.axn` File](docs/axn.md) — file schema, history export, replay
 - [Design](docs/design.md) — architecture and long-term direction
 - [Decision Log](docs/decision-log.md) — durable decisions made while shaping the project
+- [Computer-use ecosystem research](docs/computer-use-ecosystem.md) — transferable patterns from adjacent automation projects
 - [Open Issues](docs/issues) — known gaps and active follow-up work
 
 ## Current Shape
