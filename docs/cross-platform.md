@@ -100,9 +100,10 @@ The daemon serves `health` and `shutdown` as ordinary JSON-RPC methods on the
 mode-0600 `$XDG_RUNTIME_DIR/axon-v1.sock`, so a lifecycle command learns which
 process it stopped from the reply. Session facts are detected independently —
 user manager, display, session bus — so a host can report an honest partial
-state instead of one collapsed guess. Wayland's restrictions on synthetic
-pointer and keyboard input are overlaid on the backend's static capability list
-at status time, because the same build behaves differently under X11.
+state instead of one collapsed guess. Synthetic pointer and keyboard input are
+reported per session rather than per build, because the same binary can deliver
+them on an X11 session with a window manager and cannot on a Wayland one, and the
+same answer feeds both `status` and the dispatch ladder.
 
 ## Windows backend
 
@@ -341,6 +342,14 @@ self-hosted runners. Each job selects both `self-hosted` and the runner's
 dedicated `axon-live-*` label, so GitHub cannot silently route it to a hosted
 machine or to the wrong operating system.
 
+The Linux job also runs the hermetic X11 foreground test under `Xvfb`. That test
+brings its own miniature EWMH window manager rather than depending on an
+installed desktop, so it needs only the `Xvfb` binary and behaves the same on
+every run. It gates pull requests deliberately: the project's only real Linux
+desktop is a GNOME Wayland session, which is the worst possible place to verify
+X11 activation, and the live lane asserts the opposite property there — that
+global input stays withheld at both policies with a reason naming Wayland.
+
 The separate `Live desktop verification` workflow is a reporting lane. It runs
 only after a push to `main` or an explicit manual dispatch, never for a pull
 request. Its self-hosted jobs use dedicated `axon-live-*` labels and serialize
@@ -352,7 +361,9 @@ failure reports a real integration regression without blocking a pull request:
   a button, invokes `AXPress`, and verifies the display changed;
 - Linux connects to the logged-in GNOME session's AT-SPI bus and runs the
   hardened Calculator probe, which verifies the expected text transition on the
-  same AT-SPI object that was captured before dispatch;
+  same AT-SPI object that was captured before dispatch, then asserts that
+  `keyboard` refuses with `noDeliveryCandidate` at both policies because the
+  session is Wayland;
 - Windows uses a localhost-only, forced-command SSH key to cross from the
   runner's session-0 service into the desktop user's process context. The fixed
   probe rebuilds `axon-win`, snapshots and temporarily replaces the scheduled
