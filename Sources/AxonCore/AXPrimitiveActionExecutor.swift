@@ -236,7 +236,7 @@ public final class AXPrimitiveActionExecutor {
         showTargetBeforeAction(element, label: name)
         // Invoke has exactly one rung. A named accessibility action that the element refuses is a
         // failed action, never a reason to send unrelated global input at its coordinates.
-        let result = AXUIElementPerformAction(element, name as CFString)
+        let result = performAction(element, name)
         return PrimitiveActionResult.dispatched(
             action: name,
             target: target,
@@ -244,7 +244,7 @@ public final class AXPrimitiveActionExecutor {
             policy: policy,
             delivery: .semantic,
             success: result == .success,
-            message: result == .success ? nil : "AXUIElementPerformAction returned \(result.rawValue)"
+            message: result == .success ? nil : "AXUIElementPerformAction returned \(result.axonDescription)"
         )
     }
 
@@ -270,7 +270,7 @@ public final class AXPrimitiveActionExecutor {
         }
         let semanticFailure = setResult == .success
             ? "AXUIElementSetAttributeValue did not update the element value"
-            : "AXUIElementSetAttributeValue returned \(setResult.rawValue)"
+            : "AXUIElementSetAttributeValue returned \(setResult.axonDescription)"
 
         let point = centerPoint(of: element)
         let process = processProvider(element)

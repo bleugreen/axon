@@ -204,7 +204,7 @@ public struct AXFullTreeCapturer {
             if error == .noValue || error == .attributeUnsupported {
                 return .none
             }
-            return .inaccessible(error: "AXFocusedUIElement query failed (AXError \(error.rawValue))")
+            return .inaccessible(error: "AXFocusedUIElement query failed (\(error.axonDescription))")
         }
         guard let value else {
             return .none
