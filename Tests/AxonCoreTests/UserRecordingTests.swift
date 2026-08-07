@@ -594,14 +594,14 @@ import Testing
         "app": .string("Example"),
         "locator": .object([
             "role": .string("AXButton"),
-            "title": .string("Submit")
+            "title": .string("Refresh")
         ])
     ])
     let observation = ActionObservation(
         tool: "click",
         app: "Example",
-        targetBefore: buttonState(value: "Idle"),
-        targetAfter: buttonState(value: "Working"),
+        targetBefore: buttonState(locator: ["role": .string("AXButton"), "title": .string("Refresh")], value: "Idle"),
+        targetAfter: buttonState(locator: ["role": .string("AXButton"), "title": .string("Refresh")], value: "Working"),
         settled: false
     )
 
