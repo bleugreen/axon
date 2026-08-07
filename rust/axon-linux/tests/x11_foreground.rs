@@ -63,12 +63,16 @@ fn the_x11_session_reads_activates_dispatches_and_restores_the_foreground() {
     );
 
     // Capture the prior foreground, exactly as the transaction does first.
-    let prior = session.active_window_pid().expect("the active window reads");
+    let prior = session
+        .active_window_pid()
+        .expect("the active window reads");
     assert_eq!(prior, Some(FIRST_PID));
 
     // Activate the other window and prove it came forward, rather than trusting the request.
     assert!(
-        session.activate_pid(SECOND_PID).expect("activation is sent"),
+        session
+            .activate_pid(SECOND_PID)
+            .expect("activation is sent"),
         "a process with a managed window has something to raise"
     );
     assert!(
@@ -92,7 +96,9 @@ fn the_x11_session_reads_activates_dispatches_and_restores_the_foreground() {
     // Hand the session back: the cursor first, then the window.
     session.warp_pointer(origin).expect("the pointer warps");
     assert!(
-        settle(|| session.pointer_location().is_ok_and(|now| near(now, origin))),
+        settle(|| session
+            .pointer_location()
+            .is_ok_and(|now| near(now, origin))),
         "the pointer returns to where the dispatch found it"
     );
 
@@ -266,7 +272,9 @@ fn start_manager() -> Result<Manager, String> {
 
     let mut windows = Vec::new();
     for pid in [FIRST_PID, SECOND_PID] {
-        let window = connection.generate_id().map_err(|error| error.to_string())?;
+        let window = connection
+            .generate_id()
+            .map_err(|error| error.to_string())?;
         connection
             .create_window(
                 COPY_DEPTH_FROM_PARENT,

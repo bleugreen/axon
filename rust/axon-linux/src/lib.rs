@@ -1103,10 +1103,7 @@ mod tests {
             panic!("an opted-in click dispatches")
         };
         assert_eq!(success.result["delivery"], json!("foreground"));
-        assert_eq!(
-            success.result["foreground"]["pointerRestored"],
-            json!(true)
-        );
+        assert_eq!(success.result["foreground"]["pointerRestored"], json!(true));
         assert_eq!(success.result["foreground"]["restored"], json!(true));
         assert_eq!(success.result["success"], json!(true));
         // Both halves of the session are as the user left them.
@@ -1135,10 +1132,7 @@ mod tests {
             panic!("an opted-in keystroke dispatches")
         };
         assert_eq!(success.result["delivery"], json!("foreground"));
-        assert_eq!(
-            success.result["foreground"]["pointerRestored"],
-            Value::Null
-        );
+        assert_eq!(success.result["foreground"]["pointerRestored"], Value::Null);
         assert_eq!(success.result["success"], json!(true));
     }
 
