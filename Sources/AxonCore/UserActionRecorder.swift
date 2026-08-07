@@ -39,6 +39,9 @@ public final class UserActionRecorder {
         let element: AXUIElement
         let app: AppIdentity
         let actionTarget: CapturedTarget
+        /// Begun at capture, not at flush: the burst's before-read must predate the typing it
+        /// watches, so it cannot wait for the event that ends the burst.
+        let observation: ActionObservationCollector
     }
 
     private let scope: UserRecordingScope
@@ -49,9 +52,15 @@ public final class UserActionRecorder {
     private var observerSource: CFRunLoopSource?
     private var groups: [RecordedUserEventGroup] = []
     private var mouseDown: CGPoint?
+    private var mouseDownObservation: ActionObservationCollector?
     private var pendingText = ""
     private var pendingTextContext: PendingTextContext?
     private let notificationEvidence = AXNotificationEvidenceBuffer()
+    /// Retains each recorded event's element so the stock `AXElementObserver` can read it by
+    /// handle: the same targeted reads the agent dispatch path observes with, not a second set
+    /// of attribute reads.
+    private let elementStore = AXElementStore()
+    private lazy var elementObserver = AXElementObserver(elementStore: elementStore)
 
     public convenience init(targetApp: AppIdentity) {
         self.init(scope: .app(targetApp))
@@ -110,12 +119,14 @@ public final class UserActionRecorder {
         if IsSecureEventInputEnabled() {
             pendingText = ""
             pendingTextContext = nil
+            mouseDownObservation = nil
             return Unmanaged.passUnretained(event)
         }
 
         switch type {
         case .leftMouseDown:
             mouseDown = event.location
+            mouseDownObservation = beginMouseObservation(at: event.location)
         case .leftMouseUp:
             flushPendingText()
             recordMouseUp(at: event.location)
@@ -133,23 +144,61 @@ public final class UserActionRecorder {
 
     private func recordMouseUp(at point: CGPoint) {
         guard recordingApp(at: point) != nil else {
+            mouseDownObservation = nil
             return
         }
         let target = targetAtPoint(point)
         if let mouseDown, distance(mouseDown, point) > 6 {
             let from = targetAtPoint(mouseDown)
+            let index = groups.count
             groups.append(RecordedUserEventGroup(
                 action: .drag(from: from.target, to: target.target, app: target.app?.name ?? from.app?.name, durationMs: nil),
-                observed: target.observed + from.observed + drainNotificationEvidence(),
+                observed: target.observed + from.observed,
                 warnings: target.warnings + from.warnings
             ))
+            finishMouseObservation(groupIndex: index)
             return
         }
+        let index = groups.count
         groups.append(RecordedUserEventGroup(
             action: .click(target: target.target),
-            observed: target.observed + drainNotificationEvidence(),
+            observed: target.observed,
             warnings: target.warnings
         ))
+        finishMouseObservation(groupIndex: index)
+    }
+
+    /// The only before-read a passive tap can take: the press has not been delivered to the app
+    /// yet, so the element under it is still in its pre-gesture state. Whether the gesture ends
+    /// as a click or a drag is unknowable here; the tool name only labels the observation, and
+    /// the translator derives facts from the recorded action either way.
+    private func beginMouseObservation(at point: CGPoint) -> ActionObservationCollector? {
+        let systemWide = AXUIElementCreateSystemWide()
+        var element: AXUIElement?
+        guard AXUIElementCopyElementAtPosition(systemWide, Float(point.x), Float(point.y), &element) == .success,
+              let element,
+              recordingApp(for: element) != nil,
+              !isSensitive(element)
+        else {
+            return nil
+        }
+        return beginObservation(tool: "click", element: element)
+    }
+
+    /// Finishes the settle wait and folds the outcome into the gesture's group. The group is
+    /// appended before the wait, not after: the wait spins the run loop, and an event delivered
+    /// during it must record after the gesture that is still settling, never before.
+    private func finishMouseObservation(groupIndex: Int) {
+        let collector = mouseDownObservation
+        mouseDownObservation = nil
+        collector?.finish(success: true)
+        let group = groups[groupIndex]
+        groups[groupIndex] = RecordedUserEventGroup(
+            action: group.action,
+            observed: group.observed + drainNotificationEvidence(),
+            warnings: group.warnings,
+            observation: collector?.observation
+        )
     }
 
     private func recordScroll(_ event: CGEvent) {
@@ -176,8 +225,18 @@ public final class UserActionRecorder {
         let keyCode = Int(event.getIntegerValueField(.keyboardEventKeycode))
         let text = unicodeText(from: event)
         if let key = RecordedKeyClassifier.specialKeyName(keyCode: keyCode, text: text) {
+            // Begun before the flush: the flush's settle wait gives the app time to process this
+            // very key, which would contaminate the before-read with the key's own effect.
+            let keyObservation = beginKeyObservation(app: app, key: key)
             flushPendingText()
-            groups.append(RecordedUserEventGroup(action: .pressKey(app: app.name, key: key), observed: drainNotificationEvidence()))
+            let index = groups.count
+            groups.append(RecordedUserEventGroup(action: .pressKey(app: app.name, key: key)))
+            keyObservation?.finish(success: true)
+            groups[index] = RecordedUserEventGroup(
+                action: groups[index].action,
+                observed: drainNotificationEvidence(),
+                observation: keyObservation?.observation
+            )
             return
         }
 
@@ -193,28 +252,35 @@ public final class UserActionRecorder {
         guard !pendingText.isEmpty else {
             return
         }
-        defer {
-            pendingText = ""
-            pendingTextContext = nil
-        }
-        guard let context = pendingTextContext ?? pendingTextContextForCurrentFocus(),
-              !isSensitive(context.element)
-        else {
+        // Cleared before the settle wait below: the wait spins the run loop, and an event
+        // delivered during it must start a fresh burst rather than re-enter this flush.
+        let text = pendingText
+        let context = pendingTextContext ?? pendingTextContextForCurrentFocus()
+        pendingText = ""
+        pendingTextContext = nil
+        guard let context, !isSensitive(context.element) else {
             return
         }
-        notificationEvidence.waitForValueChange(on: context.element, timeout: 0.15)
-        let factTarget = targetForElement(context.element, app: context.app)
-        if let value: String = attribute(kAXValueAttribute, from: context.element), !value.isEmpty {
+
+        context.observation.finish(success: true)
+        let observation = context.observation.observation
+        // The settled read is the recorded value: the state the surface actually reached, where
+        // a mid-burst read could catch a field still processing the last keystroke.
+        let value: String? = observation?.targetAfter?.value ?? attribute(kAXValueAttribute, from: context.element)
+        if let value, !value.isEmpty {
+            let factTarget = targetForElement(context.element, app: context.app)
             groups.append(RecordedUserEventGroup(
                 action: .setValue(target: context.actionTarget.target, value: value, factTarget: factTarget.target),
                 observed: context.actionTarget.observed + factTarget.observed + drainNotificationEvidence(),
-                warnings: context.actionTarget.warnings + factTarget.warnings
+                warnings: context.actionTarget.warnings + factTarget.warnings,
+                observation: observation
             ))
         } else {
             groups.append(RecordedUserEventGroup(
-                action: .typeText(app: context.app.name, text: pendingText),
+                action: .typeText(app: context.app.name, text: text),
                 observed: context.actionTarget.observed + drainNotificationEvidence(),
-                warnings: context.actionTarget.warnings + ["focused element did not expose AXValue; recorded keyboard fallback"]
+                warnings: context.actionTarget.warnings + ["focused element did not expose AXValue; recorded keyboard fallback"],
+                observation: observation
             ))
         }
     }
@@ -223,10 +289,48 @@ public final class UserActionRecorder {
         guard let focused = focusedElement(), !isSensitive(focused.element) else {
             return nil
         }
+        // The burst's full text is unknowable at the first keyDown, so the observation carries
+        // no inputs; the translator excludes the recorded value through workflow inputs instead.
         return PendingTextContext(
             element: focused.element,
             app: focused.app,
-            actionTarget: targetForElement(focused.element, app: focused.app)
+            actionTarget: targetForElement(focused.element, app: focused.app),
+            observation: beginObservation(tool: "type", element: focused.element)
+        )
+    }
+
+    private func beginKeyObservation(app: AppIdentity, key: String) -> ActionObservationCollector? {
+        if let focused = focusedElement(), !isSensitive(focused.element) {
+            return beginObservation(tool: "keyboard", element: focused.element, inputs: [key])
+        }
+        return beginAppObservation(tool: "keyboard", app: app, inputs: [key])
+    }
+
+    private func beginObservation(tool: String, element: AXUIElement, inputs: [String] = []) -> ActionObservationCollector {
+        let snapshotID = SnapshotID.next()
+        elementStore.store(snapshotID: snapshotID, elements: [element])
+        let collector = makeObservationCollector()
+        collector.begin(tool: tool, handle: SnapshotHandle(snapshotID: snapshotID, nodeIndex: 0).rawValue, inputs: inputs)
+        return collector
+    }
+
+    private func beginAppObservation(tool: String, app: AppIdentity, inputs: [String] = []) -> ActionObservationCollector {
+        let collector = makeObservationCollector()
+        collector.begin(tool: tool, app: app.name, inputs: inputs)
+        return collector
+    }
+
+    private func makeObservationCollector() -> ActionObservationCollector {
+        ActionObservationCollector(
+            observer: elementObserver,
+            sleepMilliseconds: { milliseconds in
+                // Spinning the run loop, rather than sleeping the thread, keeps AX observer
+                // notifications flowing into the evidence buffer while the settle loop waits, so
+                // a transition the event caused is attributed to that event's group.
+                CFRunLoopRunInMode(CFRunLoopMode.defaultMode, Double(milliseconds) / 1_000, true)
+            },
+            now: Date.init,
+            settlesAfter: ActionObservationCollector.settlesAfterEveryTool
         )
     }
 
@@ -266,7 +370,7 @@ public final class UserActionRecorder {
         if let role: String = attribute(kAXRoleAttribute, from: element) {
             object["role"] = .string(role)
         }
-        notificationEvidence.append(.object(object), notification: notification as String, element: element)
+        notificationEvidence.append(.object(object))
     }
 
     private func drainNotificationEvidence() -> [JSONValue] {
@@ -505,69 +609,15 @@ public final class UserActionRecorder {
 }
 
 final class AXNotificationEvidenceBuffer {
-    private struct Entry {
-        let evidence: JSONValue
-        let notification: String
-        let element: AnyObject
-    }
+    private var entries: [JSONValue] = []
 
-    private var entries: [Entry] = []
-    private let runLoop: CFRunLoop
-    private let runLoopMode: CFRunLoopMode
-    private let elementMatches: (AnyObject, AnyObject) -> Bool
-    private let now: () -> Date
-    private let runUntil: (Date) -> Void
-
-    init(
-        runLoop: CFRunLoop = CFRunLoopGetMain(),
-        runLoopMode: CFRunLoopMode = CFRunLoopMode.defaultMode,
-        elementMatches: @escaping (AnyObject, AnyObject) -> Bool = { CFEqual($0, $1) },
-        now: @escaping () -> Date = Date.init,
-        runUntil: ((Date) -> Void)? = nil
-    ) {
-        self.runLoop = runLoop
-        self.runLoopMode = runLoopMode
-        self.elementMatches = elementMatches
-        self.now = now
-        self.runUntil = runUntil ?? { deadline in
-            let interval = max(0, deadline.timeIntervalSinceNow)
-            guard interval > 0 else {
-                return
-            }
-            CFRunLoopRunInMode(runLoopMode, interval, true)
-        }
-    }
-
-    func append(_ evidence: JSONValue, notification: String, element: AnyObject) {
-        entries.append(Entry(evidence: evidence, notification: notification, element: element))
+    func append(_ evidence: JSONValue) {
+        entries.append(evidence)
     }
 
     func drain() -> [JSONValue] {
         defer { entries.removeAll() }
-        return entries.map(\.evidence)
-    }
-
-    func waitForValueChange(on element: AnyObject, timeout: TimeInterval) {
-        waitForNotification(kAXValueChangedNotification as String, on: element, timeout: timeout)
-    }
-
-    func waitForNotification(_ notification: String, on element: AnyObject, timeout: TimeInterval) {
-        guard timeout > 0 else {
-            return
-        }
-        let deadline = now().addingTimeInterval(timeout)
-        while now() < deadline {
-            if contains(notification: notification, element: element) {
-                return
-            }
-            runUntil(deadline)
-        }
-    }
-
-    private func contains(notification: String, element: AnyObject) -> Bool {
-        entries.contains { entry in
-            entry.notification == notification && elementMatches(entry.element, element)
-        }
+        return entries
     }
 }
 
