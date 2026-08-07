@@ -403,18 +403,23 @@ mod lifecycle {
         }
         fs::write(&path, unit_file(&executable))?;
         systemctl(&["daemon-reload"])?;
-        systemctl(&["enable", "--now", UNIT_NAME])?;
-        println!("registered {UNIT_NAME} -> {executable}");
 
+        // Without a desktop the unit is enabled but deliberately not started. `--now` would start
+        // it anyway, contradicting the unit's own binding to graphical-session.target and leaving
+        // a daemon running where it has no desktop to automate.
         let session = session_health(&SessionEnvironment::from_env());
         if !session.graphical {
+            systemctl(&["enable", UNIT_NAME])?;
+            println!("registered {UNIT_NAME} -> {executable}");
             println!(
-                "daemon not started: {} — it will start with the graphical session",
+                "daemon not started: {}; it will start with the graphical session",
                 session.reason.as_deref().unwrap_or("no graphical session")
             );
             return Ok(());
         }
 
+        systemctl(&["enable", "--now", UNIT_NAME])?;
+        println!("registered {UNIT_NAME} -> {executable}");
         let report = socket::wait_until_ready(Duration::from_secs(60))?;
         println!(
             "daemon ready (pid {}, version {})",
@@ -530,7 +535,7 @@ mod status {
     }
 
     fn print_human(report: &HealthReport) {
-        println!("Version:        {}", report.version);
+        println!("{:<16}{}", "Version:", report.version);
         println!(
             "Daemon:         {}",
             match (report.daemon.running, report.daemon.ready) {
@@ -565,7 +570,7 @@ mod status {
         for permission in &report.permissions {
             println!(
                 "{:<16}{}",
-                format!("{}:", permission.name),
+                format!("{}", permission.name),
                 if permission.granted {
                     "granted"
                 } else {
