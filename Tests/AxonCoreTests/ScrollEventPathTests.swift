@@ -220,53 +220,44 @@ private let scrollFrame = AXFrame(x: 10, y: 20, width: 100, height: 40)
     #expect(!posted.isEmpty)
 }
 
-@Test func scrollActivatesForTheWheelAndNeverBeforeStrategySelection() throws {
-    // Activation is the wheel's own precondition, so it must not happen until a wheel is about to
-    // be posted: an accessibility scroll that never needs it must not take the user's focus, and a
-    // target that resolves to no point must not disturb the UI at all.
+@Test func scrollNeverActivatesTheNamedApp() throws {
+    // A posted wheel routes by the event's location regardless of which app is frontmost, so
+    // raising the app would only take the user's focus. Naming an app must stay side-effect free
+    // for every target kind and every outcome.
     var log: [String] = []
     let store = AXElementStore()
     store.store(snapshotID: SnapshotID("scroll"), elements: [AXUIElementCreateApplication(123)])
 
-    let pointing = AXPrimitiveActionExecutor(
-        elementStore: store,
-        overlay: nil,
-        postEvent: { _ in log.append("post") },
-        sleepMilliseconds: { _ in },
-        activateApp: { log.append("activate:\($0)") },
-        hitTest: { _ in nil },
-        frameProvider: { _ in scrollFrame },
-        parentProvider: { _ in nil }
-    )
+    func executor(frame: AXFrame?) -> AXPrimitiveActionExecutor {
+        AXPrimitiveActionExecutor(
+            elementStore: store,
+            overlay: nil,
+            postEvent: { _ in log.append("post") },
+            sleepMilliseconds: { _ in },
+            activateApp: { log.append("activate:\($0)") },
+            hitTest: { _ in nil },
+            frameProvider: { _ in frame },
+            parentProvider: { _ in nil }
+        )
+    }
 
-    _ = try pointing.scroll(
+    let scrolling = executor(frame: scrollFrame)
+    _ = try scrolling.scroll(
         target: .point(ActionPoint(x: 10, y: 20, coordinateSpace: .screen)),
         app: "Example",
         deltaX: 0,
         deltaY: -400
     )
-    #expect(log.first == "activate:Example")
-    #expect(log.filter { $0.hasPrefix("activate") }.count == 1)
     #expect(log.contains("post"))
+    #expect(!log.contains { $0.hasPrefix("activate") })
 
     log = []
-    _ = try pointing.scroll(target: .handle("scroll:0"), app: "Example", deltaX: 0, deltaY: -400)
-    #expect(log.first == "activate:Example")
+    _ = try scrolling.scroll(target: .handle("scroll:0"), app: "Example", deltaX: 0, deltaY: -400)
+    #expect(log.contains("post"))
+    #expect(!log.contains { $0.hasPrefix("activate") })
 
-    // No usable frame means no screen point, so there is nothing to activate for.
     log = []
-    let unresolvable = AXPrimitiveActionExecutor(
-        elementStore: store,
-        overlay: nil,
-        postEvent: { _ in log.append("post") },
-        sleepMilliseconds: { _ in },
-        activateApp: { log.append("activate:\($0)") },
-        hitTest: { _ in nil },
-        frameProvider: { _ in nil },
-        parentProvider: { _ in nil }
-    )
-
-    let result = try unresolvable.scroll(target: .handle("scroll:0"), app: "Example", deltaX: 0, deltaY: -400)
+    let result = try executor(frame: nil).scroll(target: .handle("scroll:0"), app: "Example", deltaX: 0, deltaY: -400)
     #expect(result.success == false)
     #expect(log.isEmpty)
 }

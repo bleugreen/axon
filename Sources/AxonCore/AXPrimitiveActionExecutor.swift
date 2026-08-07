@@ -242,9 +242,8 @@ public final class AXPrimitiveActionExecutor {
         }
 
         if case let .point(point) = target {
-            return try scrollWheelResult(
+            return scrollWheelResult(
                 target: description,
-                app: app,
                 at: CGPoint(x: point.x, y: point.y),
                 deltaX: deltaX,
                 deltaY: deltaY,
@@ -284,9 +283,8 @@ public final class AXPrimitiveActionExecutor {
                 details: details
             )
         }
-        return try scrollWheelResult(
+        return scrollWheelResult(
             target: description,
-            app: app,
             at: point,
             deltaX: deltaX,
             deltaY: deltaY,
@@ -294,21 +292,18 @@ public final class AXPrimitiveActionExecutor {
         )
     }
 
+    /// `scroll` never activates, even when an app is named. A posted wheel is routed by the event's
+    /// location to the window under that point, which was measured to hold regardless of which
+    /// application is frontmost or where the cursor sits, so raising the app buys nothing and costs
+    /// the user their focus on every scroll. A point covered by another window scrolls whatever is
+    /// on top of it; a caller who needs to know can compare window frames from `look`.
     private func scrollWheelResult(
         target: String,
-        app: String?,
         at point: CGPoint,
         deltaX: Double,
         deltaY: Double,
         details: [String: JSONValue]
-    ) throws -> PrimitiveActionResult {
-        // Activation belongs to the wheel and only to the wheel: a wheel reaches whichever window is
-        // topmost under the point, so an occluded target window would swallow it. AXScrollToVisible
-        // addresses an element directly and is immune to occlusion, so activating for it would take
-        // the user's focus for nothing.
-        if let app {
-            try activate(app: app)
-        }
+    ) -> PrimitiveActionResult {
         let dispatch = postScrollWheel(at: point, deltaX: deltaX, deltaY: deltaY)
         var details = details
         details["at"] = ActionPoint(x: point.x, y: point.y, coordinateSpace: .screen).jsonValue
