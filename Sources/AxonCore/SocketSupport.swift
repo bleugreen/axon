@@ -3,20 +3,38 @@ import Foundation
 
 public enum SocketError: Error, CustomStringConvertible {
     case pathTooLong(String)
-    case addressInUse(String)
-    case operationFailed(String)
+    /// Another server already owns this socket path.
+    ///
+    /// `pid` is the owner as it recorded itself, and is nil only when the owner predates that
+    /// record or had not written it yet.
+    case socketAlreadyServed(path: String, pid: Int?)
+    /// A failed syscall, with the `errno` captured at the moment it failed.
+    ///
+    /// The code is carried rather than read back later because cleanup closes descriptors before
+    /// it throws, and every one of those closes can overwrite the global `errno`. Build these with
+    /// `SocketError.failed(_:)` so the capture happens at the call site.
+    case operationFailed(String, code: Int32)
     case connectionClosed
     case readTimedOut
     case messageTooLarge(Int)
+
+    /// Captures the current `errno` before any cleanup on the way out can disturb it.
+    static func failed(_ operation: String, code: Int32 = errno) -> SocketError {
+        .operationFailed(operation, code: code)
+    }
 
     public var description: String {
         switch self {
         case let .pathTooLong(path):
             return "Unix socket path is too long: \(path)"
-        case let .addressInUse(path):
-            return "Another Axon daemon is already serving \(path)"
-        case let .operationFailed(operation):
-            return "\(operation) failed: \(String(cString: strerror(errno)))"
+        case let .socketAlreadyServed(path, pid):
+            let owner = pid.map { "pid \($0)" } ?? "an unidentified process"
+            return """
+            Another Axon server is already serving \(path) (\(owner)). \
+            Stop it, or set AXON_SOCKET_PATH to a different path.
+            """
+        case let .operationFailed(operation, code):
+            return "\(operation) failed: \(String(cString: strerror(code)))"
         case .connectionClosed:
             return "Connection closed before a full response was received"
         case .readTimedOut:
@@ -77,7 +95,7 @@ func readLineData(
             if errno == EINTR {
                 continue
             }
-            throw SocketError.operationFailed("read")
+            throw SocketError.failed("read")
         }
         if byte == 0x0A {
             return data
@@ -101,7 +119,7 @@ func writeAll(_ data: Data, to descriptor: Int32) throws {
                 continue
             }
             guard count > 0 else {
-                throw SocketError.operationFailed("write")
+                throw SocketError.failed("write")
             }
             sent += count
         }
@@ -123,6 +141,6 @@ private func waitUntilReadable(_ descriptor: Int32, timeoutSeconds: TimeInterval
         if errno == EINTR {
             continue
         }
-        throw SocketError.operationFailed("poll")
+        throw SocketError.failed("poll")
     }
 }

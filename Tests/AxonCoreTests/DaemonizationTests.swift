@@ -363,10 +363,236 @@ private final class RecordingCommandHandler: JSONRPCCommandHandling {
     }
 }
 
+// MARK: - Socket ownership
+//
+// Exactly one server owns a socket path at a time, and the server enforces that itself rather than
+// trusting a caller to check first. These tests pin the acquisition, refusal, and cleanup rules.
+
+@Test func aSecondServerIsRefusedAndNamesTheProcessAlreadyServing() throws {
+    let path = temporarySocketPath()
+    defer { removeSocketArtifacts(at: path) }
+    let incumbent = ServingThread(SocketServer(path: path, router: CommandRouter()))
+    #expect(incumbent.waitUntilListening())
+
+    // Waiting on a bounded finish rather than on a throw matters: a refused server returns right
+    // away, while one that wrongly took the path would park in accept(). Asserting the throw
+    // directly would turn that regression into a hang instead of a failure.
+    let second = ServingThread(SocketServer(path: path, router: CommandRouter()))
+    #expect(second.waitUntilFinished())
+    guard case let .socketAlreadyServed(refusedPath, pid)? = second.failure as? SocketError else {
+        Issue.record("expected an ownership refusal, got \(String(describing: second.failure))")
+        return
+    }
+    #expect(refusedPath == path)
+    #expect(pid == Int(getpid()))
+
+    // The incumbent kept the endpoint rather than merely winning an argument about it.
+    let response = try SocketClient(path: path, responseTimeoutSeconds: 5)
+        .send(JSONRPCRequest(id: .string("health"), method: "health"))
+    #expect(response.error == nil)
+    #expect(incumbent.waitUntilFinished())
+}
+
+@Test func serversStartingTogetherProduceExactlyOneOwner() throws {
+    let path = temporarySocketPath()
+    defer { removeSocketArtifacts(at: path) }
+
+    // The race this closes: asking whether anyone is serving and then binding is two steps, so
+    // servers starting together all observe an empty path and all bind. Only the last one is
+    // reachable, and the rest sit in accept() on sockets no client can arrive on.
+    let servers = (0..<8).map { _ in ServingThread(SocketServer(path: path, router: CommandRouter())) }
+    for server in servers {
+        #expect(server.waitUntilSettled())
+    }
+
+    let owners = servers.filter(\.didListen)
+    #expect(owners.count == 1)
+    for loser in servers where !loser.didListen {
+        #expect(loser.waitUntilFinished())
+        guard case .socketAlreadyServed? = loser.failure as? SocketError else {
+            Issue.record("expected an ownership refusal, got \(String(describing: loser.failure))")
+            continue
+        }
+    }
+
+    let response = try SocketClient(path: path, responseTimeoutSeconds: 5)
+        .send(JSONRPCRequest(id: .string("health"), method: "health"))
+    #expect(response.error == nil)
+    #expect(owners.first?.waitUntilFinished() == true)
+}
+
+@Test func aSocketLeftBehindByADeadServerIsReclaimed() throws {
+    let path = temporarySocketPath()
+    defer { removeSocketArtifacts(at: path) }
+    // What a crash leaves: the pathname still there, nothing serving it, no lock held.
+    #expect(FileManager.default.createFile(atPath: path, contents: Data()))
+
+    let server = ServingThread(SocketServer(path: path, router: CommandRouter()))
+    #expect(server.waitUntilListening())
+
+    let response = try SocketClient(path: path, responseTimeoutSeconds: 5)
+        .send(JSONRPCRequest(id: .string("health"), method: "health"))
+    #expect(response.error == nil)
+    #expect(server.waitUntilFinished())
+}
+
+@Test func aServerThatPredatesLockOwnershipIsRefusedRatherThanReplaced() throws {
+    let path = temporarySocketPath()
+    defer { removeSocketArtifacts(at: path) }
+
+    // An Axon older than lock-based ownership holds no lock at all, so on an upgrade in place the
+    // lock alone would call its live socket debris and take the endpoint — the same silent
+    // takeover, reappearing across a version boundary.
+    let legacy = socket(AF_UNIX, SOCK_STREAM, 0)
+    #expect(legacy >= 0)
+    defer { close(legacy) }
+    try withSocketAddress(path: path) { pointer, length in
+        #expect(bind(legacy, pointer, length) == 0)
+    }
+    #expect(listen(legacy, 16) == 0)
+    let legacyIdentity = fileIdentity(of: path)
+    #expect(legacyIdentity != nil)
+
+    let server = ServingThread(SocketServer(path: path, router: CommandRouter()))
+    #expect(server.waitUntilFinished())
+    guard case .socketAlreadyServed? = server.failure as? SocketError else {
+        Issue.record("expected an ownership refusal, got \(String(describing: server.failure))")
+        return
+    }
+    #expect(fileIdentity(of: path) == legacyIdentity)
+}
+
+@Test func theBoundSocketIsReachableOnlyByItsOwner() throws {
+    let path = temporarySocketPath()
+    defer { removeSocketArtifacts(at: path) }
+    let server = ServingThread(SocketServer(path: path, router: CommandRouter()))
+    #expect(server.waitUntilListening())
+
+    // The socket's own mode is the access control, because it lives in a world-writable directory.
+    var status = stat()
+    #expect(lstat(path, &status) == 0)
+    #expect(status.st_mode & 0o777 == 0o600)
+
+    _ = try? SocketClient(path: path, responseTimeoutSeconds: 5)
+        .send(JSONRPCRequest(id: .string("health"), method: "health"))
+    #expect(server.waitUntilFinished())
+}
+
+@Test func aServerRemovesItsOwnSocketWhenItStops() throws {
+    let path = temporarySocketPath()
+    defer { removeSocketArtifacts(at: path) }
+    let server = ServingThread(SocketServer(path: path, router: CommandRouter()))
+    #expect(server.waitUntilListening())
+
+    _ = try? SocketClient(path: path, responseTimeoutSeconds: 5)
+        .send(JSONRPCRequest(id: .string("health"), method: "health"))
+    #expect(server.waitUntilFinished())
+
+    #expect(!FileManager.default.fileExists(atPath: path))
+}
+
+@Test func aStoppingServerLeavesASocketAnotherServerHasSinceBound() throws {
+    let path = temporarySocketPath()
+    defer { removeSocketArtifacts(at: path) }
+    let first = ServingThread(SocketServer(path: path, router: CommandRouter()))
+    #expect(first.waitUntilListening())
+
+    // Connect before the swap, so the server still has a client to finish with once the pathname
+    // no longer points at its socket. It then blocks reading a request, which is what makes the
+    // rest of this deterministic rather than a race against its shutdown.
+    let client = socket(AF_UNIX, SOCK_STREAM, 0)
+    #expect(client >= 0)
+    defer { close(client) }
+    try withSocketAddress(path: path) { pointer, length in
+        #expect(connect(client, pointer, length) == 0)
+    }
+
+    // Stand in for a successor that has since bound the same pathname. Unconditional cleanup on
+    // the way out turns an orphan's late shutdown into the successor losing its socket to a
+    // process that is already gone.
+    unlink(path)
+    #expect(FileManager.default.createFile(atPath: path, contents: Data()))
+    let successor = fileIdentity(of: path)
+    #expect(successor != nil)
+
+    try writeAll(Data("{\"jsonrpc\":\"2.0\",\"id\":\"health\",\"method\":\"health\"}\n".utf8), to: client)
+    #expect(first.waitUntilFinished())
+
+    #expect(fileIdentity(of: path) == successor)
+}
+
+/// A socket path short enough for `sockaddr_un` and unique per test.
+private func temporarySocketPath() -> String {
+    FileManager.default.temporaryDirectory
+        .appendingPathComponent("axon-own-\(UUID().uuidString.prefix(8)).sock").path
+}
+
+private func removeSocketArtifacts(at path: String) {
+    unlink(path)
+    unlink(SocketServer.lockPath(for: path))
+}
+
+/// A file's identity as the server sees it: device and inode, not name.
+private func fileIdentity(of path: String) -> String? {
+    var status = stat()
+    guard lstat(path, &status) == 0 else {
+        return nil
+    }
+    return "\(status.st_dev):\(status.st_ino)"
+}
+
+/// A server on its own thread, exposing the two edges a test needs: it settled, and how.
+private final class ServingThread: @unchecked Sendable {
+    enum Lifetime {
+        case oneClient
+        case untilStopped
+    }
+
+    private let settled = DispatchSemaphore(value: 0)
+    private let finished = DispatchSemaphore(value: 0)
+    /// Whether the server reached the listening state. Safe to read once `waitUntilSettled()` has
+    /// returned true, which is the happens-before edge that publishes it.
+    private(set) var didListen = false
+    /// Why the server stopped, published by `waitUntilFinished()` returning true.
+    private(set) var failure: Error?
+
+    init(_ server: SocketServer, lifetime: Lifetime = .oneClient) {
+        let thread = Thread { [self] in
+            do {
+                switch lifetime {
+                case .oneClient:
+                    try server.runOnce { didListen = true; settled.signal() }
+                case .untilStopped:
+                    try server.run { didListen = true; settled.signal() }
+                }
+            } catch {
+                failure = error
+            }
+            settled.signal()
+            finished.signal()
+        }
+        thread.name = "axon-test-serving"
+        thread.start()
+    }
+
+    /// Blocks until the server has either started listening or stopped trying.
+    func waitUntilSettled(timeoutSeconds: Int = 10) -> Bool {
+        settled.wait(timeout: .now() + .seconds(timeoutSeconds)) == .success
+    }
+
+    func waitUntilListening(timeoutSeconds: Int = 10) -> Bool {
+        waitUntilSettled(timeoutSeconds: timeoutSeconds) && didListen
+    }
+
+    func waitUntilFinished(timeoutSeconds: Int = 15) -> Bool {
+        finished.wait(timeout: .now() + .seconds(timeoutSeconds)) == .success
+    }
+}
+
 private func socketPair() throws -> (reader: Int32, writer: Int32) {
     var descriptors = [Int32](repeating: 0, count: 2)
     guard socketpair(AF_UNIX, SOCK_STREAM, 0, &descriptors) == 0 else {
-        throw SocketError.operationFailed("socketpair")
+        throw SocketError.failed("socketpair")
     }
     return (descriptors[0], descriptors[1])
 }

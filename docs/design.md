@@ -42,7 +42,7 @@ Axon should run as a local background service from the start, installed through 
 
 The service needs Accessibility permission and should fail loudly when permission is missing.
 
-The preferred transport is JSON-RPC over a local Unix domain socket owned by the daemon. MCP can be exposed by the same binary in a facade mode if stdio compatibility is needed:
+The preferred transport is JSON-RPC over a local Unix domain socket owned by the daemon. Ownership is literal and exclusive, enforced in `SocketServer` rather than by caller-side preflight: a server takes an exclusive advisory lock on a sidecar file before it touches the pathname, and one that finds the lock held refuses to start rather than rebinding the path out from under the incumbent. Cleanup is checked against the bound socket's inode, so a server can only ever remove its own endpoint. MCP can be exposed by the same binary in a facade mode if stdio compatibility is needed:
 
 ```text
 MCP client -> `axon mcp` stdio facade -> local socket -> `axon serve` daemon

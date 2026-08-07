@@ -111,6 +111,15 @@ what a half-started daemon leaves behind. Readiness is a successful authenticate
 trip and nothing weaker. `daemon install` and `daemon restart` wait for that round trip before
 returning.
 
+### Exclusive ownership
+
+One server owns an endpoint at a time. A daemon acquires that ownership before it binds, and a
+second one refuses to start rather than displacing it, reporting the owning process. An embedding
+consumer therefore cannot install its way past a menu bar `Axon.app` already serving the default
+path: stop that server, or give the daemon an endpoint of its own with `AXON_SOCKET_PATH`.
+Ownership is released when the owning process exits, including when it crashes, so a restart never
+needs a cleanup step.
+
 On Linux, a host with no graphical session is the one exception: the unit is enabled but
 deliberately not started, because it is bound to `graphical-session.target` and has no desktop to
 automate yet. Install reports the registration, names the reason, and exits 0.

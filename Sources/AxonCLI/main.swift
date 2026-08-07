@@ -20,8 +20,6 @@ do {
     case "serve":
         ScreenCaptureRuntime.bootstrapSynchronously()
         Doctor.warmUp()
-        print("axon serving on \(socketPath)")
-        fflush(stdout)
         serveUntilTerminated(socketPath: socketPath)
 
     case "mcp":
@@ -875,7 +873,7 @@ private enum StatusProbe {
 }
 
 private func connectFailed(_ error: SocketError) -> Bool {
-    if case let .operationFailed(operation) = error {
+    if case let .operationFailed(operation, _) = error {
         return operation == "connect"
     }
     return false
@@ -923,7 +921,13 @@ private func serveUntilTerminated(socketPath: String) -> Never {
     let server = SocketServer(path: socketPath)
     let accepting = Thread {
         do {
-            try server.run()
+            try server.run {
+                // Announced from here rather than before the call, because ownership of the
+                // socket is exclusive and this process may not get it. Printing first would
+                // claim a role it is about to be refused.
+                print("axon serving on \(socketPath) (pid \(getpid()))")
+                fflush(stdout)
+            }
             fail("socket server stopped accepting connections")
         } catch {
             fail("socket server failed: \(error)")
