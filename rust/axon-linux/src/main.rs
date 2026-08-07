@@ -542,11 +542,7 @@ mod lifecycle {
         }
 
         if !socket::wait_until_absent(Duration::from_secs(10)) {
-            return Err(format!(
-                "a daemon is still answering at {}",
-                socket::endpoint()
-            )
-            .into());
+            return Err(format!("a daemon is still answering at {}", socket::endpoint()).into());
         }
 
         match stopped {
