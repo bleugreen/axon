@@ -4,8 +4,8 @@ use atspi::{
     proxy::{accessible::ObjectRefExt, proxy_ext::ProxyExt},
 };
 use axon_core::{
-    AppQuery, Application, BackendError, Capability, CapabilityInfo, Node, Observation,
-    PlatformBackend, RecordedCall, Screenshot, Snapshot, SnapshotHandle, Window,
+    AppQuery, Application, BackendError, Capability, CapabilityInfo, KeyboardIntent, Node,
+    Observation, PlatformBackend, RecordedCall, Screenshot, Snapshot, SnapshotHandle, Window,
 };
 use std::{collections::HashMap, future::Future, pin::Pin, sync::mpsc, thread, time::Duration};
 
@@ -188,7 +188,7 @@ impl PlatformBackend for LinuxBackend {
             "requires compositor authorization",
         ))
     }
-    fn keyboard(&mut self, _: &AppQuery, _: &str) -> Result<(), BackendError> {
+    fn keyboard(&mut self, _: &AppQuery, _: KeyboardIntent<'_>) -> Result<(), BackendError> {
         Err(capability(
             Capability::KeyboardInput,
             "requires compositor authorization",

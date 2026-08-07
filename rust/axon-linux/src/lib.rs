@@ -4,9 +4,9 @@ use axon_core::{
     AppQuery, AxnCodec, AxnRunner, Candidate, Capability, Confidence, DeliveryCandidate,
     DeliveryCapability, DeliveryOutcome, DeliveryPolicy, DeliveryRefusal, DeliveryRefusalReason,
     DeliveryRung, DeliverySelection, DispatchOutcome, ExpectedFact, ForegroundTarget, JsonRpcError,
-    JsonRpcId, JsonRpcRequest, JsonRpcResponse, Locator, LocatorResolver, PlatformBackend,
-    Resolution, ResolutionStatus, RunEnvelope, RunOptions, Snapshot, SnapshotHandle,
-    ToolDispatcher, dispatch_in_foreground, select_delivery,
+    JsonRpcId, JsonRpcRequest, JsonRpcResponse, KeyboardIntent, Locator, LocatorResolver,
+    PlatformBackend, Resolution, ResolutionStatus, RunEnvelope, RunOptions, Snapshot,
+    SnapshotHandle, ToolDispatcher, dispatch_in_foreground, select_delivery,
 };
 use serde_json::{Map, Value, json};
 
@@ -152,9 +152,7 @@ impl<B: PointerTargetVerifier> Router<B> {
             "keyboard" => {
                 // The intent is validated before the ladder, so a malformed request is an error
                 // rather than a refusal.
-                let input = required_str(params, "input")
-                    .or_else(|_| required_str(params, "key"))?
-                    .to_owned();
+                let intent = keyboard_intent(params)?;
                 let ladder = self.global_input_ladder(Capability::KeyboardInput, "XTest keyboard");
                 let Some(candidate) = self.selected(&ladder, policy) else {
                     return Ok(self.refusal(&ladder, policy));
@@ -175,7 +173,7 @@ impl<B: PointerTargetVerifier> Router<B> {
                     false,
                     json!({"verified":false,"reason":"keyboard input has no declared postcondition"}),
                     None,
-                    move |backend| backend.keyboard(&app, &input),
+                    move |backend| backend.keyboard(&app, intent),
                 )
             }
             "drag" => {
@@ -580,6 +578,25 @@ fn app_query_from_target(params: &Map<String, Value>, target: &Value) -> AppQuer
     }
     q
 }
+/// `keyboard` carries exactly one intent. Neither is an empty request and both at once is an
+/// ambiguous one; each is malformed rather than a delivery decision, so each is a transport error.
+fn keyboard_intent(params: &Map<String, Value>) -> Result<KeyboardIntent<'_>, JsonRpcError> {
+    let text = params.get("text").and_then(Value::as_str);
+    let key = params.get("key").and_then(Value::as_str);
+    match (text, key) {
+        (Some(text), None) => Ok(KeyboardIntent::Text(text)),
+        (None, Some(key)) => Ok(KeyboardIntent::Key(key)),
+        (Some(_), Some(_)) => Err(rpc_error(
+            -32602,
+            "keyboard takes exactly one of text and key; text is entered literally and key names a \
+             keystroke, and a request carrying both does not say which it meant",
+        )),
+        (None, None) => Err(rpc_error(
+            -32602,
+            "keyboard requires exactly one of the string parameters text and key",
+        )),
+    }
+}
 fn required_str<'a>(p: &'a Map<String, Value>, key: &str) -> Result<&'a str, JsonRpcError> {
     p.get(key)
         .and_then(Value::as_str)
@@ -713,7 +730,7 @@ mod tests {
         ) -> Result<(), BackendError> {
             unreachable!()
         }
-        fn keyboard(&mut self, _: &AppQuery, _: &str) -> Result<(), BackendError> {
+        fn keyboard(&mut self, _: &AppQuery, _: KeyboardIntent<'_>) -> Result<(), BackendError> {
             Ok(())
         }
         fn screenshot(&mut self, _: &AppQuery) -> Result<Screenshot, BackendError> {
@@ -851,7 +868,7 @@ mod tests {
         let mut router = Router::new(backend(vec![], None));
 
         let response = router
-            .request(request("keyboard", json!({"input": "x"})))
+            .request(request("keyboard", json!({"text": "x"})))
             .unwrap();
 
         let result = refusal(&response);
@@ -1100,7 +1117,7 @@ mod tests {
                         "target": handle.0,
                         "name": "Invoke",
                         "value": "x",
-                        "input": "x",
+                        "text": "x",
                         "deliveryPolicy": "whateverItTakes"
                     }),
                 ))
