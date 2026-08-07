@@ -535,7 +535,7 @@ mod status {
     }
 
     fn print_human(report: &HealthReport) {
-        println!("{:<16}{}", "Version:", report.version);
+        println!("{:<18}{}", "Version:", report.version);
         println!(
             "Daemon:         {}",
             match (report.daemon.running, report.daemon.ready) {
@@ -569,8 +569,8 @@ mod status {
         );
         for permission in &report.permissions {
             println!(
-                "{:<16}{}",
-                format!("{}", permission.name),
+                "{:<18}{}",
+                format!("{}:", permission.name),
                 if permission.granted {
                     "granted"
                 } else {
