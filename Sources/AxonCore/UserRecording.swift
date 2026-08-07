@@ -96,8 +96,49 @@ public struct UserRecordingTranslator {
 
         return .object([
             "version": .int(1),
-            "actions": .array(actions)
+            "actions": .array(prunedUnrequiredGuardFacts(in: actions))
         ])
+    }
+
+    /// Drops typed-value facts that nothing depends on.
+    ///
+    /// This fact is not a derived postcondition; it is a dependency guard, which is why the
+    /// following submit-like step points a `requires` at it: do not press Return unless the field
+    /// still holds what was typed. Emitted on every text burst it would instead assert the input
+    /// back at itself on most steps, which is the input echo derived postconditions must never be.
+    /// Keeping only the consumed ones preserves the single real guarantee and drops the rest.
+    private func prunedUnrequiredGuardFacts(in actions: [JSONValue]) -> [JSONValue] {
+        var requiredFactIDs = Set<String>()
+        for action in actions {
+            guard case let .array(requires)? = action["requires"] else {
+                continue
+            }
+            for case let .string(id) in requires {
+                requiredFactIDs.insert(id)
+            }
+        }
+
+        return actions.map { action in
+            guard case var .object(object) = action,
+                  case let .array(facts)? = object["expects"]
+            else {
+                return action
+            }
+            let kept = facts.filter { fact in
+                guard case let .string(kind)? = fact["kind"], kind == "value",
+                      case let .string(id)? = fact["id"]
+                else {
+                    return true
+                }
+                return requiredFactIDs.contains(id)
+            }
+            if kept.isEmpty {
+                object.removeValue(forKey: "expects")
+            } else {
+                object["expects"] = .array(kept)
+            }
+            return .object(object)
+        }
     }
 
     public func yaml(from groups: [RecordedUserEventGroup]) throws -> String {
