@@ -157,7 +157,7 @@ Accessibility grant all produce schema-valid documents rather than transport err
 ```json
 {
   "schemaVersion": "health-v1",
-  "version": "0.1.7",
+  "version": "0.2.0",
   "platform": "macos",
   "daemon": { "running": true, "ready": true, "endpoint": "/tmp/axon.sock", "processId": 4210 },
   "registration": { "registered": true, "mechanism": "launchd", "path": "/Applications/Axon.app/Contents/Resources/bin/axon" },
