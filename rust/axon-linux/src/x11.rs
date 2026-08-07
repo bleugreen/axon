@@ -208,10 +208,11 @@ impl X11Session {
         }
         // A character that lives on the shifted level of its key needs Shift held even when the
         // caller named no modifier, which is how literal text containing capitals is typed.
-        if needs_shift && !modifiers.contains(&keys::SHIFT_L) {
-            if let Some((shift, _)) = mapping.locate(keys::SHIFT_L) {
-                held.push(shift);
-            }
+        if needs_shift
+            && !modifiers.contains(&keys::SHIFT_L)
+            && let Some((shift, _)) = mapping.locate(keys::SHIFT_L)
+        {
+            held.push(shift);
         }
 
         for code in &held {

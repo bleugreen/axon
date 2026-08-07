@@ -60,7 +60,7 @@ struct AppIdentity {
 /// Whether this session has a path to global input, and if not, the reason a caller is owed.
 enum InputSession {
     /// A live X11 connection to an EWMH-capable window manager: the foreground rung exists here.
-    Available(X11Session),
+    Available(Box<X11Session>),
     Unavailable(&'static str),
 }
 
@@ -82,7 +82,7 @@ fn input_session() -> InputSession {
     if !x11.supports_ewmh() {
         return InputSession::Unavailable(NO_WINDOW_MANAGER);
     }
-    InputSession::Available(x11)
+    InputSession::Available(Box::new(x11))
 }
 
 pub struct LinuxBackend {
@@ -145,7 +145,7 @@ impl LinuxBackend {
     /// The X11 session, or the reason this one cannot deliver global input.
     fn x11(&self, capability_needed: Capability) -> Result<&X11Session, BackendError> {
         match &self.input {
-            InputSession::Available(session) => Ok(session),
+            InputSession::Available(session) => Ok(session.as_ref()),
             InputSession::Unavailable(reason) => Err(capability(capability_needed, reason)),
         }
     }
@@ -777,7 +777,7 @@ mod tests {
         ];
         for (capability, reason) in unavailable {
             assert!(
-                matches!(super::capability(capability.clone(), reason), BackendError::Capability { capability: c, .. } if c == capability)
+                matches!(super::capability(capability, reason), BackendError::Capability { capability: c, .. } if c == capability)
             );
         }
     }
