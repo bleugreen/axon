@@ -235,7 +235,7 @@ available, and a backend must not claim it before a live probe passes.
 | --- | --- | --- | --- |
 | macOS | `AXPress`, `AXValue`, `AXScrollToVisible` | `CGEventPostToPid` against the target process, invariants proved after dispatch | Global `CGEvent`, transactional activate/dispatch/restore |
 | Windows | UIA `InvokePattern`, `ValuePattern`, `ScrollItemPattern`, none of which call `SetFocus` | Not implemented; refuses `backgroundPixelUnsupported` | Withheld; `SendInput` exists but the backend cannot yet capture, prove, and restore the foreground |
-| Linux | AT-SPI `Action.DoAction`, `EditableText.SetTextContents`, `Component.ScrollTo`, none of which take focus | Not implemented; refuses `backgroundPixelUnsupported` | Withheld; no synthetic input path is implemented, so there is nothing to run a foreground transaction around |
+| Linux | AT-SPI `Action.DoAction`, `EditableText.SetTextContents`, `Component.ScrollTo`, none of which take focus | Not implemented; refuses `backgroundPixelUnsupported` | `XTest` on an X11 session with an EWMH-capable window manager, transactional activate/dispatch/restore; withheld on every other session |
 
 The foreground rung is not merely "global input". It is global input that hands
 back what it borrowed, and a backend that cannot do that must not offer the rung
@@ -244,6 +244,22 @@ at all. Dispatching an unrestored `SendInput` or `XTest` call while reporting
 is the exact behavior this contract exists to prevent. Such a backend reports
 `noDeliveryCandidate` naming the missing transaction, at either policy, because
 opting in cannot supply a faculty the backend lacks.
+
+Whether a backend can hand the session back is a fact about the running session
+as much as about the build. The Linux backend offers the rung on an X11 session
+with an EWMH-capable window manager and withholds it on a Wayland session, where
+the compositor refuses synthetic input and the foreground cannot be read or set
+even with XWayland running alongside. A mechanism that dispatches while its proof
+quietly does not is the trap this contract exists to close, so the capability is
+reported per session and the same answer decides both the health document and the
+dispatch.
+
+Restoration covers the pointer as well as the foreground. A mechanism that moves
+the real cursor puts it back before the prior application returns, and reports
+`pointerRestored`: `true` when it was put back, `false` when it could not be, and
+null when the dispatch never moved it. An action that leaves either the window or
+the cursor where it put them reports `success: false` while keeping its dispatch
+evidence, because the session was not handed back whole.
 
 ## Transport and result envelopes
 
