@@ -179,9 +179,11 @@ public struct DerivedPostconditionCompiler {
         }
 
         // Focus that landed somewhere other than the acted-on element is only visible in the
-        // app-level read, which is why the observation carries one.
+        // app-level read, which is why the observation carries one. Focus that was already there
+        // before the action is not a transition, and asserting it would verify nothing.
         if let focus = observation.focusAfter,
            focus.locator != nil,
+           focus.locator != observation.focusBefore?.locator,
            focus.locator != after?.locator {
             candidates.append(Candidate(
                 kind: "focused",

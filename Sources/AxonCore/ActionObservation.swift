@@ -115,8 +115,10 @@ public struct ActionObservation: Equatable, Sendable {
     public let targetAfter: ObservedElementState?
     public let fromBefore: ObservedElementState?
     public let toBefore: ObservedElementState?
-    /// The app's focused element after the action settled, which is how a focus move to some
-    /// element other than the action's own target becomes visible.
+    /// The app's focused element before and after the action. The pair is how a focus move to some
+    /// element other than the action's own target becomes visible - and, just as importantly, how
+    /// focus that never moved is recognised as no transition at all.
+    public let focusBefore: ObservedElementState?
     public let focusAfter: ObservedElementState?
     public let windowTitlesBefore: [String]
     public let windowTitlesAfter: [String]
@@ -130,6 +132,7 @@ public struct ActionObservation: Equatable, Sendable {
         targetAfter: ObservedElementState? = nil,
         fromBefore: ObservedElementState? = nil,
         toBefore: ObservedElementState? = nil,
+        focusBefore: ObservedElementState? = nil,
         focusAfter: ObservedElementState? = nil,
         windowTitlesBefore: [String] = [],
         windowTitlesAfter: [String] = [],
@@ -142,6 +145,7 @@ public struct ActionObservation: Equatable, Sendable {
         self.targetAfter = targetAfter
         self.fromBefore = fromBefore
         self.toBefore = toBefore
+        self.focusBefore = focusBefore
         self.focusAfter = focusAfter
         self.windowTitlesBefore = windowTitlesBefore
         self.windowTitlesAfter = windowTitlesAfter
@@ -183,6 +187,7 @@ public struct ActionObservation: Equatable, Sendable {
             targetAfter: redact(targetAfter),
             fromBefore: redact(fromBefore),
             toBefore: redact(toBefore),
+            focusBefore: redact(focusBefore),
             focusAfter: redact(focusAfter),
             windowTitlesBefore: redactTitles(windowTitlesBefore),
             windowTitlesAfter: redactTitles(windowTitlesAfter),
@@ -347,6 +352,7 @@ public final class ActionObservationCollector {
             targetAfter: targetAfter,
             fromBefore: pending.fromBefore,
             toBefore: pending.toBefore,
+            focusBefore: pending.appBefore?.focused,
             focusAfter: focusAfter,
             windowTitlesBefore: pending.appBefore?.windowTitles ?? [],
             windowTitlesAfter: settled.reading.app?.windowTitles ?? []
