@@ -187,8 +187,11 @@ thing; native tests establish that each backend can deliver it.
 
 ## Continuous integration lanes
 
-The hosted `Test` workflow is the merge gate. It runs deterministic Swift and
-Rust tests on GitHub-hosted machines for pull requests and pushes to `main`.
+The `Test` workflow is the merge gate. Its deterministic Swift and Rust jobs run
+for pull requests and pushes to `main` on the enrolled macOS, Linux, and Windows
+self-hosted runners. Each job selects both `self-hosted` and the runner's
+dedicated `axon-live-*` label, so GitHub cannot silently route it to a hosted
+machine or to the wrong operating system.
 
 The separate `Live desktop verification` workflow is a reporting lane. It runs
 only after a push to `main` or an explicit manual dispatch, never for a pull
@@ -210,9 +213,10 @@ failure reports a real integration regression without blocking a pull request:
   a `finally` block.
 
 The repository's Actions policy requires approval for every outside
-contributor's workflow runs. This is defense in depth: the live workflow's lack
-of a `pull_request` trigger is the boundary that prevents fork code from reaching
-the self-hosted desktops.
+contributor's workflow run before pull-request code can reach the self-hosted
+desktops. The live workflow still has no `pull_request` trigger because its
+interactive probes alter desktop state and should run only from trusted `main`
+or a manual dispatch.
 
 ### Re-enrolling a live runner
 
