@@ -828,7 +828,7 @@ private func currentStatus() -> HealthStatus {
     let registration = manager?.registration() ?? .absent(mechanism: .launchd)
 
     do {
-        let response = try SocketClient(path: socketPath, responseTimeoutSeconds: statusResponseTimeoutSeconds)
+        let response = try SocketClient(path: socketPath, responseTimeoutSeconds: StatusProbe.responseTimeoutSeconds)
             .send(JSONRPCRequest(id: .string("status"), method: "health"))
         if let error = response.error {
             return unreachable(registration, HealthReason.daemonUnreachable, error.message)
@@ -857,9 +857,18 @@ private func currentStatus() -> HealthStatus {
 
 /// How long `status` waits for a daemon that accepted the connection to answer.
 ///
-/// Long enough to outlast a genuinely busy daemon, short enough that describing a stuck one stays
-/// a fast operation. A daemon that is simply absent fails at connect and costs nothing.
-private let statusResponseTimeoutSeconds: TimeInterval = 10
+/// Long enough to outlast a genuinely busy daemon — the first permission query against a freshly
+/// installed executable makes macOS resolve it against TCC, which has been measured at several
+/// seconds — and short enough that describing a stuck one stays a fast operation. A daemon that is
+/// simply absent fails at connect and costs nothing.
+///
+/// Scoped to a type rather than left as a top-level `let`: globals in `main.swift` initialize in
+/// statement order, so a plain global read from a function defined above it is silently zero, and
+/// a zero timeout makes every read fail instantly. A type's static property is initialized on
+/// first use regardless of where it appears in the file.
+private enum StatusProbe {
+    static let responseTimeoutSeconds: TimeInterval = 10
+}
 
 private func connectFailed(_ error: SocketError) -> Bool {
     if case let .operationFailed(operation) = error {
