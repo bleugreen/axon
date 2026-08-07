@@ -39,7 +39,13 @@ const NO_BACKGROUND_PIXEL: &str = "this Linux backend has no verified target-win
      X11 window-targeted delivery and Wayland portal delivery are not implemented";
 
 /// Why the foreground rung is withheld rather than merely gated behind the opt-in.
-const NO_FOREGROUND_TRANSACTION: &str = "this Linux backend cannot capture, prove, and restore the \
+///
+/// On this backend that means one of three sessions: no X display to connect to, a Wayland session
+/// whose compositor neither permits synthetic input nor exposes its foreground to X11, or an X11
+/// session with no EWMH-capable window manager to read and set the active window through. The
+/// backend's capability report names which one, and that reason reaches the caller ahead of this
+/// message.
+const NO_FOREGROUND_TRANSACTION: &str = "this Linux session cannot capture, prove, and restore the \
      foreground application, so it cannot deliver global input transactionally";
 
 pub struct Router<B> {
@@ -650,6 +656,12 @@ mod tests {
         value: Rc<RefCell<Option<String>>>,
         clicks: Rc<RefCell<usize>>,
         focuses: Rc<RefCell<usize>>,
+        /// Where the real pointer sits. A click moves it, which is why the transaction restores it.
+        pointer: Rc<RefCell<(f64, f64)>>,
+        /// Whether the foreground can be read at all, which is not the same as nothing holding it.
+        foreground_readable: bool,
+        /// A pointer that will not go back where it started.
+        refuses_pointer_move: bool,
         /// Whether this session advertises a usable global input device, which is what decides
         /// between "opt in and it works" and "this cannot happen here".
         pointer_capability_usable: bool,
@@ -722,8 +734,9 @@ mod tests {
         ) -> Result<Observation, BackendError> {
             unreachable!()
         }
-        fn pointer_click(&mut self, _: (f64, f64)) -> Result<(), BackendError> {
+        fn pointer_click(&mut self, point: (f64, f64)) -> Result<(), BackendError> {
             *self.clicks.borrow_mut() += 1;
+            *self.pointer.borrow_mut() = point;
             Ok(())
         }
         fn pointer_drag(
@@ -756,7 +769,24 @@ mod tests {
             self.foreground_transaction
         }
         fn frontmost_application(&mut self) -> Result<Option<String>, BackendError> {
+            if !self.foreground_readable {
+                return Err(BackendError::Operation {
+                    operation: "read the foreground".into(),
+                    message: "the session refused".into(),
+                    diagnostic: None,
+                });
+            }
             Ok(self.frontmost.borrow().clone())
+        }
+        fn pointer_location(&mut self) -> Result<Option<(f64, f64)>, BackendError> {
+            Ok(Some(*self.pointer.borrow()))
+        }
+        fn move_pointer(&mut self, to: (f64, f64)) -> Result<bool, BackendError> {
+            if self.refuses_pointer_move {
+                return Ok(false);
+            }
+            *self.pointer.borrow_mut() = to;
+            Ok(true)
         }
         fn activate_application(&mut self, identity: &str) -> Result<bool, BackendError> {
             self.activations.borrow_mut().push(identity.into());
@@ -772,6 +802,10 @@ mod tests {
             Ok(true)
         }
     }
+    /// Where the fake pointer starts, deliberately away from any node's centre so a click has to
+    /// move it and the transaction has something real to put back.
+    const POINTER_ORIGIN: (f64, f64) = (500.0, 400.0);
+
     fn node(name: &str) -> Node {
         Node {
             role: "Button".into(),
@@ -811,6 +845,9 @@ mod tests {
             value: Rc::new(RefCell::new(value.map(str::to_owned))),
             clicks: Rc::new(RefCell::new(0)),
             focuses: Rc::new(RefCell::new(0)),
+            pointer: Rc::new(RefCell::new(POINTER_ORIGIN)),
+            foreground_readable: true,
+            refuses_pointer_move: false,
             pointer_capability_usable: false,
             foreground_transaction: false,
             frontmost: Rc::new(RefCell::new(Some("Prior".into()))),
