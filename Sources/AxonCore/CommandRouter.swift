@@ -796,7 +796,7 @@ private struct PrimitiveActionCommandHandler {
         case let .locator(app, locator):
             let resolution = try services.resolveLocator(app, locator, true)
             guard resolution.status == .unique, let handle = resolution.best?.handle else {
-                throw JSONRPCError.invalidParams("Locator did not resolve uniquely: \(resolution.status.rawValue)")
+                throw LocatorResolutionFailure(resolution: resolution)
             }
             return ResolvedElementTarget(handle: handle.rawValue, resolution: resolution)
         case .point:
@@ -1043,6 +1043,16 @@ private struct PrimitiveActionCommandHandler {
     private func actionResponse(id: JSONRPCID?, _ body: () throws -> PrimitiveActionResult) -> JSONRPCResponse {
         do {
             return JSONRPCResponse(id: id, result: ["action": try body().jsonValue])
+        } catch let failure as LocatorResolutionFailure {
+            let result = PrimitiveActionResult(
+                action: "resolve",
+                target: nil,
+                strategy: nil,
+                success: false,
+                message: "Locator did not resolve uniquely: \(failure.resolution.status.rawValue)",
+                details: ["targetResolution": compactTargetResolution(failure.resolution)]
+            )
+            return JSONRPCResponse(id: id, result: ["action": result.jsonValue])
         } catch let error as JSONRPCError {
             return JSONRPCResponse(id: id, error: error)
         } catch let error as AXElementStoreError {
@@ -1493,4 +1503,9 @@ private extension Array where Element == ScreenTextItem {
         JSONValue.array(map { $0.jsonValue(activeSecretRedactor: activeSecretRedactor) })
             .containsActiveCredentialRedaction()
     }
+}
+
+
+private struct LocatorResolutionFailure: Error {
+    let resolution: LocatorResolution
 }

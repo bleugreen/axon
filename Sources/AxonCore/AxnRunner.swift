@@ -352,15 +352,6 @@ public struct AxnRunner {
             let canVerifyDispatchOnly = !expectedFacts.isEmpty
                 && hasCausalExpectation
                 && dispatchedWithoutSemanticVerification(in: response.result)
-            if primitiveSucceeded == false && !canVerifyDispatchOnly {
-                record["success"] = .bool(false)
-                record["result"] = traceResult(method: method, result: response.result ?? [:], hasSecretTaint: !secretTaintedFields.isEmpty)
-                record["error"] = traceError(
-                    primitiveActionFailureMessage(in: response.result) ?? "primitive action reported failure",
-                    hasSecretTaint: !secretTaintedFields.isEmpty
-                )
-                return .object(record)
-            }
             if let resolution = targetResolution(in: response.result),
                let event = AxnHealing.event(
                    action: action,
@@ -377,6 +368,15 @@ public struct AxnRunner {
                ) {
                 healEvents.append(event)
                 record["heal"] = event.jsonValue
+            }
+            if primitiveSucceeded == false && !canVerifyDispatchOnly {
+                record["success"] = .bool(false)
+                record["result"] = traceResult(method: method, result: response.result ?? [:], hasSecretTaint: !secretTaintedFields.isEmpty)
+                record["error"] = traceError(
+                    primitiveActionFailureMessage(in: response.result) ?? "primitive action reported failure",
+                    hasSecretTaint: !secretTaintedFields.isEmpty
+                )
+                return .object(record)
             }
             try verifyExpectedFacts(expectedFacts, changeBaselines: changeBaselines, facts: &facts)
             let result = canVerifyDispatchOnly
