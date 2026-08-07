@@ -113,12 +113,15 @@ returning.
 
 ### Exclusive ownership
 
-One server owns an endpoint at a time. A daemon acquires that ownership before it binds, and a
-second one refuses to start rather than displacing it, reporting the owning process. An embedding
-consumer therefore cannot install its way past a menu bar `Axon.app` already serving the default
-path: stop that server, or give the daemon an endpoint of its own with `AXON_SOCKET_PATH`.
+One server owns an endpoint at a time. A second daemon refuses to start rather than displacing the
+running one, so an embedding consumer cannot install its way past an `Axon.app` already serving the
+default path: stop that server, or give the daemon an endpoint of its own with `AXON_SOCKET_PATH`.
 Ownership is released when the owning process exits, including when it crashes, so a restart never
 needs a cleanup step.
+
+On macOS ownership is an exclusive advisory lock taken before the socket is bound, and the refusal
+names the process holding it. On Windows the pipe is created as a single instance and the operating
+system enforces the same rule.
 
 On Linux, a host with no graphical session is the one exception: the unit is enabled but
 deliberately not started, because it is bound to `graphical-session.target` and has no desktop to
