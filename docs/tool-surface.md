@@ -70,7 +70,9 @@ Deterministic rule redaction is also always on for AX and OCR text. Role rules
 and curated patterns redact secure field values, secret-labeled values,
 structured identifiers, Luhn-valid cards, and known token shapes as
 `<redacted: auth-credential>`, `<redacted: pii-identifier>`, or
-`<redacted: financial-data>`.
+`<redacted: financial-data>`. Numeric `AXValue` strings on position controls such
+as scroll bars, sliders, and value indicators are excluded from card detection;
+their digits describe control state rather than financial data.
 When a screenshot request is known to contain an active credential through AX or
 OCR text, Axon omits the image and returns a warning instead of sending pixels.
 

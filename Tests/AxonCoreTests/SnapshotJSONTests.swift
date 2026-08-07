@@ -170,6 +170,35 @@ import Testing
     #expect(encoded.contains("raw-image"))
 }
 
+@Test func snapshotDeterministicRedactionKeepsNumericControlValuesThatResembleCards() {
+    let scrollFraction = "0.03988433542726099"
+    let snapshot = AppSnapshot(
+        id: SnapshotID("snap-numeric-controls"),
+        app: AppIdentity(bundleIdentifier: "com.example.App", name: "Example", processIdentifier: 7),
+        windows: [
+            AXNode(role: "AXWindow", title: "Main", children: [
+                AXNode(role: "AXScrollBar", value: scrollFraction),
+                AXNode(role: "AXSlider", value: scrollFraction),
+                AXNode(role: "AXValueIndicator", value: scrollFraction),
+                AXNode(role: "AXStaticText", value: scrollFraction),
+                AXNode(role: "AXScrollBar", title: scrollFraction),
+                AXNode(role: "AXScrollBar", value: "4242 4242 4242 4242")
+            ])
+        ],
+        screenshot: nil
+    )
+
+    let json = snapshot.jsonValue(includeTree: false)
+
+    for index in 1...3 {
+        #expect(json["indexedNodes"]?[index]?["value"] == .string(scrollFraction))
+        #expect(json["indexedNodes"]?[index]?["redaction"] == nil)
+    }
+    #expect(json["indexedNodes"]?[4]?["value"] == .string("<redacted: financial-data>"))
+    #expect(json["indexedNodes"]?[5]?["title"] == .string("<redacted: financial-data>"))
+    #expect(json["indexedNodes"]?[6]?["value"] == .string("<redacted: financial-data>"))
+}
+
 @Test func snapshotDeterministicRedactionKeepsPlainValuesWithoutRuleMatches() {
     let snapshot = AppSnapshot(
         id: SnapshotID("snap-value"),
