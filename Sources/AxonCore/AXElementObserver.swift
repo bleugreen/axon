@@ -118,12 +118,15 @@ public struct AXElementObserver: ActionStateObserving {
         return chain
     }
 
-    private func windowTitles(of application: AXUIElement) -> [String] {
+    /// Nil when the window list could not be read, which is a different fact from an app with no
+    /// windows: reporting the failure as an empty list would make every window that was already
+    /// open look newly appeared as soon as one read succeeds.
+    private func windowTitles(of application: AXUIElement) -> [String]? {
         var value: CFTypeRef?
         guard AXUIElementCopyAttributeValue(application, kAXWindowsAttribute as CFString, &value) == .success,
               let windows = value as? [AXUIElement]
         else {
-            return []
+            return nil
         }
         return windows.compactMap { attribute(kAXTitleAttribute, from: $0) }.filter { !$0.isEmpty }
     }

@@ -137,10 +137,6 @@ public struct DerivedPostconditionCompiler {
         let assertion: String?
         /// Capture-time verdict: this string came out of the action's own input.
         let derivedFromInput: Bool
-        /// Whether an unsettled read invalidates the candidate. Booleans and window-title sets are
-        /// stable enough to keep; a string read mid-transition is not.
-        let requiresSettled: Bool
-        let settled: Bool
     }
 
     private let deterministicRedactor: DeterministicRedactor
@@ -160,30 +156,41 @@ public struct DerivedPostconditionCompiler {
             }
     }
 
+    /// Every derivation is a comparison, so each one needs both sides.
+    ///
+    /// An attribute the pre-action read could not reach comes back the same way an attribute that
+    /// does not exist does: as nil. Treating that as "it changed" would assert pre-existing state
+    /// the action had nothing to do with, so every rule below requires positive before evidence.
+    /// An unsettled read is refused wholesale for the same reason a string from one is: a button
+    /// that disables during submission and re-enables after the budget would otherwise be saved as
+    /// permanently disabled.
     private func candidates(for observation: ActionObservation) -> [Candidate] {
+        guard observation.settled else {
+            return []
+        }
+
         var candidates: [Candidate] = []
         let before = observation.targetBefore
         let after = observation.targetAfter
 
-        if let after, before?.focused != true, after.focused == true {
+        if let after, before?.focused == false, after.focused == true {
             candidates.append(Candidate(
                 kind: "focused",
                 app: after.app,
                 locator: after.locator,
                 state: ["focused": .bool(true)],
                 assertion: nil,
-                derivedFromInput: false,
-                requiresSettled: false,
-                settled: after.settled
+                derivedFromInput: false
             ))
         }
 
         // Focus that landed somewhere other than the acted-on element is only visible in the
-        // app-level read, which is why the observation carries one. Focus that was already there
-        // before the action is not a transition, and asserting it would verify nothing.
+        // app-level read, which is why the observation carries one. A missing before-read means
+        // focus cannot be shown to have moved: nothing focused and nothing readable look alike.
         if let focus = observation.focusAfter,
+           let focusBefore = observation.focusBefore,
            focus.locator != nil,
-           focus.locator != observation.focusBefore?.locator,
+           focus.locator != focusBefore.locator,
            focus.locator != after?.locator {
             candidates.append(Candidate(
                 kind: "focused",
@@ -191,26 +198,22 @@ public struct DerivedPostconditionCompiler {
                 locator: focus.locator,
                 state: ["focused": .bool(true)],
                 assertion: nil,
-                derivedFromInput: false,
-                requiresSettled: false,
-                settled: focus.settled
+                derivedFromInput: false
             ))
         }
 
-        if let after, let enabled = after.enabled, before?.enabled != enabled {
+        if let after, let enabled = after.enabled, let wasEnabled = before?.enabled, wasEnabled != enabled {
             candidates.append(Candidate(
                 kind: "enabled",
                 app: after.app,
                 locator: after.locator,
                 state: ["enabled": .bool(enabled)],
                 assertion: nil,
-                derivedFromInput: false,
-                requiresSettled: false,
-                settled: after.settled
+                derivedFromInput: false
             ))
         }
 
-        if let after, let value = after.value, before?.value != value {
+        if let after, let value = after.value, let wasValue = before?.value, wasValue != value {
             let kind = DerivedPostconditionRules.selectionRoles.contains(after.role) ? "selected" : "value"
             candidates.append(Candidate(
                 kind: kind,
@@ -218,26 +221,21 @@ public struct DerivedPostconditionCompiler {
                 locator: after.locator,
                 state: [kind: .object(["equals": .string(value)])],
                 assertion: value,
-                derivedFromInput: after.valueDerivedFromInput,
-                requiresSettled: true,
-                settled: after.settled
+                derivedFromInput: after.valueDerivedFromInput
             ))
         }
 
-        if let app = observation.app {
-            let appeared = observation.windowTitlesAfter.filter {
-                !observation.windowTitlesBefore.contains($0)
-            }
-            for title in appeared {
+        if let app = observation.app,
+           let titlesBefore = observation.windowTitlesBefore,
+           let titlesAfter = observation.windowTitlesAfter {
+            for title in titlesAfter where !titlesBefore.contains(title) {
                 candidates.append(Candidate(
                     kind: "window",
                     app: app,
                     locator: ["role": .string("AXWindow"), "title": .string(title)],
                     state: [:],
                     assertion: title,
-                    derivedFromInput: false,
-                    requiresSettled: false,
-                    settled: true
+                    derivedFromInput: false
                 ))
             }
         }
@@ -249,9 +247,6 @@ public struct DerivedPostconditionCompiler {
     /// designed outcome, and an action with nothing safe to say stays a valid, unverified step.
     private func survives(_ candidate: Candidate, inputs: [String]) -> Bool {
         guard let locator = candidate.locator, !locator.isEmpty else {
-            return false
-        }
-        if candidate.requiresSettled, !candidate.settled {
             return false
         }
         guard let assertion = candidate.assertion else {
