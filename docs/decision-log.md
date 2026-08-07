@@ -67,6 +67,10 @@ A point is a pointer-space instruction, and a scroll wheel is the pointer-space 
 
 Activation follows the same reasoning and is therefore scoped to the wheel rather than to the presence of an `app` argument. A wheel needs the target window raised because it lands wherever the topmost window is; `AXScrollToVisible` does not, so activating for it would take the user's focus to no purpose. `dispatchSuccess` is likewise never claimed without events: a zero delta is a no-op that reports `semanticStatus: "noop"`, and a delta that rounds to no whole pixel fails rather than reporting a dispatch that moved nothing.
 
+`scroll` does not activate the app it was given, and this reversed an earlier decision to match `drag`. The argument for activating was that a wheel lands on whichever window is topmost under the point, so an occluded target window would swallow it. Measurement did not support the premise being worth its cost: a posted wheel reached the intended window in every trial across cursor positions and frontmost applications, so activation changed nothing except taking the user's focus on every scroll. `drag` still activates because a drag presses and moves the pointer, which is a mutation whose target must be unambiguous. The residual risk is named rather than hidden: a point covered by another window scrolls what is on top of it.
+
+`dispatchSuccess` is likewise never claimed without events. A zero delta is a no-op reporting `semanticStatus: "noop"`, and a delta that rounds to no whole pixel fails rather than reporting a dispatch that moved nothing.
+
 The consequence to be honest about: the two strategies interpret the delta differently. The wheel honors the documented pixel distance; `AXScrollToVisible` cannot, because the app decides how far to move to reveal the chosen descendant. Unifying that is a tool-vocabulary change, not a bug fix.
 
 ## Deferred Design Notes
