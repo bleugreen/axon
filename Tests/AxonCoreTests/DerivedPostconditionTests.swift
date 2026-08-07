@@ -190,14 +190,75 @@ import Testing
     #expect(facts.isEmpty)
 }
 
-@Test func anUnsettledReadDropsStringAssertionsButKeepsBooleanOnes() {
+@Test func anUnsettledReadDerivesNothingAtAll() {
+    // A button that disables during submission and re-enables after the budget would otherwise be
+    // saved as permanently disabled. A boolean read mid-transition is no more trustworthy than a
+    // string one.
     let facts = compile(observation(
         tool: "click",
-        targetBefore: observedState(value: "", focused: false, enabled: false),
-        targetAfter: observedState(value: "mid-transition", focused: true, enabled: true, settled: false)
+        targetBefore: observedState(value: "", focused: false, enabled: true),
+        targetAfter: observedState(value: "mid-transition", focused: true, enabled: false),
+        windowTitlesBefore: ["Main"],
+        windowTitlesAfter: ["Main", "Progress"],
+        settled: false
     ))
 
-    #expect(facts.map { $0["kind"] } == [.string("focused"), .string("enabled")])
+    #expect(facts.isEmpty)
+}
+
+@Test func derivesNothingWhenThePreActionReadIsMissingEntirely() {
+    // Without a before-read there is no transition to speak of, only the state the element happens
+    // to be in — which the action may have had nothing to do with.
+    let facts = compile(observation(
+        tool: "click",
+        targetBefore: nil,
+        targetAfter: observedState(value: "Ada", focused: true, enabled: true)
+    ))
+
+    #expect(facts.isEmpty)
+}
+
+@Test func derivesNothingFromAnAttributeThePreActionReadCouldNotReach() {
+    // An attribute that failed to read comes back nil exactly like an attribute that does not
+    // exist, so nil on the before side can never stand in for "it was something else".
+    let facts = compile(observation(
+        tool: "click",
+        targetBefore: observedState(value: nil, focused: nil, enabled: nil),
+        targetAfter: observedState(value: "Ada", focused: true, enabled: true)
+    ))
+
+    #expect(facts.isEmpty)
+}
+
+@Test func derivesNoWindowFactWhenEitherWindowListCouldNotBeRead() {
+    let beforeUnreadable = compile(observation(
+        tool: "click",
+        windowTitlesBefore: nil,
+        windowTitlesAfter: ["Main", "Preferences"]
+    ))
+    let afterUnreadable = compile(observation(
+        tool: "click",
+        windowTitlesBefore: ["Main"],
+        windowTitlesAfter: nil
+    ))
+
+    #expect(beforeUnreadable.isEmpty)
+    #expect(afterUnreadable.isEmpty)
+}
+
+@Test func derivesNoFocusMoveWhenTheAppsPriorFocusCouldNotBeRead() {
+    let elsewhere = observedState(
+        role: "AXTextArea",
+        locator: ["role": .string("AXTextArea"), "identifier": .string("body")],
+        focused: true
+    )
+    let facts = compile(observation(
+        tool: "keyboard",
+        focusBefore: nil,
+        focusAfter: elsewhere
+    ))
+
+    #expect(facts.isEmpty)
 }
 
 @Test func derivesNothingWhenNoObservedStateChanged() {
@@ -242,8 +303,7 @@ private func observedState(
     value: String? = nil,
     focused: Bool? = nil,
     enabled: Bool? = nil,
-    valueDerivedFromInput: Bool = false,
-    settled: Bool = true
+    valueDerivedFromInput: Bool = false
 ) -> ObservedElementState {
     ObservedElementState(
         app: app,
@@ -252,8 +312,7 @@ private func observedState(
         value: value,
         focused: focused,
         enabled: enabled,
-        valueDerivedFromInput: valueDerivedFromInput,
-        settled: settled
+        valueDerivedFromInput: valueDerivedFromInput
     )
 }
 
@@ -265,8 +324,9 @@ private func observation(
     targetAfter: ObservedElementState? = nil,
     focusBefore: ObservedElementState? = nil,
     focusAfter: ObservedElementState? = nil,
-    windowTitlesBefore: [String] = [],
-    windowTitlesAfter: [String] = []
+    windowTitlesBefore: [String]? = [],
+    windowTitlesAfter: [String]? = [],
+    settled: Bool = true
 ) -> ActionObservation {
     ActionObservation(
         tool: tool,
@@ -277,6 +337,7 @@ private func observation(
         focusBefore: focusBefore,
         focusAfter: focusAfter,
         windowTitlesBefore: windowTitlesBefore,
-        windowTitlesAfter: windowTitlesAfter
+        windowTitlesAfter: windowTitlesAfter,
+        settled: settled
     )
 }

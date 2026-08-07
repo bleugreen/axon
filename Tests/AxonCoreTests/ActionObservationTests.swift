@@ -19,7 +19,7 @@ import Testing
     // One pre-action read, then two post-action reads that agree.
     #expect(observer.elementReadCount == 3)
     #expect(sleeps == [ActionObservationCollector.settleIntervalMs])
-    #expect(collector.observation?.targetAfter?.settled == true)
+    #expect(collector.observation?.settled == true)
     #expect(collector.observation?.targetAfter?.focused == true)
 }
 
@@ -38,7 +38,7 @@ import Testing
     collector.finish(success: true)
 
     #expect(sleeps.reduce(0, +) <= ActionObservationCollector.settleBudgetMs)
-    #expect(collector.observation?.targetAfter?.settled == false)
+    #expect(collector.observation?.settled == false)
 }
 
 @Test func actionsThatAreNotTransitionLikelyDoNotWaitToSettle() {
@@ -55,7 +55,7 @@ import Testing
 
     #expect(sleeps.isEmpty)
     #expect(observer.elementReadCount == 2)
-    #expect(collector.observation?.targetAfter?.settled == true)
+    #expect(collector.observation?.settled == true)
 }
 
 @Test func inputEchoIsDecidedAtCaptureAgainstTheUnredactedInput() {
