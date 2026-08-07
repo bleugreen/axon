@@ -133,7 +133,14 @@ public final class ActionHistoryStore: @unchecked Sendable {
 
     public func exportScript(sessionID: String, includeReads: Bool = false, from: String? = nil, to: String? = nil) throws -> ActionHistoryExport {
         let records = try slicedRecords(sessionID: sessionID, from: from, to: to)
-        let actions = records.compactMap { actionObject(for: $0, includeReads: includeReads) }
+        var ordinal = 0
+        let actions = records.compactMap { record -> [String: JSONValue]? in
+            guard let object = actionObject(for: record, includeReads: includeReads, ordinal: ordinal + 1) else {
+                return nil
+            }
+            ordinal += 1
+            return object
+        }
         let script = try AxnDocumentCodec.yamlString(from: .object([
             "version": .int(1),
             "actions": .array(actions.map(JSONValue.object))
@@ -179,18 +186,77 @@ public final class ActionHistoryStore: @unchecked Sendable {
         return Array(records[start...end])
     }
 
-    private func actionObject(for record: ActionHistoryRecord, includeReads: Bool) -> [String: JSONValue]? {
+    /// Renders one history record as a saved `.axn` step.
+    ///
+    /// The ordinal is the step's identity, not decoration: derived fact ids hang off it, and
+    /// `requires` in a later step would name it.
+    private func actionObject(
+        for record: ActionHistoryRecord,
+        includeReads: Bool,
+        ordinal: Int
+    ) -> [String: JSONValue]? {
         guard let tool = toolName(for: record.method) else {
             return nil
         }
         if !includeReads && !isReplayableAction(record.method) {
             return nil
         }
-        var object: [String: JSONValue] = ["tool": .string(tool)]
+        let actionID = String(format: "a%03d", ordinal)
+        var object: [String: JSONValue] = ["tool": .string(tool), "id": .string(actionID)]
         for (key, value) in record.params where key != "tool" {
             object[key] = value
         }
+
+        if let observation = record.observation {
+            replaceHandleTarget("target", in: &object, with: observation.targetBefore)
+            replaceHandleTarget("from", in: &object, with: observation.fromBefore)
+            replaceHandleTarget("to", in: &object, with: observation.toBefore)
+
+            let facts = DerivedPostconditionCompiler().facts(for: DerivedPostconditionCompiler.Input(
+                actionID: actionID,
+                tool: tool,
+                observation: observation
+            ))
+            if !facts.isEmpty {
+                object["expects"] = .array(facts)
+            }
+        }
+
+        let warnings = ephemeralTargetWarnings(in: object)
+        if !warnings.isEmpty {
+            object["warnings"] = .array(warnings.map(JSONValue.string))
+        }
         return object
+    }
+
+    /// Swaps a snapshot handle for the durable `{app, locator}` identity read just before the
+    /// action ran. The pre-action read is the right source: it names the element the way it looked
+    /// when it was found, which is the state a replay will be in when it looks for it again.
+    private func replaceHandleTarget(
+        _ key: String,
+        in object: inout [String: JSONValue],
+        with state: ObservedElementState?
+    ) {
+        guard case let .string(value)? = object[key],
+              (try? SnapshotHandle(value)) != nil,
+              let state,
+              let locator = state.locator
+        else {
+            return
+        }
+        object[key] = .object(["app": .string(state.app), "locator": .object(locator)])
+    }
+
+    /// Names every step still pinned to a snapshot handle. A handle is not durable identity, so
+    /// such a step cannot replay in a later session, and the file should say so rather than look
+    /// like a workflow that works.
+    private func ephemeralTargetWarnings(in object: [String: JSONValue]) -> [String] {
+        ["target", "from", "to"].compactMap { key in
+            guard case let .string(value)? = object[key], (try? SnapshotHandle(value)) != nil else {
+                return nil
+            }
+            return "\(key) is a snapshot handle (\(value)) with no durable locator; this step will not replay in a later session"
+        }
     }
 
     private func toolName(for method: String) -> String? {
