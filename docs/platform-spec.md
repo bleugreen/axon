@@ -114,6 +114,137 @@ the intended semantic result was verified, either by direct readback or by an
 explicit `expects` postcondition. A backend that cannot verify the effect reports
 that honestly rather than promoting dispatch to success.
 
+## Delivery contract
+
+Axon's preference for accessibility-level actions is a caller-visible guarantee,
+not an implementation detail. Every mutating action — `click`, `type`,
+`keyboard`, `scroll`, `drag`, `invoke` — takes an optional `deliveryPolicy`, and
+every action result reports what the daemon actually did with it.
+
+### Policy
+
+| policy | meaning |
+| --- | --- |
+| `backgroundOnly` | The default. Forbids application activation, system-focus changes, movement of the real pointer, global keyboard input, and clipboard access. |
+| `foregroundPermitted` | Permits the backend to escalate **this action only**. |
+
+The policy is per action and is never daemon state. It is decoded before the
+target is resolved and before any native call, so an unrecognized value is a
+JSON-RPC `invalid params` error rather than a dispatch. It is never inherited:
+an `.axn` step that permits foreground delivery says nothing about the next step.
+
+### Rungs
+
+The reported rung is the mechanism that actually carried the action, classified
+by **observable side effect** rather than by the name of the API involved:
+
+| rung | classification rule |
+| --- | --- |
+| `semantic` | An AX, UIA, or AT-SPI mutation that neither focused nor activated. An action that changes system focus is foreground regardless of which API finally mutated the target. |
+| `pixel` | Target-bound input derived from verified window geometry, delivered without activating the application and without moving the real pointer. |
+| `foreground` | Global input devices: `CGEvent` on the HID tap, `SendInput`, `XTest`, or a virtual pointer. |
+
+Backends enumerate an ordered ladder — semantic, then pixel, then foreground —
+and dispatch at the first rung the policy and the runtime allow. A rung that
+demonstrably did not take may advance; a rung that delivered must not, because a
+second dispatch would repeat an action the target may already have performed.
+Under `backgroundOnly` the ladder ends after pixel.
+
+A backend may only report `pixel` for a mechanism that is genuinely bound to a
+verified target. It must carry stable app and window identity, window-relative
+coordinates converted through resolved window geometry, and revalidation of a
+retained element, window, or text-location resolution immediately before
+dispatch. A target window may never be inferred from an unscoped screen point.
+After dispatch the backend proves that the frontmost application and the real
+pointer are unchanged. Relabelling a global input device as `pixel` because it
+was aimed narrowly is a contract violation, not an optimization.
+
+Dispatch at the pixel rung is evidence, not goal success: event acceptance sets
+`dispatchSuccess`, while `success` still requires readback or an `expects`
+postcondition.
+
+### Result fields
+
+Every action result carries four stable top-level fields alongside `success`,
+`strategy`, and `message`:
+
+| field | meaning |
+| --- | --- |
+| `deliveryPolicy` | The policy the action ran under. Always present. |
+| `delivery` | The rung that carried the action, or `null` when no mechanism was reached. |
+| `dispatchSuccess` | Whether the mechanism accepted the action. |
+| `refusal` | Present when the backend declined a rung, otherwise `null`. |
+
+A refusal carries a stable `reason`, the `requiredRung` it would have needed, the
+responsible `capability` when one is to blame, and a diagnostic `message`:
+
+| reason | meaning |
+| --- | --- |
+| `foregroundNotPermitted` | Only the foreground rung remained and the action did not opt in. |
+| `backgroundPixelUnsupported` | No target-bound mechanism on this platform, compositor, toolkit, or window could carry the action without global input. |
+| `targetIdentityUnavailable` | The request named coordinates with no application or window behind them. |
+| `clipboardForbidden` | A clipboard-backed candidate was offered. Always refused. |
+| `activationNotProved` | Foreground escalation could not prove the target became frontmost, so nothing was posted. |
+| `noDeliveryCandidate` | This rung's mechanism does not exist on this backend. |
+
+A refusal is always decided before the mechanism it names produces any native
+side effect. A result whose `delivery` is `null` therefore dispatched nothing at
+all; a result that names a rung *and* carries a refusal ran that rung and was
+only declined the escalation above it, keeping whatever dispatch evidence that
+rung earned. Policy and capability denials are action results, not transport
+errors — malformed requests and target-resolution failures remain JSON-RPC
+errors.
+
+A refusal must never be reported as `foregroundNotPermitted` when the foreground
+mechanism does not exist on that backend: telling a caller to opt in to something
+that cannot happen sends them after a permission that changes nothing. Runtime
+capability overlays from the health document feed the same decision that
+dispatches, so a session that cannot reach global input refuses identically
+whatever the policy says.
+
+### Foreground escalation
+
+Foreground escalation is transactional. A backend captures the prior frontmost
+application, activates the target and proves it is frontmost, dispatches exactly
+one action, and restores the prior application in guaranteed cleanup — on
+success, on validation failure, on a thrown error, and on timeout alike.
+Activation is skipped when the target already holds the foreground. If activation
+cannot be proved, nothing is posted and the action refuses with
+`activationNotProved`. If a dispatch moves the real pointer, the pointer is
+captured and restored around it. If restoration fails after dispatch, the result
+keeps its `delivery` and `dispatchSuccess` evidence and reports overall failure.
+
+The result reports that evidence under `foreground`: `priorApp`,
+`priorAppProcessIdentifier`, `alreadyFrontmost`, `activationProved`, `restored`,
+`pointerRestored` (`null` when the pointer never moved), and a `message`.
+
+### The clipboard is not a delivery mechanism
+
+Axon has no clipboard path. The system pasteboard is modelled as a forbidden
+delivery capability so that a future fallback cannot introduce one by accident:
+the planner refuses a clipboard candidate on sight, at every policy. No ladder in
+any backend contains one.
+
+### Platform support
+
+The pixel rung is implemented where a target-bound mechanism can satisfy those
+invariants, and refused honestly everywhere else. It is not universally
+available, and a backend must not claim it before a live probe passes.
+
+| platform | semantic | pixel | foreground |
+| --- | --- | --- | --- |
+| macOS | `AXPress`, `AXValue`, `AXScrollToVisible` | `CGEventPostToPid` against the target process, invariants proved after dispatch | Global `CGEvent`, transactional activate/dispatch/restore |
+| Windows | UIA `InvokePattern`, `ValuePattern`, `ScrollItemPattern`, none of which call `SetFocus` | Not implemented; refuses `backgroundPixelUnsupported` | Withheld; `SendInput` exists but the backend cannot yet capture, prove, and restore the foreground |
+| Linux | AT-SPI `Action.DoAction`, `EditableText.SetTextContents`, `Component.ScrollTo`, none of which take focus | Not implemented; refuses `backgroundPixelUnsupported` | Withheld; `XTest` exists but the backend cannot yet capture, prove, and restore the foreground |
+
+The foreground rung is not merely "global input". It is global input that hands
+back what it borrowed, and a backend that cannot do that must not offer the rung
+at all. Dispatching an unrestored `SendInput` or `XTest` call while reporting
+`delivery: "foreground"` would claim a guarantee the backend does not keep, which
+is the exact behavior this contract exists to prevent. Such a backend reports
+`noDeliveryCandidate` naming the missing transaction, at either policy, because
+opting in cannot supply a faculty the backend lacks.
+
 ## Transport and result envelopes
 
 The daemon speaks JSON-RPC 2.0 over a local socket. Success responses use

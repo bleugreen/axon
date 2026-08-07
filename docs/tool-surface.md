@@ -16,12 +16,12 @@ wait_for_stability(app, condition?, stableMs?, timeoutMs?, intervalMs?)
 permit()
 run(actions?, path?, argValues?, continueOnError?, dryRun?, healedPath?)
 save(sessionId?, from?, to?, path?, includeReads?)
-click(target)
-type(target, value)
-keyboard(text?, key?, app?)
-scroll(target?, app?, deltaX?, deltaY?)
-drag(from, to, app?, durationMs?, expects?)
-invoke(target, name)
+click(target, deliveryPolicy?)
+type(target, value, deliveryPolicy?)
+keyboard(text?, key?, app?, deliveryPolicy?)
+scroll(target?, app?, deltaX?, deltaY?, deliveryPolicy?)
+drag(from, to, app?, durationMs?, expects?, deliveryPolicy?)
+invoke(target, name, deliveryPolicy?)
 ```
 
 ## CLI Commands
@@ -36,11 +36,11 @@ axon wait_for_stability <app> [--condition stable|changed] [--stable-ms n] [--ti
 axon run <path.axn> [--arg name=value] [--dry-run] [--healed-path file] [--continue-on-error]
 axon save [--session id] [--from call] [--to call] [--path file.axn] [--include-reads]
 
-axon click <handle|target-json>
-axon type <handle> <value>
-axon keyboard [--app app] (--text text | --key keystroke)
+axon click [--foreground] <handle|target-json>
+axon type [--foreground] <handle> <value>
+axon keyboard [--app app] [--foreground] (--text text | --key keystroke)
 axon scroll [--app app] [--target target-json] [--dx n] [--dy n]
-axon drag [--app app] [--duration-ms n] <from-json> <to-json>
+axon drag [--app app] [--duration-ms n] [--foreground] <from-json> <to-json>
 axon invoke <handle> <action-name>
 ```
 
@@ -132,6 +132,79 @@ and return `finalObservation` on success or timeout. This is the post-navigation
 settle primitive; use `wait_for_value` when readiness has a specific semantic
 field predicate instead.
 
+## Delivery
+
+Every mutating action takes a `deliveryPolicy`, and the CLI spells
+`foregroundPermitted` as `--foreground`. `backgroundOnly` is the default and
+forbids application activation, system-focus changes, movement of the real
+pointer, global keyboard input, and the clipboard. `foregroundPermitted` allows
+the backend to escalate that one action; it is never daemon state and is never
+inherited by a later action, including a later step of the same `.axn` run.
+
+Every action result carries four stable top-level fields alongside `success`,
+`strategy`, and `message`: the `deliveryPolicy` it ran under, the `delivery` rung
+that carried it, whether the mechanism accepted it (`dispatchSuccess`), and a
+`refusal` when Axon declined to act.
+
+The rung names what actually happened, classified by observable side effect
+rather than by the API that produced it:
+
+| rung | meaning on macOS |
+| --- | --- |
+| `semantic` | `AXPress`, `AXValue`, `AXScrollToVisible` — no focus change, no activation |
+| `pixel` | `CGEventPostToPid` against the target's process, with the frontmost app and the real pointer proved unchanged afterwards |
+| `foreground` | Global `CGEvent` on the shared devices, allowed only by explicit opt-in |
+
+Actions climb that ladder in order and stop at the first rung their policy and
+the runtime allow. A failed semantic attempt may advance to pixel; under
+`backgroundOnly` the ladder ends there. `invoke` and the semantic half of
+`scroll` have one rung only: an accessibility action the app refuses is a failed
+action, never a reason to send unrelated global input at the same coordinates.
+
+`foregroundPermitted` **raises the ceiling rather than choosing a rung**. An
+action still takes the quietest mechanism that works, so opting in costs nothing
+when the background path succeeds. A rung only advances when it can prove it did
+not take: `type` reads the value back and can, while a click or keystroke cannot,
+so a dispatch those accept is where they stop. Escalating past an accepted but
+unverifiable dispatch would deliver the action twice.
+
+Background delivery needs a target it can prove. A handle, locator, or text
+location carries the owning process; a point carries one only when its `app` is
+named. A bare screen point cannot be bound to a window without guessing, so
+under `backgroundOnly` it is refused rather than delivered globally.
+
+A refusal is an action result, not a transport error: the request was well
+formed and the target resolved, and the daemon declined. It carries a stable
+`reason`, the `requiredRung` it would have needed, the responsible `capability`,
+and a diagnostic `message`. A refusal is always decided before the mechanism it
+names produces any native side effect, so a result whose `delivery` is null
+dispatched nothing at all. A result that names a rung *and* carries a refusal ran
+that rung and was only declined the escalation above it, and it keeps whatever
+dispatch evidence that rung earned. Malformed requests and target-resolution
+failures remain JSON-RPC errors.
+
+| reason | meaning |
+| --- | --- |
+| `foregroundNotPermitted` | Only the foreground rung remained and the action did not opt in |
+| `backgroundPixelUnsupported` | No target-bound mechanism could carry the action without global input |
+| `targetIdentityUnavailable` | The request named coordinates with no application or window behind them |
+| `clipboardForbidden` | A clipboard-backed candidate was offered; Axon never uses the pasteboard |
+| `activationNotProved` | Foreground escalation could not prove the target became frontmost, so nothing was posted |
+| `noDeliveryCandidate` | The action has no delivery mechanism at all on this backend |
+
+Foreground escalation is transactional. Axon captures the prior frontmost
+application, activates the target and proves it is frontmost, dispatches exactly
+one action, and hands the session back — on success, on validation failure, and
+on a thrown error alike. The result reports that evidence under `foreground`:
+prior app identity, whether the target was already frontmost, whether activation
+was proved, whether the prior app was restored, and whether the real pointer was
+put back. If activation cannot be proved, nothing is posted and the action
+refuses. If restoration fails after dispatch, the dispatch evidence is kept and
+the overall result is a failure.
+
+Axon has no clipboard path and will not grow one by accident: the pasteboard is
+modelled as a forbidden delivery capability that the planner refuses on sight.
+
 ## Actions
 
 Targets may be snapshot handles or locator objects:
@@ -154,10 +227,15 @@ wire compatibility. Handle- and locator-derived pointer events are hit-tested
 again immediately before dispatch and fail closed if the intended element moved,
 is occluded, or cannot be resolved. Explicit point targets carry no intended
 element identity, so they dispatch as unverified coordinates; use a handle or
-locator when fail-closed target validation is required. Direct drag results separate pointer dispatch from semantic
-success. A drag is semantically successful only when `run` verifies supplied
-`expects` facts after dispatch, such as an AX list value exposing the new row
-order.
+locator when fail-closed target validation is required.
+
+Pointer results separate dispatch from semantic success. A click on an element
+that advertises `AXPress` is a semantic action and proves its own outcome, but a
+click or drag that has to travel as pointer input cannot read back what it
+achieved: it reports `dispatchSuccess` with `semanticStatus: "unverified"` and
+leaves `success` false. Such an action is semantically successful only when
+`run` verifies supplied `expects` facts after dispatch, such as an AX list value
+exposing the new row order.
 
 `scroll` chooses between two strategies by the kind of target it was given. A point
 target posts `CGEventScroll` wheel events at that point and never consults the
@@ -170,14 +248,18 @@ ran. `deltaX`/`deltaY` are pixels and negative `deltaY` scrolls down; only the w
 path honors the distance, because `AXScrollToVisible` lets the app decide how far to
 move. Both strategies report `dispatchSuccess` separately from `semanticSuccess` and
 leave `semanticStatus` unverified: a dispatched wheel, or an app acknowledging the
-accessibility action, is not proof that the viewport moved. `success` reflects dispatch
-rather than semantics here, unlike `drag`, because a scroll moves a viewport instead of
-mutating state. Unlike `drag`, `scroll` never activates the app it was given: a posted
-wheel is routed by the event's location to the window under that point whatever is
-frontmost, so raising the app would only take the user's focus. A point covered by
-another window therefore scrolls whatever is on top of it. A delta too small to round to
-a whole pixel of wheel movement is reported as a failure rather than as an empty
-dispatch, and a zero delta is a no-op carrying `semanticStatus: "noop"`.
+accessibility action, is not proof that the viewport moved, so `success` stays false
+until a `run` postcondition proves the viewport moved.
+
+A wheel burst is global input whatever it is aimed at, so it rides the delivery ladder:
+it reaches a verified process in the background when the target carries one, and the
+shared devices only under `foregroundPermitted`. `scroll` never activates the app it was
+given, at either rung: a posted wheel is routed by the event's location to the window
+under that point whatever is frontmost, so raising the app would only take the user's
+focus. A point covered by another window therefore scrolls whatever is on top of it. A
+delta too small to round to a whole pixel of wheel movement is reported as a failure
+rather than as an empty dispatch, and a zero delta is a no-op carrying
+`semanticStatus: "noop"` that claims no dispatch and names no rung.
 
 `type` fills writable fields by setting `AXValue`; use it when the desired
 intent is "make this field contain this value." Its exact AXValue readback is a
@@ -185,11 +267,19 @@ verified success. If it must fall back to click-and-keyboard events, dispatch is
 reported separately and success remains false unless a `run` postcondition
 proves a causal transition. For a type fallback, that requires an explicit
 `changed` expectation because the before-state cannot be reconstructed after
-dispatch. `keyboard` requires exactly one explicit
-intent: `text` accepts arbitrary text, while `key` accepts only recognized keys
-and keystrokes such as `End`, `Return`, or `cmd+shift+p`. Keyboard event dispatch
-alone is likewise unverified and does not set `success` to true.
-`invoke` runs a named AX action such as `AXPress` or `AXShowMenu`.
+dispatch. A keystroke fallback that does land the value is still proved by
+readback, so it reports a verified success at whichever rung carried it.
+
+`keyboard` requires exactly one explicit intent: `text` accepts arbitrary text,
+while `key` accepts only recognized keys and keystrokes such as `End`, `Return`,
+or `cmd+shift+p`. Keyboard event dispatch alone is likewise unverified and does
+not set `success` to true. `keyboard` has no semantic rung — there is no element
+to mutate, only input to deliver — so background delivery needs `app` to name the
+receiving application. Without it the only rung left is foreground, and
+`backgroundOnly` refuses.
+
+`invoke` runs a named AX action such as `AXPress` or `AXShowMenu`. It is always
+semantic and never escalates.
 
 ## Recordings
 

@@ -17,6 +17,10 @@ private final class MutatingPointerOverlay: VisualOverlay {
     }
 }
 
+/// The process every element in these tests belongs to, so background delivery has an identity to
+/// bind to and never reaches the real global event tap.
+private let pointerProcess: pid_t = 4_242
+
 @Test func handleClickValidatesAfterVisualOverlayDelay() throws {
     let intended = AXUIElementCreateSystemWide()
     let unrelated = AXUIElementCreateApplication(123)
@@ -30,12 +34,16 @@ private final class MutatingPointerOverlay: VisualOverlay {
         overlay: overlay,
         overlayConfiguration: VisualOverlayConfiguration(enabled: true, actionDelay: 0),
         postEvent: { posted.append($0.type) },
+        postEventToProcess: { event, _ in posted.append(event.type) },
         hitTest: { _ in hit },
         frameProvider: { _ in pointerFrame },
-        parentProvider: { _ in nil }
+        parentProvider: { _ in nil },
+        processProvider: { _ in pointerProcess },
+        frontmostApp: { ForegroundApp(processIdentifier: 7, name: "Prior", bundleIdentifier: "com.example.prior") },
+        pointerLocation: { .zero }
     )
 
-    let result = try executor.click(target: "pointer:0")
+    let result = try executor.click(target: "pointer:0", policy: .backgroundOnly)
 
     #expect(result.success == false)
     #expect(result.message?.contains("occluded") == true)
@@ -47,6 +55,7 @@ private func pointerExecutor(
     hit: AXUIElement?,
     frames: @escaping (AXUIElement) -> AXFrame? = { _ in pointerFrame },
     parent: @escaping (AXUIElement) -> AXUIElement? = { _ in nil },
+    process: pid_t? = pointerProcess,
     posted: @escaping (CGEvent) -> Void
 ) -> AXPrimitiveActionExecutor {
     let store = AXElementStore()
@@ -55,10 +64,15 @@ private func pointerExecutor(
         elementStore: store,
         overlay: nil,
         postEvent: posted,
+        postEventToProcess: { event, _ in posted(event) },
         sleepMilliseconds: { _ in },
         hitTest: { _ in hit },
         frameProvider: frames,
-        parentProvider: parent
+        parentProvider: parent,
+        processProvider: { _ in process },
+        frontmostApp: { ForegroundApp(processIdentifier: 7, name: "Prior", bundleIdentifier: "com.example.prior") },
+        activateProcess: { _ in true },
+        pointerLocation: { .zero }
     )
 }
 
@@ -73,20 +87,25 @@ private func pointerExecutor(
         elementStore: store,
         overlay: nil,
         postEvent: { posted.append(($0.type, $0.location)) },
+        postEventToProcess: { event, _ in posted.append((event.type, event.location)) },
         sleepMilliseconds: { _ in },
         hitTest: { _ in
             defer { hitTests += 1 }
             return hitTests < 1 ? intended : unrelated
         },
         frameProvider: { _ in pointerFrame },
-        parentProvider: { _ in nil }
+        parentProvider: { _ in nil },
+        processProvider: { _ in pointerProcess },
+        frontmostApp: { ForegroundApp(processIdentifier: 7, name: "Prior", bundleIdentifier: "com.example.prior") },
+        pointerLocation: { .zero }
     )
 
     let result = try executor.drag(
         from: .point(ActionPoint(x: 0, y: 0, coordinateSpace: .screen)),
         to: .handle("pointer:0"),
         app: nil,
-        durationMs: 300
+        durationMs: 300,
+        policy: .backgroundOnly
     )
 
     #expect(result.success == false)
@@ -105,9 +124,13 @@ private func pointerExecutor(
         parent: { CFEqual($0, child) ? intended : nil }
     ) { posted.append($0.type) }
 
-    let result = try executor.click(target: "pointer:0")
+    let result = try executor.click(target: "pointer:0", policy: .backgroundOnly)
 
-    #expect(result.success)
+    // A pointer click cannot read back what it achieved, so an accepted dispatch is all it may
+    // claim; `run` upgrades it to success through an expects postcondition.
+    #expect(result.success == false)
+    #expect(result.dispatchSuccess)
+    #expect(result.delivery == .pixel)
     #expect(posted == [.leftMouseDown, .leftMouseUp])
 }
 
@@ -121,7 +144,7 @@ private func pointerExecutor(
         parent: { CFEqual($0, intended) ? parent : nil }
     ) { posted.append($0.type) }
 
-    let result = try executor.click(target: "pointer:0")
+    let result = try executor.click(target: "pointer:0", policy: .backgroundOnly)
 
     #expect(result.success == false)
     #expect(posted.isEmpty)
@@ -133,7 +156,7 @@ private func pointerExecutor(
     var posted: [CGEventType] = []
     let executor = pointerExecutor(intended: intended, hit: unrelated) { posted.append($0.type) }
 
-    let result = try executor.click(target: "pointer:0")
+    let result = try executor.click(target: "pointer:0", policy: .backgroundOnly)
 
     #expect(result.success == false)
     #expect(result.message?.contains("occluded") == true)
@@ -145,9 +168,47 @@ private func pointerExecutor(
     var posted: [CGEventType] = []
     let executor = pointerExecutor(intended: intended, hit: intended) { posted.append($0.type) }
 
-    let result = try executor.click(target: "pointer:0")
+    let result = try executor.click(target: "pointer:0", policy: .backgroundOnly)
 
-    #expect(result.success)
+    #expect(result.success == false)
+    #expect(result.dispatchSuccess)
+    #expect(result.delivery == .pixel)
+    #expect(result.strategy == "CGEventToPid")
+    #expect(posted == [.leftMouseDown, .leftMouseUp])
+}
+
+@Test func handleClickWithoutProcessIdentityRefusesUnderBackgroundOnly() throws {
+    let intended = AXUIElementCreateSystemWide()
+    var posted: [CGEventType] = []
+    let executor = pointerExecutor(
+        intended: intended,
+        hit: intended,
+        process: nil
+    ) { posted.append($0.type) }
+
+    let result = try executor.click(target: "pointer:0", policy: .backgroundOnly)
+
+    #expect(result.success == false)
+    #expect(result.dispatchSuccess == false)
+    #expect(result.delivery == nil)
+    #expect(result.refusal?.reason == .foregroundNotPermitted)
+    #expect(posted.isEmpty)
+}
+
+@Test func handleClickWithoutProcessIdentityEscalatesWhenForegroundIsPermitted() throws {
+    let intended = AXUIElementCreateSystemWide()
+    var posted: [CGEventType] = []
+    let executor = pointerExecutor(
+        intended: intended,
+        hit: intended,
+        process: nil
+    ) { posted.append($0.type) }
+
+    let result = try executor.click(target: "pointer:0", policy: .foregroundPermitted)
+
+    #expect(result.delivery == .foreground)
+    #expect(result.dispatchSuccess)
+    #expect(result.strategy == "CGEvent")
     #expect(posted == [.leftMouseDown, .leftMouseUp])
 }
 
@@ -157,7 +218,7 @@ private func pointerExecutor(
     var posted: [CGEventType] = []
     let executor = pointerExecutor(intended: intended, hit: unrelated) { posted.append($0.type) }
 
-    let result = try executor.type(target: "pointer:0", value: "unsafe")
+    let result = try executor.type(target: "pointer:0", value: "unsafe", policy: .backgroundOnly)
 
     #expect(result.success == false)
     #expect(result.message?.contains("occluded") == true)
@@ -174,11 +235,12 @@ private func pointerExecutor(
         from: .handle("pointer:0"),
         to: .point(ActionPoint(x: 200, y: 200, coordinateSpace: .screen)),
         app: nil,
-        durationMs: nil
+        durationMs: nil,
+        policy: .backgroundOnly
     )
 
     #expect(result.success == false)
-    #expect(result.details["dispatchSuccess"] == .bool(false))
+    #expect(result.dispatchSuccess == false)
     #expect(posted.isEmpty)
 }
 
@@ -191,7 +253,7 @@ private func pointerExecutor(
         return reads == 0 ? pointerFrame : AXFrame(x: 200, y: 200, width: 100, height: 40)
     }) { _ in }
 
-    let result = try executor.click(target: "pointer:0")
+    let result = try executor.click(target: "pointer:0", policy: .backgroundOnly)
 
     #expect(result.success == false)
     #expect(result.message?.contains("moved") == true)

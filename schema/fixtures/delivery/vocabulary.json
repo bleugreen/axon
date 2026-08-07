@@ -1,0 +1,23 @@
+{
+  "comment": "The delivery contract's wire vocabulary, in canonical order. Swift and Rust both assert against this file so neither side can rename or reorder a value alone.",
+  "policies": ["backgroundOnly", "foregroundPermitted"],
+  "defaultPolicy": "backgroundOnly",
+  "rungs": ["semantic", "pixel", "foreground"],
+  "capabilities": [
+    "semanticAction",
+    "semanticValue",
+    "backgroundPixelInput",
+    "globalInput",
+    "clipboard"
+  ],
+  "forbiddenCapabilities": ["clipboard"],
+  "refusalReasons": [
+    "foregroundNotPermitted",
+    "backgroundPixelUnsupported",
+    "targetIdentityUnavailable",
+    "clipboardForbidden",
+    "activationNotProved",
+    "noDeliveryCandidate"
+  ],
+  "mutatingTools": ["click", "type", "keyboard", "scroll", "drag", "invoke"]
+}

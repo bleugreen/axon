@@ -77,6 +77,55 @@ history records. Prefer `source: op://...` or `source: env://...` for secrets;
 literal CLI `--arg` values can still be exposed by shell history or process
 inspection before Axon receives them.
 
+## Delivery policy
+
+Every mutating step takes the same optional `deliveryPolicy` its tool takes.
+`backgroundOnly` is the default, so a step that says nothing about delivery will
+not activate an application, change system focus, move the real pointer, send
+global keyboard input, or touch the clipboard — it returns a structured refusal
+instead.
+
+**The policy is never inherited.** It belongs to the step that carries it. A step
+that permits foreground delivery says nothing about the next step, and nothing
+about later runs of the same file. Grant it once, where the run genuinely needs
+it, and every other step stays in the background.
+
+```yaml
+version: 1
+actions:
+  # Semantic: sets AXValue and reads it back. No focus, no activation.
+  - tool: type
+    target: s1:12
+    value: "{{assignee}}"
+
+  # Still backgroundOnly, because the policy above did not carry over.
+  - tool: click
+    target: s1:20
+
+  # This one shortcut needs the app frontmost, so it opts in explicitly. Axon
+  # activates the app, posts the keystroke, and restores the prior app.
+  - tool: keyboard
+    app: Safari
+    key: cmd+shift+p
+    deliveryPolicy: foregroundPermitted
+
+  # Back to backgroundOnly.
+  - tool: invoke
+    target: s1:24
+    name: AXPress
+```
+
+Each step's trace result carries the four delivery fields — `deliveryPolicy`,
+`delivery`, `dispatchSuccess`, and `refusal` — so a replay shows which rung
+carried each action. A refused step is a failed step: nothing was dispatched, so
+no `expects` postcondition can promote it to success. A step that *did* dispatch
+but could not prove its goal is exactly the case `expects` exists for, and a
+postcondition that verifies clears the declined escalation it no longer explains.
+
+The format version is unchanged. `.axn` steps already retain tool parameters
+verbatim, so `deliveryPolicy` needs no new syntax and the external `{"batch": ...}`
+envelope is untouched.
+
 ## Metadata
 
 Actions may carry metadata that `run` strips before dispatch:

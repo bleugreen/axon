@@ -348,6 +348,123 @@ import Testing
     #expect(batch["trace"]?[0]?["result"]?["semanticStatus"] == .string("verified"))
 }
 
+@Test func runMarksClickSemanticSuccessAndClearsADeclinedEscalation() {
+    var snapshots = [
+        reorderListFactSnapshot(value: "Alpha, Bravo"),
+        reorderListFactSnapshot(value: "Bravo, Alpha")
+    ]
+    let executor = AxnRunner(
+        commandHandler: { request in
+            #expect(request.method == "click")
+            // What a background pixel click reports: events reached the target, the goal is not
+            // provable from here, and the foreground rung was declined.
+            return JSONRPCResponse(id: request.id, result: [
+                "action": .object([
+                    "success": .bool(false),
+                    "deliveryPolicy": .string("backgroundOnly"),
+                    "delivery": .string("pixel"),
+                    "dispatchSuccess": .bool(true),
+                    "refusal": .object([
+                        "reason": .string("foregroundNotPermitted"),
+                        "requiredRung": .string("foreground"),
+                        "capability": .string("globalInput"),
+                        "message": .string("CGEvent requires foreground delivery")
+                    ]),
+                    "semanticSuccess": .null,
+                    "semanticStatus": .string("unverified")
+                ])
+            ])
+        },
+        snapshotProvider: { _ in snapshots.removeFirst() }
+    )
+
+    let fact: JSONValue = .object([
+        "id": .string("a001.value.0"),
+        "kind": .string("value"),
+        "target": .object([
+            "app": .string("Example"),
+            "locator": .object([
+                "role": .string("AXList"),
+                "identifier": .string("reorder-list")
+            ])
+        ]),
+        "state": .object([
+            "value": .object(["equals": .string("Bravo, Alpha")])
+        ])
+    ])
+
+    let batch = try! executor.run(params: [
+        "actions": .array([
+            .object([
+                "id": .string("a001"),
+                "tool": .string("click"),
+                "target": .string("s1:2"),
+                "expects": .array([fact])
+            ])
+        ])
+    ])
+
+    #expect(batch["success"] == .bool(true))
+    let result = batch["trace"]?[0]?["result"]
+    #expect(result?["success"] == .bool(true))
+    #expect(result?["semanticStatus"] == .string("verified"))
+    // The rung that carried the click is still reported, and the declined escalation it no longer
+    // explains is gone.
+    #expect(result?["delivery"] == .string("pixel"))
+    #expect(result?["refusal"] == .null)
+}
+
+@Test func runFailsARefusalAndNoPostconditionCanUpgradeIt() {
+    var dispatched = 0
+    let executor = AxnRunner(
+        commandHandler: { request in
+            dispatched += 1
+            return JSONRPCResponse(id: request.id, result: [
+                "action": .object([
+                    "success": .bool(false),
+                    "strategy": .string("refused"),
+                    "deliveryPolicy": .string("backgroundOnly"),
+                    "delivery": .null,
+                    "dispatchSuccess": .bool(false),
+                    "message": .string("CGEvent requires foreground delivery"),
+                    "refusal": .object([
+                        "reason": .string("foregroundNotPermitted"),
+                        "requiredRung": .string("foreground"),
+                        "capability": .string("globalInput"),
+                        "message": .string("CGEvent requires foreground delivery")
+                    ])
+                ])
+            ])
+        },
+        snapshotProvider: { _ in reorderListFactSnapshot(value: "Bravo, Alpha") }
+    )
+
+    let batch = try! executor.run(params: [
+        "actions": .array([
+            .object([
+                "id": .string("a001"),
+                "tool": .string("keyboard"),
+                "key": .string("End"),
+                "expects": .array([.object([
+                    "id": .string("a001.value.0"),
+                    "kind": .string("value"),
+                    "target": .object([
+                        "app": .string("Example"),
+                        "locator": .object(["role": .string("AXList"), "identifier": .string("reorder-list")])
+                    ]),
+                    "state": .object(["value": .object(["equals": .string("Bravo, Alpha")])])
+                ])])
+            ])
+        ])
+    ])
+
+    #expect(dispatched == 1)
+    // The postcondition already holds, but nothing was delivered, so it proves nothing.
+    #expect(batch["success"] == .bool(false))
+    #expect(batch["trace"]?[0]?["success"] == .bool(false))
+    #expect(batch["trace"]?[0]?["error"] == .string("CGEvent requires foreground delivery"))
+}
+
 @Test func runWaitsForChangedExpectationBeforeNextAction() {
     var snapshots = [
         changeFactSnapshot(title: "Before"),
@@ -1168,7 +1285,7 @@ private func articleSnapshot(children: [AXNode]) -> AppSnapshot {
 @Test func commandRouterRunsBatch() {
     var clicked: [String] = []
     let router = CommandRouter(actions: PrimitiveActionHandlers(
-        click: { target in
+        click: { target, _ in
             clicked.append(target)
             return PrimitiveActionResult(action: "click", target: "clicked", strategy: "test", success: true)
         }
@@ -1202,7 +1319,7 @@ private func articleSnapshot(children: [AXNode]) -> AppSnapshot {
             return valueFactSnapshot(value: "Mitch")
         },
         actions: PrimitiveActionHandlers(
-            type: { target, value in
+            type: { target, value, _ in
                 types.append((target, value))
                 return PrimitiveActionResult(action: "type", target: target, strategy: "test", success: true)
             }
@@ -1249,11 +1366,11 @@ private func articleSnapshot(children: [AXNode]) -> AppSnapshot {
 @Test func commandRouterDebugStartPausesBeforeSelectedBlock() {
     var requests: [String] = []
     let router = CommandRouter(actions: PrimitiveActionHandlers(
-        click: { target in
+        click: { target, _ in
             requests.append("click:\(target)")
             return PrimitiveActionResult(action: "click", target: target, strategy: "test", success: true)
         },
-        type: { target, value in
+        type: { target, value, _ in
             requests.append("type:\(target):\(value)")
             return PrimitiveActionResult(action: "type", target: target, strategy: "test", success: true)
         }
@@ -1306,7 +1423,7 @@ private func articleSnapshot(children: [AXNode]) -> AppSnapshot {
 @Test func commandRouterDebugCreateDoesNotRunActions() {
     var requests: [String] = []
     let router = CommandRouter(actions: PrimitiveActionHandlers(
-        click: { target in
+        click: { target, _ in
             requests.append("click:\(target)")
             return PrimitiveActionResult(action: "click", target: target, strategy: "test", success: true)
         }
@@ -1340,11 +1457,11 @@ private func articleSnapshot(children: [AXNode]) -> AppSnapshot {
 @Test func commandRouterDebugRunToPausesBeforeSelectedBlock() {
     var requests: [String] = []
     let router = CommandRouter(actions: PrimitiveActionHandlers(
-        click: { target in
+        click: { target, _ in
             requests.append("click:\(target)")
             return PrimitiveActionResult(action: "click", target: target, strategy: "test", success: true)
         },
-        type: { target, value in
+        type: { target, value, _ in
             requests.append("type:\(target):\(value)")
             return PrimitiveActionResult(action: "type", target: target, strategy: "test", success: true)
         }
@@ -1395,7 +1512,7 @@ private func articleSnapshot(children: [AXNode]) -> AppSnapshot {
 @Test func commandRouterDebugSetBreakpointsUpdatesLiveSession() {
     var requests: [String] = []
     let router = CommandRouter(actions: PrimitiveActionHandlers(
-        click: { target in
+        click: { target, _ in
             requests.append("click:\(target)")
             return PrimitiveActionResult(action: "click", target: target, strategy: "test", success: true)
         }
@@ -1491,7 +1608,7 @@ private func articleSnapshot(children: [AXNode]) -> AppSnapshot {
             return debugPauseSnapshot(id: "unexpected", app: app)
         },
         actions: PrimitiveActionHandlers(
-            click: { target in
+            click: { target, _ in
                 PrimitiveActionResult(action: "click", target: target, strategy: "test", success: true)
             }
         )
@@ -1539,11 +1656,11 @@ private func articleSnapshot(children: [AXNode]) -> AppSnapshot {
 @Test func commandRouterDebugContinuePausesAtNextBreakpoint() {
     var requests: [String] = []
     let router = CommandRouter(actions: PrimitiveActionHandlers(
-        click: { target in
+        click: { target, _ in
             requests.append("click:\(target)")
             return PrimitiveActionResult(action: "click", target: target, strategy: "test", success: true)
         },
-        type: { target, value in
+        type: { target, value, _ in
             requests.append("type:\(target):\(value)")
             return PrimitiveActionResult(action: "type", target: target, strategy: "test", success: true)
         }
@@ -1599,7 +1716,7 @@ private func articleSnapshot(children: [AXNode]) -> AppSnapshot {
             return debugPauseSnapshot(id: "breakpoint-snapshot", app: app)
         },
         actions: PrimitiveActionHandlers(
-            click: { target in
+            click: { target, _ in
                 PrimitiveActionResult(action: "click", target: target, strategy: "test", success: true)
             }
         )
@@ -1649,11 +1766,11 @@ private func articleSnapshot(children: [AXNode]) -> AppSnapshot {
 @Test func commandRouterDebugStepExecutesCurrentActionAndAdvances() {
     var requests: [String] = []
     let router = CommandRouter(actions: PrimitiveActionHandlers(
-        click: { target in
+        click: { target, _ in
             requests.append("click:\(target)")
             return PrimitiveActionResult(action: "click", target: target, strategy: "test", success: true)
         },
-        type: { target, value in
+        type: { target, value, _ in
             requests.append("type:\(target):\(value)")
             return PrimitiveActionResult(action: "type", target: target, strategy: "test", success: true)
         }
@@ -1706,7 +1823,7 @@ private func articleSnapshot(children: [AXNode]) -> AppSnapshot {
             return debugPauseSnapshot(id: id, app: app)
         },
         actions: PrimitiveActionHandlers(
-            click: { target in
+            click: { target, _ in
                 attempts += 1
                 return PrimitiveActionResult(
                     action: "click",

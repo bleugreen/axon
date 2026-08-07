@@ -1,11 +1,13 @@
 //! Windows UI Automation backend and v1 JSON-RPC tool router.
 
 use axon_core::{
-    AppQuery, AxnCodec, AxnRunner, Candidate, Confidence, DispatchOutcome, ExpectedFact,
-    JsonRpcError, JsonRpcId, JsonRpcRequest, JsonRpcResponse, Locator, LocatorResolver,
-    PlatformBackend, Resolution, ResolutionStatus, RunEnvelope, RunOptions, Snapshot,
-    SnapshotHandle, TextLocationResolution, TextLocationResolver, TextLocationSource,
-    TextLocationTarget, TextRecognitionProvider, ToolDispatcher,
+    AppQuery, AxnCodec, AxnRunner, Candidate, Capability, Confidence, DeliveryCandidate,
+    DeliveryCapability, DeliveryOutcome, DeliveryPolicy, DeliveryRefusal, DeliveryRefusalReason,
+    DeliveryRung, DeliverySelection, DispatchOutcome, ExpectedFact, ForegroundTarget, JsonRpcError,
+    JsonRpcId, JsonRpcRequest, JsonRpcResponse, Locator, LocatorResolver, PlatformBackend,
+    Resolution, ResolutionStatus, RunEnvelope, RunOptions, Snapshot, SnapshotHandle,
+    TextLocationResolver, TextLocationSource, TextLocationTarget, TextRecognitionProvider,
+    ToolDispatcher, dispatch_in_foreground, select_delivery,
 };
 use serde_json::{Map, Value, json};
 
@@ -16,6 +18,8 @@ mod platform;
 #[cfg(windows)]
 pub use platform::{IntegrationProbe, WindowsBackend};
 
+/// Tools this backend does not implement at all. These are not delivery decisions: the request
+/// names something the Windows daemon has no code path for, which stays a JSON-RPC error.
 const EXCLUDED: &[(&str, &str)] = &[
     ("save", "SerializeHistory"),
     ("drag", "PointerDrag"),
@@ -23,6 +27,16 @@ const EXCLUDED: &[(&str, &str)] = &[
     ("wait_for_stability", "WaitForStability"),
     ("permit", "PermissionPrompt"),
 ];
+
+/// HWND-targeted client-coordinate delivery is not wired into this backend yet, so there is no
+/// mechanism here that can be honestly classified as the pixel rung. `SendInput` is a global
+/// device and is always the foreground rung, however narrowly it is aimed.
+const NO_BACKGROUND_PIXEL: &str = "this Windows backend has no verified HWND-targeted input path; \
+     client-coordinate window message delivery is not implemented";
+
+/// Why the foreground rung is withheld rather than merely gated behind the opt-in.
+const NO_FOREGROUND_TRANSACTION: &str = "this Windows backend cannot capture, prove, and restore \
+     the foreground application, so it cannot deliver global input transactionally";
 
 pub struct Router<B> {
     backend: B,
@@ -42,14 +56,6 @@ pub trait VisualObservationProvider {
         screenshot: bool,
         screen_text: bool,
     ) -> Result<VisualObservation, axon_core::BackendError>;
-}
-
-fn text_click_result(resolution: TextLocationResolution) -> Result<Value, JsonRpcError> {
-    Ok(json!({
-        "dispatch":{"success":true,"mechanism":"SendInput"},
-        "verification":{"verified":false,"reason":"click has no declared postcondition"},
-        "resolution": resolution
-    }))
 }
 
 pub trait PointerTargetVerifier: PlatformBackend {
@@ -85,7 +91,11 @@ impl<B: PointerTargetVerifier + TextRecognitionProvider + VisualObservationProvi
             snapshot: None,
         }
     }
-    fn click_text_location(&mut self, value: &Value) -> Result<Value, JsonRpcError> {
+    fn click_text_location(
+        &mut self,
+        value: &Value,
+        policy: DeliveryPolicy,
+    ) -> Result<Value, JsonRpcError> {
         let target: TextLocationTarget = serde_json::from_value(value.clone())
             .map_err(|error| rpc_error(-32602, error.to_string()))?;
         if target.app.is_empty() {
@@ -129,9 +139,43 @@ impl<B: PointerTargetVerifier + TextRecognitionProvider + VisualObservationProvi
                 "click target moved, is covered, or no longer matches the resolved text",
             ));
         }
-        self.backend.pointer_click(point).map_err(backend_error)?;
+        // A resolved text location is a click like any other. It travels the same ladder and the
+        // same transaction; a separate path here is how a caller ends up with global pointer input
+        // under a policy that forbids it.
+        let ladder = self.global_input_ladder(Capability::PointerInput, "SendInput");
+        let Some(candidate) = self.selected(&ladder, policy) else {
+            return Ok(self.refusal(&ladder, policy));
+        };
         self.snapshot = Some(snapshot);
-        text_click_result(resolution)
+        self.foreground_dispatch(
+            policy,
+            &candidate,
+            ForegroundTarget::Application(&target.app),
+            json!({"verified": false, "reason": "click has no declared postcondition"}),
+            None,
+            |backend| backend.pointer_click(point),
+        )
+        .map(|mut result| {
+            if let Some(object) = result.as_object_mut() {
+                object.insert("resolution".into(), json!(resolution));
+            }
+            result
+        })
+    }
+
+    /// The stable identity of the application that owns the currently resolved target.
+    ///
+    /// Foreground delivery has to activate the application the *target* belongs to, not whichever
+    /// app string the request happened to carry. A handle-only request carries no app string at
+    /// all, and treating that as "already frontmost" would dispatch global input with no
+    /// activation and no proof — the exact bug this contract exists to close.
+    fn resolved_application(&self) -> Option<String> {
+        let app = &self.snapshot.as_ref()?.app;
+        app.identifier
+            .as_deref()
+            .or(Some(app.name.as_str()))
+            .filter(|identity| !identity.is_empty())
+            .map(str::to_owned)
     }
 
     pub fn request(&mut self, request: JsonRpcRequest) -> Option<JsonRpcResponse> {
@@ -157,6 +201,10 @@ impl<B: PointerTargetVerifier + TextRecognitionProvider + VisualObservationProvi
                 format!("tool {method} requires unavailable capability {capability}"),
             ));
         }
+        // The policy is decoded before the target is resolved and before any backend call, so an
+        // unknown value can never reach a native API.
+        let policy =
+            DeliveryPolicy::from_params(params).map_err(|error| rpc_error(-32602, error))?;
         match method {
             "look" => self.look(params),
             "find" => {
@@ -169,10 +217,18 @@ impl<B: PointerTargetVerifier + TextRecognitionProvider + VisualObservationProvi
                     .and_then(|target| target.get("location"))
                     .or_else(|| params.get("location"))
                 {
-                    return self.click_text_location(location);
+                    let location = location.clone();
+                    return self.click_text_location(&location, policy);
                 }
+                // The target is resolved first, so an absent, malformed, or stale target is a
+                // JSON-RPC error. A refusal means the request was well formed and the target
+                // resolved, and the daemon declined to act; the two must not be confused.
                 let (handle, resolution) = self.resolve(params)?;
                 let point = self.node_center(&handle)?;
+                let ladder = self.global_input_ladder(Capability::PointerInput, "SendInput");
+                let Some(candidate) = self.selected(&ladder, policy) else {
+                    return Ok(self.refusal(&ladder, policy));
+                };
                 if !self
                     .backend
                     .verify_pointer_target(&handle, point)
@@ -183,42 +239,81 @@ impl<B: PointerTargetVerifier + TextRecognitionProvider + VisualObservationProvi
                         "click target moved, is covered, or no longer matches the resolved element",
                     ));
                 }
-                self.backend.pointer_click(point).map_err(backend_error)?;
-                Ok(
-                    json!({"dispatch":{"success":true,"mechanism":"SendInput"},"verification":{"verified":false,"reason":"click has no declared postcondition"},"resolution":resolution}),
+                let Some(application) = self.resolved_application() else {
+                    return Ok(DeliveryOutcome::refusal_result(
+                        policy,
+                        DeliveryRefusal::new(
+                            DeliveryRefusalReason::TargetIdentityUnavailable,
+                            DeliveryRung::Foreground,
+                            Some(DeliveryCapability::GlobalInput),
+                            "the resolved target's owning application could not be identified, so \
+                             foreground delivery cannot activate and prove it",
+                        ),
+                    ));
+                };
+                self.foreground_dispatch(
+                    policy,
+                    &candidate,
+                    ForegroundTarget::Application(&application),
+                    json!({"verified":false,"reason":"click has no declared postcondition"}),
+                    Some(resolution),
+                    |backend| backend.pointer_click(point),
                 )
             }
             "type" => {
                 let (handle, resolution) = self.resolve(params)?;
                 let value =
                     required_str(params, "value").or_else(|_| required_str(params, "text"))?;
-                self.backend.focus(&handle).map_err(backend_error)?;
+                // UIA ValuePattern does not require focus, and calling SetFocus would make this a
+                // foreground action wearing a semantic name.
                 self.backend
                     .set_value(&handle, value)
                     .map_err(backend_error)?;
                 let observed = self.backend.read_value(&handle).map_err(backend_error)?;
-                Ok(
-                    json!({"dispatch":{"success":true,"mechanism":"ValuePattern"},"verification":{"verified":observed.as_deref()==Some(value),"observed":observed},"resolution":resolution}),
-                )
+                Ok(delivered(
+                    json!({"dispatch":{"success":true,"mechanism":"UIA ValuePattern"},"verification":{"verified":observed.as_deref()==Some(value),"observed":observed},"resolution":resolution}),
+                    policy,
+                    DeliveryRung::Semantic,
+                ))
             }
             "keyboard" => {
-                let input =
-                    required_str(params, "input").or_else(|_| required_str(params, "key"))?;
-                self.backend
-                    .keyboard(&app_query(params), input)
-                    .map_err(backend_error)?;
-                Ok(
-                    json!({"dispatch":{"success":true,"mechanism":"SendInput"},"verification":{"verified":false,"reason":"keyboard input has no declared postcondition"}}),
+                // The intent is validated before the ladder, so a malformed request is an error
+                // rather than a refusal.
+                let input = required_str(params, "input")
+                    .or_else(|_| required_str(params, "key"))?
+                    .to_owned();
+                let ladder = self.global_input_ladder(Capability::KeyboardInput, "SendInput");
+                let Some(candidate) = self.selected(&ladder, policy) else {
+                    return Ok(self.refusal(&ladder, policy));
+                };
+                let app = app_query(params);
+                // `keyboard` without an app is explicitly addressed at whatever holds the
+                // foreground, so there is nothing to activate and nothing to restore. With an app
+                // it is aimed, and the transaction proves that app came forward first.
+                let named = app.name.clone();
+                self.foreground_dispatch(
+                    policy,
+                    &candidate,
+                    named
+                        .as_deref()
+                        .map_or(ForegroundTarget::Frontmost, ForegroundTarget::Application),
+                    json!({"verified":false,"reason":"keyboard input has no declared postcondition"}),
+                    None,
+                    move |backend| backend.keyboard(&app, &input),
                 )
             }
             "invoke" => {
                 let (handle, resolution) = self.resolve(params)?;
+                // UIA exposes InvokePattern, not an arbitrary named-action vocabulary, so this
+                // backend performs Invoke and says so rather than claiming a name it cannot honour.
                 self.backend
                     .invoke(&handle, "Invoke")
                     .map_err(backend_error)?;
-                Ok(
-                    json!({"dispatch":{"success":true,"mechanism":"InvokePattern"},"verification":{"verified":false,"reason":"invoke has no declared postcondition"},"resolution":resolution}),
-                )
+                Ok(delivered(
+                    json!({"dispatch":{"success":true,"mechanism":"UIA InvokePattern"},"verification":{"verified":false,"reason":"invoke has no declared postcondition"},"resolution":resolution}),
+                    policy,
+                    DeliveryRung::Semantic,
+                ))
             }
             "scroll" => {
                 let (handle, resolution) = self.resolve(params)?;
@@ -227,12 +322,142 @@ impl<B: PointerTargetVerifier + TextRecognitionProvider + VisualObservationProvi
                 self.backend
                     .scroll(&handle, (dx, dy))
                     .map_err(backend_error)?;
-                Ok(
-                    json!({"dispatch":{"success":true,"mechanism":"ScrollItemPattern"},"verification":{"verified":false,"reason":"scroll has no declared postcondition"},"resolution":resolution}),
-                )
+                Ok(delivered(
+                    json!({"dispatch":{"success":true,"mechanism":"UIA ScrollItemPattern"},"verification":{"verified":false,"reason":"scroll has no declared postcondition"},"resolution":resolution}),
+                    policy,
+                    DeliveryRung::Semantic,
+                ))
             }
             "run" => self.run_axn(params),
             _ => Err(rpc_error(-32601, format!("unknown method {method}"))),
+        }
+    }
+
+    /// The ladder for an action that can only travel as input: no semantic rung, no verified
+    /// background path on this backend, and `SendInput` behind an explicit opt-in.
+    fn global_input_ladder(
+        &self,
+        capability: Capability,
+        mechanism: &str,
+    ) -> Vec<DeliveryCandidate> {
+        let restriction = self
+            .capability_restriction(capability)
+            .or_else(|| self.foreground_transaction_restriction());
+        vec![
+            DeliveryCandidate::unavailable(
+                DeliveryRung::Pixel,
+                DeliveryCapability::BackgroundPixelInput,
+                "HWND client-coordinate message",
+                DeliveryRefusalReason::BackgroundPixelUnsupported,
+                NO_BACKGROUND_PIXEL,
+            ),
+            match restriction {
+                None => DeliveryCandidate::available(
+                    DeliveryRung::Foreground,
+                    DeliveryCapability::GlobalInput,
+                    mechanism,
+                ),
+                Some(reason) => DeliveryCandidate::unavailable(
+                    DeliveryRung::Foreground,
+                    DeliveryCapability::GlobalInput,
+                    mechanism,
+                    DeliveryRefusalReason::NoDeliveryCandidate,
+                    reason,
+                ),
+            },
+        ]
+    }
+
+    /// The health-v1 runtime overlay, consulted by the same decision that dispatches. Session 0, a
+    /// noninteractive window station, and an integrity boundary all arrive here as a restriction.
+    fn capability_restriction(&self, capability: Capability) -> Option<String> {
+        let Ok(capabilities) = self.backend.capabilities() else {
+            return Some(format!(
+                "{} is unavailable: backend capabilities could not be read",
+                capability.key()
+            ));
+        };
+        match capabilities
+            .iter()
+            .find(|info| info.capability == capability)
+        {
+            Some(info) if info.usable => None,
+            Some(info) => {
+                Some(info.restriction.clone().unwrap_or_else(|| {
+                    format!("{} is not usable in this session", capability.key())
+                }))
+            }
+            None => Some(format!(
+                "{} is not available on this backend",
+                capability.key()
+            )),
+        }
+    }
+
+    /// The foreground rung is global input that restores what it borrowed. A backend that cannot
+    /// capture, prove, and hand back the foreground does not get to offer it: dispatching
+    /// unrestored `SendInput` while reporting `delivery: "foreground"` would claim a guarantee it
+    /// does not keep, which is precisely what this contract exists to prevent.
+    fn foreground_transaction_restriction(&self) -> Option<String> {
+        if self.backend.supports_foreground_transaction() {
+            return None;
+        }
+        Some(NO_FOREGROUND_TRANSACTION.to_string())
+    }
+
+    /// Dispatches one action at the selected rung, inside a foreground transaction when the rung is
+    /// the foreground one.
+    fn foreground_dispatch(
+        &mut self,
+        policy: DeliveryPolicy,
+        candidate: &DeliveryCandidate,
+        target: ForegroundTarget<'_>,
+        verification: Value,
+        resolution: Option<Resolution>,
+        body: impl FnOnce(&mut B) -> Result<(), axon_core::BackendError>,
+    ) -> Result<Value, JsonRpcError> {
+        let dispatch = dispatch_in_foreground(&mut self.backend, target, body);
+        if let Some(refusal) = dispatch.refusal {
+            let mut result = DeliveryOutcome::refusal_result(policy, refusal);
+            if let Some(object) = result.as_object_mut() {
+                object.insert("foreground".into(), json!(dispatch.cleanup));
+            }
+            return Ok(result);
+        }
+        dispatch
+            .value
+            .expect("a proved activation dispatches")
+            .map_err(backend_error)?;
+
+        let mut result = json!({
+            // Dispatch evidence survives a failed restoration, but the action as a whole did not
+            // succeed: the user's session was not put back where they left it.
+            "success": dispatch.cleanup.restored,
+            "dispatch": {"success": true, "mechanism": candidate.mechanism},
+            "verification": verification,
+            "foreground": dispatch.cleanup,
+        });
+        if let (Some(object), Some(resolution)) = (result.as_object_mut(), resolution) {
+            object.insert("resolution".into(), json!(resolution));
+        }
+        Ok(delivered(result, policy, candidate.rung))
+    }
+
+    fn selected(
+        &self,
+        ladder: &[DeliveryCandidate],
+        policy: DeliveryPolicy,
+    ) -> Option<DeliveryCandidate> {
+        match select_delivery(ladder, policy, None) {
+            DeliverySelection::Candidate(candidate) => Some(candidate),
+            DeliverySelection::Refusal(_) => None,
+        }
+    }
+
+    fn refusal(&self, ladder: &[DeliveryCandidate], policy: DeliveryPolicy) -> Value {
+        match select_delivery(ladder, policy, None) {
+            DeliverySelection::Refusal(refusal) => DeliveryOutcome::refusal_result(policy, refusal),
+            DeliverySelection::Candidate(_) => Value::Null,
         }
     }
 
@@ -491,6 +716,14 @@ fn required_str<'a>(p: &'a Map<String, Value>, key: &str) -> Result<&'a str, Jso
         .and_then(Value::as_str)
         .ok_or_else(|| rpc_error(-32602, format!("missing string parameter {key}")))
 }
+/// Stamps the four stable delivery fields onto an action result.
+fn delivered(mut result: Value, policy: DeliveryPolicy, rung: DeliveryRung) -> Value {
+    if let Some(object) = result.as_object_mut() {
+        DeliveryOutcome::dispatched(policy, rung).merge_into(object);
+    }
+    result
+}
+
 fn rpc_error(code: i64, message: impl Into<String>) -> JsonRpcError {
     JsonRpcError {
         code,
@@ -530,6 +763,17 @@ mod tests {
         ocr_calls: Rc<RefCell<usize>>,
         visual_captures: Rc<RefCell<usize>>,
         ocr_hit_target: Option<Node>,
+        focuses: Rc<RefCell<usize>>,
+        /// Whether this session can reach the global input devices at all. Session 0, a
+        /// noninteractive window station, and an integrity boundary all present as false.
+        global_input_usable: bool,
+        /// Whether this backend can capture, prove, and restore the foreground. Without it the
+        /// foreground rung is withheld rather than dispatched unrestored.
+        foreground_transaction: bool,
+        frontmost: Rc<RefCell<Option<String>>>,
+        /// Applications that refuse to come forward, so activation cannot be proved.
+        refuses_activation: Rc<RefCell<Vec<String>>>,
+        activations: Rc<RefCell<Vec<String>>>,
     }
     impl PointerTargetVerifier for FakeBackend {
         fn verify_pointer_target(
@@ -577,7 +821,20 @@ mod tests {
     }
     impl PlatformBackend for FakeBackend {
         fn capabilities(&self) -> Result<Vec<CapabilityInfo>, BackendError> {
-            Ok(vec![])
+            Ok(vec![
+                CapabilityInfo {
+                    capability: Capability::PointerInput,
+                    usable: self.global_input_usable,
+                    restriction: (!self.global_input_usable)
+                        .then(|| "session 0 has no interactive window station".to_string()),
+                },
+                CapabilityInfo {
+                    capability: Capability::KeyboardInput,
+                    usable: self.global_input_usable,
+                    restriction: (!self.global_input_usable)
+                        .then(|| "session 0 has no interactive window station".to_string()),
+                },
+            ])
         }
         fn enumerate_applications(&self) -> Result<Vec<Application>, BackendError> {
             Ok(vec![])
@@ -596,6 +853,7 @@ mod tests {
             Ok(())
         }
         fn focus(&mut self, _: &SnapshotHandle) -> Result<(), BackendError> {
+            *self.focuses.borrow_mut() += 1;
             Ok(())
         }
         fn scroll(&mut self, _: &SnapshotHandle, _: (f64, f64)) -> Result<(), BackendError> {
@@ -642,6 +900,25 @@ mod tests {
         fn observe_global_input(&mut self, _: Duration) -> Result<Vec<RecordedCall>, BackendError> {
             unreachable!()
         }
+        fn supports_foreground_transaction(&self) -> bool {
+            self.foreground_transaction
+        }
+        fn frontmost_application(&mut self) -> Result<Option<String>, BackendError> {
+            Ok(self.frontmost.borrow().clone())
+        }
+        fn activate_application(&mut self, identity: &str) -> Result<bool, BackendError> {
+            self.activations.borrow_mut().push(identity.into());
+            if self
+                .refuses_activation
+                .borrow()
+                .iter()
+                .any(|app| app == identity)
+            {
+                return Ok(false);
+            }
+            *self.frontmost.borrow_mut() = Some(identity.into());
+            Ok(true)
+        }
     }
     fn node(name: &str) -> Node {
         Node {
@@ -685,6 +962,12 @@ mod tests {
             ocr_calls: Rc::new(RefCell::new(0)),
             visual_captures: Rc::new(RefCell::new(0)),
             ocr_hit_target: Some(node("hit")),
+            focuses: Rc::new(RefCell::new(0)),
+            global_input_usable: true,
+            foreground_transaction: true,
+            frontmost: Rc::new(RefCell::new(Some("Prior".into()))),
+            refuses_activation: Rc::new(RefCell::new(vec![])),
+            activations: Rc::new(RefCell::new(vec![])),
         }
     }
     fn request(method: &str, params: Value) -> JsonRpcRequest {
@@ -709,7 +992,7 @@ mod tests {
         let response = router
             .request(request(
                 "click",
-                json!({"target":{"app":"App","locator":{"role":"Button"}}}),
+                json!({"target":{"app":"App","locator":{"role":"Button"}}, "deliveryPolicy": "foregroundPermitted"}),
             ))
             .unwrap();
         let JsonRpcResponse::Failure(error) = response else {
@@ -727,7 +1010,10 @@ mod tests {
         let mut router = Router::new(backend);
         router.snapshot = Some(router.backend.snapshot.clone());
         let response = router
-            .request(request("click", json!({"target":handle.0})))
+            .request(request(
+                "click",
+                json!({"target":handle.0, "deliveryPolicy": "foregroundPermitted"}),
+            ))
             .unwrap();
         assert!(matches!(response, JsonRpcResponse::Failure(_)));
         assert_eq!(*clicks.borrow(), 0);
@@ -743,7 +1029,10 @@ mod tests {
         router.snapshot = Some(router.backend.snapshot.clone());
 
         let response = router
-            .request(request("click", json!({"target":target.0})))
+            .request(request(
+                "click",
+                json!({"target":target.0, "deliveryPolicy": "foregroundPermitted"}),
+            ))
             .unwrap();
 
         assert!(matches!(response, JsonRpcResponse::Failure(_)));
@@ -768,7 +1057,7 @@ mod tests {
         let response = router
             .request(request(
                 "click",
-                json!({"target":{"location":{"app":"App","text":"save"}}}),
+                json!({"target":{"location":{"app":"App","text":"save"}}, "deliveryPolicy": "foregroundPermitted"}),
             ))
             .unwrap();
         let JsonRpcResponse::Success(success) = response else {
@@ -821,7 +1110,7 @@ mod tests {
         let response = router
             .request(request(
                 "click",
-                json!({"target":{"location":{"app":"App","text":"save"}}}),
+                json!({"target":{"location":{"app":"App","text":"save"}}, "deliveryPolicy": "foregroundPermitted"}),
             ))
             .unwrap();
         assert!(matches!(response, JsonRpcResponse::Failure(_)));
@@ -836,7 +1125,7 @@ mod tests {
         let response = router
             .request(request(
                 "click",
-                json!({"target":{"location":{"app":"App","text":"save","source":"auto"}}}),
+                json!({"target":{"location":{"app":"App","text":"save","source":"auto"}}, "deliveryPolicy": "foregroundPermitted"}),
             ))
             .unwrap();
         assert!(matches!(response, JsonRpcResponse::Success(_)));
@@ -851,7 +1140,7 @@ mod tests {
         let response = router
             .request(request(
                 "click",
-                json!({"target":{"location":{"app":"App","text":"save","source":"screenshot"}}}),
+                json!({"target":{"location":{"app":"App","text":"save","source":"screenshot"}}, "deliveryPolicy": "foregroundPermitted"}),
             ))
             .unwrap();
         let JsonRpcResponse::Success(success) = response else {
@@ -870,12 +1159,437 @@ mod tests {
         let response = router
             .request(request(
                 "click",
-                json!({"target":{"location":{"app":"App","text":"save","source":"screenshot"}}}),
+                json!({"target":{"location":{"app":"App","text":"save","source":"screenshot"}}, "deliveryPolicy": "foregroundPermitted"}),
             ))
             .unwrap();
         assert!(matches!(response, JsonRpcResponse::Failure(_)));
         assert_eq!(*clicks.borrow(), 0);
     }
+    fn action_result(response: &JsonRpcResponse) -> &Value {
+        let JsonRpcResponse::Success(success) = response else {
+            panic!("a policy or capability denial is an action result, not a transport error")
+        };
+        &success.result
+    }
+
+    #[test]
+    fn a_text_location_click_travels_the_same_ladder_as_any_other_click() {
+        // A resolved text location is still a click. A separate dispatch path here is how a caller
+        // ends up with global pointer input under a policy that forbids it.
+        let mut backend = backend(vec![node("save")], None);
+        backend.recognized = vec![];
+        let clicks = backend.clicks.clone();
+        let mut router = Router::new(backend);
+
+        let refused = router
+            .request(request(
+                "click",
+                json!({"target": {"location": {"app": "App", "text": "save"}}}),
+            ))
+            .unwrap();
+        let result = action_result(&refused);
+        assert_eq!(result["refusal"]["reason"], json!("foregroundNotPermitted"));
+        assert_eq!(result["delivery"], Value::Null);
+        assert_eq!(result["dispatchSuccess"], json!(false));
+        assert_eq!(
+            *clicks.borrow(),
+            0,
+            "the default policy must not emit global pointer input"
+        );
+    }
+
+    #[test]
+    fn a_text_location_click_is_refused_when_the_foreground_rung_is_withheld() {
+        let mut backend = backend(vec![node("save")], None);
+        backend.foreground_transaction = false;
+        let clicks = backend.clicks.clone();
+        let mut router = Router::new(backend);
+
+        let response = router
+            .request(request(
+                "click",
+                json!({
+                    "target": {"location": {"app": "App", "text": "save"}},
+                    "deliveryPolicy": "foregroundPermitted"
+                }),
+            ))
+            .unwrap();
+
+        let result = action_result(&response);
+        assert_eq!(result["refusal"]["reason"], json!("noDeliveryCandidate"));
+        assert_eq!(*clicks.borrow(), 0, "a withheld rung dispatches nothing");
+    }
+
+    #[test]
+    fn a_text_location_click_activates_and_restores_when_opted_in() {
+        let backend = backend(vec![node("save")], None);
+        let clicks = backend.clicks.clone();
+        let activations = backend.activations.clone();
+        let mut router = Router::new(backend);
+
+        let response = router
+            .request(request(
+                "click",
+                json!({
+                    "target": {"location": {"app": "App", "text": "save"}},
+                    "deliveryPolicy": "foregroundPermitted"
+                }),
+            ))
+            .unwrap();
+
+        let result = action_result(&response);
+        assert_eq!(result["delivery"], json!("foreground"));
+        assert_eq!(result["dispatchSuccess"], json!(true));
+        assert_eq!(result["foreground"]["activationProved"], json!(true));
+        assert_eq!(result["foreground"]["restored"], json!(true));
+        assert!(result["resolution"]["status"] != Value::Null);
+        assert_eq!(*clicks.borrow(), 1);
+        assert_eq!(
+            *activations.borrow(),
+            vec!["App".to_string(), "Prior".to_string()]
+        );
+    }
+
+    #[test]
+    fn a_handle_only_click_activates_the_resolved_targets_application() {
+        // The canonical form carries no app string. Foreground delivery must recover the owning
+        // application from the resolution rather than treating the absence as already-frontmost,
+        // which would dispatch global input with no activation and no proof.
+        let backend = backend(vec![], None);
+        let handle = backend.snapshot.handle(0);
+        let clicks = backend.clicks.clone();
+        let activations = backend.activations.clone();
+        let frontmost = backend.frontmost.clone();
+        let mut router = Router::new(backend);
+        router.snapshot = Some(router.backend.snapshot.clone());
+
+        let response = router
+            .request(request(
+                "click",
+                json!({"target": handle.0, "deliveryPolicy": "foregroundPermitted"}),
+            ))
+            .unwrap();
+
+        let result = action_result(&response);
+        assert_eq!(result["delivery"], json!("foreground"));
+        assert_eq!(result["foreground"]["alreadyFrontmost"], json!(false));
+        assert_eq!(result["foreground"]["activationProved"], json!(true));
+        assert_eq!(result["foreground"]["restored"], json!(true));
+        assert_eq!(
+            *activations.borrow(),
+            vec!["App".to_string(), "Prior".to_string()],
+            "the resolved target's own application is activated, then the prior one restored"
+        );
+        assert_eq!(*clicks.borrow(), 1);
+        assert_eq!(frontmost.borrow().as_deref(), Some("Prior"));
+    }
+
+    #[test]
+    fn a_backend_that_cannot_restore_the_foreground_never_offers_the_rung() {
+        // Unrestored `SendInput` is not the foreground rung, it is the behaviour this contract
+        // exists to prevent. Offering it and reporting `delivery: "foreground"` would claim a
+        // guarantee the backend does not keep.
+        let mut backend = backend(vec![], None);
+        backend.foreground_transaction = false;
+        let handle = backend.snapshot.handle(0);
+        let clicks = backend.clicks.clone();
+        let mut router = Router::new(backend);
+        router.snapshot = Some(router.backend.snapshot.clone());
+
+        for policy in ["backgroundOnly", "foregroundPermitted"] {
+            let response = router
+                .request(request(
+                    "click",
+                    json!({"target": handle.0, "deliveryPolicy": policy}),
+                ))
+                .unwrap();
+            let result = action_result(&response);
+            assert_eq!(
+                result["refusal"]["reason"],
+                json!("noDeliveryCandidate"),
+                "{policy}"
+            );
+            assert!(
+                result["refusal"]["message"]
+                    .as_str()
+                    .unwrap()
+                    .contains("restore"),
+                "{policy}"
+            );
+        }
+        assert_eq!(*clicks.borrow(), 0);
+    }
+
+    #[test]
+    fn foreground_escalation_captures_activates_dispatches_once_and_restores() {
+        let backend = backend(vec![], None);
+        let handle = backend.snapshot.handle(0);
+        let clicks = backend.clicks.clone();
+        let activations = backend.activations.clone();
+        let frontmost = backend.frontmost.clone();
+        let mut router = Router::new(backend);
+        router.snapshot = Some(router.backend.snapshot.clone());
+
+        let response = router
+            .request(request(
+                "click",
+                json!({
+                    "target": handle.0,
+                    "app": "App",
+                    "deliveryPolicy": "foregroundPermitted"
+                }),
+            ))
+            .unwrap();
+
+        let result = action_result(&response);
+        assert_eq!(result["delivery"], json!("foreground"));
+        assert_eq!(result["dispatchSuccess"], json!(true));
+        assert_eq!(result["foreground"]["priorApp"], json!("Prior"));
+        assert_eq!(result["foreground"]["alreadyFrontmost"], json!(false));
+        assert_eq!(result["foreground"]["activationProved"], json!(true));
+        assert_eq!(result["foreground"]["restored"], json!(true));
+        assert_eq!(*clicks.borrow(), 1, "exactly one dispatch");
+        assert_eq!(
+            *activations.borrow(),
+            vec!["App".to_string(), "Prior".to_string()],
+            "activate the target, then hand the session back"
+        );
+        assert_eq!(frontmost.borrow().as_deref(), Some("Prior"));
+    }
+
+    #[test]
+    fn foreground_escalation_refuses_without_dispatching_when_activation_is_not_proved() {
+        let backend = backend(vec![], None);
+        backend.refuses_activation.borrow_mut().push("App".into());
+        let clicks = backend.clicks.clone();
+        let frontmost = backend.frontmost.clone();
+        let mut router = Router::new(backend);
+        router.snapshot = Some(router.backend.snapshot.clone());
+
+        let response = router
+            .request(request(
+                "keyboard",
+                json!({"input": "x", "app": "App", "deliveryPolicy": "foregroundPermitted"}),
+            ))
+            .unwrap();
+
+        let result = action_result(&response);
+        assert_eq!(result["refusal"]["reason"], json!("activationNotProved"));
+        assert_eq!(result["dispatchSuccess"], json!(false));
+        assert_eq!(result["delivery"], Value::Null);
+        // Posting global keystrokes at this moment would send them wherever the user is working.
+        assert_eq!(*clicks.borrow(), 0);
+        assert_eq!(frontmost.borrow().as_deref(), Some("Prior"));
+    }
+
+    #[test]
+    fn a_failed_restoration_keeps_dispatch_evidence_and_fails_overall() {
+        let backend = backend(vec![], None);
+        backend.refuses_activation.borrow_mut().push("Prior".into());
+        let handle = backend.snapshot.handle(0);
+        let mut router = Router::new(backend);
+        router.snapshot = Some(router.backend.snapshot.clone());
+
+        let response = router
+            .request(request(
+                "click",
+                json!({
+                    "target": handle.0,
+                    "app": "App",
+                    "deliveryPolicy": "foregroundPermitted"
+                }),
+            ))
+            .unwrap();
+
+        let result = action_result(&response);
+        assert_eq!(result["dispatchSuccess"], json!(true));
+        assert_eq!(result["delivery"], json!("foreground"));
+        assert_eq!(result["foreground"]["restored"], json!(false));
+        // The events went out, but the user's session was not put back.
+        assert_eq!(result["success"], json!(false));
+    }
+
+    #[test]
+    fn an_unresolvable_target_is_a_transport_error_not_a_delivery_refusal() {
+        // A refusal means the request was well formed and the target resolved. A target that is
+        // absent, malformed, or stale never gets that far, so it stays a JSON-RPC error even under
+        // the default policy where the rung would have been refused anyway.
+        let backend = backend(vec![], None);
+        let clicks = backend.clicks.clone();
+        let mut router = Router::new(backend);
+        router.snapshot = Some(router.backend.snapshot.clone());
+
+        for target in [json!("s999:42"), json!("not-a-handle"), Value::Null] {
+            let response = router
+                .request(request("click", json!({"target": target})))
+                .unwrap();
+            let JsonRpcResponse::Failure(failure) = response else {
+                panic!("an unresolvable target is a transport error, not a refusal: {target}")
+            };
+            assert!(failure.error.code < 0, "{target}");
+        }
+        assert_eq!(*clicks.borrow(), 0);
+    }
+
+    #[test]
+    fn a_malformed_keyboard_request_is_a_transport_error_not_a_delivery_refusal() {
+        let mut backend = backend(vec![], None);
+        backend.global_input_usable = false;
+        let mut router = Router::new(backend);
+
+        let response = router.request(request("keyboard", json!({}))).unwrap();
+
+        let JsonRpcResponse::Failure(failure) = response else {
+            panic!("a keyboard request with no intent is malformed, not refused")
+        };
+        assert_eq!(failure.error.code, -32602);
+    }
+
+    #[test]
+    fn send_input_requires_the_foreground_opt_in_and_refuses_without_it() {
+        let backend = backend(vec![], None);
+        let handle = backend.snapshot.handle(0);
+        let clicks = backend.clicks.clone();
+        let mut router = Router::new(backend);
+        router.snapshot = Some(router.backend.snapshot.clone());
+
+        let refused = router
+            .request(request("click", json!({"target": handle.0})))
+            .unwrap();
+        let result = action_result(&refused);
+        assert_eq!(result["success"], json!(false));
+        assert_eq!(result["strategy"], json!("refused"));
+        assert_eq!(result["delivery"], Value::Null);
+        assert_eq!(result["dispatchSuccess"], json!(false));
+        assert_eq!(result["refusal"]["reason"], json!("foregroundNotPermitted"));
+        assert_eq!(result["refusal"]["requiredRung"], json!("foreground"));
+        assert_eq!(result["refusal"]["capability"], json!("globalInput"));
+        assert_eq!(*clicks.borrow(), 0, "a refusal reaches no backend call");
+
+        let permitted = router
+            .request(request(
+                "click",
+                json!({"target": handle.0, "deliveryPolicy": "foregroundPermitted"}),
+            ))
+            .unwrap();
+        let result = action_result(&permitted);
+        assert_eq!(result["delivery"], json!("foreground"));
+        assert_eq!(result["dispatchSuccess"], json!(true));
+        assert_eq!(result["refusal"], Value::Null);
+        assert_eq!(result["dispatch"]["mechanism"], json!("SendInput"));
+        assert_eq!(*clicks.borrow(), 1);
+    }
+
+    #[test]
+    fn a_session_without_global_input_refuses_even_with_the_opt_in() {
+        let mut backend = backend(vec![], None);
+        // Session 0 and noninteractive window stations arrive here as an unusable capability.
+        backend.global_input_usable = false;
+        let clicks = backend.clicks.clone();
+        let mut router = Router::new(backend);
+        router.snapshot = Some(router.backend.snapshot.clone());
+
+        for policy in ["backgroundOnly", "foregroundPermitted"] {
+            let response = router
+                .request(request(
+                    "keyboard",
+                    json!({"input": "x", "deliveryPolicy": policy}),
+                ))
+                .unwrap();
+            let result = action_result(&response);
+            // Opting in cannot conjure a device, so the refusal names the missing mechanism
+            // rather than sending the caller after a permission that changes nothing.
+            assert_eq!(
+                result["refusal"]["reason"],
+                json!("noDeliveryCandidate"),
+                "{policy}"
+            );
+            assert_eq!(
+                result["refusal"]["message"],
+                json!("session 0 has no interactive window station"),
+                "{policy}"
+            );
+            assert_eq!(result["dispatchSuccess"], json!(false), "{policy}");
+        }
+        assert_eq!(*clicks.borrow(), 0);
+    }
+
+    #[test]
+    fn uia_patterns_report_the_semantic_rung_and_never_set_focus() {
+        let backend = backend(vec![], Some("before"));
+        let handle = backend.snapshot.handle(0);
+        let focuses = backend.focuses.clone();
+        let mut router = Router::new(backend);
+        router.snapshot = Some(router.backend.snapshot.clone());
+
+        for (method, params, mechanism) in [
+            ("invoke", json!({"target": handle.0}), "UIA InvokePattern"),
+            (
+                "type",
+                json!({"target": handle.0, "value": "after"}),
+                "UIA ValuePattern",
+            ),
+            (
+                "scroll",
+                json!({"target": handle.0, "deltaY": -120.0}),
+                "UIA ScrollItemPattern",
+            ),
+        ] {
+            let response = router.request(request(method, params)).unwrap();
+            let result = action_result(&response);
+            assert_eq!(result["delivery"], json!("semantic"), "{method}");
+            assert_eq!(result["dispatchSuccess"], json!(true), "{method}");
+            assert_eq!(result["refusal"], Value::Null, "{method}");
+            assert_eq!(
+                result["deliveryPolicy"],
+                json!("backgroundOnly"),
+                "{method}"
+            );
+            assert_eq!(
+                result["dispatch"]["mechanism"],
+                json!(mechanism),
+                "{method}"
+            );
+        }
+        // SetFocus is a system-wide side effect, so a semantic path must never call it.
+        assert_eq!(*focuses.borrow(), 0);
+    }
+
+    #[test]
+    fn an_unknown_policy_fails_before_resolution_or_dispatch() {
+        let backend = backend(vec![], None);
+        let handle = backend.snapshot.handle(0);
+        let clicks = backend.clicks.clone();
+        let focuses = backend.focuses.clone();
+        let mut router = Router::new(backend);
+        router.snapshot = Some(router.backend.snapshot.clone());
+
+        for method in ["click", "type", "keyboard", "scroll", "invoke"] {
+            let response = router
+                .request(request(
+                    method,
+                    json!({
+                        "target": handle.0,
+                        "value": "x",
+                        "input": "x",
+                        "deliveryPolicy": "whateverItTakes"
+                    }),
+                ))
+                .unwrap();
+            let JsonRpcResponse::Failure(failure) = response else {
+                panic!("{method} must reject an unknown policy")
+            };
+            assert_eq!(failure.error.code, -32602, "{method}");
+            assert!(
+                failure.error.message.contains("deliveryPolicy"),
+                "{method}: {}",
+                failure.error.message
+            );
+        }
+        assert_eq!(*clicks.borrow(), 0);
+        assert_eq!(*focuses.borrow(), 0);
+    }
+
     #[test]
     fn axn_value_facts_drive_expects_requires_dry_run_and_continue_on_error() {
         let backend = backend(vec![], Some("ready now"));

@@ -5,7 +5,7 @@ import Testing
 @Test func clickRequestReturnsActionResult() {
     let router = CommandRouter(
         actions: PrimitiveActionHandlers(
-            click: { target in
+            click: { target, _ in
                 #expect(target == "snap:1")
                 return PrimitiveActionResult(action: "click", target: target, strategy: "AXPress", success: true)
             }
@@ -152,7 +152,7 @@ private func stabilitySnapshot(id: String, title: String) -> AppSnapshot {
 @Test func clickRequestAcceptsPointTarget() {
     let router = CommandRouter(
         actions: PrimitiveActionHandlers(
-            clickPoint: { point in
+            clickPoint: { point, _ in
                 #expect(point.x == 25)
                 #expect(point.y == 40)
                 return PrimitiveActionResult(
@@ -354,7 +354,7 @@ private func stabilitySnapshot(id: String, title: String) -> AppSnapshot {
             )
         },
         actions: PrimitiveActionHandlers(
-            click: { target in
+            click: { target, _ in
                 #expect(target == "live-locator:0")
                 return PrimitiveActionResult(action: "click", target: target, strategy: "AXPress", success: true)
             }
@@ -390,7 +390,7 @@ private func stabilitySnapshot(id: String, title: String) -> AppSnapshot {
             return actionTextLocationFixtureSnapshot(labels: ["Backlog"])
         },
         actions: PrimitiveActionHandlers(
-            clickPoint: { point in
+            clickPoint: { point, _ in
                 #expect(point == ActionPoint(x: 140, y: 60))
                 return PrimitiveActionResult(
                     action: "click",
@@ -433,7 +433,7 @@ private func stabilitySnapshot(id: String, title: String) -> AppSnapshot {
             ))
         },
         actions: PrimitiveActionHandlers(
-            clickPoint: { point in
+            clickPoint: { point, _ in
                 #expect(point == ActionPoint(x: 225, y: 200))
                 return PrimitiveActionResult(
                     action: "click",
@@ -477,7 +477,7 @@ private func stabilitySnapshot(id: String, title: String) -> AppSnapshot {
     let router = CommandRouter(
         captureSnapshot: { _, _ in actionTextLocationFixtureSnapshot(labels: ["Backlog", "Backlog"]) },
         actions: PrimitiveActionHandlers(
-            clickPoint: { _ in
+            clickPoint: { _, _ in
                 Issue.record("ambiguous text location should not dispatch a click")
                 return PrimitiveActionResult(action: "click", target: "bad", strategy: "bad", success: false)
             }
@@ -512,7 +512,7 @@ private func stabilitySnapshot(id: String, title: String) -> AppSnapshot {
             ])
         },
         actions: PrimitiveActionHandlers(
-            clickPoint: { _ in
+            clickPoint: { _, _ in
                 Issue.record("ambiguous text location should not dispatch a click")
                 return PrimitiveActionResult(action: "click", target: "bad", strategy: "bad", success: false)
             }
@@ -548,7 +548,7 @@ private func stabilitySnapshot(id: String, title: String) -> AppSnapshot {
             ])
         },
         actions: PrimitiveActionHandlers(
-            drag: { _, _, _, _ in
+            drag: { _, _, _, _, _ in
                 Issue.record("ambiguous text location should not dispatch a drag")
                 return PrimitiveActionResult(action: "drag", target: "bad", strategy: "bad", success: false)
             }
@@ -592,7 +592,7 @@ private func stabilitySnapshot(id: String, title: String) -> AppSnapshot {
             )
         },
         actions: PrimitiveActionHandlers(
-            click: { _ in
+            click: { _, _ in
                 Issue.record("ambiguous locator should not dispatch a click")
                 return PrimitiveActionResult(action: "click", target: "bad", strategy: "bad", success: false)
             }
@@ -633,7 +633,7 @@ private func stabilitySnapshot(id: String, title: String) -> AppSnapshot {
 @Test func invokeRequestPassesActionName() {
     let router = CommandRouter(
         actions: PrimitiveActionHandlers(
-            invoke: { target, action in
+            invoke: { target, action, _ in
                 #expect(target == "snap:2")
                 #expect(action == "AXShowMenu")
                 return PrimitiveActionResult(action: action, target: target, strategy: "AXAction", success: true)
@@ -657,7 +657,7 @@ private func stabilitySnapshot(id: String, title: String) -> AppSnapshot {
 @Test func typeRequestPassesValue() {
     let router = CommandRouter(
         actions: PrimitiveActionHandlers(
-            type: { target, value in
+            type: { target, value, _ in
                 #expect(target == "snap:3")
                 #expect(value == "hello")
                 return PrimitiveActionResult(action: "type", target: target, strategy: "AXValue", success: true)
@@ -681,7 +681,7 @@ private func stabilitySnapshot(id: String, title: String) -> AppSnapshot {
 @Test func keyboardTextRequestPassesAppAndText() {
     let router = CommandRouter(
         actions: PrimitiveActionHandlers(
-            keyboard: { app, intent in
+            keyboard: { app, intent, _ in
                 #expect(app == "com.example.App")
                 #expect(intent == .text("hello"))
                 return PrimitiveActionResult(action: "keyboard", target: app ?? "frontmost", strategy: "CGEventKeyboard", success: true)
@@ -705,7 +705,7 @@ private func stabilitySnapshot(id: String, title: String) -> AppSnapshot {
 @Test func keyboardKeyRequestPassesAppAndKey() {
     let router = CommandRouter(
         actions: PrimitiveActionHandlers(
-            keyboard: { app, intent in
+            keyboard: { app, intent, _ in
                 #expect(app == "com.example.App")
                 #expect(intent == .key("End"))
                 return PrimitiveActionResult(action: "keyboard", target: app ?? "frontmost", strategy: "CGEventKeyboard", success: true)
@@ -729,7 +729,7 @@ private func stabilitySnapshot(id: String, title: String) -> AppSnapshot {
 @Test func scrollRequestPassesPointTargetAndDeltas() {
     let router = CommandRouter(
         actions: PrimitiveActionHandlers(
-            scroll: { target, app, deltaX, deltaY in
+            scroll: { target, app, deltaX, deltaY, _ in
                 #expect(target == .point(ActionPoint(x: 10, y: 20)))
                 #expect(app == "com.example.App")
                 #expect(deltaX == 0)
@@ -775,7 +775,7 @@ private func stabilitySnapshot(id: String, title: String) -> AppSnapshot {
             )
         },
         actions: PrimitiveActionHandlers(
-            scroll: { target, _, _, _ in
+            scroll: { target, _, _, _, _ in
                 #expect(target == .handle("live-locator:2"))
                 return PrimitiveActionResult(action: "scroll", target: "live-locator:2", strategy: "AXScrollToVisible", success: true)
             }
@@ -805,7 +805,7 @@ private func stabilitySnapshot(id: String, title: String) -> AppSnapshot {
     let router = CommandRouter(
         captureSnapshot: { _, _ in actionTextLocationFixtureSnapshot(labels: ["Backlog"]) },
         actions: PrimitiveActionHandlers(
-            scroll: { target, _, _, _ in
+            scroll: { target, _, _, _, _ in
                 #expect(target == .point(ActionPoint(x: 140, y: 60)))
                 return PrimitiveActionResult(action: "scroll", target: "point:140,60", strategy: "AXScrollToVisible", success: true)
             }
@@ -833,7 +833,7 @@ private func stabilitySnapshot(id: String, title: String) -> AppSnapshot {
 @Test func dragRequestPassesPointEndpoints() {
     let router = CommandRouter(
         actions: PrimitiveActionHandlers(
-            drag: { from, to, app, durationMs in
+            drag: { from, to, app, durationMs, _ in
                 #expect(from == .point(ActionPoint(x: 10, y: 20)))
                 #expect(to == .point(ActionPoint(x: 90, y: 120)))
                 #expect(app == "com.example.App")
@@ -862,7 +862,7 @@ private func stabilitySnapshot(id: String, title: String) -> AppSnapshot {
     let router = CommandRouter(
         captureSnapshot: { _, _ in actionTextLocationFixtureSnapshot(labels: ["Backlog", "Done"]) },
         actions: PrimitiveActionHandlers(
-            drag: { from, to, _, _ in
+            drag: { from, to, _, _, _ in
                 #expect(from == .point(ActionPoint(x: 140, y: 60)))
                 #expect(to == .point(ActionPoint(x: 240, y: 60)))
                 return PrimitiveActionResult(action: "drag", target: "point:140,60->point:240,60", strategy: "CGEventDrag", success: true)
@@ -902,7 +902,7 @@ private func stabilitySnapshot(id: String, title: String) -> AppSnapshot {
             return actionTextLocationFixtureSnapshot(labels: [])
         },
         actions: PrimitiveActionHandlers(
-            drag: { from, to, _, _ in
+            drag: { from, to, _, _, _ in
                 #expect(from == .point(ActionPoint(x: 60, y: 80, coordinateSpace: .screen, app: "com.example.App")))
                 #expect(to == .point(ActionPoint(x: 150, y: 260, coordinateSpace: .screen, app: "com.example.App")))
                 return PrimitiveActionResult(action: "drag", target: "converted", strategy: "CGEventDrag", success: true)
@@ -941,7 +941,7 @@ private func stabilitySnapshot(id: String, title: String) -> AppSnapshot {
             )
         },
         actions: PrimitiveActionHandlers(
-            drag: { from, to, _, _ in
+            drag: { from, to, _, _, _ in
                 #expect(from == .point(ActionPoint(x: 100, y: 85, coordinateSpace: .screen, app: "com.example.App")))
                 #expect(to == .point(ActionPoint(x: 550, y: 460, coordinateSpace: .screen, app: "com.example.App")))
                 return PrimitiveActionResult(action: "drag", target: "converted", strategy: "CGEventDrag", success: true)
@@ -973,7 +973,7 @@ private func stabilitySnapshot(id: String, title: String) -> AppSnapshot {
 
 @Test func dragRequestRejectsRelativePointWithoutApp() {
     let router = CommandRouter(actions: PrimitiveActionHandlers(
-        drag: { _, _, _, _ in
+        drag: { _, _, _, _, _ in
             Issue.record("relative point without app should fail before dispatch")
             return PrimitiveActionResult(action: "drag", target: "bad", strategy: "bad", success: true)
         }

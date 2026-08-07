@@ -6,10 +6,10 @@ import Testing
     let history = ActionHistoryStore()
     let router = CommandRouter(
         actions: PrimitiveActionHandlers(
-            click: { target in
+            click: { target, _ in
                 PrimitiveActionResult(action: "click", target: target, strategy: "test", success: true)
             },
-            type: { target, _ in
+            type: { target, _, _ in
                 PrimitiveActionResult(action: "type", target: target, strategy: "test", success: true)
             }
         ),
@@ -54,7 +54,7 @@ import Testing
             )
         },
         actions: PrimitiveActionHandlers(
-            click: { target in
+            click: { target, _ in
                 PrimitiveActionResult(action: "click", target: target, strategy: "test", success: true)
             }
         ),
@@ -134,7 +134,7 @@ import Testing
     let history = ActionHistoryStore()
     let router = CommandRouter(
         actions: PrimitiveActionHandlers(
-            type: { target, value in
+            type: { target, value, _ in
                 PrimitiveActionResult(action: "type", target: target, strategy: "test", success: true, details: [
                     "value": .string(value)
                 ])
@@ -182,10 +182,10 @@ import Testing
             )
         },
         actions: PrimitiveActionHandlers(
-            click: { target in
+            click: { target, _ in
                 PrimitiveActionResult(action: "click", target: target, strategy: "test", success: true)
             },
-            type: { target, value in
+            type: { target, value, _ in
                 PrimitiveActionResult(action: "type", target: target, strategy: "test", success: true, details: [
                     "value": .string(value)
                 ])
@@ -273,13 +273,13 @@ import Testing
     var keyedValues: [String] = []
     let router = CommandRouter(
         actions: PrimitiveActionHandlers(
-            type: { target, value in
+            type: { target, value, _ in
                 typedValues.append(value)
                 return PrimitiveActionResult(action: "type", target: target, strategy: "test", success: true, details: [
                     "value": .string(value)
                 ])
             },
-            keyboard: { app, intent in
+            keyboard: { app, intent, _ in
                 guard case let .text(text) = intent else { return PrimitiveActionResult(action: "keyboard", target: "invalid", strategy: "test", success: false) }
                 keyedValues.append(text)
                 return PrimitiveActionResult(action: "keyboard", target: app ?? "frontmost", strategy: "test", success: true, details: [
@@ -332,10 +332,10 @@ import Testing
     let history = ActionHistoryStore()
     let router = CommandRouter(
         actions: PrimitiveActionHandlers(
-            click: { target in
+            click: { target, _ in
                 PrimitiveActionResult(action: "click", target: target, strategy: "test", success: true)
             },
-            type: { target, value in
+            type: { target, value, _ in
                 PrimitiveActionResult(action: "type", target: target, strategy: "test", success: true, details: [
                     "value": .string(value)
                 ])
@@ -404,7 +404,7 @@ import Testing
     var typedValues: [String] = []
     let router = CommandRouter(
         actions: PrimitiveActionHandlers(
-            type: { target, value in
+            type: { target, value, _ in
                 typedValues.append(value)
                 return PrimitiveActionResult(action: "type", target: target, strategy: "test", success: true)
             }

@@ -59,6 +59,63 @@ or process identifier. Locator `role` values use native UIA control type names
 such as `Button`, `Edit`, `Document`, `MenuItem`, and `TreeItem`; locator actions
 use UIA pattern names `Invoke`, `Value`, and `ScrollItem`.
 
+UIA exposes `InvokePattern` rather than an open-ended named-action vocabulary, so
+`invoke` performs `Invoke` and reports that, instead of claiming a name it cannot
+honour.
+
+## Delivery
+
+Both backends implement the delivery contract described in
+[`../docs/platform-spec.md`](../docs/platform-spec.md). Every mutating tool takes
+an optional `deliveryPolicy` (`backgroundOnly` by default), and every action
+result carries `deliveryPolicy`, `delivery`, `dispatchSuccess`, and `refusal`.
+The policy is decoded before the target is resolved, so an unrecognized value is
+a JSON-RPC `-32602` error and never reaches a native call.
+
+| action | Windows rung | Linux rung |
+| --- | --- | --- |
+| `invoke` | `semantic` (UIA `InvokePattern`) | `semantic` (AT-SPI `Action.DoAction`) |
+| `type` | `semantic` (UIA `ValuePattern` + readback) | `semantic` (AT-SPI `EditableText.SetTextContents` + readback) |
+| `scroll` | `semantic` (UIA `ScrollItemPattern`) | `semantic` (AT-SPI `Component.ScrollTo`) |
+| `click` | refused: the foreground rung is withheld | refused: the foreground rung is withheld |
+| `keyboard` | refused: the foreground rung is withheld | refused: the foreground rung is withheld |
+
+The semantic paths no longer call `SetFocus` or AT-SPI focus. Focus is a
+system-wide side effect, and an action that changes it is foreground however it
+finally mutates the target, so these set the value directly and read it back.
+
+Neither backend implements the pixel rung. Windows has no HWND-targeted
+client-coordinate delivery yet, and Linux has neither X11 window-targeted
+delivery nor a Wayland portal path, so both refuse with
+`backgroundPixelUnsupported` and a message naming what is missing.
+`SendInput` and `XTest` are global devices and would always be classified
+`foreground`, however narrowly they are aimed.
+
+Neither backend offers the foreground rung either. The foreground rung is global
+input that hands the session back: capture the prior foreground, activate the
+target, prove it came forward, dispatch exactly once, restore. These backends
+cannot yet do that, so pointer and keyboard actions refuse rather than dispatch
+unrestored `SendInput` or `XTest` while claiming a guarantee they do not keep.
+
+To light the rung up, a backend overrides three `PlatformBackend` methods:
+`supports_foreground_transaction`, `frontmost_application`, and
+`activate_application`. The transaction itself — capture, activate, prove,
+dispatch once, restore, and report the evidence — is shared in
+`axon-core/src/delivery.rs` and is already covered by fake-backend tests in both
+crates, including activation that cannot be proved (nothing is dispatched) and
+restoration that fails after dispatch (evidence kept, overall failure).
+
+Stable refusal reasons a caller will see from these backends:
+
+| reason | when |
+| --- | --- |
+| `backgroundPixelUnsupported` | Only visible when the rungs above it are available, since a policy boundary is more actionable otherwise. |
+| `foregroundNotPermitted` | The backend can deliver transactionally and the session can reach global input, but the action did not opt in. |
+| `noDeliveryCandidate` | The rung does not exist here: the backend cannot run a foreground transaction, or the session cannot reach global input at all (Wayland, session 0, a noninteractive window station, an integrity boundary). Opting in changes nothing, and the refusal says so rather than sending the caller after a useless permission. |
+
+The health-v1 capability overlay feeds the same decision that dispatches, so
+`status` and a refused action agree about what this session can do.
+
 ## Linux backend
 
 `axon-linux` is the AT-SPI backend. It serves the mode-0600 socket at
@@ -74,7 +131,8 @@ The unit template lives at `axon-linux/systemd/axon.service.in` and ships inside
 the release archive, so what will be registered can be read before installing.
 Under Wayland, synthetic pointer and keyboard input and unmediated screenshots
 are unavailable; `status` reports each as unusable with a stable reason rather
-than letting a call fail later.
+than letting a call fail later, and pointer and keyboard actions refuse with
+`noDeliveryCandidate` carrying that same reason.
 
 ## Windows UI Automation spike
 
