@@ -151,6 +151,8 @@ impl<B: PointerTargetVerifier + TextRecognitionProvider + VisualObservationProvi
             policy,
             &candidate,
             ForegroundTarget::Application(&target.app),
+            // A pointer click moves the real cursor, so the transaction puts it back.
+            true,
             json!({"verified": false, "reason": "click has no declared postcondition"}),
             None,
             |backend| backend.pointer_click(point),
@@ -255,6 +257,8 @@ impl<B: PointerTargetVerifier + TextRecognitionProvider + VisualObservationProvi
                     policy,
                     &candidate,
                     ForegroundTarget::Application(&application),
+                    // A pointer click moves the real cursor, so the transaction puts it back.
+                    true,
                     json!({"verified":false,"reason":"click has no declared postcondition"}),
                     Some(resolution),
                     |backend| backend.pointer_click(point),
@@ -297,6 +301,9 @@ impl<B: PointerTargetVerifier + TextRecognitionProvider + VisualObservationProvi
                     named
                         .as_deref()
                         .map_or(ForegroundTarget::Frontmost, ForegroundTarget::Application),
+                    // Keyboard input never touches the cursor, and capturing a pointer it does not
+                    // move would report a restoration that never happened.
+                    false,
                     json!({"verified":false,"reason":"keyboard input has no declared postcondition"}),
                     None,
                     move |backend| backend.keyboard(&app, &input),
@@ -412,11 +419,13 @@ impl<B: PointerTargetVerifier + TextRecognitionProvider + VisualObservationProvi
         policy: DeliveryPolicy,
         candidate: &DeliveryCandidate,
         target: ForegroundTarget<'_>,
+        restores_pointer: bool,
         verification: Value,
         resolution: Option<Resolution>,
         body: impl FnOnce(&mut B) -> Result<(), axon_core::BackendError>,
     ) -> Result<Value, JsonRpcError> {
-        let dispatch = dispatch_in_foreground(&mut self.backend, target, body);
+        let dispatch =
+            dispatch_in_foreground(&mut self.backend, target, restores_pointer, body);
         if let Some(refusal) = dispatch.refusal {
             let mut result = DeliveryOutcome::refusal_result(policy, refusal);
             if let Some(object) = result.as_object_mut() {
@@ -431,8 +440,9 @@ impl<B: PointerTargetVerifier + TextRecognitionProvider + VisualObservationProvi
 
         let mut result = json!({
             // Dispatch evidence survives a failed restoration, but the action as a whole did not
-            // succeed: the user's session was not put back where they left it.
-            "success": dispatch.cleanup.restored,
+            // succeed: the user's session was not put back where they left it. A cursor left where
+            // the click dropped it counts as much as a window that never came forward again.
+            "success": dispatch.cleanup.session_restored(),
             "dispatch": {"success": true, "mechanism": candidate.mechanism},
             "verification": verification,
             "foreground": dispatch.cleanup,
