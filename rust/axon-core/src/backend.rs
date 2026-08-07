@@ -114,6 +114,31 @@ pub struct RecordedCall {
     pub result: Value,
 }
 
+/// What a keyboard action was asked to deliver.
+///
+/// Two intents rather than one string, because no backend can tell them apart after the fact:
+/// `End` is three characters as text and one keystroke as a key, and `ctrl+c` is a chord or eight
+/// literal characters depending only on which parameter the caller used. The tool surface requires
+/// exactly one of `text` and `key` for this reason, and the trait carries that decision through
+/// rather than re-guessing it at the point of dispatch.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum KeyboardIntent<'a> {
+    /// Literal characters, entered exactly as given.
+    Text(&'a str),
+    /// A recognized key or chord such as `End`, `Return`, or `ctrl+shift+p`. An unrecognized name
+    /// is refused rather than typed.
+    Key(&'a str),
+}
+
+impl KeyboardIntent<'_> {
+    pub fn as_str(&self) -> &str {
+        match self {
+            KeyboardIntent::Text(text) => text,
+            KeyboardIntent::Key(key) => key,
+        }
+    }
+}
+
 /// Narrow native boundary. Native objects and status codes remain behind this trait.
 pub trait PlatformBackend {
     fn capabilities(&self) -> Result<Vec<CapabilityInfo>, BackendError>;
@@ -138,7 +163,7 @@ pub trait PlatformBackend {
         to: (f64, f64),
         duration: Duration,
     ) -> Result<(), BackendError>;
-    fn keyboard(&mut self, app: &AppQuery, input: &str) -> Result<(), BackendError>;
+    fn keyboard(&mut self, app: &AppQuery, intent: KeyboardIntent<'_>) -> Result<(), BackendError>;
     fn screenshot(&mut self, app: &AppQuery) -> Result<Screenshot, BackendError>;
     fn hit_test(&mut self, point: (f64, f64)) -> Result<Option<Node>, BackendError>;
     fn recorded_calls(&self) -> Result<Vec<RecordedCall>, BackendError>;
