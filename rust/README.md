@@ -93,9 +93,11 @@ delivery nor a Wayland portal path, so both refuse with
 
 Neither backend offers the foreground rung either. The foreground rung is global
 input that hands the session back: capture the prior foreground, activate the
-target, prove it came forward, dispatch exactly once, restore. These backends
-cannot yet do that, so pointer and keyboard actions refuse rather than dispatch
-unrestored `SendInput` or `XTest` while claiming a guarantee they do not keep.
+target, prove it came forward, dispatch exactly once, restore. Windows has
+`SendInput` but cannot yet run that transaction around it. Linux has no synthetic
+input path at all: `axon-linux` depends only on AT-SPI, so `pointer_click` and
+`keyboard` return a capability error and there is nothing for a transaction to
+wrap. Both refuse rather than claim a guarantee they do not keep.
 
 To light the rung up, a backend overrides three `PlatformBackend` methods:
 `supports_foreground_transaction`, `frontmost_application`, and

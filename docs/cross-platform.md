@@ -189,8 +189,10 @@ than equating “Linux” with one uniform tree.
 - Chromium and Electron applications may not expose their accessibility trees
   until an AT-SPI listener registers. Listener registration is therefore part
   of backend readiness, not an optional optimization.
-- Under X11, XTest provides the practical synthetic-input fallback and global
-  observation is feasible.
+- Under X11, XTest is the practical synthetic-input mechanism and global
+  observation is feasible. Reaching either requires an X11 client layer in the
+  backend, which is separate from the AT-SPI connection that carries capture and
+  the semantic rung.
 - Wayland intentionally blocks unrestricted synthetic pointer input and global
   input observation. libei and desktop portals are the escape hatches when the
   compositor supports and authorizes them. The backend must otherwise declare
@@ -241,10 +243,12 @@ what is missing, because relabelling `SendInput` or `XTest` as `pixel` would mak
 the contract's central promise false.
 
 Neither backend offers the foreground rung either, which is why pointer and
-keyboard actions refuse outright there today. `SendInput` and `XTest` exist, but
-the foreground rung is global input that hands the session back, and these
-backends cannot yet capture the prior foreground, activate the target, prove it
-came forward, and restore. Dispatching unrestored global input while reporting
+keyboard actions refuse outright there today. Windows has `SendInput` but cannot
+yet run a transaction around it; the Linux backend has no synthetic input path at
+all, because it depends only on AT-SPI and has no X11 client layer. The
+foreground rung is global input that hands the session back, and neither backend
+can yet capture the prior foreground, activate the target, prove it came forward,
+and restore. Dispatching unrestored global input while reporting
 `delivery: "foreground"` would claim a guarantee they do not keep, and the
 unrestored focus theft is the very behavior the contract exists to prevent. The
 seams live on `PlatformBackend` (`supports_foreground_transaction`,
@@ -269,11 +273,12 @@ cannot honour.
 
 ### Linux compositor and toolkit overlays
 
-Under X11 the foreground rung is `XTest`, gated on the opt-in and on a usable
-global input device. Under Wayland there is no global input device to gate: the
-compositor refuses synthetic input outright, so `pointerInput` and
-`keyboardInput` are unusable and every pointer or keyboard action refuses with
-`noDeliveryCandidate` carrying the compositor's reason. AT-SPI paths are
+Under X11 the foreground rung would be `XTest`, gated on the opt-in and on a
+usable global input device, but the backend has no X11 client layer yet, so
+`pointerInput` and `keyboardInput` are unusable on every Linux session. Under
+Wayland they would be unusable regardless: the compositor refuses synthetic input
+outright, and every pointer or keyboard action refuses with `noDeliveryCandidate`
+carrying the compositor's reason. AT-SPI paths are
 unaffected, because they mutate the accessibility tree rather than the session.
 
 AT-SPI value setting no longer takes focus first. Focus is a system-wide side

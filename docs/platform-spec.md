@@ -235,7 +235,7 @@ available, and a backend must not claim it before a live probe passes.
 | --- | --- | --- | --- |
 | macOS | `AXPress`, `AXValue`, `AXScrollToVisible` | `CGEventPostToPid` against the target process, invariants proved after dispatch | Global `CGEvent`, transactional activate/dispatch/restore |
 | Windows | UIA `InvokePattern`, `ValuePattern`, `ScrollItemPattern`, none of which call `SetFocus` | Not implemented; refuses `backgroundPixelUnsupported` | Withheld; `SendInput` exists but the backend cannot yet capture, prove, and restore the foreground |
-| Linux | AT-SPI `Action.DoAction`, `EditableText.SetTextContents`, `Component.ScrollTo`, none of which take focus | Not implemented; refuses `backgroundPixelUnsupported` | Withheld; `XTest` exists but the backend cannot yet capture, prove, and restore the foreground |
+| Linux | AT-SPI `Action.DoAction`, `EditableText.SetTextContents`, `Component.ScrollTo`, none of which take focus | Not implemented; refuses `backgroundPixelUnsupported` | Withheld; no synthetic input path is implemented, so there is nothing to run a foreground transaction around |
 
 The foreground rung is not merely "global input". It is global input that hands
 back what it borrowed, and a backend that cannot do that must not offer the rung
