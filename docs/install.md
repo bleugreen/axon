@@ -217,18 +217,65 @@ from the CLI asking it. That is what an upgrade in place looks like before a res
 Approve it in System Settings > Privacy & Security > Accessibility. `screenRecording: not granted`
 costs screenshots and nothing else.
 
-Only one daemon can serve the socket. A second `axon serve` refuses to start rather than taking
-the endpoint away from the running one.
+### Socket ownership
+
+Exactly one server owns a socket path at a time, and the server enforces that itself rather than
+trusting a caller to check first. Before it touches the pathname it takes an exclusive advisory
+lock on a sidecar file — `/tmp/axon.sock.lock` for the default path — and holds that lock for as
+long as it is listening. A server that finds the lock already held refuses to start, and names the
+process holding it:
+
+```text
+axon: socket server failed: Another Axon server is already serving /tmp/axon.sock (pid 73376). Stop it, or set AXON_SOCKET_PATH to a different path.
+```
+
+The owning process is read out of the lock file rather than asked over the socket, so a server
+that is wedged and answering nothing is still identified.
+
+A server that crashes or is terminated leaves its socket file behind. Nothing needs cleaning up:
+the next server reclaims the path once it holds the lock. What a server will not do is remove a
+socket it does not own — it records the inode it bound and unlinks only while the pathname still
+resolves to that same socket, so an orphan shutting down late cannot delete a successor's
+endpoint.
+
+### Removing a duplicate server
+
+Before ownership was enforced, two servers could hold the socket at once and clients reached
+whichever bound last. Check for that with:
+
+```sh
+lsof /tmp/axon.sock
+```
+
+More than one holder means an older install is still running alongside `Axon.app`, usually a
+`dev.axon.daemon` LaunchAgent from when the CLI installed a copied daemon bundle into Application
+Support. That workflow is gone — `daemon install` now registers the executable you invoke — so
+remove the leftover once:
+
+```sh
+launchctl bootout gui/$(id -u)/dev.axon.daemon
+rm -f ~/Library/LaunchAgents/dev.axon.daemon.plist
+rm -rf ~/Library/"Application Support"/Axon/"Axon Daemon.app"
+axon start
+```
+
+Do this before upgrading. A current Axon refuses to displace a server that is still answering,
+including one old enough to predate the lock, so a leftover daemon keeps the new one from serving
+instead of being silently replaced by it.
 
 ## Development
 
-Source checkout development uses Swift directly against the socket:
+Source checkout development uses Swift directly against the socket. Give the development server a
+path of its own, because the default one is owned by whatever is already installed and running:
 
 ```sh
 make build
 make test
-AXON_SOCKET_PATH=/tmp/axon.sock swift run axon serve
+AXON_SOCKET_PATH=/tmp/axon-dev.sock swift run axon serve
 ```
+
+To develop against the default path instead, stop the installed server first. `axon status`
+reports the endpoint and the process serving it, so a surprising result is diagnosable.
 
 `make install-daemon` registers the LaunchAgent against `.build/debug/axon` for a short
 development loop. That is a build directory, so the CLI warns: the registration stops working the

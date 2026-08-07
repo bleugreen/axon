@@ -23,14 +23,14 @@ public struct SocketClient {
     public func send(_ request: JSONRPCRequest) throws -> JSONRPCResponse {
         let descriptor = socket(AF_UNIX, SOCK_STREAM, 0)
         guard descriptor >= 0 else {
-            throw SocketError.operationFailed("socket")
+            throw SocketError.failed("socket")
         }
         setNoSigPipe(descriptor)
         defer { close(descriptor) }
 
         try withSocketAddress(path: path) { pointer, length in
             guard connect(descriptor, pointer, length) == 0 else {
-                throw SocketError.operationFailed("connect")
+                throw SocketError.failed("connect")
             }
         }
 
