@@ -6,8 +6,8 @@
 //! systemd and the socket live behind the target gate in `main.rs`.
 
 use axon_core::{
-    CapabilityInfo, CapabilityState, DaemonReport, HealthPlatform, HealthReport, PermissionState,
-    RegistrationHealth, RegistrationMechanism, SessionHealth, reason,
+    CapabilityInfo, CapabilityState, DaemonReport, HealthPlatform, HealthReport, NotRunningHealth,
+    PermissionState, RegistrationHealth, RegistrationMechanism, SessionHealth, reason,
 };
 
 /// The AT-SPI accessibility bus, which is the one gate Linux applies to automation.
@@ -255,16 +255,16 @@ pub fn not_running(
     } else {
         PermissionState::ungranted(ACCESSIBILITY_BUS, reason::ATSPI_UNAVAILABLE, None)
     };
-    HealthReport::not_running(
-        env!("CARGO_PKG_VERSION"),
-        HealthPlatform::Linux,
+    HealthReport::not_running(NotRunningHealth {
+        version: env!("CARGO_PKG_VERSION").into(),
+        platform: HealthPlatform::Linux,
         endpoint,
         registration,
         session,
-        reason::DAEMON_NOT_RUNNING,
+        code: reason::DAEMON_NOT_RUNNING,
         detail,
-        vec![permission],
-    )
+        permissions: vec![permission],
+    })
 }
 
 #[cfg(test)]

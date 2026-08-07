@@ -6,7 +6,7 @@
 //! calls that touch Task Scheduler and the named pipe live behind the target gate in `main.rs`.
 
 use axon_core::{
-    CapabilityInfo, CapabilityState, DaemonReport, HealthPlatform, HealthReport,
+    CapabilityInfo, CapabilityState, DaemonReport, HealthPlatform, HealthReport, NotRunningHealth,
     RegistrationHealth, RegistrationMechanism, SessionHealth, reason,
 };
 
@@ -187,16 +187,16 @@ pub fn not_running(
     session: SessionHealth,
     detail: Option<String>,
 ) -> HealthReport {
-    HealthReport::not_running(
-        env!("CARGO_PKG_VERSION"),
-        HealthPlatform::Windows,
-        PIPE,
+    HealthReport::not_running(NotRunningHealth {
+        version: env!("CARGO_PKG_VERSION").into(),
+        platform: HealthPlatform::Windows,
+        endpoint: PIPE.into(),
         registration,
         session,
-        reason::DAEMON_NOT_RUNNING,
+        code: reason::DAEMON_NOT_RUNNING,
         detail,
-        vec![],
-    )
+        permissions: vec![],
+    })
 }
 
 #[cfg(test)]

@@ -61,6 +61,15 @@ pub trait PointerTargetVerifier: PlatformBackend {
     ) -> Result<bool, axon_core::BackendError>;
 }
 
+struct ForegroundDispatch<'candidate, 'target> {
+    policy: DeliveryPolicy,
+    candidate: &'candidate DeliveryCandidate,
+    target: ForegroundTarget<'target>,
+    restores_pointer: bool,
+    verification: Value,
+    resolution: Option<Resolution>,
+}
+
 impl<B: PointerTargetVerifier> Router<B> {
     pub fn new(backend: B) -> Self {
         Self {
@@ -134,13 +143,15 @@ impl<B: PointerTargetVerifier> Router<B> {
                     ));
                 };
                 self.foreground_dispatch(
-                    policy,
-                    &candidate,
-                    ForegroundTarget::Application(&application),
-                    // A pointer click moves the real cursor, so the transaction puts it back.
-                    true,
-                    json!({"verified":false,"reason":"click has no declared postcondition"}),
-                    Some(resolution),
+                    ForegroundDispatch {
+                        policy,
+                        candidate: &candidate,
+                        target: ForegroundTarget::Application(&application),
+                        // A pointer click moves the real cursor, so the transaction puts it back.
+                        restores_pointer: true,
+                        verification: json!({"verified":false,"reason":"click has no declared postcondition"}),
+                        resolution: Some(resolution),
+                    },
                     |backend| backend.pointer_click(point),
                 )
             }
@@ -201,16 +212,19 @@ impl<B: PointerTargetVerifier> Router<B> {
                     None
                 };
                 self.foreground_dispatch(
-                    policy,
-                    &candidate,
-                    target
-                        .as_deref()
-                        .map_or(ForegroundTarget::Frontmost, ForegroundTarget::Application),
-                    // Keyboard input never touches the cursor, and capturing a pointer it does not
-                    // move would report a restoration that never happened.
-                    false,
-                    json!({"verified":false,"reason":"keyboard input has no declared postcondition"}),
-                    None,
+                    ForegroundDispatch {
+                        policy,
+                        candidate: &candidate,
+                        target: target.as_deref().map_or(
+                            ForegroundTarget::Frontmost,
+                            ForegroundTarget::Application,
+                        ),
+                        // Keyboard input never touches the cursor, and capturing a pointer it does
+                        // not move would report a restoration that never happened.
+                        restores_pointer: false,
+                        verification: json!({"verified":false,"reason":"keyboard input has no declared postcondition"}),
+                        resolution: None,
+                    },
                     move |backend| backend.keyboard(&app, intent),
                 )
             }
@@ -331,17 +345,17 @@ impl<B: PointerTargetVerifier> Router<B> {
     /// the foreground one.
     fn foreground_dispatch(
         &mut self,
-        policy: DeliveryPolicy,
-        candidate: &DeliveryCandidate,
-        target: ForegroundTarget<'_>,
-        restores_pointer: bool,
-        verification: Value,
-        resolution: Option<axon_core::Resolution>,
+        request: ForegroundDispatch<'_, '_>,
         body: impl FnOnce(&mut B) -> Result<(), axon_core::BackendError>,
     ) -> Result<Value, JsonRpcError> {
-        let dispatch = dispatch_in_foreground(&mut self.backend, target, restores_pointer, body);
+        let dispatch = dispatch_in_foreground(
+            &mut self.backend,
+            request.target,
+            request.restores_pointer,
+            body,
+        );
         if let Some(refusal) = dispatch.refusal {
-            let mut result = DeliveryOutcome::refusal_result(policy, refusal);
+            let mut result = DeliveryOutcome::refusal_result(request.policy, refusal);
             if let Some(object) = result.as_object_mut() {
                 object.insert("foreground".into(), json!(dispatch.cleanup));
             }
@@ -361,14 +375,14 @@ impl<B: PointerTargetVerifier> Router<B> {
             // succeed: the user's session was not put back where they left it. A cursor left where
             // the click dropped it counts as much as a window that never came forward again.
             "success": dispatch.cleanup.session_restored(),
-            "dispatch": {"success": true, "mechanism": candidate.mechanism},
-            "verification": verification,
+            "dispatch": {"success": true, "mechanism": request.candidate.mechanism},
+            "verification": request.verification,
             "foreground": dispatch.cleanup,
         });
-        if let (Some(object), Some(resolution)) = (result.as_object_mut(), resolution) {
+        if let (Some(object), Some(resolution)) = (result.as_object_mut(), request.resolution) {
             object.insert("resolution".into(), json!(resolution));
         }
-        Ok(delivered(result, policy, candidate.rung))
+        Ok(delivered(result, request.policy, request.candidate.rung))
     }
 
     /// The stable identity of the application that owns the currently resolved target.
