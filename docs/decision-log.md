@@ -65,6 +65,8 @@ A point is a pointer-space instruction, and a scroll wheel is the pointer-space 
 
 `scroll` reports `success: true` once wheel events are dispatched, alongside `dispatchSuccess: true` and `semanticStatus: "unverified"`. `drag` fails closed in the same situation because a drag mutates state, and an unverified mutation is a claim that should not be made. A scroll only moves a viewport, and its real effect is implicitly checked by whatever the next action targets, so it reports the dispatch honestly in `semanticStatus` rather than as a failure. Keeping `success: true` also leaves `.axn` replay behavior unchanged, since the runner halts on `success: false` for every tool except `drag`.
 
+Activation follows the same reasoning and is therefore scoped to the wheel rather than to the presence of an `app` argument. A wheel needs the target window raised because it lands wherever the topmost window is; `AXScrollToVisible` does not, so activating for it would take the user's focus to no purpose. `dispatchSuccess` is likewise never claimed without events: a zero delta is a no-op that reports `semanticStatus: "noop"`, and a delta that rounds to no whole pixel fails rather than reporting a dispatch that moved nothing.
+
 The consequence to be honest about: the two strategies interpret the delta differently. The wheel honors the documented pixel distance; `AXScrollToVisible` cannot, because the app decides how far to move to reveal the chosen descendant. Unifying that is a tool-vocabulary change, not a bug fix.
 
 ## Deferred Design Notes
