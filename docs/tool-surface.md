@@ -172,10 +172,10 @@ move. Both strategies report `dispatchSuccess` separately from `semanticSuccess`
 leave `semanticStatus` unverified: a dispatched wheel, or an app acknowledging the
 accessibility action, is not proof that the viewport moved. `success` reflects dispatch
 rather than semantics here, unlike `drag`, because a scroll moves a viewport instead of
-mutating state. Supplying `app` activates it, but only when the wheel path actually
-runs: a wheel reaches whichever window is topmost under the point, while
-`AXScrollToVisible` addresses an element directly, so a scroll that takes the
-accessibility path leaves the frontmost application alone. A delta too small to round to
+mutating state. Unlike `drag`, `scroll` never activates the app it was given: a posted
+wheel is routed by the event's location to the window under that point whatever is
+frontmost, so raising the app would only take the user's focus. A point covered by
+another window therefore scrolls whatever is on top of it. A delta too small to round to
 a whole pixel of wheel movement is reported as a failure rather than as an empty
 dispatch, and a zero delta is a no-op carrying `semanticStatus: "noop"`.
 
