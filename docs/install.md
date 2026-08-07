@@ -65,8 +65,8 @@ The script writes:
 ```text
 dist/Axon.app
 dist/Axon Editor.app
-dist/Axon-0.2.1-macos-aarch64.zip
-dist/Axon-0.2.1-macos-aarch64.zip.sha256
+dist/Axon-0.2.2-macos-aarch64.zip
+dist/Axon-0.2.2-macos-aarch64.zip.sha256
 ```
 
 The version comes from the repository-root `VERSION` file. Archives are named with the version and
@@ -103,7 +103,7 @@ The cask shape:
 
 ```ruby
 cask "axon" do
-  version "0.2.1"
+  version "0.2.2"
   sha256 "<printed by scripts/package-app>"
 
   url "https://github.com/bleugreen/axon/releases/download/v#{version}/Axon-#{version}-macos-aarch64.zip"
