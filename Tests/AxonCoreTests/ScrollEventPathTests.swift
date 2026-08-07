@@ -467,3 +467,40 @@ private func scrollExecutor(
     #expect(result.refusal != nil)
     #expect(posted.isEmpty)
 }
+
+@Test func scrollStillAttemptsAccessibilityWhenCapabilityCannotBeRead() throws {
+    // A failed capability query says nothing about the element. Dropping such a candidate would
+    // convert a transient accessibility fault into a wheel burst at the named element's center —
+    // trading the rung that cannot disturb the wrong window for the one that can — so the nearest
+    // candidate is attempted and its answer decides.
+    var posted: [CGEvent] = []
+    let refusing = scrollExecutor(
+        tree: unreadableScrollTree,
+        performAction: { _, _ in .cannotComplete },
+        posted: { posted.append($0) }
+    )
+
+    let refused = try refusing.scroll(target: .handle("scroll:0"), app: nil, deltaX: 0, deltaY: -400, policy: .foregroundPermitted)
+
+    #expect(refused.strategy == "AXScrollToVisible")
+    #expect(refused.success == false)
+    #expect(refused.message == "AXScrollToVisible returned cannotComplete (-25204)")
+    // Ranking among unproved candidates is plain geometry, so the nearer row is the one attempted —
+    // not the element that happens to advertise the action in the readable fixture.
+    #expect(refused.details["scrollTargetFrame"]?["y"] == .double(480))
+    #expect(posted.isEmpty)
+
+    // And when the attempt does prove the mechanism absent, the ordinary advance rule applies.
+    posted = []
+    let unsupported = scrollExecutor(
+        tree: unreadableScrollTree,
+        performAction: { _, _ in .actionUnsupported },
+        posted: { posted.append($0) }
+    )
+
+    let advanced = try unsupported.scroll(target: .handle("scroll:0"), app: nil, deltaX: 0, deltaY: -400, policy: .foregroundPermitted)
+
+    #expect(advanced.strategy == "CGEventScrollToPid")
+    #expect(advanced.dispatchSuccess)
+    #expect(!posted.isEmpty)
+}
