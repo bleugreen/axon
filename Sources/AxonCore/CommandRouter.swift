@@ -1046,8 +1046,8 @@ private struct PrimitiveActionCommandHandler {
         } catch let failure as LocatorResolutionFailure {
             let result = PrimitiveActionResult(
                 action: "resolve",
-                target: nil,
-                strategy: nil,
+                target: "",
+                strategy: "locator-resolution",
                 success: false,
                 message: "Locator did not resolve uniquely: \(failure.resolution.status.rawValue)",
                 details: ["targetResolution": compactTargetResolution(failure.resolution)]
