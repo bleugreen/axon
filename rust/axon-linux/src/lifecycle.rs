@@ -286,7 +286,7 @@ mod tests {
     fn the_unit_runs_the_registered_executable_and_binds_to_the_desktop() {
         let unit = unit_file("/opt/axon/0.1.7/axon-linux");
 
-        assert!(unit.contains("ExecStart=/opt/axon/0.1.7/axon-linux serve"));
+        assert!(unit.contains("ExecStart=\"/opt/axon/0.1.7/axon-linux\" serve"));
         assert!(unit.contains("WantedBy=graphical-session.target"));
         assert!(unit.contains("Restart=on-failure"));
         // A system service would run outside the user's session and could never reach AT-SPI.
