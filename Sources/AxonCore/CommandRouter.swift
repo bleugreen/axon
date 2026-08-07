@@ -719,6 +719,10 @@ private struct PerceptionCommandHandler {
 
 private struct PrimitiveActionCommandHandler {
     let services: CommandRouterServices
+    /// Collects the before/after reads around whichever primitive this request dispatches. This is
+    /// the one place every dispatched action passes through with its resolved element in hand, so
+    /// it is the only place an observation can be taken without resolving the target a second time.
+    let observations: ActionObservationCollector?
 
     func handle(_ request: JSONRPCRequest) -> JSONRPCResponse {
         switch request.method {
@@ -738,10 +742,11 @@ private struct PrimitiveActionCommandHandler {
                     )
                 case .handle, .locator:
                     let resolved = try resolveElementTarget(target)
-                    return withTargetResolution(
+                    observations?.begin(tool: "click", handle: resolved.handle)
+                    return observed(withTargetResolution(
                         try services.actions.click(resolved.handle, policy),
                         resolution: resolved.resolution
-                    )
+                    ))
                 }
             }
         case "invoke":
@@ -752,11 +757,12 @@ private struct PrimitiveActionCommandHandler {
                 let resolved = try resolveElementTarget(
                     try CommandRouterRequestSupport.requiredToolTarget("target", in: params, acceptedKinds: .element)
                 )
-                return withTargetResolution(try services.actions.invoke(
+                observations?.begin(tool: "invoke", handle: resolved.handle)
+                return observed(withTargetResolution(try services.actions.invoke(
                     resolved.handle,
                     try decoder.requiredString("name"),
                     policy
-                ), resolution: resolved.resolution)
+                ), resolution: resolved.resolution))
             }
         case "type":
             return actionResponse(id: request.id) {
@@ -766,25 +772,30 @@ private struct PrimitiveActionCommandHandler {
                 let resolved = try resolveElementTarget(
                     try CommandRouterRequestSupport.requiredToolTarget("target", in: params, acceptedKinds: .element)
                 )
-                return withTargetResolution(try services.actions.type(
+                let value = try decoder.requiredString("value")
+                observations?.begin(tool: "type", handle: resolved.handle, inputs: [value])
+                return observed(withTargetResolution(try services.actions.type(
                     resolved.handle,
-                    try decoder.requiredString("value"),
+                    value,
                     policy
-                ), resolution: resolved.resolution)
+                ), resolution: resolved.resolution))
             }
         case "keyboard":
             return actionResponse(id: request.id) {
                 let params = try CommandRouterRequestSupport.paramsObject(in: request)
                 let decoder = ToolParamDecoder(toolName: "keyboard", params: params)
                 let policy = try decoder.deliveryPolicy()
-                return try services.actions.keyboard(
-                    try decoder.string("app"),
-                    try KeyboardIntent.validated(
-                        text: decoder.string("text"),
-                        key: decoder.string("key")
-                    ),
-                    policy
+                let app = try decoder.string("app")
+                let intent = try KeyboardIntent.validated(
+                    text: decoder.string("text"),
+                    key: decoder.string("key")
                 )
+                observations?.begin(
+                    tool: "keyboard",
+                    app: app,
+                    inputs: [try decoder.string("text"), try decoder.string("key")].compactMap { $0 }
+                )
+                return observed(try services.actions.keyboard(app, intent, policy))
             }
         case "scroll":
             return actionResponse(id: request.id) {
@@ -792,6 +803,9 @@ private struct PrimitiveActionCommandHandler {
                 let decoder = ToolParamDecoder(toolName: "scroll", params: params)
                 let policy = try decoder.deliveryPolicy()
                 let target = try optionalResolvedPointerTarget("target", in: params)
+                if case let .handle(handle)? = target?.target {
+                    observations?.begin(tool: "scroll", handle: handle)
+                }
                 let result = try services.actions.scroll(
                     target?.target,
                     try decoder.string("app"),
@@ -799,10 +813,10 @@ private struct PrimitiveActionCommandHandler {
                     try decoder.number("deltaY") ?? -120,
                     policy
                 )
-                return withTargetResolution(
+                return observed(withTargetResolution(
                     withLocationResolution(result, resolution: target?.locationResolution),
                     resolution: target?.targetResolution
-                )
+                ))
             }
         case "drag":
             return actionResponse(id: request.id) {
@@ -812,6 +826,7 @@ private struct PrimitiveActionCommandHandler {
                 let app = try decoder.string("app")
                 let from = try requiredResolvedPointerTarget("from", in: params, defaultApp: app)
                 let to = try requiredResolvedPointerTarget("to", in: params, defaultApp: app)
+                observations?.beginDrag(fromHandle: from.target.handle, toHandle: to.target.handle)
                 let result = try services.actions.drag(
                     from.target,
                     to.target,
@@ -819,14 +834,21 @@ private struct PrimitiveActionCommandHandler {
                     try decoder.int("durationMs"),
                     policy
                 )
-                return withTargetResolutions(
+                return observed(withTargetResolutions(
                     withLocationResolutions(result, resolutions: [from.locationResolution, to.locationResolution]),
                     resolutions: [from.targetResolution, to.targetResolution]
-                )
+                ))
             }
         default:
             return JSONRPCResponse(id: request.id, error: .methodNotFound(request.method))
         }
+    }
+
+    /// Closes the observation as soon as the primitive returns. Only a dispatch that actually
+    /// succeeded describes a transition; a refusal changed nothing and gets no post-action read.
+    private func observed(_ result: PrimitiveActionResult) -> PrimitiveActionResult {
+        observations?.finish(success: result.success)
+        return result
     }
 
     private func resolveElementTarget(_ target: ToolTarget) throws -> ResolvedElementTarget {
