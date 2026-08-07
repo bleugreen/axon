@@ -24,6 +24,7 @@ use x11rb::{
         xtest::ConnectionExt as _,
     },
     rust_connection::RustConnection,
+    wrapper::ConnectionExt as _,
 };
 
 x11rb::atom_manager! {
