@@ -103,11 +103,27 @@ public struct DerivedPostconditionCompiler {
         public let actionID: String
         public let tool: String
         public let observation: ActionObservation
+        /// Every input string the saved workflow carries, not only this action's own.
+        ///
+        /// Any of them may be parameterized later, and an echo often surfaces a step or two after
+        /// the step that typed it - a click opens a window titled after text typed earlier. So no
+        /// step may assert any input the workflow contains, whichever step supplied it.
+        public let workflowInputs: [String]
 
-        public init(actionID: String, tool: String, observation: ActionObservation) {
+        public init(
+            actionID: String,
+            tool: String,
+            observation: ActionObservation,
+            workflowInputs: [String] = []
+        ) {
             self.actionID = actionID
             self.tool = tool
             self.observation = observation
+            self.workflowInputs = workflowInputs
+        }
+
+        var excludedInputs: [String] {
+            observation.inputs + workflowInputs
         }
     }
 
@@ -136,7 +152,7 @@ public struct DerivedPostconditionCompiler {
     public func facts(for input: Input) -> [JSONValue] {
         var counters: [String: Int] = [:]
         return candidates(for: input.observation)
-            .filter { survives($0, inputs: input.observation.inputs) }
+            .filter { survives($0, inputs: input.excludedInputs) }
             .map { candidate in
                 let index = counters[candidate.kind, default: 0]
                 counters[candidate.kind] = index + 1

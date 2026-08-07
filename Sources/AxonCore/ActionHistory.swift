@@ -133,9 +133,18 @@ public final class ActionHistoryStore: @unchecked Sendable {
 
     public func exportScript(sessionID: String, includeReads: Bool = false, from: String? = nil, to: String? = nil) throws -> ActionHistoryExport {
         let records = try slicedRecords(sessionID: sessionID, from: from, to: to)
+        // Gathered across the whole export before any step is compiled: an echo of typed text can
+        // surface a step or two later, and every one of these strings is a parameterization
+        // candidate no step may assert.
+        let workflowInputs = records.flatMap { $0.observation?.inputs ?? [] }
         var ordinal = 0
         let actions = records.compactMap { record -> [String: JSONValue]? in
-            guard let object = actionObject(for: record, includeReads: includeReads, ordinal: ordinal + 1) else {
+            guard let object = actionObject(
+                for: record,
+                includeReads: includeReads,
+                ordinal: ordinal + 1,
+                workflowInputs: workflowInputs
+            ) else {
                 return nil
             }
             ordinal += 1
@@ -193,7 +202,8 @@ public final class ActionHistoryStore: @unchecked Sendable {
     private func actionObject(
         for record: ActionHistoryRecord,
         includeReads: Bool,
-        ordinal: Int
+        ordinal: Int,
+        workflowInputs: [String]
     ) -> [String: JSONValue]? {
         guard let tool = toolName(for: record.method) else {
             return nil
@@ -215,7 +225,8 @@ public final class ActionHistoryStore: @unchecked Sendable {
             let facts = DerivedPostconditionCompiler().facts(for: DerivedPostconditionCompiler.Input(
                 actionID: actionID,
                 tool: tool,
-                observation: observation
+                observation: observation,
+                workflowInputs: workflowInputs
             ))
             if !facts.isEmpty {
                 object["expects"] = .array(facts)

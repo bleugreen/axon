@@ -121,6 +121,23 @@ import Testing
     #expect(facts.isEmpty)
 }
 
+@Test func dropsAnEchoOfTextTypedByAnEarlierStep() {
+    // The click carries no input of its own; the window it opened is titled after text a previous
+    // step typed, and that step's value is exactly what the user will parameterize.
+    let facts = DerivedPostconditionCompiler().facts(for: DerivedPostconditionCompiler.Input(
+        actionID: "a002",
+        tool: "click",
+        observation: observation(
+            tool: "click",
+            windowTitlesBefore: ["Issues"],
+            windowTitlesAfter: ["Issues", "Result: Draft issue title"]
+        ),
+        workflowInputs: ["Draft issue title"]
+    ))
+
+    #expect(facts.isEmpty)
+}
+
 @Test func dropsAssertionThatOnlyRestatesTheTargetsOwnLocator() {
     let button: [String: JSONValue] = ["role": .string("AXButton"), "title": .string("Submit")]
     let facts = compile(observation(
