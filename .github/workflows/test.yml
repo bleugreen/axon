@@ -14,6 +14,17 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  version:
+    name: Version agreement
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # VERSION is the release source and the Swift and Rust literals are derived copies. Nothing
+      # else notices when they drift, and the drift only becomes visible at release time.
+      - name: Check version agreement
+        run: ./scripts/check-version
+
   swift:
     name: Swift
     runs-on: [self-hosted, axon-live-mac]
@@ -39,6 +50,22 @@ jobs:
 
       - name: Run Swift tests
         run: swift test
+
+      # The macOS archive is the deployed product shape; a packaging break is otherwise only
+      # discovered during a release, when it is most expensive.
+      - name: Smoke-test the release package layout
+        run: |
+          set -euo pipefail
+          ./scripts/package-app > /dev/null
+          VERSION="$(./scripts/check-version)"
+          ZIP="dist/Axon-$VERSION-macos-aarch64.zip"
+          test -f "$ZIP"
+          test -f "$ZIP.sha256"
+          test -x "dist/Axon.app/Contents/Resources/bin/axon"
+          test -x "dist/Axon.app/Contents/MacOS/Axon"
+          unzip -l "$ZIP" | grep -q "Axon-$VERSION/Axon.app/"
+          ACTUAL="$(dist/Axon.app/Contents/Resources/bin/axon version)"
+          [[ "$ACTUAL" == "$VERSION" ]]
 
   rust-core:
     name: Rust core
@@ -87,3 +114,53 @@ jobs:
       - name: Run headless axon-win tests
         working-directory: rust
         run: cargo test -p axon-win
+
+      # Releases build in release mode, which type-checks the same code under different lint and
+      # optimization settings. Finding a release-only break at tag time is too late.
+      - name: Build axon-win in release mode
+        working-directory: rust
+        run: cargo build --release --locked -p axon-win
+
+  rust-linux:
+    name: Rust Linux
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out Axon
+        uses: actions/checkout@v4
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust -> target
+          shared-key: linux
+
+      - name: Install AT-SPI build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libdbus-1-dev pkg-config
+
+      # The lifecycle, session classification, and status assembly are pure and run headlessly.
+      # Only the systemd and socket calls need a real desktop.
+      - name: Run headless axon-linux tests
+        working-directory: rust
+        run: cargo test -p axon-linux
+
+      - name: Build axon-linux in release mode
+        working-directory: rust
+        run: cargo build --release --locked -p axon-linux
+
+      - name: Smoke-test the Linux release package layout
+        run: |
+          set -euo pipefail
+          ./scripts/package-rust axon-linux > /dev/null
+          VERSION="$(./scripts/check-version)"
+          ARCHIVE="dist/axon-linux-$VERSION-linux-x86_64.tar.gz"
+          test -f "$ARCHIVE.sha256"
+          tar -tzf "$ARCHIVE" | grep -q "axon-linux-$VERSION-linux-x86_64/axon-linux"
+          tar -tzf "$ARCHIVE" | grep -q "systemd/axon.service.in"
+          test -x "dist/axon-linux-$VERSION-linux-x86_64/axon-linux"
+          ACTUAL="$(dist/axon-linux-$VERSION-linux-x86_64/axon-linux version)"
+          [[ "$ACTUAL" == "$VERSION" ]]
