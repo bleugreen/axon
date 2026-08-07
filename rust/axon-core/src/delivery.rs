@@ -6,6 +6,7 @@
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
+use std::time::{Duration, Instant};
 
 /// What a single mutating action is allowed to do to the user's session.
 ///
@@ -482,6 +483,33 @@ pub enum ForegroundTarget<'a> {
 /// identically.
 const POINTER_TOLERANCE: f64 = 0.5;
 
+/// How long an observable session change is given to happen, and how often it is looked for.
+///
+/// Activation is asynchronous on every platform: the request goes to a window manager or window
+/// server that changes the focus in its own time, and under X11 it is a client message that has not
+/// even been delivered when the request returns. Reading the foreground back once, immediately,
+/// would report almost every real activation as unproved and refuse to dispatch. The macOS executor
+/// settles on the same budget for the same reason.
+const SETTLE_TIMEOUT: Duration = Duration::from_millis(750);
+const SETTLE_INTERVAL: Duration = Duration::from_millis(25);
+
+/// Bounded wait for a session change to become observable. Never blocks past the budget, so a
+/// window manager that refuses to cooperate produces an unproved activation rather than a hung
+/// daemon.
+fn settle(mut observed: impl FnMut() -> bool) -> bool {
+    if observed() {
+        return true;
+    }
+    let deadline = Instant::now() + SETTLE_TIMEOUT;
+    while Instant::now() < deadline {
+        std::thread::sleep(SETTLE_INTERVAL);
+        if observed() {
+            return true;
+        }
+    }
+    false
+}
+
 fn pointer_matches(observed: (f64, f64), origin: (f64, f64)) -> bool {
     (observed.0 - origin.0).abs() < POINTER_TOLERANCE
         && (observed.1 - origin.1).abs() < POINTER_TOLERANCE
@@ -539,7 +567,7 @@ where
     if !backend.move_pointer(origin).unwrap_or(false) {
         return Some(false);
     }
-    Some(at_origin(backend))
+    Some(settle(|| at_origin(backend)))
 }
 
 /// Runs one action in the foreground and hands the session back.
@@ -587,22 +615,25 @@ where
         Some(target) => prior.as_deref() == Some(target),
     };
 
+    let frontmost_is = |backend: &mut B, expected: &str| {
+        backend.frontmost_application().ok().flatten().as_deref() == Some(expected)
+    };
+
     let mut activation_proved = already_frontmost;
     if let (false, Some(target)) = (already_frontmost, target) {
         let accepted = backend.activate_application(target).unwrap_or(false);
-        activation_proved =
-            accepted && backend.frontmost_application().ok().flatten().as_deref() == Some(target);
+        activation_proved = accepted && settle(|| frontmost_is(backend, target));
     }
 
     let restore = |backend: &mut B| -> bool {
         match (&prior, already_frontmost) {
             (_, true) | (None, _) => true,
             (Some(prior), false) => {
-                if backend.frontmost_application().ok().flatten().as_deref() == Some(prior) {
+                if frontmost_is(backend, prior) {
                     return true;
                 }
                 backend.activate_application(prior).unwrap_or(false)
-                    && backend.frontmost_application().ok().flatten().as_deref() == Some(prior)
+                    && settle(|| frontmost_is(backend, prior))
             }
         }
     };
