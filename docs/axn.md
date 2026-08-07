@@ -184,8 +184,18 @@ capture. Actions likely to cause a transition (`click`, `invoke`, `keyboard`,
 `drag`) wait for two agreeing reads, up to a 150ms budget, before the after-read
 counts.
 
+A post-action read that never settled derives nothing at all. A button that
+disables during submission and re-enables after the budget would otherwise be
+saved as permanently disabled, and a boolean read mid-transition is no more
+trustworthy than a string one.
+
 The derivation set is deliberately small. Each entry is a direct comparison
-between the before and after read of one element that has a durable locator:
+between the before and after read of one element that has a durable locator, and
+every comparison needs both sides. An attribute the pre-action read could not
+reach comes back the same way an attribute that does not exist does, so a missing
+before side is never read as "it changed" — that would assert state the action may
+have had nothing to do with. The same applies to the window list: a list that
+could not be read is not an app with no windows.
 
 | Transition | Emitted fact |
 | --- | --- |
@@ -229,9 +239,7 @@ resolving at all already proved it.
 deterministic redaction rules recognise it.
 
 Beyond those, a candidate is also dropped when the element has no durable
-locator, when the assertion is empty, and — for `value` and `selected`, whose
-strings are only meaningful once the UI stops moving — when the settle loop never
-saw two agreeing reads.
+locator and when the assertion is empty.
 
 Steps whose target could not be given a durable locator keep their snapshot
 handle and carry a `warnings` entry saying so, because such a step cannot replay
