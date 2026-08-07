@@ -177,6 +177,39 @@ jobs:
           test "$verified" = true
           echo 'Linux MCP facade captured, resolved, invoked, and verified GNOME Calculator through the daemon'
 
+      # The rung that must NOT light up here. This runner is a GNOME Wayland session: the
+      # compositor refuses synthetic input, and X11 cannot see or restore the foreground even with
+      # XWayland running alongside. A delivery here would be a failure rather than a bonus, so
+      # proving the refusal is honest on the real Wayland stack is worth as much as proving
+      # delivery works on X11. `keyboard` is the probe because it needs no resolved target and
+      # rides the same global-input ladder `click` does.
+      - name: Refuse global input honestly under Wayland
+        working-directory: rust
+        run: |
+          set -euo pipefail
+          daemon=target/debug/axon-linux
+          "$daemon" serve >/tmp/axon-linux-wayland.log 2>&1 &
+          daemon_pid=$!
+          cleanup() {
+            "$daemon" shutdown >/dev/null 2>&1 || true
+            wait "$daemon_pid" >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+
+          for policy in backgroundOnly foregroundPermitted; do
+            refused="$(jq -cn --arg policy "$policy" '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"keyboard","arguments":{"text":"x","deliveryPolicy":$policy}}}' | "$daemon" mcp)"
+            # A refusal is an action result, not a transport error: the request was well formed and
+            # the daemon declined.
+            printf '%s' "$refused" | jq -e '.result.isError == false' >/dev/null
+            printf '%s' "$refused" | jq -e '.result.structuredContent.dispatchSuccess == false' >/dev/null
+            printf '%s' "$refused" | jq -e '.result.structuredContent.delivery == null' >/dev/null
+            # noDeliveryCandidate rather than foregroundNotPermitted: opting in cannot conjure a
+            # device, so the caller must not be sent after a permission that changes nothing.
+            printf '%s' "$refused" | jq -e '.result.structuredContent.refusal.reason == "noDeliveryCandidate"' >/dev/null
+            printf '%s' "$refused" | jq -e '.result.structuredContent.refusal.message | test("Wayland")' >/dev/null
+          done
+          echo 'Linux under Wayland withheld the foreground rung at both policies'
+
       # The lifecycle and the published status document, exercised against a real logged-in GNOME
       # session. Scoped and restorable: the job refuses to run if a registration already exists,
       # so uninstall returns the machine to exactly the state it started in.
