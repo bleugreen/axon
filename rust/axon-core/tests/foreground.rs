@@ -6,8 +6,8 @@
 
 use axon_core::{
     AppQuery, Application, BackendError, CapabilityInfo, DeliveryRefusalReason, ForegroundTarget,
-    Node, Observation, PlatformBackend, RecordedCall, Screenshot, Snapshot, SnapshotHandle,
-    dispatch_in_foreground,
+    KeyboardIntent, Node, Observation, PlatformBackend, RecordedCall, Screenshot, Snapshot,
+    SnapshotHandle, dispatch_in_foreground,
 };
 use serde_json::Value;
 use std::time::Duration;
@@ -159,7 +159,7 @@ impl PlatformBackend for FakeSession {
     ) -> Result<(), BackendError> {
         unreachable!()
     }
-    fn keyboard(&mut self, _: &AppQuery, _: &str) -> Result<(), BackendError> {
+    fn keyboard(&mut self, _: &AppQuery, _: KeyboardIntent<'_>) -> Result<(), BackendError> {
         unreachable!()
     }
     fn screenshot(&mut self, _: &AppQuery) -> Result<Screenshot, BackendError> {
