@@ -656,14 +656,31 @@ where
         match backend.pointer_location() {
             Ok(location) => location,
             Err(_) => {
+                // The target is already forward by now, so this refusal has a proved activation to
+                // report and a foreground to undo. Reusing the unproved shape here would describe
+                // an event that did not happen.
                 let restored = restore(backend);
-                return not_dispatched(
-                    prior_identity,
-                    restored,
-                    "The pointer could not be read; no events were posted",
-                    "Foreground delivery could not read the pointer it would have to restore, so \
-                     nothing was posted",
-                );
+                return ForegroundDispatch {
+                    value: None,
+                    cleanup: ForegroundCleanup {
+                        prior_app: prior_identity,
+                        prior_app_process_identifier: None,
+                        already_frontmost,
+                        activation_proved: true,
+                        restored,
+                        pointer_restored: None,
+                        message: Some(
+                            "The pointer could not be read; no events were posted".into(),
+                        ),
+                    },
+                    refusal: Some(DeliveryRefusal::new(
+                        DeliveryRefusalReason::ActivationNotProved,
+                        DeliveryRung::Foreground,
+                        Some(DeliveryCapability::GlobalInput),
+                        "Foreground delivery could not read the pointer it would have to restore, \
+                         so nothing was posted",
+                    )),
+                };
             }
         }
     } else {

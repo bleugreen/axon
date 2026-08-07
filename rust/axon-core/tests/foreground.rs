@@ -381,6 +381,9 @@ fn an_unreadable_pointer_refuses_and_hands_the_foreground_back() {
     assert!(dispatch.value.is_none());
     assert!(!session.steps.contains(&Step::Dispatch));
     assert!(dispatch.cleanup.restored);
+    // The target did come forward before this refusal, and the evidence says so rather than
+    // describing an activation failure that never happened.
+    assert!(dispatch.cleanup.activation_proved);
     assert_eq!(session.frontmost.as_deref(), Some("Prior"));
 }
 
