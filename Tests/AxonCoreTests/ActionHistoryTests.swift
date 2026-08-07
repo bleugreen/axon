@@ -548,7 +548,7 @@ import Testing
 
     #expect(script.contains("s1:2"))
     #expect(script.contains("warnings:"))
-    #expect(script.contains("will not replay in a later session"))
+    #expect(script.contains("no durable locator"))
     #expect(script.contains("expects") == false)
 }
 
