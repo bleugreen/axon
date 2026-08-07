@@ -42,7 +42,7 @@ public struct UserRecordingTranslator {
         // Gathered across the whole recording before any step is compiled, mirroring `save`: an
         // echo of typed text can surface a step or two later, and every one of these strings is a
         // parameterization candidate no step may assert.
-        let workflowInputs = groups.flatMap(inputStrings(for:))
+        let workflowInputs = groups.flatMap { inputStrings(for: $0.action) }
         let semanticGroups = coalescedScrollBursts(from: groups)
         var index = 0
         var actionNumber = 1

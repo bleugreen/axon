@@ -250,11 +250,16 @@ public final class ActionObservationCollector {
     static let settleIntervalMs = 25
     static let settleBudgetMs = 150
 
-    /// Every recorded event pays for the settle wait. The agent path waits only on
-    /// transition-likely tools because the wait is latency on a dispatched action; the live
-    /// recorder's wait runs where the user has already moved on to the next event, so it costs
-    /// nothing and a passive tap has no other way to let an effect land.
-    static let settlesAfterEveryTool: (String) -> Bool = { _ in true }
+    /// The agent dispatch path's policy: wait only on tools whose whole point is to cause a
+    /// transition, because the wait is latency on a dispatched action.
+    public static let settlesAfterTransitionLikelyTools: @Sendable (String) -> Bool = {
+        transitionLikelyTools.contains($0)
+    }
+
+    /// Every recorded event pays for the settle wait. The live recorder's wait runs where the
+    /// user has already moved on to the next event, so it costs nothing and a passive tap has no
+    /// other way to let an effect land.
+    public static let settlesAfterEveryTool: @Sendable (String) -> Bool = { _ in true }
 
     private struct Pending {
         let tool: String
@@ -284,7 +289,7 @@ public final class ActionObservationCollector {
         observer: (any ActionStateObserving)?,
         sleepMilliseconds: @escaping (Int) -> Void,
         now: @escaping () -> Date,
-        settlesAfter: @escaping (String) -> Bool = { transitionLikelyTools.contains($0) }
+        settlesAfter: @escaping (String) -> Bool = settlesAfterTransitionLikelyTools
     ) {
         self.observer = observer
         self.sleepMilliseconds = sleepMilliseconds
