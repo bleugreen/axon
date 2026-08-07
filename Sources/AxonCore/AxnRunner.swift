@@ -10,32 +10,6 @@ public enum AxnRunError: Error, CustomStringConvertible {
         }
     }
 
-    private func targetResolution(in result: [String: JSONValue]?) -> JSONValue? {
-        guard let action = objectValue(result?["action"]) else { return nil }
-        return action["targetResolution"]
-    }
-
-    private func verifyHealingProposal(
-        action: AxnAction,
-        locator: JSONValue,
-        minimumConfidence: String
-    ) -> Bool {
-        guard case let .object(target)? = action.fields["target"],
-              case let .string(app)? = target["app"] else { return false }
-        let request = JSONRPCRequest(
-            id: .string("run.heal.verify"),
-            method: "find",
-            params: .object(["app": .string(app), "locator": locator])
-        )
-        let response = commandHandler(request)
-        guard response.error == nil, let result = response.result,
-              case let .object(resolution)? = result["resolution"],
-              resolution["status"] == JSONValue.string("unique"),
-              case let .string(confidence)? = resolution["confidence"] else { return false }
-        let rank = ["none": 0, "low": 1, "medium": 2, "high": 3]
-        return (rank[confidence] ?? -1) >= (rank[minimumConfidence] ?? Int.max)
-    }
-
 }
 
 public struct AxnRunner {
@@ -154,7 +128,7 @@ public struct AxnRunner {
         facts: inout [String: RecordedFact]
     ) -> JSONValue {
         var healEvents: [LocatorHealEvent] = []
-        runAction(
+        return runAction(
             action.action,
             index: action.index,
             dryRun: dryRun,
@@ -774,6 +748,32 @@ public struct AxnRunner {
             return nil
         }
         return object
+    }
+
+    private func targetResolution(in result: [String: JSONValue]?) -> JSONValue? {
+        guard let action = objectValue(result?["action"]) else { return nil }
+        return action["targetResolution"]
+    }
+
+    private func verifyHealingProposal(
+        action: AxnAction,
+        locator: JSONValue,
+        minimumConfidence: String
+    ) -> Bool {
+        guard case let .object(target)? = action.fields["target"],
+              case let .string(app)? = target["app"] else { return false }
+        let request = JSONRPCRequest(
+            id: .string("run.heal.verify"),
+            method: "find",
+            params: .object(["app": .string(app), "locator": locator])
+        )
+        let response = commandHandler(request)
+        guard response.error == nil, let result = response.result,
+              case let .object(resolution)? = result["resolution"],
+              resolution["status"] == JSONValue.string("unique"),
+              case let .string(confidence)? = resolution["confidence"] else { return false }
+        let rank = ["none": 0, "low": 1, "medium": 2, "high": 3]
+        return (rank[confidence] ?? -1) >= (rank[minimumConfidence] ?? Int.max)
     }
 
     private func bool(_ key: String, in object: [String: JSONValue]) -> Bool? {
