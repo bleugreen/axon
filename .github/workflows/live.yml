@@ -143,9 +143,15 @@ jobs:
           daemon=target/debug/axon-linux
           "$daemon" serve >/tmp/axon-linux-daemon.log 2>&1 &
           daemon_pid=$!
+          # Bounded for the same reason as the Wayland step: `wait` on a daemon that shutdown could
+          # not reach never returns, and the job dies on the timeout instead of the real failure.
           cleanup() {
             "$daemon" shutdown >/dev/null 2>&1 || true
-            wait "$daemon_pid" >/dev/null 2>&1 || true
+            for _ in {1..40}; do
+              if ! kill -0 "$daemon_pid" 2>/dev/null; then break; fi
+              sleep 0.25
+            done
+            kill -9 "$daemon_pid" >/dev/null 2>&1 || true
             pkill -u "$(id -u)" -f '[/]usr/bin/gnome-calculator' >/dev/null 2>&1 || true
           }
           trap cleanup EXIT
@@ -190,11 +196,34 @@ jobs:
           daemon=target/debug/axon-linux
           "$daemon" serve >/tmp/axon-linux-wayland.log 2>&1 &
           daemon_pid=$!
+          # Bounded on purpose. A daemon that never bound the socket cannot be shut down, and an
+          # unbounded `wait` here would block on the live process forever -- turning any failure
+          # above into a job timeout that hides which assertion actually failed.
           cleanup() {
             "$daemon" shutdown >/dev/null 2>&1 || true
-            wait "$daemon_pid" >/dev/null 2>&1 || true
+            for _ in {1..40}; do
+              if ! kill -0 "$daemon_pid" 2>/dev/null; then return 0; fi
+              sleep 0.25
+            done
+            kill -9 "$daemon_pid" >/dev/null 2>&1 || true
           }
           trap cleanup EXIT
+
+          # The daemon binds its socket after AT-SPI comes up, so the first request has to wait for
+          # it. Without this the connect fails with ENOENT and the refusal below is never exercised.
+          ready=false
+          for _ in {1..80}; do
+            if "$daemon" status --json 2>/dev/null | jq -e '.daemon.running and .daemon.ready' >/dev/null 2>&1; then
+              ready=true
+              break
+            fi
+            sleep 0.25
+          done
+          if [[ "$ready" != true ]]; then
+            echo '::error::the Wayland-refusal daemon never became ready'
+            cat /tmp/axon-linux-wayland.log
+            exit 1
+          fi
 
           for policy in backgroundOnly foregroundPermitted; do
             refused="$(jq -cn --arg policy "$policy" '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"keyboard","arguments":{"text":"x","deliveryPolicy":$policy}}}' | "$daemon" mcp)"
