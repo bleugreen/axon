@@ -67,6 +67,27 @@ public enum RecordedLocatorBuilder {
         return locator
     }
 
+    public static func locator(from node: AXNode, ancestors: [AXNode], windowTitle: String?) -> [String: JSONValue] {
+        locator(
+            role: node.role,
+            subrole: node.subrole,
+            identifier: node.identifier,
+            title: node.title,
+            value: node.value,
+            description: node.description,
+            actions: node.actions,
+            windowTitle: windowTitle,
+            ancestors: ancestors.map {
+                RecordedAncestorCandidate(
+                    role: $0.role,
+                    subrole: $0.subrole,
+                    identifier: $0.identifier,
+                    title: $0.title
+                )
+            }
+        )
+    }
+
     public static func strictReplayWarning(
         for locator: [String: JSONValue],
         role: String,

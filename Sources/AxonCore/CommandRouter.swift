@@ -110,63 +110,6 @@ public struct CommandRouterServices {
         self.requestShutdown = requestShutdown
     }
 
-    private func withTargetResolution(
-        _ result: PrimitiveActionResult,
-        resolution: LocatorResolution?
-    ) -> PrimitiveActionResult {
-        guard let resolution else { return result }
-        return addingDetails(
-            ["targetResolution": compactTargetResolution(resolution)],
-            to: result
-        )
-    }
-
-    private func withTargetResolutions(
-        _ result: PrimitiveActionResult,
-        resolutions: [LocatorResolution?]
-    ) -> PrimitiveActionResult {
-        let values = resolutions.compactMap { $0.map(compactTargetResolution) }
-        guard !values.isEmpty else { return result }
-        return addingDetails(["targetResolutions": .array(values)], to: result)
-    }
-
-    private func compactTargetResolution(_ resolution: LocatorResolution) -> JSONValue {
-        guard case let .object(full) = resolution.jsonValue(activeSecretRedactor: activeSecretRedactor()) else {
-            return .null
-        }
-        var compact = [String: JSONValue]()
-        for key in ["status", "confidence", "path", "context"] {
-            if let value = full[key] { compact[key] = value }
-        }
-        if case let .object(best)? = full["best"] {
-            if let observedLocator = best["observedLocator"] {
-                compact["observedLocator"] = observedLocator
-            }
-            if case let .array(evidence)? = best["evidence"] {
-                compact["evidence"] = .array(evidence.filter { item in
-                    item["outcome"] != .string("matched")
-                })
-            }
-        }
-        if resolution.status == .ambiguous, let candidates = full["candidates"] {
-            compact["candidates"] = candidates
-        }
-        return .object(compact)
-    }
-
-    private func addingDetails(_ additional: [String: JSONValue], to result: PrimitiveActionResult) -> PrimitiveActionResult {
-        var details = result.details
-        details.merge(additional) { _, new in new }
-        return PrimitiveActionResult(
-            action: result.action,
-            target: result.target,
-            strategy: result.strategy,
-            success: result.success,
-            message: result.message,
-            details: details
-        )
-    }
-
     /// Exits once the in-flight response has had time to reach the socket.
     ///
     /// A `shutdown` request is answered before the process ends so the caller learns which process
@@ -1032,6 +975,61 @@ private struct PrimitiveActionCommandHandler {
         }
         var details = result.details
         details["locationResolutions"] = .array(values)
+        return PrimitiveActionResult(
+            action: result.action,
+            target: result.target,
+            strategy: result.strategy,
+            success: result.success,
+            message: result.message,
+            details: details
+        )
+    }
+
+    private func withTargetResolution(
+        _ result: PrimitiveActionResult,
+        resolution: LocatorResolution?
+    ) -> PrimitiveActionResult {
+        guard let resolution else { return result }
+        return addingDetails(["targetResolution": compactTargetResolution(resolution)], to: result)
+    }
+
+    private func withTargetResolutions(
+        _ result: PrimitiveActionResult,
+        resolutions: [LocatorResolution?]
+    ) -> PrimitiveActionResult {
+        let values = resolutions.compactMap { resolution in
+            resolution.map { compactTargetResolution($0) }
+        }
+        guard !values.isEmpty else { return result }
+        return addingDetails(["targetResolutions": .array(values)], to: result)
+    }
+
+    private func compactTargetResolution(_ resolution: LocatorResolution) -> JSONValue {
+        let redacted = resolution.jsonValue(activeSecretRedactor: activeSecretRedactor())
+        guard case let .object(full) = redacted else { return .null }
+
+        var compact = [String: JSONValue]()
+        for key in ["status", "confidence", "path", "context"] {
+            if let value = full[key] { compact[key] = value }
+        }
+        if let bestValue = full["best"], case let .object(best) = bestValue {
+            compact["observedLocator"] = best["observedLocator"]
+            if let evidenceValue = best["evidence"], case let .array(evidence) = evidenceValue {
+                compact["evidence"] = .array(evidence.filter { item in
+                    guard case let .object(fields) = item else { return true }
+                    return fields["outcome"] != JSONValue.string("matched")
+                })
+            }
+        }
+        if resolution.status == .ambiguous {
+            compact["candidates"] = full["candidates"]
+        }
+        return .object(compact)
+    }
+
+    private func addingDetails(_ additional: [String: JSONValue], to result: PrimitiveActionResult) -> PrimitiveActionResult {
+        var details = result.details
+        details.merge(additional) { _, new in new }
         return PrimitiveActionResult(
             action: result.action,
             target: result.target,

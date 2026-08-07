@@ -8,8 +8,46 @@ public extension LocatorResolution {
             "status": .string(status.rawValue),
             "snapshotID": .string(snapshotID.rawValue),
             "confidence": .string(confidence.rawValue),
+            "path": .string(path.rawValue),
+            "context": .string(context.rawValue),
             "best": best.map { $0.jsonValue(activeSecretRedactor: activeSecretRedactor) } ?? .null,
             "candidates": .array(candidates.map { $0.jsonValue(activeSecretRedactor: activeSecretRedactor) })
+        ])
+    }
+}
+
+private extension TextMatch {
+    var jsonValue: JSONValue {
+        switch self {
+        case let .exact(value, false): return .string(value)
+        case let .exact(value, true): return .object(["exact": .string(value), "caseSensitive": .bool(true)])
+        case let .contains(value, caseSensitive):
+            var object: [String: JSONValue] = ["contains": .string(value)]
+            if caseSensitive { object["caseSensitive"] = .bool(true) }
+            return .object(object)
+        }
+    }
+}
+
+private extension AXAncestorLocator {
+    var jsonValue: JSONValue {
+        var object: [String: JSONValue] = [:]
+        if let role { object["role"] = .string(role) }
+        if let subrole { object["subrole"] = .string(subrole) }
+        if let identifier { object["identifier"] = identifier.jsonValue }
+        if let title { object["title"] = title.jsonValue }
+        if let label { object["label"] = label.jsonValue }
+        return .object(object)
+    }
+}
+
+private extension LocatorEvidenceItem {
+    var jsonValue: JSONValue {
+        .object([
+            "field": .string(field.rawValue),
+            "outcome": .string(outcome.rawValue),
+            "expected": expected.map(JSONValue.string) ?? .null,
+            "actual": actual.map(JSONValue.string) ?? .null
         ])
     }
 }
@@ -44,11 +82,30 @@ public extension LocatorCandidate {
         object["reasons"] = .array(renderedReasons.redactedReasonValues(
             activeSecretRedactor: activeSecretRedactor
         ))
+        object["evidence"] = .array(evidence.map(\.jsonValue))
+        object["observedLocator"] = observedLocator?.jsonValue ?? .null
         return .object(object)
     }
 }
 
 public extension AXLocator {
+    var jsonValue: JSONValue {
+        var object: [String: JSONValue] = [:]
+        if let role { object["role"] = .string(role) }
+        if let subrole { object["subrole"] = .string(subrole) }
+        if let title { object["title"] = title.jsonValue }
+        if let label { object["label"] = label.jsonValue }
+        if let value { object["value"] = value.jsonValue }
+        if let description { object["description"] = description.jsonValue }
+        if let identifier { object["identifier"] = identifier.jsonValue }
+        if !actions.isEmpty { object["actions"] = .array(actions.map(JSONValue.string)) }
+        if !ancestors.isEmpty { object["ancestors"] = .array(ancestors.map(\.jsonValue)) }
+        if let window { object["window"] = window.jsonValue }
+        if !nearbyText.isEmpty { object["nearbyText"] = .array(nearbyText.map(\.jsonValue)) }
+        if let frame { object["frame"] = frame.jsonValue }
+        return .object(object)
+    }
+
     init(jsonValue: JSONValue) throws {
         guard case let .object(object) = jsonValue else {
             throw JSONRPCError.invalidParams("locator must be an object")
