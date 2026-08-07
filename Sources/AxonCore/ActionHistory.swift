@@ -8,6 +8,9 @@ public struct ActionHistoryRecord: Equatable, Sendable {
     public let params: [String: JSONValue]
     public let success: Bool
     public let error: String?
+    /// What the action changed, as read at the dispatch seam. Absent for reads, for refused or
+    /// failed dispatches, and wherever the target had no live element to observe.
+    public let observation: ActionObservation?
 
     public init(
         id: String,
@@ -16,7 +19,8 @@ public struct ActionHistoryRecord: Equatable, Sendable {
         method: String,
         params: [String: JSONValue],
         success: Bool,
-        error: String?
+        error: String?,
+        observation: ActionObservation? = nil
     ) {
         self.id = id
         self.parentID = parentID
@@ -25,6 +29,7 @@ public struct ActionHistoryRecord: Equatable, Sendable {
         self.params = params
         self.success = success
         self.error = error
+        self.observation = observation
     }
 }
 
@@ -67,6 +72,7 @@ public final class ActionHistoryStore: @unchecked Sendable {
         request: JSONRPCRequest,
         response: JSONRPCResponse,
         sessionID: String,
+        observation: ActionObservation? = nil,
         activeSecretRedactor: ActiveSecretRedactor = ActiveSecretRedactor(),
         deterministicRedactor: DeterministicRedactor = .standard
     ) {
@@ -101,7 +107,14 @@ public final class ActionHistoryStore: @unchecked Sendable {
             method: request.method,
             params: params,
             success: success,
-            error: error
+            error: error,
+            // The observation holds live UI text and is redacted exactly as params are. The
+            // input-echo verdict inside it was already decided against the unredacted request,
+            // so redacting here cannot weaken the exclusion it feeds.
+            observation: observation?.redacted(
+                activeSecretRedactor: activeSecretRedactor,
+                deterministicRedactor: deterministicRedactor
+            )
         )
         var records = recordsBySession[sessionID] ?? []
         records.append(record)
