@@ -209,6 +209,7 @@ human-readable prose and must never be parsed.
 | `portal-authorization-required` | A desktop portal authorization flow is required first |
 | `no-x-display` | No X display is reachable, so there is no synthetic input device |
 | `no-window-manager` | The X11 session has no EWMH-capable window manager, so the foreground can be neither read nor activated |
+| `no-xtest` | The X server does not provide the XTEST extension, so synthetic input cannot be posted |
 | `not-implemented` | This build does not implement the capability on this platform |
 | `unknown` | The state could not be determined and no more specific code applies |
 

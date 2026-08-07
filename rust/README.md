@@ -149,6 +149,7 @@ Each way that can fail has its own reason code:
 | X11 with an EWMH window manager | usable | `click` and `keyboard` deliver at the `foreground` rung under `foregroundPermitted` |
 | Wayland | `wayland-restricted` | The compositor refuses synthetic input, and X11 cannot see or restore Wayland-native focus even through XWayland |
 | X11 with no window manager | `no-window-manager` | Nothing honours `_NET_ACTIVE_WINDOW`, so the foreground can be neither read nor activated |
+| X11 without XTEST | `no-xtest` | The server answers everything else normally but cannot synthesize input |
 | No display | `no-x-display` | There is no synthetic input device to reach |
 
 The X11 half lives in `axon-linux/src/x11.rs`; keystroke translation is pure and

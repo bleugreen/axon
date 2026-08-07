@@ -54,6 +54,8 @@ pub mod reason {
     /// The X11 session has no EWMH-capable window manager, so the foreground application can be
     /// neither read nor activated. Unlike `not-implemented`, this one a user can change.
     pub const NO_WINDOW_MANAGER: &str = "no-window-manager";
+    /// The X server does not provide the XTEST extension, so synthetic input cannot be posted.
+    pub const NO_XTEST: &str = "no-xtest";
     pub const NOT_IMPLEMENTED: &str = "not-implemented";
     /// The state could not be determined and no more specific code applies.
     pub const UNKNOWN: &str = "unknown";
@@ -298,6 +300,8 @@ fn classify_restriction(restriction: &str) -> &'static str {
         reason::PORTAL_AUTHORIZATION_REQUIRED
     } else if lowered.contains("window manager") {
         reason::NO_WINDOW_MANAGER
+    } else if lowered.contains("xtest") {
+        reason::NO_XTEST
     } else if lowered.contains("no x display") {
         reason::NO_X_DISPLAY
     } else {
