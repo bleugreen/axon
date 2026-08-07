@@ -110,6 +110,63 @@ public struct CommandRouterServices {
         self.requestShutdown = requestShutdown
     }
 
+    private func withTargetResolution(
+        _ result: PrimitiveActionResult,
+        resolution: LocatorResolution?
+    ) -> PrimitiveActionResult {
+        guard let resolution else { return result }
+        return addingDetails(
+            ["targetResolution": compactTargetResolution(resolution)],
+            to: result
+        )
+    }
+
+    private func withTargetResolutions(
+        _ result: PrimitiveActionResult,
+        resolutions: [LocatorResolution?]
+    ) -> PrimitiveActionResult {
+        let values = resolutions.compactMap { $0.map(compactTargetResolution) }
+        guard !values.isEmpty else { return result }
+        return addingDetails(["targetResolutions": .array(values)], to: result)
+    }
+
+    private func compactTargetResolution(_ resolution: LocatorResolution) -> JSONValue {
+        guard case let .object(full) = resolution.jsonValue(activeSecretRedactor: activeSecretRedactor()) else {
+            return .null
+        }
+        var compact = [String: JSONValue]()
+        for key in ["status", "confidence", "path", "context"] {
+            if let value = full[key] { compact[key] = value }
+        }
+        if case let .object(best)? = full["best"] {
+            if let observedLocator = best["observedLocator"] {
+                compact["observedLocator"] = observedLocator
+            }
+            if case let .array(evidence)? = best["evidence"] {
+                compact["evidence"] = .array(evidence.filter { item in
+                    item["outcome"] != .string("matched")
+                })
+            }
+        }
+        if resolution.status == .ambiguous, let candidates = full["candidates"] {
+            compact["candidates"] = candidates
+        }
+        return .object(compact)
+    }
+
+    private func addingDetails(_ additional: [String: JSONValue], to result: PrimitiveActionResult) -> PrimitiveActionResult {
+        var details = result.details
+        details.merge(additional) { _, new in new }
+        return PrimitiveActionResult(
+            action: result.action,
+            target: result.target,
+            strategy: result.strategy,
+            success: result.success,
+            message: result.message,
+            details: details
+        )
+    }
+
     /// Exits once the in-flight response has had time to reach the socket.
     ///
     /// A `shutdown` request is answered before the process ends so the caller learns which process
@@ -1375,6 +1432,12 @@ private struct WaitForValueResult {
 private struct ResolvedPointerTarget {
     let target: PointerTarget
     let locationResolution: TextLocationResolvedPoint?
+    let targetResolution: LocatorResolution?
+}
+
+private struct ResolvedElementTarget {
+    let handle: String
+    let resolution: LocatorResolution?
 }
 
 private struct TextLocationResolvedPoint {

@@ -14,7 +14,7 @@ find(app, locator)
 wait_for_value(target, contains?, equals?, matches?, timeoutMs?, intervalMs?)
 wait_for_stability(app, condition?, stableMs?, timeoutMs?, intervalMs?)
 permit()
-run(actions?, path?, argValues?, continueOnError?, dryRun?)
+run(actions?, path?, argValues?, continueOnError?, dryRun?, healedPath?)
 save(sessionId?, from?, to?, path?, includeReads?)
 click(target)
 type(target, value)
@@ -33,7 +33,7 @@ axon look [target] [--since snapshot-id] [--screenshot] [--screen-text] [--frame
 axon find <app> '<locator-json>'
 axon wait_for_value '<target-json>' (--contains text | --equals text | --matches regex) [--timeout-ms n] [--interval-ms n]
 axon wait_for_stability <app> [--condition stable|changed] [--stable-ms n] [--timeout-ms n] [--interval-ms n]
-axon run <path.axn> [--arg name=value] [--dry-run] [--continue-on-error]
+axon run <path.axn> [--arg name=value] [--dry-run] [--healed-path file] [--continue-on-error]
 axon save [--session id] [--from call] [--to call] [--path file.axn] [--include-reads]
 
 axon click <handle|target-json>
