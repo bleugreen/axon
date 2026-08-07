@@ -1,21 +1,45 @@
-use crate::PointerTargetVerifier;
+use crate::{PointerTargetVerifier, x11::X11Session};
 use atspi::{
     AccessibilityConnection, CoordType, ObjectRefOwned,
     proxy::{accessible::ObjectRefExt, proxy_ext::ProxyExt},
+    zbus::{fdo::DBusProxy, names::BusName},
 };
 use axon_core::{
     AppQuery, Application, BackendError, Capability, CapabilityInfo, KeyboardIntent, Node,
     Observation, PlatformBackend, RecordedCall, Screenshot, Snapshot, SnapshotHandle, Window,
 };
-use std::{collections::HashMap, future::Future, pin::Pin, sync::mpsc, thread, time::Duration};
+use std::{
+    collections::HashMap,
+    future::Future,
+    pin::Pin,
+    sync::mpsc,
+    thread,
+    time::{Duration, Instant},
+};
 
 const MAX_DEPTH: usize = 18;
 const MAX_NODES: usize = 2_000;
 const CALL_TIMEOUT: Duration = Duration::from_secs(2);
 
+/// How long the application-to-process map is trusted before it is read again.
+///
+/// Long enough that one foreground transaction reads it once rather than four times, and short
+/// enough that a process id the kernel reused after an application exited cannot be believed for
+/// long. A miss also forces a fresh read, so a newly launched application is found immediately.
+const IDENTITY_FRESHNESS: Duration = Duration::from_secs(2);
+
+const NO_X_DISPLAY: &str = "no X display is reachable from this session, so there is no synthetic \
+     input device to deliver through";
+const WAYLAND_SESSION: &str = "this is a Wayland session: the compositor does not permit \
+     unrestricted synthetic input, and X11 cannot read or set the Wayland foreground even where \
+     XWayland is running alongside";
+const NO_WINDOW_MANAGER: &str = "this X11 session has no EWMH-capable window manager, so the \
+     foreground application can be neither read nor activated";
+
 type Reply<T> = mpsc::Sender<Result<T, BackendError>>;
 enum Command {
     Enumerate(Reply<Vec<Application>>),
+    Identities(Reply<Vec<AppIdentity>>),
     Capture(AppQuery, Reply<Snapshot>),
     Invoke(SnapshotHandle, String, Reply<()>),
     Read(SnapshotHandle, Reply<Option<String>>),
@@ -23,8 +47,50 @@ enum Command {
     Focus(SnapshotHandle, Reply<()>),
 }
 
+/// An AT-SPI application paired with the process that owns it.
+///
+/// The process id is the bridge between this backend's two halves: AT-SPI knows applications by bus
+/// name, EWMH knows windows by `_NET_WM_PID`, and the process is the only fact both agree on.
+#[derive(Clone, Debug)]
+struct AppIdentity {
+    identity: String,
+    process_id: u32,
+}
+
+/// Whether this session has a path to global input, and if not, the reason a caller is owed.
+enum InputSession {
+    /// A live X11 connection to an EWMH-capable window manager: the foreground rung exists here.
+    Available(X11Session),
+    Unavailable(&'static str),
+}
+
+/// Classifies the session once, at startup, along the axes that each independently withhold the
+/// foreground rung.
+///
+/// The Wayland check is not redundant with the EWMH one. Mutter under Wayland runs XWayland and
+/// does publish EWMH properties for X11 clients, and XTest still injects input globally, so this
+/// backend could activate an X11 window, prove it came forward, and dispatch — while a
+/// Wayland-native application held the focus it could neither see nor give back. A mechanism that
+/// works while its proof quietly does not is the precise failure this contract exists to refuse.
+fn input_session() -> InputSession {
+    let Some(x11) = X11Session::connect() else {
+        return InputSession::Unavailable(NO_X_DISPLAY);
+    };
+    if x11.under_wayland() {
+        return InputSession::Unavailable(WAYLAND_SESSION);
+    }
+    if !x11.supports_ewmh() {
+        return InputSession::Unavailable(NO_WINDOW_MANAGER);
+    }
+    InputSession::Available(x11)
+}
+
 pub struct LinuxBackend {
     tx: mpsc::Sender<Command>,
+    input: InputSession,
+    /// AT-SPI identity to process id, read on demand and refreshed when stale or missed.
+    identities: Vec<AppIdentity>,
+    identities_read: Option<Instant>,
 }
 
 impl LinuxBackend {
@@ -58,7 +124,14 @@ impl LinuxBackend {
         ready_rx
             .recv()
             .map_err(|_| operation("start AT-SPI actor", "actor exited"))??;
-        Ok(Self { tx })
+        // A missing or unusable X11 session is an ordinary state, not a startup failure: capture
+        // and the semantic rung run on AT-SPI alone, and only global input is withheld.
+        Ok(Self {
+            tx,
+            input: input_session(),
+            identities: Vec::new(),
+            identities_read: None,
+        })
     }
     fn ask<T>(&self, make: impl FnOnce(Reply<T>) -> Command) -> Result<T, BackendError> {
         let (tx, rx) = mpsc::channel();
@@ -67,6 +140,50 @@ impl LinuxBackend {
             .map_err(|_| operation("AT-SPI request", "actor exited"))?;
         rx.recv()
             .map_err(|_| operation("AT-SPI request", "actor exited"))?
+    }
+
+    /// The X11 session, or the reason this one cannot deliver global input.
+    fn x11(&self, capability_needed: Capability) -> Result<&X11Session, BackendError> {
+        match &self.input {
+            InputSession::Available(session) => Ok(session),
+            InputSession::Unavailable(reason) => Err(capability(capability_needed, reason)),
+        }
+    }
+
+    fn input_restriction(&self) -> Option<&'static str> {
+        match &self.input {
+            InputSession::Available(_) => None,
+            InputSession::Unavailable(reason) => Some(reason),
+        }
+    }
+
+    fn read_identities(&mut self) -> Result<(), BackendError> {
+        self.identities = self.ask(Command::Identities)?;
+        self.identities_read = Some(Instant::now());
+        Ok(())
+    }
+
+    /// Searches the application-to-process map, reading it again if it is stale or if the first
+    /// look misses. A miss against a cached map may only mean the map is older than the
+    /// application, and concluding "no such application" from that would be wrong.
+    fn lookup<T>(
+        &mut self,
+        find: impl Fn(&AppIdentity) -> Option<T>,
+    ) -> Result<Option<T>, BackendError> {
+        let stale = self
+            .identities_read
+            .is_none_or(|read| read.elapsed() >= IDENTITY_FRESHNESS);
+        if stale {
+            self.read_identities()?;
+        }
+        if let Some(found) = self.identities.iter().find_map(&find) {
+            return Ok(Some(found));
+        }
+        if stale {
+            return Ok(None);
+        }
+        self.read_identities()?;
+        Ok(self.identities.iter().find_map(&find))
     }
 }
 
