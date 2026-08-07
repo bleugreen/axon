@@ -93,6 +93,13 @@ public struct AxnRunner {
         }
         if !dryRun, let healedPath,
            healEvents.contains(where: { $0.status == .proposed }) {
+            if case let .string(sourcePath)? = params["path"] {
+                let sourceURL = URL(fileURLWithPath: sourcePath).standardizedFileURL.resolvingSymlinksInPath()
+                let healedURL = URL(fileURLWithPath: healedPath).standardizedFileURL.resolvingSymlinksInPath()
+                guard sourceURL != healedURL else {
+                    throw AxnRunError.invalidParams("healedPath must differ from the source path")
+                }
+            }
             do {
                 let revised = AxnHealing.revise(axn, with: healEvents)
                 let source = AxnHealing.header(for: healEvents) + (try revised.yamlString())

@@ -2102,3 +2102,57 @@ private func axnActiveCredentialFilter(values: [String]) throws -> ActiveCredent
 
     #expect(!FileManager.default.fileExists(atPath: path))
 }
+
+
+@Test func healedPathCannotAliasSourcePath() throws {
+    let sourceURL = FileManager.default.temporaryDirectory
+        .appendingPathComponent(UUID().uuidString)
+        .appendingPathExtension("axn")
+    let source = """
+    version: 1
+    actions:
+      - tool: click
+        target:
+          app: Example
+          locator:
+            role: AXButton
+            title: Save
+    """
+    try source.write(to: sourceURL, atomically: true, encoding: .utf8)
+    defer { try? FileManager.default.removeItem(at: sourceURL) }
+    let runner = AxnRunner { request in
+        if request.method == "find" {
+            return JSONRPCResponse(id: request.id, result: [
+                "resolution": .object(["status": .string("unique"), "confidence": .string("high")])
+            ])
+        }
+        return JSONRPCResponse(id: request.id, result: [
+            "action": .object([
+                "success": .bool(true),
+                "targetResolution": .object([
+                    "status": .string("unique"),
+                    "confidence": .string("medium"),
+                    "path": .string("predicate"),
+                    "context": .string("path"),
+                    "observedLocator": .object([
+                        "role": .string("AXButton"),
+                        "title": .string("Save Draft")
+                    ]),
+                    "evidence": .array([
+                        .object(["field": .string("title"), "outcome": .string("tolerated")])
+                    ])
+                ])
+            ])
+        ])
+    }
+
+    #expect(throws: AxnRunError.self) {
+        _ = try runner.run(params: [
+            "path": .string(sourceURL.path),
+            "healedPath": .string(sourceURL.deletingLastPathComponent()
+                .appendingPathComponent(".")
+                .appendingPathComponent(sourceURL.lastPathComponent).path)
+        ])
+    }
+    #expect(try String(contentsOf: sourceURL, encoding: .utf8) == source)
+}
