@@ -349,7 +349,7 @@ private func stabilitySnapshot(id: String, title: String) -> AppSnapshot {
             return LocatorResolution(
                 status: .unique,
                 snapshotID: SnapshotID("live-locator"),
-                best: LocatorCandidate(index: 0, handle: SnapshotHandle(snapshotID: SnapshotID("live-locator"), nodeIndex: 0), role: "AXButton", title: "NEW", score: 2, reasons: []),
+                best: LocatorCandidate(index: 0, handle: SnapshotHandle(snapshotID: SnapshotID("live-locator"), nodeIndex: 0), role: "AXButton", title: "NEW", score: 1_000, reasons: []),
                 candidates: []
             )
         },
