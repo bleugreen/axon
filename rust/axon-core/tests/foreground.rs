@@ -203,7 +203,9 @@ fn a_click_puts_the_cursor_home_before_the_window_and_reports_it() {
     // The cursor goes home before the window comes back, so the user never sees their own
     // application return with Axon's cursor sitting in it.
     let dispatched = session.position(&Step::Dispatch).expect("dispatched");
-    let warped = session.position(&Step::MovePointer).expect("pointer warped");
+    let warped = session
+        .position(&Step::MovePointer)
+        .expect("pointer warped");
     let handed_back = session
         .position(&Step::Activate("Prior".into()))
         .expect("foreground restored");

@@ -306,8 +306,7 @@ impl<B: PointerTargetVerifier> Router<B> {
         resolution: Option<axon_core::Resolution>,
         body: impl FnOnce(&mut B) -> Result<(), axon_core::BackendError>,
     ) -> Result<Value, JsonRpcError> {
-        let dispatch =
-            dispatch_in_foreground(&mut self.backend, target, restores_pointer, body);
+        let dispatch = dispatch_in_foreground(&mut self.backend, target, restores_pointer, body);
         if let Some(refusal) = dispatch.refusal {
             let mut result = DeliveryOutcome::refusal_result(policy, refusal);
             if let Some(object) = result.as_object_mut() {

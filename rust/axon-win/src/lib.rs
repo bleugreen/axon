@@ -5,9 +5,9 @@ use axon_core::{
     DeliveryCapability, DeliveryOutcome, DeliveryPolicy, DeliveryRefusal, DeliveryRefusalReason,
     DeliveryRung, DeliverySelection, DispatchOutcome, ExpectedFact, ForegroundTarget, JsonRpcError,
     JsonRpcId, JsonRpcRequest, JsonRpcResponse, KeyboardIntent, Locator, LocatorResolver,
-    PlatformBackend, Resolution, ResolutionStatus, RunEnvelope, RunOptions, Snapshot, SnapshotHandle,
-    TextLocationResolver, TextLocationSource, TextLocationTarget, TextRecognitionProvider,
-    ToolDispatcher, dispatch_in_foreground, select_delivery,
+    PlatformBackend, Resolution, ResolutionStatus, RunEnvelope, RunOptions, Snapshot,
+    SnapshotHandle, TextLocationResolver, TextLocationSource, TextLocationTarget,
+    TextRecognitionProvider, ToolDispatcher, dispatch_in_foreground, select_delivery,
 };
 use serde_json::{Map, Value, json};
 
@@ -422,8 +422,7 @@ impl<B: PointerTargetVerifier + TextRecognitionProvider + VisualObservationProvi
         resolution: Option<Resolution>,
         body: impl FnOnce(&mut B) -> Result<(), axon_core::BackendError>,
     ) -> Result<Value, JsonRpcError> {
-        let dispatch =
-            dispatch_in_foreground(&mut self.backend, target, restores_pointer, body);
+        let dispatch = dispatch_in_foreground(&mut self.backend, target, restores_pointer, body);
         if let Some(refusal) = dispatch.refusal {
             let mut result = DeliveryOutcome::refusal_result(policy, refusal);
             if let Some(object) = result.as_object_mut() {

@@ -114,7 +114,10 @@ pub fn parse_chord(spec: &str) -> Result<Chord, String> {
     };
 
     let mut modifiers = Vec::new();
-    for name in modifier_spec.split('+').filter(|name| !name.trim().is_empty()) {
+    for name in modifier_spec
+        .split('+')
+        .filter(|name| !name.trim().is_empty())
+    {
         let lowered = name.trim().to_lowercase();
         let keysym = MODIFIERS
             .iter()

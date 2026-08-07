@@ -815,7 +815,9 @@ impl PlatformBackend for WindowsBackend {
             // chord's own name into the user's window would be worse than saying so.
             KeyboardIntent::Key(key) => Err(cap(
                 Capability::KeyboardInput,
-                format!("named keys and chords are not implemented on this backend, so {key} cannot be posted"),
+                format!(
+                    "named keys and chords are not implemented on this backend, so {key} cannot be posted"
+                ),
             )),
         }
     }

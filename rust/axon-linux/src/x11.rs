@@ -89,7 +89,10 @@ impl X11Session {
     /// ends up believing the session is empty and dispatching into someone's work.
     pub fn active_window_pid(&self) -> Result<Option<u32>, BackendError> {
         let active = self.property(self.root, self.atoms._NET_ACTIVE_WINDOW, AtomEnum::WINDOW)?;
-        let window = active.first().copied().filter(|window| *window != x11rb::NONE);
+        let window = active
+            .first()
+            .copied()
+            .filter(|window| *window != x11rb::NONE);
         let Some(window) = window else {
             if self.under_wayland {
                 return Err(operation(
@@ -146,7 +149,16 @@ impl X11Session {
     /// restoration and no application should see it as the user moving the mouse.
     pub fn warp_pointer(&self, (x, y): (f64, f64)) -> Result<(), BackendError> {
         self.connection
-            .warp_pointer(x11rb::NONE, self.root, 0, 0, 0, 0, coordinate(x), coordinate(y))
+            .warp_pointer(
+                x11rb::NONE,
+                self.root,
+                0,
+                0,
+                0,
+                0,
+                coordinate(x),
+                coordinate(y),
+            )
             .map_err(|error| operation("move the pointer", error))?;
         self.flush("move the pointer")
     }
@@ -199,12 +211,19 @@ impl X11Session {
 
         let mut held = Vec::new();
         for modifier in modifiers {
-            held.push(mapping.locate(*modifier).map(|(code, _)| code).ok_or_else(|| {
-                capability(
-                    Capability::KeyboardInput,
-                    &format!("the active keyboard layout has no key for modifier {modifier:#x}"),
-                )
-            })?);
+            held.push(
+                mapping
+                    .locate(*modifier)
+                    .map(|(code, _)| code)
+                    .ok_or_else(|| {
+                        capability(
+                            Capability::KeyboardInput,
+                            &format!(
+                                "the active keyboard layout has no key for modifier {modifier:#x}"
+                            ),
+                        )
+                    })?,
+            );
         }
         // A character that lives on the shifted level of its key needs Shift held even when the
         // caller named no modifier, which is how literal text containing capitals is typed.
@@ -290,10 +309,7 @@ impl X11Session {
             .map_err(|error| operation("read an X11 property", error))?
             .reply()
             .map_err(|error| operation("read an X11 property", error))?;
-        Ok(reply
-            .value32()
-            .map(Iterator::collect)
-            .unwrap_or_default())
+        Ok(reply.value32().map(Iterator::collect).unwrap_or_default())
     }
 }
 

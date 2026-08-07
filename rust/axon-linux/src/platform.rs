@@ -485,7 +485,10 @@ impl Actor {
             )
             .await?;
             let name = timeout("application name", proxy.name()).await?;
-            let id_match = q.identifier.as_deref().is_some_and(|id| id == identity(&object));
+            let id_match = q
+                .identifier
+                .as_deref()
+                .is_some_and(|id| id == identity(&object));
             let exact = q
                 .name
                 .as_deref()
