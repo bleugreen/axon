@@ -27,6 +27,9 @@ pub mod reason {
     pub const DAEMON_NOT_READY: &str = "daemon-not-ready";
     /// A daemon appears to exist but the round trip failed or timed out.
     pub const DAEMON_UNREACHABLE: &str = "daemon-unreachable";
+    /// A daemon answered, but not with a health document this build can read. The running daemon
+    /// is a different version from the CLI asking it.
+    pub const VERSION_SKEW: &str = "version-skew";
     /// No platform-native start-at-login registration is present.
     pub const NOT_REGISTERED: &str = "not-registered";
     /// The reporting process is in a service session rather than a logged-in user session.
@@ -345,6 +348,39 @@ impl HealthReport {
             session: daemon.session,
             permissions: daemon.permissions,
             capabilities: daemon.capabilities,
+        }
+    }
+
+    /// Describes a daemon that answered with something this build cannot read.
+    ///
+    /// A consumer that pins a version and upgrades in place will hit exactly this: the new binary
+    /// on disk, the old daemon still serving. Calling that "not running" would send an operator
+    /// looking for a process that is right there, so the document says a daemon is running, is not
+    /// ready, and does not match.
+    pub fn incompatible(
+        version: impl Into<String>,
+        platform: HealthPlatform,
+        endpoint: impl Into<String>,
+        registration: RegistrationHealth,
+        session: SessionHealth,
+        detail: Option<String>,
+    ) -> Self {
+        Self {
+            schema_version: HealthSchemaVersion,
+            version: version.into(),
+            platform,
+            daemon: DaemonHealth {
+                running: true,
+                ready: false,
+                endpoint: endpoint.into(),
+                process_id: None,
+                reason: Some(reason::VERSION_SKEW.into()),
+                detail,
+            },
+            registration,
+            session,
+            permissions: vec![],
+            capabilities: CapabilityState::all_unusable(reason::VERSION_SKEW),
         }
     }
 

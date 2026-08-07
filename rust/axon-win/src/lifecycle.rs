@@ -108,6 +108,22 @@ pub fn daemon_report(
     }
 }
 
+/// The published document for a daemon whose health payload this build cannot read.
+pub fn incompatible(
+    registration: RegistrationHealth,
+    session: SessionHealth,
+    detail: Option<String>,
+) -> HealthReport {
+    HealthReport::incompatible(
+        env!("CARGO_PKG_VERSION"),
+        HealthPlatform::Windows,
+        PIPE,
+        registration,
+        session,
+        detail,
+    )
+}
+
 /// The published document for a machine whose daemon did not answer.
 pub fn not_running(
     registration: RegistrationHealth,

@@ -373,7 +373,8 @@ fn current_session() -> axon_core::SessionHealth {
 mod status {
     use super::{current_session, lifecycle, pipe};
     use axon_core::{HealthReport, exit_code};
-    use axon_win::lifecycle::not_running;
+    use axon_win::lifecycle::{incompatible, not_running};
+    use std::io;
 
     pub fn run(args: &[String]) -> Result<i32, Box<dyn std::error::Error>> {
         let json = args.iter().any(|arg| arg == "--json");
@@ -401,6 +402,9 @@ mod status {
         let registration = lifecycle::registration();
         match pipe::daemon_health() {
             Ok(report) => HealthReport::running(report, registration),
+            Err(error) if error.kind() == io::ErrorKind::InvalidData => {
+                incompatible(registration, current_session(), Some(error.to_string()))
+            }
             Err(error) => not_running(registration, current_session(), Some(error.to_string())),
         }
     }
@@ -888,13 +892,13 @@ mod pipe {
             "health",
             Some(json!({})),
         ))?;
-        let report: axon_core::DaemonReport = response
-            .get("result")
-            .cloned()
-            .map(serde_json::from_value)
-            .transpose()
-            .map_err(io::Error::other)?
-            .ok_or_else(|| io::Error::other(format!("daemon rejected health check: {response}")))?;
+        let result = response.get("result").cloned().ok_or_else(|| {
+            io::Error::other(format!("daemon rejected health check: {response}"))
+        })?;
+        // InvalidData rather than a generic error: a daemon that answers unintelligibly is a
+        // running daemon of another version, and the caller reports that differently from silence.
+        let report: axon_core::DaemonReport = serde_json::from_value(result)
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
         if report.ready {
             Ok(report)
         } else {
