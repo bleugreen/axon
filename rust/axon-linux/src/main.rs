@@ -351,7 +351,7 @@ mod socket {
 mod lifecycle {
     use super::socket;
     use axon_core::{ephemeral_path_warning, exit_code};
-    use axon_linux::lifecycle::{UNIT_NAME, unit_file};
+    use axon_linux::lifecycle::{SessionEnvironment, UNIT_NAME, session_health, unit_file};
     use std::{fs, io, path::PathBuf, process::Command, time::Duration};
 
     /// Where systemd looks for a user unit this CLI owns.
@@ -386,6 +386,10 @@ mod lifecycle {
     ///
     /// Idempotent: rewriting the unit and enabling an already-enabled service both no-op, so a
     /// consumer can run this on every deploy without checking first.
+    ///
+    /// On a host with no desktop the registration still succeeds and the wait is skipped. The unit
+    /// is bound to `graphical-session.target`, so it starts when someone logs in; blocking for a
+    /// readiness that cannot arrive until then would report a timeout for work that was done.
     fn install() -> Result<(), Box<dyn std::error::Error>> {
         let executable = std::env::current_exe()?.canonicalize()?;
         let executable = executable.display().to_string();
@@ -400,9 +404,18 @@ mod lifecycle {
         fs::write(&path, unit_file(&executable))?;
         systemctl(&["daemon-reload"])?;
         systemctl(&["enable", "--now", UNIT_NAME])?;
+        println!("registered {UNIT_NAME} -> {executable}");
+
+        let session = session_health(&SessionEnvironment::from_env());
+        if !session.graphical {
+            println!(
+                "daemon not started: {} — it will start with the graphical session",
+                session.reason.as_deref().unwrap_or("no graphical session")
+            );
+            return Ok(());
+        }
 
         let report = socket::wait_until_ready(Duration::from_secs(60))?;
-        println!("registered {UNIT_NAME} -> {executable}");
         println!(
             "daemon ready (pid {}, version {})",
             report.process_id, report.version
@@ -552,7 +565,7 @@ mod status {
         for permission in &report.permissions {
             println!(
                 "{:<16}{}",
-                permission.name,
+                format!("{}:", permission.name),
                 if permission.granted {
                     "granted"
                 } else {

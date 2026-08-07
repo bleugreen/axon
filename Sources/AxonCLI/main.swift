@@ -795,7 +795,7 @@ private func printStatus(arguments: [String]) throws {
         print("Registration:   \(status.registration.registered ? status.registration.path ?? "registered" : "not registered")")
         print("Session:        \(status.session.graphical ? "graphical" : (status.session.interactive ? "interactive, no desktop" : "not interactive"))")
         for permission in status.permissions {
-            print("\(permission.name.padding(toLength: 16, withPad: " ", startingAt: 0))\(permission.granted ? "granted" : "not granted")")
+            print("\("\(permission.name):".padding(toLength: 16, withPad: " ", startingAt: 0))\(permission.granted ? "granted" : "not granted")")
         }
         let unusable = status.capabilities.filter { !$0.usable }.map(\.capability)
         print("Unusable:       \(unusable.isEmpty ? "none" : unusable.joined(separator: ", "))")
