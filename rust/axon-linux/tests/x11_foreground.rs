@@ -71,8 +71,10 @@ fn the_x11_session_reads_activates_dispatches_and_restores_the_foreground() {
         session.activate_pid(SECOND_PID).expect("activation is sent"),
         "a process with a managed window has something to raise"
     );
-    settle(|| session.active_window_pid().ok().flatten() == Some(SECOND_PID))
-        .expect("the manager honours _NET_ACTIVE_WINDOW");
+    assert!(
+        settle(|| session.active_window_pid().ok().flatten() == Some(SECOND_PID)),
+        "the manager honours _NET_ACTIVE_WINDOW and the activation is proved by reading it back"
+    );
 
     // Dispatch, and watch the real cursor move: this is why the rung is foreground and not pixel.
     let origin = session.pointer_location().expect("the pointer reads");
@@ -95,8 +97,10 @@ fn the_x11_session_reads_activates_dispatches_and_restores_the_foreground() {
     );
 
     assert!(session.activate_pid(FIRST_PID).expect("activation is sent"));
-    settle(|| session.active_window_pid().ok().flatten() == prior)
-        .expect("the prior window comes back");
+    assert!(
+        settle(|| session.active_window_pid().ok().flatten() == prior),
+        "the window that held the foreground before comes back"
+    );
 
     // A process with no managed window cannot be raised, and the backend reports that rather than
     // claiming a request it never sent.
@@ -120,8 +124,8 @@ fn near(observed: (f64, f64), expected: (f64, f64)) -> bool {
     (observed.0 - expected.0).abs() < 0.5 && (observed.1 - expected.1).abs() < 0.5
 }
 
-fn settle(mut observed: impl FnMut() -> bool) -> Option<()> {
-    settle_value(|| observed().then_some(()))
+fn settle(mut observed: impl FnMut() -> bool) -> bool {
+    settle_value(|| observed().then_some(())).is_some()
 }
 
 fn settle_value<T>(mut observed: impl FnMut() -> Option<T>) -> Option<T> {
@@ -135,4 +139,180 @@ fn settle_value<T>(mut observed: impl FnMut() -> Option<T>) -> Option<T> {
         }
         thread::sleep(Duration::from_millis(10));
     }
+}
+
+/// A miniature EWMH window manager: enough of one for the conversation the backend actually has.
+///
+/// It publishes `_NET_SUPPORTED`, owns two windows carrying `_NET_WM_PID`, keeps
+/// `_NET_CLIENT_LIST` and `_NET_ACTIVE_WINDOW`, and honours an `_NET_ACTIVE_WINDOW` client message
+/// by moving the active window. That is the whole protocol surface this backend depends on.
+struct MiniWindowManager {
+    stop: mpsc::Sender<()>,
+    thread: thread::JoinHandle<()>,
+}
+
+impl MiniWindowManager {
+    fn start() -> Self {
+        let (stop, stopped) = mpsc::channel();
+        let (ready, is_ready) = mpsc::channel();
+        let thread = thread::spawn(move || run_manager(&ready, &stopped));
+        is_ready
+            .recv_timeout(OBSERVED_WITHIN)
+            .expect("the window manager starts")
+            .expect("the window manager claims the root");
+        Self { stop, thread }
+    }
+
+    fn stop(self) {
+        let _ = self.stop.send(());
+        // The manager is parked in wait_for_event, so it needs an event to notice the request. A
+        // property change on the root is the quietest one that reaches it.
+        if let Ok((connection, screen)) = x11rb::connect(None) {
+            let root = connection.setup().roots[screen].root;
+            let _ = connection.delete_property(root, AtomEnum::WM_NAME.into());
+            let _ = connection.flush();
+        }
+        let _ = self.thread.join();
+    }
+}
+
+fn run_manager(ready: &mpsc::Sender<Result<(), String>>, stopped: &mpsc::Receiver<()>) {
+    let started = start_manager();
+    let (connection, root, atoms, windows) = match started {
+        Ok(parts) => {
+            let _ = ready.send(Ok(()));
+            parts
+        }
+        Err(error) => {
+            let _ = ready.send(Err(error));
+            return;
+        }
+    };
+
+    while stopped.try_recv().is_err() {
+        let Ok(event) = connection.wait_for_event() else {
+            break;
+        };
+        // The one request a manager owes this backend: bring the named window forward.
+        if let Event::ClientMessage(message) = event
+            && message.type_ == atoms.active_window
+        {
+            let _ = connection.change_property32(
+                PropMode::REPLACE,
+                root,
+                atoms.active_window,
+                AtomEnum::WINDOW,
+                &[message.window],
+            );
+            let _ = connection.flush();
+        }
+    }
+
+    // Leave the server as it was found, so a second run of this test starts from the same place.
+    for property in [atoms.supported, atoms.active_window, atoms.client_list] {
+        let _ = connection.delete_property(root, property);
+    }
+    for window in windows {
+        let _ = connection.destroy_window(window);
+    }
+    let _ = connection.flush();
+}
+
+struct ManagerAtoms {
+    supported: u32,
+    active_window: u32,
+    client_list: u32,
+    window_pid: u32,
+}
+
+type Manager = (
+    x11rb::rust_connection::RustConnection,
+    Window,
+    ManagerAtoms,
+    Vec<Window>,
+);
+
+fn start_manager() -> Result<Manager, String> {
+    let (connection, screen) = x11rb::connect(None).map_err(|error| error.to_string())?;
+    let root = connection.setup().roots[screen].root;
+
+    let atom = |name: &str| -> Result<u32, String> {
+        connection
+            .intern_atom(false, name.as_bytes())
+            .map_err(|error| error.to_string())?
+            .reply()
+            .map(|reply| reply.atom)
+            .map_err(|error| error.to_string())
+    };
+    let atoms = ManagerAtoms {
+        supported: atom("_NET_SUPPORTED")?,
+        active_window: atom("_NET_ACTIVE_WINDOW")?,
+        client_list: atom("_NET_CLIENT_LIST")?,
+        window_pid: atom("_NET_WM_PID")?,
+    };
+
+    // Only one client may hold this, which is what makes a window manager a singleton. Failing
+    // here means something else is already managing the display.
+    connection
+        .change_window_attributes(
+            root,
+            &ChangeWindowAttributesAux::new().event_mask(
+                EventMask::SUBSTRUCTURE_REDIRECT
+                    | EventMask::SUBSTRUCTURE_NOTIFY
+                    | EventMask::PROPERTY_CHANGE,
+            ),
+        )
+        .map_err(|error| error.to_string())?
+        .check()
+        .map_err(|_| "another window manager already owns this display".to_string())?;
+
+    let mut windows = Vec::new();
+    for pid in [FIRST_PID, SECOND_PID] {
+        let window = connection.generate_id().map_err(|error| error.to_string())?;
+        connection
+            .create_window(
+                COPY_DEPTH_FROM_PARENT,
+                window,
+                root,
+                0,
+                0,
+                200,
+                200,
+                0,
+                WindowClass::INPUT_OUTPUT,
+                COPY_FROM_PARENT,
+                &CreateWindowAux::new(),
+            )
+            .map_err(|error| error.to_string())?;
+        connection
+            .change_property32(
+                PropMode::REPLACE,
+                window,
+                atoms.window_pid,
+                AtomEnum::CARDINAL,
+                &[pid],
+            )
+            .map_err(|error| error.to_string())?;
+        connection
+            .map_window(window)
+            .map_err(|error| error.to_string())?;
+        windows.push(window);
+    }
+
+    let publish = |property: u32, kind: AtomEnum, values: &[u32]| -> Result<(), String> {
+        connection
+            .change_property32(PropMode::REPLACE, root, property, kind, values)
+            .map_err(|error| error.to_string())?;
+        Ok(())
+    };
+    publish(
+        atoms.supported,
+        AtomEnum::ATOM,
+        &[atoms.active_window, atoms.client_list, atoms.window_pid],
+    )?;
+    publish(atoms.client_list, AtomEnum::WINDOW, &windows)?;
+    publish(atoms.active_window, AtomEnum::WINDOW, &windows[..1])?;
+    connection.flush().map_err(|error| error.to_string())?;
+
+    Ok((connection, root, atoms, windows))
 }
