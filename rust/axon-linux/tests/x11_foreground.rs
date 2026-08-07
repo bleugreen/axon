@@ -1,0 +1,138 @@
+//! The X11 half of the Linux foreground transaction, against a real X server.
+//!
+//! `#[ignore]` by default, so it runs only where a display exists: the Xvfb lane in CI, or a
+//! developer's own X11 session.
+//!
+//! The test is its own miniature EWMH window manager rather than depending on an installed one.
+//! That is deliberate. A real desktop brings a toolkit, a compositor, and a session's worth of
+//! variability, none of which this code touches; what it does touch is exactly the protocol
+//! conversation reproduced here, and reproducing it needs nothing but the `Xvfb` binary. The
+//! manager also removes everything it published on the way out, so the test can be run twice
+//! against the same server and mean the same thing both times.
+
+#![cfg(target_os = "linux")]
+
+use axon_linux::x11::X11Session;
+use std::{
+    sync::mpsc,
+    thread,
+    time::{Duration, Instant},
+};
+use x11rb::{
+    COPY_DEPTH_FROM_PARENT, COPY_FROM_PARENT,
+    connection::Connection,
+    protocol::{
+        Event,
+        xproto::{
+            AtomEnum, ChangeWindowAttributesAux, ConnectionExt as _, CreateWindowAux, EventMask,
+            PropMode, Window, WindowClass,
+        },
+    },
+    wrapper::ConnectionExt as _,
+};
+
+/// Process ids the managed windows claim. Nothing resolves them against real processes: the
+/// backend's X11 half only ever matches `_NET_WM_PID` values, and the AT-SPI half that turns a
+/// process into an application needs the desktop session this test deliberately does without.
+const FIRST_PID: u32 = 424_242;
+const SECOND_PID: u32 = 424_243;
+
+/// Long enough for a cooperating manager on a loaded CI machine, short enough to fail rather than
+/// hang when the conversation never happens.
+const OBSERVED_WITHIN: Duration = Duration::from_secs(2);
+
+/// One test rather than several, because a window manager is a singleton: only one X client may
+/// hold `SubstructureRedirect` on the root, and Cargo runs tests in parallel by default.
+#[test]
+#[ignore = "requires an X server; run with DISPLAY set, for example under Xvfb"]
+fn the_x11_session_reads_activates_dispatches_and_restores_the_foreground() {
+    let session = X11Session::connect().expect("an X server on DISPLAY");
+
+    // Before a manager publishes anything there is nothing to activate through, and the backend
+    // must say so rather than offering a rung it cannot honour.
+    assert!(
+        !session.supports_ewmh(),
+        "a bare X server has no window manager, so the foreground rung must stay withheld"
+    );
+
+    let manager = MiniWindowManager::start();
+
+    assert!(
+        session.supports_ewmh(),
+        "a manager publishing _NET_ACTIVE_WINDOW and _NET_WM_PID makes the rung available"
+    );
+
+    // Capture the prior foreground, exactly as the transaction does first.
+    let prior = session.active_window_pid().expect("the active window reads");
+    assert_eq!(prior, Some(FIRST_PID));
+
+    // Activate the other window and prove it came forward, rather than trusting the request.
+    assert!(
+        session.activate_pid(SECOND_PID).expect("activation is sent"),
+        "a process with a managed window has something to raise"
+    );
+    settle(|| session.active_window_pid().ok().flatten() == Some(SECOND_PID))
+        .expect("the manager honours _NET_ACTIVE_WINDOW");
+
+    // Dispatch, and watch the real cursor move: this is why the rung is foreground and not pixel.
+    let origin = session.pointer_location().expect("the pointer reads");
+    let target = (origin.0 + 37.0, origin.1 + 23.0);
+    session.click(target).expect("a click is posted");
+    let after_click = settle_value(|| {
+        let now = session.pointer_location().ok()?;
+        (near(now, target)).then_some(now)
+    });
+    assert!(
+        after_click.is_some(),
+        "XTest motion moves the real pointer, which is what the transaction has to undo"
+    );
+
+    // Hand the session back: the cursor first, then the window.
+    session.warp_pointer(origin).expect("the pointer warps");
+    assert!(
+        settle(|| session.pointer_location().is_ok_and(|now| near(now, origin))),
+        "the pointer returns to where the dispatch found it"
+    );
+
+    assert!(session.activate_pid(FIRST_PID).expect("activation is sent"));
+    settle(|| session.active_window_pid().ok().flatten() == prior)
+        .expect("the prior window comes back");
+
+    // A process with no managed window cannot be raised, and the backend reports that rather than
+    // claiming a request it never sent.
+    assert!(
+        !session
+            .activate_pid(SECOND_PID + 1000)
+            .expect("the client list reads"),
+        "there is nothing to activate for a process with no window"
+    );
+
+    manager.stop();
+
+    // The manager took its properties with it, so the next run starts from the same place.
+    assert!(
+        !session.supports_ewmh(),
+        "the manager removed what it published"
+    );
+}
+
+fn near(observed: (f64, f64), expected: (f64, f64)) -> bool {
+    (observed.0 - expected.0).abs() < 0.5 && (observed.1 - expected.1).abs() < 0.5
+}
+
+fn settle(mut observed: impl FnMut() -> bool) -> Option<()> {
+    settle_value(|| observed().then_some(()))
+}
+
+fn settle_value<T>(mut observed: impl FnMut() -> Option<T>) -> Option<T> {
+    let deadline = Instant::now() + OBSERVED_WITHIN;
+    loop {
+        if let Some(value) = observed() {
+            return Some(value);
+        }
+        if Instant::now() >= deadline {
+            return None;
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+}
