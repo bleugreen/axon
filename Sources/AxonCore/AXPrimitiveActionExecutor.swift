@@ -1180,6 +1180,10 @@ public final class AXPrimitiveActionExecutor {
     }
 
     private func actionNames(for element: AXUIElement) -> [String] {
+        actionNamesProvider(element)
+    }
+
+    private static func copyActionNames(_ element: AXUIElement) -> [String] {
         var names: CFArray?
         guard AXUIElementCopyActionNames(element, &names) == .success else {
             return []
@@ -1281,21 +1285,33 @@ public final class AXPrimitiveActionExecutor {
             return nil
         }
 
-        let candidates = descendants(of: container, limit: 5_000).compactMap { element -> ScrollToVisibleTarget? in
-            guard let frame = frame(of: element), isOutside(frame, from: containerFrame, deltaX: deltaX, deltaY: deltaY) else {
-                return nil
+        // Only elements the delta could actually travel to are asked what they can do. The walk
+        // visits up to 5,000 descendants and an action-names read is a round trip each, so the
+        // cheap geometric test comes first and the capability question is asked of what survives it.
+        var elements: [AXUIElement] = []
+        var candidates: [ScrollToVisibleCandidate] = []
+        for element in descendants(of: container, limit: 5_000) {
+            guard let frame = frame(of: element),
+                  ScrollToVisibleSelector.isOutside(frame, container: containerFrame, deltaX: deltaX, deltaY: deltaY)
+            else {
+                continue
             }
-            return ScrollToVisibleTarget(element: element, frame: frame)
-        }
-        guard !candidates.isEmpty else {
-            return nil
+            elements.append(element)
+            candidates.append(ScrollToVisibleCandidate(
+                frame: frame,
+                performsScrollToVisible: actionNames(for: element).contains(Self.scrollToVisibleAction)
+            ))
         }
 
-        let desired = desiredScrollCoordinate(from: containerFrame, deltaX: deltaX, deltaY: deltaY)
-        return candidates.min { lhs, rhs in
-            scrollDistance(lhs.frame, desired: desired, deltaX: deltaX, deltaY: deltaY)
-                < scrollDistance(rhs.frame, desired: desired, deltaX: deltaX, deltaY: deltaY)
+        guard let index = ScrollToVisibleSelector.select(
+            from: candidates,
+            container: containerFrame,
+            deltaX: deltaX,
+            deltaY: deltaY
+        ) else {
+            return nil
         }
+        return ScrollToVisibleTarget(element: elements[index], frame: candidates[index].frame)
     }
 
     private func scrollSeedElement(target: PointerTarget?, app: NSRunningApplication?) throws -> AXUIElement {
@@ -1386,25 +1402,6 @@ public final class AXPrimitiveActionExecutor {
         return element
     }
 
-    private func isOutside(_ frame: AXFrame, from container: AXFrame, deltaX: Double, deltaY: Double) -> Bool {
-        if abs(deltaY) >= abs(deltaX) {
-            return deltaY < 0 ? frame.y >= container.maxY : frame.maxY <= container.y
-        }
-        return deltaX < 0 ? frame.x >= container.maxX : frame.maxX <= container.x
-    }
-
-    private func desiredScrollCoordinate(from container: AXFrame, deltaX: Double, deltaY: Double) -> Double {
-        if abs(deltaY) >= abs(deltaX) {
-            return deltaY < 0 ? container.maxY + abs(deltaY) : container.y - abs(deltaY)
-        }
-        return deltaX < 0 ? container.maxX + abs(deltaX) : container.x - abs(deltaX)
-    }
-
-    private func scrollDistance(_ frame: AXFrame, desired: Double, deltaX: Double, deltaY: Double) -> Double {
-        let coordinate = abs(deltaY) >= abs(deltaX) ? frame.midY : frame.midX
-        return abs(coordinate - desired)
-    }
-
     private func frame(of element: AXUIElement) -> AXFrame? {
         frameProvider(element)
     }
@@ -1444,6 +1441,10 @@ public final class AXPrimitiveActionExecutor {
     }
 
     private func copyRawAttribute(_ attribute: String, from element: AXUIElement) -> AnyObject? {
+        attributeProvider(element, attribute)
+    }
+
+    private static func copyRawAttributeValue(_ element: AXUIElement, _ attribute: String) -> AnyObject? {
         var value: CFTypeRef?
         guard AXUIElementCopyAttributeValue(element, attribute as CFString, &value) == .success else {
             return nil
@@ -1633,12 +1634,6 @@ private struct ScrollToVisibleTarget {
     let frame: AXFrame
 }
 
-private extension AXFrame {
-    var maxX: Double { x + width }
-    var maxY: Double { y + height }
-    var midX: Double { x + width / 2 }
-    var midY: Double { y + height / 2 }
-}
 
 struct KeyStroke {
     let keyCode: CGKeyCode
