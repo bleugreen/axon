@@ -249,9 +249,12 @@ locator, or bare app resolves an offscreen descendant *that advertises*
 `AXScrollToVisible` and presses it. Advertising the action is part of being a candidate
 rather than something checked afterwards: most AppKit list rows expose no scrolling
 action at all, and choosing one on placement alone would commit the scroll to a
-mechanism that does not exist. When no descendant advertises the action — or when one
-does and then reports it unsupported — the scroll falls back to a wheel burst aimed at
-the center of the element or window the caller named, never at the ranked descendant.
+mechanism that does not exist. Only a proved absence disqualifies a descendant: one whose
+action list could not be read at all is still attempted, because silence from the tree is
+not evidence that the element cannot scroll. When no descendant can carry the action — or
+when one is attempted and reports it unsupported — the scroll falls back to a wheel burst
+aimed at the center of the element or window the caller named, never at the ranked
+descendant.
 The reported `strategy` always names which one ran. `deltaX`/`deltaY` are pixels and negative `deltaY` scrolls down; only the wheel
 path honors the distance, because `AXScrollToVisible` lets the app decide how far to
 move. Both strategies report `dispatchSuccess` separately from `semanticSuccess` and
