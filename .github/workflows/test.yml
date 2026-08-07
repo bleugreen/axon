@@ -72,7 +72,11 @@ jobs:
 
   rust-core:
     name: Rust core
-    runs-on: [self-hosted, axon-live-linux]
+    # Hosted on purpose. axon-core is platform-neutral and pure -- no dbus, no X11, no desktop --
+    # so it needs a machine rather than any particular machine. The enrolled Linux box is the only
+    # one with a real GNOME session, and every job parked on it queues behind the live lane that
+    # genuinely needs it. Self-host what needs that hardware; run the rest where a runner is free.
+    runs-on: ubuntu-latest
     steps:
       - name: Check out Axon
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
