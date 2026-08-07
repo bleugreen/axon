@@ -686,6 +686,7 @@ mod tests {
         verified_handles: Rc<RefCell<Vec<SnapshotHandle>>>,
         value: Rc<RefCell<Option<String>>>,
         clicks: Rc<RefCell<usize>>,
+        keystrokes: Rc<RefCell<usize>>,
         focuses: Rc<RefCell<usize>>,
         /// Where the real pointer sits. A click moves it, which is why the transaction restores it.
         pointer: Rc<RefCell<(f64, f64)>>,
@@ -779,6 +780,7 @@ mod tests {
             unreachable!()
         }
         fn keyboard(&mut self, _: &AppQuery, _: KeyboardIntent<'_>) -> Result<(), BackendError> {
+            *self.keystrokes.borrow_mut() += 1;
             Ok(())
         }
         fn screenshot(&mut self, _: &AppQuery) -> Result<Screenshot, BackendError> {
@@ -798,6 +800,16 @@ mod tests {
         }
         fn supports_foreground_transaction(&self) -> bool {
             self.foreground_transaction
+        }
+        /// The display name and the identity are deliberately different strings, as they are in the
+        /// real backend: a router that hands one where the other is meant activates nothing.
+        fn resolve_application(&mut self, app: &AppQuery) -> Result<Option<String>, BackendError> {
+            let by_name = app
+                .name
+                .as_deref()
+                .is_some_and(|name| name.eq_ignore_ascii_case("App"));
+            let by_identifier = app.identifier.as_deref() == Some(APP_IDENTITY);
+            Ok((by_name || by_identifier).then(|| APP_IDENTITY.to_string()))
         }
         fn frontmost_application(&mut self) -> Result<Option<String>, BackendError> {
             if !self.foreground_readable {
@@ -837,6 +849,10 @@ mod tests {
     /// move it and the transaction has something real to put back.
     const POINTER_ORIGIN: (f64, f64) = (500.0, 400.0);
 
+    /// What the backend answers with and activates by, which is not what a request carries. On
+    /// Linux this is an AT-SPI bus name and object path, and the display name is "App".
+    const APP_IDENTITY: &str = ":1.7/org/a11y/atspi/accessible/root";
+
     fn node(name: &str) -> Node {
         Node {
             role: "Button".into(),
@@ -868,13 +884,14 @@ mod tests {
         FakeBackend {
             snapshot: Snapshot::new(Application {
                 name: "App".into(),
-                identifier: None,
+                identifier: Some(APP_IDENTITY.into()),
                 windows: vec![Window { title: None, root }],
             }),
             pointer_target_matches: true,
             verified_handles: Rc::new(RefCell::new(vec![])),
             value: Rc::new(RefCell::new(value.map(str::to_owned))),
             clicks: Rc::new(RefCell::new(0)),
+            keystrokes: Rc::new(RefCell::new(0)),
             focuses: Rc::new(RefCell::new(0)),
             pointer: Rc::new(RefCell::new(POINTER_ORIGIN)),
             foreground_readable: true,
