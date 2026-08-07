@@ -243,6 +243,14 @@ public enum PointerTarget: Equatable, Sendable {
     case handle(String)
     case point(ActionPoint)
 
+    /// The retained element this target names, or nil when it is a raw screen point.
+    public var handle: String? {
+        guard case let .handle(handle) = self else {
+            return nil
+        }
+        return handle
+    }
+
     public var targetDescription: String {
         switch self {
         case let .handle(handle):

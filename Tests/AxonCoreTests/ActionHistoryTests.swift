@@ -441,6 +441,221 @@ import Testing
     #expect(history.records(sessionID: "thread-a").containsSecretLiteral("s3cr3t!") == false)
 }
 
+@Test func saveReplacesSnapshotHandlesWithDurableLocatorsAndNumbersSteps() {
+    let history = ActionHistoryStore()
+    let router = observingRouter(
+        history: history,
+        observer: StubActionStateObserver(elementReads: [
+            buttonState(focused: false),
+            buttonState(focused: true),
+            buttonState(focused: true)
+        ])
+    )
+
+    _ = router.handle(clickRequest(target: "s1:2"))
+    let script = savedScript(router)
+
+    #expect(script.contains("id: a001"))
+    #expect(script.contains("app: Example"))
+    #expect(script.contains("role: AXButton"))
+    #expect(script.contains("title: Submit"))
+    #expect(script.contains("s1:2") == false)
+    #expect(script.contains("warnings") == false)
+}
+
+@Test func saveNumbersEveryStepSequentially() {
+    let history = ActionHistoryStore()
+    let router = observingRouter(history: history, observer: StubActionStateObserver())
+
+    _ = router.handle(clickRequest(target: "s1:2"))
+    _ = router.handle(clickRequest(target: "s1:3"))
+    let script = savedScript(router)
+
+    #expect(script.contains("id: a001"))
+    #expect(script.contains("id: a002"))
+}
+
+@Test func saveCarriesAnObservedFocusTransitionAsAPostcondition() {
+    let history = ActionHistoryStore()
+    let router = observingRouter(
+        history: history,
+        observer: StubActionStateObserver(elementReads: [
+            buttonState(focused: false),
+            buttonState(focused: true),
+            buttonState(focused: true)
+        ])
+    )
+
+    _ = router.handle(clickRequest(target: "s1:2"))
+    let script = savedScript(router)
+
+    #expect(script.contains("expects:"))
+    #expect(script.contains("id: a001.focused.0"))
+    #expect(script.contains("kind: focused"))
+}
+
+@Test func saveNeverAssertsATypedValueBackAtTheFieldItWasTypedInto() {
+    let history = ActionHistoryStore()
+    let field: [String: JSONValue] = ["role": .string("AXTextField"), "identifier": .string("name")]
+    let router = observingRouter(
+        history: history,
+        observer: StubActionStateObserver(elementReads: [
+            buttonState(role: "AXTextField", locator: field, value: ""),
+            buttonState(role: "AXTextField", locator: field, value: "Ada Lovelace")
+        ])
+    )
+
+    _ = router.handle(JSONRPCRequest(
+        id: .string("type"),
+        method: "type",
+        params: .object([
+            "_session": .string("thread-a"),
+            "target": .string("s1:2"),
+            "value": .string("Ada Lovelace")
+        ])
+    ))
+    let script = savedScript(router)
+
+    #expect(script.contains("value: Ada Lovelace"))
+    #expect(script.contains("expects") == false)
+}
+
+@Test func saveKeepsAnActionWithNoSafeFactAsAValidUnverifiedStep() {
+    let history = ActionHistoryStore()
+    let steady = buttonState(focused: true)
+    let router = observingRouter(
+        history: history,
+        observer: StubActionStateObserver(elementReads: [steady, steady, steady])
+    )
+
+    _ = router.handle(clickRequest(target: "s1:2"))
+    let script = savedScript(router)
+
+    #expect(script.contains("tool: click"))
+    #expect(script.contains("expects") == false)
+}
+
+@Test func saveWarnsWhenAStepStaysPinnedToASnapshotHandle() {
+    let history = ActionHistoryStore()
+    let ephemeral = buttonState(locator: nil, focused: true)
+    let router = observingRouter(
+        history: history,
+        observer: StubActionStateObserver(elementReads: [buttonState(locator: nil, focused: false), ephemeral, ephemeral])
+    )
+
+    _ = router.handle(clickRequest(target: "s1:2"))
+    let script = savedScript(router)
+
+    #expect(script.contains("s1:2"))
+    #expect(script.contains("warnings:"))
+    #expect(script.contains("no durable locator"))
+    #expect(script.contains("expects") == false)
+}
+
+@Test func aSavedWorkflowVerifiesItsDerivedPostconditionOnReplay() throws {
+    let history = ActionHistoryStore()
+    let router = observingRouter(
+        history: history,
+        observer: StubActionStateObserver(elementReads: [
+            buttonState(focused: false),
+            buttonState(focused: true),
+            buttonState(focused: true)
+        ])
+    )
+    _ = router.handle(clickRequest(target: "s1:2"))
+    let path = try temporaryAxnFile(savedScript(router))
+    defer { try? FileManager.default.removeItem(atPath: path) }
+
+    let runner = AxnRunner(
+        commandHandler: { request in
+            JSONRPCResponse(id: request.id, result: ["action": .object(["success": .bool(true)])])
+        },
+        snapshotProvider: { _ in submitButtonSnapshot(focused: true) }
+    )
+    let result = try runner.run(params: ["path": .string(path)])
+
+    #expect(result["success"] == .bool(true))
+}
+
+@Test func aSavedWorkflowFailsWhenItsDerivedPostconditionDoesNotHold() throws {
+    let history = ActionHistoryStore()
+    let router = observingRouter(
+        history: history,
+        observer: StubActionStateObserver(elementReads: [
+            buttonState(focused: false),
+            buttonState(focused: true),
+            buttonState(focused: true)
+        ])
+    )
+    _ = router.handle(clickRequest(target: "s1:2"))
+    let path = try temporaryAxnFile(savedScript(router))
+    defer { try? FileManager.default.removeItem(atPath: path) }
+
+    let runner = AxnRunner(
+        commandHandler: { request in
+            JSONRPCResponse(id: request.id, result: ["action": .object(["success": .bool(true)])])
+        },
+        snapshotProvider: { _ in submitButtonSnapshot(focused: false) }
+    )
+    let result = try runner.run(params: ["path": .string(path)])
+
+    #expect(result["success"] == .bool(false))
+    #expect(result["trace"]?[0]?["factId"] == .string("a001.focused.0"))
+}
+
+private func observingRouter(
+    history: ActionHistoryStore,
+    observer: StubActionStateObserver
+) -> CommandRouter {
+    CommandRouter(
+        actions: PrimitiveActionHandlers(
+            click: { target, _ in
+                PrimitiveActionResult(action: "click", target: target, strategy: "test", success: true)
+            },
+            type: { target, value, _ in
+                PrimitiveActionResult(action: "type", target: target, strategy: "test", success: true, details: [
+                    "value": .string(value)
+                ])
+            }
+        ),
+        history: history,
+        actionStateObserver: observer,
+        sleepMilliseconds: { _ in }
+    )
+}
+
+private func clickRequest(target: String) -> JSONRPCRequest {
+    JSONRPCRequest(
+        id: .string("click-\(target)"),
+        method: "click",
+        params: .object([
+            "_session": .string("thread-a"),
+            "target": .string(target)
+        ])
+    )
+}
+
+private func savedScript(_ router: CommandRouter) -> String {
+    router.handle(JSONRPCRequest(
+        id: .string("export"),
+        method: "save",
+        params: .object(["sessionId": .string("thread-a")])
+    )).result?["script"]?.stringValue ?? ""
+}
+
+private func submitButtonSnapshot(focused: Bool) -> AppSnapshot {
+    AppSnapshot(
+        id: SnapshotID("saved-replay-fixture"),
+        app: AppIdentity(bundleIdentifier: "com.example.App", name: "Example", processIdentifier: 42),
+        windows: [
+            AXNode(role: "AXWindow", title: "Main", children: [
+                AXNode(role: "AXButton", title: "Submit", focused: focused)
+            ])
+        ],
+        screenshot: nil
+    )
+}
+
 private extension JSONValue {
     func containsString(_ needle: String) -> Bool {
         switch self {

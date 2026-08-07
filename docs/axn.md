@@ -133,26 +133,117 @@ Actions may carry metadata that `run` strips before dispatch:
 ```yaml
 version: 1
 actions:
-  - id: title
+  - id: a001
     tool: type
-    target: s1:12
+    target:
+      app: Safari
+      locator:
+        role: AXTextField
+        identifier: issue-title
     value: Draft issue title
     expects:
-      - id: title.value
+      - id: a001.value.0
         kind: value
-        target: s1:12
-        equals: Draft issue title
-  - tool: keyboard
+        target:
+          app: Safari
+          locator:
+            role: AXTextField
+            identifier: issue-title
+        state:
+          value:
+            equals: Draft issue title
+  - id: a002
+    tool: keyboard
     app: Safari
     key: Return
     requires:
-      - title.value
+      - a001.value.0
 ```
+
+A fact's matchers live under `state`, keyed by what the fact is about: `value`,
+`selected`, `focused`, `enabled`. A fact's `target` must be an `{app, locator}`
+pair, never a snapshot handle — a handle is not durable identity and goes stale
+with the session that produced it.
+
+The pair above is the one case where a workflow asserts its own input back at
+itself, and it is a *dependency guard* rather than a postcondition: the `requires`
+on the following step is what makes it worth writing. Do not press Return unless
+the field still holds what was typed.
 
 Supported replay tools are `click`, `type`, `keyboard`, `scroll`, `drag`, and
 `invoke`. Read tools such as `look` and `find` may be kept in history as context
 and can be included by `save(..., includeReads: true)`, but normal saved
 workflows omit them.
+
+## Derived postconditions
+
+`save` compiles `expects` for the steps it writes, from a bounded before/after
+read taken around each dispatched action. The reads are targeted — the acted-on
+element, the app's focused element, the app's window titles — never a full tree
+capture. Actions likely to cause a transition (`click`, `invoke`, `keyboard`,
+`drag`) wait for two agreeing reads, up to a 150ms budget, before the after-read
+counts.
+
+A post-action read that never settled derives nothing at all. A button that
+disables during submission and re-enables after the budget would otherwise be
+saved as permanently disabled, and a boolean read mid-transition is no more
+trustworthy than a string one.
+
+The derivation set is deliberately small. Each entry is a direct comparison
+between the before and after read of one element that has a durable locator, and
+every comparison needs both sides. An attribute the pre-action read could not
+reach comes back the same way an attribute that does not exist does, so a missing
+before side is never read as "it changed" — that would assert state the action may
+have had nothing to do with. The same applies to the window list: a list that
+could not be read is not an app with no windows.
+
+| Transition | Emitted fact |
+| --- | --- |
+| The target gained focus | `focused`, `state: {focused: true}` |
+| Focus landed on a different element | `focused` on that element |
+| The target's enabled state flipped | `enabled`, `state: {enabled: <after>}` |
+| The target's value changed | `value`, `state: {value: {equals: <after>}}` |
+| A selection control's value changed | `selected`, `state: {selected: {equals: <after>}}` |
+| A window title appeared that was not there before | `window` on `{role: AXWindow, title: <new>}` |
+
+The fact's target locator comes from the **post-action** read while the action's
+own target comes from the **pre-action** read. This matters for any action whose
+purpose is to mutate its target: Firefox's URL bar exposes an `AXDescription`
+only while it is empty, so a fact carrying the pre-action locator would resolve
+`missing` and never evaluate its predicate.
+
+Three exclusions apply to every candidate. A candidate that trips one is dropped
+silently — an action with nothing safe to say is saved with no `expects` and
+stays a valid, unverified step.
+
+**Never assert a parameterized value or a downstream echo of one.** A candidate
+is dropped when its string equals, contains, or is contained by any input string
+(`value`, `text`, `key`) the saved workflow carries — not only the step's own,
+because an echo often surfaces a step or two later, as when a click opens a
+window titled after text typed earlier. This covers both the direct case — a
+`type` asserting back exactly what it typed, which the user is expected to
+replace with `{{a_parameter}}` — and the downstream case, where a preview label
+or window title elsewhere quotes the typed text. Parameter references are
+only substituted in `value`, `text`, and `key`; `expects` is not a substitutable
+field, and `run` rejects a file that puts a reference there. So an assertion
+built from an input is either a literal that goes stale the first time the
+parameter changes, or a hard rejection of the whole workflow.
+
+**Never assert a clicked target's own label.** A candidate is dropped when its
+string already appears as the `title`, `value`, `description`, or `identifier`
+of the fact target's own locator. Clicking a button labelled `Submit` and then
+asserting the button still reads `Submit` verifies nothing: the locator
+resolving at all already proved it.
+
+**Never assert a secret.** A candidate is dropped when it is redacted or when the
+deterministic redaction rules recognise it.
+
+Beyond those, a candidate is also dropped when the element has no durable
+locator and when the assertion is empty.
+
+Steps whose target could not be given a durable locator keep their snapshot
+handle and carry a `warnings` entry saying so, because such a step cannot replay
+in a later session at all.
 
 ## CLI
 
