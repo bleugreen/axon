@@ -1,8 +1,29 @@
 # Rust platform work
 
-This directory is an experimental Cargo workspace for non-macOS Axon platform
-work. Its placement in the monorepo is a recommendation under evaluation, not a
+This directory is a Cargo workspace for the non-macOS Axon platform backends.
+Its placement in the monorepo is a recommendation under evaluation, not a
 settled project structure.
+
+Every crate inherits the workspace version, which is kept in step with the
+repository-root `VERSION` file by `scripts/check-version`.
+
+## Daemon lifecycle
+
+`axon-win` and `axon-linux` expose the same lifecycle verbs as the macOS CLI —
+`daemon install`, `daemon uninstall`, `daemon restart`, `shutdown`,
+`status [--json]`, and `version` — with the same exit codes: 0 for success or a
+status that described any state, 1 for an operation that could not be completed,
+2 for wrong usage. `daemon install` registers the path of the executable you
+invoked, so run it from a permanent location.
+
+The consumer-facing contract, including the `health-v1` status document, is
+[docs/embedding.md](../docs/embedding.md).
+
+The lifecycle, session classification, and status assembly for both platforms
+live in ungated `lifecycle` modules and are unit-tested on any host; only the
+calls that touch Task Scheduler, systemd, and the local transport are behind
+target gates. `cargo test -p axon-win` and `cargo test -p axon-linux` therefore
+cover them from a development machine of any kind.
 
 ## Windows backend
 
@@ -37,6 +58,23 @@ Capture matches an application by top-level window title (exact then substring)
 or process identifier. Locator `role` values use native UIA control type names
 such as `Button`, `Edit`, `Document`, `MenuItem`, and `TreeItem`; locator actions
 use UIA pattern names `Invoke`, `Value`, and `ScrollItem`.
+
+## Linux backend
+
+`axon-linux` is the AT-SPI backend. It serves the mode-0600 socket at
+`$XDG_RUNTIME_DIR/axon-v1.sock` and is registered as a systemd user unit bound to
+`graphical-session.target`:
+
+    cd rust
+    cargo build --release -p axon-linux
+    target/release/axon-linux daemon install
+    target/release/axon-linux status --json
+
+The unit template lives at `axon-linux/systemd/axon.service.in` and ships inside
+the release archive, so what will be registered can be read before installing.
+Under Wayland, synthetic pointer and keyboard input and unmediated screenshots
+are unavailable; `status` reports each as unusable with a stable reason rather
+than letting a call fail later.
 
 ## Windows UI Automation spike
 

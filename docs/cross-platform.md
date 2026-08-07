@@ -60,6 +60,50 @@ MCP stdio facades connect locally. This is architectural parity, not a demand
 that installation and lifecycle management be identical across operating
 systems.
 
+## One lifecycle vocabulary, three native mechanisms
+
+Every platform exposes the same four verbs — `daemon install`, `daemon uninstall`,
+`daemon restart`, and `shutdown` — plus `status --json` and `version`, with the
+same exit-code contract. What differs is the mechanism each verb uses, because
+start-at-login is a platform-native concern: a LaunchAgent limited to the Aqua
+session on macOS, an interactive `ONLOGON` scheduled task on Windows, and a
+systemd user unit bound to `graphical-session.target` on Linux.
+
+All three register the *invoking* executable rather than copying a binary
+anywhere, so there is exactly one registration truth and callers must invoke
+from a permanent path. All three treat a successful authenticated health round
+trip as the readiness contract; a bound socket or an existing pipe is never
+taken as evidence that a daemon is serving.
+
+Status is one versioned document, `health-v1`, described by
+`schema/health-v1.schema.json` and modelled in both Swift (`AxonCore`) and Rust
+(`axon-core::health`) against the same shared fixtures. Degradation is data:
+a daemon that is not running, a Windows service session, a Linux greeter with
+no AT-SPI bus, and a denied macOS grant are all schema-valid documents that exit
+0. The consumer contract is [Embedding Axon](embedding.md).
+
+## Linux lifecycle
+
+`axon-linux daemon install` writes `~/.config/systemd/user/axon.service` with
+`ExecStart=<invoking executable> serve`, reloads the user manager, and enables
+the unit. The unit is `PartOf`/`WantedBy` `graphical-session.target` rather than
+login, because AT-SPI only exists once a desktop is up; a daemon started at the
+greeter would have nothing to talk to. It uses `Type=simple` because Axon does
+not implement `sd_notify` readiness, so systemd's notion of "started" is earlier
+than Axon can serve and the CLI's health round trip is the real readiness signal.
+
+On a host with no graphical session the unit is enabled but deliberately not
+started, and install says so and exits 0. Blocking for a readiness that cannot
+arrive until someone logs in would report a timeout for work that was done.
+
+The daemon serves `health` and `shutdown` as ordinary JSON-RPC methods on the
+mode-0600 `$XDG_RUNTIME_DIR/axon-v1.sock`, so a lifecycle command learns which
+process it stopped from the reply. Session facts are detected independently —
+user manager, display, session bus — so a host can report an honest partial
+state instead of one collapsed guess. Wayland's restrictions on synthetic
+pointer and keyboard input are overlaid on the backend's static capability list
+at status time, because the same build behaves differently under X11.
+
 ## Windows backend
 
 Windows is first because UIA provides strong semantic capture, patterns, and
@@ -98,17 +142,18 @@ events with a close conceptual fit to AX.
   startup, `axon-win serve` reads the user SID from its process token and installs
   a protected DACL granting pipe access only to that SID; it does not rely on the
   process default security descriptor. `axon-win daemon install` registers an
-  interactive `ONLOGON` scheduled task for the current user and starts it; this
-  is the canonical installation path because Task Scheduler launches `serve` in
-  the logged-in desktop session even when the command is issued over an SSH
-  session-0 shell. `axon-win daemon restart` sends the authenticated `shutdown`
-  RPC, updates the task to the current executable, and relaunches it. The daemon
-  acknowledges shutdown with its process ID before closing the pipe. Lifecycle
-  commands wait for that process to exit after its UIA thread joins and the COM
-  apartment is torn down, avoiding a Task Scheduler relaunch race. Busy pipe
-  instances are retried rather than mistaken for an absent daemon. `axon-win daemon
-  uninstall` stops the daemon and removes the task. All three commands are
-  scriptable and `install`/`restart` wait until the pipe is ready before returning.
+  interactive `ONLOGON` scheduled task for the current user pointing at the
+  invoking executable, and starts it; this is the canonical installation path
+  because Task Scheduler launches `serve` in the logged-in desktop session even
+  when the command is issued over an SSH session-0 shell. `axon-win daemon restart`
+  sends the authenticated `shutdown` RPC, updates the task to the current
+  executable, and relaunches it. The daemon acknowledges shutdown with its process
+  ID before closing the pipe. Lifecycle commands wait for that process to exit
+  after its UIA thread joins and the COM apartment is torn down, avoiding a Task
+  Scheduler relaunch race. Busy pipe instances are retried rather than mistaken
+  for an absent daemon. `axon-win daemon uninstall` stops the daemon and removes
+  the task. All three commands are scriptable and `install`/`restart` wait until
+  the daemon answers a health request before returning.
   Short-lived `axon-win mcp` processes connect to that pipe.
 - `serve` creates the user-restricted pipe before initializing COM and UI
   Automation, making the stalled stage observable, but lifecycle readiness still

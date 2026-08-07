@@ -35,6 +35,7 @@ The four guarantees Axon tries to make:
 ## Documentation
 
 - [Install and Operations](docs/install.md) — build, daemon lifecycle, MCP setup, logs, troubleshooting
+- [Embedding Axon](docs/embedding.md) — the contract for bundling Axon: versioned artifacts, lifecycle verbs, and the `health-v1` status document
 - [Tool Surface](docs/tool-surface.md) — MCP/CLI commands, target shapes, screenshots, action semantics
 - [The `.axn` File](docs/axn.md) — file schema, history export, replay
 - [Design](docs/design.md) — architecture and long-term direction
