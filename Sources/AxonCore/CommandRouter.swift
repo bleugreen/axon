@@ -22,6 +22,9 @@ public struct CommandRouterServices {
     public let debugSessions: AxnDebugSessionStore
     public let readableAXState: ReadableAXStateProvider
     public let browserAutomation: any BrowserAutomationServing
+    /// Reads the before/after element and app state that `save` derives postconditions from.
+    /// Nil disables observation entirely, which is what a router with no live Accessibility wants.
+    public let actionStateObserver: (any ActionStateObserving)?
     public let now: () -> Date
     public let sleepMilliseconds: (Int) -> Void
     /// The local socket this daemon serves, reported as the endpoint in health documents.
@@ -50,6 +53,7 @@ public struct CommandRouterServices {
         debugSessions: AxnDebugSessionStore = AxnDebugSessionStore(),
         readableAXState: ReadableAXStateProvider? = nil,
         browserAutomation: any BrowserAutomationServing = AppleScriptBrowserAutomation(),
+        actionStateObserver: (any ActionStateObserving)? = nil,
         now: @escaping () -> Date = Date.init,
         sleepMilliseconds: @escaping (Int) -> Void = { Thread.sleep(forTimeInterval: Double($0) / 1_000) },
         endpoint: String = AxonEnvironment.socketPath(),
@@ -99,6 +103,7 @@ public struct CommandRouterServices {
             return ReadableAXState(element: element)
         }
         self.browserAutomation = browserAutomation
+        self.actionStateObserver = actionStateObserver ?? AXElementObserver(elementStore: elementStore)
         self.now = now
         self.sleepMilliseconds = sleepMilliseconds
         self.endpoint = endpoint
@@ -249,6 +254,7 @@ public struct CommandRouter {
         debugSessions: AxnDebugSessionStore = AxnDebugSessionStore(),
         readableAXState: CommandRouterServices.ReadableAXStateProvider? = nil,
         browserAutomation: any BrowserAutomationServing = AppleScriptBrowserAutomation(),
+        actionStateObserver: (any ActionStateObserving)? = nil,
         now: @escaping () -> Date = Date.init,
         sleepMilliseconds: @escaping (Int) -> Void = { Thread.sleep(forTimeInterval: Double($0) / 1_000) }
     ) {
@@ -269,6 +275,7 @@ public struct CommandRouter {
             debugSessions: debugSessions,
             readableAXState: readableAXState,
             browserAutomation: browserAutomation,
+            actionStateObserver: actionStateObserver,
             now: now,
             sleepMilliseconds: sleepMilliseconds
         ))
@@ -276,28 +283,47 @@ public struct CommandRouter {
 
     public func handle(_ request: JSONRPCRequest) -> JSONRPCResponse {
         let context = services.history.context(for: request)
-        let response = handleCommand(context.request, historySessionID: context.sessionID)
+        let observations = observationCollector()
+        let response = handleCommand(
+            context.request,
+            historySessionID: context.sessionID,
+            observations: observations
+        )
         services.history.record(
             request: context.request,
             response: response,
             sessionID: context.sessionID,
+            observation: observations.observation,
             activeSecretRedactor: ActiveSecretRedactor(filter: services.activeCredentialFilterProvider())
         )
         return response
     }
 
-    private func handleCommand(_ request: JSONRPCRequest, historySessionID: String? = nil) -> JSONRPCResponse {
+    private func observationCollector() -> ActionObservationCollector {
+        ActionObservationCollector(
+            observer: services.actionStateObserver,
+            sleepMilliseconds: services.sleepMilliseconds,
+            now: services.now
+        )
+    }
+
+    private func handleCommand(
+        _ request: JSONRPCRequest,
+        historySessionID: String? = nil,
+        observations: ActionObservationCollector? = nil
+    ) -> JSONRPCResponse {
         switch request.method {
         case "health", "permit", "shutdown":
             return SystemCommandHandler(services: services).handle(request)
         case "look", "find", "wait_for_value", "wait_for_stability", "navigate", "windows", "tabs":
             return PerceptionCommandHandler(services: services).handle(request)
         case "click", "invoke", "type", "keyboard", "scroll", "drag":
-            return PrimitiveActionCommandHandler(services: services).handle(request)
+            return PrimitiveActionCommandHandler(services: services, observations: observations).handle(request)
         case "run", "debug.create", "debug.start", "debug.step", "debug.retry", "debug.continue", "debug.resume", "debug.runTo", "debug.setBreakpoints", "debug.stop":
             return AxnRunCommandHandler(
                 services: services,
-                commandHandler: { handleCommand($0) },
+                commandHandler: { handleCommand($0, observations: $1) },
+                observationCollector: observationCollector,
                 historySessionID: historySessionID
             ).handle(request)
         case "save":
