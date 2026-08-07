@@ -258,7 +258,9 @@ public final class AXPrimitiveActionExecutor {
         if let scrollTarget = try scrollToVisibleTarget(target: target, app: resolvedApp, deltaX: deltaX, deltaY: deltaY) {
             let result = AXUIElementPerformAction(scrollTarget.element, "AXScrollToVisible" as CFString)
             details["scrollTargetFrame"] = scrollTarget.frame.jsonValue
-            details["dispatchSuccess"] = .bool(true)
+            // The app acknowledging the action is the dispatch; it is still not proof that the
+            // viewport moved, and it is not a dispatch at all when the action itself errors.
+            details["dispatchSuccess"] = .bool(result == .success)
             details["semanticSuccess"] = .null
             details["semanticStatus"] = .string("unverified")
             return PrimitiveActionResult(
