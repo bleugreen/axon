@@ -38,6 +38,11 @@ public final class AXPrimitiveActionExecutor {
     private let frameProvider: (AXUIElement) -> AXFrame?
     private let parentProvider: (AXUIElement) -> AXUIElement?
     private let processProvider: (AXUIElement) -> pid_t?
+    private let attributeProvider: (AXUIElement, String) -> AnyObject?
+    private let actionNamesProvider: (AXUIElement) -> [String]
+    /// The accessibility dispatch itself. Seamed so that what an action reported — and therefore
+    /// whether the ladder settles or advances — is observable without a live application.
+    private let performAction: (AXUIElement, String) -> AXError
     private let elementsEqual: (AXUIElement, AXUIElement) -> Bool
     private let frontmostApp: () -> ForegroundApp?
     private let activateProcess: (pid_t) -> Bool
@@ -59,6 +64,9 @@ public final class AXPrimitiveActionExecutor {
         frameProvider: ((AXUIElement) -> AXFrame?)? = nil,
         parentProvider: ((AXUIElement) -> AXUIElement?)? = nil,
         processProvider: ((AXUIElement) -> pid_t?)? = nil,
+        attributeProvider: ((AXUIElement, String) -> AnyObject?)? = nil,
+        actionNamesProvider: ((AXUIElement) -> [String])? = nil,
+        performAction: ((AXUIElement, String) -> AXError)? = nil,
         elementsEqual: @escaping (AXUIElement, AXUIElement) -> Bool = { CFEqual($0, $1) },
         frontmostApp: (() -> ForegroundApp?)? = nil,
         activateProcess: ((pid_t) -> Bool)? = nil,
@@ -79,6 +87,9 @@ public final class AXPrimitiveActionExecutor {
         self.frameProvider = frameProvider ?? Self.copyFrame
         self.parentProvider = parentProvider ?? Self.copyParent
         self.processProvider = processProvider ?? Self.copyProcessIdentifier
+        self.attributeProvider = attributeProvider ?? Self.copyRawAttributeValue
+        self.actionNamesProvider = actionNamesProvider ?? Self.copyActionNames
+        self.performAction = performAction ?? { element, name in AXUIElementPerformAction(element, name as CFString) }
         self.elementsEqual = elementsEqual
         self.frontmostApp = frontmostApp ?? Self.systemFrontmostApp
         self.activateProcess = activateProcess ?? Self.systemActivate
@@ -87,6 +98,11 @@ public final class AXPrimitiveActionExecutor {
         self.settleTimeoutMs = settleTimeoutMs
         self.settleIntervalMs = max(settleIntervalMs, 1)
     }
+
+    /// The action name of the accessibility scroll rung. `kAXScrollToVisibleAction` is not bridged
+    /// into Swift, so the literal exists here once rather than at both the selection and the
+    /// perform site, where the two could drift apart silently.
+    private static let scrollToVisibleAction = "AXScrollToVisible"
 
     private static func copyProcessIdentifier(_ element: AXUIElement) -> pid_t? {
         var pid: pid_t = 0
