@@ -1057,9 +1057,11 @@ mod tests {
             json!(true)
         );
         assert_eq!(success.result["foreground"]["restored"], json!(true));
+        // Activated by the identity the backend answers with, not the display name the request
+        // carried: the two are different strings, and only one of them can be compared or raised.
         assert_eq!(
             *activations.borrow(),
-            vec!["App".to_string(), "Prior".to_string()]
+            vec![APP_IDENTITY.to_string(), "Prior".to_string()]
         );
         assert_eq!(frontmost.borrow().as_deref(), Some("Prior"));
     }
@@ -1067,7 +1069,10 @@ mod tests {
     #[test]
     fn foreground_escalation_refuses_without_dispatching_when_activation_is_not_proved() {
         let backend = transactional_backend();
-        backend.refuses_activation.borrow_mut().push("App".into());
+        backend
+            .refuses_activation
+            .borrow_mut()
+            .push(APP_IDENTITY.into());
         let handle = backend.snapshot.handle(0);
         let clicks = backend.clicks.clone();
         let frontmost = backend.frontmost.clone();
@@ -1250,6 +1255,102 @@ mod tests {
         assert_eq!(success.result["success"], json!(false));
         assert_eq!(*clicks.borrow(), 1);
         assert_eq!(frontmost.borrow().as_deref(), Some("Prior"));
+    }
+
+    #[test]
+    fn an_aimed_keystroke_activates_the_application_the_request_named() {
+        // The request carries a display name; the backend answers and activates by its own
+        // identity. A router that passed the name straight through would compare two strings that
+        // can never be equal and refuse every aimed keystroke.
+        for naming in [json!({"app": "App"}), json!({"identifier": APP_IDENTITY})] {
+            let backend = transactional_backend();
+            let keystrokes = backend.keystrokes.clone();
+            let activations = backend.activations.clone();
+            let frontmost = backend.frontmost.clone();
+            let mut router = Router::new(backend);
+
+            let mut params = naming.as_object().unwrap().clone();
+            params.insert("text".into(), json!("x"));
+            params.insert("deliveryPolicy".into(), json!("foregroundPermitted"));
+            let response = router
+                .request(request("keyboard", Value::Object(params)))
+                .unwrap();
+
+            let JsonRpcResponse::Success(success) = response else {
+                panic!("an aimed keystroke dispatches: {naming}")
+            };
+            assert_eq!(success.result["delivery"], json!("foreground"), "{naming}");
+            assert_eq!(
+                success.result["foreground"]["activationProved"],
+                json!(true),
+                "{naming}"
+            );
+            assert_eq!(*keystrokes.borrow(), 1, "{naming}");
+            assert_eq!(
+                *activations.borrow(),
+                vec![APP_IDENTITY.to_string(), "Prior".to_string()],
+                "{naming}"
+            );
+            assert_eq!(frontmost.borrow().as_deref(), Some("Prior"), "{naming}");
+        }
+    }
+
+    #[test]
+    fn a_keystroke_aimed_at_an_unknown_application_never_falls_through_to_the_frontmost() {
+        // Posting these keystrokes at whatever the user is working in, having been asked for an
+        // application that could not be found, is the worst available answer.
+        let backend = transactional_backend();
+        let keystrokes = backend.keystrokes.clone();
+        let activations = backend.activations.clone();
+        let mut router = Router::new(backend);
+
+        let response = router
+            .request(request(
+                "keyboard",
+                json!({
+                    "app": "Nothing By That Name",
+                    "text": "x",
+                    "deliveryPolicy": "foregroundPermitted"
+                }),
+            ))
+            .unwrap();
+
+        let result = refusal(&response);
+        assert_eq!(
+            result["refusal"]["reason"],
+            json!("targetIdentityUnavailable")
+        );
+        assert_eq!(result["dispatchSuccess"], json!(false));
+        assert_eq!(*keystrokes.borrow(), 0);
+        assert!(activations.borrow().is_empty());
+    }
+
+    #[test]
+    fn a_keystroke_naming_no_application_addresses_the_frontmost_without_activating() {
+        // The one case where dispatching without activation is correct: the caller asked for
+        // whatever holds the foreground, so there is nothing to bring forward and nothing to undo.
+        let backend = transactional_backend();
+        let keystrokes = backend.keystrokes.clone();
+        let activations = backend.activations.clone();
+        let mut router = Router::new(backend);
+
+        let response = router
+            .request(request(
+                "keyboard",
+                json!({"text": "x", "deliveryPolicy": "foregroundPermitted"}),
+            ))
+            .unwrap();
+
+        let JsonRpcResponse::Success(success) = response else {
+            panic!("an unaimed keystroke dispatches")
+        };
+        assert_eq!(success.result["delivery"], json!("foreground"));
+        assert_eq!(
+            success.result["foreground"]["alreadyFrontmost"],
+            json!(true)
+        );
+        assert_eq!(*keystrokes.borrow(), 1);
+        assert!(activations.borrow().is_empty());
     }
 
     #[test]
