@@ -10,6 +10,7 @@ use axon_core::{
 };
 use serde_json::{Map, Value, json};
 
+pub mod keys;
 pub mod lifecycle;
 
 #[cfg(target_os = "linux")]
