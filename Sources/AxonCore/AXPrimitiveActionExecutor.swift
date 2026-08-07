@@ -39,7 +39,7 @@ public final class AXPrimitiveActionExecutor {
     private let parentProvider: (AXUIElement) -> AXUIElement?
     private let processProvider: (AXUIElement) -> pid_t?
     private let attributeProvider: (AXUIElement, String) -> AnyObject?
-    private let actionNamesProvider: (AXUIElement) -> [String]
+    private let actionNamesProvider: (AXUIElement) -> [String]?
     /// The accessibility dispatch itself. Seamed so that what an action reported — and therefore
     /// whether the ladder settles or advances — is observable without a live application.
     private let performAction: (AXUIElement, String) -> AXError
@@ -65,7 +65,7 @@ public final class AXPrimitiveActionExecutor {
         parentProvider: ((AXUIElement) -> AXUIElement?)? = nil,
         processProvider: ((AXUIElement) -> pid_t?)? = nil,
         attributeProvider: ((AXUIElement, String) -> AnyObject?)? = nil,
-        actionNamesProvider: ((AXUIElement) -> [String])? = nil,
+        actionNamesProvider: ((AXUIElement) -> [String]?)? = nil,
         performAction: ((AXUIElement, String) -> AXError)? = nil,
         elementsEqual: @escaping (AXUIElement, AXUIElement) -> Bool = { CFEqual($0, $1) },
         frontmostApp: (() -> ForegroundApp?)? = nil,
@@ -1179,14 +1179,27 @@ public final class AXPrimitiveActionExecutor {
         return false
     }
 
-    private func actionNames(for element: AXUIElement) -> [String] {
+    /// What the element says it can do, or `nil` when the tree did not answer. An empty list is an
+    /// answer; a failed query is not, and the two must not be collapsed by a caller reasoning about
+    /// whether a mechanism exists.
+    private func advertisedActions(for element: AXUIElement) -> [String]? {
         actionNamesProvider(element)
     }
 
-    private static func copyActionNames(_ element: AXUIElement) -> [String] {
+    /// The advertised actions with an unanswered query read as none.
+    ///
+    /// This is what `click` wants: its semantic rung is an optimization over a pointer press it can
+    /// always fall back to, so an element that cannot say whether it takes `AXPress` is better
+    /// clicked than pressed. `scroll` cannot reason this way, because for it the accessibility rung
+    /// is the *safe* one — see `scrollToVisibleTarget`.
+    private func actionNames(for element: AXUIElement) -> [String] {
+        advertisedActions(for: element) ?? []
+    }
+
+    private static func copyActionNames(_ element: AXUIElement) -> [String]? {
         var names: CFArray?
         guard AXUIElementCopyActionNames(element, &names) == .success else {
-            return []
+            return nil
         }
         return (names as? [String]) ?? []
     }
@@ -1297,10 +1310,19 @@ public final class AXPrimitiveActionExecutor {
                 continue
             }
             elements.append(element)
-            candidates.append(ScrollToVisibleCandidate(
-                frame: frame,
-                performsScrollToVisible: actionNames(for: element).contains(Self.scrollToVisibleAction)
-            ))
+            // Only a proved absence disqualifies a candidate. A capability query that failed says
+            // nothing about the element, and dropping it on that basis would quietly convert a
+            // transient accessibility fault into a wheel burst at the named element's center —
+            // trading the rung that cannot disturb the wrong window for the one that can. Such a
+            // candidate is kept, and the action sent to it answers the question honestly.
+            let capability: ScrollToVisibleCapability
+            switch advertisedActions(for: element) {
+            case let .some(actions):
+                capability = actions.contains(Self.scrollToVisibleAction) ? .advertised : .absent
+            case .none:
+                capability = .unknown
+            }
+            candidates.append(ScrollToVisibleCandidate(frame: frame, capability: capability))
         }
 
         guard let index = ScrollToVisibleSelector.select(
