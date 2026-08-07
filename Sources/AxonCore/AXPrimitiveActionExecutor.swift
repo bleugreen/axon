@@ -417,30 +417,41 @@ public final class AXPrimitiveActionExecutor {
         // Only a bare app target needs the app resolved; a handle carries its own element, and
         // resolving anyway would reject a live handle because some unrelated app name went stale.
         let resolvedApp = target == nil ? try app.map(appResolver.resolve) : nil
+        // Carried down to the wheel only when the accessibility rung was attempted and turned out
+        // not to be a mechanism at all, so that a caller with no wheel rung left still hears what
+        // accessibility actually said.
+        var semanticFallback: PrimitiveActionResult?
         if let scrollTarget = try scrollToVisibleTarget(target: target, app: resolvedApp, deltaX: deltaX, deltaY: deltaY) {
             // The semantic rung. AXScrollToVisible neither focuses nor activates, so it is always
-            // allowed, and a refusal from the app is a failed scroll rather than a reason to send
-            // an unrelated wheel burst at the same coordinates.
-            let result = AXUIElementPerformAction(scrollTarget.element, "AXScrollToVisible" as CFString)
-            details["scrollTargetFrame"] = scrollTarget.frame.jsonValue
+            // allowed, and an app that refuses it has failed the scroll rather than earned an
+            // unrelated wheel burst at the same coordinates.
+            let error = performAction(scrollTarget.element, Self.scrollToVisibleAction)
+            var semanticDetails = details
+            semanticDetails["scrollTargetFrame"] = scrollTarget.frame.jsonValue
             // The app acknowledging the action is the dispatch; it is still not proof that the
             // viewport moved, and it is not a dispatch at all when the action itself errors.
-            details["semanticSuccess"] = .null
-            details["semanticStatus"] = .string("unverified")
-            return PrimitiveActionResult.dispatched(
+            semanticDetails["semanticSuccess"] = .null
+            semanticDetails["semanticStatus"] = .string("unverified")
+            let semantic = PrimitiveActionResult.dispatched(
                 action: "scroll",
                 target: description,
                 strategy: "AXScrollToVisible",
                 policy: policy,
                 delivery: .semantic,
-                success: result == .success,
-                message: result == .success ? nil : "AXScrollToVisible returned \(result.rawValue)",
-                details: details
+                success: error == .success,
+                message: error == .success ? nil : "AXScrollToVisible returned \(error.axonDescription)",
+                details: semanticDetails
             )
+            guard Self.semanticScrollAdvances(after: error) else {
+                return semantic
+            }
+            semanticFallback = semantic
         }
 
         guard let point = try wheelPoint(target: target, app: resolvedApp) else {
-            return PrimitiveActionResult(
+            // An accessibility attempt that found no mechanism is the honest answer here. The wheel
+            // having nowhere to aim is true but is not what went wrong.
+            return semanticFallback ?? PrimitiveActionResult(
                 action: "scroll",
                 target: description,
                 strategy: "CGEventScroll",
@@ -459,8 +470,19 @@ public final class AXPrimitiveActionExecutor {
             identityMessage: "The scroll target does not belong to a resolvable process, so a wheel burst cannot be bound to it",
             deltaX: deltaX,
             deltaY: deltaY,
-            details: details
+            details: details,
+            semanticFallback: semanticFallback
         )
+    }
+
+    /// Whether an accessibility scroll that failed leaves the wheel rung below it still owed a try.
+    ///
+    /// An unsupported action was never refused, because the app was never asked to decide: the
+    /// element advertised a mechanism it does not implement, and the tree is contradicting itself.
+    /// Every other error is the app answering, and a scroll it answered badly is a failed scroll
+    /// rather than a reason to send global input at the same coordinates.
+    private static func semanticScrollAdvances(after error: AXError) -> Bool {
+        error == .actionUnsupported || error == .attributeUnsupported
     }
 
     /// `scroll` never activates for the background rung, and the foreground rung activates only
@@ -476,7 +498,8 @@ public final class AXPrimitiveActionExecutor {
         identityMessage: String,
         deltaX: Double,
         deltaY: Double,
-        details: [String: JSONValue]
+        details: [String: JSONValue],
+        semanticFallback: PrimitiveActionResult? = nil
     ) -> PrimitiveActionResult {
         var wheelDetails = details
         wheelDetails["at"] = ActionPoint(x: point.x, y: point.y, coordinateSpace: .screen).jsonValue
@@ -491,6 +514,7 @@ public final class AXPrimitiveActionExecutor {
                 identityMessage: identityMessage,
                 strategy: "CGEventScroll"
             ),
+            fallback: semanticFallback,
             details: wheelDetails
         ) { candidate in
             var dispatch: ScrollDispatch?
