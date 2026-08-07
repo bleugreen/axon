@@ -77,8 +77,8 @@ a JSON-RPC `-32602` error and never reaches a native call.
 | `invoke` | `semantic` (UIA `InvokePattern`) | `semantic` (AT-SPI `Action.DoAction`) |
 | `type` | `semantic` (UIA `ValuePattern` + readback) | `semantic` (AT-SPI `EditableText.SetTextContents` + readback) |
 | `scroll` | `semantic` (UIA `ScrollItemPattern`) | `semantic` (AT-SPI `Component.ScrollTo`) |
-| `click` | refused: the foreground rung is withheld | refused: the foreground rung is withheld |
-| `keyboard` | refused: the foreground rung is withheld | refused: the foreground rung is withheld |
+| `click` | refused: the foreground rung is withheld | `foreground` (XTest) on X11 with an EWMH-capable window manager; refused on any other session |
+| `keyboard` | refused: the foreground rung is withheld | `foreground` (XTest) on X11 with an EWMH-capable window manager; refused on any other session |
 
 The semantic paths no longer call `SetFocus` or AT-SPI focus. Focus is a
 system-wide side effect, and an action that changes it is foreground however it
@@ -91,19 +91,26 @@ delivery nor a Wayland portal path, so both refuse with
 `SendInput` and `XTest` are global devices and would always be classified
 `foreground`, however narrowly they are aimed.
 
-Neither backend offers the foreground rung either. The foreground rung is global
-input that hands the session back: capture the prior foreground, activate the
-target, prove it came forward, dispatch exactly once, restore. These backends
-cannot yet do that, so pointer and keyboard actions refuse rather than dispatch
-unrestored `SendInput` or `XTest` while claiming a guarantee they do not keep.
+The foreground rung is global input that hands the session back: capture the
+prior foreground, activate the target, prove it came forward, dispatch exactly
+once, restore the pointer, restore the window. Windows has `SendInput` but cannot
+yet run that transaction around it, so it refuses rather than claim a guarantee
+it does not keep. Linux offers the rung on an X11 session with an EWMH-capable
+window manager, and withholds it everywhere else.
 
-To light the rung up, a backend overrides three `PlatformBackend` methods:
-`supports_foreground_transaction`, `frontmost_application`, and
-`activate_application`. The transaction itself — capture, activate, prove,
-dispatch once, restore, and report the evidence — is shared in
-`axon-core/src/delivery.rs` and is already covered by fake-backend tests in both
-crates, including activation that cannot be proved (nothing is dispatched) and
-restoration that fails after dispatch (evidence kept, overall failure).
+A backend lights the rung up by overriding `supports_foreground_transaction`,
+`frontmost_application`, and `activate_application`, plus `pointer_location` and
+`move_pointer` when its dispatch moves the real cursor. The transaction itself is
+shared in `axon-core/src/delivery.rs`, and `axon-core/tests/foreground.rs` covers
+it directly: what it does to the session and in what order, including activation
+that cannot be proved (nothing is dispatched), a foreground that cannot be read
+(also nothing dispatched, because what cannot be read cannot be promised back),
+and a restoration that fails after dispatch (evidence kept, overall failure).
+
+Activation is asynchronous everywhere, so the proof and both restorations poll on
+a bounded budget rather than reading once. Under X11 the activation request is a
+client message that has not reached the window manager when the call returns, and
+a single immediate read would report almost every real activation as unproved.
 
 Stable refusal reasons a caller will see from these backends:
 
@@ -129,10 +136,31 @@ The health-v1 capability overlay feeds the same decision that dispatches, so
 
 The unit template lives at `axon-linux/systemd/axon.service.in` and ships inside
 the release archive, so what will be registered can be read before installing.
-Under Wayland, synthetic pointer and keyboard input and unmediated screenshots
-are unavailable; `status` reports each as unusable with a stable reason rather
-than letting a call fail later, and pointer and keyboard actions refuse with
-`noDeliveryCandidate` carrying that same reason.
+
+Synthetic input is the one capability whose availability is a fact about the
+running session rather than about the build, and the same answer feeds both
+`status` and the dispatch ladder. It needs an X11 session with an EWMH-capable
+window manager, because the transaction reads and sets the foreground through
+`_NET_ACTIVE_WINDOW` and ties a window to an application through `_NET_WM_PID`.
+Each way that can fail has its own reason code:
+
+| session | `pointerInput` reason | why |
+| --- | --- | --- |
+| X11 with an EWMH window manager | usable | `click` and `keyboard` deliver at the `foreground` rung under `foregroundPermitted` |
+| Wayland | `wayland-restricted` | The compositor refuses synthetic input, and X11 cannot see or restore Wayland-native focus even through XWayland |
+| X11 with no window manager | `no-window-manager` | Nothing honours `_NET_ACTIVE_WINDOW`, so the foreground can be neither read nor activated |
+| X11 without XTEST | `no-xtest` | The server answers everything else normally but cannot synthesize input |
+| No display | `no-x-display` | There is no synthetic input device to reach |
+
+The X11 half lives in `axon-linux/src/x11.rs`; keystroke translation is pure and
+lives in `axon-linux/src/keys.rs`, so it is tested on every host rather than only
+where it can run. `tests/x11_foreground.rs` exercises the protocol conversation
+against a real X server by being its own miniature EWMH window manager, which is
+why it needs nothing but `Xvfb`.
+
+Screenshots still require a portal authorization flow, and `drag` remains
+unimplemented: it holds a button down across the whole gesture, so an interrupted
+one leaves the session in a state the restoration here cannot describe.
 
 ## Windows UI Automation spike
 

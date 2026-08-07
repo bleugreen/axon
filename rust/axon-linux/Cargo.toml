@@ -12,6 +12,13 @@ serde_json = "1"
 [target.'cfg(target_os = "linux")'.dependencies]
 atspi = { version = "0.30.0", features = ["connection", "proxies", "tokio"] }
 tokio = { version = "1.47.1", features = ["rt", "time"] }
+# Pure Rust, so no libxtst development package is needed to build this crate anywhere.
+x11rb = { version = "0.14", features = ["xtest"] }
+
+# The hermetic foreground test is its own miniature window manager, so it needs the protocol
+# bindings directly rather than through the backend.
+[target.'cfg(target_os = "linux")'.dev-dependencies]
+x11rb = { version = "0.14", features = ["xtest"] }
 
 [[bin]]
 name = "axon-linux"

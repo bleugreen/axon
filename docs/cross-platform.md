@@ -100,9 +100,10 @@ The daemon serves `health` and `shutdown` as ordinary JSON-RPC methods on the
 mode-0600 `$XDG_RUNTIME_DIR/axon-v1.sock`, so a lifecycle command learns which
 process it stopped from the reply. Session facts are detected independently —
 user manager, display, session bus — so a host can report an honest partial
-state instead of one collapsed guess. Wayland's restrictions on synthetic
-pointer and keyboard input are overlaid on the backend's static capability list
-at status time, because the same build behaves differently under X11.
+state instead of one collapsed guess. Synthetic pointer and keyboard input are
+reported per session rather than per build, because the same binary can deliver
+them on an X11 session with a window manager and cannot on a Wayland one, and the
+same answer feeds both `status` and the dispatch ladder.
 
 ## Windows backend
 
@@ -189,8 +190,16 @@ than equating “Linux” with one uniform tree.
 - Chromium and Electron applications may not expose their accessibility trees
   until an AT-SPI listener registers. Listener registration is therefore part
   of backend readiness, not an optional optimization.
-- Under X11, XTest provides the practical synthetic-input fallback and global
-  observation is feasible.
+- Under X11, XTest is the practical synthetic-input mechanism and global
+  observation is feasible. Reaching either requires an X11 client layer in the
+  backend, separate from the AT-SPI connection that carries capture and the
+  semantic rung. The two halves meet at the process id: AT-SPI knows applications
+  by bus name and EWMH knows windows by `_NET_WM_PID`, and the process is the
+  only fact both understand.
+- A keysym the active layout does not contain is refused by name rather than
+  reached by temporarily remapping a spare keycode. Remapping the keyboard is a
+  global side effect visible to every other X client, it races them, and no
+  transaction can guarantee undoing it.
 - Wayland intentionally blocks unrestricted synthetic pointer input and global
   input observation. libei and desktop portals are the escape hatches when the
   compositor supports and authorizes them. The backend must otherwise declare
@@ -229,8 +238,8 @@ rather than falling through to a louder mechanism.
 | `invoke` | `semantic` (`AXUIElementPerformAction`, any named action) | `semantic` (UIA `InvokePattern` only) | `semantic` (AT-SPI `Action.DoAction`, any named action) |
 | `type` | `semantic` (`AXValue` + readback), then `pixel`, then `foreground` | `semantic` (UIA `ValuePattern` + readback) | `semantic` (AT-SPI `EditableText.SetTextContents` + readback) |
 | `scroll` | `semantic` (`AXScrollToVisible`); wheel bursts ride `pixel` then `foreground` | `semantic` (UIA `ScrollItemPattern`) | `semantic` (AT-SPI `Component.ScrollTo`) |
-| `click` | `semantic` when the element advertises `AXPress`, else `pixel`, else `foreground` | refused | refused |
-| `keyboard` | `pixel` with `app`, else `foreground` | refused | refused |
+| `click` | `semantic` when the element advertises `AXPress`, else `pixel`, else `foreground` | refused | `foreground` on X11 with an EWMH window manager, else refused |
+| `keyboard` | `pixel` with `app`, else `foreground` | refused | `foreground` on X11 with an EWMH window manager, else refused |
 | `drag` | `pixel` with an app or handle endpoint, else `foreground` | not implemented | not implemented |
 
 No backend reports `pixel` for a mechanism it cannot bind to a verified target.
@@ -240,17 +249,20 @@ implemented. Both refuse with `backgroundPixelUnsupported` and a message naming
 what is missing, because relabelling `SendInput` or `XTest` as `pixel` would make
 the contract's central promise false.
 
-Neither backend offers the foreground rung either, which is why pointer and
-keyboard actions refuse outright there today. `SendInput` and `XTest` exist, but
-the foreground rung is global input that hands the session back, and these
-backends cannot yet capture the prior foreground, activate the target, prove it
-came forward, and restore. Dispatching unrestored global input while reporting
-`delivery: "foreground"` would claim a guarantee they do not keep, and the
-unrestored focus theft is the very behavior the contract exists to prevent. The
-seams live on `PlatformBackend` (`supports_foreground_transaction`,
-`frontmost_application`, `activate_application`) and the transaction itself is
-shared in `rust/axon-core/src/delivery.rs`, so each backend only has to implement
-three platform calls to light the rung up.
+Windows does not offer the foreground rung, which is why pointer and keyboard
+actions refuse outright there. It has `SendInput`, but the foreground rung is
+global input that hands the session back, and this backend cannot yet capture the
+prior foreground, activate the target, prove it came forward, and restore.
+Dispatching unrestored global input while reporting `delivery: "foreground"`
+would claim a guarantee it does not keep, and the unrestored focus theft is the
+very behavior the contract exists to prevent.
+
+The seams live on `PlatformBackend` — `supports_foreground_transaction`,
+`frontmost_application`, `activate_application`, and, for a mechanism that moves
+the real cursor, `pointer_location` and `move_pointer` — while the transaction
+itself is shared in `rust/axon-core/src/delivery.rs`. Linux implements them and
+offers the rung where the session supports it; Windows implements none of them
+yet.
 
 ### Windows session and integrity constraints
 
@@ -269,12 +281,48 @@ cannot honour.
 
 ### Linux compositor and toolkit overlays
 
-Under X11 the foreground rung is `XTest`, gated on the opt-in and on a usable
-global input device. Under Wayland there is no global input device to gate: the
-compositor refuses synthetic input outright, so `pointerInput` and
-`keyboardInput` are unusable and every pointer or keyboard action refuses with
-`noDeliveryCandidate` carrying the compositor's reason. AT-SPI paths are
-unaffected, because they mutate the accessibility tree rather than the session.
+Under X11 the foreground rung is `XTest`, gated on the opt-in and on a window
+manager that publishes `_NET_ACTIVE_WINDOW` and `_NET_WM_PID`. Those two
+properties are the whole transaction: the first is how the foreground is read and
+set, and the second is what ties a window back to an application. Without a
+manager honouring them there is nothing to activate through, so `pointerInput`
+and `keyboardInput` are unusable with reason `no-window-manager`. The XTEST
+extension itself is probed rather than assumed: a server started without it
+answers every other question about the session normally, and advertising input on
+the strength of a window manager alone would report the capability usable and
+discover otherwise only at the moment of dispatch.
+
+A keystroke aimed at an application is resolved to the backend's own AT-SPI
+identity before the transaction begins, because that is the string
+`frontmost_application` answers with and `activate_application` raises. An
+application that cannot be resolved refuses with `targetIdentityUnavailable`
+rather than falling through to whatever holds the foreground, which would post
+keystrokes into work the caller never named.
+
+Under Wayland they are unusable whatever else is true. The compositor refuses
+synthetic input from an ordinary client, and X11 cannot read or set the Wayland
+foreground. XWayland is the trap worth naming: Mutter publishes EWMH properties
+for X11 clients and injects XTest events globally, so a backend could activate an
+X11 window, prove it came forward, and dispatch — while a Wayland-native
+application held the focus it could neither see nor give back. A mechanism that
+works while its proof quietly does not is precisely what this contract refuses,
+so the session is classified as Wayland before any X connection is attempted, and
+every pointer or keyboard action refuses with `noDeliveryCandidate` carrying that
+reason.
+
+Because XTest moves the real cursor, a Linux `click` captures the pointer before
+dispatch and warps it home afterwards, ahead of returning the prior window, and
+reports the outcome as `pointerRestored`. `keyboard` does not move it, and
+reports null rather than claiming a restoration that never happened.
+
+AT-SPI paths are unaffected by any of this, because they mutate the accessibility
+tree rather than the session. AT-SPI identities carry the bus name alongside the
+object path, since every application's root object sits at the same path and the
+path alone would name several applications at once.
+
+`drag` remains unimplemented on Linux. It holds a button down across the whole
+gesture, so it needs its own capability and its own account of a press held
+across a failed restoration, and has neither.
 
 AT-SPI value setting no longer takes focus first. Focus is a system-wide side
 effect, and an action that changes it is foreground however it finally mutates
@@ -305,6 +353,14 @@ self-hosted runners. Each job selects both `self-hosted` and the runner's
 dedicated `axon-live-*` label, so GitHub cannot silently route it to a hosted
 machine or to the wrong operating system.
 
+The Linux job also runs the hermetic X11 foreground test under `Xvfb`. That test
+brings its own miniature EWMH window manager rather than depending on an
+installed desktop, so it needs only the `Xvfb` binary and behaves the same on
+every run. It gates pull requests deliberately: the project's only real Linux
+desktop is a GNOME Wayland session, which is the worst possible place to verify
+X11 activation, and the live lane asserts the opposite property there — that
+global input stays withheld at both policies with a reason naming Wayland.
+
 The separate `Live desktop verification` workflow is a reporting lane. It runs
 only after a push to `main` or an explicit manual dispatch, never for a pull
 request. Its self-hosted jobs use dedicated `axon-live-*` labels and serialize
@@ -316,7 +372,9 @@ failure reports a real integration regression without blocking a pull request:
   a button, invokes `AXPress`, and verifies the display changed;
 - Linux connects to the logged-in GNOME session's AT-SPI bus and runs the
   hardened Calculator probe, which verifies the expected text transition on the
-  same AT-SPI object that was captured before dispatch;
+  same AT-SPI object that was captured before dispatch, then asserts that
+  `keyboard` refuses with `noDeliveryCandidate` at both policies because the
+  session is Wayland;
 - Windows uses a localhost-only, forced-command SSH key to cross from the
   runner's session-0 service into the desktop user's process context. The fixed
   probe rebuilds `axon-win`, snapshots and temporarily replaces the scheduled

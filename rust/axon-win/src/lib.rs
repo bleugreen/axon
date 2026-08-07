@@ -4,10 +4,10 @@ use axon_core::{
     AppQuery, AxnCodec, AxnRunner, Candidate, Capability, Confidence, DeliveryCandidate,
     DeliveryCapability, DeliveryOutcome, DeliveryPolicy, DeliveryRefusal, DeliveryRefusalReason,
     DeliveryRung, DeliverySelection, DispatchOutcome, ExpectedFact, ForegroundTarget, JsonRpcError,
-    JsonRpcId, JsonRpcRequest, JsonRpcResponse, Locator, LocatorResolver, PlatformBackend,
-    Resolution, ResolutionStatus, RunEnvelope, RunOptions, Snapshot, SnapshotHandle,
-    TextLocationResolver, TextLocationSource, TextLocationTarget, TextRecognitionProvider,
-    ToolDispatcher, dispatch_in_foreground, select_delivery,
+    JsonRpcId, JsonRpcRequest, JsonRpcResponse, KeyboardIntent, Locator, LocatorResolver,
+    PlatformBackend, Resolution, ResolutionStatus, RunEnvelope, RunOptions, Snapshot,
+    SnapshotHandle, TextLocationResolver, TextLocationSource, TextLocationTarget,
+    TextRecognitionProvider, ToolDispatcher, dispatch_in_foreground, select_delivery,
 };
 use serde_json::{Map, Value, json};
 
@@ -151,6 +151,8 @@ impl<B: PointerTargetVerifier + TextRecognitionProvider + VisualObservationProvi
             policy,
             &candidate,
             ForegroundTarget::Application(&target.app),
+            // A pointer click moves the real cursor, so the transaction puts it back.
+            true,
             json!({"verified": false, "reason": "click has no declared postcondition"}),
             None,
             |backend| backend.pointer_click(point),
@@ -255,6 +257,8 @@ impl<B: PointerTargetVerifier + TextRecognitionProvider + VisualObservationProvi
                     policy,
                     &candidate,
                     ForegroundTarget::Application(&application),
+                    // A pointer click moves the real cursor, so the transaction puts it back.
+                    true,
                     json!({"verified":false,"reason":"click has no declared postcondition"}),
                     Some(resolution),
                     |backend| backend.pointer_click(point),
@@ -279,27 +283,54 @@ impl<B: PointerTargetVerifier + TextRecognitionProvider + VisualObservationProvi
             "keyboard" => {
                 // The intent is validated before the ladder, so a malformed request is an error
                 // rather than a refusal.
-                let input = required_str(params, "input")
-                    .or_else(|_| required_str(params, "key"))?
-                    .to_owned();
+                let intent = keyboard_intent(params)?;
                 let ladder = self.global_input_ladder(Capability::KeyboardInput, "SendInput");
                 let Some(candidate) = self.selected(&ladder, policy) else {
                     return Ok(self.refusal(&ladder, policy));
                 };
                 let app = app_query(params);
-                // `keyboard` without an app is explicitly addressed at whatever holds the
-                // foreground, so there is nothing to activate and nothing to restore. With an app
-                // it is aimed, and the transaction proves that app came forward first.
-                let named = app.name.clone();
+                // `keyboard` naming no application is explicitly addressed at whatever holds the
+                // foreground: nothing to activate, nothing to restore. Naming one makes it aimed,
+                // and the transaction compares and activates the backend's own identity for that
+                // application rather than the display name the request carried.
+                let aimed = app.name.is_some() || app.identifier.is_some();
+                let target = if aimed {
+                    match self
+                        .backend
+                        .resolve_application(&app)
+                        .map_err(backend_error)?
+                    {
+                        Some(identity) => Some(identity),
+                        // Falling through to the frontmost here would post keystrokes into whatever
+                        // the user happens to be working in, having been asked for something else.
+                        None => {
+                            return Ok(DeliveryOutcome::refusal_result(
+                                policy,
+                                DeliveryRefusal::new(
+                                    DeliveryRefusalReason::TargetIdentityUnavailable,
+                                    DeliveryRung::Foreground,
+                                    Some(DeliveryCapability::GlobalInput),
+                                    "the requested application could not be identified, so \
+                                     foreground delivery cannot activate and prove it",
+                                ),
+                            ));
+                        }
+                    }
+                } else {
+                    None
+                };
                 self.foreground_dispatch(
                     policy,
                     &candidate,
-                    named
+                    target
                         .as_deref()
                         .map_or(ForegroundTarget::Frontmost, ForegroundTarget::Application),
+                    // Keyboard input never touches the cursor, and capturing a pointer it does not
+                    // move would report a restoration that never happened.
+                    false,
                     json!({"verified":false,"reason":"keyboard input has no declared postcondition"}),
                     None,
-                    move |backend| backend.keyboard(&app, &input),
+                    move |backend| backend.keyboard(&app, intent),
                 )
             }
             "invoke" => {
@@ -412,11 +443,12 @@ impl<B: PointerTargetVerifier + TextRecognitionProvider + VisualObservationProvi
         policy: DeliveryPolicy,
         candidate: &DeliveryCandidate,
         target: ForegroundTarget<'_>,
+        restores_pointer: bool,
         verification: Value,
         resolution: Option<Resolution>,
         body: impl FnOnce(&mut B) -> Result<(), axon_core::BackendError>,
     ) -> Result<Value, JsonRpcError> {
-        let dispatch = dispatch_in_foreground(&mut self.backend, target, body);
+        let dispatch = dispatch_in_foreground(&mut self.backend, target, restores_pointer, body);
         if let Some(refusal) = dispatch.refusal {
             let mut result = DeliveryOutcome::refusal_result(policy, refusal);
             if let Some(object) = result.as_object_mut() {
@@ -424,15 +456,20 @@ impl<B: PointerTargetVerifier + TextRecognitionProvider + VisualObservationProvi
             }
             return Ok(result);
         }
-        dispatch
-            .value
-            .expect("a proved activation dispatches")
-            .map_err(backend_error)?;
+        if let Err(error) = dispatch.value.expect("a proved activation dispatches") {
+            // The transaction activated and then handed the session back around this failure, so
+            // its cleanup evidence is the only record of what happened to the user's foreground.
+            // It rides on the error rather than being dropped.
+            let mut failure = backend_error(error);
+            failure.data = Some(json!({ "foreground": dispatch.cleanup }));
+            return Err(failure);
+        }
 
         let mut result = json!({
             // Dispatch evidence survives a failed restoration, but the action as a whole did not
-            // succeed: the user's session was not put back where they left it.
-            "success": dispatch.cleanup.restored,
+            // succeed: the user's session was not put back where they left it. A cursor left where
+            // the click dropped it counts as much as a window that never came forward again.
+            "success": dispatch.cleanup.session_restored(),
             "dispatch": {"success": true, "mechanism": candidate.mechanism},
             "verification": verification,
             "foreground": dispatch.cleanup,
@@ -711,6 +748,25 @@ fn app_query_from_target(params: &Map<String, Value>, target: &Value) -> AppQuer
     }
     q
 }
+/// `keyboard` carries exactly one intent. Neither is an empty request and both at once is an
+/// ambiguous one; each is malformed rather than a delivery decision, so each is a transport error.
+fn keyboard_intent(params: &Map<String, Value>) -> Result<KeyboardIntent<'_>, JsonRpcError> {
+    let text = params.get("text").and_then(Value::as_str);
+    let key = params.get("key").and_then(Value::as_str);
+    match (text, key) {
+        (Some(text), None) => Ok(KeyboardIntent::Text(text)),
+        (None, Some(key)) => Ok(KeyboardIntent::Key(key)),
+        (Some(_), Some(_)) => Err(rpc_error(
+            -32602,
+            "keyboard takes exactly one of text and key; text is entered literally and key names a \
+             keystroke, and a request carrying both does not say which it meant",
+        )),
+        (None, None) => Err(rpc_error(
+            -32602,
+            "keyboard requires exactly one of the string parameters text and key",
+        )),
+    }
+}
 fn required_str<'a>(p: &'a Map<String, Value>, key: &str) -> Result<&'a str, JsonRpcError> {
     p.get(key)
         .and_then(Value::as_str)
@@ -882,7 +938,7 @@ mod tests {
         ) -> Result<(), BackendError> {
             unreachable!()
         }
-        fn keyboard(&mut self, _: &AppQuery, _: &str) -> Result<(), BackendError> {
+        fn keyboard(&mut self, _: &AppQuery, _: KeyboardIntent<'_>) -> Result<(), BackendError> {
             Ok(())
         }
         fn screenshot(&mut self, _: &AppQuery) -> Result<Screenshot, BackendError> {
@@ -902,6 +958,9 @@ mod tests {
         }
         fn supports_foreground_transaction(&self) -> bool {
             self.foreground_transaction
+        }
+        fn resolve_application(&mut self, app: &AppQuery) -> Result<Option<String>, BackendError> {
+            Ok(app.name.clone())
         }
         fn frontmost_application(&mut self) -> Result<Option<String>, BackendError> {
             Ok(self.frontmost.borrow().clone())
@@ -1369,7 +1428,7 @@ mod tests {
         let response = router
             .request(request(
                 "keyboard",
-                json!({"input": "x", "app": "App", "deliveryPolicy": "foregroundPermitted"}),
+                json!({"text": "x", "app": "App", "deliveryPolicy": "foregroundPermitted"}),
             ))
             .unwrap();
 
@@ -1493,7 +1552,7 @@ mod tests {
             let response = router
                 .request(request(
                     "keyboard",
-                    json!({"input": "x", "deliveryPolicy": policy}),
+                    json!({"text": "x", "deliveryPolicy": policy}),
                 ))
                 .unwrap();
             let result = action_result(&response);
@@ -1571,7 +1630,7 @@ mod tests {
                     json!({
                         "target": handle.0,
                         "value": "x",
-                        "input": "x",
+                        "text": "x",
                         "deliveryPolicy": "whateverItTakes"
                     }),
                 ))

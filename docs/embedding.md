@@ -207,6 +207,9 @@ human-readable prose and must never be parsed.
 | `atspi-unavailable` | The AT-SPI accessibility bus is absent or refused a connection |
 | `wayland-restricted` | Wayland's security model forbids the operation for an unprivileged client |
 | `portal-authorization-required` | A desktop portal authorization flow is required first |
+| `no-x-display` | No X display is reachable, so there is no synthetic input device |
+| `no-window-manager` | The X11 session has no EWMH-capable window manager, so the foreground can be neither read nor activated |
+| `no-xtest` | The X server does not provide the XTEST extension, so synthetic input cannot be posted |
 | `not-implemented` | This build does not implement the capability on this platform |
 | `unknown` | The state could not be determined and no more specific code applies |
 
@@ -239,9 +242,11 @@ expect to see in production.
 - **Linux at the greeter.** `session.graphical` is false with reason `no-graphical-session` and
   `accessibilityBus` is ungranted with reason `atspi-unavailable`. The registration can still be
   present and correct; the desktop simply is not up yet.
-- **Linux under Wayland.** The daemon is ready, but `pointerInput`, `keyboardInput`, and
-  `observeGlobalInput` are unusable with reason `wayland-restricted`, and `screenshot` is unusable
-  with reason `portal-authorization-required`.
+- **Linux under Wayland.** The daemon is ready, but `pointerInput` and `keyboardInput` are unusable
+  with reason `wayland-restricted`, and `screenshot` is unusable with reason
+  `portal-authorization-required`. `observeGlobalInput` is unusable with reason `not-implemented`,
+  because that one is a gap in this build rather than something the compositor withholds — an X11
+  session reports it exactly the same way.
 
 ### Compatibility
 

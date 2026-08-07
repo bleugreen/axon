@@ -69,13 +69,13 @@
       "capability": "pointerInput",
       "usable": false,
       "reason": "wayland-restricted",
-      "restriction": "Wayland does not permit unrestricted synthetic pointer input"
+      "restriction": "this is a Wayland session: the compositor does not permit unrestricted synthetic input, and X11 cannot read or set the Wayland foreground even where XWayland is running alongside"
     },
     {
       "capability": "keyboardInput",
       "usable": false,
       "reason": "wayland-restricted",
-      "restriction": "Wayland does not permit unrestricted synthetic keyboard input"
+      "restriction": "this is a Wayland session: the compositor does not permit unrestricted synthetic input, and X11 cannot read or set the Wayland foreground even where XWayland is running alongside"
     },
     {
       "capability": "screenshot",
@@ -98,8 +98,8 @@
     {
       "capability": "observeGlobalInput",
       "usable": false,
-      "reason": "wayland-restricted",
-      "restriction": "Wayland does not expose global input observation"
+      "reason": "not-implemented",
+      "restriction": "global input observation is not implemented"
     }
   ]
 }

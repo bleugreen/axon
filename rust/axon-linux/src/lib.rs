@@ -4,18 +4,23 @@ use axon_core::{
     AppQuery, AxnCodec, AxnRunner, Candidate, Capability, Confidence, DeliveryCandidate,
     DeliveryCapability, DeliveryOutcome, DeliveryPolicy, DeliveryRefusal, DeliveryRefusalReason,
     DeliveryRung, DeliverySelection, DispatchOutcome, ExpectedFact, ForegroundTarget, JsonRpcError,
-    JsonRpcId, JsonRpcRequest, JsonRpcResponse, Locator, LocatorResolver, PlatformBackend,
-    Resolution, ResolutionStatus, RunEnvelope, RunOptions, Snapshot, SnapshotHandle,
-    ToolDispatcher, dispatch_in_foreground, select_delivery,
+    JsonRpcId, JsonRpcRequest, JsonRpcResponse, KeyboardIntent, Locator, LocatorResolver,
+    PlatformBackend, Resolution, ResolutionStatus, RunEnvelope, RunOptions, Snapshot,
+    SnapshotHandle, ToolDispatcher, dispatch_in_foreground, select_delivery,
 };
 use serde_json::{Map, Value, json};
 
+pub mod keys;
 pub mod lifecycle;
 
 #[cfg(target_os = "linux")]
 mod platform;
 #[cfg(target_os = "linux")]
 pub use platform::LinuxBackend;
+/// The X11 half of the Linux backend, public so the hermetic foreground test can drive it against
+/// a real X server without a desktop session.
+#[cfg(target_os = "linux")]
+pub mod x11;
 
 /// Tools this backend does not implement at all. These are not delivery decisions: the request
 /// names something the Linux daemon has no code path for, which stays a JSON-RPC error.
@@ -34,7 +39,13 @@ const NO_BACKGROUND_PIXEL: &str = "this Linux backend has no verified target-win
      X11 window-targeted delivery and Wayland portal delivery are not implemented";
 
 /// Why the foreground rung is withheld rather than merely gated behind the opt-in.
-const NO_FOREGROUND_TRANSACTION: &str = "this Linux backend cannot capture, prove, and restore the \
+///
+/// On this backend that means one of three sessions: no X display to connect to, a Wayland session
+/// whose compositor neither permits synthetic input nor exposes its foreground to X11, or an X11
+/// session with no EWMH-capable window manager to read and set the active window through. The
+/// backend's capability report names which one, and that reason reaches the caller ahead of this
+/// message.
+const NO_FOREGROUND_TRANSACTION: &str = "this Linux session cannot capture, prove, and restore the \
      foreground application, so it cannot deliver global input transactionally";
 
 pub struct Router<B> {
@@ -126,6 +137,8 @@ impl<B: PointerTargetVerifier> Router<B> {
                     policy,
                     &candidate,
                     ForegroundTarget::Application(&application),
+                    // A pointer click moves the real cursor, so the transaction puts it back.
+                    true,
                     json!({"verified":false,"reason":"click has no declared postcondition"}),
                     Some(resolution),
                     |backend| backend.pointer_click(point),
@@ -150,27 +163,55 @@ impl<B: PointerTargetVerifier> Router<B> {
             "keyboard" => {
                 // The intent is validated before the ladder, so a malformed request is an error
                 // rather than a refusal.
-                let input = required_str(params, "input")
-                    .or_else(|_| required_str(params, "key"))?
-                    .to_owned();
+                let intent = keyboard_intent(params)?;
                 let ladder = self.global_input_ladder(Capability::KeyboardInput, "XTest keyboard");
                 let Some(candidate) = self.selected(&ladder, policy) else {
                     return Ok(self.refusal(&ladder, policy));
                 };
                 let app = app_query(params);
-                // `keyboard` without an app is explicitly addressed at whatever holds the
-                // foreground, so there is nothing to activate and nothing to restore. With an app
-                // it is aimed, and the transaction proves that app came forward first.
-                let named = app.name.clone();
+                // `keyboard` naming no application is explicitly addressed at whatever holds the
+                // foreground: nothing to activate, nothing to restore. Naming one makes it aimed,
+                // and the transaction compares and activates the backend's own identity for that
+                // application — not the display name or caller-facing identifier the request
+                // carried, which no backend answers with.
+                let aimed = app.name.is_some() || app.identifier.is_some();
+                let target = if aimed {
+                    match self
+                        .backend
+                        .resolve_application(&app)
+                        .map_err(backend_error)?
+                    {
+                        Some(identity) => Some(identity),
+                        // Falling through to the frontmost here would post keystrokes into whatever
+                        // the user happens to be working in, having been asked for something else.
+                        None => {
+                            return Ok(DeliveryOutcome::refusal_result(
+                                policy,
+                                DeliveryRefusal::new(
+                                    DeliveryRefusalReason::TargetIdentityUnavailable,
+                                    DeliveryRung::Foreground,
+                                    Some(DeliveryCapability::GlobalInput),
+                                    "the requested application could not be identified, so \
+                                     foreground delivery cannot activate and prove it",
+                                ),
+                            ));
+                        }
+                    }
+                } else {
+                    None
+                };
                 self.foreground_dispatch(
                     policy,
                     &candidate,
-                    named
+                    target
                         .as_deref()
                         .map_or(ForegroundTarget::Frontmost, ForegroundTarget::Application),
+                    // Keyboard input never touches the cursor, and capturing a pointer it does not
+                    // move would report a restoration that never happened.
+                    false,
                     json!({"verified":false,"reason":"keyboard input has no declared postcondition"}),
                     None,
-                    move |backend| backend.keyboard(&app, &input),
+                    move |backend| backend.keyboard(&app, intent),
                 )
             }
             "drag" => {
@@ -293,11 +334,12 @@ impl<B: PointerTargetVerifier> Router<B> {
         policy: DeliveryPolicy,
         candidate: &DeliveryCandidate,
         target: ForegroundTarget<'_>,
+        restores_pointer: bool,
         verification: Value,
         resolution: Option<axon_core::Resolution>,
         body: impl FnOnce(&mut B) -> Result<(), axon_core::BackendError>,
     ) -> Result<Value, JsonRpcError> {
-        let dispatch = dispatch_in_foreground(&mut self.backend, target, body);
+        let dispatch = dispatch_in_foreground(&mut self.backend, target, restores_pointer, body);
         if let Some(refusal) = dispatch.refusal {
             let mut result = DeliveryOutcome::refusal_result(policy, refusal);
             if let Some(object) = result.as_object_mut() {
@@ -305,15 +347,20 @@ impl<B: PointerTargetVerifier> Router<B> {
             }
             return Ok(result);
         }
-        dispatch
-            .value
-            .expect("a proved activation dispatches")
-            .map_err(backend_error)?;
+        if let Err(error) = dispatch.value.expect("a proved activation dispatches") {
+            // The transaction activated and then handed the session back around this failure, so
+            // its cleanup evidence is the only record of what happened to the user's foreground.
+            // It rides on the error rather than being dropped.
+            let mut failure = backend_error(error);
+            failure.data = Some(json!({ "foreground": dispatch.cleanup }));
+            return Err(failure);
+        }
 
         let mut result = json!({
             // Dispatch evidence survives a failed restoration, but the action as a whole did not
-            // succeed: the user's session was not put back where they left it.
-            "success": dispatch.cleanup.restored,
+            // succeed: the user's session was not put back where they left it. A cursor left where
+            // the click dropped it counts as much as a window that never came forward again.
+            "success": dispatch.cleanup.session_restored(),
             "dispatch": {"success": true, "mechanism": candidate.mechanism},
             "verification": verification,
             "foreground": dispatch.cleanup,
@@ -572,6 +619,25 @@ fn app_query_from_target(params: &Map<String, Value>, target: &Value) -> AppQuer
     }
     q
 }
+/// `keyboard` carries exactly one intent. Neither is an empty request and both at once is an
+/// ambiguous one; each is malformed rather than a delivery decision, so each is a transport error.
+fn keyboard_intent(params: &Map<String, Value>) -> Result<KeyboardIntent<'_>, JsonRpcError> {
+    let text = params.get("text").and_then(Value::as_str);
+    let key = params.get("key").and_then(Value::as_str);
+    match (text, key) {
+        (Some(text), None) => Ok(KeyboardIntent::Text(text)),
+        (None, Some(key)) => Ok(KeyboardIntent::Key(key)),
+        (Some(_), Some(_)) => Err(rpc_error(
+            -32602,
+            "keyboard takes exactly one of text and key; text is entered literally and key names a \
+             keystroke, and a request carrying both does not say which it meant",
+        )),
+        (None, None) => Err(rpc_error(
+            -32602,
+            "keyboard requires exactly one of the string parameters text and key",
+        )),
+    }
+}
 fn required_str<'a>(p: &'a Map<String, Value>, key: &str) -> Result<&'a str, JsonRpcError> {
     p.get(key)
         .and_then(Value::as_str)
@@ -620,7 +686,14 @@ mod tests {
         verified_handles: Rc<RefCell<Vec<SnapshotHandle>>>,
         value: Rc<RefCell<Option<String>>>,
         clicks: Rc<RefCell<usize>>,
+        keystrokes: Rc<RefCell<usize>>,
         focuses: Rc<RefCell<usize>>,
+        /// Where the real pointer sits. A click moves it, which is why the transaction restores it.
+        pointer: Rc<RefCell<(f64, f64)>>,
+        /// Whether the foreground can be read at all, which is not the same as nothing holding it.
+        foreground_readable: bool,
+        /// A pointer that will not go back where it started.
+        refuses_pointer_move: bool,
         /// Whether this session advertises a usable global input device, which is what decides
         /// between "opt in and it works" and "this cannot happen here".
         pointer_capability_usable: bool,
@@ -693,8 +766,9 @@ mod tests {
         ) -> Result<Observation, BackendError> {
             unreachable!()
         }
-        fn pointer_click(&mut self, _: (f64, f64)) -> Result<(), BackendError> {
+        fn pointer_click(&mut self, point: (f64, f64)) -> Result<(), BackendError> {
             *self.clicks.borrow_mut() += 1;
+            *self.pointer.borrow_mut() = point;
             Ok(())
         }
         fn pointer_drag(
@@ -705,7 +779,8 @@ mod tests {
         ) -> Result<(), BackendError> {
             unreachable!()
         }
-        fn keyboard(&mut self, _: &AppQuery, _: &str) -> Result<(), BackendError> {
+        fn keyboard(&mut self, _: &AppQuery, _: KeyboardIntent<'_>) -> Result<(), BackendError> {
+            *self.keystrokes.borrow_mut() += 1;
             Ok(())
         }
         fn screenshot(&mut self, _: &AppQuery) -> Result<Screenshot, BackendError> {
@@ -726,8 +801,35 @@ mod tests {
         fn supports_foreground_transaction(&self) -> bool {
             self.foreground_transaction
         }
+        /// The display name and the identity are deliberately different strings, as they are in the
+        /// real backend: a router that hands one where the other is meant activates nothing.
+        fn resolve_application(&mut self, app: &AppQuery) -> Result<Option<String>, BackendError> {
+            let by_name = app
+                .name
+                .as_deref()
+                .is_some_and(|name| name.eq_ignore_ascii_case("App"));
+            let by_identifier = app.identifier.as_deref() == Some(APP_IDENTITY);
+            Ok((by_name || by_identifier).then(|| APP_IDENTITY.to_string()))
+        }
         fn frontmost_application(&mut self) -> Result<Option<String>, BackendError> {
+            if !self.foreground_readable {
+                return Err(BackendError::Operation {
+                    operation: "read the foreground".into(),
+                    message: "the session refused".into(),
+                    diagnostic: None,
+                });
+            }
             Ok(self.frontmost.borrow().clone())
+        }
+        fn pointer_location(&mut self) -> Result<Option<(f64, f64)>, BackendError> {
+            Ok(Some(*self.pointer.borrow()))
+        }
+        fn move_pointer(&mut self, to: (f64, f64)) -> Result<bool, BackendError> {
+            if self.refuses_pointer_move {
+                return Ok(false);
+            }
+            *self.pointer.borrow_mut() = to;
+            Ok(true)
         }
         fn activate_application(&mut self, identity: &str) -> Result<bool, BackendError> {
             self.activations.borrow_mut().push(identity.into());
@@ -743,6 +845,14 @@ mod tests {
             Ok(true)
         }
     }
+    /// Where the fake pointer starts, deliberately away from any node's centre so a click has to
+    /// move it and the transaction has something real to put back.
+    const POINTER_ORIGIN: (f64, f64) = (500.0, 400.0);
+
+    /// What the backend answers with and activates by, which is not what a request carries. On
+    /// Linux this is an AT-SPI bus name and object path, and the display name is "App".
+    const APP_IDENTITY: &str = ":1.7/org/a11y/atspi/accessible/root";
+
     fn node(name: &str) -> Node {
         Node {
             role: "Button".into(),
@@ -774,14 +884,18 @@ mod tests {
         FakeBackend {
             snapshot: Snapshot::new(Application {
                 name: "App".into(),
-                identifier: None,
+                identifier: Some(APP_IDENTITY.into()),
                 windows: vec![Window { title: None, root }],
             }),
             pointer_target_matches: true,
             verified_handles: Rc::new(RefCell::new(vec![])),
             value: Rc::new(RefCell::new(value.map(str::to_owned))),
             clicks: Rc::new(RefCell::new(0)),
+            keystrokes: Rc::new(RefCell::new(0)),
             focuses: Rc::new(RefCell::new(0)),
+            pointer: Rc::new(RefCell::new(POINTER_ORIGIN)),
+            foreground_readable: true,
+            refuses_pointer_move: false,
             pointer_capability_usable: false,
             foreground_transaction: false,
             frontmost: Rc::new(RefCell::new(Some("Prior".into()))),
@@ -843,7 +957,7 @@ mod tests {
         let mut router = Router::new(backend(vec![], None));
 
         let response = router
-            .request(request("keyboard", json!({"input": "x"})))
+            .request(request("keyboard", json!({"text": "x"})))
             .unwrap();
 
         let result = refusal(&response);
@@ -943,9 +1057,11 @@ mod tests {
             json!(true)
         );
         assert_eq!(success.result["foreground"]["restored"], json!(true));
+        // Activated by the identity the backend answers with, not the display name the request
+        // carried: the two are different strings, and only one of them can be compared or raised.
         assert_eq!(
             *activations.borrow(),
-            vec!["App".to_string(), "Prior".to_string()]
+            vec![APP_IDENTITY.to_string(), "Prior".to_string()]
         );
         assert_eq!(frontmost.borrow().as_deref(), Some("Prior"));
     }
@@ -953,7 +1069,10 @@ mod tests {
     #[test]
     fn foreground_escalation_refuses_without_dispatching_when_activation_is_not_proved() {
         let backend = transactional_backend();
-        backend.refuses_activation.borrow_mut().push("App".into());
+        backend
+            .refuses_activation
+            .borrow_mut()
+            .push(APP_IDENTITY.into());
         let handle = backend.snapshot.handle(0);
         let clicks = backend.clicks.clone();
         let frontmost = backend.frontmost.clone();
@@ -1009,6 +1128,248 @@ mod tests {
         // The events went out, but the user's session was not put back.
         assert_eq!(success.result["success"], json!(false));
         assert_eq!(*clicks.borrow(), 1);
+    }
+
+    #[test]
+    fn an_opted_in_click_puts_the_pointer_back_where_it_found_it() {
+        // XTest moves the real cursor, so a click that lands but leaves the pointer in the target
+        // has taken something from the user it did not give back.
+        let backend = transactional_backend();
+        let handle = backend.snapshot.handle(0);
+        let pointer = backend.pointer.clone();
+        let frontmost = backend.frontmost.clone();
+        let mut router = Router::new(backend);
+        router.snapshot = Some(router.backend.snapshot.clone());
+
+        let response = router
+            .request(request(
+                "click",
+                json!({
+                    "target": handle.0,
+                    "app": "App",
+                    "deliveryPolicy": "foregroundPermitted"
+                }),
+            ))
+            .unwrap();
+
+        let JsonRpcResponse::Success(success) = response else {
+            panic!("an opted-in click dispatches")
+        };
+        assert_eq!(success.result["delivery"], json!("foreground"));
+        assert_eq!(success.result["foreground"]["pointerRestored"], json!(true));
+        assert_eq!(success.result["foreground"]["restored"], json!(true));
+        assert_eq!(success.result["success"], json!(true));
+        // Both halves of the session are as the user left them.
+        assert_eq!(*pointer.borrow(), POINTER_ORIGIN);
+        assert_eq!(frontmost.borrow().as_deref(), Some("Prior"));
+    }
+
+    #[test]
+    fn keyboard_reports_no_pointer_to_restore_rather_than_a_restoration() {
+        // null means the dispatch never moved the cursor. Reporting `true` would claim a
+        // restoration that never happened, and `false` would claim a failure that never happened.
+        let mut router = Router::new(transactional_backend());
+
+        let response = router
+            .request(request(
+                "keyboard",
+                json!({
+                    "key": "Return",
+                    "app": "App",
+                    "deliveryPolicy": "foregroundPermitted"
+                }),
+            ))
+            .unwrap();
+
+        let JsonRpcResponse::Success(success) = response else {
+            panic!("an opted-in keystroke dispatches")
+        };
+        assert_eq!(success.result["delivery"], json!("foreground"));
+        assert_eq!(success.result["foreground"]["pointerRestored"], Value::Null);
+        assert_eq!(success.result["success"], json!(true));
+    }
+
+    #[test]
+    fn a_backend_that_cannot_read_the_foreground_dispatches_nothing() {
+        // Not the same as nothing being frontmost. A backend that cannot read what holds the
+        // foreground cannot promise to give it back, so it must not take it in the first place.
+        let mut backend = transactional_backend();
+        backend.foreground_readable = false;
+        let handle = backend.snapshot.handle(0);
+        let clicks = backend.clicks.clone();
+        let activations = backend.activations.clone();
+        let mut router = Router::new(backend);
+        router.snapshot = Some(router.backend.snapshot.clone());
+
+        let response = router
+            .request(request(
+                "click",
+                json!({
+                    "target": handle.0,
+                    "app": "App",
+                    "deliveryPolicy": "foregroundPermitted"
+                }),
+            ))
+            .unwrap();
+
+        let result = refusal(&response);
+        assert_eq!(result["refusal"]["reason"], json!("activationNotProved"));
+        assert_eq!(result["dispatchSuccess"], json!(false));
+        assert_eq!(result["delivery"], Value::Null);
+        assert_eq!(*clicks.borrow(), 0);
+        assert!(activations.borrow().is_empty());
+    }
+
+    #[test]
+    fn a_pointer_that_cannot_be_put_back_fails_the_click_and_keeps_the_evidence() {
+        let mut backend = transactional_backend();
+        backend.refuses_pointer_move = true;
+        let handle = backend.snapshot.handle(0);
+        let clicks = backend.clicks.clone();
+        let frontmost = backend.frontmost.clone();
+        let mut router = Router::new(backend);
+        router.snapshot = Some(router.backend.snapshot.clone());
+
+        let response = router
+            .request(request(
+                "click",
+                json!({
+                    "target": handle.0,
+                    "app": "App",
+                    "deliveryPolicy": "foregroundPermitted"
+                }),
+            ))
+            .unwrap();
+
+        let JsonRpcResponse::Success(success) = response else {
+            panic!("the dispatch happened, so this is an action result")
+        };
+        assert_eq!(success.result["dispatchSuccess"], json!(true));
+        assert_eq!(success.result["delivery"], json!("foreground"));
+        assert_eq!(
+            success.result["foreground"]["pointerRestored"],
+            json!(false)
+        );
+        // The window came back and the events went out; the cursor did not, so the action failed.
+        assert_eq!(success.result["foreground"]["restored"], json!(true));
+        assert_eq!(success.result["success"], json!(false));
+        assert_eq!(*clicks.borrow(), 1);
+        assert_eq!(frontmost.borrow().as_deref(), Some("Prior"));
+    }
+
+    #[test]
+    fn an_aimed_keystroke_activates_the_application_the_request_named() {
+        // The request carries a display name; the backend answers and activates by its own
+        // identity. A router that passed the name straight through would compare two strings that
+        // can never be equal and refuse every aimed keystroke.
+        for naming in [json!({"app": "App"}), json!({"identifier": APP_IDENTITY})] {
+            let backend = transactional_backend();
+            let keystrokes = backend.keystrokes.clone();
+            let activations = backend.activations.clone();
+            let frontmost = backend.frontmost.clone();
+            let mut router = Router::new(backend);
+
+            let mut params = naming.as_object().unwrap().clone();
+            params.insert("text".into(), json!("x"));
+            params.insert("deliveryPolicy".into(), json!("foregroundPermitted"));
+            let response = router
+                .request(request("keyboard", Value::Object(params)))
+                .unwrap();
+
+            let JsonRpcResponse::Success(success) = response else {
+                panic!("an aimed keystroke dispatches: {naming}")
+            };
+            assert_eq!(success.result["delivery"], json!("foreground"), "{naming}");
+            assert_eq!(
+                success.result["foreground"]["activationProved"],
+                json!(true),
+                "{naming}"
+            );
+            assert_eq!(*keystrokes.borrow(), 1, "{naming}");
+            assert_eq!(
+                *activations.borrow(),
+                vec![APP_IDENTITY.to_string(), "Prior".to_string()],
+                "{naming}"
+            );
+            assert_eq!(frontmost.borrow().as_deref(), Some("Prior"), "{naming}");
+        }
+    }
+
+    #[test]
+    fn a_keystroke_aimed_at_an_unknown_application_never_falls_through_to_the_frontmost() {
+        // Posting these keystrokes at whatever the user is working in, having been asked for an
+        // application that could not be found, is the worst available answer.
+        let backend = transactional_backend();
+        let keystrokes = backend.keystrokes.clone();
+        let activations = backend.activations.clone();
+        let mut router = Router::new(backend);
+
+        let response = router
+            .request(request(
+                "keyboard",
+                json!({
+                    "app": "Nothing By That Name",
+                    "text": "x",
+                    "deliveryPolicy": "foregroundPermitted"
+                }),
+            ))
+            .unwrap();
+
+        let result = refusal(&response);
+        assert_eq!(
+            result["refusal"]["reason"],
+            json!("targetIdentityUnavailable")
+        );
+        assert_eq!(result["dispatchSuccess"], json!(false));
+        assert_eq!(*keystrokes.borrow(), 0);
+        assert!(activations.borrow().is_empty());
+    }
+
+    #[test]
+    fn a_keystroke_naming_no_application_addresses_the_frontmost_without_activating() {
+        // The one case where dispatching without activation is correct: the caller asked for
+        // whatever holds the foreground, so there is nothing to bring forward and nothing to undo.
+        let backend = transactional_backend();
+        let keystrokes = backend.keystrokes.clone();
+        let activations = backend.activations.clone();
+        let mut router = Router::new(backend);
+
+        let response = router
+            .request(request(
+                "keyboard",
+                json!({"text": "x", "deliveryPolicy": "foregroundPermitted"}),
+            ))
+            .unwrap();
+
+        let JsonRpcResponse::Success(success) = response else {
+            panic!("an unaimed keystroke dispatches")
+        };
+        assert_eq!(success.result["delivery"], json!("foreground"));
+        assert_eq!(
+            success.result["foreground"]["alreadyFrontmost"],
+            json!(true)
+        );
+        assert_eq!(*keystrokes.borrow(), 1);
+        assert!(activations.borrow().is_empty());
+    }
+
+    #[test]
+    fn a_keyboard_request_naming_both_intents_is_a_transport_error() {
+        // text is entered literally and key names a keystroke: `End` is three characters as one
+        // and a single key as the other, so a request carrying both has not said what it wants.
+        let mut router = Router::new(transactional_backend());
+
+        let response = router
+            .request(request(
+                "keyboard",
+                json!({"text": "End", "key": "End", "deliveryPolicy": "foregroundPermitted"}),
+            ))
+            .unwrap();
+
+        let JsonRpcResponse::Failure(failure) = response else {
+            panic!("an ambiguous keyboard request is malformed, not refused")
+        };
+        assert_eq!(failure.error.code, -32602);
     }
 
     #[test]
@@ -1092,7 +1453,7 @@ mod tests {
                         "target": handle.0,
                         "name": "Invoke",
                         "value": "x",
-                        "input": "x",
+                        "text": "x",
                         "deliveryPolicy": "whateverItTakes"
                     }),
                 ))

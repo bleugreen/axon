@@ -140,13 +140,37 @@ jobs:
       - name: Install AT-SPI build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libdbus-1-dev pkg-config
+          sudo apt-get install -y libdbus-1-dev pkg-config xvfb x11-utils
 
-      # The lifecycle, session classification, and status assembly are pure and run headlessly.
-      # Only the systemd and socket calls need a real desktop.
+      # The lifecycle, session classification, status assembly, keysym translation, and the whole
+      # router are pure and run headlessly. Only the systemd and socket calls need a real desktop.
       - name: Run headless axon-linux tests
         working-directory: rust
         run: cargo test -p axon-linux
+
+      # The one part of this backend a fake cannot exercise. Activation is a client message to a
+      # window manager and proof is reading the answer back, so only a real X server can show that
+      # the conversation works. The test brings its own miniature EWMH manager, which is why a bare
+      # Xvfb is the entire requirement: no desktop, no toolkit, nothing to vary between runs.
+      #
+      # This runs for pull requests, unlike the live lane. It has to: the project's only real Linux
+      # desktop is a GNOME Wayland session, which is the worst possible place to verify X11
+      # activation and is asserted to refuse instead.
+      - name: Run the hermetic X11 foreground test
+        working-directory: rust
+        env:
+          DISPLAY: ":99"
+        run: |
+          set -euo pipefail
+          Xvfb :99 -screen 0 1280x1024x24 &
+          xvfb_pid=$!
+          trap 'kill "$xvfb_pid" 2>/dev/null || true' EXIT
+          for _ in $(seq 1 100); do
+            if xdpyinfo -display :99 >/dev/null 2>&1; then break; fi
+            sleep 0.1
+          done
+          xdpyinfo -display :99 >/dev/null
+          cargo test -p axon-linux -- --ignored
 
       - name: Build axon-linux in release mode
         working-directory: rust
