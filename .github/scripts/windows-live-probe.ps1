@@ -73,6 +73,40 @@ try {
         Write-Output "Daemon readiness completed after $([Math]::Round($restartTimer.Elapsed.TotalSeconds, 2)) seconds"
     }
 
+    # The published contract, checked against a real interactive desktop rather than a fixture.
+    $expectedVersion = (Get-Content (Join-Path $PSScriptRoot '..\..\VERSION')).Trim()
+    $reportedVersion = (& $probeExecutable version).Trim()
+    if ($reportedVersion -ne $expectedVersion) {
+        throw "version reports $reportedVersion, expected $expectedVersion"
+    }
+
+    $status = & $probeExecutable status --json | ConvertFrom-Json -Depth 100
+    if ($LASTEXITCODE -ne 0) { throw "status --json failed with exit code $LASTEXITCODE" }
+    if ($status.schemaVersion -ne 'health-v1') { throw "unexpected schemaVersion $($status.schemaVersion)" }
+    if ($status.version -ne $expectedVersion) { throw "status reports version $($status.version)" }
+    if ($status.platform -ne 'windows') { throw "status reports platform $($status.platform)" }
+    if (-not $status.daemon.running -or -not $status.daemon.ready) {
+        throw "daemon is not ready after restart: $($status.daemon | ConvertTo-Json -Compress)"
+    }
+    if (-not $status.session.interactive -or -not $status.session.graphical) {
+        throw "the daemon is not on the interactive desktop: $($status.session | ConvertTo-Json -Compress)"
+    }
+    # The registration must point at the permanent probe path, not at the build output it was
+    # copied from. Registering an ephemeral path is the failure this assertion exists to catch.
+    if ($status.registration.path -ne $probeExecutable) {
+        throw "registration points at $($status.registration.path), expected $probeExecutable"
+    }
+    # The complete vocabulary, so 'unusable here' stays distinguishable from 'older than yours'.
+    if ($status.capabilities.Count -ne 15) {
+        throw "expected the complete capability vocabulary, got $($status.capabilities.Count)"
+    }
+    foreach ($capability in $status.capabilities) {
+        if (-not $capability.usable -and [string]::IsNullOrEmpty($capability.reason)) {
+            throw "$($capability.capability) is unusable without a reason"
+        }
+    }
+    Write-Output "status ok: version=$($status.version) ready=$($status.daemon.ready) capabilities=$($status.capabilities.Count)"
+
     $listRequest = '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"look","arguments":{}}}'
     $listResponse = $listRequest | & $probeExecutable mcp | ConvertFrom-Json -Depth 100
     if ($listResponse.result.isError -ne $false) { throw 'the app-list look request failed' }
