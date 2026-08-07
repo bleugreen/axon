@@ -262,27 +262,32 @@ public final class UserActionRecorder {
             return
         }
 
-        context.observation.finish(success: true)
-        let observation = context.observation.observation
-        // The settled read is the recorded value: the state the surface actually reached, where
-        // a mid-burst read could catch a field still processing the last keystroke.
-        let value: String? = observation?.targetAfter?.value ?? attribute(kAXValueAttribute, from: context.element)
-        if let value, !value.isEmpty {
+        // Appended before the settle wait, like every recorded group: the wait spins the run
+        // loop, and an event delivered during it must record after this burst, never before.
+        // The burst's own action is decided from a direct read; the wait feeds the observation.
+        let index = groups.count
+        if let value: String = attribute(kAXValueAttribute, from: context.element), !value.isEmpty {
             let factTarget = targetForElement(context.element, app: context.app)
             groups.append(RecordedUserEventGroup(
                 action: .setValue(target: context.actionTarget.target, value: value, factTarget: factTarget.target),
-                observed: context.actionTarget.observed + factTarget.observed + drainNotificationEvidence(),
-                warnings: context.actionTarget.warnings + factTarget.warnings,
-                observation: observation
+                observed: context.actionTarget.observed + factTarget.observed,
+                warnings: context.actionTarget.warnings + factTarget.warnings
             ))
         } else {
             groups.append(RecordedUserEventGroup(
                 action: .typeText(app: context.app.name, text: text),
-                observed: context.actionTarget.observed + drainNotificationEvidence(),
-                warnings: context.actionTarget.warnings + ["focused element did not expose AXValue; recorded keyboard fallback"],
-                observation: observation
+                observed: context.actionTarget.observed,
+                warnings: context.actionTarget.warnings + ["focused element did not expose AXValue; recorded keyboard fallback"]
             ))
         }
+        context.observation.finish(success: true)
+        let group = groups[index]
+        groups[index] = RecordedUserEventGroup(
+            action: group.action,
+            observed: group.observed + drainNotificationEvidence(),
+            warnings: group.warnings,
+            observation: context.observation.observation
+        )
     }
 
     private func pendingTextContextForCurrentFocus() -> PendingTextContext? {
