@@ -222,7 +222,13 @@ fn run_manager(ready: &mpsc::Sender<Result<(), String>>, stopped: &mpsc::Receive
     for window in windows {
         let _ = connection.destroy_window(window);
     }
+    // `flush` only guarantees the teardown reached the socket, not that the server applied it. The
+    // test reads the root back over a *different* connection as soon as `stop` returns, and two
+    // clients' requests carry no ordering against each other, so the manager has to wait for the
+    // server to have processed its own teardown before the thread ends. This is the same round
+    // trip `X11Session::flush` makes for the same reason.
     let _ = connection.flush();
+    let _ = connection.sync();
 }
 
 struct ManagerAtoms {

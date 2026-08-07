@@ -63,7 +63,10 @@ jobs:
           test -f "$ZIP.sha256"
           test -x "dist/Axon.app/Contents/Resources/bin/axon"
           test -x "dist/Axon.app/Contents/MacOS/Axon"
-          unzip -l "$ZIP" | grep -q "Axon-$VERSION/Axon.app/"
+          # Listed once into a variable for the same reason as the Linux archive check below:
+          # `grep -q` short-circuits, and under `pipefail` that fails the pipeline on EPIPE.
+          LISTING="$(unzip -l "$ZIP")"
+          grep -q "Axon-$VERSION/Axon.app/" <<<"$LISTING"
           ACTUAL="$(dist/Axon.app/Contents/Resources/bin/axon version)"
           [[ "$ACTUAL" == "$VERSION" ]]
 
@@ -183,8 +186,12 @@ jobs:
           VERSION="$(./scripts/check-version)"
           ARCHIVE="dist/axon-linux-$VERSION-linux-x86_64.tar.gz"
           test -f "$ARCHIVE.sha256"
-          tar -tzf "$ARCHIVE" | grep -q "axon-linux-$VERSION-linux-x86_64/axon-linux"
-          tar -tzf "$ARCHIVE" | grep -q "systemd/axon.service.in"
+          # Listed once into a variable rather than piped into `grep -q`: under `pipefail` a
+          # short-circuiting reader closes the pipe, and the producer then fails the whole
+          # pipeline on EPIPE even though the match succeeded.
+          LISTING="$(tar -tzf "$ARCHIVE")"
+          grep -q "axon-linux-$VERSION-linux-x86_64/axon-linux" <<<"$LISTING"
+          grep -q "systemd/axon.service.in" <<<"$LISTING"
           test -x "dist/axon-linux-$VERSION-linux-x86_64/axon-linux"
           ACTUAL="$(dist/axon-linux-$VERSION-linux-x86_64/axon-linux version)"
           [[ "$ACTUAL" == "$VERSION" ]]
