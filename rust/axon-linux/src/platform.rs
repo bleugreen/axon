@@ -208,14 +208,6 @@ impl PlatformBackend for LinuxBackend {
                 "AT-SPI has no portable delta-scroll operation",
             ),
             (
-                Capability::PointerInput,
-                "Wayland does not permit unrestricted synthetic pointer input",
-            ),
-            (
-                Capability::KeyboardInput,
-                "Wayland does not permit unrestricted synthetic keyboard input",
-            ),
-            (
                 Capability::Screenshot,
                 "a desktop portal authorization flow is required",
             ),
@@ -229,9 +221,20 @@ impl PlatformBackend for LinuxBackend {
             ),
             (
                 Capability::ObserveGlobalInput,
-                "Wayland does not expose global input observation",
+                "global input observation is not implemented",
             ),
         ];
+        // Synthetic input is the one pair whose availability is a fact about the running session
+        // rather than about this build, and the same answer decides both the health document and
+        // the dispatch ladder.
+        let restriction = self.input_restriction();
+        let input = [Capability::PointerInput, Capability::KeyboardInput].map(|capability| {
+            CapabilityInfo {
+                capability,
+                usable: restriction.is_none(),
+                restriction: restriction.map(str::to_string),
+            }
+        });
         Ok(usable
             .into_iter()
             .map(|capability| CapabilityInfo {
@@ -248,6 +251,7 @@ impl PlatformBackend for LinuxBackend {
                         restriction: Some(reason.into()),
                     }),
             )
+            .chain(input)
             .collect())
     }
     fn enumerate_applications(&self) -> Result<Vec<Application>, BackendError> {
@@ -288,11 +292,8 @@ impl PlatformBackend for LinuxBackend {
             "wait_for_value is not implemented",
         ))
     }
-    fn pointer_click(&mut self, _: (f64, f64)) -> Result<(), BackendError> {
-        Err(capability(
-            Capability::PointerInput,
-            "requires compositor authorization",
-        ))
+    fn pointer_click(&mut self, point: (f64, f64)) -> Result<(), BackendError> {
+        self.x11(Capability::PointerInput)?.click(point)
     }
     fn pointer_drag(
         &mut self,
@@ -300,16 +301,18 @@ impl PlatformBackend for LinuxBackend {
         _: (f64, f64),
         _: Duration,
     ) -> Result<(), BackendError> {
+        // A drag holds a button down across the whole gesture, so an interrupted one leaves the
+        // session in a state no restoration here can describe. It needs its own capability and its
+        // own story about a press held across a failure, and has neither yet.
         Err(capability(
             Capability::PointerInput,
-            "requires compositor authorization",
+            "pointer drag is not implemented on this backend",
         ))
     }
-    fn keyboard(&mut self, _: &AppQuery, _: KeyboardIntent<'_>) -> Result<(), BackendError> {
-        Err(capability(
-            Capability::KeyboardInput,
-            "requires compositor authorization",
-        ))
+    /// The application is not named here: the transaction has already brought it forward and proved
+    /// it, and XTest posts to whatever holds the focus regardless of what this call was told.
+    fn keyboard(&mut self, _: &AppQuery, intent: KeyboardIntent<'_>) -> Result<(), BackendError> {
+        self.x11(Capability::KeyboardInput)?.keyboard(intent)
     }
     fn screenshot(&mut self, _: &AppQuery) -> Result<Screenshot, BackendError> {
         Err(capability(
@@ -329,8 +332,51 @@ impl PlatformBackend for LinuxBackend {
     fn observe_global_input(&mut self, _: Duration) -> Result<Vec<RecordedCall>, BackendError> {
         Err(capability(
             Capability::ObserveGlobalInput,
-            "not available under Wayland",
+            "global input observation is not implemented",
         ))
+    }
+
+    fn supports_foreground_transaction(&self) -> bool {
+        matches!(self.input, InputSession::Available(_))
+    }
+
+    fn frontmost_application(&mut self) -> Result<Option<String>, BackendError> {
+        let Some(process_id) = self.x11(Capability::Focus)?.active_window_pid()? else {
+            return Ok(None);
+        };
+        match self.lookup(|app| (app.process_id == process_id).then(|| app.identity.clone()))? {
+            Some(identity) => Ok(Some(identity)),
+            // A window whose process has no AT-SPI application is a real foreground this backend
+            // cannot name, and so cannot promise to give back. Answering `None` would tell the
+            // transaction there was nothing to restore and leave the user's session where Axon
+            // put it.
+            None => Err(operation(
+                "read the foreground application",
+                format!(
+                    "the foreground window belongs to process {process_id}, which exposes no \
+                     AT-SPI application to name or restore"
+                ),
+            )),
+        }
+    }
+
+    fn activate_application(&mut self, identity: &str) -> Result<bool, BackendError> {
+        let found = self.lookup(|app| (app.identity == identity).then_some(app.process_id))?;
+        let Some(process_id) = found else {
+            return Ok(false);
+        };
+        self.x11(Capability::Focus)?.activate_pid(process_id)
+    }
+
+    fn pointer_location(&mut self) -> Result<Option<(f64, f64)>, BackendError> {
+        self.x11(Capability::PointerInput)?
+            .pointer_location()
+            .map(Some)
+    }
+
+    fn move_pointer(&mut self, to: (f64, f64)) -> Result<bool, BackendError> {
+        self.x11(Capability::PointerInput)?.warp_pointer(to)?;
+        Ok(true)
     }
 }
 impl PointerTargetVerifier for LinuxBackend {
