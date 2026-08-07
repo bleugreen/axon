@@ -17,6 +17,10 @@ pub mod lifecycle;
 mod platform;
 #[cfg(target_os = "linux")]
 pub use platform::LinuxBackend;
+/// The X11 half of the Linux backend, public so the hermetic foreground test can drive it against
+/// a real X server without a desktop session.
+#[cfg(target_os = "linux")]
+pub mod x11;
 
 /// Tools this backend does not implement at all. These are not delivery decisions: the request
 /// names something the Linux daemon has no code path for, which stays a JSON-RPC error.

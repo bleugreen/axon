@@ -541,14 +541,14 @@ where
         .map_err(|_| operation(name, "timed out"))?
         .map_err(|e| operation(name, e))
 }
-fn operation(name: &str, error: impl std::fmt::Display) -> BackendError {
+pub(crate) fn operation(name: &str, error: impl std::fmt::Display) -> BackendError {
     BackendError::Operation {
         operation: name.into(),
         message: error.to_string(),
         diagnostic: None,
     }
 }
-fn capability(capability: Capability, reason: &str) -> BackendError {
+pub(crate) fn capability(capability: Capability, reason: &str) -> BackendError {
     BackendError::Capability {
         capability,
         reason: reason.into(),
