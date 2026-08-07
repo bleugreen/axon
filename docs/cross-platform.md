@@ -191,8 +191,14 @@ than equating “Linux” with one uniform tree.
   of backend readiness, not an optional optimization.
 - Under X11, XTest is the practical synthetic-input mechanism and global
   observation is feasible. Reaching either requires an X11 client layer in the
-  backend, which is separate from the AT-SPI connection that carries capture and
-  the semantic rung.
+  backend, separate from the AT-SPI connection that carries capture and the
+  semantic rung. The two halves meet at the process id: AT-SPI knows applications
+  by bus name and EWMH knows windows by `_NET_WM_PID`, and the process is the
+  only fact both understand.
+- A keysym the active layout does not contain is refused by name rather than
+  reached by temporarily remapping a spare keycode. Remapping the keyboard is a
+  global side effect visible to every other X client, it races them, and no
+  transaction can guarantee undoing it.
 - Wayland intentionally blocks unrestricted synthetic pointer input and global
   input observation. libei and desktop portals are the escape hatches when the
   compositor supports and authorizes them. The backend must otherwise declare
@@ -231,8 +237,8 @@ rather than falling through to a louder mechanism.
 | `invoke` | `semantic` (`AXUIElementPerformAction`, any named action) | `semantic` (UIA `InvokePattern` only) | `semantic` (AT-SPI `Action.DoAction`, any named action) |
 | `type` | `semantic` (`AXValue` + readback), then `pixel`, then `foreground` | `semantic` (UIA `ValuePattern` + readback) | `semantic` (AT-SPI `EditableText.SetTextContents` + readback) |
 | `scroll` | `semantic` (`AXScrollToVisible`); wheel bursts ride `pixel` then `foreground` | `semantic` (UIA `ScrollItemPattern`) | `semantic` (AT-SPI `Component.ScrollTo`) |
-| `click` | `semantic` when the element advertises `AXPress`, else `pixel`, else `foreground` | refused | refused |
-| `keyboard` | `pixel` with `app`, else `foreground` | refused | refused |
+| `click` | `semantic` when the element advertises `AXPress`, else `pixel`, else `foreground` | refused | `foreground` on X11 with an EWMH window manager, else refused |
+| `keyboard` | `pixel` with `app`, else `foreground` | refused | `foreground` on X11 with an EWMH window manager, else refused |
 | `drag` | `pixel` with an app or handle endpoint, else `foreground` | not implemented | not implemented |
 
 No backend reports `pixel` for a mechanism it cannot bind to a verified target.
@@ -242,19 +248,20 @@ implemented. Both refuse with `backgroundPixelUnsupported` and a message naming
 what is missing, because relabelling `SendInput` or `XTest` as `pixel` would make
 the contract's central promise false.
 
-Neither backend offers the foreground rung either, which is why pointer and
-keyboard actions refuse outright there today. Windows has `SendInput` but cannot
-yet run a transaction around it; the Linux backend has no synthetic input path at
-all, because it depends only on AT-SPI and has no X11 client layer. The
-foreground rung is global input that hands the session back, and neither backend
-can yet capture the prior foreground, activate the target, prove it came forward,
-and restore. Dispatching unrestored global input while reporting
-`delivery: "foreground"` would claim a guarantee they do not keep, and the
-unrestored focus theft is the very behavior the contract exists to prevent. The
-seams live on `PlatformBackend` (`supports_foreground_transaction`,
-`frontmost_application`, `activate_application`) and the transaction itself is
-shared in `rust/axon-core/src/delivery.rs`, so each backend only has to implement
-three platform calls to light the rung up.
+Windows does not offer the foreground rung, which is why pointer and keyboard
+actions refuse outright there. It has `SendInput`, but the foreground rung is
+global input that hands the session back, and this backend cannot yet capture the
+prior foreground, activate the target, prove it came forward, and restore.
+Dispatching unrestored global input while reporting `delivery: "foreground"`
+would claim a guarantee it does not keep, and the unrestored focus theft is the
+very behavior the contract exists to prevent.
+
+The seams live on `PlatformBackend` — `supports_foreground_transaction`,
+`frontmost_application`, `activate_application`, and, for a mechanism that moves
+the real cursor, `pointer_location` and `move_pointer` — while the transaction
+itself is shared in `rust/axon-core/src/delivery.rs`. Linux implements them and
+offers the rung where the session supports it; Windows implements none of them
+yet.
 
 ### Windows session and integrity constraints
 
