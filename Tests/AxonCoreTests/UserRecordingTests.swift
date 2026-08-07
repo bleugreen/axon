@@ -13,7 +13,30 @@ final class RecorderSettleTestElement: @unchecked Sendable {}
     #expect(scopes == [.app(editor), .app(browser), .all])
 }
 
-@Test func recordingTranslatorEmitsMechanicalIdsAndValueExpectations() throws {
+@Test func recordingTranslatorEmitsMechanicalIdsAndRequiredValueGuard() throws {
+    let translator = UserRecordingTranslator()
+    let target: JSONValue = .object([
+        "app": .string("Example"),
+        "locator": .object([
+            "role": .string("AXTextField"),
+            "identifier": .string("name-field")
+        ])
+    ])
+
+    let axnDocument = try translator.axnDocument(from: [
+        RecordedUserEventGroup(action: .setValue(target: target, value: "Mitch")),
+        RecordedUserEventGroup(action: .pressKey(app: "Example", key: "Return"))
+    ])
+
+    #expect(axnDocument["version"] == .int(1))
+    #expect(axnDocument["actions"]?[0]?["id"] == .string("a001"))
+    #expect(axnDocument["actions"]?[0]?["tool"] == .string("type"))
+    #expect(axnDocument["actions"]?[0]?["expects"]?[0]?["id"] == .string("a001.value.0"))
+    #expect(axnDocument["actions"]?[0]?["expects"]?[0]?["state"]?["value"]?["contains"] == .string("Mitch"))
+    #expect(axnDocument["actions"]?[1]?["requires"] == .array([.string("a001.value.0")]))
+}
+
+@Test func recordingTranslatorOmitsTypedValueGuardNothingDependsOn() throws {
     let translator = UserRecordingTranslator()
     let target: JSONValue = .object([
         "app": .string("Example"),
@@ -27,11 +50,9 @@ final class RecorderSettleTestElement: @unchecked Sendable {}
         RecordedUserEventGroup(action: .setValue(target: target, value: "Mitch"))
     ])
 
-    #expect(axnDocument["version"] == .int(1))
-    #expect(axnDocument["actions"]?[0]?["id"] == .string("a001"))
-    #expect(axnDocument["actions"]?[0]?["tool"] == .string("type"))
-    #expect(axnDocument["actions"]?[0]?["expects"]?[0]?["id"] == .string("a001.value.0"))
-    #expect(axnDocument["actions"]?[0]?["expects"]?[0]?["state"]?["value"]?["contains"] == .string("Mitch"))
+    // With no following step to guard, the fact would only assert the typed input back at the
+    // field it was typed into - the input echo a derived postcondition must never be.
+    #expect(axnDocument["actions"]?[0]?["expects"] == nil)
 }
 
 @Test func recordingTranslatorUsesPostActionTargetForValueExpectation() throws {
@@ -52,7 +73,8 @@ final class RecorderSettleTestElement: @unchecked Sendable {}
     ])
 
     let axnDocument = try translator.axnDocument(from: [
-        RecordedUserEventGroup(action: .setValue(target: actionTarget, value: "wikipedia.org", factTarget: factTarget))
+        RecordedUserEventGroup(action: .setValue(target: actionTarget, value: "wikipedia.org", factTarget: factTarget)),
+        RecordedUserEventGroup(action: .pressKey(app: "Example", key: "Return"))
     ])
 
     #expect(axnDocument["actions"]?[0]?["target"] == actionTarget)
@@ -308,7 +330,7 @@ final class RecorderSettleTestElement: @unchecked Sendable {}
         expects = []
     }
     #expect(expects.contains { $0["kind"] == .string("changed") } == false)
-    #expect(expects.contains { $0["kind"] == .string("value") } == true)
+    #expect(expects.isEmpty)
 }
 
 @Test func recordingTranslatorDoesNotTreatTextInputPopupAsNavigationChange() throws {
@@ -345,8 +367,8 @@ final class RecorderSettleTestElement: @unchecked Sendable {}
     } else {
         expects = []
     }
-    #expect(expects.contains { $0["kind"] == .string("value") } == true)
     #expect(expects.contains { $0["kind"] == .string("changed") } == false)
+    #expect(expects.isEmpty)
 }
 
 @Test func recordingTranslatorCoalescesWheelBurstIntoSingleSemanticScroll() throws {
