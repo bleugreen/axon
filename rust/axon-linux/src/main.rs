@@ -501,9 +501,12 @@ mod status {
         let env = SessionEnvironment::from_env();
         match socket::daemon_health() {
             Ok(report) => HealthReport::running(report, registration),
-            Err(error) if error.kind() == io::ErrorKind::InvalidData => {
-                incompatible(socket::endpoint(), registration, &env, Some(error.to_string()))
-            }
+            Err(error) if error.kind() == io::ErrorKind::InvalidData => incompatible(
+                socket::endpoint(),
+                registration,
+                &env,
+                Some(error.to_string()),
+            ),
             Err(error) => not_running(
                 socket::endpoint(),
                 registration,

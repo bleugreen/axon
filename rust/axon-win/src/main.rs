@@ -892,9 +892,10 @@ mod pipe {
             "health",
             Some(json!({})),
         ))?;
-        let result = response.get("result").cloned().ok_or_else(|| {
-            io::Error::other(format!("daemon rejected health check: {response}"))
-        })?;
+        let result = response
+            .get("result")
+            .cloned()
+            .ok_or_else(|| io::Error::other(format!("daemon rejected health check: {response}")))?;
         // InvalidData rather than a generic error: a daemon that answers unintelligibly is a
         // running daemon of another version, and the caller reports that differently from silence.
         let report: axon_core::DaemonReport = serde_json::from_value(result)
