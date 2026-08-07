@@ -286,7 +286,18 @@ manager that publishes `_NET_ACTIVE_WINDOW` and `_NET_WM_PID`. Those two
 properties are the whole transaction: the first is how the foreground is read and
 set, and the second is what ties a window back to an application. Without a
 manager honouring them there is nothing to activate through, so `pointerInput`
-and `keyboardInput` are unusable with reason `no-window-manager`.
+and `keyboardInput` are unusable with reason `no-window-manager`. The XTEST
+extension itself is probed rather than assumed: a server started without it
+answers every other question about the session normally, and advertising input on
+the strength of a window manager alone would report the capability usable and
+discover otherwise only at the moment of dispatch.
+
+A keystroke aimed at an application is resolved to the backend's own AT-SPI
+identity before the transaction begins, because that is the string
+`frontmost_application` answers with and `activate_application` raises. An
+application that cannot be resolved refuses with `targetIdentityUnavailable`
+rather than falling through to whatever holds the foreground, which would post
+keystrokes into work the caller never named.
 
 Under Wayland they are unusable whatever else is true. The compositor refuses
 synthetic input from an ordinary client, and X11 cannot read or set the Wayland
