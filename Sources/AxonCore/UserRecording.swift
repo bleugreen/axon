@@ -506,14 +506,6 @@ public struct UserRecordingTranslator {
         ])
     }
 
-    private func existsFact(id: String, target: JSONValue) -> JSONValue {
-        .object([
-            "id": .string(id),
-            "kind": .string("exists"),
-            "target": target
-        ])
-    }
-
     private func changedFact(id: String, app: String) -> JSONValue {
         .object([
             "id": .string(id),
