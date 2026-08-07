@@ -171,7 +171,7 @@ import Testing
 }
 
 @Test func snapshotDeterministicRedactionKeepsNumericControlValuesThatResembleCards() {
-    let scrollFraction = "0.03988433542726094"
+    let scrollFraction = "0.03988433542726099"
     let snapshot = AppSnapshot(
         id: SnapshotID("snap-numeric-controls"),
         app: AppIdentity(bundleIdentifier: "com.example.App", name: "Example", processIdentifier: 7),

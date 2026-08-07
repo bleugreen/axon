@@ -88,7 +88,11 @@ public struct DeterministicRedactor: Sendable {
         }
 
         var matches = roleMatches(for: field, context: context)
-        matches.append(contentsOf: patternMatches(in: value))
+        matches.append(contentsOf: patternMatches(
+            in: value,
+            field: field,
+            context: context
+        ))
         guard !matches.isEmpty else {
             return nil
         }
@@ -123,7 +127,11 @@ public struct DeterministicRedactor: Sendable {
         return matches
     }
 
-    private func patternMatches(in value: String) -> [DeterministicRuleMatch] {
+    private func patternMatches(
+        in value: String,
+        field: String,
+        context: DeterministicRedactionContext
+    ) -> [DeterministicRuleMatch] {
         var matches: [DeterministicRuleMatch] = []
         for rule in Self.regexRules where rule.matches(value) {
             matches.append(DeterministicRuleMatch(
@@ -132,7 +140,8 @@ public struct DeterministicRedactor: Sendable {
                 tag: rule.tag.rawValue
             ))
         }
-        if containsLuhnValidCard(value) {
+        if !isNumericControlValue(field: field, value: value, context: context),
+           containsLuhnValidCard(value) {
             matches.append(DeterministicRuleMatch(
                 rule: "luhn-credit-card",
                 version: 1,
@@ -140,6 +149,21 @@ public struct DeterministicRedactor: Sendable {
             ))
         }
         return matches
+    }
+
+    private func isNumericControlValue(
+        field: String,
+        value: String,
+        context: DeterministicRedactionContext
+    ) -> Bool {
+        guard field == "value",
+              let role = context.role,
+              Self.numericValueControlRoles.contains(role)
+        else {
+            return false
+        }
+        let trimmedValue = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        return !trimmedValue.isEmpty && Double(trimmedValue) != nil
     }
 
     private func strongestTag(in matches: [DeterministicRuleMatch]) -> String {
@@ -208,6 +232,12 @@ public struct DeterministicRedactor: Sendable {
         }
         return sum > 0 && sum % 10 == 0
     }
+
+    private static let numericValueControlRoles: Set<String> = [
+        "AXScrollBar",
+        "AXSlider",
+        "AXValueIndicator"
+    ]
 
     private static let secretLabelNeedles = [
         "password",
