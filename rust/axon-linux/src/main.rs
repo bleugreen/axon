@@ -537,7 +537,8 @@ mod status {
     fn print_human(report: &HealthReport) {
         println!("{:<18}{}", "Version:", report.version);
         println!(
-            "Daemon:         {}",
+            "{:<18}{}",
+            "Daemon:",
             match (report.daemon.running, report.daemon.ready) {
                 (true, true) => "ready".to_owned(),
                 (true, false) => "running, not ready".to_owned(),
@@ -547,9 +548,10 @@ mod status {
                 ),
             }
         );
-        println!("Endpoint:       {}", report.daemon.endpoint);
+        println!("{:<18}{}", "Endpoint:", report.daemon.endpoint);
         println!(
-            "Registration:   {}",
+            "{:<18}{}",
+            "Registration:",
             report
                 .registration
                 .path
@@ -557,7 +559,8 @@ mod status {
                 .unwrap_or("not registered")
         );
         println!(
-            "Session:        {}",
+            "{:<18}{}",
+            "Session:",
             match (report.session.interactive, report.session.graphical) {
                 (_, true) => "graphical".to_owned(),
                 (true, false) => format!(
@@ -585,7 +588,8 @@ mod status {
             .map(|state| state.capability.as_str())
             .collect::<Vec<_>>();
         println!(
-            "Unusable:       {}",
+            "{:<18}{}",
+            "Unusable:",
             if unusable.is_empty() {
                 "none".to_owned()
             } else {

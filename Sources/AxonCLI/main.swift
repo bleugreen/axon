@@ -789,16 +789,30 @@ private func printStatus(arguments: [String]) throws {
     let status = currentStatus()
 
     guard options.contains("--json") else {
-        print("Version:        \(status.version)")
-        print("Daemon:         \(status.daemon.running ? (status.daemon.ready ? "ready" : "running, not ready") : "not running")")
-        print("Endpoint:       \(status.daemon.endpoint)")
-        print("Registration:   \(status.registration.registered ? status.registration.path ?? "registered" : "not registered")")
-        print("Session:        \(status.session.graphical ? "graphical" : (status.session.interactive ? "interactive, no desktop" : "not interactive"))")
+        func line(_ label: String, _ value: String) {
+            print("\(label.padding(toLength: 18, withPad: " ", startingAt: 0))\(value)")
+        }
+        let daemonState: String
+        switch (status.daemon.running, status.daemon.ready) {
+        case (true, true):
+            daemonState = "ready"
+        case (true, false):
+            daemonState = "running, not ready (\(status.daemon.reason ?? HealthReason.unknown))"
+        default:
+            daemonState = "not running (\(status.daemon.reason ?? HealthReason.unknown))"
+        }
+        line("Version:", status.version)
+        line("Daemon:", daemonState)
+        line("Endpoint:", status.daemon.endpoint)
+        line("Registration:", status.registration.registered ? status.registration.path ?? "registered" : "not registered")
+        line("Session:", status.session.graphical
+            ? "graphical"
+            : "\(status.session.interactive ? "interactive, no desktop" : "not interactive") (\(status.session.reason ?? HealthReason.unknown))")
         for permission in status.permissions {
-            print("\("\(permission.name):".padding(toLength: 18, withPad: " ", startingAt: 0))\(permission.granted ? "granted" : "not granted")")
+            line("\(permission.name):", permission.granted ? "granted" : "not granted")
         }
         let unusable = status.capabilities.filter { !$0.usable }.map(\.capability)
-        print("Unusable:       \(unusable.isEmpty ? "none" : unusable.joined(separator: ", "))")
+        line("Unusable:", unusable.isEmpty ? "none" : unusable.joined(separator: ", "))
         return
     }
     print(try status.jsonLine())
