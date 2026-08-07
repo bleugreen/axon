@@ -193,6 +193,68 @@ import Testing
     ))
 }
 
+@Test func restartKeepsTheInstalledRegistrationRatherThanRepointingIt() throws {
+    let root = FileManager.default.temporaryDirectory
+        .appendingPathComponent("axon-restart-\(UUID().uuidString)")
+    defer { try? FileManager.default.removeItem(at: root) }
+    try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+    let plistPath = root.appendingPathComponent("dev.axon.test.plist")
+
+    let installed = "/Applications/Axon.app/Contents/Resources/bin/axon"
+    try LaunchAgentManager(
+        configuration: LaunchAgentConfiguration(
+            label: "dev.axon.test",
+            executablePath: installed,
+            socketPath: "/tmp/axon-test.sock",
+            environment: [:]
+        ),
+        plistPath: plistPath
+    ).install()
+
+    // Restarting from an ephemeral build directory must not become an install of it. This is the
+    // failure mode the whole permanent-path contract exists to prevent, reached by a verb that
+    // was never meant to change registration at all.
+    var commands: [[String]] = []
+    let ephemeral = LaunchAgentManager(
+        configuration: LaunchAgentConfiguration(
+            label: "dev.axon.test",
+            executablePath: "/tmp/build-slot/.build/debug/axon",
+            socketPath: "/tmp/axon-test.sock",
+            environment: [:]
+        ),
+        plistPath: plistPath,
+        runProcess: { command in
+            commands.append(command)
+            return ProcessResult(exitCode: 0)
+        }
+    )
+
+    try ephemeral.restart()
+
+    #expect(ephemeral.registration() == .present(mechanism: .launchd, path: installed))
+    #expect(commands.map(\.first) == ["bootout", "bootstrap"])
+}
+
+@Test func restartRefusesWhenNothingIsRegistered() {
+    let plistPath = FileManager.default.temporaryDirectory
+        .appendingPathComponent("axon-missing-\(UUID().uuidString).plist")
+    let manager = LaunchAgentManager(
+        configuration: LaunchAgentConfiguration(
+            label: "dev.axon.test",
+            executablePath: "/tmp/build-slot/.build/debug/axon",
+            socketPath: "/tmp/axon-test.sock",
+            environment: [:]
+        ),
+        plistPath: plistPath,
+        runProcess: { _ in ProcessResult(exitCode: 0) }
+    )
+
+    // Restarting nothing is an operational failure that names the fix, not a silent install.
+    #expect(throws: LaunchAgentError.self) {
+        try manager.restart()
+    }
+}
+
 @Test func buildDirectoryInstallPathsAreFlagged() {
     // The failure this guards against: installing from a build slot registers a path that
     // disappears, leaving a registration that can never start again.
