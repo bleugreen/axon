@@ -63,8 +63,22 @@ try {
     New-Item -ItemType Directory -Path $liveDirectory -Force | Out-Null
     Copy-Item (Resolve-Path 'target\debug\axon-win.exe').Path $probeExecutable -Force
 
+    # A live runner is also somebody's desktop, so an existing Axon registration is the normal
+    # case. Its XML is already captured above; unregister it now so the probe installs its own,
+    # and the finally block puts the original back exactly as it was. Without this park, `daemon
+    # restart` would restart whatever is installed -- by design, it never repoints a registration
+    # -- and every assertion below would describe that daemon instead of the one just built.
+    if ($null -ne $taskXml) {
+        Write-Output "parking the existing $taskName registration (running=$taskWasRunning)"
+        Unregister-ScheduledTask -TaskName $taskName -Confirm:$false -ErrorAction SilentlyContinue
+    }
+
     $restartTimer = [System.Diagnostics.Stopwatch]::StartNew()
     try {
+        & $probeExecutable daemon install
+        if ($LASTEXITCODE -ne 0) { throw "daemon install failed with exit code $LASTEXITCODE" }
+        # Restart is the operation this lane is named for, and it is only meaningful against a
+        # registration that already exists -- which is now the probe's own.
         & $probeExecutable daemon restart
         if ($LASTEXITCODE -ne 0) { throw "daemon restart failed with exit code $LASTEXITCODE" }
     }

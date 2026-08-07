@@ -247,18 +247,45 @@ jobs:
         run: |
           set -euo pipefail
           unit="$HOME/.config/systemd/user/axon.service"
+          # A live runner is also somebody's desktop, so an existing Axon registration is the
+          # normal case rather than a reason to refuse. Park it for the duration of the probe and
+          # put it back exactly as it was found -- contents, enablement, and running state.
+          parked=""
+          was_enabled=false
+          was_active=false
           if [ -e "$unit" ]; then
-            echo "::error::$unit already exists; refusing to overwrite an existing registration."
-            exit 1
+            if systemctl --user is-enabled axon.service >/dev/null 2>&1; then was_enabled=true; fi
+            if systemctl --user is-active axon.service >/dev/null 2>&1; then was_active=true; fi
+            parked="$(mktemp)"
+            cp -p "$unit" "$parked"
+            systemctl --user stop axon.service >/dev/null 2>&1 || true
+            systemctl --user disable axon.service >/dev/null 2>&1 || true
+            rm -f "$unit"
+            systemctl --user daemon-reload >/dev/null 2>&1 || true
+            echo "parked the existing registration (enabled=$was_enabled active=$was_active)"
           fi
 
           daemon="$PWD/target/debug/axon-linux"
-          cleanup() {
+          restore() {
             "$daemon" daemon uninstall >/dev/null 2>&1 || true
             rm -f "$unit"
-            systemctl --user daemon-reload >/dev/null 2>&1 || true
+            if [ -n "$parked" ]; then
+              mkdir -p "$(dirname "$unit")"
+              cp -p "$parked" "$unit"
+              rm -f "$parked"
+              systemctl --user daemon-reload >/dev/null 2>&1 || true
+              if [ "$was_enabled" = true ]; then
+                systemctl --user enable axon.service >/dev/null 2>&1 || true
+              fi
+              if [ "$was_active" = true ]; then
+                systemctl --user start axon.service >/dev/null 2>&1 || true
+              fi
+              echo "restored the parked registration"
+            else
+              systemctl --user daemon-reload >/dev/null 2>&1 || true
+            fi
           }
-          trap cleanup EXIT
+          trap restore EXIT
 
           expected_version="$(cat ../VERSION)"
           test "$("$daemon" version)" = "$expected_version"
