@@ -363,13 +363,13 @@ public final class ActionObservationCollector {
         // keeps changing faster than the clock an injected time source advances.
         let maxReads = max(2, Self.settleBudgetMs / Self.settleIntervalMs + 1)
         var previous: Reading?
-        for _ in 0..<maxReads {
+        for index in 0..<maxReads {
             let current = read(pending)
             if let previous, previous == current {
                 return (current, true)
             }
             previous = current
-            if now() >= deadline {
+            if index == maxReads - 1 || now() >= deadline {
                 break
             }
             sleepMilliseconds(Self.settleIntervalMs)
