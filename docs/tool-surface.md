@@ -74,6 +74,12 @@ structured identifiers, Luhn-valid cards, and known token shapes as
 When a screenshot request is known to contain an active credential through AX or
 OCR text, Axon omits the image and returns a warning instead of sending pixels.
 
+When every child of a rendered node is filtered out of the observation, the tree says so
+with a marker naming what disappeared, such as
+`⟨1 unreadable node: group[AXHostingView]⟩`, instead of rendering an empty child list
+against a non-zero child count. This is how a caller tells "nothing here" from "nothing
+readable here" without dropping to `format: "debug"`.
+
 `look(target: handle)` fetches a retained node's child page. Use the `offset`
 and `limit` fields from the returned continuation to page broad sibling lists.
 `direct: true` returns only direct children, and `all: true` includes every
@@ -152,6 +158,22 @@ locator when fail-closed target validation is required. Direct drag results sepa
 success. A drag is semantically successful only when `run` verifies supplied
 `expects` facts after dispatch, such as an AX list value exposing the new row
 order.
+
+`scroll` chooses between two strategies by the kind of target it was given. A point
+target posts `CGEventScroll` wheel events at that point and never consults the
+accessibility tree, which is what makes surfaces that render their own contents —
+iPhone Mirroring, remote desktops, games, canvas views — scrollable at all. A handle,
+locator, or bare app resolves an offscreen descendant and presses `AXScrollToVisible`
+as before, and falls back to a wheel burst at the element's or window's center when the
+tree exposes no scrollable descendant. The reported `strategy` always names which one
+ran. `deltaX`/`deltaY` are pixels and negative `deltaY` scrolls down; only the wheel
+path honors the distance, because `AXScrollToVisible` lets the app decide how far to
+move. Both strategies report `dispatchSuccess` separately from `semanticSuccess` and
+leave `semanticStatus` unverified: a dispatched wheel, or an app acknowledging the
+accessibility action, is not proof that the viewport moved. `success` reflects dispatch
+rather than semantics here, unlike `drag`, because a scroll moves a viewport instead of
+mutating state. Supplying `app` activates it first, since a wheel reaches whichever
+window is topmost under the point.
 
 `type` fills writable fields by setting `AXValue`; use it when the desired
 intent is "make this field contain this value." Its exact AXValue readback is a
