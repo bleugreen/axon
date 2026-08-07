@@ -144,7 +144,35 @@ private let scrollFrame = AXFrame(x: 10, y: 20, width: 100, height: 40)
     #expect(posted.isEmpty)
 }
 
-@Test func scrollWithoutDeltaPostsNothingAndSaysSo() throws {
+@Test func scrollWithoutDeltaIsANoOpThatClaimsNoDispatch() throws {
+    var posted: [CGEvent] = []
+    var activations: [String] = []
+    let executor = AXPrimitiveActionExecutor(
+        elementStore: AXElementStore(),
+        overlay: nil,
+        postEvent: { posted.append($0) },
+        sleepMilliseconds: { _ in },
+        activateApp: { activations.append($0) },
+        hitTest: { _ in nil }
+    )
+
+    let result = try executor.scroll(
+        target: .point(ActionPoint(x: 10, y: 20, coordinateSpace: .screen)),
+        app: "Example",
+        deltaX: 0,
+        deltaY: 0
+    )
+
+    #expect(result.success == true)
+    #expect(result.details["eventPath"]?["eventCount"] == .int(0))
+    #expect(result.details["dispatchSuccess"] == .bool(false))
+    #expect(result.details["semanticStatus"] == .string("noop"))
+    #expect(result.message == "No scroll delta was requested; no events were posted")
+    #expect(posted.isEmpty)
+    #expect(activations.isEmpty)
+}
+
+@Test func scrollSmallerThanOnePixelReportsThatNothingMoved() throws {
     var posted: [CGEvent] = []
     let executor = AXPrimitiveActionExecutor(
         elementStore: AXElementStore(),
@@ -158,11 +186,87 @@ private let scrollFrame = AXFrame(x: 10, y: 20, width: 100, height: 40)
         target: .point(ActionPoint(x: 10, y: 20, coordinateSpace: .screen)),
         app: nil,
         deltaX: 0,
-        deltaY: 0
+        deltaY: 0.4
+    )
+
+    #expect(result.success == false)
+    #expect(result.details["dispatchSuccess"] == .bool(false))
+    #expect(result.details["semanticStatus"] == nil)
+    #expect(result.details["eventPath"]?["eventCount"] == .int(0))
+    #expect(result.message == "scroll delta rounds to no pixel of wheel movement")
+    #expect(posted.isEmpty)
+}
+
+@Test func scrollDropsSubPixelAxisWithoutDroppingTheAxisThatMoves() throws {
+    var posted: [CGEvent] = []
+    let executor = AXPrimitiveActionExecutor(
+        elementStore: AXElementStore(),
+        overlay: nil,
+        postEvent: { posted.append($0) },
+        sleepMilliseconds: { _ in },
+        hitTest: { _ in nil }
+    )
+
+    let result = try executor.scroll(
+        target: .point(ActionPoint(x: 10, y: 20, coordinateSpace: .screen)),
+        app: nil,
+        deltaX: 0.4,
+        deltaY: -400
     )
 
     #expect(result.success == true)
-    #expect(result.details["eventPath"]?["eventCount"] == .int(0))
-    #expect(result.message == "No scroll delta was requested; no events were posted")
-    #expect(posted.isEmpty)
+    #expect(result.details["eventPath"]?["totalDeltaY"] == .double(-400))
+    #expect(result.details["eventPath"]?["totalDeltaX"] == .double(0))
+    #expect(!posted.isEmpty)
+}
+
+@Test func scrollActivatesForTheWheelAndNeverBeforeStrategySelection() throws {
+    // Activation is the wheel's own precondition, so it must not happen until a wheel is about to
+    // be posted: an accessibility scroll that never needs it must not take the user's focus, and a
+    // target that resolves to no point must not disturb the UI at all.
+    var log: [String] = []
+    let store = AXElementStore()
+    store.store(snapshotID: SnapshotID("scroll"), elements: [AXUIElementCreateApplication(123)])
+
+    let pointing = AXPrimitiveActionExecutor(
+        elementStore: store,
+        overlay: nil,
+        postEvent: { _ in log.append("post") },
+        sleepMilliseconds: { _ in },
+        activateApp: { log.append("activate:\($0)") },
+        hitTest: { _ in nil },
+        frameProvider: { _ in scrollFrame },
+        parentProvider: { _ in nil }
+    )
+
+    _ = try pointing.scroll(
+        target: .point(ActionPoint(x: 10, y: 20, coordinateSpace: .screen)),
+        app: "Example",
+        deltaX: 0,
+        deltaY: -400
+    )
+    #expect(log.first == "activate:Example")
+    #expect(log.filter { $0.hasPrefix("activate") }.count == 1)
+    #expect(log.contains("post"))
+
+    log = []
+    _ = try pointing.scroll(target: .handle("scroll:0"), app: "Example", deltaX: 0, deltaY: -400)
+    #expect(log.first == "activate:Example")
+
+    // No usable frame means no screen point, so there is nothing to activate for.
+    log = []
+    let unresolvable = AXPrimitiveActionExecutor(
+        elementStore: store,
+        overlay: nil,
+        postEvent: { _ in log.append("post") },
+        sleepMilliseconds: { _ in },
+        activateApp: { log.append("activate:\($0)") },
+        hitTest: { _ in nil },
+        frameProvider: { _ in nil },
+        parentProvider: { _ in nil }
+    )
+
+    let result = try unresolvable.scroll(target: .handle("scroll:0"), app: "Example", deltaX: 0, deltaY: -400)
+    #expect(result.success == false)
+    #expect(log.isEmpty)
 }
