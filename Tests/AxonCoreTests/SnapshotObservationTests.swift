@@ -345,6 +345,67 @@ import Testing
     #expect(text.contains("s12:42: button \"Tab 25\" [click]"))
 }
 
+@Test func observationNamesUnreadableChildrenInsteadOfRenderingAnEmptyTree() {
+    let snapshot = AppSnapshot(
+        id: SnapshotID("mirror"),
+        app: AppIdentity(bundleIdentifier: "com.apple.ScreenContinuity", name: "iPhone Mirroring", processIdentifier: 7),
+        windows: [
+            AXNode(role: "AXWindow", title: "iPhone Mirroring", children: [
+                AXNode(role: "AXGroup", subrole: "AXHostingView")
+            ])
+        ],
+        screenshot: nil
+    )
+
+    let observation = SnapshotObservationFormatter().observation(from: snapshot.jsonValue, frames: false)
+    let tree = treeString(in: observation)
+    let text = SnapshotObservationFormatter().text(from: observation)
+
+    #expect(tree == """
+    mirror:0: window "iPhone Mirroring"
+      ⟨1 unreadable node: group[AXHostingView]⟩
+    """)
+    #expect(text.contains("⟨1 unreadable node: group[AXHostingView]⟩"))
+}
+
+@Test func observationMarksNoOpacityForGenuineLeavesOrContentfulChildren() {
+    let snapshot = AppSnapshot(
+        id: SnapshotID("obs"),
+        app: AppIdentity(bundleIdentifier: "com.example.App", name: "Example", processIdentifier: 7),
+        windows: [
+            AXNode(role: "AXWindow", title: "Empty"),
+            AXNode(role: "AXWindow", title: "Full", children: [
+                AXNode(role: "AXButton", title: "Run", actions: ["AXPress"])
+            ])
+        ],
+        screenshot: nil
+    )
+
+    let tree = treeString(in: SnapshotObservationFormatter().observation(from: snapshot.jsonValue, frames: false))
+
+    #expect(!tree.contains("unreadable"))
+    #expect(tree.contains("window \"Empty\""))
+    #expect(tree.contains("button \"Run\" [click]"))
+}
+
+@Test func childListObservationNamesUnreadableChildrenInsteadOfAnEmptyTree() {
+    let children = AXChildrenPage(
+        snapshotID: SnapshotID("mirror"),
+        parentHandle: "mirror:0",
+        offset: 0,
+        limit: 1,
+        total: 1,
+        baseIndex: 1,
+        children: [AXNode(role: "AXGroup", subrole: "AXHostingView")]
+    )
+
+    let observation = SnapshotObservationFormatter().children(from: children.jsonValue, frames: false)
+    let text = SnapshotObservationFormatter().text(from: observation)
+
+    #expect(observation["tree"] == .string("⟨1 unreadable node: group[AXHostingView]⟩"))
+    #expect(text.contains("⟨1 unreadable node: group[AXHostingView]⟩"))
+}
+
 private func treeString(in observation: JSONValue) -> String {
     guard case let .string(tree)? = observation["tree"] else {
         return ""

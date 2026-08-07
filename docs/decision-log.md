@@ -57,6 +57,22 @@ A batch is a flat list of `{ tool, ...args }` objects using the same shape as th
 
 YAML is the preferred on-disk format for `.axn` files because it is compact and easy to edit. JSON-RPC remains the daemon transport, and structured JSON batch objects remain acceptable when a caller already has data in memory.
 
+## Scroll Strategy and Dispatch Reporting
+
+Decision: `scroll` picks its strategy from the kind of target the caller named, and a dispatched wheel is a success.
+
+A point is a pointer-space instruction, and a scroll wheel is the pointer-space mechanism, so a point target posts `CGEventScroll` at that point and never consults the accessibility tree. A handle, locator, or bare app names something semantic, where `AXScrollToVisible` is more precise and is immune to window occlusion — a wheel posted at a point routes to whichever window is topmost there, which may not be the app that was named. So accessibility stays primary for named elements, and the wheel covers the case where the tree offers no scrollable descendant. This is a rule about the target, not a fallback chain: trying accessibility first for a point target only produced failures on surfaces that render their own contents, because the tree cannot answer a question about pixels.
+
+`scroll` reports `success: true` once wheel events are dispatched, alongside `dispatchSuccess: true` and `semanticStatus: "unverified"`. `drag` fails closed in the same situation because a drag mutates state, and an unverified mutation is a claim that should not be made. A scroll only moves a viewport, and its real effect is implicitly checked by whatever the next action targets, so it reports the dispatch honestly in `semanticStatus` rather than as a failure. Keeping `success: true` also leaves `.axn` replay behavior unchanged, since the runner halts on `success: false` for every tool except `drag`.
+
+Activation follows the same reasoning and is therefore scoped to the wheel rather than to the presence of an `app` argument. A wheel needs the target window raised because it lands wherever the topmost window is; `AXScrollToVisible` does not, so activating for it would take the user's focus to no purpose. `dispatchSuccess` is likewise never claimed without events: a zero delta is a no-op that reports `semanticStatus: "noop"`, and a delta that rounds to no whole pixel fails rather than reporting a dispatch that moved nothing.
+
+`scroll` does not activate the app it was given, and this reversed an earlier decision to match `drag`. The argument for activating was that a wheel lands on whichever window is topmost under the point, so an occluded target window would swallow it. Measurement did not support the premise being worth its cost: a posted wheel reached the intended window in every trial across cursor positions and frontmost applications, so activation changed nothing except taking the user's focus on every scroll. `drag` still activates because a drag presses and moves the pointer, which is a mutation whose target must be unambiguous. The residual risk is named rather than hidden: a point covered by another window scrolls what is on top of it.
+
+`dispatchSuccess` is likewise never claimed without events. A zero delta is a no-op reporting `semanticStatus: "noop"`, and a delta that rounds to no whole pixel fails rather than reporting a dispatch that moved nothing.
+
+The consequence to be honest about: the two strategies interpret the delta differently. The wheel honors the documented pixel distance; `AXScrollToVisible` cannot, because the app decides how far to move to reveal the chosen descendant. Unifying that is a tool-vocabulary change, not a bug fix.
+
 ## Deferred Design Notes
 
 These are not blocking questions. They are details that should be decided when implementation reaches the relevant layer.

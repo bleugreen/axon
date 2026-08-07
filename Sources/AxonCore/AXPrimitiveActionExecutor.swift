@@ -11,6 +11,7 @@ public final class AXPrimitiveActionExecutor {
     private let sleepMilliseconds: (Int) -> Void
     /// Re-read per text action so a mid-session input source switch is picked up.
     private let makeKeyboardLayout: () -> KeyboardLayoutMap
+    private let activateApp: (String) throws -> Void
     private let hitTest: (CGPoint) -> AXUIElement?
     private let frameProvider: (AXUIElement) -> AXFrame?
     private let parentProvider: (AXUIElement) -> AXUIElement?
@@ -24,6 +25,7 @@ public final class AXPrimitiveActionExecutor {
         postEvent: @escaping (CGEvent) -> Void = { $0.post(tap: .cghidEventTap) },
         sleepMilliseconds: @escaping (Int) -> Void = { Thread.sleep(forTimeInterval: Double($0) / 1_000) },
         makeKeyboardLayout: @escaping () -> KeyboardLayoutMap = { KeyboardLayoutMap.current() },
+        activateApp: ((String) throws -> Void)? = nil,
         hitTest: ((CGPoint) -> AXUIElement?)? = nil,
         frameProvider: ((AXUIElement) -> AXFrame?)? = nil,
         parentProvider: ((AXUIElement) -> AXUIElement?)? = nil,
@@ -36,6 +38,7 @@ public final class AXPrimitiveActionExecutor {
         self.postEvent = postEvent
         self.sleepMilliseconds = sleepMilliseconds
         self.makeKeyboardLayout = makeKeyboardLayout
+        self.activateApp = activateApp ?? { query in try appResolver.resolve(query).activate() }
         self.hitTest = hitTest ?? Self.systemHitTest
         self.frameProvider = frameProvider ?? Self.copyFrame
         self.parentProvider = parentProvider ?? Self.copyParent
@@ -203,28 +206,18 @@ public final class AXPrimitiveActionExecutor {
         setResult == .success && readValue == expected
     }
 
+    /// Which strategy runs is decided by what the caller named, not by trying one and catching its
+    /// failure. A point is a pointer-space instruction, so it takes the pointer-space mechanism and
+    /// never consults the AX tree. An element or app names something semantic, where
+    /// `AXScrollToVisible` is more precise and immune to window occlusion, so AX stays primary there
+    /// and the wheel covers the case where AX has nothing to work with.
     public func scroll(
         target: PointerTarget?,
         app: String?,
         deltaX: Double,
         deltaY: Double
     ) throws -> PrimitiveActionResult {
-        let resolvedApp = try app.map(appResolver.resolve)
-        let scrollTarget = try scrollToVisibleTarget(target: target, app: resolvedApp, deltaX: deltaX, deltaY: deltaY)
-        guard let scrollTarget else {
-            return PrimitiveActionResult(
-                action: "scroll",
-                target: target?.targetDescription ?? app ?? "frontmost",
-                strategy: "AXScrollToVisible",
-                success: false,
-                message: "No offscreen accessibility descendant found for scroll direction",
-                details: [
-                    "deltaX": .double(deltaX),
-                    "deltaY": .double(deltaY)
-                ]
-            )
-        }
-        let result = AXUIElementPerformAction(scrollTarget.element, "AXScrollToVisible" as CFString)
+        let description = target?.targetDescription ?? app ?? "frontmost"
         var details: [String: JSONValue] = [
             "deltaX": .double(deltaX),
             "deltaY": .double(deltaY)
@@ -232,15 +225,136 @@ public final class AXPrimitiveActionExecutor {
         if let target {
             details["targetSpec"] = target.jsonValue
         }
-        details["scrollTargetFrame"] = scrollTarget.frame.jsonValue
-        return PrimitiveActionResult(
-            action: "scroll",
-            target: target?.targetDescription ?? app ?? "frontmost",
-            strategy: "AXScrollToVisible",
-            success: result == .success,
-            message: result == .success ? nil : "AXScrollToVisible returned \(result.rawValue)",
+
+        guard deltaX != 0 || deltaY != 0 else {
+            details["dispatchSuccess"] = .bool(false)
+            details["semanticSuccess"] = .null
+            details["semanticStatus"] = .string("noop")
+            details["eventPath"] = Self.eventPathSummary(steps: [])
+            return PrimitiveActionResult(
+                action: "scroll",
+                target: description,
+                strategy: "CGEventScroll",
+                success: true,
+                message: "No scroll delta was requested; no events were posted",
+                details: details
+            )
+        }
+
+        if case let .point(point) = target {
+            return scrollWheelResult(
+                target: description,
+                at: CGPoint(x: point.x, y: point.y),
+                deltaX: deltaX,
+                deltaY: deltaY,
+                details: details
+            )
+        }
+
+        // Only a bare app target needs the app resolved; a handle carries its own element, and
+        // resolving anyway would reject a live handle because some unrelated app name went stale.
+        let resolvedApp = target == nil ? try app.map(appResolver.resolve) : nil
+        if let scrollTarget = try scrollToVisibleTarget(target: target, app: resolvedApp, deltaX: deltaX, deltaY: deltaY) {
+            let result = AXUIElementPerformAction(scrollTarget.element, "AXScrollToVisible" as CFString)
+            details["scrollTargetFrame"] = scrollTarget.frame.jsonValue
+            // The app acknowledging the action is the dispatch; it is still not proof that the
+            // viewport moved, and it is not a dispatch at all when the action itself errors.
+            details["dispatchSuccess"] = .bool(result == .success)
+            details["semanticSuccess"] = .null
+            details["semanticStatus"] = .string("unverified")
+            return PrimitiveActionResult(
+                action: "scroll",
+                target: description,
+                strategy: "AXScrollToVisible",
+                success: result == .success,
+                message: result == .success ? nil : "AXScrollToVisible returned \(result.rawValue)",
+                details: details
+            )
+        }
+
+        guard let point = try wheelPoint(target: target, app: resolvedApp) else {
+            details["dispatchSuccess"] = .bool(false)
+            return PrimitiveActionResult(
+                action: "scroll",
+                target: description,
+                strategy: "CGEventScroll",
+                success: false,
+                message: "scroll target has no resolvable screen point",
+                details: details
+            )
+        }
+        return scrollWheelResult(
+            target: description,
+            at: point,
+            deltaX: deltaX,
+            deltaY: deltaY,
             details: details
         )
+    }
+
+    /// `scroll` never activates, even when an app is named. A posted wheel is routed by the event's
+    /// location to the window under that point, which was measured to hold regardless of which
+    /// application is frontmost or where the cursor sits, so raising the app buys nothing and costs
+    /// the user their focus on every scroll. A point covered by another window scrolls whatever is
+    /// on top of it; a caller who needs to know can compare window frames from `look`.
+    private func scrollWheelResult(
+        target: String,
+        at point: CGPoint,
+        deltaX: Double,
+        deltaY: Double,
+        details: [String: JSONValue]
+    ) -> PrimitiveActionResult {
+        let dispatch = postScrollWheel(at: point, deltaX: deltaX, deltaY: deltaY)
+        var details = details
+        details["at"] = ActionPoint(x: point.x, y: point.y, coordinateSpace: .screen).jsonValue
+        details["eventPath"] = Self.eventPathSummary(steps: dispatch.steps)
+        guard !dispatch.steps.isEmpty else {
+            details["dispatchSuccess"] = .bool(false)
+            return PrimitiveActionResult(
+                action: "scroll",
+                target: target,
+                strategy: "CGEventScroll",
+                success: false,
+                message: dispatch.creationFailed
+                    ? "Unable to create scroll wheel events"
+                    : "scroll delta rounds to no pixel of wheel movement",
+                details: details
+            )
+        }
+        details["dispatchSuccess"] = .bool(true)
+        details["semanticSuccess"] = .null
+        details["semanticStatus"] = .string("unverified")
+        return PrimitiveActionResult(
+            action: "scroll",
+            target: target,
+            strategy: "CGEventScroll",
+            success: true,
+            details: details
+        )
+    }
+
+    private static func eventPathSummary(steps: [ScrollEventStep]) -> JSONValue {
+        .object([
+            "eventCount": .int(steps.count),
+            "units": .string("pixel"),
+            "totalDeltaX": .double(steps.reduce(0) { $0 + $1.deltaX }),
+            "totalDeltaY": .double(steps.reduce(0) { $0 + $1.deltaY })
+        ])
+    }
+
+    /// The screen point a wheel burst is posted at when the AX tree offers no scrollable descendant.
+    private func wheelPoint(target: PointerTarget?, app: NSRunningApplication?) throws -> CGPoint? {
+        switch target {
+        case let .point(point):
+            return CGPoint(x: point.x, y: point.y)
+        case let .handle(handle):
+            return centerPoint(of: try elementStore.element(for: handle))
+        case nil:
+            guard let app, let window = firstWindow(for: app) else {
+                return nil
+            }
+            return centerPoint(of: window)
+        }
     }
 
     public func drag(
@@ -299,8 +413,7 @@ public final class AXPrimitiveActionExecutor {
     }
 
     private func activate(app query: String) throws {
-        let app = try appResolver.resolve(query)
-        app.activate()
+        try activateApp(query)
     }
 
     private func actionNames(for element: AXUIElement) -> [String] {
@@ -605,6 +718,61 @@ public final class AXPrimitiveActionExecutor {
         return DragDispatch(steps: postedSteps, validationFailure: nil)
     }
 
+    /// Posts a wheel burst at `point`. A scroll wheel event carries no location of its own; macOS
+    /// routes it to the window under the event's `location` field, so setting it is what makes the
+    /// event reach the intended window rather than the screen origin.
+    private func postScrollWheel(at point: CGPoint, deltaX: Double, deltaY: Double) -> ScrollDispatch {
+        let steps = ScrollEventPathSynthesizer.path(deltaX: deltaX, deltaY: deltaY)
+        var posted: [ScrollEventStep] = []
+        var creationFailed = false
+        var cumulativeX = 0.0
+        var cumulativeY = 0.0
+        var postedX: Int32 = 0
+        var postedY: Int32 = 0
+        for (index, step) in steps.enumerated() {
+            cumulativeX += step.deltaX
+            cumulativeY += step.deltaY
+            // Round the running total rather than each step, so the integer wheel values still sum
+            // to the requested delta instead of drifting by a unit per step.
+            let wheelX = Self.clampedWheelDelta(cumulativeX) - postedX
+            let wheelY = Self.clampedWheelDelta(cumulativeY) - postedY
+            // A step that rounds to no movement on either axis carries nothing. Posting it would
+            // report a dispatch that moves the viewport zero pixels.
+            guard wheelX != 0 || wheelY != 0 else {
+                continue
+            }
+            guard let event = CGEvent(
+                scrollWheelEvent2Source: nil,
+                units: .pixel,
+                wheelCount: 2,
+                wheel1: wheelY,
+                wheel2: wheelX,
+                wheel3: 0
+            ) else {
+                creationFailed = true
+                continue
+            }
+            event.location = point
+            postEvent(event)
+            postedX += wheelX
+            postedY += wheelY
+            posted.append(ScrollEventStep(deltaX: Double(wheelX), deltaY: Double(wheelY)))
+            if index < steps.count - 1 {
+                sleepMilliseconds(Self.scrollStepDelayMs)
+            }
+        }
+        return ScrollDispatch(steps: posted, creationFailed: creationFailed)
+    }
+
+    private static let scrollStepDelayMs = 4
+
+    private static func clampedWheelDelta(_ value: Double) -> Int32 {
+        guard value.isFinite else {
+            return value > 0 ? Int32.max : Int32.min
+        }
+        return Int32(min(max(value.rounded(), Double(Int32.min)), Double(Int32.max)))
+    }
+
     @discardableResult
     private func postKeyStroke(_ keyStroke: KeyStroke) -> Bool {
         guard let down = CGEvent(keyboardEventSource: nil, virtualKey: keyStroke.keyCode, keyDown: true),
@@ -650,6 +818,11 @@ private struct ResolvedPointerTarget {
     let point: CGPoint
     let element: AXUIElement?
     let validationFailure: String?
+}
+
+private struct ScrollDispatch {
+    let steps: [ScrollEventStep]
+    let creationFailed: Bool
 }
 
 private struct DragDispatch {
