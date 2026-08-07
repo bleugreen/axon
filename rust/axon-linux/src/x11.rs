@@ -314,6 +314,14 @@ impl X11Session {
     }
 }
 
+/// One keystroke resolved against the live layout: the key to press, and the modifier keys held
+/// around it. Resolved before anything is posted, so an intent this layout cannot express is
+/// refused rather than half delivered.
+struct Stroke {
+    key: u8,
+    held: Vec<u8>,
+}
+
 /// The layout the user is actually typing on, as the server currently reports it.
 struct KeyboardMapping {
     first: u8,
@@ -322,6 +330,34 @@ struct KeyboardMapping {
 }
 
 impl KeyboardMapping {
+    /// Resolves one keystroke, or explains which key this layout does not have.
+    fn stroke(&self, keysym: Keysym, modifiers: &[Keysym]) -> Result<Stroke, BackendError> {
+        let missing = |keysym: Keysym| {
+            capability(
+                Capability::KeyboardInput,
+                &format!(
+                    "the active keyboard layout has no key for keysym {keysym:#x}; remapping the \
+                     layout to reach it would change what every other X client types"
+                ),
+            )
+        };
+        let (key, needs_shift) = self.locate(keysym).ok_or_else(|| missing(keysym))?;
+        let mut held = Vec::new();
+        for modifier in modifiers {
+            let (code, _) = self.locate(*modifier).ok_or_else(|| missing(*modifier))?;
+            held.push(code);
+        }
+        // A character on the shifted level of its key needs Shift held even when the caller named
+        // no modifier, which is how literal text containing capitals is typed.
+        if needs_shift
+            && !modifiers.contains(&keys::SHIFT_L)
+            && let Some((shift, _)) = self.locate(keys::SHIFT_L)
+        {
+            held.push(shift);
+        }
+        Ok(Stroke { key, held })
+    }
+
     /// The keycode that produces `keysym`, and whether Shift has to be held to reach it.
     ///
     /// Only the unshifted and shifted levels are consulted. Higher levels need a group or AltGr
