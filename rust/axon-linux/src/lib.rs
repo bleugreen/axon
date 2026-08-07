@@ -1078,6 +1078,158 @@ mod tests {
     }
 
     #[test]
+    fn an_opted_in_click_puts_the_pointer_back_where_it_found_it() {
+        // XTest moves the real cursor, so a click that lands but leaves the pointer in the target
+        // has taken something from the user it did not give back.
+        let backend = transactional_backend();
+        let handle = backend.snapshot.handle(0);
+        let pointer = backend.pointer.clone();
+        let frontmost = backend.frontmost.clone();
+        let mut router = Router::new(backend);
+        router.snapshot = Some(router.backend.snapshot.clone());
+
+        let response = router
+            .request(request(
+                "click",
+                json!({
+                    "target": handle.0,
+                    "app": "App",
+                    "deliveryPolicy": "foregroundPermitted"
+                }),
+            ))
+            .unwrap();
+
+        let JsonRpcResponse::Success(success) = response else {
+            panic!("an opted-in click dispatches")
+        };
+        assert_eq!(success.result["delivery"], json!("foreground"));
+        assert_eq!(
+            success.result["foreground"]["pointerRestored"],
+            json!(true)
+        );
+        assert_eq!(success.result["foreground"]["restored"], json!(true));
+        assert_eq!(success.result["success"], json!(true));
+        // Both halves of the session are as the user left them.
+        assert_eq!(*pointer.borrow(), POINTER_ORIGIN);
+        assert_eq!(frontmost.borrow().as_deref(), Some("Prior"));
+    }
+
+    #[test]
+    fn keyboard_reports_no_pointer_to_restore_rather_than_a_restoration() {
+        // null means the dispatch never moved the cursor. Reporting `true` would claim a
+        // restoration that never happened, and `false` would claim a failure that never happened.
+        let mut router = Router::new(transactional_backend());
+
+        let response = router
+            .request(request(
+                "keyboard",
+                json!({
+                    "key": "Return",
+                    "app": "App",
+                    "deliveryPolicy": "foregroundPermitted"
+                }),
+            ))
+            .unwrap();
+
+        let JsonRpcResponse::Success(success) = response else {
+            panic!("an opted-in keystroke dispatches")
+        };
+        assert_eq!(success.result["delivery"], json!("foreground"));
+        assert_eq!(
+            success.result["foreground"]["pointerRestored"],
+            Value::Null
+        );
+        assert_eq!(success.result["success"], json!(true));
+    }
+
+    #[test]
+    fn a_backend_that_cannot_read_the_foreground_dispatches_nothing() {
+        // Not the same as nothing being frontmost. A backend that cannot read what holds the
+        // foreground cannot promise to give it back, so it must not take it in the first place.
+        let mut backend = transactional_backend();
+        backend.foreground_readable = false;
+        let handle = backend.snapshot.handle(0);
+        let clicks = backend.clicks.clone();
+        let activations = backend.activations.clone();
+        let mut router = Router::new(backend);
+        router.snapshot = Some(router.backend.snapshot.clone());
+
+        let response = router
+            .request(request(
+                "click",
+                json!({
+                    "target": handle.0,
+                    "app": "App",
+                    "deliveryPolicy": "foregroundPermitted"
+                }),
+            ))
+            .unwrap();
+
+        let result = refusal(&response);
+        assert_eq!(result["refusal"]["reason"], json!("activationNotProved"));
+        assert_eq!(result["dispatchSuccess"], json!(false));
+        assert_eq!(result["delivery"], Value::Null);
+        assert_eq!(*clicks.borrow(), 0);
+        assert!(activations.borrow().is_empty());
+    }
+
+    #[test]
+    fn a_pointer_that_cannot_be_put_back_fails_the_click_and_keeps_the_evidence() {
+        let mut backend = transactional_backend();
+        backend.refuses_pointer_move = true;
+        let handle = backend.snapshot.handle(0);
+        let clicks = backend.clicks.clone();
+        let frontmost = backend.frontmost.clone();
+        let mut router = Router::new(backend);
+        router.snapshot = Some(router.backend.snapshot.clone());
+
+        let response = router
+            .request(request(
+                "click",
+                json!({
+                    "target": handle.0,
+                    "app": "App",
+                    "deliveryPolicy": "foregroundPermitted"
+                }),
+            ))
+            .unwrap();
+
+        let JsonRpcResponse::Success(success) = response else {
+            panic!("the dispatch happened, so this is an action result")
+        };
+        assert_eq!(success.result["dispatchSuccess"], json!(true));
+        assert_eq!(success.result["delivery"], json!("foreground"));
+        assert_eq!(
+            success.result["foreground"]["pointerRestored"],
+            json!(false)
+        );
+        // The window came back and the events went out; the cursor did not, so the action failed.
+        assert_eq!(success.result["foreground"]["restored"], json!(true));
+        assert_eq!(success.result["success"], json!(false));
+        assert_eq!(*clicks.borrow(), 1);
+        assert_eq!(frontmost.borrow().as_deref(), Some("Prior"));
+    }
+
+    #[test]
+    fn a_keyboard_request_naming_both_intents_is_a_transport_error() {
+        // text is entered literally and key names a keystroke: `End` is three characters as one
+        // and a single key as the other, so a request carrying both has not said what it wants.
+        let mut router = Router::new(transactional_backend());
+
+        let response = router
+            .request(request(
+                "keyboard",
+                json!({"text": "End", "key": "End", "deliveryPolicy": "foregroundPermitted"}),
+            ))
+            .unwrap();
+
+        let JsonRpcResponse::Failure(failure) = response else {
+            panic!("an ambiguous keyboard request is malformed, not refused")
+        };
+        assert_eq!(failure.error.code, -32602);
+    }
+
+    #[test]
     fn an_unresolvable_target_is_a_transport_error_not_a_delivery_refusal() {
         // A refusal means the request was well formed and the target resolved. A target that is
         // absent, malformed, or stale never gets that far, so it stays a JSON-RPC error even under
