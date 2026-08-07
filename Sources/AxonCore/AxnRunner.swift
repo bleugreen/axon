@@ -28,9 +28,9 @@ public enum AxnRunError: Error, CustomStringConvertible {
             params: .object(["app": .string(app), "locator": locator])
         )
         let response = commandHandler(request)
-        guard response.error == nil,
-              case let .object(resolution)? = response.result?["resolution"],
-              resolution["status"] == .string("unique"),
+        guard response.error == nil, let result = response.result,
+              case let .object(resolution)? = result["resolution"],
+              resolution["status"] == JSONValue.string("unique"),
               case let .string(confidence)? = resolution["confidence"] else { return false }
         let rank = ["none": 0, "low": 1, "medium": 2, "high": 3]
         return (rank[confidence] ?? -1) >= (rank[minimumConfidence] ?? Int.max)
@@ -151,15 +151,16 @@ public struct AxnRunner {
     func debugRunAction(
         _ action: PreparedAxnAction,
         dryRun: Bool,
-        facts: inout [String: RecordedFact],
-        healEvents: inout [LocatorHealEvent]
+        facts: inout [String: RecordedFact]
     ) -> JSONValue {
+        var healEvents: [LocatorHealEvent] = []
         runAction(
             action.action,
             index: action.index,
             dryRun: dryRun,
             secretTaintedFields: action.secretTaintedFields,
-            facts: &facts
+            facts: &facts,
+            healEvents: &healEvents
         )
     }
 
@@ -322,7 +323,8 @@ public struct AxnRunner {
         index: Int,
         dryRun: Bool,
         secretTaintedFields: Set<String>,
-        facts: inout [String: RecordedFact]
+        facts: inout [String: RecordedFact],
+        healEvents: inout [LocatorHealEvent]
     ) -> JSONValue {
         do {
             var object = action.fields

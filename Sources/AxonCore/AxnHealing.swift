@@ -94,12 +94,20 @@ public enum AxnHealing {
                 reason: "proposal contains an active secret"
             )
         }
-        guard let app = targetApp(in: action.fields), verify(proposalValue, confidence) else {
+        guard targetApp(in: action.fields) != nil else {
+            return LocatorHealEvent(
+                actionID: action.id, actionIndex: index, status: .halted,
+                confidence: confidence, path: path, evidence: evidence, proposal: nil,
+                diff: "\(identity)  target.locator  healing halted: locator target has no app",
+                reason: "locator target has no app"
+            )
+        }
+        guard verify(proposalValue, confidence) else {
             return LocatorHealEvent(
                 actionID: action.id, actionIndex: index, status: .halted,
                 confidence: confidence, path: path, evidence: evidence, proposal: nil,
                 diff: "\(identity)  target.locator  healing halted: proposal verification failed",
-                reason: app == nil ? "locator target has no app" : "proposal did not resolve uniquely at equal or higher confidence"
+                reason: "proposal did not resolve uniquely at equal or higher confidence"
             )
         }
 
