@@ -171,71 +171,38 @@ impl X11Session {
     }
 
     /// Literal text or one chord, through the global keyboard device.
+    ///
+    /// The entire intent is resolved against the live layout before a single event is posted.
+    /// Resolving as it goes would let an unmappable character halfway through a string leave the
+    /// first half typed into the user's window while the call reports a failure, and no caller can
+    /// tell that apart from nothing having happened at all.
     pub fn keyboard(&self, intent: KeyboardIntent<'_>) -> Result<(), BackendError> {
         let mapping = self.keyboard_mapping()?;
-        match intent {
-            KeyboardIntent::Text(text) => {
-                for keysym in keys::text_keysyms(text) {
-                    self.press(keysym, &[], &mapping)?;
-                }
-            }
+        let strokes = match intent {
+            KeyboardIntent::Text(text) => keys::text_keysyms(text)
+                .into_iter()
+                .map(|keysym| mapping.stroke(keysym, &[]))
+                .collect::<Result<Vec<_>, _>>()?,
             KeyboardIntent::Key(spec) => {
                 let chord = keys::parse_chord(spec)
                     .map_err(|error| capability(Capability::KeyboardInput, &error))?;
-                self.press(chord.key, &chord.modifiers, &mapping)?;
+                vec![mapping.stroke(chord.key, &chord.modifiers)?]
             }
+        };
+        for stroke in &strokes {
+            self.post(stroke)?;
         }
         self.flush("post keyboard input")
     }
 
     /// Presses one key with its modifiers held, then releases everything in reverse.
-    fn press(
-        &self,
-        keysym: Keysym,
-        modifiers: &[Keysym],
-        mapping: &KeyboardMapping,
-    ) -> Result<(), BackendError> {
-        let (keycode, needs_shift) = mapping.locate(keysym).ok_or_else(|| {
-            capability(
-                Capability::KeyboardInput,
-                &format!(
-                    "the active keyboard layout has no key for keysym {keysym:#x}; remapping the \
-                     layout to reach it would change what every other X client types"
-                ),
-            )
-        })?;
-
-        let mut held = Vec::new();
-        for modifier in modifiers {
-            held.push(
-                mapping
-                    .locate(*modifier)
-                    .map(|(code, _)| code)
-                    .ok_or_else(|| {
-                        capability(
-                            Capability::KeyboardInput,
-                            &format!(
-                                "the active keyboard layout has no key for modifier {modifier:#x}"
-                            ),
-                        )
-                    })?,
-            );
-        }
-        // A character that lives on the shifted level of its key needs Shift held even when the
-        // caller named no modifier, which is how literal text containing capitals is typed.
-        if needs_shift
-            && !modifiers.contains(&keys::SHIFT_L)
-            && let Some((shift, _)) = mapping.locate(keys::SHIFT_L)
-        {
-            held.push(shift);
-        }
-
-        for code in &held {
+    fn post(&self, stroke: &Stroke) -> Result<(), BackendError> {
+        for code in &stroke.held {
             self.fake_input(KEY_PRESS_EVENT, *code, 0, 0)?;
         }
-        self.fake_input(KEY_PRESS_EVENT, keycode, 0, 0)?;
-        self.fake_input(KEY_RELEASE_EVENT, keycode, 0, 0)?;
-        for code in held.iter().rev() {
+        self.fake_input(KEY_PRESS_EVENT, stroke.key, 0, 0)?;
+        self.fake_input(KEY_RELEASE_EVENT, stroke.key, 0, 0)?;
+        for code in stroke.held.iter().rev() {
             self.fake_input(KEY_RELEASE_EVENT, *code, 0, 0)?;
         }
         Ok(())
