@@ -1,14 +1,29 @@
 import Foundation
 
-/// One descendant weighed for the accessibility scroll rung: where it sits, and whether it says it
-/// can perform the action at all.
+/// What a descendant said when asked whether it can scroll itself into view.
+///
+/// `unknown` is deliberately distinct from `absent`. An accessibility query that failed is not
+/// evidence that a mechanism is missing — an element mid-teardown, a busy application, a timed-out
+/// round trip all produce no answer rather than a negative one — and treating silence as a negative
+/// is the same mistake as treating placement as a capability.
+public enum ScrollToVisibleCapability: Equatable, Sendable {
+    /// The element answered, and advertises the action.
+    case advertised
+    /// The element answered, and the action is not in its list.
+    case absent
+    /// The element did not answer.
+    case unknown
+}
+
+/// One descendant weighed for the accessibility scroll rung: where it sits, and what it said it can
+/// do.
 public struct ScrollToVisibleCandidate: Equatable, Sendable {
     public let frame: AXFrame
-    public let performsScrollToVisible: Bool
+    public let capability: ScrollToVisibleCapability
 
-    public init(frame: AXFrame, performsScrollToVisible: Bool) {
+    public init(frame: AXFrame, capability: ScrollToVisibleCapability) {
         self.frame = frame
-        self.performsScrollToVisible = performsScrollToVisible
+        self.capability = capability
     }
 }
 
@@ -16,10 +31,12 @@ public struct ScrollToVisibleCandidate: Equatable, Sendable {
 ///
 /// Two rules apply, in this order.
 ///
-/// **Eligibility.** An element that does not advertise the action cannot perform it, so it is not a
-/// candidate however well it is placed. Choosing on geometry alone commits to a mechanism that may
-/// not exist — most list rows in AppKit apps advertise no scrolling action at all — and the request
-/// then fails at the perform site with nothing having been tried.
+/// **Eligibility.** An element that answered and does not advertise the action cannot perform it, so
+/// it is not a candidate however well it is placed. Choosing on geometry alone commits to a
+/// mechanism that may not exist — most list rows in AppKit apps advertise no scrolling action at all
+/// — and the request then fails at the perform site with nothing having been tried. Only a proved
+/// absence disqualifies: an element whose capability could not be read stays a candidate, and the
+/// action it is sent then answers the question for itself.
 ///
 /// **Ranking**, among what remains: the element nearest to where the requested delta wants the
 /// viewport to end up, so that revealing it moves the viewport approximately that far. Eligibility
@@ -40,7 +57,7 @@ public enum ScrollToVisibleSelector {
         return candidates.indices
             .filter { index in
                 let candidate = candidates[index]
-                return candidate.performsScrollToVisible
+                return candidate.capability != .absent
                     && isOutside(candidate.frame, container: container, deltaX: deltaX, deltaY: deltaY)
             }
             .min { lhs, rhs in
