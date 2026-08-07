@@ -14,11 +14,21 @@ public struct RecordedUserEventGroup: Equatable, Sendable {
     public let action: RecordedUserAction
     public let observed: [JSONValue]
     public let warnings: [String]
+    /// The before/after read taken around the recorded event, when the event had an observable
+    /// target. This is what lets the translator run the same derived-postcondition compiler the
+    /// agent path's `save` runs; notification evidence alone cannot feed it.
+    public let observation: ActionObservation?
 
-    public init(action: RecordedUserAction, observed: [JSONValue] = [], warnings: [String] = []) {
+    public init(
+        action: RecordedUserAction,
+        observed: [JSONValue] = [],
+        warnings: [String] = [],
+        observation: ActionObservation? = nil
+    ) {
         self.action = action
         self.observed = observed
         self.warnings = warnings
+        self.observation = observation
     }
 }
 
@@ -28,6 +38,11 @@ public struct UserRecordingTranslator {
     public func axnDocument(from groups: [RecordedUserEventGroup]) throws -> JSONValue {
         var actions: [JSONValue] = []
         var lastValueFactID: String?
+        var guardFactIDs = Set<String>()
+        // Gathered across the whole recording before any step is compiled, mirroring `save`: an
+        // echo of typed text can surface a step or two later, and every one of these strings is a
+        // parameterization candidate no step may assert.
+        let workflowInputs = groups.flatMap { inputStrings(for: $0.action) }
         let semanticGroups = coalescedScrollBursts(from: groups)
         var index = 0
         var actionNumber = 1
@@ -67,10 +82,25 @@ public struct UserRecordingTranslator {
             }
 
             var expectedFacts: [JSONValue] = []
+            if let observation = emittedGroup.observation {
+                expectedFacts.append(contentsOf: DerivedPostconditionCompiler().facts(
+                    for: DerivedPostconditionCompiler.Input(
+                        actionID: actionID,
+                        tool: toolName(for: emittedGroup.action),
+                        observation: observation,
+                        workflowInputs: workflowInputs
+                    )
+                ))
+            }
             switch emittedGroup.action {
             case let .setValue(target, value, factTarget):
-                let factID = "\(actionID).value.0"
+                // The guard is indexed after any value facts the compiler derived for this step,
+                // so a formatted field value (a derived `equals` fact) and the typed input (the
+                // guard's `contains`) can coexist without colliding ids.
+                let derivedValueFacts = expectedFacts.filter { $0["kind"] == .string("value") }.count
+                let factID = "\(actionID).value.\(derivedValueFacts)"
                 expectedFacts.append(valueFact(id: factID, target: factTarget ?? target, value: value))
+                guardFactIDs.insert(factID)
                 lastValueFactID = factID
             default:
                 break
@@ -96,8 +126,38 @@ public struct UserRecordingTranslator {
 
         return .object([
             "version": .int(1),
-            "actions": .array(prunedUnrequiredGuardFacts(in: actions))
+            "actions": .array(prunedUnrequiredGuardFacts(in: actions, guardFactIDs: guardFactIDs))
         ])
+    }
+
+    private func inputStrings(for action: RecordedUserAction) -> [String] {
+        switch action {
+        case let .setValue(_, value, _):
+            return [value]
+        case let .typeText(_, text):
+            return [text]
+        case let .pressKey(_, key):
+            return [key]
+        case .click, .scroll, .drag, .performAction:
+            return []
+        }
+    }
+
+    private func toolName(for action: RecordedUserAction) -> String {
+        switch action {
+        case .click:
+            return "click"
+        case .setValue:
+            return "type"
+        case .typeText, .pressKey:
+            return "keyboard"
+        case .scroll:
+            return "scroll"
+        case .drag:
+            return "drag"
+        case .performAction:
+            return "invoke"
+        }
     }
 
     /// Drops typed-value facts that nothing depends on.
@@ -107,7 +167,7 @@ public struct UserRecordingTranslator {
     /// still holds what was typed. Emitted on every text burst it would instead assert the input
     /// back at itself on most steps, which is the input echo derived postconditions must never be.
     /// Keeping only the consumed ones preserves the single real guarantee and drops the rest.
-    private func prunedUnrequiredGuardFacts(in actions: [JSONValue]) -> [JSONValue] {
+    private func prunedUnrequiredGuardFacts(in actions: [JSONValue], guardFactIDs: Set<String>) -> [JSONValue] {
         var requiredFactIDs = Set<String>()
         for action in actions {
             guard case let .array(requires)? = action["requires"] else {
@@ -124,10 +184,10 @@ public struct UserRecordingTranslator {
             else {
                 return action
             }
+            // Only facts this translator emitted as dependency guards are prunable. A `value`
+            // fact the compiler derived is a postcondition like any other and stays.
             let kept = facts.filter { fact in
-                guard case let .string(kind)? = fact["kind"], kind == "value",
-                      case let .string(id)? = fact["id"]
-                else {
+                guard case let .string(id)? = fact["id"], guardFactIDs.contains(id) else {
                     return true
                 }
                 return requiredFactIDs.contains(id)

@@ -177,12 +177,25 @@ workflows omit them.
 
 ## Derived postconditions
 
-`save` compiles `expects` for the steps it writes, from a bounded before/after
-read taken around each dispatched action. The reads are targeted — the acted-on
-element, the app's focused element, the app's window titles — never a full tree
-capture. Actions likely to cause a transition (`click`, `invoke`, `keyboard`,
-`drag`) wait for two agreeing reads, up to a 150ms budget, before the after-read
-counts.
+Both workflow producers — `save` from an agent session and a live user
+recording — compile `expects` from a bounded before/after read taken around
+each action, through the same shared rule set. The reads are targeted — the
+acted-on element, the app's focused element, the app's window titles — never
+a full tree capture. Settling has one answer in both paths: two agreeing
+reads, up to a 150ms budget, before the after-read counts. The agent path
+pays that wait only for actions likely to cause a transition (`click`,
+`invoke`, `keyboard`, `drag`); a live recording pays it on every event,
+because the wait runs when the user has already moved on, and a passive
+event tap has no other way to let an effect land.
+
+A recording's before-read is the best a passive tap can do. Clicks and drags
+read at mouseDown, before the press is delivered to the app; a text burst
+reads at its first keyDown; a special key reads before the pending text
+flush, so the flush's own settle wait cannot contaminate the read with the
+key's effect. Alongside the shared compiler the recorder keeps two producers
+of its own, both rooted in evidence the compiler cannot see: the `changed`
+fact, derived from AX notification evidence rather than a state comparison,
+and the typed-value dependency guard described above.
 
 A post-action read that never settled derives nothing at all. A button that
 disables during submission and re-enables after the budget would otherwise be

@@ -80,6 +80,30 @@ import Testing
     #expect(observer.elementReadCount == 1)
 }
 
+@Test func recorderSettlePolicyWaitsAfterToolsTheAgentPathDoesNot() {
+    let observer = StubActionStateObserver(elementReads: [
+        buttonState(value: ""),
+        buttonState(value: "Ada"),
+        buttonState(value: "Ada")
+    ])
+    var sleeps: [Int] = []
+    let collector = ActionObservationCollector(
+        observer: observer,
+        sleepMilliseconds: { sleeps.append($0) },
+        now: Date.init,
+        settlesAfter: ActionObservationCollector.settlesAfterEveryTool
+    )
+
+    collector.begin(tool: "type", handle: "s1:2", inputs: ["Ada"])
+    collector.finish(success: true)
+
+    // `type` reads its own value back when the agent dispatches it, but a passive recorder has
+    // no such guarantee, so the recorder's policy pays for the same settle wait on every tool.
+    #expect(sleeps == [ActionObservationCollector.settleIntervalMs])
+    #expect(collector.observation?.settled == true)
+    #expect(collector.observation?.targetAfter?.value == "Ada")
+}
+
 // MARK: - Fixtures
 
 /// Replays a fixed sequence of reads, holding the last one once the sequence runs out. That models

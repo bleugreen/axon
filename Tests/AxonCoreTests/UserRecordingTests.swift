@@ -2,8 +2,6 @@ import Foundation
 import Testing
 @testable import AxonCore
 
-final class RecorderSettleTestElement: @unchecked Sendable {}
-
 @Test func recordingScopePickerListsAllAppsLast() {
     let editor = AppIdentity(bundleIdentifier: "com.example.Editor", name: "Editor", processIdentifier: 10)
     let browser = AppIdentity(bundleIdentifier: "com.example.Browser", name: "Browser", processIdentifier: 11)
@@ -79,60 +77,6 @@ final class RecorderSettleTestElement: @unchecked Sendable {}
 
     #expect(axnDocument["actions"]?[0]?["target"] == actionTarget)
     #expect(axnDocument["actions"]?[0]?["expects"]?[0]?["target"] == factTarget)
-}
-
-@Test func recorderSettleReturnsImmediatelyWhenTargetValueChangeWasAlreadyObserved() {
-    let target = RecorderSettleTestElement()
-    let buffer = AXNotificationEvidenceBuffer(
-        elementMatches: { $0 === $1 },
-        runUntil: { _ in Issue.record("settle should not wait when notification is already buffered") }
-    )
-    let evidence: JSONValue = .object(["notification": .string("AXValueChanged")])
-    buffer.append(evidence, notification: "AXValueChanged", element: target)
-
-    buffer.waitForValueChange(on: target, timeout: 1)
-
-    #expect(buffer.drain() == [evidence])
-}
-
-@Test func recorderSettleWaitsUntilTargetValueChangeArrives() {
-    let target = RecorderSettleTestElement()
-    var now = Date(timeIntervalSinceReferenceDate: 0)
-    var waits = 0
-    let buffer = AXNotificationEvidenceBuffer(
-        elementMatches: { lhs, rhs in waits > 0 && lhs === rhs },
-        now: { now },
-        runUntil: { _ in
-            waits += 1
-            now = now.addingTimeInterval(0.01)
-        }
-    )
-    buffer.append(.object(["notification": .string("AXValueChanged")]), notification: "AXValueChanged", element: target)
-
-    buffer.waitForValueChange(on: target, timeout: 1)
-
-    #expect(waits == 1)
-}
-
-@Test func recorderSettleFallsThroughAfterBoundedTimeout() {
-    let target = RecorderSettleTestElement()
-    let other = RecorderSettleTestElement()
-    var now = Date(timeIntervalSinceReferenceDate: 0)
-    var waits = 0
-    let buffer = AXNotificationEvidenceBuffer(
-        elementMatches: { $0 === $1 },
-        now: { now },
-        runUntil: { deadline in
-            waits += 1
-            now = deadline
-        }
-    )
-    buffer.append(.object(["notification": .string("AXValueChanged")]), notification: "AXValueChanged", element: other)
-
-    buffer.waitForValueChange(on: target, timeout: 0.15)
-
-    #expect(waits == 1)
-    #expect(buffer.drain().count == 1)
 }
 
 @Test func recordingTranslatorAddsConservativeValueDependencyForSubmitKey() throws {
@@ -510,6 +454,197 @@ final class RecorderSettleTestElement: @unchecked Sendable {}
     #expect(axnDocument["actions"]?[0]?["resolve"]?["reveal"]?["app"] == .string("Example"))
     #expect(axnDocument["actions"]?[0]?["resolve"]?["reveal"]?["surface"] == nil)
     #expect(axnDocument["actions"]?[0]?["resolve"]?["reveal"]?["deltaY"] == .double(-360))
+    #expect(axnDocument["actions"]?[1] == nil)
+}
+
+@Test func recordingTranslatorDerivesFocusFactFromObservation() throws {
+    let translator = UserRecordingTranslator()
+    let target: JSONValue = .object([
+        "app": .string("Example"),
+        "locator": .object([
+            "role": .string("AXButton"),
+            "title": .string("Submit")
+        ])
+    ])
+    let observation = ActionObservation(
+        tool: "click",
+        app: "Example",
+        targetBefore: buttonState(focused: false),
+        targetAfter: buttonState(focused: true)
+    )
+
+    let axnDocument = try translator.axnDocument(from: [
+        RecordedUserEventGroup(action: .click(target: target), observation: observation)
+    ])
+
+    #expect(axnDocument["actions"]?[0]?["expects"]?[0]?["id"] == .string("a001.focused.0"))
+    #expect(axnDocument["actions"]?[0]?["expects"]?[0]?["kind"] == .string("focused"))
+    #expect(axnDocument["actions"]?[0]?["expects"]?[0]?["state"]?["focused"] == .bool(true))
+}
+
+@Test func recordingTranslatorExcludesTypedValueEchoFromDerivedFacts() throws {
+    let translator = UserRecordingTranslator()
+    let fieldLocator: [String: JSONValue] = [
+        "role": .string("AXTextField"),
+        "identifier": .string("name-field")
+    ]
+    let target: JSONValue = .object(["app": .string("Example"), "locator": .object(fieldLocator)])
+    let observation = ActionObservation(
+        tool: "type",
+        app: "Example",
+        targetBefore: buttonState(role: "AXTextField", locator: fieldLocator, value: ""),
+        targetAfter: buttonState(role: "AXTextField", locator: fieldLocator, value: "Mitch")
+    )
+
+    let axnDocument = try translator.axnDocument(from: [
+        RecordedUserEventGroup(action: .setValue(target: target, value: "Mitch"), observation: observation),
+        RecordedUserEventGroup(action: .pressKey(app: "Example", key: "Return"))
+    ])
+
+    // The observed value echoes the typed input, so the compiler drops its derived fact and the
+    // dependency guard remains the only value fact, at the same id it has always had.
+    #expect(axnDocument["actions"]?[0]?["expects"]?[0]?["id"] == .string("a001.value.0"))
+    #expect(axnDocument["actions"]?[0]?["expects"]?[0]?["state"]?["value"]?["contains"] == .string("Mitch"))
+    #expect(axnDocument["actions"]?[0]?["expects"]?[1] == nil)
+    #expect(axnDocument["actions"]?[1]?["requires"] == .array([.string("a001.value.0")]))
+}
+
+@Test func recordingTranslatorKeepsDerivedValueFactBesideGuardWhenValueIsReformatted() throws {
+    let translator = UserRecordingTranslator()
+    let fieldLocator: [String: JSONValue] = [
+        "role": .string("AXTextField"),
+        "identifier": .string("amount-field")
+    ]
+    let target: JSONValue = .object(["app": .string("Example"), "locator": .object(fieldLocator)])
+    let observation = ActionObservation(
+        tool: "type",
+        app: "Example",
+        targetBefore: buttonState(role: "AXTextField", locator: fieldLocator, value: ""),
+        targetAfter: buttonState(role: "AXTextField", locator: fieldLocator, value: "2,024")
+    )
+
+    let axnDocument = try translator.axnDocument(from: [
+        RecordedUserEventGroup(action: .setValue(target: target, value: "2024"), observation: observation),
+        RecordedUserEventGroup(action: .pressKey(app: "Example", key: "Return"))
+    ])
+
+    // The reformatted value is not an echo of the typed input, so the derived equals fact and
+    // the guard's contains fact coexist, each with its own id.
+    #expect(axnDocument["actions"]?[0]?["expects"]?[0]?["id"] == .string("a001.value.0"))
+    #expect(axnDocument["actions"]?[0]?["expects"]?[0]?["state"]?["value"]?["equals"] == .string("2,024"))
+    #expect(axnDocument["actions"]?[0]?["expects"]?[1]?["id"] == .string("a001.value.1"))
+    #expect(axnDocument["actions"]?[0]?["expects"]?[1]?["state"]?["value"]?["contains"] == .string("2024"))
+    #expect(axnDocument["actions"]?[1]?["requires"] == .array([.string("a001.value.1")]))
+}
+
+@Test func recordingTranslatorPrunesGuardButKeepsDerivedFacts() throws {
+    let translator = UserRecordingTranslator()
+    let fieldLocator: [String: JSONValue] = [
+        "role": .string("AXTextField"),
+        "identifier": .string("name-field")
+    ]
+    let target: JSONValue = .object(["app": .string("Example"), "locator": .object(fieldLocator)])
+    let observation = ActionObservation(
+        tool: "type",
+        app: "Example",
+        targetBefore: buttonState(role: "AXTextField", locator: fieldLocator, value: "", focused: false),
+        targetAfter: buttonState(role: "AXTextField", locator: fieldLocator, value: "Mitch", focused: true)
+    )
+
+    let axnDocument = try translator.axnDocument(from: [
+        RecordedUserEventGroup(action: .setValue(target: target, value: "Mitch"), observation: observation)
+    ])
+
+    // Nothing requires the typed-value guard, so it is pruned; the derived focus transition is a
+    // postcondition like any other and stays.
+    #expect(axnDocument["actions"]?[0]?["expects"]?[0]?["id"] == .string("a001.focused.0"))
+    #expect(axnDocument["actions"]?[0]?["expects"]?[1] == nil)
+}
+
+@Test func recordingTranslatorDerivesWindowFactFromObservation() throws {
+    let translator = UserRecordingTranslator()
+    let target: JSONValue = .object([
+        "app": .string("Example"),
+        "locator": .object([
+            "role": .string("AXButton"),
+            "title": .string("Submit")
+        ])
+    ])
+    let observation = ActionObservation(
+        tool: "click",
+        app: "Example",
+        targetBefore: buttonState(),
+        targetAfter: buttonState(),
+        windowTitlesBefore: ["Main"],
+        windowTitlesAfter: ["Main", "Report"]
+    )
+
+    let axnDocument = try translator.axnDocument(from: [
+        RecordedUserEventGroup(action: .click(target: target), observation: observation)
+    ])
+
+    #expect(axnDocument["actions"]?[0]?["expects"]?[0]?["id"] == .string("a001.window.0"))
+    #expect(axnDocument["actions"]?[0]?["expects"]?[0]?["kind"] == .string("window"))
+    #expect(axnDocument["actions"]?[0]?["expects"]?[0]?["target"]?["locator"]?["title"] == .string("Report"))
+}
+
+@Test func recordingTranslatorDerivesNothingFromUnsettledObservation() throws {
+    let translator = UserRecordingTranslator()
+    let target: JSONValue = .object([
+        "app": .string("Example"),
+        "locator": .object([
+            "role": .string("AXButton"),
+            "title": .string("Refresh")
+        ])
+    ])
+    let observation = ActionObservation(
+        tool: "click",
+        app: "Example",
+        targetBefore: buttonState(locator: ["role": .string("AXButton"), "title": .string("Refresh")], value: "Idle"),
+        targetAfter: buttonState(locator: ["role": .string("AXButton"), "title": .string("Refresh")], value: "Working"),
+        settled: false
+    )
+
+    let axnDocument = try translator.axnDocument(from: [
+        RecordedUserEventGroup(action: .click(target: target), observation: observation)
+    ])
+
+    #expect(axnDocument["actions"]?[0]?["expects"] == nil)
+}
+
+@Test func recordingTranslatorScrollFoldKeepsNextActionDerivedFacts() throws {
+    let translator = UserRecordingTranslator()
+    let scrollSurface: JSONValue = .object([
+        "app": .string("Example"),
+        "locator": .object([
+            "role": .string("AXScrollArea")
+        ])
+    ])
+    let link: JSONValue = .object([
+        "app": .string("Example"),
+        "locator": .object([
+            "role": .string("AXLink"),
+            "title": .string("Article")
+        ])
+    ])
+    let linkLocator: [String: JSONValue] = [
+        "role": .string("AXLink"),
+        "title": .string("Article")
+    ]
+    let observation = ActionObservation(
+        tool: "click",
+        app: "Example",
+        targetBefore: buttonState(role: "AXLink", locator: linkLocator, focused: false),
+        targetAfter: buttonState(role: "AXLink", locator: linkLocator, focused: true)
+    )
+
+    let axnDocument = try translator.axnDocument(from: [
+        RecordedUserEventGroup(action: .scroll(target: scrollSurface, app: "Example", deltaX: 0, deltaY: -120)),
+        RecordedUserEventGroup(action: .click(target: link), observation: observation)
+    ])
+
+    #expect(axnDocument["actions"]?[0]?["tool"] == .string("click"))
+    #expect(axnDocument["actions"]?[0]?["expects"]?[0]?["id"] == .string("a001.focused.0"))
     #expect(axnDocument["actions"]?[1] == nil)
 }
 
