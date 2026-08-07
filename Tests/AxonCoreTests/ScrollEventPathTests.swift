@@ -292,7 +292,8 @@ private let scrollFrame = AXFrame(x: 10, y: 20, width: 100, height: 40)
 private struct FakeAXNode {
     var role: String
     var frame: AXFrame?
-    var actions: [String] = []
+    /// `nil` stands for an element whose action list could not be read at all.
+    var actions: [String]? = []
     var children: [pid_t] = []
 }
 
@@ -331,8 +332,8 @@ private struct FakeAXTree {
         { node(for: $0)?.frame }
     }
 
-    var actionNamesProvider: (AXUIElement) -> [String] {
-        { node(for: $0)?.actions ?? [] }
+    var actionNamesProvider: (AXUIElement) -> [String]? {
+        { node(for: $0)?.actions }
     }
 }
 
@@ -351,13 +352,24 @@ private let scrollTree = FakeAXTree(nodes: [
     202: FakeAXNode(role: "AXList", frame: advertisedFrame, actions: ["AXScrollToVisible"])
 ])
 
+/// The same subtree with no descendant able to answer what it can do, as a busy or half-torn-down
+/// application produces.
+private let unreadableScrollTree = FakeAXTree(nodes: scrollTree.nodes.mapValues { node in
+    var node = node
+    if node.role != kAXScrollAreaRole {
+        node.actions = nil
+    }
+    return node
+})
+
 private func scrollExecutor(
+    tree: FakeAXTree = scrollTree,
     performAction: @escaping (AXUIElement, String) -> AXError,
     posted: @escaping (CGEvent) -> Void,
     processProvider: ((AXUIElement) -> pid_t?)? = nil
 ) -> AXPrimitiveActionExecutor {
     let store = AXElementStore()
-    store.store(snapshotID: SnapshotID("scroll"), elements: [scrollTree.element(scrollAreaPid)])
+    store.store(snapshotID: SnapshotID("scroll"), elements: [tree.element(scrollAreaPid)])
     return AXPrimitiveActionExecutor(
         elementStore: store,
         overlay: nil,
@@ -365,11 +377,11 @@ private func scrollExecutor(
         postEventToProcess: { event, _ in posted(event) },
         sleepMilliseconds: { _ in },
         hitTest: { _ in nil },
-        frameProvider: scrollTree.frameProvider,
+        frameProvider: tree.frameProvider,
         parentProvider: { _ in nil },
         processProvider: processProvider,
-        attributeProvider: scrollTree.attributeProvider,
-        actionNamesProvider: scrollTree.actionNamesProvider,
+        attributeProvider: tree.attributeProvider,
+        actionNamesProvider: tree.actionNamesProvider,
         performAction: performAction
     )
 }
