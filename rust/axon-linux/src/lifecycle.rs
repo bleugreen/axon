@@ -177,6 +177,23 @@ pub fn daemon_report(
     }
 }
 
+/// The published document for a daemon whose health payload this build cannot read.
+pub fn incompatible(
+    endpoint: String,
+    registration: RegistrationHealth,
+    env: &SessionEnvironment,
+    detail: Option<String>,
+) -> HealthReport {
+    HealthReport::incompatible(
+        env!("CARGO_PKG_VERSION"),
+        HealthPlatform::Linux,
+        endpoint,
+        registration,
+        session_health(env),
+        detail,
+    )
+}
+
 /// The published document for a machine whose daemon did not answer.
 ///
 /// Without a desktop the AT-SPI bus cannot be available, and saying so is more useful than
@@ -350,6 +367,23 @@ mod tests {
                 .unwrap()
                 .usable
         );
+    }
+
+    #[test]
+    fn an_older_daemon_is_running_rather_than_absent() {
+        // Upgrading in place leaves the new binary on disk and the old daemon still serving.
+        // Calling that "not running" would send an operator looking for a process that is there.
+        let report = incompatible(
+            "/run/user/1000/axon-v1.sock".into(),
+            registration(None),
+            &graphical(),
+            Some("missing field `version`".into()),
+        );
+
+        assert!(report.daemon.running);
+        assert!(!report.daemon.ready);
+        assert_eq!(report.daemon.reason.as_deref(), Some(reason::VERSION_SKEW));
+        assert_eq!(report.capabilities.len(), Capability::ALL.len());
     }
 
     #[test]

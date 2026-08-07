@@ -118,7 +118,10 @@ mod socket {
             .get("result")
             .cloned()
             .ok_or_else(|| io::Error::other(format!("daemon rejected health: {response}")))?;
-        serde_json::from_value(result).map_err(io::Error::other)
+        // InvalidData rather than a generic error: a daemon that answers unintelligibly is a
+        // running daemon of another version, and the caller reports that differently from silence.
+        serde_json::from_value(result)
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
     }
 
     /// Waits for a successful health round trip.
@@ -469,7 +472,8 @@ mod lifecycle {
 mod status {
     use super::{lifecycle, socket};
     use axon_core::{HealthReport, exit_code};
-    use axon_linux::lifecycle::{SessionEnvironment, not_running, registration};
+    use axon_linux::lifecycle::{SessionEnvironment, incompatible, not_running, registration};
+    use std::io;
 
     pub fn run(args: &[String]) -> Result<i32, Box<dyn std::error::Error>> {
         let json = args.iter().any(|arg| arg == "--json");
@@ -494,12 +498,16 @@ mod status {
     /// the daemon process does not own that fact.
     fn current() -> HealthReport {
         let registration = registration(lifecycle::installed_unit().as_deref());
+        let env = SessionEnvironment::from_env();
         match socket::daemon_health() {
             Ok(report) => HealthReport::running(report, registration),
+            Err(error) if error.kind() == io::ErrorKind::InvalidData => {
+                incompatible(socket::endpoint(), registration, &env, Some(error.to_string()))
+            }
             Err(error) => not_running(
                 socket::endpoint(),
                 registration,
-                &SessionEnvironment::from_env(),
+                &env,
                 Some(error.to_string()),
             ),
         }

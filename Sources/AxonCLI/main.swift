@@ -819,7 +819,18 @@ private func currentStatus() -> HealthStatus {
         if let error = response.error {
             return unreachable(registration, HealthReason.daemonUnreachable, error.message)
         }
-        return .running(daemon: try DaemonReport(jsonObject: response.result ?? [:]), registration: registration)
+        do {
+            return .running(daemon: try DaemonReport(jsonObject: response.result ?? [:]), registration: registration)
+        } catch {
+            // A daemon that answers unintelligibly is a running daemon of another version, which
+            // is a different machine state from silence and is reported as one.
+            return .incompatible(
+                endpoint: socketPath,
+                registration: registration,
+                session: Doctor.currentSession(),
+                detail: "\(error)"
+            )
+        }
     } catch let error as SocketError {
         // Failing to connect and failing to get an answer are different machine states, and the
         // difference is the whole point of asking: a socket file with nothing behind it means no

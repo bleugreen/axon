@@ -78,6 +78,9 @@ public enum HealthReason {
     public static let accessibilityNotGranted = "accessibility-not-granted"
     /// macOS has not granted Screen Recording to the daemon identity.
     public static let screenRecordingNotGranted = "screen-recording-not-granted"
+    /// A daemon answered, but not with a health document this build can read. The running daemon
+    /// is a different version from the CLI asking it.
+    public static let versionSkew = "version-skew"
     /// This build does not implement the capability on this platform.
     public static let notImplemented = "not-implemented"
     /// The state could not be determined and no more specific code applies.
@@ -335,6 +338,37 @@ public struct HealthStatus: Codable, Equatable, Sendable {
             session: report.session,
             permissions: report.permissions,
             capabilities: report.capabilities
+        )
+    }
+
+    /// Describes a daemon that answered with something this build cannot read.
+    ///
+    /// A consumer that pins a version and upgrades in place will hit exactly this: the new binary
+    /// on disk, the old daemon still serving. Calling that "not running" would send an operator
+    /// looking for a process that is right there, so the document says a daemon is running, is not
+    /// ready, and does not match.
+    public static func incompatible(
+        version: String = AxonVersion.current,
+        platform: HealthPlatform = .macos,
+        endpoint: String,
+        registration: RegistrationHealth,
+        session: SessionHealth,
+        detail: String? = nil
+    ) -> HealthStatus {
+        HealthStatus(
+            version: version,
+            platform: platform,
+            daemon: DaemonHealth(
+                running: true,
+                ready: false,
+                endpoint: endpoint,
+                reason: HealthReason.versionSkew,
+                detail: detail
+            ),
+            registration: registration,
+            session: session,
+            permissions: [],
+            capabilities: CapabilityState.allUnusable(reason: HealthReason.versionSkew)
         )
     }
 
