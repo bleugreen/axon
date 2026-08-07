@@ -14,14 +14,14 @@ use crate::{
 };
 use axon_core::{BackendError, Capability, KeyboardIntent};
 use x11rb::{
-    connection::Connection,
+    connection::{Connection, RequestConnection as _},
     protocol::{
         xproto::{
             Atom, AtomEnum, BUTTON_PRESS_EVENT, BUTTON_RELEASE_EVENT, ClientMessageEvent,
             ConnectionExt as _, EventMask, KEY_PRESS_EVENT, KEY_RELEASE_EVENT, MOTION_NOTIFY_EVENT,
             Window,
         },
-        xtest::ConnectionExt as _,
+        xtest::{self, ConnectionExt as _},
     },
     rust_connection::RustConnection,
     wrapper::ConnectionExt as _,
@@ -59,6 +59,20 @@ impl X11Session {
             atoms,
             under_wayland: std::env::var_os("WAYLAND_DISPLAY").is_some(),
         })
+    }
+
+    /// Whether this server actually provides XTEST.
+    ///
+    /// The extension is near-universal but not guaranteed: a server started with `-extension XTEST`
+    /// or a remote X server without it will answer everything else about the session normally.
+    /// Advertising synthetic input on the strength of a window manager alone would report the
+    /// capability usable and only discover otherwise at the moment of dispatch.
+    pub fn supports_xtest(&self) -> bool {
+        self.connection
+            .extension_information(xtest::X11_EXTENSION_NAME)
+            .ok()
+            .flatten()
+            .is_some()
     }
 
     /// Whether a window manager is present that publishes the two properties the foreground
