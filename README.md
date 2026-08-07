@@ -1,8 +1,8 @@
 # Axon
 
-Axon is a local macOS accessibility service that gives agents a typed, composable path into running apps. It is the connective layer between an agent's intent and an app's UI — semantic locators over coordinates, a flat set of primitive actions, honest results, and recordable sessions that replay as plain text files.
+Axon is a local accessibility service that gives agents a typed, composable path into running apps on macOS, Windows, and Linux. It is the connective layer between an agent's intent and an app's UI — semantic locators over coordinates, a flat set of primitive actions, honest results, and recordable sessions that replay as plain text files.
 
-It runs as a menu bar service, exposes a small JSON-RPC command surface over a Unix socket, and provides an MCP stdio facade for agent clients. The core loop is:
+On macOS it runs as a menu bar service; on Windows and Linux the sibling Rust daemons (`axon-win`, `axon-linux`) serve the same surface. Each exposes a small JSON-RPC command surface over local IPC and provides an MCP stdio facade for agent clients. What is proven to work where — separated into Supported, Supported with limits, and Experimental tiers — is recorded in the [cross-platform support matrix](docs/cross-platform.md#support-matrix). The core loop is:
 
 1. look at app state
 2. find an honest target
@@ -21,7 +21,7 @@ claude mcp add axon -- axon mcp   # or: codex mcp add axon -- axon mcp
 
 ## Why Axon
 
-Computer Use APIs ship as closed-source pixel-pushing services. Axon takes the opposite stance: it is a small, local, open-source utility layer over the macOS Accessibility API. Nothing about it is gated, hosted, or proprietary. AX is public-by-mandate; this is just the thing that makes everything downstream easier.
+Computer Use APIs ship as closed-source pixel-pushing services. Axon takes the opposite stance: it is a small, local, open-source utility layer over each platform's native accessibility API — Accessibility on macOS, UI Automation on Windows, AT-SPI2 on Linux. Nothing about it is gated, hosted, or proprietary. These APIs are public-by-mandate; this is just the thing that makes everything downstream easier.
 
 The unit of memory is the **`.axn` file** (axon // action) — a saved sequence of past tool calls that an agent or user can replay, edit, and share. Sessions become re-runnable artifacts rather than ephemeral chat history. If an axon is a neuron's path to muscle, a `.axn` is a myelinated one: a route taken often enough that it gets wrapped in insulation and becomes a reflex.
 
@@ -35,6 +35,7 @@ The four guarantees Axon tries to make:
 ## Documentation
 
 - [Install and Operations](docs/install.md) — build, daemon lifecycle, MCP setup, logs, troubleshooting
+- [Cross-platform](docs/cross-platform.md) — the evidence-based support matrix, backend design, and live verification lanes
 - [Embedding Axon](docs/embedding.md) — the contract for bundling Axon: versioned artifacts, lifecycle verbs, and the `health-v1` status document
 - [Tool Surface](docs/tool-surface.md) — MCP/CLI commands, target shapes, screenshots, action semantics
 - [The `.axn` File](docs/axn.md) — file schema, history export, replay
