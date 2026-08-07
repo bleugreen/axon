@@ -756,26 +756,26 @@ private func handleDaemonCommand(arguments: [String]) throws {
 
 /// Stops the running daemon while leaving start-at-login registration in place.
 ///
-/// The agent is unloaded before the shutdown request because `KeepAlive` would otherwise relaunch
-/// the daemon in the gap between it acknowledging the request and actually exiting.
+/// Who is running is asked first, because unloading the agent terminates the daemon and there
+/// would be nothing left to ask afterwards. The agent is then unloaded before the shutdown
+/// request, since `KeepAlive` would otherwise relaunch the daemon in the gap between it
+/// acknowledging the request and actually exiting.
 private func shutdownDaemon() throws {
+    let running = currentStatus().daemon
+    let runningProcessID = running.running ? running.processId : nil
+
     let manager = LaunchAgentManager(configuration: try launchAgentConfiguration())
     try manager.stop()
 
-    var stoppedProcessID: Int?
-    if let response = try? SocketClient(path: socketPath, responseTimeoutSeconds: 2)
-        .send(JSONRPCRequest(id: .string("shutdown"), method: "shutdown")) {
-        stoppedProcessID = response.result?["processId"].flatMap { value in
-            if case let .int(processID) = value { return processID }
-            return nil
-        }
-    }
+    // Anything still answering is a daemon launchd does not own, such as a running Axon.app.
+    _ = try? SocketClient(path: socketPath, responseTimeoutSeconds: 2)
+        .send(JSONRPCRequest(id: .string("shutdown"), method: "shutdown"))
 
     guard waitUntilDaemonStops(timeoutSeconds: 5) else {
         throw CLIError.operationFailed("a daemon is still answering at \(socketPath)")
     }
-    if let stoppedProcessID {
-        print("stopped daemon (pid \(stoppedProcessID)); registration left in place")
+    if let runningProcessID {
+        print("stopped daemon (pid \(runningProcessID)); registration left in place")
     } else {
         print("no daemon was running; registration left in place")
     }
