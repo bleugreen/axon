@@ -77,10 +77,6 @@ impl X11Session {
             .all(|required| supported.contains(required))
     }
 
-    pub fn under_wayland(&self) -> bool {
-        self.under_wayland
-    }
-
     /// The process id of whatever holds the X11 foreground.
     ///
     /// `Ok(None)` means nothing is focused, which is a real state on a bare X session. Under

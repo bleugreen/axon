@@ -73,12 +73,14 @@ enum InputSession {
 /// Wayland-native application held the focus it could neither see nor give back. A mechanism that
 /// works while its proof quietly does not is the precise failure this contract exists to refuse.
 fn input_session() -> InputSession {
+    // Asked before an X connection is attempted, because a Wayland session is one whether or not
+    // XWayland happens to answer, and what XWayland could answer is about X11 clients alone.
+    if std::env::var_os("WAYLAND_DISPLAY").is_some() {
+        return InputSession::Unavailable(WAYLAND_SESSION);
+    }
     let Some(x11) = X11Session::connect() else {
         return InputSession::Unavailable(NO_X_DISPLAY);
     };
-    if x11.under_wayland() {
-        return InputSession::Unavailable(WAYLAND_SESSION);
-    }
     if !x11.supports_ewmh() {
         return InputSession::Unavailable(NO_WINDOW_MANAGER);
     }
