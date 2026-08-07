@@ -742,10 +742,14 @@ private func handleDaemonCommand(arguments: [String]) throws {
         print("registered \(manager.configuration.label) -> \(manager.configuration.executablePath)")
         print("daemon ready (pid \(report.processId), version \(report.version))")
     case "restart":
-        try manager.stop()
-        try manager.start()
+        // Restart deliberately does not re-register. It restarts the daemon that is installed,
+        // whatever binary is asking, so restarting from a build directory cannot repoint a
+        // working installation at a path that is about to disappear.
+        let registration = manager.registration()
+        try manager.restart()
         let report = try waitForDaemonReport()
-        print("restarted \(manager.configuration.label) (pid \(report.processId), version \(report.version))")
+        print("restarted \(manager.configuration.label) -> \(registration.path ?? manager.configuration.executablePath)")
+        print("daemon ready (pid \(report.processId), version \(report.version))")
     case "uninstall":
         try manager.uninstall()
         print("unregistered \(manager.configuration.label)")

@@ -351,7 +351,9 @@ mod socket {
 mod lifecycle {
     use super::socket;
     use axon_core::{ephemeral_path_warning, exit_code};
-    use axon_linux::lifecycle::{SessionEnvironment, UNIT_NAME, session_health, unit_file};
+    use axon_linux::lifecycle::{
+        SessionEnvironment, UNIT_NAME, session_health, unit_executable, unit_file,
+    };
     use std::{fs, io, path::PathBuf, process::Command, time::Duration};
 
     /// Where systemd looks for a user unit this CLI owns.
@@ -441,11 +443,33 @@ mod lifecycle {
         Ok(())
     }
 
+    /// Restarts the registered daemon.
+    ///
+    /// Deliberately does not rewrite the unit. Restart restarts the daemon that is installed,
+    /// whatever binary is asking, so restarting from a build directory cannot repoint a working
+    /// installation at a path that is about to disappear.
     fn restart() -> Result<(), Box<dyn std::error::Error>> {
+        let Some(path) = installed_unit().as_deref().and_then(unit_executable) else {
+            return Err(format!(
+                "{UNIT_NAME} is not registered; run `daemon install` from the permanent install path first"
+            )
+            .into());
+        };
         systemctl(&["restart", UNIT_NAME])?;
+        println!("restarted {UNIT_NAME} -> {path}");
+
+        let session = session_health(&SessionEnvironment::from_env());
+        if !session.graphical {
+            println!(
+                "daemon not started: {}; it will start with the graphical session",
+                session.reason.as_deref().unwrap_or("no graphical session")
+            );
+            return Ok(());
+        }
+
         let report = socket::wait_until_ready(Duration::from_secs(60))?;
         println!(
-            "restarted {UNIT_NAME} (pid {}, version {})",
+            "daemon ready (pid {}, version {})",
             report.process_id, report.version
         );
         Ok(())

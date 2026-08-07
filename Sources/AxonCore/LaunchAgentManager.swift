@@ -113,6 +113,23 @@ public struct LaunchAgentManager {
         }
     }
 
+    /// Reloads the installed agent without rewriting it.
+    ///
+    /// `start()` writes the plist first, which is right for install and wrong for restart. Restart
+    /// must restart the daemon that is registered; rewriting the registration would silently
+    /// repoint it at whichever binary happened to invoke the command, which is exactly how an
+    /// agent restarting from an ephemeral build directory destroys a working installation.
+    public func restart() throws {
+        guard fileManager.fileExists(atPath: plistPath.path) else {
+            throw LaunchAgentError.notRegistered(configuration.label)
+        }
+        try stop()
+        let result = try runProcess(["bootstrap", launchctlDomain(), plistPath.path])
+        guard result.exitCode == 0 else {
+            throw LaunchAgentError.commandFailed("launchctl bootstrap", result)
+        }
+    }
+
     public func stop() throws {
         let result = try runProcess(["bootout", "\(launchctlDomain())/\(configuration.label)"])
         guard result.exitCode == 0 || isMissingServiceOutput(result.combinedOutput) else {
@@ -225,11 +242,14 @@ public struct ProcessResult: Equatable, Sendable {
 
 public enum LaunchAgentError: Error, CustomStringConvertible {
     case commandFailed(String, ProcessResult)
+    case notRegistered(String)
 
     public var description: String {
         switch self {
         case let .commandFailed(command, result):
             return "\(command) failed with exit code \(result.exitCode): \(result.combinedOutput)"
+        case let .notRegistered(label):
+            return "\(label) is not registered; run `axon daemon install` from the permanent install path first"
         }
     }
 }

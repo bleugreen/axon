@@ -79,11 +79,21 @@ mod lifecycle {
                 );
             }
             Some("restart") => {
+                // Restart deliberately does not re-register. It restarts the daemon that is
+                // installed, whatever binary is asking, so restarting from a build directory
+                // cannot repoint a working installation at a path that is about to disappear.
+                let registered = registration();
+                let Some(path) = registered.path.filter(|_| registered.registered) else {
+                    return Err(format!(
+                        "{TASK_NAME:?} is not registered; run `daemon install` from the permanent install path first"
+                    )
+                    .into());
+                };
                 stop_if_running()?;
-                register()?;
                 let report = start()?;
+                println!("restarted {TASK_NAME:?} -> {path}");
                 println!(
-                    "restarted {TASK_NAME:?} (pid {}, version {})",
+                    "daemon ready (pid {}, version {})",
                     report.process_id, report.version
                 );
             }
