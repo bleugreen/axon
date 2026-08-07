@@ -240,6 +240,15 @@ pub struct ForegroundCleanup {
     pub message: Option<String>,
 }
 
+impl ForegroundCleanup {
+    /// Whether the user's session was handed back whole. A cursor left where synthetic input
+    /// dropped it is a failed restoration as surely as a window that never came back, so an action
+    /// that leaves either behind did not succeed however well its dispatch went.
+    pub fn session_restored(&self) -> bool {
+        self.restored && self.pointer_restored != Some(false)
+    }
+}
+
 /// One rung of an action's delivery ladder.
 ///
 /// A candidate the runtime cannot satisfy right now still belongs in the ladder, carrying the
@@ -468,24 +477,110 @@ pub enum ForegroundTarget<'a> {
     Frontmost,
 }
 
+/// How far the pointer may sit from where it started and still count as never having moved. The
+/// same half-pixel tolerance the macOS executor uses, so the two report `pointerRestored`
+/// identically.
+const POINTER_TOLERANCE: f64 = 0.5;
+
+fn pointer_matches(observed: (f64, f64), origin: (f64, f64)) -> bool {
+    (observed.0 - origin.0).abs() < POINTER_TOLERANCE
+        && (observed.1 - origin.1).abs() < POINTER_TOLERANCE
+}
+
+/// The transaction stopped before dispatching. Nothing was posted, and `restored` says whether the
+/// session is as the user left it.
+fn not_dispatched<T>(
+    prior_app: Option<String>,
+    restored: bool,
+    cleanup_message: &str,
+    refusal_message: &str,
+) -> ForegroundDispatch<T> {
+    ForegroundDispatch {
+        value: None,
+        cleanup: ForegroundCleanup {
+            prior_app,
+            prior_app_process_identifier: None,
+            already_frontmost: false,
+            activation_proved: false,
+            restored,
+            pointer_restored: None,
+            message: Some(cleanup_message.into()),
+        },
+        refusal: Some(DeliveryRefusal::new(
+            DeliveryRefusalReason::ActivationNotProved,
+            DeliveryRung::Foreground,
+            Some(DeliveryCapability::GlobalInput),
+            refusal_message,
+        )),
+    }
+}
+
+/// Puts the pointer back where the dispatch found it.
+///
+/// `None` means the dispatch never moved it, so there was nothing to put back — which is why the
+/// field is an `Option<bool>` rather than a bool that would have to lie in that case.
+fn restore_pointer<B>(backend: &mut B, origin: Option<(f64, f64)>) -> Option<bool>
+where
+    B: crate::PlatformBackend + ?Sized,
+{
+    let origin = origin?;
+    let at_origin = |backend: &mut B| {
+        backend
+            .pointer_location()
+            .ok()
+            .flatten()
+            .is_some_and(|now| pointer_matches(now, origin))
+    };
+    // A location that cannot be read is treated as moved. Warping a pointer that never left is
+    // harmless; leaving one where synthetic input put it is not.
+    if at_origin(backend) {
+        return None;
+    }
+    if !backend.move_pointer(origin).unwrap_or(false) {
+        return Some(false);
+    }
+    Some(at_origin(backend))
+}
+
 /// Runs one action in the foreground and hands the session back.
 ///
 /// The order is fixed and is the whole point: capture the prior foreground, activate the target,
 /// **prove** it came forward, dispatch exactly once, then restore. If activation cannot be proved,
 /// nothing is dispatched at all — posting global input at that moment would send it wherever the
-/// user happens to be working. Restoration runs whether or not the dispatch succeeded.
+/// user happens to be working. Restoration runs whether or not the dispatch succeeded, and puts the
+/// pointer back before the window, so the cursor is home by the time the user's application returns.
+///
+/// `restores_pointer` is the caller's statement that this dispatch moves the real cursor. A pointer
+/// click sets it; keyboard input does not, and capturing a pointer it never touches would report a
+/// restoration that did not happen.
 pub fn dispatch_in_foreground<B, T>(
     backend: &mut B,
     target: ForegroundTarget<'_>,
+    restores_pointer: bool,
     body: impl FnOnce(&mut B) -> T,
 ) -> ForegroundDispatch<T>
 where
     B: crate::PlatformBackend + ?Sized,
 {
-    let prior = backend.frontmost_application().ok().flatten();
     let target = match target {
         ForegroundTarget::Frontmost => None,
         ForegroundTarget::Application(app) => Some(app),
+    };
+    // "The foreground could not be read" and "nothing holds the foreground" are different answers,
+    // and collapsing them is how an escalation activates a target with no idea what to put back.
+    // `Frontmost` is exempt because it activates nothing and so has nothing to restore.
+    let prior = match backend.frontmost_application() {
+        Ok(prior) => prior,
+        Err(_) if target.is_none() => None,
+        Err(_) => {
+            return not_dispatched(
+                None,
+                true,
+                "The prior foreground application could not be read; no events were posted",
+                "Foreground delivery could not read the application it would have to restore, so \
+                 nothing was posted",
+            );
+        }
     };
     let already_frontmost = match target {
         None => true,
@@ -515,27 +610,37 @@ where
     let prior_identity = prior.clone();
     if !activation_proved {
         let restored = restore(backend);
-        return ForegroundDispatch {
-            value: None,
-            cleanup: ForegroundCleanup {
-                prior_app: prior_identity,
-                prior_app_process_identifier: None,
-                already_frontmost: false,
-                activation_proved: false,
-                restored,
-                pointer_restored: None,
-                message: Some("No events were posted".into()),
-            },
-            refusal: Some(DeliveryRefusal::new(
-                DeliveryRefusalReason::ActivationNotProved,
-                DeliveryRung::Foreground,
-                Some(DeliveryCapability::GlobalInput),
-                "Foreground delivery could not prove the target became frontmost, so nothing was posted",
-            )),
-        };
+        return not_dispatched(
+            prior_identity,
+            restored,
+            "No events were posted",
+            "Foreground delivery could not prove the target became frontmost, so nothing was posted",
+        );
     }
 
+    // Captured only for a dispatch that moves the cursor. `Ok(None)` is a backend with no pointer;
+    // an `Err` is a backend that has one and cannot read it, and posting input we could not undo is
+    // the behaviour this transaction exists to prevent.
+    let pointer_before = if restores_pointer {
+        match backend.pointer_location() {
+            Ok(location) => location,
+            Err(_) => {
+                let restored = restore(backend);
+                return not_dispatched(
+                    prior_identity,
+                    restored,
+                    "The pointer could not be read; no events were posted",
+                    "Foreground delivery could not read the pointer it would have to restore, so \
+                     nothing was posted",
+                );
+            }
+        }
+    } else {
+        None
+    };
+
     let value = body(backend);
+    let pointer_restored = restore_pointer(backend, pointer_before);
     let restored = restore(backend);
     ForegroundDispatch {
         value: Some(value),
@@ -545,11 +650,13 @@ where
             already_frontmost,
             activation_proved: true,
             restored,
-            pointer_restored: None,
-            message: if restored {
-                None
-            } else {
-                Some("The prior application did not return to the foreground".into())
+            pointer_restored,
+            message: match (restored, pointer_restored) {
+                (false, _) => Some("The prior application did not return to the foreground".into()),
+                (true, Some(false)) => {
+                    Some("The pointer did not return to where the dispatch found it".into())
+                }
+                (true, _) => None,
             },
         },
         refusal: None,
