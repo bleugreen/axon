@@ -35,6 +35,8 @@ const WAYLAND_SESSION: &str = "this is a Wayland session: the compositor does no
      XWayland is running alongside";
 const NO_WINDOW_MANAGER: &str = "this X11 session has no EWMH-capable window manager, so the \
      foreground application can be neither read nor activated";
+const NO_XTEST: &str = "this X server does not provide the XTEST extension, so there is no way to \
+     post synthetic input to it";
 
 type Reply<T> = mpsc::Sender<Result<T, BackendError>>;
 enum Command {
@@ -65,27 +67,61 @@ enum InputSession {
     Unavailable(&'static str),
 }
 
-/// Classifies the session once, at startup, along the axes that each independently withhold the
-/// foreground rung.
+/// What this session can be observed to provide. Every one of these is required, and each is
+/// missing for its own reason, so a caller is told which.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct SessionFacts {
+    wayland: bool,
+    x_display: bool,
+    window_manager: bool,
+    xtest: bool,
+}
+
+/// Why global input cannot be delivered in this session, or `None` when it can.
 ///
-/// The Wayland check is not redundant with the EWMH one. Mutter under Wayland runs XWayland and
-/// does publish EWMH properties for X11 clients, and XTest still injects input globally, so this
-/// backend could activate an X11 window, prove it came forward, and dispatch — while a
-/// Wayland-native application held the focus it could neither see nor give back. A mechanism that
-/// works while its proof quietly does not is the precise failure this contract exists to refuse.
+/// Pure, and separated from the probing above it, so the decision is tested on every host rather
+/// than only where each of these conditions can be arranged — an X server without XTEST especially,
+/// which no ordinary desktop and no CI lane will produce by accident.
+///
+/// Wayland outranks the rest, and is not redundant with them. Mutter under Wayland runs XWayland,
+/// publishes EWMH for X11 clients, and injects XTest globally, so every other fact here can be true
+/// while a Wayland-native application holds a focus X11 can neither see nor give back. A mechanism
+/// that works while its proof quietly does not is the precise failure this contract exists to
+/// refuse.
+fn input_restriction(facts: SessionFacts) -> Option<&'static str> {
+    if facts.wayland {
+        return Some(WAYLAND_SESSION);
+    }
+    if !facts.x_display {
+        return Some(NO_X_DISPLAY);
+    }
+    if !facts.window_manager {
+        return Some(NO_WINDOW_MANAGER);
+    }
+    if !facts.xtest {
+        return Some(NO_XTEST);
+    }
+    None
+}
+
+/// Observes the session once, at startup, and classifies it.
 fn input_session() -> InputSession {
     // Asked before an X connection is attempted, because a Wayland session is one whether or not
     // XWayland happens to answer, and what XWayland could answer is about X11 clients alone.
-    if std::env::var_os("WAYLAND_DISPLAY").is_some() {
-        return InputSession::Unavailable(WAYLAND_SESSION);
-    }
-    let Some(x11) = X11Session::connect() else {
-        return InputSession::Unavailable(NO_X_DISPLAY);
+    let wayland = std::env::var_os("WAYLAND_DISPLAY").is_some();
+    let x11 = (!wayland).then(X11Session::connect).flatten();
+    let facts = SessionFacts {
+        wayland,
+        x_display: x11.is_some(),
+        window_manager: x11.as_ref().is_some_and(X11Session::supports_ewmh),
+        xtest: x11.as_ref().is_some_and(X11Session::supports_xtest),
     };
-    if !x11.supports_ewmh() {
-        return InputSession::Unavailable(NO_WINDOW_MANAGER);
+    match (input_restriction(facts), x11) {
+        (None, Some(session)) => InputSession::Available(Box::new(session)),
+        (Some(reason), _) => InputSession::Unavailable(reason),
+        // Unreachable: no session is exactly what NO_X_DISPLAY reports.
+        (None, None) => InputSession::Unavailable(NO_X_DISPLAY),
     }
-    InputSession::Available(Box::new(x11))
 }
 
 pub struct LinuxBackend {
@@ -788,6 +824,55 @@ pub(crate) fn capability(capability: Capability, reason: &str) -> BackendError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const USABLE: SessionFacts = SessionFacts {
+        wayland: false,
+        x_display: true,
+        window_manager: true,
+        xtest: true,
+    };
+
+    #[test]
+    fn global_input_needs_a_display_a_window_manager_and_xtest() {
+        assert_eq!(input_restriction(USABLE), None);
+        assert_eq!(
+            input_restriction(SessionFacts {
+                x_display: false,
+                ..USABLE
+            }),
+            Some(NO_X_DISPLAY)
+        );
+        assert_eq!(
+            input_restriction(SessionFacts {
+                window_manager: false,
+                ..USABLE
+            }),
+            Some(NO_WINDOW_MANAGER)
+        );
+        // An X server can answer everything else and still refuse to synthesize input. Nothing on
+        // an ordinary desktop, and nothing in the Xvfb lane, produces this by accident, so the
+        // decision is checked here rather than left to a runtime nobody runs.
+        assert_eq!(
+            input_restriction(SessionFacts {
+                xtest: false,
+                ..USABLE
+            }),
+            Some(NO_XTEST)
+        );
+    }
+
+    #[test]
+    fn wayland_withholds_global_input_however_complete_the_x11_session_looks() {
+        // XWayland satisfies every X11 fact here and still cannot see the focus that matters.
+        assert_eq!(
+            input_restriction(SessionFacts {
+                wayland: true,
+                ..USABLE
+            }),
+            Some(WAYLAND_SESSION)
+        );
+    }
+
     #[test]
     fn reports_wayland_restrictions_explicitly() {
         let unavailable = [
