@@ -707,26 +707,36 @@ private struct PrimitiveActionCommandHandler {
                     let resolution = try resolveTextLocationTarget(location)
                     return try withLocationResolution(services.actions.clickPoint(resolution.point), resolution: resolution)
                 case .handle, .locator:
-                    return try services.actions.click(resolveElementTarget(target))
+                    let resolved = try resolveElementTarget(target)
+                    return withTargetResolution(
+                        try services.actions.click(resolved.handle),
+                        resolution: resolved.resolution
+                    )
                 }
             }
         case "invoke":
             return actionResponse(id: request.id) {
                 let params = try CommandRouterRequestSupport.paramsObject(in: request)
                 let decoder = ToolParamDecoder(toolName: "invoke", params: params)
-                return try services.actions.invoke(
-                    resolveElementTarget(try CommandRouterRequestSupport.requiredToolTarget("target", in: params, acceptedKinds: .element)),
-                    try decoder.requiredString("name")
+                let resolved = try resolveElementTarget(
+                    try CommandRouterRequestSupport.requiredToolTarget("target", in: params, acceptedKinds: .element)
                 )
+                return withTargetResolution(try services.actions.invoke(
+                    resolved.handle,
+                    try decoder.requiredString("name")
+                ), resolution: resolved.resolution)
             }
         case "type":
             return actionResponse(id: request.id) {
                 let params = try CommandRouterRequestSupport.paramsObject(in: request)
                 let decoder = ToolParamDecoder(toolName: "type", params: params)
-                return try services.actions.type(
-                    resolveElementTarget(try CommandRouterRequestSupport.requiredToolTarget("target", in: params, acceptedKinds: .element)),
-                    try decoder.requiredString("value")
+                let resolved = try resolveElementTarget(
+                    try CommandRouterRequestSupport.requiredToolTarget("target", in: params, acceptedKinds: .element)
                 )
+                return withTargetResolution(try services.actions.type(
+                    resolved.handle,
+                    try decoder.requiredString("value")
+                ), resolution: resolved.resolution)
             }
         case "keyboard":
             return actionResponse(id: request.id) {
@@ -751,7 +761,10 @@ private struct PrimitiveActionCommandHandler {
                     try decoder.number("deltaX") ?? 0,
                     try decoder.number("deltaY") ?? -120
                 )
-                return withLocationResolution(result, resolution: target?.locationResolution)
+                return withTargetResolution(
+                    withLocationResolution(result, resolution: target?.locationResolution),
+                    resolution: target?.targetResolution
+                )
             }
         case "drag":
             return actionResponse(id: request.id) {
@@ -766,23 +779,26 @@ private struct PrimitiveActionCommandHandler {
                     app,
                     try decoder.int("durationMs")
                 )
-                return withLocationResolutions(result, resolutions: [from.locationResolution, to.locationResolution])
+                return withTargetResolutions(
+                    withLocationResolutions(result, resolutions: [from.locationResolution, to.locationResolution]),
+                    resolutions: [from.targetResolution, to.targetResolution]
+                )
             }
         default:
             return JSONRPCResponse(id: request.id, error: .methodNotFound(request.method))
         }
     }
 
-    private func resolveElementTarget(_ target: ToolTarget) throws -> String {
+    private func resolveElementTarget(_ target: ToolTarget) throws -> ResolvedElementTarget {
         switch target {
         case let .handle(handle):
-            return handle
+            return ResolvedElementTarget(handle: handle, resolution: nil)
         case let .locator(app, locator):
             let resolution = try services.resolveLocator(app, locator, true)
             guard resolution.status == .unique, let handle = resolution.best?.handle else {
                 throw JSONRPCError.invalidParams("Locator did not resolve uniquely: \(resolution.status.rawValue)")
             }
-            return handle.rawValue
+            return ResolvedElementTarget(handle: handle.rawValue, resolution: resolution)
         case .point:
             throw JSONRPCError.invalidParams("target does not accept point targets; accepted target kinds: handle, locator")
         case .textLocation:
@@ -816,18 +832,27 @@ private struct PrimitiveActionCommandHandler {
     ) throws -> ResolvedPointerTarget {
         switch target {
         case let .handle(handle):
-            return ResolvedPointerTarget(target: .handle(handle), locationResolution: nil)
+            return ResolvedPointerTarget(target: .handle(handle), locationResolution: nil, targetResolution: nil)
         case let .locator(app, locator):
             let resolved = try resolveElementTarget(.locator(app: app, locator: locator))
-            return ResolvedPointerTarget(target: .handle(resolved), locationResolution: nil)
+            return ResolvedPointerTarget(
+                target: .handle(resolved.handle),
+                locationResolution: nil,
+                targetResolution: resolved.resolution
+            )
         case let .point(point):
             return ResolvedPointerTarget(
                 target: .point(try screenPoint(for: point, defaultApp: defaultApp, fieldName: fieldName)),
-                locationResolution: nil
+                locationResolution: nil,
+                targetResolution: nil
             )
         case let .textLocation(location):
             let resolution = try resolveTextLocationTarget(location)
-            return ResolvedPointerTarget(target: .point(resolution.point), locationResolution: resolution)
+            return ResolvedPointerTarget(
+                target: .point(resolution.point),
+                locationResolution: resolution,
+                targetResolution: nil
+            )
         }
     }
 
