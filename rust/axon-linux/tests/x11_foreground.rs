@@ -165,13 +165,6 @@ impl MiniWindowManager {
 
     fn stop(self) {
         let _ = self.stop.send(());
-        // The manager is parked in wait_for_event, so it needs an event to notice the request. A
-        // property change on the root is the quietest one that reaches it.
-        if let Ok((connection, screen)) = x11rb::connect(None) {
-            let root = connection.setup().roots[screen].root;
-            let _ = connection.delete_property(root, AtomEnum::WM_NAME.into());
-            let _ = connection.flush();
-        }
         let _ = self.thread.join();
     }
 }
@@ -189,9 +182,17 @@ fn run_manager(ready: &mpsc::Sender<Result<(), String>>, stopped: &mpsc::Receive
         }
     };
 
+    // Polled rather than blocked on `wait_for_event`, so a stop request is always noticed. Waking
+    // a blocked manager would need an event of its own, and an event that turns out not to be
+    // generated leaves the test hanging until CI kills it.
     while stopped.try_recv().is_err() {
-        let Ok(event) = connection.wait_for_event() else {
-            break;
+        let event = match connection.poll_for_event() {
+            Ok(Some(event)) => event,
+            Ok(None) => {
+                thread::sleep(Duration::from_millis(5));
+                continue;
+            }
+            Err(_) => break,
         };
         // The one request a manager owes this backend: bring the named window forward.
         if let Event::ClientMessage(message) = event
@@ -256,11 +257,8 @@ fn start_manager() -> Result<Manager, String> {
     connection
         .change_window_attributes(
             root,
-            &ChangeWindowAttributesAux::new().event_mask(
-                EventMask::SUBSTRUCTURE_REDIRECT
-                    | EventMask::SUBSTRUCTURE_NOTIFY
-                    | EventMask::PROPERTY_CHANGE,
-            ),
+            &ChangeWindowAttributesAux::new()
+                .event_mask(EventMask::SUBSTRUCTURE_REDIRECT | EventMask::SUBSTRUCTURE_NOTIFY),
         )
         .map_err(|error| error.to_string())?
         .check()
