@@ -1044,15 +1044,14 @@ private struct PrimitiveActionCommandHandler {
         do {
             return JSONRPCResponse(id: id, result: ["action": try body().jsonValue])
         } catch let failure as LocatorResolutionFailure {
-            let result = PrimitiveActionResult(
-                action: "resolve",
-                target: "",
-                strategy: "locator-resolution",
-                success: false,
-                message: "Locator did not resolve uniquely: \(failure.resolution.status.rawValue)",
-                details: ["targetResolution": compactTargetResolution(failure.resolution)]
+            return JSONRPCResponse(
+                id: id,
+                error: JSONRPCError(
+                    code: -32602,
+                    message: "Locator did not resolve uniquely: \(failure.resolution.status.rawValue)",
+                    data: .object(["targetResolution": compactTargetResolution(failure.resolution)])
+                )
             )
-            return JSONRPCResponse(id: id, result: ["action": result.jsonValue])
         } catch let error as JSONRPCError {
             return JSONRPCResponse(id: id, error: error)
         } catch let error as AXElementStoreError {

@@ -344,6 +344,18 @@ public struct AxnRunner {
                 secretTaintedFields: secretTaintedFields
             )
             if let error = response.error {
+                if case let .object(data)? = error.data,
+                   let resolution = data["targetResolution"],
+                   let event = AxnHealing.event(
+                       action: action,
+                       index: index,
+                       resolution: resolution,
+                       verify: { _, _ in false },
+                       activeSecretRedactor: activeSecretRedactorProvider()
+                   ) {
+                    healEvents.append(event)
+                    record["heal"] = event.jsonValue
+                }
                 record["success"] = .bool(false)
                 record["error"] = traceError(error.message, hasSecretTaint: !secretTaintedFields.isEmpty)
                 return .object(record)
