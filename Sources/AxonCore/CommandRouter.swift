@@ -803,7 +803,7 @@ private struct PrimitiveActionCommandHandler {
                 let decoder = ToolParamDecoder(toolName: "scroll", params: params)
                 let policy = try decoder.deliveryPolicy()
                 let target = try optionalResolvedPointerTarget("target", in: params)
-                if case let .handle(handle)? = target?.target {
+                if let handle = target?.target.handle {
                     observations?.begin(tool: "scroll", handle: handle)
                 }
                 let result = try services.actions.scroll(
@@ -1111,7 +1111,8 @@ private struct PrimitiveActionCommandHandler {
 
 private struct AxnRunCommandHandler {
     let services: CommandRouterServices
-    let commandHandler: (JSONRPCRequest) -> JSONRPCResponse
+    let commandHandler: (JSONRPCRequest, ActionObservationCollector?) -> JSONRPCResponse
+    let observationCollector: () -> ActionObservationCollector
     let historySessionID: String?
 
     func handle(_ request: JSONRPCRequest) -> JSONRPCResponse {
@@ -1228,8 +1229,14 @@ private struct AxnRunCommandHandler {
 
     private func runner() -> AxnRunner {
         let credentialFilterProvider = services.activeCredentialFilterProvider
+        // Actions replayed inside `run` are dispatched and recorded one at a time, so a single
+        // collector reset per action carries that action's observation from dispatch to history.
+        let collector = observationCollector()
         return AxnRunner(
-            commandHandler: commandHandler,
+            commandHandler: { childRequest in
+                collector.reset()
+                return commandHandler(childRequest, collector)
+            },
             snapshotProvider: services.axnSnapshotProvider,
             actionRecorder: { childRequest, childResponse in
                 guard let historySessionID else {
@@ -1239,6 +1246,7 @@ private struct AxnRunCommandHandler {
                     request: childRequest,
                     response: childResponse,
                     sessionID: historySessionID,
+                    observation: collector.observation,
                     activeSecretRedactor: activeSecretRedactor()
                 )
             },
