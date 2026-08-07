@@ -146,6 +146,35 @@ mod socket {
         ))
     }
 
+    /// Whether an error means nothing is listening, as opposed to something listening badly.
+    ///
+    /// Only the first is an already-reached end state; the second is a daemon that must be dealt
+    /// with rather than reported as absent.
+    pub fn is_daemon_absent(error: &io::Error) -> bool {
+        matches!(
+            error.kind(),
+            io::ErrorKind::NotFound | io::ErrorKind::ConnectionRefused
+        )
+    }
+
+    fn is_absent() -> bool {
+        match path() {
+            Ok(path) => UnixStream::connect(path).is_err(),
+            Err(_) => true,
+        }
+    }
+
+    pub fn wait_until_absent(timeout: Duration) -> bool {
+        let start = Instant::now();
+        while start.elapsed() < timeout {
+            if is_absent() {
+                return true;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        is_absent()
+    }
+
     pub fn shutdown_rpc() -> io::Result<u32> {
         let response = rpc("shutdown")?;
         response
@@ -477,18 +506,54 @@ mod lifecycle {
 
     /// Stops the running daemon while leaving the registration in place.
     ///
-    /// The unit is stopped rather than only asked to exit, because `Restart=on-failure` plus a
+    /// The unit is stopped as well as asked to exit, because `Restart=on-failure` plus a
     /// systemd-managed process means asking alone can be undone a second later.
+    ///
+    /// Only an absent endpoint counts as an already-reached end state. A daemon that accepts a
+    /// connection and then does not answer, or a `systemctl stop` that fails, must reach the
+    /// caller: reporting a stop that did not happen leaves a process holding the socket while
+    /// whoever asked believes the machine is clear.
     pub fn shutdown() -> Result<(), Box<dyn std::error::Error>> {
-        let stopped = socket::shutdown_rpc().ok();
-        if installed_unit().is_some() {
-            let _ = systemctl(&["stop", UNIT_NAME]);
+        let registered = installed_unit().is_some();
+        let stopped = match socket::shutdown_rpc() {
+            Ok(process_id) => Some(process_id),
+            Err(error) if socket::is_daemon_absent(&error) => {
+                println!("no daemon was running; registration left in place");
+                return Ok(());
+            }
+            Err(error) if registered => {
+                eprintln!(
+                    "axon-linux: the daemon did not answer a shutdown request ({error}); stopping {UNIT_NAME}"
+                );
+                None
+            }
+            Err(error) => {
+                return Err(format!(
+                    "a daemon at {} did not answer a shutdown request and no {UNIT_NAME} \
+                     registration exists to stop it: {error}",
+                    socket::endpoint()
+                )
+                .into());
+            }
+        };
+
+        if registered {
+            systemctl(&["stop", UNIT_NAME])?;
         }
+
+        if !socket::wait_until_absent(Duration::from_secs(10)) {
+            return Err(format!(
+                "a daemon is still answering at {}",
+                socket::endpoint()
+            )
+            .into());
+        }
+
         match stopped {
             Some(process_id) => {
                 println!("stopped daemon (pid {process_id}); registration left in place")
             }
-            None => println!("no daemon was running; registration left in place"),
+            None => println!("stopped daemon; registration left in place"),
         }
         Ok(())
     }

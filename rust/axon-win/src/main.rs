@@ -177,7 +177,7 @@ mod lifecycle {
         }
     }
 
-    fn wait_for_process_exit(process_id: u32, timeout: Duration) -> io::Result<()> {
+    pub fn wait_for_process_exit(process_id: u32, timeout: Duration) -> io::Result<()> {
         let handle = unsafe { OpenProcess(SYNCHRONIZE, 0, process_id) };
         if handle == 0 {
             let error = io::Error::last_os_error();
@@ -420,9 +420,15 @@ mod status {
     }
 
     /// Stops the running daemon while leaving the registration in place.
+    ///
+    /// Only an absent pipe counts as an already-reached end state. A daemon that acknowledges
+    /// shutdown is then waited for, because the acknowledgement is sent before the UI Automation
+    /// thread joins and the COM apartment is torn down; reporting a stop before the process is
+    /// gone is how a relaunch races the next lifecycle command.
     pub fn shutdown() -> Result<(), Box<dyn std::error::Error>> {
         match pipe::shutdown() {
             Ok(process_id) => {
+                lifecycle::wait_for_process_exit(process_id, std::time::Duration::from_secs(10))?;
                 println!("stopped daemon (pid {process_id}); registration left in place")
             }
             Err(error) if pipe::is_daemon_absent(&error) => {
