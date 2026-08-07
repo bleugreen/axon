@@ -324,7 +324,13 @@ fn start_manager() -> Result<Manager, String> {
     )?;
     publish(atoms.client_list, AtomEnum::WINDOW, &windows)?;
     publish(atoms.active_window, AtomEnum::WINDOW, &windows[..1])?;
+    // Sent *and* processed before `start` reports ready. The test observes this state over its own
+    // connection the moment `start` returns, and a flush alone only guarantees the requests left
+    // this client -- the server would still be free to answer the other connection first. Every
+    // point where the manager publishes state the test reads directly needs this round trip; the
+    // teardown makes the same one for the same reason.
     connection.flush().map_err(|error| error.to_string())?;
+    connection.sync().map_err(|error| error.to_string())?;
 
     Ok((connection, root, atoms, windows))
 }
