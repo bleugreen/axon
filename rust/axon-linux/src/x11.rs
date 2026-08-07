@@ -244,7 +244,12 @@ impl X11Session {
     fn keyboard_mapping(&self) -> Result<KeyboardMapping, BackendError> {
         let setup = self.connection.setup();
         let first = setup.min_keycode;
-        let count = setup.max_keycode - setup.min_keycode + 1;
+        // Keycodes are 8-bit, and a server reporting the full range would overflow this on the
+        // way to describing itself.
+        let count = setup
+            .max_keycode
+            .saturating_sub(setup.min_keycode)
+            .saturating_add(1);
         let mapping = self
             .connection
             .get_keyboard_mapping(first, count)
@@ -327,9 +332,12 @@ impl KeyboardMapping {
             return None;
         }
         for (index, levels) in self.keysyms.chunks(self.per_keycode).enumerate() {
+            let keycode = u8::try_from(index)
+                .ok()
+                .and_then(|index| self.first.checked_add(index))?;
             for (level, candidate) in levels.iter().enumerate().take(2) {
                 if *candidate == keysym {
-                    return Some((self.first + index as u8, level == 1));
+                    return Some((keycode, level == 1));
                 }
             }
         }
