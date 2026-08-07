@@ -21,7 +21,7 @@ claude mcp add axon -- axon mcp   # or: codex mcp add axon -- axon mcp
 
 ## Why Axon
 
-Computer Use APIs ship as closed-source pixel-pushing services. Axon takes the opposite stance: it is a small, local, open-source utility layer over each platform's native accessibility API — Accessibility on macOS, UI Automation on Windows, AT-SPI2 on Linux. Nothing about it is gated, hosted, or proprietary. These APIs are public-by-mandate; this is just the thing that makes everything downstream easier.
+Every desktop platform already ships a semantic description of its running apps — Accessibility on macOS, UI Automation on Windows, AT-SPI2 on Linux. These APIs expose what is actually on screen as roles, labels, values, and actions, so a button can be addressed as a button rather than a region of pixels. Axon is a small, local, open-source utility layer over that surface: one consistent tool shape across platforms, nothing gated, hosted, or proprietary. The APIs were always public; Axon is the thing that makes everything downstream easier.
 
 The unit of memory is the **`.axn` file** (axon // action) — a saved sequence of past tool calls that an agent or user can replay, edit, and share. Sessions become re-runnable artifacts rather than ephemeral chat history. If an axon is a neuron's path to muscle, a `.axn` is a myelinated one: a route taken often enough that it gets wrapped in insulation and becomes a reflex.
 
