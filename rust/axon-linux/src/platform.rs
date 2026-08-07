@@ -408,6 +408,9 @@ impl Actor {
                 Command::Enumerate(r) => {
                     let _ = r.send(self.enumerate().await);
                 }
+                Command::Identities(r) => {
+                    let _ = r.send(self.identities().await);
+                }
                 Command::Capture(q, r) => {
                     let _ = r.send(self.capture(q).await);
                 }
@@ -441,9 +444,35 @@ impl Actor {
             let name = timeout("application name", proxy.name()).await?;
             out.push(Application {
                 name,
-                identifier: Some(object.path().to_string()),
+                identifier: Some(identity(&object)),
                 windows: vec![],
             });
+        }
+        Ok(out)
+    }
+    /// Every AT-SPI application paired with the process that owns it.
+    ///
+    /// An application that cannot be asked for its process id is skipped rather than failing the
+    /// whole read: one application exiting mid-enumeration must not blind the backend to the rest
+    /// of the session.
+    async fn identities(&self) -> Result<Vec<AppIdentity>, BackendError> {
+        let dbus = timeout("D-Bus proxy", DBusProxy::new(self.connection.connection())).await?;
+        let mut out = Vec::new();
+        for object in self.roots().await? {
+            let Some(bus) = object.name().cloned() else {
+                continue;
+            };
+            let process_id = timeout(
+                "application process id",
+                dbus.get_connection_unix_process_id(BusName::Unique(bus)),
+            )
+            .await;
+            if let Ok(process_id) = process_id {
+                out.push(AppIdentity {
+                    identity: identity(&object),
+                    process_id,
+                });
+            }
         }
         Ok(out)
     }
@@ -456,10 +485,7 @@ impl Actor {
             )
             .await?;
             let name = timeout("application name", proxy.name()).await?;
-            let id_match = q
-                .identifier
-                .as_deref()
-                .is_some_and(|id| id == object.path().as_str());
+            let id_match = q.identifier.as_deref().is_some_and(|id| id == identity(&object));
             let exact = q
                 .name
                 .as_deref()
@@ -479,7 +505,7 @@ impl Actor {
     }
     async fn capture(&mut self, q: AppQuery) -> Result<Snapshot, BackendError> {
         let (root, name) = self.select(&q).await?;
-        let identifier = Some(root.path().to_string());
+        let identifier = Some(identity(&root));
         let mut refs = Vec::new();
         let mut remaining = MAX_NODES;
         let node = self.node(root, 0, &mut remaining, &mut refs).await?;
@@ -590,7 +616,7 @@ impl Actor {
                 label: name,
                 value,
                 description,
-                identifier: Some(object.path().to_string()),
+                identifier: Some(identity(&object)),
                 actions,
                 frame,
                 editable,
@@ -704,6 +730,21 @@ where
         .map_err(|_| operation(name, "timed out"))?
         .map_err(|e| operation(name, e))
 }
+/// The identity string Axon uses for an AT-SPI object.
+///
+/// AT-SPI names an object by a `(bus name, object path)` pair, and the path alone is not unique.
+/// Every application's root object sits at the same path, so an identity that dropped the bus name
+/// would make every application look like every other one — and the foreground transaction decides
+/// what to activate and what to give back by comparing exactly these strings. The same holds inside
+/// one snapshot: an application's WebKit content lives on a different bus name with its own path
+/// space, so paths alone can collide within a single captured tree.
+fn identity(object: &ObjectRefOwned) -> String {
+    match object.name_as_str() {
+        Some(bus) => format!("{bus}{}", object.path_as_str()),
+        None => object.path_as_str().to_string(),
+    }
+}
+
 pub(crate) fn operation(name: &str, error: impl std::fmt::Display) -> BackendError {
     BackendError::Operation {
         operation: name.into(),
