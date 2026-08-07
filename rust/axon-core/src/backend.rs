@@ -147,4 +147,36 @@ pub trait PlatformBackend {
         &mut self,
         timeout: Duration,
     ) -> Result<Vec<RecordedCall>, BackendError>;
+
+    /// Whether this backend can run a transactional foreground escalation: capture the prior
+    /// foreground, activate the target, prove it came forward, and hand the session back.
+    ///
+    /// False by default, and that default is load-bearing. The foreground rung is not merely
+    /// "global input" — it is global input that restores what it borrowed. A backend that cannot
+    /// do all of that must not offer the rung at all, because unrestored global input is exactly
+    /// what the delivery contract exists to prevent. Reporting `delivery: "foreground"` for a bare
+    /// `SendInput` or `XTest` call would claim a guarantee the backend does not keep.
+    fn supports_foreground_transaction(&self) -> bool {
+        false
+    }
+
+    /// Stable identity of whatever currently holds the foreground.
+    fn frontmost_application(&mut self) -> Result<Option<String>, BackendError> {
+        Err(BackendError::Capability {
+            capability: Capability::Focus,
+            reason: "this backend cannot read the foreground application".into(),
+            diagnostic: None,
+        })
+    }
+
+    /// Brings `identity` forward. Returns whether the request was accepted; the caller still has to
+    /// prove the target actually came forward by reading the foreground back.
+    fn activate_application(&mut self, identity: &str) -> Result<bool, BackendError> {
+        let _ = identity;
+        Err(BackendError::Capability {
+            capability: Capability::Focus,
+            reason: "this backend cannot activate an application".into(),
+            diagnostic: None,
+        })
+    }
 }

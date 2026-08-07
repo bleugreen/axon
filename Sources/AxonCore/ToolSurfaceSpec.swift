@@ -219,17 +219,21 @@ public enum ToolSurfaceSpec {
         ToolSpec(
             name: "click",
             description: "Click a target specified by snapshot handle, locator object, point, or text location.",
-            params: [ToolParameterSpec("target", .target(.pointer), required: true, description: "Target to click.")],
-            cliUsage: "axon click <handle|target-json>"
+            params: [
+                ToolParameterSpec("target", .target(.pointer), required: true, description: "Target to click."),
+                deliveryPolicyParameter
+            ],
+            cliUsage: "axon click [--foreground] <handle|target-json>"
         ),
         ToolSpec(
             name: "type",
             description: "Fill a writable field by setting AXValue directly on a target, avoiding focus and keystroke timing races.",
             params: [
                 ToolParameterSpec("target", .target(.element), required: true, description: "Handle or locator target for the writable field."),
-                ToolParameterSpec("value", .string, required: true, description: "New string value.")
+                ToolParameterSpec("value", .string, required: true, description: "New string value."),
+                deliveryPolicyParameter
             ],
-            cliUsage: "axon type <handle> <value>"
+            cliUsage: "axon type [--foreground] <handle> <value>"
         ),
         ToolSpec(
             name: "keyboard",
@@ -237,9 +241,10 @@ public enum ToolSurfaceSpec {
             params: [
                 ToolParameterSpec("text", .string, description: "Arbitrary text to enter exactly as provided."),
                 ToolParameterSpec("key", .string, description: "Recognized key or keystroke, for example End, Return, or cmd+shift+p. Unknown names are rejected."),
-                ToolParameterSpec("app", .string, description: "Optional app to activate before posting keyboard input.")
+                ToolParameterSpec("app", .string, description: "Application that receives the input. Required for background delivery; without it only foregroundPermitted can reach the frontmost app."),
+                deliveryPolicyParameter
             ],
-            cliUsage: "axon keyboard [--app app] (--text text | --key keystroke)",
+            cliUsage: "axon keyboard [--app app] [--foreground] (--text text | --key keystroke)",
             exactlyOneOf: ["text", "key"]
         ),
         ToolSpec(
@@ -249,7 +254,8 @@ public enum ToolSurfaceSpec {
                 ToolParameterSpec("target", .target(.pointer), description: "Optional target to scroll or resolve into view."),
                 ToolParameterSpec("app", .string, description: "Optional app used to resolve a scroll surface without activating it."),
                 ToolParameterSpec("deltaX", .number, default: .int(0), description: "Horizontal scroll delta in pixels. Defaults to 0."),
-                ToolParameterSpec("deltaY", .number, default: .int(-120), description: "Vertical scroll delta in pixels. Defaults to -120.")
+                ToolParameterSpec("deltaY", .number, default: .int(-120), description: "Vertical scroll delta in pixels. Defaults to -120."),
+                deliveryPolicyParameter
             ],
             cliUsage: "axon scroll [--app app] [--target target-json] [--dx n] [--dy n]"
         ),
@@ -259,22 +265,38 @@ public enum ToolSurfaceSpec {
             params: [
                 ToolParameterSpec("from", .target(.pointer), required: true, description: "Starting handle, locator, point, or text location."),
                 ToolParameterSpec("to", .target(.pointer), required: true, description: "Ending handle, locator, point, or text location."),
-                ToolParameterSpec("app", .string, description: "Optional app to activate before dragging."),
+                ToolParameterSpec("app", .string, description: "Application that owns the drag. Required for background delivery; also the app foregroundPermitted activates and restores."),
                 ToolParameterSpec("durationMs", .integer, description: "Optional drag duration in milliseconds. The pointer path still emits threshold and intermediate drag events."),
-                ToolParameterSpec("expects", .array, description: "Optional post-action facts used by run to verify semantic success. Direct drag calls without a verified postcondition report an unverified semantic outcome.")
+                ToolParameterSpec("expects", .array, description: "Optional post-action facts used by run to verify semantic success. Direct drag calls without a verified postcondition report an unverified semantic outcome."),
+                deliveryPolicyParameter
             ],
-            cliUsage: "axon drag [--app app] [--duration-ms n] <from-json> <to-json>"
+            cliUsage: "axon drag [--app app] [--duration-ms n] [--foreground] <from-json> <to-json>"
         ),
         ToolSpec(
             name: "invoke",
             description: "Invoke a named AX action on a target specified by snapshot handle or locator object.",
             params: [
                 ToolParameterSpec("target", .target(.element), required: true, description: "Handle or locator target."),
-                ToolParameterSpec("name", .string, required: true, description: "Accessibility action name, for example AXPress or AXShowMenu.")
+                ToolParameterSpec("name", .string, required: true, description: "Accessibility action name, for example AXPress or AXShowMenu."),
+                deliveryPolicyParameter
             ],
             cliUsage: "axon invoke <handle> <action-name>"
         )
     ]
+
+    /// The one public control over what an action may do to the session, shared verbatim by every
+    /// mutating tool so MCP schemas, CLI signatures, and .axn steps cannot drift apart.
+    public static let deliveryPolicyParameter = ToolParameterSpec(
+        "deliveryPolicy",
+        .string,
+        default: .string(DeliveryPolicy.default.rawValue),
+        description: "backgroundOnly (default) forbids activation, focus changes, real pointer movement, global keyboard input, and the clipboard, and returns a structured refusal instead. foregroundPermitted allows this one action to escalate; it is never inherited by later actions."
+    )
+
+    /// The tools that accept a delivery policy: every action that can mutate the session.
+    public static var mutatingToolNames: [String] {
+        tools.filter { tool in tool.params.contains { $0.name == "deliveryPolicy" } }.map(\.name)
+    }
 
     public static var toolNames: [String] {
         tools.map(\.name)
@@ -449,6 +471,17 @@ public struct ToolParamDecoder {
         default:
             throw JSONRPCError.invalidParams("\(name) must be a number")
         }
+    }
+
+    /// Decodes the action's delivery policy, defaulting to backgroundOnly when the caller omits it.
+    ///
+    /// An unknown value fails here, before the target is resolved and before any native side
+    /// effect, because a policy the daemon does not understand cannot be honoured safely.
+    public func deliveryPolicy() throws -> DeliveryPolicy {
+        guard let rawValue = try string("deliveryPolicy") else {
+            return .default
+        }
+        return try DeliveryPolicy.validated(rawValue)
     }
 
     public func locator(_ name: String) throws -> AXLocator? {

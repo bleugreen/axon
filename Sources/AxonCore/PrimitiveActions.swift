@@ -4,6 +4,18 @@ public struct PrimitiveActionResult: Codable, Equatable, Sendable {
     public let strategy: String
     public let success: Bool
     public let message: String?
+    /// The policy the action ran under. Always present, always the caller's, never inherited.
+    public let deliveryPolicy: DeliveryPolicy
+    /// The rung that carried this action, or nil when no mechanism was ever reached — which is
+    /// what a policy or capability refusal returns.
+    public let delivery: DeliveryRung?
+    /// Whether the mechanism accepted the action. Dispatch is evidence, not goal success: an
+    /// accepted event still needs readback or a postcondition before `success` can be true.
+    public let dispatchSuccess: Bool
+    /// Set when Axon declined a rung. It is always decided before that mechanism produces any
+    /// native side effect, so a result whose `delivery` is nil dispatched nothing at all; a result
+    /// that names a rung tried that one and was only refused the escalation above it.
+    public let refusal: DeliveryRefusal?
     public let details: [String: JSONValue]
 
     public init(
@@ -12,6 +24,10 @@ public struct PrimitiveActionResult: Codable, Equatable, Sendable {
         strategy: String,
         success: Bool,
         message: String? = nil,
+        deliveryPolicy: DeliveryPolicy = .default,
+        delivery: DeliveryRung? = nil,
+        dispatchSuccess: Bool? = nil,
+        refusal: DeliveryRefusal? = nil,
         details: [String: JSONValue] = [:]
     ) {
         self.action = action
@@ -19,19 +35,51 @@ public struct PrimitiveActionResult: Codable, Equatable, Sendable {
         self.strategy = strategy
         self.success = success
         self.message = message
+        self.deliveryPolicy = deliveryPolicy
+        self.delivery = delivery
+        self.dispatchSuccess = dispatchSuccess ?? success
+        self.refusal = refusal
         self.details = details
     }
 
+    /// A conclusive outcome: the rung dispatched and the result is already known to be right or
+    /// wrong, with no postcondition required.
+    public static func dispatched(
+        action: String,
+        target: String,
+        strategy: String,
+        policy: DeliveryPolicy,
+        delivery: DeliveryRung,
+        success: Bool,
+        message: String? = nil,
+        details: [String: JSONValue] = [:]
+    ) -> PrimitiveActionResult {
+        PrimitiveActionResult(
+            action: action,
+            target: target,
+            strategy: strategy,
+            success: success,
+            message: message,
+            deliveryPolicy: policy,
+            delivery: delivery,
+            dispatchSuccess: success,
+            details: details
+        )
+    }
+
+    /// Input reached the target but the goal cannot be proved from here. `run` may still upgrade
+    /// this to a verified success through an `expects` postcondition.
     public static func unverifiedDispatch(
         action: String,
         target: String,
         strategy: String,
+        policy: DeliveryPolicy = .default,
+        delivery: DeliveryRung? = nil,
         dispatched: Bool,
         message: String,
         details: [String: JSONValue] = [:]
     ) -> PrimitiveActionResult {
         var resultDetails = details
-        resultDetails["dispatchSuccess"] = .bool(dispatched)
         resultDetails["semanticSuccess"] = .null
         resultDetails["semanticStatus"] = .string("unverified")
         return PrimitiveActionResult(
@@ -40,7 +88,52 @@ public struct PrimitiveActionResult: Codable, Equatable, Sendable {
             strategy: strategy,
             success: false,
             message: message,
+            deliveryPolicy: policy,
+            delivery: delivery,
+            dispatchSuccess: dispatched,
             details: resultDetails
+        )
+    }
+
+    /// Nothing was dispatched. Returned before any native side effect.
+    public static func refused(
+        action: String,
+        target: String,
+        policy: DeliveryPolicy,
+        refusal: DeliveryRefusal,
+        details: [String: JSONValue] = [:]
+    ) -> PrimitiveActionResult {
+        PrimitiveActionResult(
+            action: action,
+            target: target,
+            strategy: "refused",
+            success: false,
+            message: refusal.message,
+            deliveryPolicy: policy,
+            delivery: nil,
+            dispatchSuccess: false,
+            refusal: refusal,
+            details: details
+        )
+    }
+
+    /// Records that escalation past the rung that was just attempted was declined.
+    ///
+    /// The attempted rung keeps whatever it earned: a mechanism that delivered events but could not
+    /// prove the goal still reports `delivery` and `dispatchSuccess`, and the refusal explains only
+    /// why nothing louder was tried.
+    public func refusing(_ refusal: DeliveryRefusal) -> PrimitiveActionResult {
+        PrimitiveActionResult(
+            action: action,
+            target: target,
+            strategy: strategy,
+            success: false,
+            message: message.map { "\($0); \(refusal.message)" } ?? refusal.message,
+            deliveryPolicy: deliveryPolicy,
+            delivery: delivery,
+            dispatchSuccess: dispatchSuccess,
+            refusal: refusal,
+            details: details
         )
     }
 
@@ -53,6 +146,10 @@ public struct PrimitiveActionResult: Codable, Equatable, Sendable {
             strategy: strategy,
             success: success,
             message: message ?? self.message,
+            deliveryPolicy: deliveryPolicy,
+            delivery: delivery,
+            dispatchSuccess: dispatchSuccess,
+            refusal: refusal,
             details: mergedDetails
         )
     }
@@ -63,7 +160,11 @@ public struct PrimitiveActionResult: Codable, Equatable, Sendable {
             "target": .string(target),
             "strategy": .string(strategy),
             "success": .bool(success),
-            "message": message.map(JSONValue.string) ?? .null
+            "message": message.map(JSONValue.string) ?? .null,
+            "deliveryPolicy": .string(deliveryPolicy.rawValue),
+            "delivery": delivery.map { .string($0.rawValue) } ?? .null,
+            "dispatchSuccess": .bool(dispatchSuccess),
+            "refusal": refusal?.jsonValue ?? .null
         ]
         object.merge(details) { _, detail in detail }
         return .object(object)
@@ -161,23 +262,28 @@ public enum PointerTarget: Equatable, Sendable {
     }
 }
 
+/// The backend boundary for the six mutating actions.
+///
+/// Every handler takes the caller's `DeliveryPolicy` explicitly: the policy gates delivery, and
+/// delivery happens behind this boundary, so it has to travel the whole way rather than be
+/// consulted once at the edge.
 public struct PrimitiveActionHandlers {
-    public var click: (String) throws -> PrimitiveActionResult
-    public var clickPoint: (ActionPoint) throws -> PrimitiveActionResult
-    public var invoke: (String, String) throws -> PrimitiveActionResult
-    public var type: (String, String) throws -> PrimitiveActionResult
-    public var keyboard: (String?, KeyboardIntent) throws -> PrimitiveActionResult
-    public var scroll: (PointerTarget?, String?, Double, Double) throws -> PrimitiveActionResult
-    public var drag: (PointerTarget, PointerTarget, String?, Int?) throws -> PrimitiveActionResult
+    public var click: (String, DeliveryPolicy) throws -> PrimitiveActionResult
+    public var clickPoint: (ActionPoint, DeliveryPolicy) throws -> PrimitiveActionResult
+    public var invoke: (String, String, DeliveryPolicy) throws -> PrimitiveActionResult
+    public var type: (String, String, DeliveryPolicy) throws -> PrimitiveActionResult
+    public var keyboard: (String?, KeyboardIntent, DeliveryPolicy) throws -> PrimitiveActionResult
+    public var scroll: (PointerTarget?, String?, Double, Double, DeliveryPolicy) throws -> PrimitiveActionResult
+    public var drag: (PointerTarget, PointerTarget, String?, Int?, DeliveryPolicy) throws -> PrimitiveActionResult
 
     public init(
-        click: @escaping (String) throws -> PrimitiveActionResult = { _ in throw JSONRPCError.methodNotFound("click") },
-        clickPoint: @escaping (ActionPoint) throws -> PrimitiveActionResult = { _ in throw JSONRPCError.methodNotFound("click") },
-        invoke: @escaping (String, String) throws -> PrimitiveActionResult = { _, _ in throw JSONRPCError.methodNotFound("invoke") },
-        type: @escaping (String, String) throws -> PrimitiveActionResult = { _, _ in throw JSONRPCError.methodNotFound("type") },
-        keyboard: @escaping (String?, KeyboardIntent) throws -> PrimitiveActionResult = { _, _ in throw JSONRPCError.methodNotFound("keyboard") },
-        scroll: @escaping (PointerTarget?, String?, Double, Double) throws -> PrimitiveActionResult = { _, _, _, _ in throw JSONRPCError.methodNotFound("scroll") },
-        drag: @escaping (PointerTarget, PointerTarget, String?, Int?) throws -> PrimitiveActionResult = { _, _, _, _ in throw JSONRPCError.methodNotFound("drag") }
+        click: @escaping (String, DeliveryPolicy) throws -> PrimitiveActionResult = { _, _ in throw JSONRPCError.methodNotFound("click") },
+        clickPoint: @escaping (ActionPoint, DeliveryPolicy) throws -> PrimitiveActionResult = { _, _ in throw JSONRPCError.methodNotFound("click") },
+        invoke: @escaping (String, String, DeliveryPolicy) throws -> PrimitiveActionResult = { _, _, _ in throw JSONRPCError.methodNotFound("invoke") },
+        type: @escaping (String, String, DeliveryPolicy) throws -> PrimitiveActionResult = { _, _, _ in throw JSONRPCError.methodNotFound("type") },
+        keyboard: @escaping (String?, KeyboardIntent, DeliveryPolicy) throws -> PrimitiveActionResult = { _, _, _ in throw JSONRPCError.methodNotFound("keyboard") },
+        scroll: @escaping (PointerTarget?, String?, Double, Double, DeliveryPolicy) throws -> PrimitiveActionResult = { _, _, _, _, _ in throw JSONRPCError.methodNotFound("scroll") },
+        drag: @escaping (PointerTarget, PointerTarget, String?, Int?, DeliveryPolicy) throws -> PrimitiveActionResult = { _, _, _, _, _ in throw JSONRPCError.methodNotFound("drag") }
     ) {
         self.click = click
         self.clickPoint = clickPoint

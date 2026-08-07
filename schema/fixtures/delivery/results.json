@@ -1,0 +1,87 @@
+{
+  "comment": "Canonical action-result shapes for the delivery contract. Every case fixes the four stable top-level fields; backends add their own strategy, message, and detail keys around them.",
+  "cases": [
+    {
+      "name": "semantic action verified by the accessibility layer",
+      "deliveryPolicy": "backgroundOnly",
+      "delivery": "semantic",
+      "dispatchSuccess": true,
+      "refusal": null
+    },
+    {
+      "name": "background pixel delivery that cannot prove its goal",
+      "deliveryPolicy": "backgroundOnly",
+      "delivery": "pixel",
+      "dispatchSuccess": true,
+      "refusal": null
+    },
+    {
+      "name": "policy refusal decided before any native side effect",
+      "deliveryPolicy": "backgroundOnly",
+      "delivery": null,
+      "dispatchSuccess": false,
+      "refusal": {
+        "reason": "foregroundNotPermitted",
+        "requiredRung": "foreground",
+        "capability": "globalInput",
+        "message": "SendInput requires foreground delivery; this action ran under backgroundOnly"
+      }
+    },
+    {
+      "name": "capability refusal where no target-bound mechanism exists",
+      "deliveryPolicy": "foregroundPermitted",
+      "delivery": null,
+      "dispatchSuccess": false,
+      "refusal": {
+        "reason": "backgroundPixelUnsupported",
+        "requiredRung": "pixel",
+        "capability": "backgroundPixelInput",
+        "message": "the compositor cannot bind background input to the target window"
+      }
+    },
+    {
+      "name": "refusal with no responsible capability",
+      "deliveryPolicy": "backgroundOnly",
+      "delivery": null,
+      "dispatchSuccess": false,
+      "refusal": {
+        "reason": "noDeliveryCandidate",
+        "requiredRung": "semantic",
+        "capability": null,
+        "message": "No delivery mechanism remains for this action"
+      }
+    },
+    {
+      "name": "foreground escalation that dispatched and restored the session",
+      "deliveryPolicy": "foregroundPermitted",
+      "delivery": "foreground",
+      "dispatchSuccess": true,
+      "refusal": null,
+      "foreground": {
+        "priorApp": "com.example.prior",
+        "priorAppProcessIdentifier": 4321,
+        "alreadyFrontmost": false,
+        "activationProved": true,
+        "restored": true,
+        "pointerRestored": true,
+        "message": null
+      }
+    },
+    {
+      "name": "foreground escalation whose restoration failed after dispatch",
+      "deliveryPolicy": "foregroundPermitted",
+      "delivery": "foreground",
+      "dispatchSuccess": true,
+      "refusal": null,
+      "foreground": {
+        "priorApp": "com.example.prior",
+        "priorAppProcessIdentifier": 4321,
+        "alreadyFrontmost": false,
+        "activationProved": true,
+        "restored": false,
+        "pointerRestored": null,
+        "message": "The prior application did not return to the foreground"
+      }
+    }
+  ]
+}

@@ -217,6 +217,69 @@ values, event delivery, and coordinate conversion against Cairn before broad
 desktop coverage. KVM access to each executor allows the semantic result to be
 checked against the visible interface as well as the API response.
 
+## Delivery matrix
+
+The delivery contract in [`platform-spec.md`](platform-spec.md) is one vocabulary
+across all three backends, but the rungs each backend can actually offer differ.
+This table is what a caller can rely on today; anything absent from it refuses
+rather than falling through to a louder mechanism.
+
+| action | macOS | Windows | Linux |
+| --- | --- | --- | --- |
+| `invoke` | `semantic` (`AXUIElementPerformAction`, any named action) | `semantic` (UIA `InvokePattern` only) | `semantic` (AT-SPI `Action.DoAction`, any named action) |
+| `type` | `semantic` (`AXValue` + readback), then `pixel`, then `foreground` | `semantic` (UIA `ValuePattern` + readback) | `semantic` (AT-SPI `EditableText.SetTextContents` + readback) |
+| `scroll` | `semantic` (`AXScrollToVisible`); wheel bursts ride `pixel` then `foreground` | `semantic` (UIA `ScrollItemPattern`) | `semantic` (AT-SPI `Component.ScrollTo`) |
+| `click` | `semantic` when the element advertises `AXPress`, else `pixel`, else `foreground` | refused | refused |
+| `keyboard` | `pixel` with `app`, else `foreground` | refused | refused |
+| `drag` | `pixel` with an app or handle endpoint, else `foreground` | not implemented | not implemented |
+
+No backend reports `pixel` for a mechanism it cannot bind to a verified target.
+On Windows, HWND-targeted client-coordinate delivery is not implemented; on
+Linux, neither X11 window-targeted delivery nor a Wayland portal path is
+implemented. Both refuse with `backgroundPixelUnsupported` and a message naming
+what is missing, because relabelling `SendInput` or `XTest` as `pixel` would make
+the contract's central promise false.
+
+Neither backend offers the foreground rung either, which is why pointer and
+keyboard actions refuse outright there today. `SendInput` and `XTest` exist, but
+the foreground rung is global input that hands the session back, and these
+backends cannot yet capture the prior foreground, activate the target, prove it
+came forward, and restore. Dispatching unrestored global input while reporting
+`delivery: "foreground"` would claim a guarantee they do not keep, and the
+unrestored focus theft is the very behavior the contract exists to prevent. The
+seams live on `PlatformBackend` (`supports_foreground_transaction`,
+`frontmost_application`, `activate_application`) and the transaction itself is
+shared in `rust/axon-core/src/delivery.rs`, so each backend only has to implement
+three platform calls to light the rung up.
+
+### Windows session and integrity constraints
+
+`SendInput` is the foreground rung and needs the explicit opt-in. It also needs a
+session that can reach the global input devices at all. Session 0, a
+noninteractive window station, and an integrity or elevation boundary between the
+daemon and the target all present as an unusable `pointerInput` or
+`keyboardInput` capability in the health document, and the same overlay feeds the
+dispatch decision. When the capability is unusable the refusal is
+`noDeliveryCandidate`, not `foregroundNotPermitted`, at either policy — opting in
+cannot conjure a device.
+
+UIA exposes `InvokePattern` rather than an open-ended named-action vocabulary, so
+the Windows backend performs `Invoke` and says so instead of claiming a name it
+cannot honour.
+
+### Linux compositor and toolkit overlays
+
+Under X11 the foreground rung is `XTest`, gated on the opt-in and on a usable
+global input device. Under Wayland there is no global input device to gate: the
+compositor refuses synthetic input outright, so `pointerInput` and
+`keyboardInput` are unusable and every pointer or keyboard action refuses with
+`noDeliveryCandidate` carrying the compositor's reason. AT-SPI paths are
+unaffected, because they mutate the accessibility tree rather than the session.
+
+AT-SPI value setting no longer takes focus first. Focus is a system-wide side
+effect, and an action that changes it is foreground however it finally mutates
+the target, so the semantic rung sets the value directly and reads it back.
+
 ## Keeping implementations aligned
 
 The platform-neutral specification will drive a shared conformance suite. Its
@@ -224,7 +287,11 @@ fixtures should be language-neutral data wherever possible, with adapters that
 run them against Swift and Rust. Schema snapshots verify the public tools;
 synthetic trees verify locator behavior; request/response fixtures verify JSON-RPC
 and MCP envelopes; `.axn` fixtures verify parsing and traces; backend harnesses
-verify capability and honest-result semantics.
+verify capability and honest-result semantics. `schema/fixtures/delivery` holds
+the delivery vocabulary and result shapes, read by both
+`Tests/AxonCoreTests/SharedDeliveryConformanceTests.swift` and
+`rust/axon-core/tests/delivery.rs`, so a rung or refusal reason cannot be renamed
+on one side alone.
 
 Native integration tests remain necessary because no fixture can prove UIA or
 AT-SPI exposure. Conformance establishes that implementations mean the same

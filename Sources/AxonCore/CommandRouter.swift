@@ -699,17 +699,21 @@ private struct PrimitiveActionCommandHandler {
         case "click":
             return actionResponse(id: request.id) {
                 let params = try CommandRouterRequestSupport.paramsObject(in: request)
+                let policy = try ToolParamDecoder(toolName: "click", params: params).deliveryPolicy()
                 let target = try CommandRouterRequestSupport.requiredToolTarget("target", in: params, acceptedKinds: .pointer)
                 switch target {
                 case let .point(point):
-                    return try services.actions.clickPoint(point)
+                    return try services.actions.clickPoint(point, policy)
                 case let .textLocation(location):
                     let resolution = try resolveTextLocationTarget(location)
-                    return try withLocationResolution(services.actions.clickPoint(resolution.point), resolution: resolution)
+                    return try withLocationResolution(
+                        services.actions.clickPoint(resolution.point, policy),
+                        resolution: resolution
+                    )
                 case .handle, .locator:
                     let resolved = try resolveElementTarget(target)
                     return withTargetResolution(
-                        try services.actions.click(resolved.handle),
+                        try services.actions.click(resolved.handle, policy),
                         resolution: resolved.resolution
                     )
                 }
@@ -718,48 +722,56 @@ private struct PrimitiveActionCommandHandler {
             return actionResponse(id: request.id) {
                 let params = try CommandRouterRequestSupport.paramsObject(in: request)
                 let decoder = ToolParamDecoder(toolName: "invoke", params: params)
+                let policy = try decoder.deliveryPolicy()
                 let resolved = try resolveElementTarget(
                     try CommandRouterRequestSupport.requiredToolTarget("target", in: params, acceptedKinds: .element)
                 )
                 return withTargetResolution(try services.actions.invoke(
                     resolved.handle,
-                    try decoder.requiredString("name")
+                    try decoder.requiredString("name"),
+                    policy
                 ), resolution: resolved.resolution)
             }
         case "type":
             return actionResponse(id: request.id) {
                 let params = try CommandRouterRequestSupport.paramsObject(in: request)
                 let decoder = ToolParamDecoder(toolName: "type", params: params)
+                let policy = try decoder.deliveryPolicy()
                 let resolved = try resolveElementTarget(
                     try CommandRouterRequestSupport.requiredToolTarget("target", in: params, acceptedKinds: .element)
                 )
                 return withTargetResolution(try services.actions.type(
                     resolved.handle,
-                    try decoder.requiredString("value")
+                    try decoder.requiredString("value"),
+                    policy
                 ), resolution: resolved.resolution)
             }
         case "keyboard":
             return actionResponse(id: request.id) {
                 let params = try CommandRouterRequestSupport.paramsObject(in: request)
                 let decoder = ToolParamDecoder(toolName: "keyboard", params: params)
+                let policy = try decoder.deliveryPolicy()
                 return try services.actions.keyboard(
                     try decoder.string("app"),
                     try KeyboardIntent.validated(
                         text: decoder.string("text"),
                         key: decoder.string("key")
-                    )
+                    ),
+                    policy
                 )
             }
         case "scroll":
             return actionResponse(id: request.id) {
                 let params = try CommandRouterRequestSupport.paramsObject(in: request)
                 let decoder = ToolParamDecoder(toolName: "scroll", params: params)
+                let policy = try decoder.deliveryPolicy()
                 let target = try optionalResolvedPointerTarget("target", in: params)
                 let result = try services.actions.scroll(
                     target?.target,
                     try decoder.string("app"),
                     try decoder.number("deltaX") ?? 0,
-                    try decoder.number("deltaY") ?? -120
+                    try decoder.number("deltaY") ?? -120,
+                    policy
                 )
                 return withTargetResolution(
                     withLocationResolution(result, resolution: target?.locationResolution),
@@ -770,6 +782,7 @@ private struct PrimitiveActionCommandHandler {
             return actionResponse(id: request.id) {
                 let params = try CommandRouterRequestSupport.paramsObject(in: request)
                 let decoder = ToolParamDecoder(toolName: "drag", params: params)
+                let policy = try decoder.deliveryPolicy()
                 let app = try decoder.string("app")
                 let from = try requiredResolvedPointerTarget("from", in: params, defaultApp: app)
                 let to = try requiredResolvedPointerTarget("to", in: params, defaultApp: app)
@@ -777,7 +790,8 @@ private struct PrimitiveActionCommandHandler {
                     from.target,
                     to.target,
                     app,
-                    try decoder.int("durationMs")
+                    try decoder.int("durationMs"),
+                    policy
                 )
                 return withTargetResolutions(
                     withLocationResolutions(result, resolutions: [from.locationResolution, to.locationResolution]),
@@ -973,16 +987,7 @@ private struct PrimitiveActionCommandHandler {
         guard !values.isEmpty else {
             return result
         }
-        var details = result.details
-        details["locationResolutions"] = .array(values)
-        return PrimitiveActionResult(
-            action: result.action,
-            target: result.target,
-            strategy: result.strategy,
-            success: result.success,
-            message: result.message,
-            details: details
-        )
+        return result.withSuccess(result.success, details: ["locationResolutions": .array(values)])
     }
 
     private func withTargetResolution(
@@ -990,7 +995,10 @@ private struct PrimitiveActionCommandHandler {
         resolution: LocatorResolution?
     ) -> PrimitiveActionResult {
         guard let resolution else { return result }
-        return addingDetails(["targetResolution": compactTargetResolution(resolution)], to: result)
+        return result.withSuccess(
+            result.success,
+            details: ["targetResolution": compactTargetResolution(resolution)]
+        )
     }
 
     private func withTargetResolutions(
@@ -1001,7 +1009,7 @@ private struct PrimitiveActionCommandHandler {
             resolution.map { compactTargetResolution($0) }
         }
         guard !values.isEmpty else { return result }
-        return addingDetails(["targetResolutions": .array(values)], to: result)
+        return result.withSuccess(result.success, details: ["targetResolutions": .array(values)])
     }
 
     private func compactTargetResolution(_ resolution: LocatorResolution) -> JSONValue {
@@ -1025,19 +1033,6 @@ private struct PrimitiveActionCommandHandler {
             compact["candidates"] = full["candidates"]
         }
         return .object(compact)
-    }
-
-    private func addingDetails(_ additional: [String: JSONValue], to result: PrimitiveActionResult) -> PrimitiveActionResult {
-        var details = result.details
-        details.merge(additional) { _, new in new }
-        return PrimitiveActionResult(
-            action: result.action,
-            target: result.target,
-            strategy: result.strategy,
-            success: result.success,
-            message: result.message,
-            details: details
-        )
     }
 
     private func actionResponse(id: JSONRPCID?, _ body: () throws -> PrimitiveActionResult) -> JSONRPCResponse {
@@ -1447,6 +1442,10 @@ private struct ResolvedElementTarget {
     let resolution: LocatorResolution?
 }
 
+private struct LocatorResolutionFailure: Error {
+    let resolution: LocatorResolution
+}
+
 private struct TextLocationResolvedPoint {
     let point: ActionPoint
     let resolution: TextLocationResolution
@@ -1502,9 +1501,4 @@ private extension Array where Element == ScreenTextItem {
         JSONValue.array(map { $0.jsonValue(activeSecretRedactor: activeSecretRedactor) })
             .containsActiveCredentialRedaction()
     }
-}
-
-
-private struct LocatorResolutionFailure: Error {
-    let resolution: LocatorResolution
 }

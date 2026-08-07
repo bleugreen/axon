@@ -163,8 +163,9 @@ do {
         try printResponse(response)
 
     case "click":
-        let target = try requiredArgument(after: command, in: arguments)
-        try sendAction(method: "click", params: ["target": targetArgument(target)])
+        var (rest, policy) = deliveryPolicyArgument(in: arguments)
+        let target = try requiredArgument(after: command, in: rest)
+        try sendAction(method: "click", params: policy.applied(to: ["target": targetArgument(target)]))
 
     case "scroll":
         try sendAction(method: "scroll", params: scrollParams(arguments: arguments))
@@ -173,22 +174,24 @@ do {
         try sendAction(method: "drag", params: dragParams(arguments: arguments))
 
     case "invoke":
-        guard arguments.count >= 3 else {
+        let (rest, policy) = deliveryPolicyArgument(in: arguments)
+        guard rest.count >= 3 else {
             throw CLIError.missingArguments("invoke requires a target and action name")
         }
-        try sendAction(method: "invoke", params: [
-            "target": .string(arguments[1]),
-            "name": .string(arguments[2])
-        ])
+        try sendAction(method: "invoke", params: policy.applied(to: [
+            "target": .string(rest[1]),
+            "name": .string(rest[2])
+        ]))
 
     case "type":
-        guard arguments.count >= 3 else {
+        let (rest, policy) = deliveryPolicyArgument(in: arguments)
+        guard rest.count >= 3 else {
             throw CLIError.missingArguments("type requires a target and value")
         }
-        try sendAction(method: "type", params: [
-            "target": .string(arguments[1]),
-            "value": .string(arguments.dropFirst(2).joined(separator: " "))
-        ])
+        try sendAction(method: "type", params: policy.applied(to: [
+            "target": .string(rest[1]),
+            "value": .string(rest.dropFirst(2).joined(separator: " "))
+        ]))
 
     case "keyboard":
         try sendAction(method: "keyboard", params: try keyboardParams(arguments: arguments))
@@ -424,7 +427,30 @@ private func waitForValueParams(arguments: [String]) throws -> [String: JSONValu
     return params
 }
 
+/// `--foreground` is the CLI spelling of `deliveryPolicy: foregroundPermitted`.
+///
+/// It is a per-invocation opt-in like the wire parameter it stands for, and it is stripped before
+/// the remaining arguments are parsed so it may appear anywhere in the command line.
+private struct DeliveryPolicyArgument {
+    let permitsForeground: Bool
+
+    func applied(to params: [String: JSONValue]) -> [String: JSONValue] {
+        guard permitsForeground else {
+            return params
+        }
+        var params = params
+        params["deliveryPolicy"] = .string(DeliveryPolicy.foregroundPermitted.rawValue)
+        return params
+    }
+}
+
+private func deliveryPolicyArgument(in arguments: [String]) -> ([String], DeliveryPolicyArgument) {
+    let remaining = arguments.filter { $0 != "--foreground" }
+    return (remaining, DeliveryPolicyArgument(permitsForeground: remaining.count != arguments.count))
+}
+
 private func keyboardParams(arguments: [String]) throws -> [String: JSONValue] {
+    let (arguments, policy) = deliveryPolicyArgument(in: arguments)
     var params: [String: JSONValue] = [:]
     var index = 1
     while index < arguments.count {
@@ -452,10 +478,11 @@ private func keyboardParams(arguments: [String]) throws -> [String: JSONValue] {
     guard (params["text"] == nil) != (params["key"] == nil) else {
         throw CLIError.missingArguments("keyboard requires exactly one of --text or --key")
     }
-    return params
+    return policy.applied(to: params)
 }
 
 private func scrollParams(arguments: [String]) throws -> [String: JSONValue] {
+    let (arguments, policy) = deliveryPolicyArgument(in: arguments)
     var params: [String: JSONValue] = [:]
     var index = 1
     while index < arguments.count {
@@ -488,10 +515,11 @@ private func scrollParams(arguments: [String]) throws -> [String: JSONValue] {
             throw CLIError.missingArguments("unexpected scroll argument: \(arguments[index])")
         }
     }
-    return params
+    return policy.applied(to: params)
 }
 
 private func dragParams(arguments: [String]) throws -> [String: JSONValue] {
+    let (arguments, policy) = deliveryPolicyArgument(in: arguments)
     var params: [String: JSONValue] = [:]
     var endpoints: [JSONValue] = []
     var index = 1
@@ -519,7 +547,7 @@ private func dragParams(arguments: [String]) throws -> [String: JSONValue] {
     }
     params["from"] = endpoints[0]
     params["to"] = endpoints[1]
-    return params
+    return policy.applied(to: params)
 }
 
 private func saveParams(arguments: [String]) throws -> [String: JSONValue] {

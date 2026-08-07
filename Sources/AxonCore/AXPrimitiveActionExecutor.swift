@@ -2,20 +2,49 @@ import ApplicationServices
 import AppKit
 import Foundation
 
+/// Identity of whatever holds the foreground, captured so an escalation can hand it back.
+public struct ForegroundApp: Equatable, Sendable {
+    public let processIdentifier: pid_t
+    public let name: String?
+    public let bundleIdentifier: String?
+
+    public init(processIdentifier: pid_t, name: String?, bundleIdentifier: String?) {
+        self.processIdentifier = processIdentifier
+        self.name = name
+        self.bundleIdentifier = bundleIdentifier
+    }
+
+    /// What the result reports as the prior app: the bundle identifier when there is one, because
+    /// it is stable across localizations and renames.
+    public var identity: String {
+        bundleIdentifier ?? name ?? "pid:\(processIdentifier)"
+    }
+}
+
 public final class AXPrimitiveActionExecutor {
     private let elementStore: AXElementStore
     private let appResolver: AppResolver
     private let overlay: VisualOverlay?
     private let overlayConfiguration: VisualOverlayConfiguration
+    /// Global input, shared with the human at the keyboard. Only the foreground rung uses it.
     private let postEvent: (CGEvent) -> Void
+    /// Process-targeted delivery. Does not activate the application and does not move the cursor,
+    /// which is what makes the pixel rung a background mechanism.
+    private let postEventToProcess: (CGEvent, pid_t) -> Void
     private let sleepMilliseconds: (Int) -> Void
     /// Re-read per text action so a mid-session input source switch is picked up.
     private let makeKeyboardLayout: () -> KeyboardLayoutMap
-    private let activateApp: (String) throws -> Void
     private let hitTest: (CGPoint) -> AXUIElement?
     private let frameProvider: (AXUIElement) -> AXFrame?
     private let parentProvider: (AXUIElement) -> AXUIElement?
+    private let processProvider: (AXUIElement) -> pid_t?
     private let elementsEqual: (AXUIElement, AXUIElement) -> Bool
+    private let frontmostApp: () -> ForegroundApp?
+    private let activateProcess: (pid_t) -> Bool
+    private let pointerLocation: () -> CGPoint
+    private let movePointer: (CGPoint) -> Void
+    private let settleTimeoutMs: Int
+    private let settleIntervalMs: Int
 
     public init(
         elementStore: AXElementStore,
@@ -23,26 +52,66 @@ public final class AXPrimitiveActionExecutor {
         overlay: VisualOverlay? = VisualOverlayFactory.makeFromEnvironment(),
         overlayConfiguration: VisualOverlayConfiguration = .fromEnvironment(),
         postEvent: @escaping (CGEvent) -> Void = { $0.post(tap: .cghidEventTap) },
+        postEventToProcess: @escaping (CGEvent, pid_t) -> Void = { event, pid in event.postToPid(pid) },
         sleepMilliseconds: @escaping (Int) -> Void = { Thread.sleep(forTimeInterval: Double($0) / 1_000) },
         makeKeyboardLayout: @escaping () -> KeyboardLayoutMap = { KeyboardLayoutMap.current() },
-        activateApp: ((String) throws -> Void)? = nil,
         hitTest: ((CGPoint) -> AXUIElement?)? = nil,
         frameProvider: ((AXUIElement) -> AXFrame?)? = nil,
         parentProvider: ((AXUIElement) -> AXUIElement?)? = nil,
-        elementsEqual: @escaping (AXUIElement, AXUIElement) -> Bool = { CFEqual($0, $1) }
+        processProvider: ((AXUIElement) -> pid_t?)? = nil,
+        elementsEqual: @escaping (AXUIElement, AXUIElement) -> Bool = { CFEqual($0, $1) },
+        frontmostApp: (() -> ForegroundApp?)? = nil,
+        activateProcess: ((pid_t) -> Bool)? = nil,
+        pointerLocation: @escaping () -> CGPoint = { CGEvent(source: nil)?.location ?? .zero },
+        movePointer: @escaping (CGPoint) -> Void = { CGWarpMouseCursorPosition($0) },
+        settleTimeoutMs: Int = 750,
+        settleIntervalMs: Int = 25
     ) {
         self.elementStore = elementStore
         self.appResolver = appResolver
         self.overlay = overlay
         self.overlayConfiguration = overlayConfiguration
         self.postEvent = postEvent
+        self.postEventToProcess = postEventToProcess
         self.sleepMilliseconds = sleepMilliseconds
         self.makeKeyboardLayout = makeKeyboardLayout
-        self.activateApp = activateApp ?? { query in try appResolver.resolve(query).activate() }
         self.hitTest = hitTest ?? Self.systemHitTest
         self.frameProvider = frameProvider ?? Self.copyFrame
         self.parentProvider = parentProvider ?? Self.copyParent
+        self.processProvider = processProvider ?? Self.copyProcessIdentifier
         self.elementsEqual = elementsEqual
+        self.frontmostApp = frontmostApp ?? Self.systemFrontmostApp
+        self.activateProcess = activateProcess ?? Self.systemActivate
+        self.pointerLocation = pointerLocation
+        self.movePointer = movePointer
+        self.settleTimeoutMs = settleTimeoutMs
+        self.settleIntervalMs = max(settleIntervalMs, 1)
+    }
+
+    private static func copyProcessIdentifier(_ element: AXUIElement) -> pid_t? {
+        var pid: pid_t = 0
+        guard AXUIElementGetPid(element, &pid) == .success, pid > 0 else {
+            return nil
+        }
+        return pid
+    }
+
+    private static func systemFrontmostApp() -> ForegroundApp? {
+        guard let app = NSWorkspace.shared.frontmostApplication else {
+            return nil
+        }
+        return ForegroundApp(
+            processIdentifier: app.processIdentifier,
+            name: app.localizedName,
+            bundleIdentifier: app.bundleIdentifier
+        )
+    }
+
+    private static func systemActivate(_ pid: pid_t) -> Bool {
+        guard let app = NSRunningApplication(processIdentifier: pid) else {
+            return false
+        }
+        return app.activate()
     }
 
     private static func copyParent(_ element: AXUIElement) -> AXUIElement? {
@@ -55,151 +124,220 @@ public final class AXPrimitiveActionExecutor {
 
     public func handlers() -> PrimitiveActionHandlers {
         PrimitiveActionHandlers(
-            click: click(target:),
-            clickPoint: click(point:),
-            invoke: invoke(target:name:),
-            type: type(target:value:),
-            keyboard: keyboard(app:intent:),
-            scroll: scroll(target:app:deltaX:deltaY:),
-            drag: drag(from:to:app:durationMs:)
+            click: click(target:policy:),
+            clickPoint: click(point:policy:),
+            invoke: invoke(target:name:policy:),
+            type: type(target:value:policy:),
+            keyboard: keyboard(app:intent:policy:),
+            scroll: scroll(target:app:deltaX:deltaY:policy:),
+            drag: drag(from:to:app:durationMs:policy:)
         )
     }
 
-    public func click(target: String) throws -> PrimitiveActionResult {
+    public func click(target: String, policy: DeliveryPolicy) throws -> PrimitiveActionResult {
         let element = try elementStore.element(for: target)
+        // A native press is the semantic rung: it neither focuses nor activates, and it is the only
+        // click path that can prove its own outcome.
         if actionNames(for: element).contains(kAXPressAction) {
-            return try invoke(target: target, name: kAXPressAction)
+            return try invoke(target: target, name: kAXPressAction, policy: policy)
         }
 
         showTargetBeforeAction(element, label: "CGClick")
-        guard let point = centerPoint(of: element) else {
-            return PrimitiveActionResult(
+        let point = centerPoint(of: element)
+        let process = processProvider(element)
+        return deliver(
+            action: "click",
+            target: target,
+            policy: policy,
+            candidates: inputCandidates(
+                processIdentifier: process,
+                hasGeometry: point != nil,
+                geometryMessage: "Element has no usable frame for pointer delivery",
+                identityMessage: "Element does not belong to a resolvable process, so input cannot be bound to it",
+                strategy: "CGEvent"
+            )
+        ) { candidate in
+            guard let point else {
+                return .settled(PrimitiveActionResult(
+                    action: "click", target: target, strategy: candidate.strategy, success: false,
+                    message: "Element has no usable frame for pointer delivery",
+                    deliveryPolicy: policy
+                ))
+            }
+            return Self.outcome(of: self.postClick(
                 action: "click",
                 target: target,
-                strategy: "CGEvent",
-                success: false,
-                message: "Element has no usable frame for click fallback"
-            )
+                policy: policy,
+                candidate: candidate,
+                point: point,
+                element: element,
+                process: process,
+                details: [:]
+            ))
         }
-
-        guard let failure = pointerValidationFailure(element: element, point: point) else {
-            postMouseClick(at: point)
-            return PrimitiveActionResult(action: "click", target: target, strategy: "CGEvent", success: true)
-        }
-        return PrimitiveActionResult(
-            action: "click", target: target, strategy: "CGEvent", success: false,
-            message: failure
-        )
     }
 
-    public func click(point: ActionPoint) throws -> PrimitiveActionResult {
+    /// A rung that demonstrably did not take may advance; one that delivered must not, because a
+    /// second dispatch would repeat an action the target may already have performed.
+    private static func outcome(of result: PrimitiveActionResult) -> DeliveryAttempt {
+        result.dispatchSuccess ? .settled(result) : .advance(result)
+    }
+
+    public func click(point: ActionPoint, policy: DeliveryPolicy) throws -> PrimitiveActionResult {
         let cgPoint = CGPoint(x: point.x, y: point.y)
-        postMouseClick(at: cgPoint)
-        return PrimitiveActionResult(
+        // A screen point only carries target identity when the caller named the application it came
+        // from. Inferring a window from a bare coordinate is exactly the guess background delivery
+        // must never make, so such a point can only travel on global input.
+        let process = point.app.flatMap { processIdentifier(forApp: $0) }
+        return deliver(
             action: "click",
             target: point.targetDescription,
-            strategy: "CGEvent",
-            success: true,
+            policy: policy,
+            candidates: inputCandidates(
+                processIdentifier: process,
+                hasGeometry: true,
+                geometryMessage: "",
+                identityMessage: "A raw screen point carries no application or window identity; background delivery needs a handle, locator, text location, or an app-scoped point",
+                strategy: "CGEvent"
+            ),
             details: ["point": point.jsonValue]
-        )
+        ) { candidate in
+            Self.outcome(of: self.postClick(
+                action: "click",
+                target: point.targetDescription,
+                policy: policy,
+                candidate: candidate,
+                point: cgPoint,
+                element: nil,
+                process: process,
+                details: ["point": point.jsonValue]
+            ))
+        }
     }
 
-    public func invoke(target: String, name: String) throws -> PrimitiveActionResult {
+    public func invoke(target: String, name: String, policy: DeliveryPolicy) throws -> PrimitiveActionResult {
         let element = try elementStore.element(for: target)
         showTargetBeforeAction(element, label: name)
+        // Invoke has exactly one rung. A named accessibility action that the element refuses is a
+        // failed action, never a reason to send unrelated global input at its coordinates.
         let result = AXUIElementPerformAction(element, name as CFString)
-        return PrimitiveActionResult(
+        return PrimitiveActionResult.dispatched(
             action: name,
             target: target,
             strategy: "AXAction",
+            policy: policy,
+            delivery: .semantic,
             success: result == .success,
             message: result == .success ? nil : "AXUIElementPerformAction returned \(result.rawValue)"
         )
     }
 
-    public func type(target: String, value: String) throws -> PrimitiveActionResult {
+    public func type(target: String, value: String, policy: DeliveryPolicy) throws -> PrimitiveActionResult {
         let element = try elementStore.element(for: target)
         showTargetBeforeAction(element, label: "AXValue")
-        let result = AXUIElementSetAttributeValue(element, kAXValueAttribute as CFString, value as CFTypeRef)
+        // The semantic rung: set the value and read it back. AXUIElementSetAttributeValue does not
+        // need focus, so nothing here touches the foreground.
+        let setResult = AXUIElementSetAttributeValue(element, kAXValueAttribute as CFString, value as CFTypeRef)
         if Self.axValueWasVerified(
-            setResult: result,
+            setResult: setResult,
             readValue: stringValue(copyRawAttribute(kAXValueAttribute, from: element)),
             expected: value
         ) {
-            return PrimitiveActionResult(
+            return PrimitiveActionResult.dispatched(
                 action: "type",
                 target: target,
                 strategy: "AXValue",
+                policy: policy,
+                delivery: .semantic,
                 success: true
             )
         }
+        let semanticFailure = setResult == .success
+            ? "AXUIElementSetAttributeValue did not update the element value"
+            : "AXUIElementSetAttributeValue returned \(setResult.rawValue)"
 
-        guard let point = centerPoint(of: element) else {
-            return PrimitiveActionResult(
-                action: "type",
-                target: target,
-                strategy: "AXValue",
-                success: false,
-                message: result == .success
-                    ? "AXUIElementSetAttributeValue did not update the element value"
-                    : "AXUIElementSetAttributeValue returned \(result.rawValue)"
-            )
-        }
-
-        if let failure = pointerValidationFailure(element: element, point: point) {
-            return PrimitiveActionResult(
-                action: "type", target: target, strategy: "CGEventKeyboard", success: false,
-                message: failure
-            )
-        }
-        postMouseClick(at: point)
-        Thread.sleep(forTimeInterval: 0.05)
-        let selectAllDispatched: Bool
-        if let selectAll = KeyStroke("command+a") {
-            selectAllDispatched = postKeyStroke(selectAll)
-            Thread.sleep(forTimeInterval: 0.02)
-        } else {
-            selectAllDispatched = false
-        }
-        let textDispatched = postKeyboardText(value)
-        let dispatched = selectAllDispatched && textDispatched
-        return PrimitiveActionResult.unverifiedDispatch(
+        let point = centerPoint(of: element)
+        let process = processProvider(element)
+        var candidates = inputCandidates(
+            processIdentifier: process,
+            hasGeometry: point != nil,
+            geometryMessage: "Element has no usable frame, so text cannot be delivered by pointer and keystroke",
+            identityMessage: "Element does not belong to a resolvable process, so keystrokes cannot be bound to it",
+            strategy: "CGEventKeyboard"
+        )
+        candidates.insert(
+            DeliveryCandidate(rung: .semantic, capability: .semanticValue, strategy: "AXValue"),
+            at: 0
+        )
+        return deliver(
             action: "type",
             target: target,
-            strategy: "CGEventKeyboard",
-            dispatched: dispatched,
-            message: dispatched
-                ? "Keyboard fallback events were dispatched, but the field value could not be verified"
-                : "Unable to create keyboard events for text fallback",
-            details: [:]
-        )
+            policy: policy,
+            candidates: candidates,
+            // The semantic rung already ran above; the ladder starts from what comes after it.
+            after: .semantic,
+            fallback: PrimitiveActionResult(
+                action: "type", target: target, strategy: "AXValue", success: false,
+                message: semanticFailure, deliveryPolicy: policy, delivery: .semantic
+            )
+        ) { candidate in
+            guard let point else {
+                return .settled(PrimitiveActionResult(
+                    action: "type", target: target, strategy: "AXValue", success: false,
+                    message: semanticFailure, deliveryPolicy: policy, delivery: .semantic
+                ))
+            }
+            // Typing is the one action that can prove its own outcome at every rung, so a rung
+            // whose readback still shows the wrong value has genuinely not taken and may advance.
+            let result = self.postTypedText(
+                target: target,
+                policy: policy,
+                candidate: candidate,
+                element: element,
+                point: point,
+                process: process,
+                value: value
+            )
+            return result.success ? .settled(result) : .advance(result)
+        }
     }
 
-    public func keyboard(app: String?, intent: KeyboardIntent) throws -> PrimitiveActionResult {
-        if let app {
-            try activate(app: app)
-        }
+    public func keyboard(app: String?, intent: KeyboardIntent, policy: DeliveryPolicy) throws -> PrimitiveActionResult {
         let target = app ?? "frontmost"
-        let dispatched: Bool
+        let process = app.flatMap { processIdentifier(forApp: $0) }
         var intentDetails: [String: JSONValue]
         switch intent {
         case let .key(key):
-            dispatched = postKeyStroke(try KeyStroke(validating: key))
+            _ = try KeyStroke(validating: key)
             intentDetails = ["key": .string(key), "mode": .string("key")]
         case let .text(text):
-            dispatched = postKeyboardText(text)
             intentDetails = ["text": .string(text), "mode": .string("text")]
         }
-        return PrimitiveActionResult.unverifiedDispatch(
+        // Keyboard input has no semantic rung: there is no element to mutate, only input to deliver.
+        return deliver(
             action: "keyboard",
             target: target,
-            strategy: "CGEventKeyboard",
-            dispatched: dispatched,
-            message: dispatched
-                ? "Keyboard events were dispatched, but semantic outcome is unverified without a postcondition"
-                : "Unable to create keyboard events",
+            policy: policy,
+            candidates: inputCandidates(
+                processIdentifier: process,
+                hasGeometry: true,
+                geometryMessage: "",
+                identityMessage: app == nil
+                    ? "keyboard without app has no target application, so input can only reach whatever holds the foreground"
+                    : "app \(app ?? "") is not running, so keystrokes cannot be bound to it",
+                strategy: "CGEventKeyboard"
+            ),
             details: intentDetails
-        )
+        ) { candidate in
+            Self.outcome(of: self.postKeyboardIntent(
+                target: target,
+                policy: policy,
+                candidate: candidate,
+                process: process,
+                intent: intent,
+                details: intentDetails
+            ))
+        }
     }
 
     static func axValueWasVerified(setResult: AXError, readValue: String?, expected: String) -> Bool {
@@ -211,11 +349,15 @@ public final class AXPrimitiveActionExecutor {
     /// never consults the AX tree. An element or app names something semantic, where
     /// `AXScrollToVisible` is more precise and immune to window occlusion, so AX stays primary there
     /// and the wheel covers the case where AX has nothing to work with.
+    ///
+    /// The wheel is global input whatever it is aimed at, so it sits on the delivery ladder: it
+    /// reaches a verified process in the background, and the shared devices only by opt-in.
     public func scroll(
         target: PointerTarget?,
         app: String?,
         deltaX: Double,
-        deltaY: Double
+        deltaY: Double,
+        policy: DeliveryPolicy
     ) throws -> PrimitiveActionResult {
         let description = target?.targetDescription ?? app ?? "frontmost"
         var details: [String: JSONValue] = [
@@ -227,7 +369,6 @@ public final class AXPrimitiveActionExecutor {
         }
 
         guard deltaX != 0 || deltaY != 0 else {
-            details["dispatchSuccess"] = .bool(false)
             details["semanticSuccess"] = .null
             details["semanticStatus"] = .string("noop")
             details["eventPath"] = Self.eventPathSummary(steps: [])
@@ -237,6 +378,9 @@ public final class AXPrimitiveActionExecutor {
                 strategy: "CGEventScroll",
                 success: true,
                 message: "No scroll delta was requested; no events were posted",
+                deliveryPolicy: policy,
+                delivery: nil,
+                dispatchSuccess: false,
                 details: details
             )
         }
@@ -245,6 +389,9 @@ public final class AXPrimitiveActionExecutor {
             return scrollWheelResult(
                 target: description,
                 at: CGPoint(x: point.x, y: point.y),
+                process: point.app.flatMap { processIdentifier(forApp: $0) },
+                policy: policy,
+                identityMessage: "A raw screen point carries no application identity, so a wheel burst cannot be bound to a process",
                 deltaX: deltaX,
                 deltaY: deltaY,
                 details: details
@@ -255,17 +402,21 @@ public final class AXPrimitiveActionExecutor {
         // resolving anyway would reject a live handle because some unrelated app name went stale.
         let resolvedApp = target == nil ? try app.map(appResolver.resolve) : nil
         if let scrollTarget = try scrollToVisibleTarget(target: target, app: resolvedApp, deltaX: deltaX, deltaY: deltaY) {
+            // The semantic rung. AXScrollToVisible neither focuses nor activates, so it is always
+            // allowed, and a refusal from the app is a failed scroll rather than a reason to send
+            // an unrelated wheel burst at the same coordinates.
             let result = AXUIElementPerformAction(scrollTarget.element, "AXScrollToVisible" as CFString)
             details["scrollTargetFrame"] = scrollTarget.frame.jsonValue
             // The app acknowledging the action is the dispatch; it is still not proof that the
             // viewport moved, and it is not a dispatch at all when the action itself errors.
-            details["dispatchSuccess"] = .bool(result == .success)
             details["semanticSuccess"] = .null
             details["semanticStatus"] = .string("unverified")
-            return PrimitiveActionResult(
+            return PrimitiveActionResult.dispatched(
                 action: "scroll",
                 target: description,
                 strategy: "AXScrollToVisible",
+                policy: policy,
+                delivery: .semantic,
                 success: result == .success,
                 message: result == .success ? nil : "AXScrollToVisible returned \(result.rawValue)",
                 details: details
@@ -273,64 +424,114 @@ public final class AXPrimitiveActionExecutor {
         }
 
         guard let point = try wheelPoint(target: target, app: resolvedApp) else {
-            details["dispatchSuccess"] = .bool(false)
             return PrimitiveActionResult(
                 action: "scroll",
                 target: description,
                 strategy: "CGEventScroll",
                 success: false,
                 message: "scroll target has no resolvable screen point",
+                deliveryPolicy: policy,
+                dispatchSuccess: false,
                 details: details
             )
         }
         return scrollWheelResult(
             target: description,
             at: point,
+            process: try scrollProcess(target: target, app: resolvedApp),
+            policy: policy,
+            identityMessage: "The scroll target does not belong to a resolvable process, so a wheel burst cannot be bound to it",
             deltaX: deltaX,
             deltaY: deltaY,
             details: details
         )
     }
 
-    /// `scroll` never activates, even when an app is named. A posted wheel is routed by the event's
-    /// location to the window under that point, which was measured to hold regardless of which
-    /// application is frontmost or where the cursor sits, so raising the app buys nothing and costs
-    /// the user their focus on every scroll. A point covered by another window scrolls whatever is
-    /// on top of it; a caller who needs to know can compare window frames from `look`.
+    /// `scroll` never activates for the background rung, and the foreground rung activates only
+    /// because the shared devices demand it. A posted wheel is routed by the event's location to
+    /// the window under that point regardless of which application is frontmost, so raising the app
+    /// buys nothing; a point covered by another window scrolls whatever is on top of it, and a
+    /// caller who needs to know can compare window frames from `look`.
     private func scrollWheelResult(
         target: String,
         at point: CGPoint,
+        process: pid_t?,
+        policy: DeliveryPolicy,
+        identityMessage: String,
         deltaX: Double,
         deltaY: Double,
         details: [String: JSONValue]
     ) -> PrimitiveActionResult {
-        let dispatch = postScrollWheel(at: point, deltaX: deltaX, deltaY: deltaY)
-        var details = details
-        details["at"] = ActionPoint(x: point.x, y: point.y, coordinateSpace: .screen).jsonValue
-        details["eventPath"] = Self.eventPathSummary(steps: dispatch.steps)
-        guard !dispatch.steps.isEmpty else {
-            details["dispatchSuccess"] = .bool(false)
-            return PrimitiveActionResult(
-                action: "scroll",
-                target: target,
-                strategy: "CGEventScroll",
-                success: false,
-                message: dispatch.creationFailed
-                    ? "Unable to create scroll wheel events"
-                    : "scroll delta rounds to no pixel of wheel movement",
-                details: details
-            )
-        }
-        details["dispatchSuccess"] = .bool(true)
-        details["semanticSuccess"] = .null
-        details["semanticStatus"] = .string("unverified")
-        return PrimitiveActionResult(
+        var wheelDetails = details
+        wheelDetails["at"] = ActionPoint(x: point.x, y: point.y, coordinateSpace: .screen).jsonValue
+        return deliver(
             action: "scroll",
             target: target,
-            strategy: "CGEventScroll",
-            success: true,
-            details: details
-        )
+            policy: policy,
+            candidates: inputCandidates(
+                processIdentifier: process,
+                hasGeometry: true,
+                geometryMessage: "",
+                identityMessage: identityMessage,
+                strategy: "CGEventScroll"
+            ),
+            details: wheelDetails
+        ) { candidate in
+            var dispatch: ScrollDispatch?
+            let post: ((CGEvent) -> Void) -> Bool = { sink in
+                let outcome = self.postScrollWheel(at: point, deltaX: deltaX, deltaY: deltaY, sink: sink)
+                dispatch = outcome
+                return !outcome.steps.isEmpty
+            }
+            let message = "Scroll wheel events were dispatched, but semantic outcome is unverified without a postcondition"
+            let base: PrimitiveActionResult
+            if candidate.rung == .pixel, let process {
+                base = self.backgroundDispatch(
+                    action: "scroll", target: target, policy: policy, strategy: candidate.strategy,
+                    process: process, details: wheelDetails, message: message, post: post
+                )
+            } else {
+                // Deliberately no process to activate: a wheel routes by the event's location, so
+                // raising the app would cost the user their focus and buy the scroll nothing.
+                base = self.inForeground(
+                    action: "scroll", target: target, policy: policy, process: nil,
+                    restoresPointer: false, details: wheelDetails
+                ) {
+                    let dispatched = post(self.postEvent)
+                    return .unverifiedDispatch(
+                        action: "scroll", target: target, strategy: candidate.strategy, policy: policy,
+                        delivery: .foreground, dispatched: dispatched, message: message,
+                        details: wheelDetails
+                    )
+                }
+            }
+            let steps = dispatch?.steps ?? []
+            guard !steps.isEmpty else {
+                // A wheel burst that rounds away to nothing is not a dispatch, so it must not
+                // claim one — nor an unverified semantic outcome it never attempted.
+                var emptyDetails = base.details.filter { key, _ in
+                    key != "semanticSuccess" && key != "semanticStatus"
+                }
+                emptyDetails["eventPath"] = Self.eventPathSummary(steps: [])
+                return .settled(PrimitiveActionResult(
+                    action: "scroll",
+                    target: target,
+                    strategy: candidate.strategy,
+                    success: false,
+                    message: dispatch?.creationFailed == true
+                        ? "Unable to create scroll wheel events"
+                        : "scroll delta rounds to no pixel of wheel movement",
+                    deliveryPolicy: policy,
+                    delivery: nil,
+                    dispatchSuccess: false,
+                    details: emptyDetails
+                ))
+            }
+            return .settled(base.withSuccess(
+                base.success,
+                details: ["eventPath": Self.eventPathSummary(steps: steps)]
+            ))
+        }
     }
 
     private static func eventPathSummary(steps: [ScrollEventStep]) -> JSONValue {
@@ -357,63 +558,585 @@ public final class AXPrimitiveActionExecutor {
         }
     }
 
+    /// The process a wheel burst binds to for background delivery.
+    private func scrollProcess(target: PointerTarget?, app: NSRunningApplication?) throws -> pid_t? {
+        switch target {
+        case let .handle(handle):
+            return processProvider(try elementStore.element(for: handle))
+        case let .point(point):
+            return point.app.flatMap { processIdentifier(forApp: $0) }
+        case nil:
+            return app?.processIdentifier
+        }
+    }
+
     public func drag(
         from: PointerTarget,
         to: PointerTarget,
         app: String?,
-        durationMs: Int?
+        durationMs: Int?,
+        policy: DeliveryPolicy
     ) throws -> PrimitiveActionResult {
-        if let app {
-            try activate(app: app)
-        }
         let start = try resolvedPointerTarget(from)
         let end = try resolvedPointerTarget(to)
-        if let failure = start.validationFailure ?? end.validationFailure {
-            return PrimitiveActionResult(
-                action: "drag",
-                target: "\(from.targetDescription)->\(to.targetDescription)",
-                strategy: "CGEventDrag",
-                success: false,
-                message: failure,
-                details: ["dispatchSuccess": .bool(false)]
-            )
-        }
-        let dispatch = postMouseDrag(from: start, to: end, durationMs: durationMs)
-        if let failure = dispatch.validationFailure {
-            return PrimitiveActionResult(
-                action: "drag",
-                target: "\(from.targetDescription)->\(to.targetDescription)",
-                strategy: "CGEventDrag",
-                success: false,
-                message: failure,
-                details: ["dispatchSuccess": .bool(false), "cancelledSafely": .bool(true)]
-            )
-        }
-        let eventSteps = dispatch.steps
-        return PrimitiveActionResult(
+        let target = "\(from.targetDescription)->\(to.targetDescription)"
+        // A drag has to stay inside one application for its whole path, so the identity that binds
+        // background delivery is the app the caller named, or the process owning the start element.
+        let process = app.flatMap { processIdentifier(forApp: $0) }
+            ?? start.element.flatMap(processProvider)
+            ?? end.element.flatMap(processProvider)
+        let details: [String: JSONValue] = [
+            "from": ActionPoint(x: start.point.x, y: start.point.y, coordinateSpace: .screen).jsonValue,
+            "to": ActionPoint(x: end.point.x, y: end.point.y, coordinateSpace: .screen).jsonValue,
+            "durationMs": durationMs.map(JSONValue.int) ?? .null
+        ]
+        return deliver(
             action: "drag",
-            target: "\(from.targetDescription)->\(to.targetDescription)",
-            strategy: "CGEventDrag",
-            success: false,
-            message: "Drag pointer events were dispatched, but semantic outcome is unverified without a postcondition",
-            details: [
-                "dispatchSuccess": .bool(true),
-                "semanticSuccess": .null,
-                "semanticStatus": .string("unverified"),
-                "from": ActionPoint(x: start.point.x, y: start.point.y, coordinateSpace: .screen).jsonValue,
-                "to": ActionPoint(x: end.point.x, y: end.point.y, coordinateSpace: .screen).jsonValue,
-                "durationMs": durationMs.map(JSONValue.int) ?? .null,
-                "eventPath": .object([
-                    "eventCount": .int(eventSteps.count),
-                    "updates": .int(eventSteps.filter { $0.type == .leftMouseDragged }.count),
-                    "hasThresholdMotion": .bool(eventSteps.count > 2)
-                ])
-            ]
+            target: target,
+            policy: policy,
+            candidates: inputCandidates(
+                processIdentifier: process,
+                hasGeometry: true,
+                geometryMessage: "",
+                identityMessage: "Neither drag endpoint carries an application identity; background delivery needs an app, a handle, or a locator",
+                strategy: "CGEventDrag"
+            ),
+            details: details
+        ) { candidate in
+            // Endpoint validation happens inside the rung, where `postMouseDrag` re-checks the
+            // start before its first event and the destination before its last.
+            let result = self.postDrag(
+                target: target,
+                policy: policy,
+                candidate: candidate,
+                process: process,
+                start: start,
+                end: end,
+                durationMs: durationMs,
+                details: details
+            )
+            // A drag cancelled mid-path already released the button safely; repeating it at a
+            // louder rung would replay a gesture against a target that just moved.
+            return result.details["cancelledSafely"] == .bool(true)
+                ? .settled(result)
+                : Self.outcome(of: result)
+        }
+    }
+
+    // MARK: - Delivery
+
+    private enum DeliveryAttempt {
+        /// A conclusive outcome. Nothing further is tried.
+        case settled(PrimitiveActionResult)
+        /// This rung did not take. The ladder advances if the policy and runtime allow it.
+        case advance(PrimitiveActionResult)
+    }
+
+    /// Walks an action's ladder, dispatching at the first rung the policy and runtime allow.
+    ///
+    /// The selection always happens before `attempt` runs, so a policy or capability denial returns
+    /// a refusal without the action ever reaching a native API.
+    private func deliver(
+        action: String,
+        target: String,
+        policy: DeliveryPolicy,
+        candidates: [DeliveryCandidate],
+        after: DeliveryRung? = nil,
+        fallback: PrimitiveActionResult? = nil,
+        details: [String: JSONValue] = [:],
+        attempt: (DeliveryCandidate) throws -> DeliveryAttempt
+    ) rethrows -> PrimitiveActionResult {
+        var lastFailure = fallback
+        var selection = DeliveryPlanner.select(from: candidates, policy: policy, after: after)
+        while true {
+            switch selection {
+            case let .refusal(refusal):
+                guard let lastFailure else {
+                    return .refused(action: action, target: target, policy: policy, refusal: refusal, details: details)
+                }
+                // Running out of rungs is not a refusal: nothing declined the action, it simply has
+                // no mechanism left. The honest answer is what the last attempt actually reported.
+                guard refusal.reason != .noDeliveryCandidate else {
+                    return lastFailure
+                }
+                return lastFailure.refusing(refusal)
+            case let .candidate(candidate):
+                switch try attempt(candidate) {
+                case let .settled(result):
+                    return result
+                case let .advance(result):
+                    lastFailure = result
+                    selection = DeliveryPlanner.select(from: candidates, policy: policy, after: candidate.rung)
+                }
+            }
+        }
+    }
+
+    /// The pixel and foreground rungs shared by every action that delivers input.
+    ///
+    /// Background delivery needs a process to bind to; without one there is nowhere to send input
+    /// except the global devices, and saying so is the whole point of the refusal.
+    private func inputCandidates(
+        processIdentifier process: pid_t?,
+        hasGeometry: Bool,
+        geometryMessage: String,
+        identityMessage: String,
+        strategy: String
+    ) -> [DeliveryCandidate] {
+        let geometryGap: (DeliveryRefusalReason, String)? = hasGeometry
+            ? nil
+            : (.targetIdentityUnavailable, geometryMessage)
+        let pixelGap = geometryGap ?? (process == nil ? (.backgroundPixelUnsupported, identityMessage) : nil)
+        return [
+            DeliveryCandidate(
+                rung: .pixel,
+                capability: .backgroundPixelInput,
+                strategy: "\(strategy)ToPid",
+                unavailable: pixelGap?.0,
+                unavailableMessage: pixelGap?.1
+            ),
+            DeliveryCandidate(
+                rung: .foreground,
+                capability: .globalInput,
+                strategy: strategy,
+                unavailable: geometryGap?.0,
+                unavailableMessage: geometryGap?.1
+            )
+        ]
+    }
+
+    private func processIdentifier(forApp query: String) -> pid_t? {
+        (try? appResolver.resolve(query))?.processIdentifier
+    }
+
+    /// Where a rung's events go. The pixel rung addresses the target process directly; the
+    /// foreground rung uses the same global devices the person at the keyboard uses.
+    private func sink(for rung: DeliveryRung, process: pid_t?) -> (CGEvent) -> Void {
+        guard rung == .pixel, let process else {
+            return postEvent
+        }
+        return { [postEventToProcess] event in postEventToProcess(event, process) }
+    }
+
+    private struct SessionInvariants {
+        let frontmost: pid_t?
+        let pointer: CGPoint
+    }
+
+    private func captureInvariants() -> SessionInvariants {
+        SessionInvariants(frontmost: frontmostApp()?.processIdentifier, pointer: pointerLocation())
+    }
+
+    /// What the pixel rung promised not to do. Checked after every background dispatch so the
+    /// reported rung is a claim Axon has actually verified rather than one it assumed.
+    private func invariantViolation(since before: SessionInvariants) -> String? {
+        if frontmostApp()?.processIdentifier != before.frontmost {
+            return "background delivery changed the frontmost application"
+        }
+        if !Self.pointsMatch(pointerLocation(), before.pointer) {
+            return "background delivery moved the real pointer"
+        }
+        return nil
+    }
+
+    private static func pointsMatch(_ lhs: CGPoint, _ rhs: CGPoint) -> Bool {
+        abs(lhs.x - rhs.x) < 0.5 && abs(lhs.y - rhs.y) < 0.5
+    }
+
+    /// The window the input is bound to, and the window-relative coordinates it was converted
+    /// through. This is the evidence that a pixel dispatch addressed a verified target.
+    private func targetWindowEvidence(for element: AXUIElement, point: CGPoint) -> [String: JSONValue] {
+        var current: AXUIElement? = element
+        for _ in 0..<64 {
+            guard let candidate = current else { break }
+            let role: String? = copyAttribute(kAXRoleAttribute, from: candidate)
+            if role == kAXWindowRole, let frame = frame(of: candidate) {
+                let title: String? = copyAttribute(kAXTitleAttribute, from: candidate)
+                return ["targetWindow": .object([
+                    "title": title.map(JSONValue.string) ?? .null,
+                    "frame": frame.jsonValue,
+                    "windowPoint": .object([
+                        "x": .double(point.x - frame.x),
+                        "y": .double(point.y - frame.y)
+                    ]),
+                    "sourceCoordinateSpace": .string(ActionPointCoordinateSpace.screen.rawValue)
+                ])]
+            }
+            current = parentProvider(candidate)
+        }
+        return [:]
+    }
+
+    private func postClick(
+        action: String,
+        target: String,
+        policy: DeliveryPolicy,
+        candidate: DeliveryCandidate,
+        point: CGPoint,
+        element: AXUIElement?,
+        process: pid_t?,
+        details: [String: JSONValue]
+    ) -> PrimitiveActionResult {
+        var evidence = details
+        if let element {
+            evidence.merge(targetWindowEvidence(for: element, point: point)) { _, new in new }
+        }
+        let message = "Click events were dispatched, but semantic outcome is unverified without a postcondition"
+        // Validation runs inside the rung that is about to dispatch. Checking occlusion before the
+        // foreground rung activates the app would test a window stack the dispatch is about to
+        // change, and would refuse the very escalation that resolves it.
+        func validationFailure(settling: Bool) -> PrimitiveActionResult? {
+            guard let element else { return nil }
+            let failure = settling
+                ? self.settledPointerValidationFailure(element: element, point: point)
+                : self.pointerValidationFailure(element: element, point: point)
+            guard let failure else { return nil }
+            return PrimitiveActionResult(
+                action: action, target: target, strategy: candidate.strategy, success: false,
+                message: failure, deliveryPolicy: policy, dispatchSuccess: false, details: evidence
+            )
+        }
+        if candidate.rung == .pixel, let process {
+            if let failure = validationFailure(settling: false) {
+                return failure
+            }
+            return backgroundDispatch(
+                action: action, target: target, policy: policy, strategy: candidate.strategy,
+                process: process, details: evidence, message: message
+            ) { sink in
+                self.postMouseClick(at: point, sink: sink)
+            }
+        }
+        return inForeground(
+            action: action, target: target, policy: policy, process: process,
+            restoresPointer: true, details: evidence
+        ) {
+            if let failure = validationFailure(settling: true) {
+                return failure
+            }
+            let dispatched = self.postMouseClick(at: point, sink: self.postEvent)
+            return .unverifiedDispatch(
+                action: action, target: target, strategy: candidate.strategy, policy: policy,
+                delivery: .foreground, dispatched: dispatched,
+                message: dispatched ? message : "Unable to create pointer events",
+                details: evidence
+            )
+        }
+    }
+
+    private func postTypedText(
+        target: String,
+        policy: DeliveryPolicy,
+        candidate: DeliveryCandidate,
+        element: AXUIElement,
+        point: CGPoint,
+        process: pid_t?,
+        value: String
+    ) -> PrimitiveActionResult {
+        var evidence = targetWindowEvidence(for: element, point: point)
+        evidence["semanticFallback"] = .string("AXValue did not take; the field was refilled by pointer and keystroke")
+        let message = "Keyboard events were dispatched, but the field value could not be verified"
+        func validationFailure(settling: Bool) -> PrimitiveActionResult? {
+            let failure = settling
+                ? self.settledPointerValidationFailure(element: element, point: point)
+                : self.pointerValidationFailure(element: element, point: point)
+            guard let failure else { return nil }
+            return PrimitiveActionResult(
+                action: "type", target: target, strategy: candidate.strategy, success: false,
+                message: failure, deliveryPolicy: policy, dispatchSuccess: false, details: evidence
+            )
+        }
+        let post: ((CGEvent) -> Void) -> Bool = { sink in
+            guard self.postMouseClick(at: point, sink: sink) else { return false }
+            self.sleepMilliseconds(50)
+            guard let selectAll = KeyStroke("command+a"), self.postKeyStroke(selectAll, sink: sink) else {
+                return false
+            }
+            self.sleepMilliseconds(20)
+            return self.postKeyboardText(value, sink: sink)
+        }
+        let base: PrimitiveActionResult
+        if candidate.rung == .pixel, let process {
+            if let failure = validationFailure(settling: false) {
+                return failure
+            }
+            base = backgroundDispatch(
+                action: "type", target: target, policy: policy, strategy: candidate.strategy,
+                process: process, details: evidence, message: message, post: post
+            )
+        } else {
+            base = inForeground(
+                action: "type", target: target, policy: policy, process: process,
+                restoresPointer: true, details: evidence
+            ) {
+                if let failure = validationFailure(settling: true) {
+                    return failure
+                }
+                let dispatched = post(self.postEvent)
+                return .unverifiedDispatch(
+                    action: "type", target: target, strategy: candidate.strategy, policy: policy,
+                    delivery: .foreground, dispatched: dispatched,
+                    message: dispatched ? message : "Unable to create keyboard events for text fallback",
+                    details: evidence
+                )
+            }
+        }
+        // Unlike a click, a filled field can be read back, so this rung can still prove its goal.
+        guard base.dispatchSuccess,
+              stringValue(copyRawAttribute(kAXValueAttribute, from: element)) == value
+        else {
+            return base
+        }
+        return .dispatched(
+            action: "type", target: target, strategy: candidate.strategy, policy: policy,
+            delivery: base.delivery ?? candidate.rung, success: true,
+            details: base.details.filter { key, _ in key != "semanticSuccess" && key != "semanticStatus" }
         )
     }
 
-    private func activate(app query: String) throws {
-        try activateApp(query)
+    private func postKeyboardIntent(
+        target: String,
+        policy: DeliveryPolicy,
+        candidate: DeliveryCandidate,
+        process: pid_t?,
+        intent: KeyboardIntent,
+        details: [String: JSONValue]
+    ) -> PrimitiveActionResult {
+        let message = "Keyboard events were dispatched, but semantic outcome is unverified without a postcondition"
+        let post: ((CGEvent) -> Void) -> Bool = { sink in
+            switch intent {
+            case let .key(key):
+                guard let stroke = KeyStroke(key) else { return false }
+                return self.postKeyStroke(stroke, sink: sink)
+            case let .text(text):
+                return self.postKeyboardText(text, sink: sink)
+            }
+        }
+        if candidate.rung == .pixel, let process {
+            return backgroundDispatch(
+                action: "keyboard", target: target, policy: policy, strategy: candidate.strategy,
+                process: process, details: details, message: message, post: post
+            )
+        }
+        return inForeground(
+            action: "keyboard", target: target, policy: policy, process: process,
+            restoresPointer: false, details: details
+        ) {
+            let dispatched = post(self.postEvent)
+            return .unverifiedDispatch(
+                action: "keyboard", target: target, strategy: candidate.strategy, policy: policy,
+                delivery: .foreground, dispatched: dispatched,
+                message: dispatched ? message : "Unable to create keyboard events",
+                details: details
+            )
+        }
+    }
+
+    private func postDrag(
+        target: String,
+        policy: DeliveryPolicy,
+        candidate: DeliveryCandidate,
+        process: pid_t?,
+        start: ResolvedPointerTarget,
+        end: ResolvedPointerTarget,
+        durationMs: Int?,
+        details: [String: JSONValue]
+    ) -> PrimitiveActionResult {
+        var dispatch: DragDispatch?
+        let post: ((CGEvent) -> Void) -> Bool = { sink in
+            let outcome = self.postMouseDrag(from: start, to: end, durationMs: durationMs, sink: sink)
+            dispatch = outcome
+            return outcome.validationFailure == nil
+        }
+        let message = "Drag pointer events were dispatched, but semantic outcome is unverified without a postcondition"
+        let base: PrimitiveActionResult
+        if candidate.rung == .pixel, let process {
+            base = backgroundDispatch(
+                action: "drag", target: target, policy: policy, strategy: candidate.strategy,
+                process: process, details: details, message: message, post: post
+            )
+        } else {
+            base = inForeground(
+                action: "drag", target: target, policy: policy, process: process,
+                restoresPointer: true, details: details
+            ) {
+                let dispatched = post(self.postEvent)
+                return .unverifiedDispatch(
+                    action: "drag", target: target, strategy: candidate.strategy, policy: policy,
+                    delivery: .foreground, dispatched: dispatched,
+                    message: dispatched ? message : "Unable to create pointer events",
+                    details: details
+                )
+            }
+        }
+        guard let dispatch else {
+            return base
+        }
+        // Mid-path validation is a real failure of the drag, not a reason to try a louder rung:
+        // the path was cancelled with a mouse-up so nothing is left held down.
+        if let failure = dispatch.validationFailure {
+            // `cancelledSafely` reports that a half-finished gesture was released. A path that
+            // never pressed the button down had nothing to cancel.
+            return base.withSuccess(
+                false,
+                message: failure,
+                details: dispatch.steps.isEmpty ? [:] : ["cancelledSafely": .bool(true)]
+            )
+        }
+        return base.withSuccess(base.success, details: ["eventPath": .object([
+            "eventCount": .int(dispatch.steps.count),
+            "updates": .int(dispatch.steps.filter { $0.type == .leftMouseDragged }.count),
+            "hasThresholdMotion": .bool(dispatch.steps.count > 2)
+        ])])
+    }
+
+    /// Delivers through the target process without activating it or moving the real pointer, then
+    /// proves both promises were kept.
+    private func backgroundDispatch(
+        action: String,
+        target: String,
+        policy: DeliveryPolicy,
+        strategy: String,
+        process: pid_t,
+        details: [String: JSONValue],
+        message: String,
+        post: ((CGEvent) -> Void) -> Bool
+    ) -> PrimitiveActionResult {
+        let before = captureInvariants()
+        let dispatched = post(sink(for: .pixel, process: process))
+        let violation = invariantViolation(since: before)
+        var evidence = details
+        evidence["backgroundDelivery"] = .object([
+            "targetProcessIdentifier": .int(Int(process)),
+            "frontmostAppUnchanged": .bool(frontmostApp()?.processIdentifier == before.frontmost),
+            "pointerUnchanged": .bool(Self.pointsMatch(pointerLocation(), before.pointer))
+        ])
+        guard dispatched else {
+            return PrimitiveActionResult(
+                action: action, target: target, strategy: strategy, success: false,
+                message: "Unable to create events for background delivery to process \(process)",
+                deliveryPolicy: policy, delivery: .pixel, dispatchSuccess: false, details: evidence
+            )
+        }
+        if let violation {
+            return PrimitiveActionResult(
+                action: action, target: target, strategy: strategy, success: false,
+                message: "Background delivery broke its own contract: \(violation)",
+                deliveryPolicy: policy, delivery: .pixel, dispatchSuccess: true, details: evidence
+            )
+        }
+        return .unverifiedDispatch(
+            action: action, target: target, strategy: strategy, policy: policy,
+            delivery: .pixel, dispatched: true, message: message, details: evidence
+        )
+    }
+
+    /// Runs one action in the foreground and hands the session back.
+    ///
+    /// Activation is proved before anything is posted, and restoration runs on every exit including
+    /// a thrown error, so an escalation cannot leave the user's foreground where Axon put it.
+    private func inForeground(
+        action: String,
+        target: String,
+        policy: DeliveryPolicy,
+        process: pid_t?,
+        restoresPointer: Bool,
+        details: [String: JSONValue],
+        _ body: () -> PrimitiveActionResult
+    ) -> PrimitiveActionResult {
+        let prior = frontmostApp()
+        let alreadyFrontmost = process == nil || prior?.processIdentifier == process
+        var activationProved = alreadyFrontmost
+        if !alreadyFrontmost, let process {
+            _ = activateProcess(process)
+            activationProved = settle { self.frontmostApp()?.processIdentifier == process }
+        }
+        guard activationProved else {
+            let cleanup = ForegroundCleanup(
+                priorApp: prior?.identity,
+                priorAppProcessIdentifier: prior.map { Int($0.processIdentifier) },
+                alreadyFrontmost: false,
+                activationProved: false,
+                restored: restoreForeground(prior: prior, alreadyFrontmost: false),
+                pointerRestored: nil,
+                message: "No events were posted"
+            )
+            var evidence = details
+            evidence["foreground"] = cleanup.jsonValue
+            return .refused(
+                action: action, target: target, policy: policy,
+                refusal: DeliveryRefusal(
+                    reason: .activationNotProved,
+                    requiredRung: .foreground,
+                    capability: .globalInput,
+                    message: "Foreground delivery could not prove the target became frontmost, so nothing was posted"
+                ),
+                details: evidence
+            )
+        }
+
+        let pointerBefore = restoresPointer ? pointerLocation() : nil
+        func handBack() -> ForegroundCleanup {
+            let pointerRestored = restorePointer(to: pointerBefore)
+            let restored = restoreForeground(prior: prior, alreadyFrontmost: alreadyFrontmost)
+            return ForegroundCleanup(
+                priorApp: prior?.identity,
+                priorAppProcessIdentifier: prior.map { Int($0.processIdentifier) },
+                alreadyFrontmost: alreadyFrontmost,
+                activationProved: true,
+                restored: restored,
+                pointerRestored: pointerRestored,
+                message: restored ? nil : "The prior application did not return to the foreground"
+            )
+        }
+
+        let result = body()
+        let cleanup = handBack()
+        let restorationFailed = !cleanup.restored || cleanup.pointerRestored == false
+        return result.withSuccess(
+            result.success && !restorationFailed,
+            message: restorationFailed
+                ? "\(result.message ?? "Foreground delivery completed"); the session was not restored afterwards"
+                : nil,
+            details: ["foreground": cleanup.jsonValue]
+        )
+    }
+
+    private func restoreForeground(prior: ForegroundApp?, alreadyFrontmost: Bool) -> Bool {
+        guard !alreadyFrontmost, let prior else {
+            return true
+        }
+        if frontmostApp()?.processIdentifier == prior.processIdentifier {
+            return true
+        }
+        _ = activateProcess(prior.processIdentifier)
+        return settle { self.frontmostApp()?.processIdentifier == prior.processIdentifier }
+    }
+
+    /// Nil means the dispatch never moved the pointer, so there was nothing to put back.
+    private func restorePointer(to origin: CGPoint?) -> Bool? {
+        guard let origin, !Self.pointsMatch(pointerLocation(), origin) else {
+            return nil
+        }
+        movePointer(origin)
+        return settle { Self.pointsMatch(self.pointerLocation(), origin) }
+    }
+
+    /// Bounded wait for an observable session change. Never blocks past the settle budget, so a
+    /// window server that refuses to cooperate produces a timeout rather than a hung daemon.
+    private func settle(_ condition: () -> Bool) -> Bool {
+        if condition() {
+            return true
+        }
+        var waited = 0
+        while waited < settleTimeoutMs {
+            sleepMilliseconds(settleIntervalMs)
+            waited += settleIntervalMs
+            if condition() {
+                return true
+            }
+        }
+        return false
     }
 
     private func actionNames(for element: AXUIElement) -> [String] {
@@ -446,6 +1169,29 @@ public final class AXPrimitiveActionExecutor {
                 validationFailure: pointerValidationFailure(element: element, point: point)
             )
         }
+    }
+
+    /// Waits, within the settle budget, for a just-activated window to actually reach the top.
+    ///
+    /// `NSRunningApplication` reports an app frontmost before the window server has finished
+    /// raising its window, so a hit test taken the instant activation is proved still sees the old
+    /// window stack. Validating once at that moment would reject the target as occluded by the very
+    /// window the escalation just moved out of the way.
+    private func settledPointerValidationFailure(element: AXUIElement, point: CGPoint) -> String? {
+        var failure = pointerValidationFailure(element: element, point: point)
+        guard failure != nil else {
+            return nil
+        }
+        var waited = 0
+        while waited < settleTimeoutMs {
+            sleepMilliseconds(settleIntervalMs)
+            waited += settleIntervalMs
+            failure = pointerValidationFailure(element: element, point: point)
+            if failure == nil {
+                return nil
+            }
+        }
+        return failure
     }
 
     private func pointerValidationFailure(element: AXUIElement, point: CGPoint) -> String? {
@@ -678,18 +1424,25 @@ public final class AXPrimitiveActionExecutor {
         return String(describing: value)
     }
 
-    private func postMouseClick(at point: CGPoint) {
-        let down = CGEvent(mouseEventSource: nil, mouseType: .leftMouseDown, mouseCursorPosition: point, mouseButton: .left)
-        let up = CGEvent(mouseEventSource: nil, mouseType: .leftMouseUp, mouseCursorPosition: point, mouseButton: .left)
-        if let down { postEvent(down) }
-        if let up { postEvent(up) }
+    @discardableResult
+    private func postMouseClick(at point: CGPoint, sink: (CGEvent) -> Void) -> Bool {
+        guard
+            let down = CGEvent(mouseEventSource: nil, mouseType: .leftMouseDown, mouseCursorPosition: point, mouseButton: .left),
+            let up = CGEvent(mouseEventSource: nil, mouseType: .leftMouseUp, mouseCursorPosition: point, mouseButton: .left)
+        else {
+            return false
+        }
+        sink(down)
+        sink(up)
+        return true
     }
 
     @discardableResult
     private func postMouseDrag(
         from start: ResolvedPointerTarget,
         to end: ResolvedPointerTarget,
-        durationMs: Int?
+        durationMs: Int?,
+        sink: (CGEvent) -> Void
     ) -> DragDispatch {
         let steps = DragEventPathSynthesizer.path(from: start.point, to: end.point, durationMs: durationMs)
         let delayMs = max((durationMs ?? 250) / max(steps.count - 1, 1), 0)
@@ -702,13 +1455,13 @@ public final class AXPrimitiveActionExecutor {
                let failure = pointerValidationFailure(element: validationElement, point: step.point) {
                 if !postedSteps.isEmpty, let lastPoint = postedSteps.last?.point,
                    let cancel = CGEvent(mouseEventSource: nil, mouseType: .leftMouseUp, mouseCursorPosition: lastPoint, mouseButton: .left) {
-                    postEvent(cancel)
+                    sink(cancel)
                 }
                 return DragDispatch(steps: postedSteps, validationFailure: failure)
             }
             let event = CGEvent(mouseEventSource: nil, mouseType: step.type, mouseCursorPosition: step.point, mouseButton: .left)
             if let event {
-                postEvent(event)
+                sink(event)
                 postedSteps.append(step)
             }
             if index < steps.count - 1, delayMs > 0 {
@@ -721,7 +1474,12 @@ public final class AXPrimitiveActionExecutor {
     /// Posts a wheel burst at `point`. A scroll wheel event carries no location of its own; macOS
     /// routes it to the window under the event's `location` field, so setting it is what makes the
     /// event reach the intended window rather than the screen origin.
-    private func postScrollWheel(at point: CGPoint, deltaX: Double, deltaY: Double) -> ScrollDispatch {
+    private func postScrollWheel(
+        at point: CGPoint,
+        deltaX: Double,
+        deltaY: Double,
+        sink: (CGEvent) -> Void
+    ) -> ScrollDispatch {
         let steps = ScrollEventPathSynthesizer.path(deltaX: deltaX, deltaY: deltaY)
         var posted: [ScrollEventStep] = []
         var creationFailed = false
@@ -753,7 +1511,7 @@ public final class AXPrimitiveActionExecutor {
                 continue
             }
             event.location = point
-            postEvent(event)
+            sink(event)
             postedX += wheelX
             postedY += wheelY
             posted.append(ScrollEventStep(deltaX: Double(wheelX), deltaY: Double(wheelY)))
@@ -774,7 +1532,7 @@ public final class AXPrimitiveActionExecutor {
     }
 
     @discardableResult
-    private func postKeyStroke(_ keyStroke: KeyStroke) -> Bool {
+    private func postKeyStroke(_ keyStroke: KeyStroke, sink: (CGEvent) -> Void) -> Bool {
         guard let down = CGEvent(keyboardEventSource: nil, virtualKey: keyStroke.keyCode, keyDown: true),
               let up = CGEvent(keyboardEventSource: nil, virtualKey: keyStroke.keyCode, keyDown: false)
         else {
@@ -782,12 +1540,12 @@ public final class AXPrimitiveActionExecutor {
         }
         down.flags = keyStroke.flags
         up.flags = keyStroke.flags
-        postEvent(down)
-        postEvent(up)
+        sink(down)
+        sink(up)
         return true
     }
 
-    private func postKeyboardText(_ text: String) -> Bool {
+    private func postKeyboardText(_ text: String, sink: (CGEvent) -> Void) -> Bool {
         let layout = makeKeyboardLayout()
         for scalar in text.unicodeScalars {
             // The layout stroke is what keycode-reading consumers see; the Unicode payload is what
@@ -806,8 +1564,8 @@ public final class AXPrimitiveActionExecutor {
             }
             down.keyboardSetUnicodeString(stringLength: utf16.count, unicodeString: &utf16)
             up.keyboardSetUnicodeString(stringLength: utf16.count, unicodeString: &utf16)
-            postEvent(down)
-            postEvent(up)
+            sink(down)
+            sink(up)
         }
         return true
     }

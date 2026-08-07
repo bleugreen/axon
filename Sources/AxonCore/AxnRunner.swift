@@ -438,7 +438,8 @@ public struct AxnRunner {
         }
         // Direct type success already has exact AXValue readback. Its keyboard fallback cannot
         // establish a before-state after dispatch, so only an explicit changed fact may upgrade it.
-        guard method == "drag" || method == "keyboard" else {
+        // The others deliver pointer or keyboard input and can never read back what they achieved.
+        guard method == "drag" || method == "keyboard" || method == "click" || method == "scroll" else {
             return false
         }
         guard let factEvaluator else {
@@ -757,6 +758,9 @@ public struct AxnRunner {
         action["semanticSuccess"] = .bool(true)
         action["semanticStatus"] = .string("verified")
         action["message"] = .string("\(method.capitalized) semantic outcome verified by postcondition")
+        // A declined escalation turned out to be unnecessary: the rung that ran reached the goal,
+        // so the refusal must not linger next to a verified success it no longer explains.
+        action["refusal"] = .null
         var updated = result
         updated["action"] = .object(action)
         return updated

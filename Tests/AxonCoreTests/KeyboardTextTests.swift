@@ -1,4 +1,6 @@
+import AppKit
 import CoreGraphics
+import Foundation
 import Testing
 @testable import AxonCore
 
@@ -26,10 +28,14 @@ private func postedKeyboardEvents(
                 String(utf16CodeUnits: buffer, count: length)
             ))
         },
-        makeKeyboardLayout: { layout }
+        makeKeyboardLayout: { layout },
+        frontmostApp: { ForegroundApp(processIdentifier: 7, name: "Prior", bundleIdentifier: "com.example.prior") },
+        pointerLocation: { .zero }
     )
 
-    _ = try executor.keyboard(app: nil, intent: .text(text))
+    // Keystroke synthesis is what these cases measure, and without a named app the only rung that
+    // can carry keystrokes at all is the foreground one.
+    _ = try executor.keyboard(app: nil, intent: .text(text), policy: .foregroundPermitted)
     // Every character posts a key-down and a key-up carrying the same payload.
     return stride(from: 0, to: posted.count, by: 2).map { posted[$0] }
 }
@@ -43,11 +49,14 @@ private func postedKeyboardEvents(
         action: "type",
         target: "s1:2",
         strategy: "CGEventKeyboard",
+        policy: .foregroundPermitted,
+        delivery: .foreground,
         dispatched: true,
         message: "unverified"
     )
     #expect(fallback.success == false)
-    #expect(fallback.details["dispatchSuccess"] == .bool(true))
+    #expect(fallback.dispatchSuccess)
+    #expect(fallback.delivery == .foreground)
     #expect(fallback.details["semanticSuccess"] == .null)
 }
 
@@ -61,17 +70,73 @@ private func postedKeyboardEvents(
             var buffer = [UniChar](repeating: 0, count: 8)
             event.keyboardGetUnicodeString(maxStringLength: buffer.count, actualStringLength: &length, unicodeString: &buffer)
             posted.append((event.getIntegerValueField(.keyboardEventKeycode), String(utf16CodeUnits: buffer, count: length)))
-        }
+        },
+        frontmostApp: { ForegroundApp(processIdentifier: 7, name: "Prior", bundleIdentifier: "com.example.prior") },
+        pointerLocation: { .zero }
     )
 
-    let result = try executor.keyboard(app: nil, intent: .key("End"))
+    let result = try executor.keyboard(app: nil, intent: .key("End"), policy: .foregroundPermitted)
 
     #expect(posted.map(\.keyCode) == [119, 119])
     #expect(posted.allSatisfy { $0.text.isEmpty })
     #expect(result.success == false)
-    #expect(result.details["dispatchSuccess"] == .bool(true))
+    #expect(result.dispatchSuccess)
+    #expect(result.delivery == .foreground)
     #expect(result.details["semanticSuccess"] == .null)
     #expect(result.details["semanticStatus"] == .string("unverified"))
+}
+
+@Test func keyboardWithoutAppRefusesUnderBackgroundOnlyWithoutPostingEvents() throws {
+    var posted = 0
+    let executor = AXPrimitiveActionExecutor(
+        elementStore: AXElementStore(),
+        overlay: nil,
+        postEvent: { _ in posted += 1 },
+        postEventToProcess: { _, _ in posted += 1 },
+        frontmostApp: { ForegroundApp(processIdentifier: 7, name: "Prior", bundleIdentifier: "com.example.prior") },
+        pointerLocation: { .zero }
+    )
+
+    let result = try executor.keyboard(app: nil, intent: .key("End"), policy: .backgroundOnly)
+
+    #expect(posted == 0)
+    #expect(result.success == false)
+    #expect(result.dispatchSuccess == false)
+    #expect(result.delivery == nil)
+    #expect(result.strategy == "refused")
+    #expect(result.refusal?.reason == .foregroundNotPermitted)
+    #expect(result.refusal?.capability == .globalInput)
+}
+
+@Test func keyboardWithNamedAppDeliversToThatProcessWithoutGlobalEvents() throws {
+    var global = 0
+    var targeted: [pid_t] = []
+    let executor = AXPrimitiveActionExecutor(
+        elementStore: AXElementStore(),
+        overlay: nil,
+        postEvent: { _ in global += 1 },
+        postEventToProcess: { _, pid in targeted.append(pid) },
+        frontmostApp: { ForegroundApp(processIdentifier: 7, name: "Prior", bundleIdentifier: "com.example.prior") },
+        activateProcess: { _ in Issue.record("background keyboard delivery must not activate"); return false },
+        pointerLocation: { .zero }
+    )
+
+    // The frontmost application is always resolvable by pid, which gives the pixel rung a real
+    // identity to bind to without depending on any particular app being installed.
+    let target = try #require(NSWorkspace.shared.frontmostApplication?.processIdentifier)
+    let result = try executor.keyboard(
+        app: String(target),
+        intent: .key("End"),
+        policy: .backgroundOnly
+    )
+
+    #expect(global == 0)
+    #expect(targeted == [target, target])
+    #expect(result.delivery == .pixel)
+    #expect(result.dispatchSuccess)
+    #expect(result.success == false)
+    #expect(result.details["backgroundDelivery"]?["frontmostAppUnchanged"] == .bool(true))
+    #expect(result.details["backgroundDelivery"]?["pointerUnchanged"] == .bool(true))
 }
 
 @Test func keyboardIntentValidationKeepsTextArbitraryAndRejectsUnknownKeys() throws {
