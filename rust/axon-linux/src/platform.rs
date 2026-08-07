@@ -528,10 +528,7 @@ impl Actor {
         Ok(self.select(q).await?.map(|(object, _)| identity(&object)))
     }
     /// `Ok(None)` is "nothing matched", which is a different answer from a failure to look.
-    async fn select(
-        &self,
-        q: &AppQuery,
-    ) -> Result<Option<(ObjectRefOwned, String)>, BackendError> {
+    async fn select(&self, q: &AppQuery) -> Result<Option<(ObjectRefOwned, String)>, BackendError> {
         let mut partial = None;
         for object in self.roots().await? {
             let proxy = timeout(
