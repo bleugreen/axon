@@ -28,12 +28,33 @@ import Testing
         tool: "keyboard",
         targetBefore: observedState(focused: true),
         targetAfter: observedState(focused: true),
+        focusBefore: observedState(focused: true),
         focusAfter: elsewhere
     ))
 
     #expect(facts.count == 1)
     #expect(facts[0]["kind"] == .string("focused"))
     #expect(facts[0]["target"]?["locator"]?["identifier"] == .string("body"))
+}
+
+@Test func derivesNothingFromFocusThatNeverMoved() {
+    // Clicking a button often leaves focus on the text field it was already in. The app-level read
+    // sees a focused element that is not the click target, but nothing about it transitioned.
+    let field = observedState(
+        role: "AXTextField",
+        locator: ["role": .string("AXTextField"), "identifier": .string("name-field")],
+        focused: true
+    )
+    let button: [String: JSONValue] = ["role": .string("AXButton"), "title": .string("Submit")]
+    let facts = compile(observation(
+        tool: "click",
+        targetBefore: observedState(role: "AXButton", locator: button),
+        targetAfter: observedState(role: "AXButton", locator: button),
+        focusBefore: field,
+        focusAfter: field
+    ))
+
+    #expect(facts.isEmpty)
 }
 
 @Test func derivesEnabledTransitionsInBothDirections() {
@@ -242,6 +263,7 @@ private func observation(
     inputs: [String] = [],
     targetBefore: ObservedElementState? = nil,
     targetAfter: ObservedElementState? = nil,
+    focusBefore: ObservedElementState? = nil,
     focusAfter: ObservedElementState? = nil,
     windowTitlesBefore: [String] = [],
     windowTitlesAfter: [String] = []
@@ -252,6 +274,7 @@ private func observation(
         inputs: inputs,
         targetBefore: targetBefore,
         targetAfter: targetAfter,
+        focusBefore: focusBefore,
         focusAfter: focusAfter,
         windowTitlesBefore: windowTitlesBefore,
         windowTitlesAfter: windowTitlesAfter
