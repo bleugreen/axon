@@ -981,13 +981,6 @@ public struct SnapshotObservationFormatter {
 }
 
 private extension JSONValue {
-    var objectValue: [String: JSONValue]? {
-        guard case let .object(object) = self else {
-            return nil
-        }
-        return object
-    }
-
     var arrayValue: [JSONValue]? {
         guard case let .array(values) = self else {
             return nil
