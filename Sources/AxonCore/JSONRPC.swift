@@ -160,6 +160,14 @@ public extension JSONValue {
         return value
     }
 
+    /// The object this value holds, or nil for every other JSON type.
+    var objectValue: [String: JSONValue]? {
+        guard case let .object(value) = self else {
+            return nil
+        }
+        return value
+    }
+
     subscript(key: String) -> JSONValue? {
         guard case let .object(values) = self else {
             return nil

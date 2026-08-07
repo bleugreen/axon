@@ -265,7 +265,7 @@ private extension JSONRPCRequest {
     }
 }
 
-private extension JSONValue {
+extension JSONValue {
     func redactingSensitiveHistoryValues(
         activeSecretRedactor: ActiveSecretRedactor,
         deterministicRedactor: DeterministicRedactor,
