@@ -49,7 +49,7 @@ jobs:
             axon_was_running=true
           fi
           restore_desktop() {
-            "$cli" quit >/dev/null 2>&1 || true
+            "$cli" shutdown >/dev/null 2>&1 || true
             killall Calculator >/dev/null 2>&1 || true
             if [[ "$axon_was_running" == true ]]; then
               open -a /Applications/Axon.app >/dev/null 2>&1 || true
@@ -57,16 +57,31 @@ jobs:
           }
           trap restore_desktop EXIT
 
-          /opt/homebrew/bin/axon quit >/dev/null 2>&1 || true
+          # `shutdown` stops whichever daemon holds the socket, so the freshly built app can bind
+          # it. Only one daemon may serve the endpoint; a second would now refuse to start.
+          /opt/homebrew/bin/axon shutdown >/dev/null 2>&1 || true
           open -n "$PWD/dist/Axon.app"
           for _ in {1..40}; do
-            if "$cli" status | grep -q 'Accessibility: trusted'; then
+            if "$cli" status --json | jq -e '.daemon.ready' >/dev/null 2>&1; then
               break
             fi
             sleep 0.25
           done
-          "$cli" status | grep -q 'Accessibility: trusted'
-          echo 'Axon daemon is trusted'
+
+          # The published contract, checked against a real logged-in Mac.
+          expected_version="$(cat VERSION)"
+          test "$("$cli" version)" = "$expected_version"
+          status="$("$cli" status --json)"
+          printf '%s' "$status" | jq -e '.schemaVersion == "health-v1"' >/dev/null
+          printf '%s' "$status" | jq -e --arg v "$expected_version" '.version == $v' >/dev/null
+          printf '%s' "$status" | jq -e '.platform == "macos"' >/dev/null
+          printf '%s' "$status" | jq -e '.daemon.running and .daemon.ready' >/dev/null
+          printf '%s' "$status" | jq -e '.session.interactive and .session.graphical' >/dev/null
+          # The complete vocabulary, every unusable entry explained.
+          printf '%s' "$status" | jq -e '.capabilities | length == 15' >/dev/null
+          printf '%s' "$status" | jq -e '[.capabilities[] | select(.usable == false and (.reason // "") == "")] | length == 0' >/dev/null
+          printf '%s' "$status" | jq -e '[.permissions[] | select(.name == "accessibility")][0].granted == true' >/dev/null
+          echo 'Axon daemon is ready and Accessibility is granted'
 
           open -a Calculator
           clear_locator='{"role":"AXButton","description":"All Clear","actions":["AXPress"]}'
