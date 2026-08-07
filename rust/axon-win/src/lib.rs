@@ -9,6 +9,8 @@ use axon_core::{
 };
 use serde_json::{Map, Value, json};
 
+pub mod lifecycle;
+
 #[cfg(windows)]
 mod platform;
 #[cfg(windows)]
@@ -69,6 +71,14 @@ pub trait PointerTargetVerifier: PlatformBackend {
 }
 
 impl<B: PointerTargetVerifier + TextRecognitionProvider + VisualObservationProvider> Router<B> {
+    /// What the backend can do, for health documents.
+    ///
+    /// The backend is otherwise private to the router; health is the one caller that needs to ask
+    /// it a question rather than dispatch a tool through it.
+    pub fn capabilities(&self) -> Result<Vec<axon_core::CapabilityInfo>, axon_core::BackendError> {
+        self.backend.capabilities()
+    }
+
     pub fn new(backend: B) -> Self {
         Self {
             backend,

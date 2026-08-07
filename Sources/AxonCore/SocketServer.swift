@@ -84,7 +84,7 @@ public struct SocketServer: @unchecked Sendable {
     }
 
     private func makeListeningSocket() throws -> Int32 {
-        unlink(path)
+        try clearStaleSocket()
         let descriptor = socket(AF_UNIX, SOCK_STREAM, 0)
         guard descriptor >= 0 else {
             throw SocketError.operationFailed("socket")
@@ -97,6 +97,12 @@ public struct SocketServer: @unchecked Sendable {
                     throw SocketError.operationFailed("bind")
                 }
             }
+            // The socket lives in world-writable /tmp, so its own mode is the access control.
+            // This matches the DACL'd pipe on Windows and the mode-0600 socket on Linux: Axon's
+            // trust boundary is the local user, and nothing weaker.
+            guard chmod(path, 0o600) == 0 else {
+                throw SocketError.operationFailed("chmod")
+            }
             guard listen(descriptor, 16) == 0 else {
                 throw SocketError.operationFailed("listen")
             }
@@ -105,5 +111,33 @@ public struct SocketServer: @unchecked Sendable {
             close(descriptor)
             throw error
         }
+    }
+
+    /// Removes a leftover socket file, but never one a live daemon is still serving.
+    ///
+    /// Binding unconditionally would let a second daemon silently steal the endpoint from a
+    /// running one: the first keeps its listening descriptor and never sees another connection,
+    /// so both processes believe they are the daemon and clients reach whichever bound last.
+    /// Refusing here is what makes "the daemon answered" mean one specific process.
+    private func clearStaleSocket() throws {
+        guard access(path, F_OK) == 0 else {
+            return
+        }
+        if isServed() {
+            throw SocketError.addressInUse(path)
+        }
+        unlink(path)
+    }
+
+    private func isServed() -> Bool {
+        let probe = socket(AF_UNIX, SOCK_STREAM, 0)
+        guard probe >= 0 else {
+            return false
+        }
+        defer { close(probe) }
+        let connected = (try? withSocketAddress(path: path) { pointer, length in
+            connect(probe, pointer, length) == 0
+        }) ?? false
+        return connected
     }
 }

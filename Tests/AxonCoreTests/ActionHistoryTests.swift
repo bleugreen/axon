@@ -442,13 +442,6 @@ import Testing
 }
 
 private extension JSONValue {
-    var stringValue: String? {
-        guard case let .string(value) = self else {
-            return nil
-        }
-        return value
-    }
-
     func containsString(_ needle: String) -> Bool {
         switch self {
         case let .string(value):

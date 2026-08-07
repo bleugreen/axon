@@ -1,0 +1,95 @@
+#!/usr/bin/env bash
+# Builds a release archive for one of the Rust daemons.
+#
+# Usage: scripts/package-rust <axon-win|axon-linux>
+#
+# Archives are named with both the version and the target, because a consumer pins an exact
+# release and has to be able to name the artifact it wants without guessing. Nothing here resolves
+# a mutable "latest".
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$ROOT"
+
+CRATE="${1:-}"
+VERSION="$("$ROOT/scripts/check-version")"
+DIST_DIR="$ROOT/dist"
+
+case "$CRATE" in
+  axon-win)
+    TARGET="windows-x86_64"
+    BINARY="axon-win.exe"
+    EXPECTED_HOST="windows"
+    ;;
+  axon-linux)
+    TARGET="linux-x86_64"
+    BINARY="axon-linux"
+    EXPECTED_HOST="linux"
+    ;;
+  *)
+    printf 'usage: scripts/package-rust <axon-win|axon-linux>\n' >&2
+    exit 2
+    ;;
+esac
+
+# Each daemon builds natively, so the host decides what is actually inside the archive. Without
+# this check a macOS build would happily produce a file named linux-x86_64 containing a Mach-O
+# binary, and the name a consumer pins would be a lie.
+case "$(uname -s)" in
+  Linux) HOST="linux" ;;
+  Darwin) HOST="macos" ;;
+  MINGW* | MSYS* | CYGWIN* | Windows_NT) HOST="windows" ;;
+  *) HOST="unknown" ;;
+esac
+if [[ "$HOST" != "$EXPECTED_HOST" ]]; then
+  printf '%s must be packaged on %s; this host is %s\n' "$CRATE" "$EXPECTED_HOST" "$HOST" >&2
+  exit 1
+fi
+
+STAGING="$DIST_DIR/$CRATE-$VERSION-$TARGET"
+rm -rf "$STAGING"
+mkdir -p "$STAGING"
+
+(cd rust && cargo build --release --locked -p "$CRATE")
+cp "rust/target/release/$BINARY" "$STAGING/$BINARY"
+chmod 755 "$STAGING/$BINARY"
+
+# The unit template ships with the binary: `daemon install` renders it, so a consumer who wants to
+# inspect what will be registered before installing can read it out of the archive.
+if [[ "$CRATE" == "axon-linux" ]]; then
+  mkdir -p "$STAGING/systemd"
+  cp rust/axon-linux/systemd/axon.service.in "$STAGING/systemd/axon.service.in"
+fi
+
+sha256_of() {
+  if command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 "$1" | awk '{ print $1 }'
+  else
+    sha256sum "$1" | awk '{ print $1 }'
+  fi
+}
+
+cd "$DIST_DIR"
+BASENAME="$(basename "$STAGING")"
+if [[ "$CRATE" == "axon-win" ]]; then
+  ARCHIVE="$BASENAME.zip"
+  rm -f "$ARCHIVE"
+  if command -v zip >/dev/null 2>&1; then
+    zip -qr "$ARCHIVE" "$BASENAME"
+  elif command -v powershell >/dev/null 2>&1; then
+    powershell -NoProfile -Command "Compress-Archive -Path '$BASENAME' -DestinationPath '$ARCHIVE' -Force"
+  else
+    printf 'no zip or powershell available to build %s\n' "$ARCHIVE" >&2
+    exit 1
+  fi
+else
+  ARCHIVE="$BASENAME.tar.gz"
+  rm -f "$ARCHIVE"
+  tar -czf "$ARCHIVE" "$BASENAME"
+fi
+
+SHA256="$(sha256_of "$ARCHIVE")"
+printf '%s  %s\n' "$SHA256" "$ARCHIVE" > "$ARCHIVE.sha256"
+
+printf 'archive: %s\n' "$DIST_DIR/$ARCHIVE"
+printf 'sha256: %s\n' "$SHA256"

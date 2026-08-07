@@ -1,0 +1,19 @@
+[Unit]
+Description=Axon accessibility daemon
+Documentation=https://github.com/bleugreen/axon
+# Bound to the graphical session, not to login: AT-SPI only exists once a desktop is up, so a
+# daemon started at the greeter would have nothing to talk to. Stopping the desktop stops Axon.
+PartOf=graphical-session.target
+After=graphical-session.target
+
+[Service]
+# Type=simple because Axon does not implement sd_notify readiness. Systemd therefore considers the
+# unit started as soon as the process execs, which is earlier than Axon can serve; the CLI's
+# authenticated health round trip is the readiness contract, not this unit's state.
+Type=simple
+ExecStart=@EXEC@ serve
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=graphical-session.target

@@ -157,9 +157,17 @@ a client relies on them. Capability reporting distinguishes at least:
 The declaration must say whether each operation is usable and explain platform,
 permission, or session restrictions. Unsupported operations fail before dispatch
 and identify the missing capability; they must not silently substitute a weaker
-mechanism. The status vocabulary, reason codes, error shape, and discovery tool
-are not defined yet. They must be added once to the canonical tool surface before
-backend implementations expose them.
+mechanism.
+
+The status vocabulary is now defined once, as the `health-v1` document described
+by `schema/health-v1.schema.json` and modelled in both implementations
+(`AxonCore`'s `HealthStatus` and `axon-core::health`). It carries the complete
+capability vocabulary — one entry per known capability, so "unusable here" stays
+distinguishable from "older than your vocabulary" — alongside daemon, session,
+and permission state, each degraded entry naming a stable kebab-case reason code
+from the registry in `docs/embedding.md`. The document is what `status --json`
+emits on every platform. Backends report capabilities through the same structure
+rather than defining their own.
 
 This allows honest degradation. For example, a Wayland backend may provide
 AT-SPI capture, semantic actions, call-history serialization, and `save` while
@@ -174,6 +182,12 @@ The shared contract will be encoded as implementation-neutral fixtures covering
 tool schemas, target decoding, locator filtering/scoring outcomes, result
 envelopes, `.axn` parsing and traces, capability failures, and honest action
 results. Both the Swift and Rust implementations must run those fixtures in
-addition to backend-specific integration tests. No implementation may treat its
+addition to backend-specific integration tests.
+
+The status contract already works this way: `schema/fixtures/health/` holds the
+healthy and degraded examples, and both implementations are tested against those
+same files — round-tripping each one exactly, so a field either implementation
+silently dropped is a test failure rather than a document a consumer never meant
+to publish. No implementation may treat its
 own incidental native behavior as a shared guarantee without first changing
 this specification.

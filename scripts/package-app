@@ -10,7 +10,7 @@ else
   SWIFT="$(command -v swift)"
 fi
 
-VERSION="${AXON_VERSION:-0.1.7}"
+VERSION="${AXON_VERSION:-$("$ROOT/scripts/check-version")}"
 DIST_DIR="$ROOT/dist"
 DAEMON_APP_NAME="Axon"
 EDITOR_APP_NAME="Axon Editor"
@@ -191,7 +191,10 @@ fi
 /usr/bin/codesign "${SIGN_ARGS[@]}" "$EDITOR_APP_DIR/Contents/MacOS/AxonEditor"
 /usr/bin/codesign "${SIGN_ARGS[@]}" "$EDITOR_APP_DIR"
 
-ZIP_PATH="$DIST_DIR/Axon-$VERSION.zip"
+# Named with the version and the target, matching the Rust archives, so a consumer pinning a
+# release can name every artifact it needs without guessing. The staging directory keeps the bare
+# version so the Homebrew cask's in-archive paths stay stable.
+ZIP_PATH="$DIST_DIR/Axon-$VERSION-macos-aarch64.zip"
 STAGING_DIR="$DIST_DIR/Axon-$VERSION"
 rm -f "$ZIP_PATH"
 rm -rf "$STAGING_DIR"
@@ -233,6 +236,7 @@ elif [[ -n "${AXON_NOTARY_KEY_PATH:-}" || -n "${AXON_NOTARY_KEY_ID:-}" || -n "${
 fi
 
 SHA256="$(/usr/bin/shasum -a 256 "$ZIP_PATH" | awk '{ print $1 }')"
+printf '%s  %s\n' "$SHA256" "$(basename "$ZIP_PATH")" > "$ZIP_PATH.sha256"
 
 printf 'daemon app: %s\n' "$DAEMON_APP_DIR"
 printf 'editor app: %s\n' "$EDITOR_APP_DIR"
@@ -246,7 +250,7 @@ cask "axon" do
   version "$VERSION"
   sha256 "$SHA256"
 
-  url "https://github.com/bleugreen/axon/releases/download/v#{version}/Axon-#{version}.zip"
+  url "https://github.com/bleugreen/axon/releases/download/v#{version}/Axon-#{version}-macos-aarch64.zip"
   name "Axon"
   desc "Local macOS accessibility service for agents"
   homepage "https://github.com/bleugreen/axon"

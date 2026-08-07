@@ -1,0 +1,86 @@
+{
+  "schemaVersion": "health-v1",
+  "version": "0.1.7",
+  "platform": "windows",
+  "daemon": {
+    "running": true,
+    "ready": true,
+    "endpoint": "\\\\.\\pipe\\axon-v1",
+    "processId": 8124
+  },
+  "registration": {
+    "registered": true,
+    "mechanism": "scheduledTask",
+    "path": "C:\\Program Files\\Axon\\axon-win.exe"
+  },
+  "session": {
+    "interactive": true,
+    "graphical": true
+  },
+  "permissions": [],
+  "capabilities": [
+    {
+      "capability": "enumerate",
+      "usable": true
+    },
+    {
+      "capability": "capture",
+      "usable": true
+    },
+    {
+      "capability": "retainedHandles",
+      "usable": true
+    },
+    {
+      "capability": "observeChanges",
+      "usable": false,
+      "reason": "not-implemented"
+    },
+    {
+      "capability": "invoke",
+      "usable": true
+    },
+    {
+      "capability": "readValue",
+      "usable": true
+    },
+    {
+      "capability": "setValue",
+      "usable": true
+    },
+    {
+      "capability": "focus",
+      "usable": true
+    },
+    {
+      "capability": "scroll",
+      "usable": true
+    },
+    {
+      "capability": "pointerInput",
+      "usable": true
+    },
+    {
+      "capability": "keyboardInput",
+      "usable": true
+    },
+    {
+      "capability": "screenshot",
+      "usable": true
+    },
+    {
+      "capability": "hitTest",
+      "usable": true
+    },
+    {
+      "capability": "serializeHistory",
+      "usable": false,
+      "reason": "not-implemented"
+    },
+    {
+      "capability": "observeGlobalInput",
+      "usable": false,
+      "reason": "not-implemented"
+    }
+  ]
+}

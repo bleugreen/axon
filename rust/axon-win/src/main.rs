@@ -51,9 +51,10 @@ impl StartupLog {
 #[cfg(windows)]
 mod lifecycle {
     use super::pipe;
-    use std::{env, io, path::Path, process::Command, time::Duration};
+    use axon_core::{RegistrationHealth, ephemeral_path_warning, exit_code};
+    use axon_win::lifecycle::{TASK_NAME, registration_from_task_xml, task_action};
+    use std::{env, io, process::Command, time::Duration};
 
-    const TASK_NAME: &str = "Axon Windows Daemon";
     const SYNCHRONIZE: u32 = 0x0010_0000;
     const WAIT_OBJECT_0: u32 = 0;
     const WAIT_TIMEOUT: u32 = 258;
@@ -65,30 +66,71 @@ mod lifecycle {
         fn CloseHandle(handle: isize) -> i32;
     }
 
-    pub fn run(mut args: impl Iterator<Item = String>) -> Result<(), Box<dyn std::error::Error>> {
+    pub fn run(mut args: impl Iterator<Item = String>) -> Result<i32, Box<dyn std::error::Error>> {
         match args.next().as_deref() {
-            Some("install" | "restart") => {
+            Some("install") => {
                 stop_if_running()?;
-                register()?;
-                start()?;
+                let executable = register()?;
+                let report = start()?;
+                println!("registered {TASK_NAME:?} -> {executable}");
+                println!(
+                    "daemon ready (pid {}, version {})",
+                    report.process_id, report.version
+                );
+            }
+            Some("restart") => {
+                // Restart deliberately does not re-register. It restarts the daemon that is
+                // installed, whatever binary is asking, so restarting from a build directory
+                // cannot repoint a working installation at a path that is about to disappear.
+                let registered = registration();
+                let Some(path) = registered.path.filter(|_| registered.registered) else {
+                    return Err(format!(
+                        "{TASK_NAME:?} is not registered; run `daemon install` from the permanent install path first"
+                    )
+                    .into());
+                };
+                stop_if_running()?;
+                let report = start()?;
+                println!("restarted {TASK_NAME:?} -> {path}");
+                println!(
+                    "daemon ready (pid {}, version {})",
+                    report.process_id, report.version
+                );
             }
             Some("uninstall") => {
                 stop_if_running()?;
                 delete()?;
+                println!("unregistered {TASK_NAME:?}");
             }
             other => {
-                return Err(format!(
-                    "unknown daemon command {other:?}; expected install, restart, or uninstall"
-                )
-                .into());
+                eprintln!(
+                    "axon-win: daemon requires install, uninstall, or restart (got {other:?})"
+                );
+                return Ok(exit_code::USAGE);
             }
         }
 
-        Ok(())
+        Ok(exit_code::SUCCESS)
     }
 
-    fn register() -> io::Result<()> {
-        let executable = env::current_exe()?;
+    /// Registers the invoking executable and returns the path that was registered.
+    ///
+    /// Idempotent through `/f`, which replaces an existing task rather than failing, so a consumer
+    /// can run install on every deploy without checking first.
+    fn register() -> io::Result<String> {
+        let executable = env::current_exe()?
+            .canonicalize()
+            .unwrap_or(env::current_exe()?)
+            .display()
+            .to_string();
+        // `\\?\` is what canonicalize returns on Windows and Task Scheduler will not run it.
+        let executable = executable
+            .strip_prefix(r"\\?\")
+            .unwrap_or(&executable)
+            .to_owned();
+        if let Some(warning) = ephemeral_path_warning(&executable) {
+            eprintln!("axon-win: warning: {warning}");
+        }
         let user = command_output("whoami", &[])?;
         let action = task_action(&executable);
         command(
@@ -97,10 +139,18 @@ mod lifecycle {
                 "/create", "/tn", TASK_NAME, "/tr", &action, "/sc", "ONLOGON", "/ru", &user, "/it",
                 "/f",
             ],
-        )
+        )?;
+        Ok(executable)
     }
 
-    fn start() -> io::Result<()> {
+    /// The registration as Task Scheduler holds it, for health documents.
+    pub fn registration() -> RegistrationHealth {
+        let xml =
+            command_output("schtasks", &["/query", "/tn", TASK_NAME, "/xml"]).unwrap_or_default();
+        registration_from_task_xml(&xml)
+    }
+
+    fn start() -> io::Result<axon_core::DaemonReport> {
         command("schtasks", &["/run", "/tn", TASK_NAME])?;
         pipe::wait_until_ready(Duration::from_secs(60))
     }
@@ -127,7 +177,7 @@ mod lifecycle {
         }
     }
 
-    fn wait_for_process_exit(process_id: u32, timeout: Duration) -> io::Result<()> {
+    pub fn wait_for_process_exit(process_id: u32, timeout: Duration) -> io::Result<()> {
         let handle = unsafe { OpenProcess(SYNCHRONIZE, 0, process_id) };
         if handle == 0 {
             let error = io::Error::last_os_error();
@@ -163,10 +213,6 @@ mod lifecycle {
         }
     }
 
-    fn task_action(executable: &Path) -> String {
-        format!("\"{}\" serve", executable.display())
-    }
-
     fn command(program: &str, args: &[&str]) -> io::Result<()> {
         let output = Command::new(program).args(args).output()?;
         if output.status.success() {
@@ -199,14 +245,6 @@ mod lifecycle {
         use super::*;
 
         #[test]
-        fn scheduled_task_action_quotes_executable_paths() {
-            assert_eq!(
-                task_action(Path::new(r"C:\Program Files\Axon\axon-win.exe")),
-                r#""C:\Program Files\Axon\axon-win.exe" serve"#
-            );
-        }
-
-        #[test]
         fn busy_pipe_is_not_absent() {
             assert!(!pipe::is_daemon_absent(&io::Error::from_raw_os_error(231)));
             assert!(pipe::is_daemon_absent(&io::Error::from_raw_os_error(2)));
@@ -217,14 +255,39 @@ mod lifecycle {
 
 #[cfg(windows)]
 fn main() {
-    if let Err(error) = windows_main() {
-        eprintln!("axon-win: {error}");
-        std::process::exit(1);
+    match windows_main() {
+        Ok(code) => std::process::exit(code),
+        Err(error) => {
+            eprintln!("axon-win: {error}");
+            std::process::exit(axon_core::exit_code::FAILURE);
+        }
     }
 }
 
 #[cfg(windows)]
-fn windows_main() -> Result<(), Box<dyn std::error::Error>> {
+const USAGE: &str = "\
+usage: axon-win <command>
+
+embedding lifecycle:
+  daemon install    register this executable to start at logon, then wait for health
+  daemon uninstall  stop the daemon and remove the registration
+  daemon restart    restart the registered daemon and wait for health
+  shutdown          stop the running daemon, leaving the registration in place
+  status [--json]   describe daemon, registration, session, permissions, capabilities
+  version           print the product version
+
+`daemon install` registers the path of the executable you invoked, so run it from a permanent
+location. Installing from a build directory registers a path that disappears.
+
+other commands:
+  serve             run the UI Automation daemon on the local named pipe
+  mcp               run an MCP stdio facade backed by the daemon pipe
+  probe             run a session-1 integration probe
+";
+
+#[cfg(windows)]
+fn windows_main() -> Result<i32, Box<dyn std::error::Error>> {
+    use axon_core::exit_code;
     use axon_win::{IntegrationProbe, Router, WindowsBackend};
     let command = std::env::args().nth(1).unwrap_or_else(|| "serve".into());
     match command.as_str() {
@@ -243,10 +306,11 @@ fn windows_main() -> Result<(), Box<dyn std::error::Error>> {
             )?;
         }
         "mcp" => pipe::mcp()?,
-        "shutdown" => {
-            pipe::shutdown()?;
-        }
-        "daemon" => lifecycle::run(std::env::args().skip(2))?,
+        "shutdown" => status::shutdown()?,
+        "daemon" => return lifecycle::run(std::env::args().skip(2)),
+        "status" => return status::run(&std::env::args().skip(2).collect::<Vec<_>>()),
+        "version" | "--version" => println!("{}", env!("CARGO_PKG_VERSION")),
+        "help" | "--help" | "-h" => print!("{USAGE}"),
         "probe" => {
             let args = std::env::args().skip(2).collect::<Vec<_>>();
             println!(
@@ -255,13 +319,173 @@ fn windows_main() -> Result<(), Box<dyn std::error::Error>> {
             )
         }
         other => {
-            return Err(format!(
-                "unknown subcommand {other:?}; expected serve, mcp, shutdown, daemon, or probe"
-            )
-            .into());
+            eprintln!("axon-win: unknown subcommand {other:?}\n\n{USAGE}");
+            return Ok(exit_code::USAGE);
         }
     }
-    Ok(())
+    Ok(exit_code::SUCCESS)
+}
+
+/// The session this process occupies, as Windows reports it.
+#[cfg(windows)]
+fn current_session() -> axon_core::SessionHealth {
+    use axon_win::lifecycle::session_health;
+
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn ProcessIdToSessionId(process_id: u32, session_id: *mut u32) -> i32;
+    }
+    #[link(name = "user32")]
+    unsafe extern "system" {
+        fn GetProcessWindowStation() -> isize;
+        fn GetUserObjectInformationW(
+            object: isize,
+            index: i32,
+            info: *mut std::ffi::c_void,
+            length: u32,
+            needed: *mut u32,
+        ) -> i32;
+    }
+    const UOI_NAME: i32 = 2;
+
+    let mut session_id = 0u32;
+    if unsafe { ProcessIdToSessionId(std::process::id(), &mut session_id) } == 0 {
+        session_id = 0;
+    }
+
+    let station = (|| {
+        let handle = unsafe { GetProcessWindowStation() };
+        if handle == 0 {
+            return None;
+        }
+        let mut buffer = [0u16; 256];
+        let mut needed = 0u32;
+        let ok = unsafe {
+            GetUserObjectInformationW(
+                handle,
+                UOI_NAME,
+                buffer.as_mut_ptr().cast(),
+                (buffer.len() * 2) as u32,
+                &mut needed,
+            )
+        };
+        if ok == 0 {
+            return None;
+        }
+        let length = buffer.iter().position(|unit| *unit == 0).unwrap_or(0);
+        Some(String::from_utf16_lossy(&buffer[..length]))
+    })();
+
+    session_health(session_id, station.as_deref())
+}
+
+#[cfg(windows)]
+mod status {
+    use super::{current_session, lifecycle, pipe};
+    use axon_core::{HealthReport, exit_code};
+    use axon_win::lifecycle::{incompatible, not_running};
+    use std::io;
+
+    pub fn run(args: &[String]) -> Result<i32, Box<dyn std::error::Error>> {
+        let json = args.iter().any(|arg| arg == "--json");
+        if let Some(unexpected) = args.iter().find(|arg| *arg != "--json") {
+            eprintln!("axon-win: unexpected status argument: {unexpected}");
+            return Ok(exit_code::USAGE);
+        }
+
+        let report = current();
+        if json {
+            println!("{}", serde_json::to_string(&report)?);
+        } else {
+            print_human(&report);
+        }
+        // Describing a machine honestly is a success even when what it describes is degraded.
+        Ok(exit_code::SUCCESS)
+    }
+
+    /// Builds the published document.
+    ///
+    /// The daemon authors what only it knows. Registration is read from Task Scheduler here
+    /// because the daemon process does not own that fact, and the session falls back to this
+    /// process only when no daemon could report its own.
+    fn current() -> HealthReport {
+        let registration = lifecycle::registration();
+        match pipe::daemon_health() {
+            Ok(report) => HealthReport::running(report, registration),
+            Err(error) if error.kind() == io::ErrorKind::InvalidData => {
+                incompatible(registration, current_session(), Some(error.to_string()))
+            }
+            Err(error) => not_running(registration, current_session(), Some(error.to_string())),
+        }
+    }
+
+    /// Stops the running daemon while leaving the registration in place.
+    ///
+    /// Only an absent pipe counts as an already-reached end state. A daemon that acknowledges
+    /// shutdown is then waited for, because the acknowledgement is sent before the UI Automation
+    /// thread joins and the COM apartment is torn down; reporting a stop before the process is
+    /// gone is how a relaunch races the next lifecycle command.
+    pub fn shutdown() -> Result<(), Box<dyn std::error::Error>> {
+        match pipe::shutdown() {
+            Ok(process_id) => {
+                lifecycle::wait_for_process_exit(process_id, std::time::Duration::from_secs(10))?;
+                println!("stopped daemon (pid {process_id}); registration left in place")
+            }
+            Err(error) if pipe::is_daemon_absent(&error) => {
+                println!("no daemon was running; registration left in place")
+            }
+            Err(error) => return Err(error.into()),
+        }
+        Ok(())
+    }
+
+    fn print_human(report: &HealthReport) {
+        println!("Version:        {}", report.version);
+        println!(
+            "Daemon:         {}",
+            match (report.daemon.running, report.daemon.ready) {
+                (true, true) => "ready".to_owned(),
+                (true, false) => "running, not ready".to_owned(),
+                _ => format!(
+                    "not running ({})",
+                    report.daemon.reason.as_deref().unwrap_or("unknown")
+                ),
+            }
+        );
+        println!("Endpoint:       {}", report.daemon.endpoint);
+        println!(
+            "Registration:   {}",
+            report
+                .registration
+                .path
+                .as_deref()
+                .unwrap_or("not registered")
+        );
+        println!(
+            "Session:        {}",
+            match (report.session.interactive, report.session.graphical) {
+                (_, true) => "interactive desktop".to_owned(),
+                _ => format!(
+                    "degraded ({})",
+                    report.session.reason.as_deref().unwrap_or("unknown")
+                ),
+            }
+        );
+        let unusable = report
+            .capabilities
+            .iter()
+            .filter(|state| !state.usable)
+            .map(|state| state.capability.as_str())
+            .collect::<Vec<_>>();
+        println!(
+            "Unusable:       {}",
+            if unusable.is_empty() {
+                "none".to_owned()
+            } else {
+                unusable.join(", ")
+            }
+        );
+    }
 }
 
 #[cfg(windows)]
@@ -506,9 +730,22 @@ mod pipe {
                 let shutdown =
                     matches!(&parsed, Ok(req) if req.method == "shutdown" && req.id.is_some());
                 let response = match parsed {
-                    Ok(req) if req.method == "health" => req
-                        .id
-                        .map(|id| axon_core::JsonRpcResponse::success(id, json!({"ready": true}))),
+                    // Answering health at all means UI Automation finished initializing, because
+                    // the router only exists after it does; the pipe binds earlier so a stalled
+                    // startup stays observable, and a request arriving in that window is refused
+                    // rather than answered as ready.
+                    Ok(req) if req.method == "health" => req.id.map(|id| {
+                        let capabilities = router.capabilities().unwrap_or_default();
+                        axon_core::JsonRpcResponse::success(
+                            id,
+                            serde_json::to_value(axon_win::lifecycle::daemon_report(
+                                std::process::id(),
+                                &capabilities,
+                                super::current_session(),
+                            ))
+                            .unwrap_or(Value::Null),
+                        )
+                    }),
                     Ok(req) if shutdown => req.id.map(|id| {
                         axon_core::JsonRpcResponse::success(
                             id,
@@ -568,14 +805,18 @@ mod pipe {
             .ok_or_else(|| io::Error::other(format!("daemon rejected shutdown: {response}")))
     }
 
-    pub fn wait_until_ready(timeout: Duration) -> io::Result<()> {
-        wait_until_ready_with(timeout, Arc::new(health))
+    /// Waits for a successful health round trip.
+    ///
+    /// A pipe that exists proves only that some process created it, which is exactly what a
+    /// half-started daemon leaves behind. Answering is the readiness contract.
+    pub fn wait_until_ready(timeout: Duration) -> io::Result<axon_core::DaemonReport> {
+        wait_until_ready_with(timeout, Arc::new(daemon_health))
     }
 
-    fn wait_until_ready_with(
+    fn wait_until_ready_with<T: Send + 'static>(
         timeout: Duration,
-        health: Arc<dyn Fn() -> io::Result<()> + Send + Sync>,
-    ) -> io::Result<()> {
+        health: Arc<dyn Fn() -> io::Result<T> + Send + Sync>,
+    ) -> io::Result<T> {
         let start = Instant::now();
         loop {
             let Some(remaining) = timeout.checked_sub(start.elapsed()) else {
@@ -590,7 +831,7 @@ mod pipe {
                 let _ = tx.send(health());
             });
             match rx.recv_timeout(remaining) {
-                Ok(Ok(())) => return Ok(()),
+                Ok(Ok(value)) => return Ok(value),
                 Ok(Err(_)) => thread::sleep(Duration::from_millis(50).min(remaining)),
                 Err(mpsc::RecvTimeoutError::Timeout) => {
                     return Err(io::Error::new(
@@ -642,20 +883,43 @@ mod pipe {
             assert_eq!(error.kind(), io::ErrorKind::TimedOut);
             assert!(started.elapsed() < Duration::from_millis(250));
         }
+
+        #[test]
+        fn readiness_refuses_a_daemon_that_answers_without_being_ready() {
+            // The AXN-45 distinction, kept: a pipe that answers is not the same as a backend that
+            // finished starting, and only the second one may satisfy a lifecycle command.
+            let unready = json!({"result": {
+                "version": "0.1.7", "platform": "windows", "ready": false, "processId": 1,
+                "endpoint": r"\\.\pipe\axon-v1",
+                "session": {"interactive": true, "graphical": true},
+                "permissions": [], "capabilities": []
+            }});
+            let report: axon_core::DaemonReport =
+                serde_json::from_value(unready["result"].clone()).unwrap();
+
+            assert!(!report.ready);
+        }
     }
 
-    fn health() -> io::Result<()> {
+    /// Asks the running daemon to describe itself.
+    pub fn daemon_health() -> io::Result<axon_core::DaemonReport> {
         let response = send_rpc(&JsonRpcRequest::new(
             Some(JsonRpcId::Integer(1)),
             "health",
             Some(json!({})),
         ))?;
-        if response.pointer("/result/ready").and_then(Value::as_bool) == Some(true) {
-            Ok(())
+        let result = response
+            .get("result")
+            .cloned()
+            .ok_or_else(|| io::Error::other(format!("daemon rejected health check: {response}")))?;
+        // InvalidData rather than a generic error: a daemon that answers unintelligibly is a
+        // running daemon of another version, and the caller reports that differently from silence.
+        let report: axon_core::DaemonReport = serde_json::from_value(result)
+            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
+        if report.ready {
+            Ok(report)
         } else {
-            Err(io::Error::other(format!(
-                "daemon rejected health check: {response}"
-            )))
+            Err(io::Error::other("daemon is not ready to serve requests"))
         }
     }
 

@@ -1,12 +1,18 @@
+# A release is one product version built natively on three platforms and published together.
+#
+# The tag is the release identity and must agree with the checked-in VERSION file; a tag that
+# disagrees is rejected rather than quietly producing artifacts named after something else.
+# Publishing is a separate job that runs only after all three native builds succeed, so a release
+# can never exist with two of its three targets missing.
 name: Release
 
 on:
   workflow_dispatch:
     inputs:
-      version:
-        description: Version to release, without the leading v
-        required: true
-        default: 0.1.7
+      publish:
+        description: Publish a GitHub release. Leave unchecked for a dry run.
+        type: boolean
+        default: false
   push:
     tags:
       - "v*"
@@ -15,58 +21,51 @@ permissions:
   contents: write
 
 jobs:
-  release:
-    name: Build, notarize, and publish
-    runs-on: macos-15
+  version:
+    name: Resolve version
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.resolve.outputs.version }}
+      tag: ${{ steps.resolve.outputs.tag }}
+      publish: ${{ steps.resolve.outputs.publish }}
+    steps:
+      - uses: actions/checkout@v4
 
+      - name: Resolve and verify the release version
+        id: resolve
+        run: |
+          set -euo pipefail
+          VERSION="$(./scripts/check-version)"
+          if [[ "$GITHUB_EVENT_NAME" == "push" ]]; then
+            TAG="$GITHUB_REF_NAME"
+            # The tag names the release, so a tag that disagrees with VERSION is a mistake to
+            # surface rather than a value to prefer.
+            ./scripts/check-version --tag "$TAG"
+            PUBLISH=true
+          else
+            TAG="v$VERSION"
+            PUBLISH="${{ inputs.publish }}"
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "publish=$PUBLISH" >> "$GITHUB_OUTPUT"
+
+  macos:
+    name: Build macOS
+    needs: version
+    runs-on: macos-15
     env:
       APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
       APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
       APPLE_API_KEY: ${{ secrets.APPLE_API_KEY }}
       APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
       APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
-      PUBLIC_RELEASE_PAT: ${{ secrets.PUBLIC_RELEASE_PAT }}
-
     steps:
-      - name: Check out Axon
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Set up Swift
-        uses: swift-actions/setup-swift@v2
+      - uses: swift-actions/setup-swift@v2
         with:
           swift-version: "6.2"
-
-      - name: Show Swift version
-        run: swift --version
-
-      - name: Resolve release version
-        id: release
-        env:
-          INPUT_VERSION: ${{ inputs.version }}
-        run: |
-          set -euo pipefail
-          if [[ "$GITHUB_EVENT_NAME" == "workflow_dispatch" ]]; then
-            VERSION="$INPUT_VERSION"
-            TAG="v$VERSION"
-          else
-            TAG="$GITHUB_REF_NAME"
-            VERSION="${TAG#v}"
-          fi
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
-
-      - name: Create manual release tag
-        if: github.event_name == 'workflow_dispatch'
-        env:
-          TAG: ${{ steps.release.outputs.tag }}
-        run: |
-          set -euo pipefail
-          if git ls-remote --exit-code origin "refs/tags/$TAG" >/dev/null 2>&1; then
-            echo "::error::Tag $TAG already exists. Bump the release version instead of overwriting an existing release."
-            exit 1
-          fi
-          git tag "$TAG" "$GITHUB_SHA"
-          git push origin "refs/tags/$TAG"
 
       - name: Check release secrets
         run: |
@@ -111,7 +110,6 @@ jobs:
 
       - name: Build, sign, notarize, and staple
         env:
-          AXON_VERSION: ${{ steps.release.outputs.version }}
           AXON_NOTARY_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
           AXON_NOTARY_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
         run: |
@@ -122,37 +120,153 @@ jobs:
           spctl -a -vvv -t install "dist/Axon.app"
           spctl -a -vvv -t install "dist/Axon Editor.app"
 
-      - name: Upload build artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: Axon-${{ steps.release.outputs.version }}
-          path: dist/Axon-${{ steps.release.outputs.version }}.zip
-          if-no-files-found: error
-
-      - name: Publish GitHub release
+      - name: Verify the packaged CLI reports the release version
         env:
-          GH_TOKEN: ${{ github.token }}
-          TAG: ${{ steps.release.outputs.tag }}
-          VERSION: ${{ steps.release.outputs.version }}
+          VERSION: ${{ needs.version.outputs.version }}
         run: |
           set -euo pipefail
-          ZIP_PATH="dist/Axon-$VERSION.zip"
+          PACKAGED="dist/Axon.app/Contents/Resources/bin/axon"
+          ACTUAL="$("$PACKAGED" version)"
+          if [[ "$ACTUAL" != "$VERSION" ]]; then
+            echo "::error::packaged CLI reports $ACTUAL, expected $VERSION"
+            exit 1
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos
+          path: |
+            dist/Axon-${{ needs.version.outputs.version }}-macos-aarch64.zip
+            dist/Axon-${{ needs.version.outputs.version }}-macos-aarch64.zip.sha256
+          if-no-files-found: error
+
+  windows:
+    name: Build Windows
+    needs: version
+    runs-on: windows-latest
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Package axon-win
+        run: ./scripts/package-rust axon-win
+
+      - name: Verify the packaged daemon reports the release version
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          ACTUAL="$(dist/axon-win-$VERSION-windows-x86_64/axon-win.exe version)"
+          if [[ "$ACTUAL" != "$VERSION" ]]; then
+            echo "::error::packaged axon-win reports $ACTUAL, expected $VERSION"
+            exit 1
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: |
+            dist/axon-win-${{ needs.version.outputs.version }}-windows-x86_64.zip
+            dist/axon-win-${{ needs.version.outputs.version }}-windows-x86_64.zip.sha256
+          if-no-files-found: error
+
+  linux:
+    name: Build Linux
+    needs: version
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+
+      - name: Install AT-SPI build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libdbus-1-dev pkg-config
+
+      - name: Package axon-linux
+        run: ./scripts/package-rust axon-linux
+
+      - name: Verify the packaged daemon reports the release version
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          ACTUAL="$(dist/axon-linux-$VERSION-linux-x86_64/axon-linux version)"
+          if [[ "$ACTUAL" != "$VERSION" ]]; then
+            echo "::error::packaged axon-linux reports $ACTUAL, expected $VERSION"
+            exit 1
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux
+          path: |
+            dist/axon-linux-${{ needs.version.outputs.version }}-linux-x86_64.tar.gz
+            dist/axon-linux-${{ needs.version.outputs.version }}-linux-x86_64.tar.gz.sha256
+          if-no-files-found: error
+
+  publish:
+    name: Publish release
+    needs: [version, macos, windows, linux]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Verify every target is present with a checksum
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          mkdir -p release
+          find artifacts -type f -exec mv {} release/ \;
+          MISSING=0
+          for NAME in \
+            "Axon-$VERSION-macos-aarch64.zip" \
+            "axon-win-$VERSION-windows-x86_64.zip" \
+            "axon-linux-$VERSION-linux-x86_64.tar.gz"; do
+            if [[ ! -f "release/$NAME" || ! -f "release/$NAME.sha256" ]]; then
+              echo "::error::missing artifact or checksum for $NAME"
+              MISSING=1
+            fi
+          done
+          [[ "$MISSING" == "0" ]]
+          cd release
+          # Re-verify rather than trust the producing job: the checksum a consumer will use has to
+          # match the bytes that actually reach the release.
+          sha256sum -c ./*.sha256
+
+      - name: Publish GitHub release
+        if: needs.version.outputs.publish == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ needs.version.outputs.tag }}
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          set -euo pipefail
           if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release upload "$TAG" "$ZIP_PATH" --repo "$GITHUB_REPOSITORY" --clobber
+            gh release upload "$TAG" release/* --repo "$GITHUB_REPOSITORY" --clobber
           else
-            gh release create "$TAG" "$ZIP_PATH" \
+            gh release create "$TAG" release/* \
               --repo "$GITHUB_REPOSITORY" \
               --title "Axon $VERSION" \
               --generate-notes
           fi
 
       - name: Publish Homebrew cask
-        if: env.PUBLIC_RELEASE_PAT != ''
+        if: needs.version.outputs.publish == 'true' && env.PUBLIC_RELEASE_PAT != ''
         env:
-          VERSION: ${{ steps.release.outputs.version }}
+          PUBLIC_RELEASE_PAT: ${{ secrets.PUBLIC_RELEASE_PAT }}
+          VERSION: ${{ needs.version.outputs.version }}
         run: |
           set -euo pipefail
-          SHA256="$(shasum -a 256 "dist/Axon-$VERSION.zip" | awk '{ print $1 }')"
+          SHA256="$(awk '{ print $1 }' "release/Axon-$VERSION-macos-aarch64.zip.sha256")"
           TAP_DIR="$RUNNER_TEMP/homebrew-tap"
 
           git clone "https://x-access-token:${PUBLIC_RELEASE_PAT}@github.com/bleugreen/homebrew-tap.git" "$TAP_DIR"
@@ -167,7 +281,7 @@ jobs:
             version "$VERSION"
             sha256 "$SHA256"
 
-            url "https://github.com/bleugreen/axon/releases/download/v#{version}/Axon-#{version}.zip"
+            url "https://github.com/bleugreen/axon/releases/download/v#{version}/Axon-#{version}-macos-aarch64.zip"
             name "Axon"
             desc "Local macOS accessibility service for agents"
             homepage "https://github.com/bleugreen/axon"
@@ -185,16 +299,6 @@ jobs:
           end
           CASK
 
-          if [[ ! -f README.md ]]; then
-            cat > README.md <<README
-          # bleugreen/homebrew-tap
-
-          ```sh
-          brew install --cask bleugreen/tap/axon
-          ```
-          README
-          fi
-
-          git add Casks/axon.rb README.md
+          git add Casks/axon.rb
           git commit -m "Update axon cask to $VERSION" || exit 0
           git push origin main

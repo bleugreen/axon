@@ -47,6 +47,7 @@ final class AxonDaemonAppDelegate: NSObject, NSApplicationDelegate, @unchecked S
         appRecency.start()
         configureStatusItem()
         ScreenCaptureRuntime.bootstrapSynchronously()
+        Doctor.warmUp()
         startServer()
         installMenu()
         refreshTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
@@ -612,15 +613,6 @@ private final class RecordingAppRecencyStore {
             return
         }
         UserDefaults.standard.set(data, forKey: defaultsKey)
-    }
-}
-
-private extension JSONValue {
-    var stringValue: String? {
-        guard case let .string(value) = self else {
-            return nil
-        }
-        return value
     }
 }
 

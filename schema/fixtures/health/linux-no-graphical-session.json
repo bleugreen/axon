@@ -1,0 +1,107 @@
+{
+  "schemaVersion": "health-v1",
+  "version": "0.1.7",
+  "platform": "linux",
+  "daemon": {
+    "running": false,
+    "ready": false,
+    "endpoint": "/run/user/1000/axon-v1.sock",
+    "reason": "daemon-not-running",
+    "detail": "axon.service is enabled but graphical-session.target has not been reached"
+  },
+  "registration": {
+    "registered": true,
+    "mechanism": "systemdUser",
+    "path": "/opt/axon/0.1.7/axon-linux"
+  },
+  "session": {
+    "interactive": true,
+    "graphical": false,
+    "reason": "no-graphical-session",
+    "detail": "No WAYLAND_DISPLAY or DISPLAY is present; the host is at the login greeter"
+  },
+  "permissions": [
+    {
+      "name": "accessibilityBus",
+      "granted": false,
+      "reason": "atspi-unavailable"
+    }
+  ],
+  "capabilities": [
+    {
+      "capability": "enumerate",
+      "usable": false,
+      "reason": "daemon-not-running"
+    },
+    {
+      "capability": "capture",
+      "usable": false,
+      "reason": "daemon-not-running"
+    },
+    {
+      "capability": "retainedHandles",
+      "usable": false,
+      "reason": "daemon-not-running"
+    },
+    {
+      "capability": "observeChanges",
+      "usable": false,
+      "reason": "daemon-not-running"
+    },
+    {
+      "capability": "invoke",
+      "usable": false,
+      "reason": "daemon-not-running"
+    },
+    {
+      "capability": "readValue",
+      "usable": false,
+      "reason": "daemon-not-running"
+    },
+    {
+      "capability": "setValue",
+      "usable": false,
+      "reason": "daemon-not-running"
+    },
+    {
+      "capability": "focus",
+      "usable": false,
+      "reason": "daemon-not-running"
+    },
+    {
+      "capability": "scroll",
+      "usable": false,
+      "reason": "daemon-not-running"
+    },
+    {
+      "capability": "pointerInput",
+      "usable": false,
+      "reason": "daemon-not-running"
+    },
+    {
+      "capability": "keyboardInput",
+      "usable": false,
+      "reason": "daemon-not-running"
+    },
+    {
+      "capability": "screenshot",
+      "usable": false,
+      "reason": "daemon-not-running"
+    },
+    {
+      "capability": "hitTest",
+      "usable": false,
+      "reason": "daemon-not-running"
+    },
+    {
+      "capability": "serializeHistory",
+      "usable": false,
+      "reason": "daemon-not-running"
+    },
+    {
+      "capability": "observeGlobalInput",
+      "usable": false,
+      "reason": "daemon-not-running"
+    }
+  ]
+}

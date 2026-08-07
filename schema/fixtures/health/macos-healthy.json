@@ -1,0 +1,92 @@
+{
+  "schemaVersion": "health-v1",
+  "version": "0.1.7",
+  "platform": "macos",
+  "daemon": {
+    "running": true,
+    "ready": true,
+    "endpoint": "/tmp/axon.sock",
+    "processId": 4210
+  },
+  "registration": {
+    "registered": true,
+    "mechanism": "launchd",
+    "path": "/Applications/Axon.app/Contents/Resources/bin/axon"
+  },
+  "session": {
+    "interactive": true,
+    "graphical": true
+  },
+  "permissions": [
+    {
+      "name": "accessibility",
+      "granted": true
+    },
+    {
+      "name": "screenRecording",
+      "granted": true
+    }
+  ],
+  "capabilities": [
+    {
+      "capability": "enumerate",
+      "usable": true
+    },
+    {
+      "capability": "capture",
+      "usable": true
+    },
+    {
+      "capability": "retainedHandles",
+      "usable": true
+    },
+    {
+      "capability": "observeChanges",
+      "usable": true
+    },
+    {
+      "capability": "invoke",
+      "usable": true
+    },
+    {
+      "capability": "readValue",
+      "usable": true
+    },
+    {
+      "capability": "setValue",
+      "usable": true
+    },
+    {
+      "capability": "focus",
+      "usable": true
+    },
+    {
+      "capability": "scroll",
+      "usable": true
+    },
+    {
+      "capability": "pointerInput",
+      "usable": true
+    },
+    {
+      "capability": "keyboardInput",
+      "usable": true
+    },
+    {
+      "capability": "screenshot",
+      "usable": true
+    },
+    {
+      "capability": "hitTest",
+      "usable": true
+    },
+    {
+      "capability": "serializeHistory",
+      "usable": true
+    },
+    {
+      "capability": "observeGlobalInput",
+      "usable": true
+    }
+  ]
+}

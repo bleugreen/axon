@@ -1,0 +1,101 @@
+{
+  "schemaVersion": "health-v1",
+  "version": "0.1.7",
+  "platform": "windows",
+  "daemon": {
+    "running": false,
+    "ready": false,
+    "endpoint": "\\\\.\\pipe\\axon-v1",
+    "reason": "daemon-not-running",
+    "detail": "The named pipe has no listening daemon"
+  },
+  "registration": {
+    "registered": true,
+    "mechanism": "scheduledTask",
+    "path": "C:\\Program Files\\Axon\\axon-win.exe"
+  },
+  "session": {
+    "interactive": false,
+    "graphical": false,
+    "reason": "not-interactive-session",
+    "detail": "Running in session 0; UI Automation requires the logged-in desktop session"
+  },
+  "permissions": [],
+  "capabilities": [
+    {
+      "capability": "enumerate",
+      "usable": false,
+      "reason": "daemon-not-running"
+    },
+    {
+      "capability": "capture",
+      "usable": false,
+      "reason": "daemon-not-running"
+    },
+    {
+      "capability": "retainedHandles",
+      "usable": false,
+      "reason": "daemon-not-running"
+    },
+    {
+      "capability": "observeChanges",
+      "usable": false,
+      "reason": "daemon-not-running"
+    },
+    {
+      "capability": "invoke",
+      "usable": false,
+      "reason": "daemon-not-running"
+    },
+    {
+      "capability": "readValue",
+      "usable": false,
+      "reason": "daemon-not-running"
+    },
+    {
+      "capability": "setValue",
+      "usable": false,
+      "reason": "daemon-not-running"
+    },
+    {
+      "capability": "focus",
+      "usable": false,
+      "reason": "daemon-not-running"
+    },
+    {
+      "capability": "scroll",
+      "usable": false,
+      "reason": "daemon-not-running"
+    },
+    {
+      "capability": "pointerInput",
+      "usable": false,
+      "reason": "daemon-not-running"
+    },
+    {
+      "capability": "keyboardInput",
+      "usable": false,
+      "reason": "daemon-not-running"
+    },
+    {
+      "capability": "screenshot",
+      "usable": false,
+      "reason": "daemon-not-running"
+    },
+    {
+      "capability": "hitTest",
+      "usable": false,
+      "reason": "daemon-not-running"
+    },
+    {
+      "capability": "serializeHistory",
+      "usable": false,
+      "reason": "daemon-not-running"
+    },
+    {
+      "capability": "observeGlobalInput",
+      "usable": false,
+      "reason": "daemon-not-running"
+    }
+  ]
+}

@@ -21,7 +21,7 @@ With no arguments, `axon` launches `Axon.app`, checks the local socket, and requ
 The release artifact is a signed and preferably notarized zip:
 
 ```text
-Axon-<version>.zip
+Axon-<version>-macos-aarch64.zip
 └── Axon-<version>
     ├── Axon.app
     │   └── Contents
@@ -65,8 +65,13 @@ The script writes:
 ```text
 dist/Axon.app
 dist/Axon Editor.app
-dist/Axon-0.1.7.zip
+dist/Axon-0.1.7-macos-aarch64.zip
+dist/Axon-0.1.7-macos-aarch64.zip.sha256
 ```
+
+The version comes from the repository-root `VERSION` file. Archives are named with the version and
+the target so a consumer pinning a release can name the artifact it wants; see
+[Embedding Axon](embedding.md).
 
 It also prints the SHA-256 and a Homebrew cask stanza for `bleugreen/tap`.
 
@@ -101,7 +106,7 @@ cask "axon" do
   version "0.1.7"
   sha256 "<printed by scripts/package-app>"
 
-  url "https://github.com/bleugreen/axon/releases/download/v#{version}/Axon-#{version}.zip"
+  url "https://github.com/bleugreen/axon/releases/download/v#{version}/Axon-#{version}-macos-aarch64.zip"
   name "Axon"
   desc "Local macOS accessibility service for agents"
   homepage "https://github.com/bleugreen/axon"
@@ -121,24 +126,41 @@ end
 
 ## Runtime Commands
 
+For a person setting Axon up on their own Mac:
+
 ```sh
-axon
-axon start
-axon status
-axon mcp
-axon restart
-axon quit
+axon           # launch Axon.app and request permissions when needed
+axon start     # launch the installed Axon.app menu bar service
+axon status    # describe the daemon, permissions, and capabilities
+axon mcp       # the stdio MCP entrypoint clients run
 ```
 
 `axon setup` remains an explicit alias for no-arg `axon` for scripts that prefer named commands.
 
-The lower-level development socket server still exists:
+For a consumer embedding Axon in something else, the CLI-managed daemon lifecycle is a separate
+path from the menu bar app. See [Embedding Axon](embedding.md) for the full contract:
+
+```sh
+axon daemon install     # register this executable to start at login, then wait for health
+axon daemon restart
+axon daemon uninstall
+axon shutdown           # stop the daemon, keep the registration
+axon status --json      # the machine-readable health-v1 document
+axon version
+```
+
+The two are distinct on purpose. `Axon.app` is the ordinary user experience: a visible menu bar
+service to inspect, quit, and approve. The `daemon` verbs register the invoking executable with
+launchd so a consumer can manage Axon without a person in the loop; because they register the
+invoking path, they must be run from a permanent location.
+
+The lower-level socket server still exists:
 
 ```sh
 axon serve
 ```
 
-That mode is useful for debugging, but it is not the deployed product center.
+That is what the LaunchAgent runs, and it is useful directly when debugging.
 
 ## Register with an Agent
 
@@ -180,15 +202,23 @@ ScreenCaptureKit may also prompt when screenshot capture is first used.
 
 ## Troubleshooting
 
-`Socket: unreachable` means `Axon.app` is not running or could not bind `/tmp/axon.sock`. Run `axon start`, then `axon status`.
+`axon status` names what is wrong, and `axon status --json` gives the same answer with stable
+reason codes. Both exit 0 whatever they find, because describing a broken machine correctly is a
+success.
 
-`Accessibility: denied` means macOS has not approved the `com.bleugreen.axon` app identity.
+`Daemon: not running` means nothing answered on `/tmp/axon.sock`. Run `axon start` for the menu
+bar app, or `axon daemon restart` for the CLI-managed daemon.
 
-If an old development LaunchAgent is still running, stop it before testing `Axon.app`:
+`Daemon: running, not ready (version-skew)` means a daemon is serving but is a different version
+from the CLI asking it. That is what an upgrade in place looks like before a restart; run
+`axon daemon restart`.
 
-```sh
-swift run axon daemon stop
-```
+`accessibility: not granted` means macOS has not approved the `com.bleugreen.axon` app identity.
+Approve it in System Settings > Privacy & Security > Accessibility. `screenRecording: not granted`
+costs screenshots and nothing else.
+
+Only one daemon can serve the socket. A second `axon serve` refuses to start rather than taking
+the endpoint away from the running one.
 
 ## Development
 
@@ -200,12 +230,6 @@ make test
 AXON_SOCKET_PATH=/tmp/axon.sock swift run axon serve
 ```
 
-A legacy LaunchAgent installer remains for daemon experiments. It is not the deployed product path, but is useful for short-loop development without rebuilding the app bundle:
-
-```sh
-swift run axon daemon install
-swift run axon daemon start
-swift run axon daemon stop
-```
-
-For the installed product, prefer `Axon.app` — it gives the user a visible service to inspect, quit, restart, and approve.
+`make install-daemon` registers the LaunchAgent against `.build/debug/axon` for a short
+development loop. That is a build directory, so the CLI warns: the registration stops working the
+moment the build is cleaned. Never install that way for real.

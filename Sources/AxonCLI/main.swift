@@ -19,6 +19,7 @@ do {
 
     case "serve":
         ScreenCaptureRuntime.bootstrapSynchronously()
+        Doctor.warmUp()
         print("axon serving on \(socketPath)")
         fflush(stdout)
         serveUntilTerminated(socketPath: socketPath)
@@ -34,28 +35,19 @@ do {
         try openAxnEditor(arguments: arguments)
 
     case "status":
-        try printHumanStatus()
+        try printStatus(arguments: arguments)
 
     case "bootstrap", "setup":
         try runSetup()
 
-    case "quit":
-        quitAxonApp()
-        print("quit Axon.app")
-
-    case "restart":
-        quitAxonApp()
-        Thread.sleep(forTimeInterval: 0.5)
-        try launchAxonApp()
-        print("restarted Axon.app")
-
     case "daemon":
         try handleDaemonCommand(arguments: arguments)
 
-    case "health":
-        let response = try SocketClient(path: socketPath)
-            .send(JSONRPCRequest(id: .string("health"), method: "health"))
-        try printResponse(response)
+    case "shutdown":
+        try shutdownDaemon()
+
+    case "version", "--version":
+        print(AxonVersion.current)
 
     case "wait_for_stability":
         let response = try SocketClient(path: socketPath, responseTimeoutSeconds: SocketClient.defaultRunResponseTimeoutSeconds)
@@ -207,6 +199,17 @@ do {
         print("""
         usage: axon [command]
 
+        embedding lifecycle:
+          daemon install    register this executable to start at login, then wait for health
+          daemon uninstall  stop the daemon and remove the registration
+          daemon restart    restart the registered daemon and wait for health
+          shutdown          stop the running daemon, leaving the registration in place
+          status [--json]   describe daemon, registration, session, permissions, capabilities
+          version           print the product version
+
+        `daemon install` registers the path of the executable you invoked, so run it from a
+        permanent location. Installing from a build directory registers a path that disappears.
+
         commands:
           axon     launch Axon.app and request permissions when needed
           doctor   check local permissions
@@ -215,12 +218,7 @@ do {
           start    launch the installed Axon.app menu bar service
           edit <path.axn>
                   open an axn file in the visual editor
-          status   print app-backed daemon status
           setup    launch Axon.app and request permissions when needed
-          quit     quit the installed Axon.app service
-          restart  restart the installed Axon.app service
-          daemon <install|start|stop|status|uninstall>
-          health   request daemon health over the local socket
           permit   ask macOS to approve the running daemon identity
           refresh-secrets [--json]
                    refresh the active credential redaction index from 1Password
@@ -230,6 +228,9 @@ do {
     default:
         throw CLIError.missingArguments("unknown command: \(command)")
     }
+} catch let error as CLIError {
+    fputs("axon: \(error)\n", stderr)
+    exit(error.exitCode)
 } catch {
     fputs("axon: \(error)\n", stderr)
     exit(1)
@@ -573,41 +574,21 @@ private func printResponse(_ response: JSONRPCResponse) throws {
 
 private func runSetup() throws {
     try launchAxonApp()
-    _ = try? waitForDaemonHealth(socketPath: socketPath, timeoutSeconds: 5)
-    let health = try SocketClient(path: socketPath, responseTimeoutSeconds: 2)
-        .send(JSONRPCRequest(id: .string("setup-health"), method: "health"))
-    if health.result?["accessibility"].flatMap(stringValue) != PermissionStatus.trusted.rawValue {
+    let report = try? waitForDaemonReport(timeoutSeconds: 5)
+    if report?.permissions.first(where: { $0.name == HealthPermission.accessibility })?.granted != true {
         _ = try SocketClient(path: socketPath)
             .send(JSONRPCRequest(id: .string("permit"), method: "permit"))
     }
-    try printSetupStatus()
+    printSetupStatus()
 }
 
-private func printHumanStatus() throws {
-    do {
-        let health = try SocketClient(path: socketPath, responseTimeoutSeconds: 2)
-            .send(JSONRPCRequest(id: .string("status"), method: "health"))
-        let accessibility = health.result?["accessibility"].flatMap(stringValue) ?? "unknown"
-        print("Axon.app: \(isAxonAppRunning() ? "running" : "not running")")
-        print("Socket: \(socketPath)")
-        print("Accessibility: \(accessibility)")
-    } catch {
-        print("Axon.app: \(isAxonAppRunning() ? "running" : "not running")")
-        print("Socket: unreachable at \(socketPath)")
-        print("Error: \(error)")
-        exit(1)
-    }
-}
-
-private func printSetupStatus() throws {
-    let health = try SocketClient(path: socketPath, responseTimeoutSeconds: 2)
-        .send(JSONRPCRequest(id: .string("setup-health"), method: "health"))
-    let accessibility = health.result?["accessibility"].flatMap(stringValue)
-        ?? "unknown"
+private func printSetupStatus() {
+    let status = currentStatus()
+    let accessibility = status.permissions.first { $0.name == HealthPermission.accessibility }
     print("Axon.app: \(isAxonAppRunning() ? "running" : "not running")")
     print("Socket: \(socketPath)")
-    print("Accessibility: \(accessibility)")
-    if accessibility == PermissionStatus.trusted.rawValue {
+    print("Accessibility: \(accessibility?.granted == true ? "granted" : "not granted")")
+    if accessibility?.granted == true {
         print("")
         print("Register with an MCP client:")
         print("  claude mcp add axon -- axon mcp")
@@ -650,12 +631,6 @@ private func openAxnEditor(arguments: [String]) throws {
     process.waitUntilExit()
     guard process.terminationStatus == 0 else {
         throw CLIError.missingArguments("Could not open axn file editor for \(fileURL.path)")
-    }
-}
-
-private func quitAxonApp() {
-    for app in runningAxonApps() {
-        app.terminate()
     }
 }
 
@@ -748,40 +723,188 @@ private func runCommand(arguments: [String]) throws -> (method: String, params: 
     return ("run", params)
 }
 
+/// The CLI-managed embedding lifecycle: a LaunchAgent whose program is this executable.
+///
+/// There is one registration truth. Earlier versions copied the binary into an Application Support
+/// bundle and registered the copy, which meant the path a consumer installed and the path macOS
+/// launched could drift apart, and an upgrade in place left the old copy running. The agent now
+/// points at the invoking executable, which is why callers must invoke it from a permanent path.
 private func handleDaemonCommand(arguments: [String]) throws {
-    let subcommand = arguments.dropFirst().first ?? "status"
+    guard let subcommand = arguments.dropFirst().first else {
+        throw CLIError.missingArguments("daemon requires install, uninstall, or restart")
+    }
     let manager = LaunchAgentManager(configuration: try launchAgentConfiguration())
-    let installer = try daemonBinaryInstaller()
     switch subcommand {
     case "install":
-        let installedURL = try installer.install()
-        try manager.install()
-        print("installed \(manager.configuration.label) at \(manager.plistPath.path)")
-        print("installed daemon binary at \(installedURL.path)")
-    case "start":
-        try installer.install()
+        warnAboutEphemeralInstall(manager.configuration.executablePath)
         try manager.start()
-        let health = try waitForDaemonHealth(socketPath: socketPath)
-        let accessibility = health.result?["accessibility"].flatMap(stringValue) ?? "unknown"
-        print("started \(manager.configuration.label) (accessibility: \(accessibility))")
-    case "stop":
-        try manager.stop()
-        print("stopped \(manager.configuration.label)")
-    case "status":
-        let status = try manager.status()
-        print(status)
+        let report = try waitForDaemonReport()
+        print("registered \(manager.configuration.label) -> \(manager.configuration.executablePath)")
+        print("daemon ready (pid \(report.processId), version \(report.version))")
+    case "restart":
+        // Restart deliberately does not re-register. It restarts the daemon that is installed,
+        // whatever binary is asking, so restarting from a build directory cannot repoint a
+        // working installation at a path that is about to disappear.
+        let registration = manager.registration()
+        try manager.restart()
+        let report = try waitForDaemonReport()
+        print("restarted \(manager.configuration.label) -> \(registration.path ?? manager.configuration.executablePath)")
+        print("daemon ready (pid \(report.processId), version \(report.version))")
     case "uninstall":
         try manager.uninstall()
-        try installer.uninstall()
-        print("uninstalled \(manager.configuration.label)")
+        print("unregistered \(manager.configuration.label)")
     default:
-        throw CLIError.missingArguments("daemon requires install, start, stop, status, or uninstall")
+        throw CLIError.missingArguments("daemon requires install, uninstall, or restart")
     }
+}
+
+/// Stops the running daemon while leaving start-at-login registration in place.
+///
+/// Who is running is asked first, because unloading the agent terminates the daemon and there
+/// would be nothing left to ask afterwards. The agent is then unloaded before the shutdown
+/// request, since `KeepAlive` would otherwise relaunch the daemon in the gap between it
+/// acknowledging the request and actually exiting.
+private func shutdownDaemon() throws {
+    let running = currentStatus().daemon
+    let runningProcessID = running.running ? running.processId : nil
+
+    let manager = LaunchAgentManager(configuration: try launchAgentConfiguration())
+    try manager.stop()
+
+    // Anything still answering is a daemon launchd does not own, such as a running Axon.app.
+    _ = try? SocketClient(path: socketPath, responseTimeoutSeconds: 2)
+        .send(JSONRPCRequest(id: .string("shutdown"), method: "shutdown"))
+
+    guard waitUntilDaemonStops(timeoutSeconds: 5) else {
+        throw CLIError.operationFailed("a daemon is still answering at \(socketPath)")
+    }
+    if let runningProcessID {
+        print("stopped daemon (pid \(runningProcessID)); registration left in place")
+    } else {
+        print("no daemon was running; registration left in place")
+    }
+}
+
+private func printStatus(arguments: [String]) throws {
+    let options = arguments.dropFirst()
+    if let unexpected = options.first(where: { $0 != "--json" }) {
+        throw CLIError.missingArguments("unexpected status argument: \(unexpected)")
+    }
+    let status = currentStatus()
+
+    guard options.contains("--json") else {
+        func line(_ label: String, _ value: String) {
+            print("\(label.padding(toLength: 18, withPad: " ", startingAt: 0))\(value)")
+        }
+        let daemonState: String
+        switch (status.daemon.running, status.daemon.ready) {
+        case (true, true):
+            daemonState = "ready"
+        case (true, false):
+            daemonState = "running, not ready (\(status.daemon.reason ?? HealthReason.unknown))"
+        default:
+            daemonState = "not running (\(status.daemon.reason ?? HealthReason.unknown))"
+        }
+        line("Version:", status.version)
+        line("Daemon:", daemonState)
+        line("Endpoint:", status.daemon.endpoint)
+        line("Registration:", status.registration.registered ? status.registration.path ?? "registered" : "not registered")
+        line("Session:", status.session.graphical
+            ? "graphical"
+            : "\(status.session.interactive ? "interactive, no desktop" : "not interactive") (\(status.session.reason ?? HealthReason.unknown))")
+        for permission in status.permissions {
+            line("\(permission.name):", permission.granted ? "granted" : "not granted")
+        }
+        let unusable = status.capabilities.filter { !$0.usable }.map(\.capability)
+        line("Unusable:", unusable.isEmpty ? "none" : unusable.joined(separator: ", "))
+        return
+    }
+    print(try status.jsonLine())
+}
+
+/// Builds the published document.
+///
+/// A daemon that does not answer is a state to describe, not a failure to report, so every path
+/// here produces a schema-valid document. The daemon authors what only it knows; registration is
+/// read from disk here because the daemon process does not own that fact.
+private func currentStatus() -> HealthStatus {
+    let manager = try? LaunchAgentManager(configuration: launchAgentConfiguration())
+    let registration = manager?.registration() ?? .absent(mechanism: .launchd)
+
+    do {
+        let response = try SocketClient(path: socketPath, responseTimeoutSeconds: StatusProbe.responseTimeoutSeconds)
+            .send(JSONRPCRequest(id: .string("status"), method: "health"))
+        if let error = response.error {
+            return unreachable(registration, HealthReason.daemonUnreachable, error.message)
+        }
+        do {
+            return .running(daemon: try DaemonReport(jsonObject: response.result ?? [:]), registration: registration)
+        } catch {
+            // A daemon that answers unintelligibly is a running daemon of another version, which
+            // is a different machine state from silence and is reported as one.
+            return .incompatible(
+                endpoint: socketPath,
+                registration: registration,
+                session: Doctor.currentSession(),
+                detail: "\(error)"
+            )
+        }
+    } catch let error as SocketError {
+        // Failing to connect and failing to get an answer are different machine states, and the
+        // difference is the whole point of asking: a socket file with nothing behind it means no
+        // daemon, while a daemon that accepts a connection and then says nothing is stuck.
+        return unreachable(registration, connectFailed(error) ? HealthReason.daemonNotRunning : HealthReason.daemonUnreachable, error.description)
+    } catch {
+        return unreachable(registration, HealthReason.daemonUnreachable, "\(error)")
+    }
+}
+
+/// How long `status` waits for a daemon that accepted the connection to answer.
+///
+/// Long enough to outlast a genuinely busy daemon — the first permission query against a freshly
+/// installed executable makes macOS resolve it against TCC, which has been measured at several
+/// seconds — and short enough that describing a stuck one stays a fast operation. A daemon that is
+/// simply absent fails at connect and costs nothing.
+///
+/// Scoped to a type rather than left as a top-level `let`: globals in `main.swift` initialize in
+/// statement order, so a plain global read from a function defined above it is silently zero, and
+/// a zero timeout makes every read fail instantly. A type's static property is initialized on
+/// first use regardless of where it appears in the file.
+private enum StatusProbe {
+    static let responseTimeoutSeconds: TimeInterval = 10
+}
+
+private func connectFailed(_ error: SocketError) -> Bool {
+    if case let .operationFailed(operation) = error {
+        return operation == "connect"
+    }
+    return false
+}
+
+private func unreachable(
+    _ registration: RegistrationHealth,
+    _ reason: String,
+    _ detail: String
+) -> HealthStatus {
+    .notRunning(
+        endpoint: socketPath,
+        registration: registration,
+        session: Doctor.currentSession(),
+        reason: reason,
+        detail: detail
+    )
+}
+
+private func warnAboutEphemeralInstall(_ path: String) {
+    guard let warning = DaemonRegistrationPath.ephemeralWarning(for: path) else {
+        return
+    }
+    fputs("axon: warning: \(warning)\n", stderr)
 }
 
 private func launchAgentConfiguration() throws -> LaunchAgentConfiguration {
     LaunchAgentConfiguration(
-        executablePath: DaemonBinaryInstaller.defaultInstallURL.path,
+        executablePath: try resolvedExecutablePath(),
         socketPath: socketPath,
         environment: ProcessInfo.processInfo.environment
     )
@@ -822,15 +945,11 @@ private func fail(_ message: String) -> Never {
     exit(1)
 }
 
-private func daemonBinaryInstaller() throws -> DaemonBinaryInstaller {
-    DaemonBinaryInstaller(sourcePath: try resolvedExecutablePath())
-}
-
 /// The real path of the running executable, with every symlink resolved.
 ///
-/// Resolution matters because the Homebrew cask installs `axon` as a symlink into the app
-/// bundle. Callers copy this path into the daemon bundle and walk it to find the enclosing
-/// `.app`; an unresolved link breaks both.
+/// Resolution matters because the Homebrew cask installs `axon` as a symlink into the app bundle.
+/// This path is what `daemon install` registers with launchd and what callers walk to find the
+/// enclosing `.app`; an unresolved link breaks both.
 private func resolvedExecutablePath() throws -> String {
     let rawPath = CommandLine.arguments[0]
     let candidate: String
@@ -857,24 +976,42 @@ private func executablePathFromPATH(_ executableName: String) -> String? {
     return nil
 }
 
-private func waitForDaemonHealth(socketPath: String, timeoutSeconds: TimeInterval = 3) throws -> JSONRPCResponse {
+/// Waits until the daemon answers a health request.
+///
+/// A successful round trip is the readiness contract: the socket existing proves only that some
+/// process bound it, which is exactly the state a half-started daemon leaves behind.
+private func waitForDaemonReport(timeoutSeconds: TimeInterval = 30) throws -> DaemonReport {
     let deadline = Date().addingTimeInterval(timeoutSeconds)
-    var lastError: Error?
+    var lastError: Error = SocketError.connectionClosed
 
     while Date() < deadline {
         do {
-            return try SocketClient(path: socketPath)
+            let response = try SocketClient(path: socketPath, responseTimeoutSeconds: 2)
                 .send(JSONRPCRequest(id: .string("health"), method: "health"))
+            if let error = response.error {
+                throw CLIError.operationFailed(error.message)
+            }
+            return try DaemonReport(jsonObject: response.result ?? [:])
         } catch {
             lastError = error
             Thread.sleep(forTimeInterval: 0.05)
         }
     }
 
-    if let lastError {
-        throw lastError
+    throw CLIError.operationFailed("daemon did not become ready at \(socketPath): \(lastError)")
+}
+
+private func waitUntilDaemonStops(timeoutSeconds: TimeInterval) -> Bool {
+    let deadline = Date().addingTimeInterval(timeoutSeconds)
+    while Date() < deadline {
+        let reachable = (try? SocketClient(path: socketPath, responseTimeoutSeconds: 1)
+            .send(JSONRPCRequest(id: .string("health"), method: "health"))) != nil
+        if !reachable {
+            return true
+        }
+        Thread.sleep(forTimeInterval: 0.05)
     }
-    throw SocketError.connectionClosed
+    return false
 }
 
 private func stringValue(_ value: JSONValue) -> String? {
@@ -896,6 +1033,7 @@ private enum CLIError: Error, CustomStringConvertible {
     case missingArgument(String)
     case missingArguments(String)
     case invalidArguments(String)
+    case operationFailed(String)
 
     var description: String {
         switch self {
@@ -905,6 +1043,20 @@ private enum CLIError: Error, CustomStringConvertible {
             return message
         case let .invalidArguments(message):
             return message
+        case let .operationFailed(message):
+            return message
+        }
+    }
+
+    /// The shared exit-code contract: 2 means the command was used wrongly, 1 means it was used
+    /// correctly and could not be completed. Anything a consumer scripts against depends on the
+    /// difference, so it is stated once here rather than at each throw site.
+    var exitCode: Int32 {
+        switch self {
+        case .missingArgument, .missingArguments:
+            return 2
+        case .invalidArguments, .operationFailed:
+            return 1
         }
     }
 }

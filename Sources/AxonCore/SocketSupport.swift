@@ -3,6 +3,7 @@ import Foundation
 
 public enum SocketError: Error, CustomStringConvertible {
     case pathTooLong(String)
+    case addressInUse(String)
     case operationFailed(String)
     case connectionClosed
     case readTimedOut
@@ -12,6 +13,8 @@ public enum SocketError: Error, CustomStringConvertible {
         switch self {
         case let .pathTooLong(path):
             return "Unix socket path is too long: \(path)"
+        case let .addressInUse(path):
+            return "Another Axon daemon is already serving \(path)"
         case let .operationFailed(operation):
             return "\(operation) failed: \(String(cString: strerror(errno)))"
         case .connectionClosed:
