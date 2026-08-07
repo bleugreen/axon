@@ -3,6 +3,7 @@ use std::env;
 #[cfg(windows)]
 mod windows;
 
+#[cfg(any(windows, test))]
 #[derive(Clone, Debug, Eq, PartialEq)]
 struct Node {
     depth: usize,
@@ -73,6 +74,7 @@ fn value(args: &mut impl Iterator<Item = String>, flag: &str) -> Result<String, 
         .ok_or_else(|| format!("{flag} requires a value"))
 }
 
+#[cfg(any(windows, test))]
 fn matches_locator(node: &Node, control_type: &str, name_contains: &str) -> bool {
     node.control_type.eq_ignore_ascii_case(control_type)
         && node

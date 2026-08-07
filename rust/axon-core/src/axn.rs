@@ -269,8 +269,8 @@ impl<'a, D: ToolDispatcher> AxnRunner<'a, D> {
         }
         Ok(RunResult {
             success,
-            dry_run: dry_run,
-            continue_on_error: continue_on_error,
+            dry_run,
+            continue_on_error,
             trace,
         })
     }

@@ -330,27 +330,23 @@ fn candidate(
             return None;
         }
     }
-    if locator.window.is_some() {
-        let window = snapshot.app.windows.iter().find(|window| {
+    if let Some(expected) = &locator.window {
+        let actual = snapshot.app.windows.iter().find(|window| {
             std::iter::once(node)
                 .chain(ancestors.iter().copied())
                 .any(|candidate| std::ptr::eq(&window.root, candidate))
-        });
-        let Some(actual) = window else { return None };
-        if !window_matches(locator.window.as_ref().unwrap(), actual) {
+        })?;
+        if !window_matches(expected, actual) {
             return None;
         }
         reasons.push("window scope".into());
-        add_scoped_match_reasons("window", locator.window.as_ref().unwrap(), &mut reasons);
+        add_scoped_match_reasons("window", expected, &mut reasons);
     }
     let mut start = 0;
     for expected in &locator.ancestors {
-        let Some(offset) = ancestors[start..]
+        let offset = ancestors[start..]
             .iter()
-            .position(|n| ancestor_matches(expected, n))
-        else {
-            return None;
-        };
+            .position(|n| ancestor_matches(expected, n))?;
         start += offset + 1;
         add_scoped_match_reasons("ancestor", expected, &mut reasons);
     }
@@ -412,10 +408,10 @@ fn add_scoped_match_reasons(prefix: &str, locator: &AncestorLocator, reasons: &m
     if let Some(label) = &locator.label {
         reasons.push(format!("{prefix} label {}", label.reason()));
     }
-    if prefix == "ancestor" {
-        if let Some(role) = &locator.role {
-            reasons.push(format!("ancestor role {role}"));
-        }
+    if prefix == "ancestor"
+        && let Some(role) = &locator.role
+    {
+        reasons.push(format!("ancestor role {role}"));
     }
 }
 

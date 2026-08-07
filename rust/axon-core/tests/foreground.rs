@@ -192,8 +192,8 @@ fn a_click_puts_the_cursor_home_before_the_window_and_reports_it() {
     );
 
     assert!(dispatch.refusal.is_none());
-    assert_eq!(dispatch.cleanup.activation_proved, true);
-    assert_eq!(dispatch.cleanup.restored, true);
+    assert!(dispatch.cleanup.activation_proved);
+    assert!(dispatch.cleanup.restored);
     assert_eq!(dispatch.cleanup.pointer_restored, Some(true));
     assert!(dispatch.cleanup.session_restored());
     assert_eq!(dispatch.cleanup.message, None);
@@ -297,7 +297,7 @@ fn a_cursor_that_cannot_be_put_back_fails_the_action_and_keeps_the_evidence() {
 
     // The events went out and the window came back, but the cursor did not.
     assert!(dispatch.value.is_some());
-    assert_eq!(dispatch.cleanup.restored, true);
+    assert!(dispatch.cleanup.restored);
     assert_eq!(dispatch.cleanup.pointer_restored, Some(false));
     assert!(!dispatch.cleanup.session_restored());
     assert!(

@@ -61,6 +61,18 @@ pub mod reason {
     pub const UNKNOWN: &str = "unknown";
 }
 
+/// Inputs that describe a daemon which did not answer.
+pub struct NotRunningHealth<'a> {
+    pub version: String,
+    pub platform: HealthPlatform,
+    pub endpoint: String,
+    pub registration: RegistrationHealth,
+    pub session: SessionHealth,
+    pub code: &'a str,
+    pub detail: Option<String>,
+    pub permissions: Vec<PermissionState>,
+}
+
 /// Serializes as the literal `health-v1` and refuses to deserialize any other schema major.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct HealthSchemaVersion;
@@ -403,32 +415,23 @@ impl HealthReport {
     /// a gate the CLI can rule out from the session alone is worth reporting as such, while one
     /// only the daemon could have answered is reported ungranted with the reason it could not be
     /// determined.
-    pub fn not_running(
-        version: impl Into<String>,
-        platform: HealthPlatform,
-        endpoint: impl Into<String>,
-        registration: RegistrationHealth,
-        session: SessionHealth,
-        code: &str,
-        detail: Option<String>,
-        permissions: Vec<PermissionState>,
-    ) -> Self {
+    pub fn not_running(report: NotRunningHealth) -> Self {
         Self {
             schema_version: HealthSchemaVersion,
-            version: version.into(),
-            platform,
+            version: report.version,
+            platform: report.platform,
             daemon: DaemonHealth {
                 running: false,
                 ready: false,
-                endpoint: endpoint.into(),
+                endpoint: report.endpoint,
                 process_id: None,
-                reason: Some(code.into()),
-                detail,
+                reason: Some(report.code.into()),
+                detail: report.detail,
             },
-            registration,
-            session,
-            permissions,
-            capabilities: CapabilityState::all_unusable(code),
+            registration: report.registration,
+            session: report.session,
+            permissions: report.permissions,
+            capabilities: CapabilityState::all_unusable(report.code),
         }
     }
 }
