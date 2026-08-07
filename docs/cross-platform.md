@@ -280,13 +280,37 @@ cannot honour.
 
 ### Linux compositor and toolkit overlays
 
-Under X11 the foreground rung would be `XTest`, gated on the opt-in and on a
-usable global input device, but the backend has no X11 client layer yet, so
-`pointerInput` and `keyboardInput` are unusable on every Linux session. Under
-Wayland they would be unusable regardless: the compositor refuses synthetic input
-outright, and every pointer or keyboard action refuses with `noDeliveryCandidate`
-carrying the compositor's reason. AT-SPI paths are
-unaffected, because they mutate the accessibility tree rather than the session.
+Under X11 the foreground rung is `XTest`, gated on the opt-in and on a window
+manager that publishes `_NET_ACTIVE_WINDOW` and `_NET_WM_PID`. Those two
+properties are the whole transaction: the first is how the foreground is read and
+set, and the second is what ties a window back to an application. Without a
+manager honouring them there is nothing to activate through, so `pointerInput`
+and `keyboardInput` are unusable with reason `no-window-manager`.
+
+Under Wayland they are unusable whatever else is true. The compositor refuses
+synthetic input from an ordinary client, and X11 cannot read or set the Wayland
+foreground. XWayland is the trap worth naming: Mutter publishes EWMH properties
+for X11 clients and injects XTest events globally, so a backend could activate an
+X11 window, prove it came forward, and dispatch — while a Wayland-native
+application held the focus it could neither see nor give back. A mechanism that
+works while its proof quietly does not is precisely what this contract refuses,
+so the session is classified as Wayland before any X connection is attempted, and
+every pointer or keyboard action refuses with `noDeliveryCandidate` carrying that
+reason.
+
+Because XTest moves the real cursor, a Linux `click` captures the pointer before
+dispatch and warps it home afterwards, ahead of returning the prior window, and
+reports the outcome as `pointerRestored`. `keyboard` does not move it, and
+reports null rather than claiming a restoration that never happened.
+
+AT-SPI paths are unaffected by any of this, because they mutate the accessibility
+tree rather than the session. AT-SPI identities carry the bus name alongside the
+object path, since every application's root object sits at the same path and the
+path alone would name several applications at once.
+
+`drag` remains unimplemented on Linux. It holds a button down across the whole
+gesture, so it needs its own capability and its own account of a press held
+across a failed restoration, and has neither.
 
 AT-SPI value setting no longer takes focus first. Focus is a system-wide side
 effect, and an action that changes it is foreground however it finally mutates
