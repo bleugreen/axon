@@ -36,8 +36,8 @@ For signing and notarization options, see [docs/install.md](docs/install.md).
 
 Releases are fully automated by [`.github/workflows/release.yml`](.github/workflows/release.yml), triggered by pushing a `vX.Y.Z` tag. CI builds, signs, **notarizes and staples** the bundle, publishes the GitHub release, and updates the `bleugreen/homebrew-tap` cask. The procedure is:
 
-1. Bump the version in all three places: `Sources/AxonCore/AxonVersion.swift`, `scripts/package-app`, and `docs/install.md`.
-2. `make test` to confirm green.
+1. Edit the repository-root `VERSION` file — it is the single release source — then run `scripts/check-version --write` to push the new value into the derived literals (`Sources/AxonCore/AxonVersion.swift` and the `[workspace.package]` version in `rust/Cargo.toml`). Everything else — plists, archive names, the cask — reads `VERSION` at build time.
+2. `make test` and `make check-version` to confirm green. CI re-runs `check-version` and rejects a tag that disagrees with `VERSION`.
 3. Commit as `Bump to X.Y.Z` with a one-paragraph summary of what shipped since the last release.
 4. `git tag vX.Y.Z && git push origin main vX.Y.Z`.
 5. Watch CI with `gh run watch` and confirm the release asset and tap cask land.
