@@ -600,10 +600,7 @@ public struct LocatorResolver: Sendable {
     }
 
     private func addNearbyTextReasons(_ expected: [TextMatch], context: LocatorNodeContext, completeness: LocatorContextCompleteness, reasons: inout [String], evidence: inout [LocatorEvidenceItem]) {
-        guard !expected.isEmpty else {
-            evidence.append(.init(field: .nearbyText, outcome: .absent, expected: expected.map(\.evidenceValue).joined(separator: ", ")))
-            return
-        }
+        guard !expected.isEmpty else { return }
         if completeness == .path {
             evidence.append(.init(field: .nearbyText, outcome: .unevaluated, expected: expected.map(\.evidenceValue).joined(separator: ", ")))
             return

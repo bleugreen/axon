@@ -75,8 +75,19 @@ public enum AxnHealing {
             )
         }
 
+        if evidence.contains(where: { item in
+            guard case let .object(object) = item else { return false }
+            return object["secretTainted"] == .bool(true)
+        }) {
+            return LocatorHealEvent(
+                actionID: action.id, actionIndex: index, status: .halted,
+                confidence: confidence, path: path, evidence: evidence, proposal: nil,
+                diff: "\(identity)  target.locator  healing halted: resolution evidence contains an active secret",
+                reason: "resolution evidence contains an active secret"
+            )
+        }
+
         var proposal = observed
-        if let frame = recorded["frame"], !drift.isEmpty { proposal["frame"] = frame }
         for item in evidence {
             guard case let .object(object) = item,
                   string("outcome", in: object) == "unevaluated",

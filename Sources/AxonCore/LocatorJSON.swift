@@ -16,6 +16,19 @@ public extension LocatorResolution {
     }
 }
 
+private func redactActiveSecrets(in value: JSONValue, using redactor: ActiveSecretRedactor) -> JSONValue {
+    switch value {
+    case let .string(string):
+        return .string(redactor.redaction(for: string)?.value ?? string)
+    case let .array(values):
+        return .array(values.map { redactActiveSecrets(in: $0, using: redactor) })
+    case let .object(object):
+        return .object(object.mapValues { redactActiveSecrets(in: $0, using: redactor) })
+    default:
+        return value
+    }
+}
+
 private extension TextMatch {
     var jsonValue: JSONValue {
         switch self {
@@ -42,13 +55,19 @@ private extension AXAncestorLocator {
 }
 
 private extension LocatorEvidenceItem {
-    var jsonValue: JSONValue {
-        .object([
+    func jsonValue(activeSecretRedactor: ActiveSecretRedactor) -> JSONValue {
+        let expectedRedaction = expected.flatMap(activeSecretRedactor.redaction(for:))
+        let actualRedaction = actual.flatMap(activeSecretRedactor.redaction(for:))
+        var object: [String: JSONValue] = [
             "field": .string(field.rawValue),
             "outcome": .string(outcome.rawValue),
-            "expected": expected.map(JSONValue.string) ?? .null,
-            "actual": actual.map(JSONValue.string) ?? .null
-        ])
+            "expected": expected.map { .string(expectedRedaction?.value ?? $0) } ?? .null,
+            "actual": actual.map { .string(actualRedaction?.value ?? $0) } ?? .null
+        ]
+        if expectedRedaction != nil || actualRedaction != nil {
+            object["secretTainted"] = .bool(true)
+        }
+        return .object(object)
     }
 }
 
@@ -82,8 +101,10 @@ public extension LocatorCandidate {
         object["reasons"] = .array(renderedReasons.redactedReasonValues(
             activeSecretRedactor: activeSecretRedactor
         ))
-        object["evidence"] = .array(evidence.map(\.jsonValue))
-        object["observedLocator"] = observedLocator?.jsonValue ?? .null
+        object["evidence"] = .array(evidence.map { $0.jsonValue(activeSecretRedactor: activeSecretRedactor) })
+        object["observedLocator"] = observedLocator.map {
+            redactActiveSecrets(in: $0.jsonValue, using: activeSecretRedactor)
+        } ?? .null
         return .object(object)
     }
 }
