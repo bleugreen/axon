@@ -295,6 +295,47 @@ mod tests {
     }
 
     #[test]
+    fn a_permanent_path_with_spaces_stays_one_argument() {
+        // systemd splits ExecStart on whitespace, so an unquoted path here would register a unit
+        // that executes /opt/Axon. `daemon install` registers whatever path the caller invoked,
+        // and a directory with a space in it is an ordinary permanent install location.
+        let unit = unit_file("/opt/Axon Stable/axon-linux");
+
+        assert!(unit.contains(r#"ExecStart="/opt/Axon Stable/axon-linux" serve"#));
+        assert_eq!(
+            unit_executable(&unit).as_deref(),
+            Some("/opt/Axon Stable/axon-linux")
+        );
+    }
+
+    #[test]
+    fn a_percent_in_a_path_is_not_a_systemd_specifier() {
+        // %h would otherwise expand to the user home directory.
+        let unit = unit_file("/opt/axon-100%h/axon-linux");
+
+        assert!(unit.contains(r#"ExecStart="/opt/axon-100%%h/axon-linux" serve"#));
+        assert_eq!(
+            unit_executable(&unit).as_deref(),
+            Some("/opt/axon-100%h/axon-linux")
+        );
+    }
+
+    #[test]
+    fn quotes_and_backslashes_survive_the_round_trip() {
+        for path in [
+            r#"/opt/axon "quoted"/axon-linux"#,
+            r"/opt/axon\backslash/axon-linux",
+            "/opt/axon/axon-linux",
+        ] {
+            assert_eq!(
+                unit_executable(&unit_file(path)).as_deref(),
+                Some(path),
+                "{path} did not round-trip"
+            );
+        }
+    }
+
+    #[test]
     fn registration_reports_the_path_systemd_will_run() {
         let unit = unit_file("/opt/axon/0.1.7/axon-linux");
 
