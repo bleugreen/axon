@@ -86,6 +86,63 @@ pub fn session_health(session_id: u32, window_station: Option<&str>) -> SessionH
     }
 }
 
+/// The session this process actually occupies, as Windows reports it.
+///
+/// This is load-bearing well beyond the health document. `WindowsBackend::capabilities` consults
+/// it, and the delivery ladder consults that, so a daemon in session 0 or off the interactive
+/// window station refuses pointer and keyboard actions instead of posting `SendInput` into a
+/// desktop nobody is looking at. UI Automation keeps answering in those sessions, which is exactly
+/// what makes the failure quiet enough to need this.
+#[cfg(windows)]
+pub fn current_session() -> SessionHealth {
+    #[link(name = "kernel32")]
+    unsafe extern "system" {
+        fn ProcessIdToSessionId(process_id: u32, session_id: *mut u32) -> i32;
+    }
+    #[link(name = "user32")]
+    unsafe extern "system" {
+        fn GetProcessWindowStation() -> isize;
+        fn GetUserObjectInformationW(
+            object: isize,
+            index: i32,
+            info: *mut std::ffi::c_void,
+            length: u32,
+            needed: *mut u32,
+        ) -> i32;
+    }
+    const UOI_NAME: i32 = 2;
+
+    let mut session_id = 0u32;
+    if unsafe { ProcessIdToSessionId(std::process::id(), &mut session_id) } == 0 {
+        session_id = 0;
+    }
+
+    let station = (|| {
+        let handle = unsafe { GetProcessWindowStation() };
+        if handle == 0 {
+            return None;
+        }
+        let mut buffer = [0u16; 256];
+        let mut needed = 0u32;
+        let ok = unsafe {
+            GetUserObjectInformationW(
+                handle,
+                UOI_NAME,
+                buffer.as_mut_ptr().cast(),
+                (buffer.len() * 2) as u32,
+                &mut needed,
+            )
+        };
+        if ok == 0 {
+            return None;
+        }
+        let length = buffer.iter().position(|unit| *unit == 0).unwrap_or(0);
+        Some(String::from_utf16_lossy(&buffer[..length]))
+    })();
+
+    session_health(session_id, station.as_deref())
+}
+
 /// The daemon's own answer to a `health` request.
 pub fn daemon_report(
     process_id: u32,

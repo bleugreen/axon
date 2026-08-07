@@ -234,7 +234,7 @@ available, and a backend must not claim it before a live probe passes.
 | platform | semantic | pixel | foreground |
 | --- | --- | --- | --- |
 | macOS | `AXPress`, `AXValue`, `AXScrollToVisible` | `CGEventPostToPid` against the target process, invariants proved after dispatch | Global `CGEvent`, transactional activate/dispatch/restore |
-| Windows | UIA `InvokePattern`, `ValuePattern`, `ScrollItemPattern`, none of which call `SetFocus` | Not implemented; refuses `backgroundPixelUnsupported` | Withheld; `SendInput` exists but the backend cannot yet capture, prove, and restore the foreground |
+| Windows | UIA `InvokePattern`, `ValuePattern`, `ScrollItemPattern`, none of which call `SetFocus` | Client-coordinate window messages to a leaf HWND bound through UIA ancestry, for window classes a live probe has verified; every other class refuses `backgroundPixelUnsupported` by name | Withheld; `SendInput`, activation, proof, and pointer hand-back all work, but Windows refuses to return the foreground to the application it was taken from |
 | Linux | AT-SPI `Action.DoAction`, `EditableText.SetTextContents`, `Component.ScrollTo`, none of which take focus | Not implemented; refuses `backgroundPixelUnsupported` | `XTest` on an X11 session with an EWMH-capable window manager, transactional activate/dispatch/restore; withheld on every other session |
 
 The foreground rung is not merely "global input". It is global input that hands
@@ -252,7 +252,9 @@ the compositor refuses synthetic input and the foreground cannot be read or set
 even with XWayland running alongside. A mechanism that dispatches while its proof
 quietly does not is the trap this contract exists to close, so the capability is
 reported per session and the same answer decides both the health document and the
-dispatch.
+dispatch. Windows withholds the rung for a different reason: every part of the
+transaction works there except the last one, and Windows declines to return the
+foreground to the application it was taken from.
 
 Restoration covers the pointer as well as the foreground. A mechanism that moves
 the real cursor puts it back before the prior application returns, and reports

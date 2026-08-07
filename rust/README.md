@@ -77,26 +77,44 @@ a JSON-RPC `-32602` error and never reaches a native call.
 | `invoke` | `semantic` (UIA `InvokePattern`) | `semantic` (AT-SPI `Action.DoAction`) |
 | `type` | `semantic` (UIA `ValuePattern` + readback) | `semantic` (AT-SPI `EditableText.SetTextContents` + readback) |
 | `scroll` | `semantic` (UIA `ScrollItemPattern`) | `semantic` (AT-SPI `Component.ScrollTo`) |
-| `click` | refused: the foreground rung is withheld | `foreground` (XTest) on X11 with an EWMH-capable window manager; refused on any other session |
+| `click` | `pixel` for a probe-verified window class, else refused | `foreground` (XTest) on X11 with an EWMH-capable window manager; refused on any other session |
 | `keyboard` | refused: the foreground rung is withheld | `foreground` (XTest) on X11 with an EWMH-capable window manager; refused on any other session |
 
 The semantic paths no longer call `SetFocus` or AT-SPI focus. Focus is a
 system-wide side effect, and an action that changes it is foreground however it
 finally mutates the target, so these set the value directly and read it back.
 
-Neither backend implements the pixel rung. Windows has no HWND-targeted
-client-coordinate delivery yet, and Linux has neither X11 window-targeted
-delivery nor a Wayland portal path, so both refuse with
-`backgroundPixelUnsupported` and a message naming what is missing.
-`SendInput` and `XTest` are global devices and would always be classified
+Windows implements the pixel rung for `click`: window messages carrying client
+coordinates, posted to the leaf HWND resolved through the element's UIA ancestry
+and proved to sit inside the captured top-level window. The mechanism lives in
+`axon-win/src/pixel.rs`, and the class allowlist there gates it — a window class
+is added only after `axon-win probe pixel-click` observed a real state change in
+the target with the foreground window and cursor unchanged. `Button` is there,
+earned against Character Map; `Windows.UI.Core.CoreWindow` is deliberately not,
+because Calculator processed every message and its display never moved. Every
+unlisted class refuses, naming itself.
+
+The sequence is delivered with `SendMessageTimeoutW`, not posted. A posted
+message only enters a queue, so the invariant checks around it would straddle
+nothing; a synchronous delivery returns once the window procedure has processed
+the message, which is the boundary that makes `frontmostAppUnchanged` and
+`pointerUnchanged` mean something. `keyboard` has no pixel rung by
+construction: it names an application rather than an element, so there is no
+window geometry to bind it to.
+
+Linux implements neither X11 window-targeted delivery nor a Wayland portal path,
+so it refuses with `backgroundPixelUnsupported` and a message naming what is
+missing. `SendInput` and `XTest` are global devices and are always classified
 `foreground`, however narrowly they are aimed.
 
 The foreground rung is global input that hands the session back: capture the
 prior foreground, activate the target, prove it came forward, dispatch exactly
-once, restore the pointer, restore the window. Windows has `SendInput` but cannot
-yet run that transaction around it, so it refuses rather than claim a guarantee
-it does not keep. Linux offers the rung on an X11 session with an EWMH-capable
-window manager, and withholds it everywhere else.
+once, restore the pointer, restore the window. Linux offers it on an X11 session
+with an EWMH-capable window manager, and withholds it everywhere else. Windows
+implements every seam and the live probe proves activation, the single dispatch,
+and the pointer hand-back — but Windows then refuses to return the foreground to
+the application it was taken from, so the rung's defining guarantee is not kept
+and it stays closed rather than claiming one the backend does not deliver.
 
 A backend lights the rung up by overriding `supports_foreground_transaction`,
 `frontmost_application`, and `activate_application`, plus `pointer_location` and
@@ -112,11 +130,18 @@ a bounded budget rather than reading once. Under X11 the activation request is a
 client message that has not reached the window manager when the call returns, and
 a single immediate read would report almost every real activation as unproved.
 
+The identity the transaction compares has to be one vocabulary, and only the
+backend knows how it spells one, so `resolve_application` does the translation.
+Windows answers with the foreground window's process id and Linux with an AT-SPI
+identity; handing a caller's display name straight through either would compare a
+title against something that is not one and refuse every aimed action as
+`activationNotProved`.
+
 Stable refusal reasons a caller will see from these backends:
 
 | reason | when |
 | --- | --- |
-| `backgroundPixelUnsupported` | Only visible when the rungs above it are available, since a policy boundary is more actionable otherwise. |
+| `backgroundPixelUnsupported` | No target-bound mechanism for this target: an unverified window class, an element with no native window in its ancestry, or a text location resolved from screen pixels rather than an element. Reported to a caller only when the foreground rung is unavailable too, since a policy boundary is the more actionable answer otherwise. |
 | `foregroundNotPermitted` | The backend can deliver transactionally and the session can reach global input, but the action did not opt in. |
 | `noDeliveryCandidate` | The rung does not exist here: the backend cannot run a foreground transaction, or the session cannot reach global input at all (Wayland, session 0, a noninteractive window station, an integrity boundary). Opting in changes nothing, and the refusal says so rather than sending the caller after a useless permission. |
 

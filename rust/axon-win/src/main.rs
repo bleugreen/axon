@@ -283,6 +283,17 @@ other commands:
   serve             run the UI Automation daemon on the local named pipe
   mcp               run an MCP stdio facade backed by the daemon pipe
   probe             run a session-1 integration probe
+
+probes:
+  probe value <app-query>
+  probe events <app-query> [seconds]
+  probe timeout [app-query] [milliseconds]
+  probe pixel-click <app-query> <element-query> [--observe <query>] [--unverified-class] [--settle-ms N]
+  probe foreground <app-query>
+
+Probes drive real windows and must run in the interactive desktop session. Over SSH they land in
+session 0, where UI Automation and SetForegroundWindow cannot reach the logged-in desktop and
+every answer is a false negative.
 ";
 
 #[cfg(windows)]
@@ -326,58 +337,8 @@ fn windows_main() -> Result<i32, Box<dyn std::error::Error>> {
     Ok(exit_code::SUCCESS)
 }
 
-/// The session this process occupies, as Windows reports it.
 #[cfg(windows)]
-fn current_session() -> axon_core::SessionHealth {
-    use axon_win::lifecycle::session_health;
-
-    #[link(name = "kernel32")]
-    unsafe extern "system" {
-        fn ProcessIdToSessionId(process_id: u32, session_id: *mut u32) -> i32;
-    }
-    #[link(name = "user32")]
-    unsafe extern "system" {
-        fn GetProcessWindowStation() -> isize;
-        fn GetUserObjectInformationW(
-            object: isize,
-            index: i32,
-            info: *mut std::ffi::c_void,
-            length: u32,
-            needed: *mut u32,
-        ) -> i32;
-    }
-    const UOI_NAME: i32 = 2;
-
-    let mut session_id = 0u32;
-    if unsafe { ProcessIdToSessionId(std::process::id(), &mut session_id) } == 0 {
-        session_id = 0;
-    }
-
-    let station = (|| {
-        let handle = unsafe { GetProcessWindowStation() };
-        if handle == 0 {
-            return None;
-        }
-        let mut buffer = [0u16; 256];
-        let mut needed = 0u32;
-        let ok = unsafe {
-            GetUserObjectInformationW(
-                handle,
-                UOI_NAME,
-                buffer.as_mut_ptr().cast(),
-                (buffer.len() * 2) as u32,
-                &mut needed,
-            )
-        };
-        if ok == 0 {
-            return None;
-        }
-        let length = buffer.iter().position(|unit| *unit == 0).unwrap_or(0);
-        Some(String::from_utf16_lossy(&buffer[..length]))
-    })();
-
-    session_health(session_id, station.as_deref())
-}
+use axon_win::lifecycle::current_session;
 
 #[cfg(windows)]
 mod status {

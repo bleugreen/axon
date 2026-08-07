@@ -238,42 +238,126 @@ rather than falling through to a louder mechanism.
 | `invoke` | `semantic` (`AXUIElementPerformAction`, any named action) | `semantic` (UIA `InvokePattern` only) | `semantic` (AT-SPI `Action.DoAction`, any named action) |
 | `type` | `semantic` (`AXValue` + readback), then `pixel`, then `foreground` | `semantic` (UIA `ValuePattern` + readback) | `semantic` (AT-SPI `EditableText.SetTextContents` + readback) |
 | `scroll` | `semantic` (`AXScrollToVisible`); wheel bursts ride `pixel` then `foreground` | `semantic` (UIA `ScrollItemPattern`) | `semantic` (AT-SPI `Component.ScrollTo`) |
-| `click` | `semantic` when the element advertises `AXPress`, else `pixel`, else `foreground` | refused | `foreground` on X11 with an EWMH window manager, else refused |
+| `click` | `semantic` when the element advertises `AXPress`, else `pixel`, else `foreground` | `pixel` for a probe-verified window class, else refused | `foreground` on X11 with an EWMH window manager, else refused |
 | `keyboard` | `pixel` with `app`, else `foreground` | refused | `foreground` on X11 with an EWMH window manager, else refused |
 | `drag` | `pixel` with an app or handle endpoint, else `foreground` | not implemented | not implemented |
 
 No backend reports `pixel` for a mechanism it cannot bind to a verified target.
-On Windows, HWND-targeted client-coordinate delivery is not implemented; on
-Linux, neither X11 window-targeted delivery nor a Wayland portal path is
-implemented. Both refuse with `backgroundPixelUnsupported` and a message naming
-what is missing, because relabelling `SendInput` or `XTest` as `pixel` would make
-the contract's central promise false.
 
-Windows does not offer the foreground rung, which is why pointer and keyboard
-actions refuse outright there. It has `SendInput`, but the foreground rung is
-global input that hands the session back, and this backend cannot yet capture the
-prior foreground, activate the target, prove it came forward, and restore.
-Dispatching unrestored global input while reporting `delivery: "foreground"`
-would claim a guarantee it does not keep, and the unrestored focus theft is the
-very behavior the contract exists to prevent.
+On Windows the mechanism exists. A click resolves the leaf window through the
+resolved element's UIA ancestry, proves that window sits inside the top-level
+window the caller actually captured, refuses across an integrity boundary,
+reconciles the target's DPI awareness with the daemon's, and reports the
+client-coordinate transform as evidence. What gates it is the class allowlist in
+`rust/axon-win/src/pixel.rs`: a window class enters that table only after
+`axon-win probe pixel-click` observed a real state change inside the target with
+the foreground window and the cursor position both unchanged.
 
-The seams live on `PlatformBackend` — `supports_foreground_transaction`,
-`frontmost_application`, `activate_application`, and, for a mechanism that moves
-the real cursor, `pointer_location` and `move_pointer` — while the transaction
-itself is shared in `rust/axon-core/src/delivery.rs`. Linux implements them and
-offers the rung where the session supports it; Windows implements none of them
-yet.
+The messages are delivered synchronously rather than posted, and that choice is
+load-bearing rather than incidental. A posted message only enters the target's
+queue, so reading the foreground and the cursor immediately afterwards samples a
+moment before the handler runs — a window procedure that activated its
+application or moved the pointer while handling the click would do so after the
+daemon had already reported both invariants intact. `SendMessageTimeoutW` does
+not return until the window procedure has processed the message, which gives the
+delivery an explicit end for the invariant checks to straddle. It is bounded, and
+a timeout is reported as a failure to deliver rather than as a delivery.
+
+The table currently holds one class, `Button`, earned against Character Map's
+"Advanced view" checkbox: the dialog expanded from 437 to 586 pixels and gained
+nine controls, with `GetForegroundWindow` and `GetCursorPos` identical before and
+after and the reported transform reconstructing the screen point exactly. Because
+the foreground rung is withheld below it, that entry is also the only way a
+Windows click is delivered at all today; every other class refuses, naming
+itself.
+
+A short allowlist is the intended resting state rather than an oversight, and the
+same probe run shows why. A window procedure that examines a click and does
+nothing returns from it exactly like one that acts on it:
+`Windows.UI.Core.CoreWindow`, the class hosting every UWP and WinUI surface, took
+the whole sequence and Calculator's display never left zero. Delivery proves the
+handler ran and never proves it did anything, and the allowlist is the only thing
+keeping "the message was processed" from quietly standing in for "the control was
+clicked".
+
+One caveat travels with the current entry: it was earned at 100% display scaling
+against a per-monitor-aware window, so the coordinate reconciliation that a
+DPI-unaware target needs was a no-op in that run. The probe reports
+`dpiAwareness` for exactly this reason — an entry earned where the transform had
+no work to do is a narrower claim than one earned where it did.
+
+On Linux, neither X11 window-targeted delivery nor a Wayland portal path is
+implemented, so it refuses with `backgroundPixelUnsupported` naming what is
+missing. Relabelling `SendInput` or `XTest` as `pixel` would make the contract's
+central promise false.
+
+`keyboard` has no pixel rung on Windows and will not grow one in this shape. The
+rung is target-bound input derived from verified window geometry; `keyboard`
+names an application and an input string, so there is no element, no window to
+bind to, and no transform to report. It refuses `backgroundPixelUnsupported`
+saying exactly that and falls to the foreground rung. Key delivery gets an honest
+home later as a `type` fallback below `ValuePattern`, once the pointer path is
+proven against real targets.
+
+Linux offers the foreground rung where the session supports it; Windows withholds
+it everywhere.
+
+On Windows every seam is implemented and all but one of them is proved on a real
+desktop. `frontmost_application` reports the foreground window's process id — the
+same vocabulary `capture` records as the application identifier, so the
+transaction's identity comparison can actually succeed — and
+`activate_application` brings the target forward with the `AttachThreadInput`
+assist that `SetForegroundWindow` requires of a background process.
+`pointer_location` and `move_pointer` hand the real cursor back, which
+matters because `SendInput` moves it. `axon-win probe foreground` shows
+activation proved, the dispatch running once, and the pointer returning to where
+it started.
+
+What fails is the hand-back, and the asymmetry is the whole finding: the daemon
+can take the foreground and cannot give it back. `axon-win probe foreground`
+activates Character Map away from Notepad, proves it, restores the cursor exactly
+— and then `SetForegroundWindow` aimed back at Notepad's own window returns
+false, with Character Map still holding the foreground a full second later. The
+second reading is what makes that a refusal rather than an activation that had
+not landed yet, and the two are worth keeping apart, because a refusal is a
+permission problem and latency is a waiting problem.
+
+The rung is global input that hands the session back, so one that reliably takes
+the foreground and reliably reports failure would give a caller the side effect
+without the guarantee. It stays closed, the seams stay — they are what the probe
+exercises and what a fix will need — and the probe is how anyone knows when that
+changes.
+
+Linux implements the same seams and offers the rung on an X11 session with an
+EWMH-capable window manager, withholding it everywhere else. The seams live on
+`PlatformBackend` — `supports_foreground_transaction`, `frontmost_application`,
+`activate_application`, and, for a mechanism that moves the real cursor,
+`pointer_location` and `move_pointer` — while the transaction itself is shared in
+`rust/axon-core/src/delivery.rs`. That the two backends implement the same seams
+and reach opposite conclusions is the point: the rung is offered on what the
+running session can actually prove, not on what the build contains.
 
 ### Windows session and integrity constraints
 
 `SendInput` is the foreground rung and needs the explicit opt-in. It also needs a
-session that can reach the global input devices at all. Session 0, a
-noninteractive window station, and an integrity or elevation boundary between the
-daemon and the target all present as an unusable `pointerInput` or
+session that can reach the global input devices at all. Session 0 and a
+noninteractive window station present as an unusable `pointerInput` and
 `keyboardInput` capability in the health document, and the same overlay feeds the
-dispatch decision. When the capability is unusable the refusal is
-`noDeliveryCandidate`, not `foregroundNotPermitted`, at either policy — opting in
-cannot conjure a device.
+dispatch decision: the backend derives both from the session it actually
+occupies, classified in `rust/axon-win/src/lifecycle.rs`. This matters because UI
+Automation keeps answering in those sessions while `SendInput` posts to a desktop
+nobody is looking at, so nothing else in the daemon notices. When the capability
+is unusable the refusal is `noDeliveryCandidate`, not `foregroundNotPermitted`,
+at either policy — opting in cannot conjure a device.
+
+An integrity or elevation boundary between the daemon and the target is answered
+per target rather than per session, because it depends on which window is being
+addressed. The pixel planner reads the target process's mandatory integrity level
+and refuses when it sits above the daemon's. That obstacle closes the foreground
+rung as well: UIPI discards posted messages and `SendInput` alike from a
+lower-integrity process, so leaving the loud rung open would answer an elevated
+window with an invitation to opt in to a dispatch Windows had already decided to
+throw away.
 
 UIA exposes `InvokePattern` rather than an open-ended named-action vocabulary, so
 the Windows backend performs `Invoke` and says so instead of claiming a name it

@@ -1,12 +1,17 @@
-use crate::{PointerTargetVerifier, VisualObservation, VisualObservationProvider};
+use crate::{
+    BackgroundPixelPointer, PixelDispatch, PixelDispatchError, PixelPlan, PixelTarget,
+    PointerTargetVerifier, VisualObservation, VisualObservationProvider,
+};
 use axon_core::{
-    AppQuery, Application, BackendError, Capability, CapabilityInfo, KeyboardIntent, Node,
-    Observation, PlatformBackend, RecognizedText, RecordedCall, Rect, Screenshot, Snapshot,
-    SnapshotHandle, TextRecognitionProvider, Window,
+    AppQuery, Application, BackendError, Capability, CapabilityInfo, ForegroundTarget,
+    KeyboardIntent, Node, Observation, PlatformBackend, RecognizedText, RecordedCall, Rect,
+    Screenshot, Snapshot, SnapshotHandle, TextRecognitionProvider, Window, dispatch_in_foreground,
 };
 
 #[path = "capture.rs"]
 mod graphics_capture;
+#[path = "pixel.rs"]
+mod pixel;
 use std::{
     ffi::c_void,
     sync::{Arc, mpsc},
@@ -103,6 +108,18 @@ enum Command {
         (f64, f64),
         mpsc::Sender<Result<bool, BackendError>>,
     ),
+    PlanPixelClick(
+        SnapshotHandle,
+        (f64, f64),
+        mpsc::Sender<Result<PixelPlan, BackendError>>,
+    ),
+    DispatchPixelClick(
+        PixelTarget,
+        mpsc::Sender<Result<Result<PixelDispatch, PixelDispatchError>, BackendError>>,
+    ),
+    /// Probe-only: lets `axon-win probe pixel-click` reach a class the allowlist has not yet
+    /// accepted, which is how a class becomes a candidate for it in the first place.
+    AllowUnverifiedPixelClasses(bool, mpsc::Sender<Result<(), BackendError>>),
 }
 
 impl VisualObservationProvider for WindowsBackend {
@@ -210,6 +227,19 @@ impl PointerTargetVerifier for WindowsBackend {
 pub struct WindowsBackend {
     tx: Option<mpsc::Sender<Command>>,
     thread: Option<thread::JoinHandle<()>>,
+    /// The window last seen holding the foreground, per process that owned it.
+    ///
+    /// The transaction's identity vocabulary is the process id, which is what lets a macOS, Linux,
+    /// and Windows refusal be one contract. But a process owns several top-level windows, and
+    /// restoring "some window of that process" is not handing the session back to where the user
+    /// left it. Remembering the window the foreground was actually taken from closes that gap
+    /// without widening the shared vocabulary.
+    ///
+    /// Keyed by process rather than held as a single slot, because one transaction reads the
+    /// foreground several times — before activating, to prove activation, and again to restore —
+    /// and a single slot is overwritten by the target long before the prior application needs it
+    /// back.
+    last_foreground: std::collections::HashMap<u32, u64>,
 }
 
 impl WindowsBackend {
@@ -265,6 +295,7 @@ impl WindowsBackend {
         Ok(Self {
             tx: Some(tx),
             thread: Some(thread),
+            last_foreground: std::collections::HashMap::new(),
         })
     }
 }
@@ -327,6 +358,10 @@ struct UiaState {
     automation: IUIAutomation,
     snapshot: Option<Snapshot>,
     elements: Vec<IUIAutomationElement>,
+    /// The top-level window the last capture came from. A pixel plan is only allowed to bind a
+    /// window inside this one; without it there is no verified ancestry and no plan.
+    capture_window: Option<u64>,
+    allow_unverified_pixel_classes: bool,
     _com: ComApartment,
 }
 impl UiaState {
@@ -357,6 +392,8 @@ impl UiaState {
             automation,
             snapshot: None,
             elements: vec![],
+            capture_window: None,
+            allow_unverified_pixel_classes: false,
             _com: com,
         })
     }
@@ -439,29 +476,8 @@ impl UiaState {
                             {
                                 return Ok(false);
                             }
-                            let hit = unsafe {
-                                self.automation.ElementFromPoint(POINT {
-                                    x: x.round() as i32,
-                                    y: y.round() as i32,
-                                })
-                            }
-                            .map_err(|e| operation("hit test OCR pointer target", e))?;
-                            let walker = unsafe { self.automation.ControlViewWalker() }
-                                .map_err(|e| operation("get UIA control walker", e))?;
-                            let mut current = Some(hit);
-                            for _ in 0..64 {
-                                let Some(element) = current else {
-                                    return Ok(false);
-                                };
-                                if unsafe { self.automation.CompareElements(&window, &element) }
-                                    .map_err(|e| operation("compare OCR target ancestry", e))?
-                                    .as_bool()
-                                {
-                                    return Ok(true);
-                                }
-                                current = unsafe { walker.GetParentElement(&element) }.ok();
-                            }
-                            Ok(false)
+                            let hit = self.element_at((x, y))?;
+                            self.contains(&window, hit)
                         });
                 let _ = tx.send(result);
             }
@@ -509,7 +525,171 @@ impl UiaState {
                     unsafe { p.ScrollIntoView() }.map_err(|e| operation("scroll into view", e))
                 }));
             }
+            Command::PlanPixelClick(handle, point, tx) => {
+                let _ = tx.send(self.plan_pixel_click(&handle, point));
+            }
+            Command::DispatchPixelClick(target, tx) => {
+                let _ = tx.send(Ok(self.dispatch_pixel_click(&target)));
+            }
+            Command::AllowUnverifiedPixelClasses(allow, tx) => {
+                self.allow_unverified_pixel_classes = allow;
+                let _ = tx.send(Ok(()));
+            }
         }
+    }
+
+    /// Whether `hit` is `ancestor` or sits underneath it in the control view.
+    ///
+    /// One walk shared by every check that has to answer "is what is at this point still the thing
+    /// we resolved": the OCR frame check, and the pixel rung's revalidation.
+    fn contains(
+        &self,
+        ancestor: &IUIAutomationElement,
+        hit: IUIAutomationElement,
+    ) -> Result<bool, BackendError> {
+        let walker = unsafe { self.automation.ControlViewWalker() }
+            .map_err(|e| operation("get UIA control walker", e))?;
+        let mut current = Some(hit);
+        for _ in 0..pixel::MAX_ANCESTRY {
+            let Some(element) = current else {
+                return Ok(false);
+            };
+            if unsafe { self.automation.CompareElements(ancestor, &element) }
+                .map_err(|e| operation("compare target ancestry", e))?
+                .as_bool()
+            {
+                return Ok(true);
+            }
+            current = unsafe { walker.GetParentElement(&element) }.ok();
+        }
+        Ok(false)
+    }
+
+    fn element_at(&self, (x, y): (f64, f64)) -> Result<IUIAutomationElement, BackendError> {
+        unsafe {
+            self.automation.ElementFromPoint(POINT {
+                x: x.round() as i32,
+                y: y.round() as i32,
+            })
+        }
+        .map_err(|e| operation("hit test", e))
+    }
+
+    /// The nearest ancestor that owns a native window, walked through the control view.
+    fn host_window(&self, element: &IUIAutomationElement) -> Result<Option<HWND>, BackendError> {
+        let walker = unsafe { self.automation.ControlViewWalker() }
+            .map_err(|e| operation("get UIA control walker", e))?;
+        let mut current = Some(element.clone());
+        for _ in 0..pixel::MAX_ANCESTRY {
+            let Some(node) = current else {
+                return Ok(None);
+            };
+            if let Ok(native) = unsafe { node.CurrentNativeWindowHandle() }
+                && !native.is_invalid()
+            {
+                return Ok(Some(native));
+            }
+            current = unsafe { walker.GetParentElement(&node) }.ok();
+        }
+        Ok(None)
+    }
+
+    /// Binds one click to one window, or names why it cannot be bound.
+    ///
+    /// Pure inspection throughout: the planner that calls this may discard the answer and refuse,
+    /// so by the time a rung is chosen nothing native may have happened.
+    fn plan_pixel_click(
+        &mut self,
+        handle: &SnapshotHandle,
+        point: (f64, f64),
+    ) -> Result<PixelPlan, BackendError> {
+        let Some(root) = self.capture_window.map(pixel::hwnd) else {
+            return Ok(PixelPlan::unavailable(
+                "no window has been captured, so there is no verified ancestry to bind this click \
+                 to",
+            ));
+        };
+        let element = self.element(handle)?;
+        let Some(host) = self.host_window(&element)? else {
+            return Ok(PixelPlan::unavailable(
+                "the resolved element has no native window in its accessibility ancestry",
+            ));
+        };
+        // The invariant that forbids inferring a window from an unscoped point: the window this
+        // binds to has to be the one the caller already captured and resolved against.
+        if pixel::root_of(host) != root {
+            return Ok(PixelPlan::unavailable(
+                "the resolved element's native window is not inside the captured window",
+            ));
+        }
+        let Some(pid) = pixel::process_of(host) else {
+            return Ok(PixelPlan::unavailable(
+                "the target window's owning process could not be read",
+            ));
+        };
+        if let Some(reason) = pixel::integrity_obstacle(pid) {
+            return Ok(PixelPlan::blocked(reason));
+        }
+        Ok(
+            match pixel::bind(host, point, pid, self.allow_unverified_pixel_classes) {
+                Err(reason) => PixelPlan::unavailable(reason),
+                Ok(bound) => PixelPlan::Bound(PixelTarget {
+                    handle: handle.clone(),
+                    window: pixel::bits(bound.window),
+                    window_class: bound.class,
+                    dpi_awareness: bound.dpi_awareness,
+                    root_window: pixel::bits(root),
+                    process_identifier: pid as i64,
+                    screen_point: point,
+                    client_origin: bound.client_origin,
+                    client_point: bound.client_point,
+                }),
+            },
+        )
+    }
+
+    /// Revalidates a plan and posts it, in that order and with nothing in between.
+    fn dispatch_pixel_click(
+        &mut self,
+        target: &PixelTarget,
+    ) -> Result<PixelDispatch, PixelDispatchError> {
+        let window = pixel::hwnd(target.window);
+        let root = pixel::hwnd(target.root_window);
+        pixel::revalidate(window, root, target.client_origin).map_err(PixelDispatchError::Stale)?;
+        let element = self
+            .element(&target.handle)
+            .map_err(PixelDispatchError::Backend)?;
+        let hit = self
+            .element_at(target.screen_point)
+            .map_err(PixelDispatchError::Backend)?;
+        if !self
+            .contains(&element, hit)
+            .map_err(PixelDispatchError::Backend)?
+        {
+            return Err(PixelDispatchError::Stale(
+                "the resolved element is no longer under the planned point".into(),
+            ));
+        }
+        // The invariants are read either side of a delivery that has an explicit end: the call
+        // below returns only once the target's window procedure has processed each message, so
+        // what follows observes the handler rather than racing it. With a posted sequence these
+        // two comparisons would straddle nothing at all.
+        let frontmost_before = pixel::foreground_window();
+        let cursor_before = pixel::cursor();
+        let delivered = pixel::deliver_click(
+            window,
+            POINT {
+                x: target.client_point.0 as i32,
+                y: target.client_point.1 as i32,
+            },
+        )
+        .map_err(|message| PixelDispatchError::Backend(op("deliver pixel click", message)))?;
+        Ok(PixelDispatch {
+            complete: delivered.complete,
+            partial: delivered.partial,
+            frontmost_unchanged: pixel::foreground_window() == frontmost_before,
+            pointer_unchanged: pixel::cursor() == cursor_before,
+        })
     }
     fn top_level(&self) -> Result<Vec<IUIAutomationElement>, BackendError> {
         let root = unsafe { self.automation.GetRootElement() }
@@ -542,6 +722,12 @@ impl UiaState {
         if let Ok(hwnd) = unsafe { window.CurrentNativeWindowHandle() } {
             msaa::activate(hwnd.0 as isize);
         }
+        // Recorded here and nowhere else: the pixel rung binds only inside the window a caller
+        // actually captured, so this is the anchor every later ancestry check is measured against.
+        self.capture_window = unsafe { window.CurrentNativeWindowHandle() }
+            .ok()
+            .filter(|native| !native.is_invalid())
+            .map(pixel::bits);
         let capture_root = self
             .wait_for_root_web_area(&window, Duration::from_secs(2))
             .unwrap_or_else(|| window.clone());
@@ -596,7 +782,7 @@ impl UiaState {
         let (window, _) = self.find_window(&q, "capture window graphics")?;
         let native = unsafe { window.CurrentNativeWindowHandle() }
             .map_err(|e| operation("read native window handle", e))?;
-        graphics_capture::capture(HWND(native.0 as *mut c_void))
+        graphics_capture::capture(HWND(native.0))
     }
     fn wait_for_root_web_area(
         &self,
@@ -762,6 +948,17 @@ impl UiaState {
 
 impl PlatformBackend for WindowsBackend {
     fn capabilities(&self) -> Result<Vec<CapabilityInfo>, BackendError> {
+        // `SendInput` posts to whatever desktop this process is attached to, and in session 0 or
+        // off the interactive window station that desktop has no user on it. UI Automation keeps
+        // answering there, so nothing else in the daemon notices; this is where the ladder finds
+        // out, and it is why a foreground refusal in session 0 is `noDeliveryCandidate` rather
+        // than an invitation to opt in to a device that reaches nobody.
+        let session = crate::lifecycle::current_session();
+        let global_input = (!session.interactive || !session.graphical).then(|| {
+            session.detail.clone().unwrap_or_else(|| {
+                "this session cannot reach the interactive desktop's input devices".to_string()
+            })
+        });
         Ok([
             Capability::Enumerate,
             Capability::Capture,
@@ -777,10 +974,18 @@ impl PlatformBackend for WindowsBackend {
             Capability::HitTest,
         ]
         .into_iter()
-        .map(|capability| CapabilityInfo {
-            capability,
-            usable: true,
-            restriction: None,
+        .map(|capability| {
+            let restriction = matches!(
+                capability,
+                Capability::PointerInput | Capability::KeyboardInput
+            )
+            .then(|| global_input.clone())
+            .flatten();
+            CapabilityInfo {
+                capability,
+                usable: restriction.is_none(),
+                restriction,
+            }
         })
         .collect())
     }
@@ -858,14 +1063,146 @@ impl PlatformBackend for WindowsBackend {
     fn observe_global_input(&mut self, _: Duration) -> Result<Vec<RecordedCall>, BackendError> {
         Err(cap(Capability::ObserveGlobalInput, "excluded from v1"))
     }
+
+    /// Withheld, on measurement rather than on principle.
+    ///
+    /// Every other part of the transaction works on a real desktop, and
+    /// `axon-win probe foreground` shows it: activation is proved, the dispatch runs once, and the
+    /// real pointer is captured and put back. What fails is the hand-back. `SetForegroundWindow`
+    /// activates the target and is then refused when asked to return the foreground to the
+    /// application it was taken from — twice, against two unrelated prior applications, with the
+    /// thread-attachment assist in place and a bounded wait for the change to settle. The probe
+    /// reports `accepted: false` on a direct retry, so this is Windows declining rather than a
+    /// readback sampled too early.
+    ///
+    /// The rung is global input that hands the session back. Offering one that reliably steals the
+    /// foreground and reliably reports `success: false` is the worst of both: the caller pays the
+    /// side effect and does not get the guarantee. So the seams below stay — they are what the
+    /// probe exercises and what a fix will need — and the rung stays closed until the probe says
+    /// the foreground comes home.
+    fn supports_foreground_transaction(&self) -> bool {
+        false
+    }
+
+    /// The foreground window's process id.
+    ///
+    /// The process id, deliberately: it is the same vocabulary `capture` records in
+    /// `Application::identifier`, and the transaction proves activation by comparing identities.
+    /// A window title would compare unequal against that and could never prove anything.
+    fn frontmost_application(&mut self) -> Result<Option<String>, BackendError> {
+        let window = pixel::foreground_window();
+        let Some(pid) = pixel::process_of(window) else {
+            return Ok(None);
+        };
+        // Bounded: this is a hint for restoration, not something anything reads for truth, and a
+        // long-lived daemon does not need to remember every window it has ever watched.
+        if self.last_foreground.len() >= 32 {
+            self.last_foreground.clear();
+        }
+        self.last_foreground.insert(pid, pixel::bits(window));
+        Ok(Some(pid.to_string()))
+    }
+
+    fn activate_application(&mut self, identity: &str) -> Result<bool, BackendError> {
+        // Identities reaching here are process ids, because `resolve_application` above is what
+        // the transaction translates a caller's request through. Anything else cannot be
+        // activated, and saying so leaves the transaction to refuse without posting rather than
+        // guessing at a window.
+        let Ok(pid) = identity.parse::<u32>() else {
+            return Ok(false);
+        };
+        let remembered = self.last_foreground.get(&pid).copied().map(pixel::hwnd);
+        Ok(pixel::activate(pid, remembered))
+    }
+
+    fn pointer_location(&mut self) -> Result<Option<(f64, f64)>, BackendError> {
+        Ok(pixel::cursor().map(|(x, y)| (x as f64, y as f64)))
+    }
+
+    fn move_pointer(&mut self, to: (f64, f64)) -> Result<bool, BackendError> {
+        Ok(pixel::set_cursor(to.0.round() as i32, to.1.round() as i32))
+    }
+
+    /// The process id of the application an `AppQuery` names.
+    ///
+    /// This is the translation the foreground transaction depends on, and it lives here rather
+    /// than in the router because only this backend knows that it spells an identity as a process
+    /// id. Handing a display name straight through would compare a window title against a process
+    /// id and refuse every aimed action as `activationNotProved`.
+    fn resolve_application(&mut self, app: &AppQuery) -> Result<Option<String>, BackendError> {
+        let applications = self.enumerate_applications()?;
+        let identified = |app: &Application| {
+            app.identifier
+                .clone()
+                .filter(|identity| !identity.is_empty())
+        };
+        if let Some(wanted) = app.identifier.as_deref() {
+            return Ok(applications
+                .iter()
+                .find(|candidate| identified(candidate).as_deref() == Some(wanted))
+                .and_then(identified));
+        }
+        let Some(wanted) = app.name.as_deref().map(str::to_lowercase) else {
+            return Ok(None);
+        };
+        // Exact before substring, so "Notepad" cannot be answered by "Notepad++" while the
+        // application the caller meant is running.
+        Ok(applications
+            .iter()
+            .find(|candidate| candidate.name.to_lowercase() == wanted)
+            .or_else(|| {
+                applications
+                    .iter()
+                    .find(|candidate| candidate.name.to_lowercase().contains(&wanted))
+            })
+            .and_then(identified))
+    }
+}
+
+impl BackgroundPixelPointer for WindowsBackend {
+    fn plan_pixel_click(
+        &mut self,
+        handle: &SnapshotHandle,
+        point: (f64, f64),
+    ) -> Result<PixelPlan, BackendError> {
+        self.call(|tx| Command::PlanPixelClick(handle.clone(), point, tx))
+    }
+
+    fn dispatch_pixel_click(
+        &mut self,
+        target: &PixelTarget,
+    ) -> Result<PixelDispatch, PixelDispatchError> {
+        self.call(|tx| Command::DispatchPixelClick(target.clone(), tx))
+            .map_err(PixelDispatchError::Backend)?
+    }
+}
+
+impl WindowsBackend {
+    /// Probe-only: lets a plan bind a window class the allowlist has not accepted yet.
+    ///
+    /// This is how a class becomes a candidate for the allowlist at all, and it is deliberately
+    /// not reachable through the tool surface. The daemon never bypasses its own table.
+    pub fn allow_unverified_pixel_classes(&mut self, allow: bool) -> Result<(), BackendError> {
+        self.call(|tx| Command::AllowUnverifiedPixelClasses(allow, tx))
+    }
 }
 
 pub struct IntegrationProbe;
 impl IntegrationProbe {
     pub fn run(args: &[String]) -> Result<serde_json::Value, BackendError> {
         let command = args.first().map(String::as_str).ok_or_else(|| {
-            op("probe", "expected value <app-query>, events <app-query> [seconds], or timeout [app-query] [milliseconds]")
+            op("probe", "expected value <app-query>, events <app-query> [seconds], timeout [app-query] [milliseconds], pixel-click <app-query> <element-query> [--unverified-class] [--settle-ms N], or foreground <app-query>")
         })?;
+        // These two drive the shipping backend rather than a parallel client, which is the point:
+        // a probe that exercised its own copy of the mechanism would prove nothing about the one
+        // the daemon runs. They must run in the interactive desktop session; over SSH they land
+        // in session 0, where UIA and SetForegroundWindow cannot reach the user's UI at all and
+        // every answer is a false negative.
+        match command {
+            "pixel-click" => return probe_pixel_click(args),
+            "foreground" => return probe_foreground(args),
+            _ => {}
+        }
         let _com = ComApartment::mta()?;
         let automation = create_automation()?;
         match command {
@@ -896,6 +1233,268 @@ fn required_probe_arg<'a>(
     args.get(index)
         .map(String::as_str)
         .ok_or_else(|| op("probe", format!("missing {name}")))
+}
+
+fn probe_flag<'a>(args: &'a [String], name: &str) -> Option<&'a String> {
+    args.iter()
+        .position(|arg| arg == name)
+        .and_then(|index| args.get(index + 1))
+}
+
+/// Every node of a snapshot, in the order its handles are numbered.
+fn flattened(snapshot: &Snapshot) -> Vec<&Node> {
+    fn add<'a>(node: &'a Node, out: &mut Vec<&'a Node>) {
+        out.push(node);
+        for child in &node.children {
+            add(child, out);
+        }
+    }
+    let mut out = Vec::new();
+    for window in &snapshot.app.windows {
+        add(&window.root, &mut out);
+    }
+    out
+}
+
+fn find_probe_node(
+    snapshot: &Snapshot,
+    query: &str,
+) -> Result<(SnapshotHandle, Node), BackendError> {
+    let wanted = query.to_lowercase();
+    let matches = |text: &Option<String>| {
+        text.as_ref()
+            .is_some_and(|value| value.to_lowercase().contains(&wanted))
+    };
+    flattened(snapshot)
+        .into_iter()
+        .enumerate()
+        .find(|(_, node)| {
+            matches(&node.name)
+                || matches(&node.title)
+                || matches(&node.label)
+                || matches(&node.identifier)
+        })
+        .map(|(index, node)| (snapshot.handle(index), node.clone()))
+        .ok_or_else(|| op("probe", format!("no element matches {query:?}")))
+}
+
+fn probe_point(point: Option<(i32, i32)>) -> serde_json::Value {
+    match point {
+        Some((x, y)) => serde_json::json!({"x": x, "y": y}),
+        None => serde_json::Value::Null,
+    }
+}
+
+/// Plans and posts one pixel click, reporting everything an allowlist entry has to be earned on.
+///
+/// The four acceptance criteria read straight off the output: the element state changed, the
+/// foreground window is identical before and after, the cursor is identical before and after, and
+/// `clientOrigin` plus `windowPoint` reconstruct `screenPoint`. Nothing here decides whether a
+/// class is good enough; a person reads this and edits `PIXEL_MESSAGE_CLASSES`.
+fn probe_pixel_click(args: &[String]) -> Result<serde_json::Value, BackendError> {
+    let app = required_probe_arg(args, 1, "app-query")?.to_string();
+    let element_query = required_probe_arg(args, 2, "element-query")?.to_string();
+    let unverified = args.iter().any(|arg| arg == "--unverified-class");
+    let settle = probe_number(probe_flag(args, "--settle-ms"), 750, "settle-ms")?;
+    // The element that changes is usually not the element that was clicked — a calculator key
+    // moves the display, a tab moves the pane. Watching only the target would report "nothing
+    // changed" for a click that worked perfectly.
+    let observed_query = probe_flag(args, "--observe")
+        .cloned()
+        .unwrap_or_else(|| element_query.clone());
+
+    let mut backend = WindowsBackend::start()?;
+    if unverified {
+        backend.allow_unverified_pixel_classes(true)?;
+    }
+    let query = AppQuery {
+        name: Some(app.clone()),
+        identifier: None,
+    };
+    let snapshot = backend.capture(&query)?;
+    let (handle, target_node) = find_probe_node(&snapshot, &element_query)?;
+    let frame = target_node
+        .frame
+        .ok_or_else(|| op("probe", "the resolved element has no actionable frame"))?;
+    let point = (frame.x + frame.width / 2.0, frame.y + frame.height / 2.0);
+    let (observed_handle, before) = find_probe_node(&snapshot, &observed_query)?;
+    let value_before = backend.read_value(&observed_handle).ok().flatten();
+
+    let target = match backend.plan_pixel_click(&handle, point)? {
+        PixelPlan::Bound(target) => target,
+        PixelPlan::Unavailable {
+            reason,
+            blocks_global_input,
+        } => {
+            return Ok(serde_json::json!({
+                "probe": "pixel-click",
+                "app": app,
+                "element": element_query,
+                "planned": false,
+                "reason": reason,
+                "blocksGlobalInput": blocks_global_input,
+            }));
+        }
+    };
+
+    // The two checks the router already runs against this pairing, reported alongside the
+    // dispatch. A revalidation that refuses is only diagnosable if what is actually under the
+    // point, and whether the shipping identity check agrees, are both on the record.
+    let hit_at_point = backend.hit_test(point).ok().flatten();
+    let identity_verified = backend
+        .verify_pointer_target(&handle, point)
+        .unwrap_or(false);
+
+    let foreground_before = pixel::bits(pixel::foreground_window());
+    let cursor_before = pixel::cursor();
+    let dispatch = backend.dispatch_pixel_click(&target);
+    let foreground_after = pixel::bits(pixel::foreground_window());
+    let cursor_after = pixel::cursor();
+    thread::sleep(Duration::from_millis(settle));
+    // Sampled a second time, after the target has had time to finish reacting. The dispatch's own
+    // invariant check ends where the window procedure returns, which is the boundary it can prove;
+    // a handler that defers activation onto its own message loop would land after that and before
+    // this. An allowlist entry has to survive both readings.
+    let foreground_settled = pixel::bits(pixel::foreground_window());
+    let cursor_settled = pixel::cursor();
+
+    let after_snapshot = backend.capture(&query)?;
+    let after = find_probe_node(&after_snapshot, &observed_query).ok();
+    let value_after = after
+        .as_ref()
+        .and_then(|(handle, _)| backend.read_value(handle).ok().flatten());
+
+    Ok(serde_json::json!({
+        "probe": "pixel-click",
+        "app": app,
+        "element": element_query,
+        "observed": observed_query,
+        "planned": true,
+        "unverifiedClassAllowed": unverified,
+        "target": {
+            "processIdentifier": target.process_identifier,
+            "screenPoint": {"x": target.screen_point.0, "y": target.screen_point.1},
+            "window": target.evidence(),
+        },
+        "dispatch": match &dispatch {
+            Ok(dispatch) => serde_json::json!({
+                "complete": dispatch.complete,
+                "partial": dispatch.partial,
+                "frontmostAppUnchanged": dispatch.frontmost_unchanged,
+                "pointerUnchanged": dispatch.pointer_unchanged,
+            }),
+            Err(PixelDispatchError::Stale(reason)) => serde_json::json!({"stale": reason}),
+            Err(PixelDispatchError::Backend(error)) => {
+                serde_json::json!({"error": error.to_string()})
+            }
+        },
+        "foregroundWindowBefore": format!("0x{foreground_before:08X}"),
+        "foregroundWindowAfter": format!("0x{foreground_after:08X}"),
+        "foregroundWindowSettled": format!("0x{foreground_settled:08X}"),
+        "cursorBefore": probe_point(cursor_before),
+        "cursorAfter": probe_point(cursor_after),
+        "cursorSettled": probe_point(cursor_settled),
+        "settleMs": settle,
+        "clickedElement": target_node,
+        "hitAtPoint": hit_at_point,
+        "identityVerified": identity_verified,
+        "observedBefore": before,
+        "observedAfter": after.map(|(_, node)| node),
+        "valueBefore": value_before,
+        "valueAfter": value_after,
+    }))
+}
+
+/// Runs the foreground transaction against a real application and reports the whole of it.
+///
+/// This is what answers whether `SetForegroundWindow` is usable from the daemon on this machine.
+/// If it is not, `activationProved` is false, nothing was posted, and the honest response is to
+/// leave the foreground rung withheld rather than to ship a rung that always refuses late.
+///
+/// The body deliberately moves the real pointer, because that is the seam a `SendInput` click
+/// depends on: `pointerRestored` in the output is the daemon proving it can hand the cursor back.
+fn probe_foreground(args: &[String]) -> Result<serde_json::Value, BackendError> {
+    let app = required_probe_arg(args, 1, "app-query")?.to_string();
+    let mut backend = WindowsBackend::start()?;
+    let query = AppQuery {
+        name: Some(app.clone()),
+        identifier: None,
+    };
+    let snapshot = backend.capture(&query)?;
+    let identity = snapshot
+        .app
+        .identifier
+        .clone()
+        .unwrap_or_else(|| snapshot.app.name.clone());
+    let nudge = snapshot
+        .app
+        .windows
+        .first()
+        .and_then(|window| window.root.frame)
+        .map(|frame| {
+            (
+                (frame.x + frame.width / 2.0).round() as i32,
+                (frame.y + frame.height / 2.0).round() as i32,
+            )
+        });
+
+    let prior_window = pixel::bits(pixel::foreground_window());
+    let cursor_before = pixel::cursor();
+    let dispatch = dispatch_in_foreground(
+        &mut backend,
+        ForegroundTarget::Application(&identity),
+        // This probe's whole subject is the hand-back, so it deliberately moves the cursor and
+        // then reports whether the transaction put it home. Passing false would exercise the one
+        // path it exists to measure and skip it.
+        true,
+        |_| {
+            if let Some((x, y)) = nudge {
+                pixel::set_cursor(x, y);
+            }
+        },
+    );
+    let cursor_after = pixel::cursor();
+
+    // What the transaction's own restore could not report: where the foreground actually ended up,
+    // and whether asking again changes the answer. A restore that fails is only diagnosable if the
+    // difference between "the request was refused" and "the request was accepted and ignored" is
+    // visible.
+    let settled = pixel::foreground_window();
+    let prior_identity = dispatch.cleanup.prior_app.clone();
+    let retry = prior_identity.as_ref().map(|identity| {
+        let accepted = backend.activate_application(identity).unwrap_or(false);
+        let immediately = pixel::foreground_window();
+        // Read once, then again after a wait longer than the transaction's own. Acceptance is a
+        // request and the foreground changes when Windows gets to it, so a single read cannot tell
+        // a refusal from an activation that had not happened yet — which is precisely the
+        // confusion that would have this rung withheld for the wrong reason.
+        thread::sleep(Duration::from_millis(1_000));
+        let eventually = pixel::foreground_window();
+        serde_json::json!({
+            "identity": identity,
+            "accepted": accepted,
+            "foregroundWindow": format!("0x{:08X}", pixel::bits(immediately)),
+            "foregroundProcess": pixel::process_of(immediately),
+            "foregroundWindowAfterWait": format!("0x{:08X}", pixel::bits(eventually)),
+            "foregroundProcessAfterWait": pixel::process_of(eventually),
+        })
+    });
+
+    Ok(serde_json::json!({
+        "probe": "foreground",
+        "app": app,
+        "identity": identity,
+        "priorForegroundWindow": format!("0x{prior_window:08X}"),
+        "priorForegroundProcess": pixel::process_of(pixel::hwnd(prior_window)),
+        "foreground": dispatch.cleanup,
+        "refusal": dispatch.refusal,
+        "pointerNudgedTo": probe_point(nudge),
+        "cursorBefore": probe_point(cursor_before),
+        "cursorAfter": probe_point(cursor_after),
+        "settledForegroundWindow": format!("0x{:08X}", pixel::bits(settled)),
+        "settledForegroundProcess": pixel::process_of(settled),
+        "restoreRetry": retry,
+    }))
 }
 
 fn probe_number(value: Option<&String>, default: u64, name: &str) -> Result<u64, BackendError> {
@@ -1336,7 +1935,7 @@ impl From<&BackendError> for CloneError {
             BackendError::Capability {
                 capability, reason, ..
             } => Self {
-                capability: Some(capability.clone()),
+                capability: Some(*capability),
                 operation: String::new(),
                 message: reason.clone(),
             },
