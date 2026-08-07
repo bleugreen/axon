@@ -40,6 +40,7 @@ type Reply<T> = mpsc::Sender<Result<T, BackendError>>;
 enum Command {
     Enumerate(Reply<Vec<Application>>),
     Identities(Reply<Vec<AppIdentity>>),
+    Identity(AppQuery, Reply<Option<String>>),
     Capture(AppQuery, Reply<Snapshot>),
     Invoke(SnapshotHandle, String, Reply<()>),
     Read(SnapshotHandle, Reply<Option<String>>),
@@ -362,6 +363,10 @@ impl PlatformBackend for LinuxBackend {
         }
     }
 
+    fn resolve_application(&mut self, app: &AppQuery) -> Result<Option<String>, BackendError> {
+        self.ask(|r| Command::Identity(app.clone(), r))
+    }
+
     fn activate_application(&mut self, identity: &str) -> Result<bool, BackendError> {
         let found = self.lookup(|app| (app.identity == identity).then_some(app.process_id))?;
         let Some(process_id) = found else {
@@ -412,6 +417,9 @@ impl Actor {
                 }
                 Command::Identities(r) => {
                     let _ = r.send(self.identities().await);
+                }
+                Command::Identity(q, r) => {
+                    let _ = r.send(self.identity_of(&q).await);
                 }
                 Command::Capture(q, r) => {
                     let _ = r.send(self.capture(q).await);
@@ -478,7 +486,16 @@ impl Actor {
         }
         Ok(out)
     }
-    async fn select(&self, q: &AppQuery) -> Result<(ObjectRefOwned, String), BackendError> {
+    /// The canonical identity of the application a query names, matched by exactly the rules
+    /// capture uses, so one request names one application across every tool.
+    async fn identity_of(&self, q: &AppQuery) -> Result<Option<String>, BackendError> {
+        Ok(self.select(q).await?.map(|(object, _)| identity(&object)))
+    }
+    /// `Ok(None)` is "nothing matched", which is a different answer from a failure to look.
+    async fn select(
+        &self,
+        q: &AppQuery,
+    ) -> Result<Option<(ObjectRefOwned, String)>, BackendError> {
         let mut partial = None;
         for object in self.roots().await? {
             let proxy = timeout(
@@ -496,7 +513,7 @@ impl Actor {
                 .as_deref()
                 .is_some_and(|n| name.eq_ignore_ascii_case(n));
             if id_match || exact {
-                return Ok((object, name));
+                return Ok(Some((object, name)));
             }
             if partial.is_none()
                 && q.name
@@ -506,10 +523,13 @@ impl Actor {
                 partial = Some((object, name));
             }
         }
-        partial.ok_or_else(|| operation("select application", "no AT-SPI application matched"))
+        Ok(partial)
     }
     async fn capture(&mut self, q: AppQuery) -> Result<Snapshot, BackendError> {
-        let (root, name) = self.select(&q).await?;
+        let (root, name) = self
+            .select(&q)
+            .await?
+            .ok_or_else(|| operation("select application", "no AT-SPI application matched"))?;
         let identifier = Some(identity(&root));
         let mut refs = Vec::new();
         let mut remaining = MAX_NODES;
