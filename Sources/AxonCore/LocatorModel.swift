@@ -31,6 +31,48 @@ public enum TextMatch: Codable, Equatable, Sendable {
     }
 }
 
+private extension TextMatch {
+    var evidenceValue: String {
+        switch self {
+        case let .exact(value, _), let .contains(value, _): value
+        }
+    }
+}
+
+public enum LocatorEvidenceField: String, Codable, Equatable, Sendable {
+    case role, subrole, title, label, value, description, identifier
+    case actions, ancestors, window, nearbyText, frame
+}
+
+public enum LocatorEvidenceOutcome: String, Codable, Equatable, Sendable {
+    case matched
+    case tolerated
+    case absent
+    case unevaluated
+}
+
+public struct LocatorEvidenceItem: Codable, Equatable, Sendable {
+    public let field: LocatorEvidenceField
+    public let outcome: LocatorEvidenceOutcome
+    public let expected: String?
+    public let actual: String?
+
+    public init(field: LocatorEvidenceField, outcome: LocatorEvidenceOutcome, expected: String? = nil, actual: String? = nil) {
+        self.field = field
+        self.outcome = outcome
+        self.expected = expected
+        self.actual = actual
+    }
+}
+
+public enum LocatorResolutionPath: String, Codable, Equatable, Sendable {
+    case cached, predicate, scopedScan, fullSnapshot
+}
+
+public enum LocatorContextCompleteness: String, Codable, Equatable, Sendable {
+    case full, path
+}
+
 public struct AXAncestorLocator: Codable, Equatable, Sendable {
     public let role: String?
     public let subrole: String?
@@ -170,6 +212,8 @@ public struct LocatorCandidate: Codable, Equatable, Sendable {
     public let frame: AXFrame?
     public let score: Int
     public let reasons: [String]
+    public let evidence: [LocatorEvidenceItem]
+    public let observedLocator: AXLocator?
 
     public init(
         index: Int,
@@ -178,7 +222,9 @@ public struct LocatorCandidate: Codable, Equatable, Sendable {
         title: String?,
         frame: AXFrame? = nil,
         score: Int,
-        reasons: [String]
+        reasons: [String],
+        evidence: [LocatorEvidenceItem] = [],
+        observedLocator: AXLocator? = nil
     ) {
         self.index = index
         self.handle = handle
@@ -187,6 +233,8 @@ public struct LocatorCandidate: Codable, Equatable, Sendable {
         self.frame = frame
         self.score = score
         self.reasons = reasons
+        self.evidence = evidence
+        self.observedLocator = observedLocator
     }
 }
 
@@ -196,8 +244,15 @@ public struct LocatorResolution: Codable, Equatable, Sendable {
     public let best: LocatorCandidate?
     public let candidates: [LocatorCandidate]
     public let confidence: LocatorConfidence
+    public let path: LocatorResolutionPath
+    public let context: LocatorContextCompleteness
 
-    init(snapshotID: SnapshotID, candidates: [LocatorCandidate]) {
+    init(
+        snapshotID: SnapshotID,
+        candidates: [LocatorCandidate],
+        path: LocatorResolutionPath = .fullSnapshot,
+        context: LocatorContextCompleteness = .full
+    ) {
         let best = Self.uniqueHighestScoringCandidate(in: candidates)
         let status: LocatorResolutionStatus = candidates.isEmpty ? .missing : (best == nil ? .ambiguous : .unique)
         self.init(
@@ -205,7 +260,9 @@ public struct LocatorResolution: Codable, Equatable, Sendable {
             snapshotID: snapshotID,
             best: best,
             candidates: candidates,
-            confidence: Self.confidence(status: status, best: best)
+            confidence: Self.confidence(status: status, best: best),
+            path: path,
+            context: context
         )
     }
 
@@ -214,13 +271,17 @@ public struct LocatorResolution: Codable, Equatable, Sendable {
         snapshotID: SnapshotID,
         best: LocatorCandidate?,
         candidates: [LocatorCandidate],
-        confidence: LocatorConfidence? = nil
+        confidence: LocatorConfidence? = nil,
+        path: LocatorResolutionPath = .fullSnapshot,
+        context: LocatorContextCompleteness = .full
     ) {
         self.status = status
         self.snapshotID = snapshotID
         self.best = best
         self.candidates = candidates
         self.confidence = confidence ?? Self.confidence(status: status, best: best)
+        self.path = path
+        self.context = context
     }
 
     private static func uniqueHighestScoringCandidate(in candidates: [LocatorCandidate]) -> LocatorCandidate? {
@@ -280,39 +341,60 @@ public struct LocatorResolver: Sendable {
         usesMacOSCompensations = !platformNeutral
     }
 
-    public func resolve(_ locator: AXLocator, in snapshot: AppSnapshot) -> LocatorResolution {
+    public func resolve(
+        _ locator: AXLocator,
+        in snapshot: AppSnapshot,
+        path: LocatorResolutionPath = .fullSnapshot,
+        context completeness: LocatorContextCompleteness = .full
+    ) -> LocatorResolution {
         let candidates = indexedNodesWithContext(in: snapshot).compactMap { indexed, context -> LocatorCandidate? in
-            candidate(for: indexed, context: context, locator: locator, snapshot: snapshot)
+            candidate(for: indexed, context: context, locator: locator, snapshot: snapshot, completeness: completeness)
         }
 
-        return LocatorResolution(snapshotID: snapshot.id, candidates: candidates)
+        return LocatorResolution(snapshotID: snapshot.id, candidates: candidates, path: path, context: completeness)
     }
 
     private func candidate(
         for indexed: IndexedAXNode,
         context: LocatorNodeContext,
         locator: AXLocator,
-        snapshot: AppSnapshot
+        snapshot: AppSnapshot,
+        completeness: LocatorContextCompleteness
     ) -> LocatorCandidate? {
         let node = indexed.node
         var reasons: [String] = []
+        var evidence: [LocatorEvidenceItem] = []
 
-        guard matchesExact(locator.role, actual: node.role, label: "role", reasons: &reasons),
-              matchesExact(locator.subrole, actual: node.subrole, label: "subrole", reasons: &reasons),
-              matchesTitle(locator.title, node: node, reasons: &reasons),
-              matchesLabel(locator.label, node: node, reasons: &reasons),
-              matchesValue(locator.value, node: node, reasons: &reasons),
-              matches(locator.description, actual: node.description, label: "description", reasons: &reasons),
-              matches(locator.identifier, actual: node.identifier, label: "identifier", reasons: &reasons),
+        guard matchesExact(locator.role, actual: node.role, field: .role, label: "role", reasons: &reasons, evidence: &evidence),
+              matchesExact(locator.subrole, actual: node.subrole, field: .subrole, label: "subrole", reasons: &reasons, evidence: &evidence),
+              matchesTitle(locator.title, node: node, reasons: &reasons, evidence: &evidence),
+              matchesLabel(locator.label, node: node, reasons: &reasons, evidence: &evidence),
+              matchesValue(locator.value, node: node, reasons: &reasons, evidence: &evidence),
+              matches(locator.description, actual: node.description, field: .description, label: "description", reasons: &reasons, evidence: &evidence),
+              matches(locator.identifier, actual: node.identifier, field: .identifier, label: "identifier", reasons: &reasons, evidence: &evidence),
               matchesWindow(locator.window, node: node, ancestors: context.ancestors, reasons: &reasons),
               matchesAncestors(locator.ancestors, actual: context.ancestors, snapshot: snapshot, reasons: &reasons)
         else {
             return nil
         }
         addActionReasons(locator.actions, actual: node.actions, reasons: &reasons)
-        addNearbyTextReasons(locator.nearbyText, context: context, reasons: &reasons)
+        if !locator.actions.isEmpty {
+            evidence.append(.init(field: .actions, outcome: locator.actions.contains(where: node.actions.contains) ? .matched : .absent, expected: locator.actions.joined(separator: ", "), actual: node.actions.joined(separator: ", ")))
+        }
+        addNearbyTextReasons(locator.nearbyText, context: context, completeness: completeness, reasons: &reasons, evidence: &evidence)
         let score = score(for: locator, node: node, reasons: reasons)
         addGeometryReason(locator.frame, nodeFrame: node.frame, baseScore: score.base, reasons: &reasons)
+        if let frame = locator.frame {
+            evidence.append(.init(field: .frame, outcome: reasons.contains(where: { $0.hasPrefix("frame distance ") }) ? .matched : .absent, expected: String(describing: frame), actual: node.frame.map(String.init(describing:))))
+        }
+        if !locator.ancestors.isEmpty {
+            evidence.append(.init(field: .ancestors, outcome: .matched, expected: String(locator.ancestors.count), actual: String(context.ancestors.count)))
+        }
+        if locator.window != nil {
+            evidence.append(.init(field: .window, outcome: .matched))
+        }
+        let windowTitle = context.ancestors.first(where: { $0.role == "AXWindow" })?.title
+        let observedLocator = try? AXLocator(jsonValue: .object(RecordedLocatorBuilder.locator(from: node, ancestors: context.ancestors, windowTitle: windowTitle)))
 
         return LocatorCandidate(
             index: indexed.index,
@@ -321,7 +403,9 @@ public struct LocatorResolver: Sendable {
             title: node.title,
             frame: node.frame,
             score: score.total,
-            reasons: reasons
+            reasons: reasons,
+            evidence: evidence,
+            observedLocator: observedLocator
         )
     }
 
@@ -334,7 +418,7 @@ public struct LocatorResolver: Sendable {
         return LocatorScore(base: baseScore, geometry: geometryScore)
     }
 
-    private func matchesExact(_ expected: String?, actual: String?, label: String, reasons: inout [String]) -> Bool {
+    private func matchesExact(_ expected: String?, actual: String?, field: LocatorEvidenceField, label: String, reasons: inout [String], evidence: inout [LocatorEvidenceItem]) -> Bool {
         guard let expected else {
             return true
         }
@@ -342,10 +426,11 @@ public struct LocatorResolver: Sendable {
             return false
         }
         reasons.append("\(label) \(expected)")
+        evidence.append(.init(field: field, outcome: .matched, expected: expected, actual: actual))
         return true
     }
 
-    private func matches(_ matcher: TextMatch?, actual: String?, label: String, reasons: inout [String]) -> Bool {
+    private func matches(_ matcher: TextMatch?, actual: String?, field: LocatorEvidenceField, label: String, reasons: inout [String], evidence: inout [LocatorEvidenceItem]) -> Bool {
         guard let matcher else {
             return true
         }
@@ -353,21 +438,25 @@ public struct LocatorResolver: Sendable {
             return false
         }
         reasons.append("\(label) \(matcher.reasonFragment)")
+        evidence.append(.init(field: field, outcome: .matched, expected: matcher.evidenceValue, actual: actual))
         return true
     }
 
-    private func matchesValue(_ matcher: TextMatch?, node: AXNode, reasons: inout [String]) -> Bool {
+    private func matchesValue(_ matcher: TextMatch?, node: AXNode, reasons: inout [String], evidence: inout [LocatorEvidenceItem]) -> Bool {
         guard let matcher else {
             return true
         }
         if matcher.matches(node.value) {
             reasons.append("value \(matcher.reasonFragment)")
+            evidence.append(.init(field: .value, outcome: .matched, expected: matcher.evidenceValue, actual: node.value))
             return true
         }
-        return node.editable == true || (usesMacOSCompensations && AXRoleSemantics.isEditableTextRole(node.role))
+        let tolerated = node.editable == true || (usesMacOSCompensations && AXRoleSemantics.isEditableTextRole(node.role))
+        if tolerated { evidence.append(.init(field: .value, outcome: .tolerated, expected: matcher.evidenceValue, actual: node.value)) }
+        return tolerated
     }
 
-    private func matchesTitle(_ matcher: TextMatch?, node: AXNode, reasons: inout [String]) -> Bool {
+    private func matchesTitle(_ matcher: TextMatch?, node: AXNode, reasons: inout [String], evidence: inout [LocatorEvidenceItem]) -> Bool {
         // macOS AX often leaves an editable control's accessible name unset and exposes its useful
         // text only through AXValue. Treating a stale recorded title as a positive signal avoids
         // rejecting that control. This is an AX-backend compensation, not shared locator semantics.
@@ -376,6 +465,7 @@ public struct LocatorResolver: Sendable {
         }
         if matcher.matches(node.title) {
             reasons.append("title \(matcher.reasonFragment)")
+            evidence.append(.init(field: .title, outcome: .matched, expected: matcher.evidenceValue, actual: node.title))
             return true
         }
         guard usesMacOSCompensations else {
@@ -387,13 +477,16 @@ public struct LocatorResolver: Sendable {
         guard Self.descendantLabelRoles.contains(node.role),
               descendantLabels(of: node).contains(where: matcher.matches)
         else {
-            return AXRoleSemantics.isEditableTextRole(node.role)
+            let tolerated = AXRoleSemantics.isEditableTextRole(node.role)
+            if tolerated { evidence.append(.init(field: .title, outcome: .tolerated, expected: matcher.evidenceValue, actual: node.title)) }
+            return tolerated
         }
         reasons.append("descendant title \(matcher.reasonFragment)")
+        evidence.append(.init(field: .title, outcome: .matched, expected: matcher.evidenceValue, actual: descendantLabels(of: node).first(where: matcher.matches)))
         return true
     }
 
-    private func matchesLabel(_ matcher: TextMatch?, node: AXNode, reasons: inout [String]) -> Bool {
+    private func matchesLabel(_ matcher: TextMatch?, node: AXNode, reasons: inout [String], evidence: inout [LocatorEvidenceItem]) -> Bool {
         // AX snapshots have no computed, cross-role Name field. displayLabel and descendant text
         // reconstruct the human-facing label that macOS exposes across several attributes/nodes.
         // Editable-role mismatch handling is likewise AX-local; the shared contract remains strict.
@@ -403,14 +496,18 @@ public struct LocatorResolver: Sendable {
         let label = usesMacOSCompensations ? node.displayLabel : node.label
         if matcher.matches(label) {
             reasons.append("label \(matcher.reasonFragment)")
+            evidence.append(.init(field: .label, outcome: .matched, expected: matcher.evidenceValue, actual: label))
             return true
         }
         guard usesMacOSCompensations,
               descendantLabels(of: node).contains(where: matcher.matches)
         else {
-            return usesMacOSCompensations && AXRoleSemantics.isEditableTextRole(node.role)
+            let tolerated = usesMacOSCompensations && AXRoleSemantics.isEditableTextRole(node.role)
+            if tolerated { evidence.append(.init(field: .label, outcome: .tolerated, expected: matcher.evidenceValue, actual: label)) }
+            return tolerated
         }
         reasons.append("descendant label \(matcher.reasonFragment)")
+        evidence.append(.init(field: .label, outcome: .matched, expected: matcher.evidenceValue, actual: descendantLabels(of: node).first(where: matcher.matches)))
         return true
     }
 
@@ -502,8 +599,10 @@ public struct LocatorResolver: Sendable {
         return locator.label == nil || locator.label?.matches(label) == true
     }
 
-    private func addNearbyTextReasons(_ expected: [TextMatch], context: LocatorNodeContext, reasons: inout [String]) {
-        guard !expected.isEmpty else {
+    private func addNearbyTextReasons(_ expected: [TextMatch], context: LocatorNodeContext, completeness: LocatorContextCompleteness, reasons: inout [String], evidence: inout [LocatorEvidenceItem]) {
+        guard !expected.isEmpty else { return }
+        if completeness == .path {
+            evidence.append(.init(field: .nearbyText, outcome: .unevaluated, expected: expected.map(\.evidenceValue).joined(separator: ", ")))
             return
         }
         let nearbyStrings = nearbyTextStrings(in: context)
@@ -513,6 +612,7 @@ public struct LocatorResolver: Sendable {
         for matcher in expected where nearbyStrings.contains(where: matcher.matches) {
             reasons.append("nearby text \(matcher.reasonFragment)")
         }
+        evidence.append(.init(field: .nearbyText, outcome: expected.contains(where: { matcher in nearbyStrings.contains(where: matcher.matches) }) ? .matched : .absent, expected: expected.map(\.evidenceValue).joined(separator: ", "), actual: nearbyStrings.joined(separator: ", ")))
     }
 
     private func nearbyTextStrings(in context: LocatorNodeContext) -> [String] {

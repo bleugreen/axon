@@ -31,7 +31,7 @@ public final class AXLiveLocatorResolver: @unchecked Sendable {
 
     public func resolve(app query: String, locator: AXLocator, scrollToVisible: Bool = false) throws -> LocatorResolution {
         if let cached = cachedElement(app: query, locator: locator) {
-            if let resolution = fastResolution(app: query, locator: locator, candidateElements: [cached], cacheResult: false) {
+            if let resolution = fastResolution(app: query, locator: locator, candidateElements: [cached], cacheResult: false, path: .cached) {
                 debug("cache hit")
                 if scrollToVisible,
                    let handle = resolution.best?.handle,
@@ -48,7 +48,7 @@ public final class AXLiveLocatorResolver: @unchecked Sendable {
         }
 
         let snapshot = try captureSnapshot(app: query)
-        let resolution = LocatorResolver().resolve(locator, in: snapshot)
+        let resolution = LocatorResolver().resolve(locator, in: snapshot, path: .fullSnapshot, context: .full)
 
         if resolution.status == .unique,
            let handle = resolution.best?.handle,
@@ -171,7 +171,7 @@ public final class AXLiveLocatorResolver: @unchecked Sendable {
 
         let candidateElements = scopes.flatMap { boundedDescendants(of: $0.element, limit: 250) }
         debug("bounded candidates: \(candidateElements.count)")
-        if let result = fastResolution(app: query, locator: locator, candidateElements: candidateElements, cacheResult: true) {
+        if let result = fastResolution(app: query, locator: locator, candidateElements: candidateElements, cacheResult: true, path: .scopedScan) {
             if scrollToVisible,
                result.status == .unique,
                let handle = result.best?.handle,
@@ -252,7 +252,7 @@ public final class AXLiveLocatorResolver: @unchecked Sendable {
         }
         debug("predicate returned \(elements.count) for \(searchKey) \(searchText)")
 
-        guard let resolution = fastResolution(app: query, locator: locator, candidateElements: elements, cacheResult: true) else {
+        guard let resolution = fastResolution(app: query, locator: locator, candidateElements: elements, cacheResult: true, path: .predicate) else {
             return nil
         }
         if scrollToVisible,
@@ -268,7 +268,8 @@ public final class AXLiveLocatorResolver: @unchecked Sendable {
         app query: String,
         locator: AXLocator,
         candidateElements: [AXUIElement],
-        cacheResult: Bool
+        cacheResult: Bool,
+        path: LocatorResolutionPath
     ) -> LocatorResolution? {
         let appIdentity: AppIdentity
         do {
@@ -280,7 +281,7 @@ public final class AXLiveLocatorResolver: @unchecked Sendable {
         var matches: [(element: AXUIElement, candidate: LocatorCandidate)] = []
         for element in deduplicated(candidateElements) {
             let capture = miniCapture(app: appIdentity, leaf: element)
-            let resolution = LocatorResolver().resolve(locator, in: capture.snapshot)
+            let resolution = LocatorResolver().resolve(locator, in: capture.snapshot, path: path, context: .path)
             guard resolution.status == .unique,
                   let best = resolution.best,
                   best.index == capture.elements.count - 1
@@ -312,11 +313,13 @@ public final class AXLiveLocatorResolver: @unchecked Sendable {
                 title: match.candidate.title,
                 frame: match.candidate.frame,
                 score: match.candidate.score,
-                reasons: match.candidate.reasons
+                reasons: match.candidate.reasons,
+                evidence: match.candidate.evidence,
+                observedLocator: match.candidate.observedLocator
             )
         }
 
-        let resolution = LocatorResolution(snapshotID: snapshotID, candidates: candidates)
+        let resolution = LocatorResolution(snapshotID: snapshotID, candidates: candidates, path: path, context: .path)
         if cacheResult,
            resolution.status == .unique,
            let index = resolution.best?.index,

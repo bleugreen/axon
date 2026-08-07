@@ -707,26 +707,36 @@ private struct PrimitiveActionCommandHandler {
                     let resolution = try resolveTextLocationTarget(location)
                     return try withLocationResolution(services.actions.clickPoint(resolution.point), resolution: resolution)
                 case .handle, .locator:
-                    return try services.actions.click(resolveElementTarget(target))
+                    let resolved = try resolveElementTarget(target)
+                    return withTargetResolution(
+                        try services.actions.click(resolved.handle),
+                        resolution: resolved.resolution
+                    )
                 }
             }
         case "invoke":
             return actionResponse(id: request.id) {
                 let params = try CommandRouterRequestSupport.paramsObject(in: request)
                 let decoder = ToolParamDecoder(toolName: "invoke", params: params)
-                return try services.actions.invoke(
-                    resolveElementTarget(try CommandRouterRequestSupport.requiredToolTarget("target", in: params, acceptedKinds: .element)),
-                    try decoder.requiredString("name")
+                let resolved = try resolveElementTarget(
+                    try CommandRouterRequestSupport.requiredToolTarget("target", in: params, acceptedKinds: .element)
                 )
+                return withTargetResolution(try services.actions.invoke(
+                    resolved.handle,
+                    try decoder.requiredString("name")
+                ), resolution: resolved.resolution)
             }
         case "type":
             return actionResponse(id: request.id) {
                 let params = try CommandRouterRequestSupport.paramsObject(in: request)
                 let decoder = ToolParamDecoder(toolName: "type", params: params)
-                return try services.actions.type(
-                    resolveElementTarget(try CommandRouterRequestSupport.requiredToolTarget("target", in: params, acceptedKinds: .element)),
-                    try decoder.requiredString("value")
+                let resolved = try resolveElementTarget(
+                    try CommandRouterRequestSupport.requiredToolTarget("target", in: params, acceptedKinds: .element)
                 )
+                return withTargetResolution(try services.actions.type(
+                    resolved.handle,
+                    try decoder.requiredString("value")
+                ), resolution: resolved.resolution)
             }
         case "keyboard":
             return actionResponse(id: request.id) {
@@ -751,7 +761,10 @@ private struct PrimitiveActionCommandHandler {
                     try decoder.number("deltaX") ?? 0,
                     try decoder.number("deltaY") ?? -120
                 )
-                return withLocationResolution(result, resolution: target?.locationResolution)
+                return withTargetResolution(
+                    withLocationResolution(result, resolution: target?.locationResolution),
+                    resolution: target?.targetResolution
+                )
             }
         case "drag":
             return actionResponse(id: request.id) {
@@ -766,23 +779,26 @@ private struct PrimitiveActionCommandHandler {
                     app,
                     try decoder.int("durationMs")
                 )
-                return withLocationResolutions(result, resolutions: [from.locationResolution, to.locationResolution])
+                return withTargetResolutions(
+                    withLocationResolutions(result, resolutions: [from.locationResolution, to.locationResolution]),
+                    resolutions: [from.targetResolution, to.targetResolution]
+                )
             }
         default:
             return JSONRPCResponse(id: request.id, error: .methodNotFound(request.method))
         }
     }
 
-    private func resolveElementTarget(_ target: ToolTarget) throws -> String {
+    private func resolveElementTarget(_ target: ToolTarget) throws -> ResolvedElementTarget {
         switch target {
         case let .handle(handle):
-            return handle
+            return ResolvedElementTarget(handle: handle, resolution: nil)
         case let .locator(app, locator):
             let resolution = try services.resolveLocator(app, locator, true)
             guard resolution.status == .unique, let handle = resolution.best?.handle else {
-                throw JSONRPCError.invalidParams("Locator did not resolve uniquely: \(resolution.status.rawValue)")
+                throw LocatorResolutionFailure(resolution: resolution)
             }
-            return handle.rawValue
+            return ResolvedElementTarget(handle: handle.rawValue, resolution: resolution)
         case .point:
             throw JSONRPCError.invalidParams("target does not accept point targets; accepted target kinds: handle, locator")
         case .textLocation:
@@ -816,18 +832,27 @@ private struct PrimitiveActionCommandHandler {
     ) throws -> ResolvedPointerTarget {
         switch target {
         case let .handle(handle):
-            return ResolvedPointerTarget(target: .handle(handle), locationResolution: nil)
+            return ResolvedPointerTarget(target: .handle(handle), locationResolution: nil, targetResolution: nil)
         case let .locator(app, locator):
             let resolved = try resolveElementTarget(.locator(app: app, locator: locator))
-            return ResolvedPointerTarget(target: .handle(resolved), locationResolution: nil)
+            return ResolvedPointerTarget(
+                target: .handle(resolved.handle),
+                locationResolution: nil,
+                targetResolution: resolved.resolution
+            )
         case let .point(point):
             return ResolvedPointerTarget(
                 target: .point(try screenPoint(for: point, defaultApp: defaultApp, fieldName: fieldName)),
-                locationResolution: nil
+                locationResolution: nil,
+                targetResolution: nil
             )
         case let .textLocation(location):
             let resolution = try resolveTextLocationTarget(location)
-            return ResolvedPointerTarget(target: .point(resolution.point), locationResolution: resolution)
+            return ResolvedPointerTarget(
+                target: .point(resolution.point),
+                locationResolution: resolution,
+                targetResolution: nil
+            )
         }
     }
 
@@ -960,9 +985,73 @@ private struct PrimitiveActionCommandHandler {
         )
     }
 
+    private func withTargetResolution(
+        _ result: PrimitiveActionResult,
+        resolution: LocatorResolution?
+    ) -> PrimitiveActionResult {
+        guard let resolution else { return result }
+        return addingDetails(["targetResolution": compactTargetResolution(resolution)], to: result)
+    }
+
+    private func withTargetResolutions(
+        _ result: PrimitiveActionResult,
+        resolutions: [LocatorResolution?]
+    ) -> PrimitiveActionResult {
+        let values = resolutions.compactMap { resolution in
+            resolution.map { compactTargetResolution($0) }
+        }
+        guard !values.isEmpty else { return result }
+        return addingDetails(["targetResolutions": .array(values)], to: result)
+    }
+
+    private func compactTargetResolution(_ resolution: LocatorResolution) -> JSONValue {
+        let redacted = resolution.jsonValue(activeSecretRedactor: activeSecretRedactor())
+        guard case let .object(full) = redacted else { return .null }
+
+        var compact = [String: JSONValue]()
+        for key in ["status", "confidence", "path", "context"] {
+            if let value = full[key] { compact[key] = value }
+        }
+        if let bestValue = full["best"], case let .object(best) = bestValue {
+            compact["observedLocator"] = best["observedLocator"]
+            if let evidenceValue = best["evidence"], case let .array(evidence) = evidenceValue {
+                compact["evidence"] = .array(evidence.filter { item in
+                    guard case let .object(fields) = item else { return true }
+                    return fields["outcome"] != JSONValue.string("matched")
+                })
+            }
+        }
+        if resolution.status == .ambiguous {
+            compact["candidates"] = full["candidates"]
+        }
+        return .object(compact)
+    }
+
+    private func addingDetails(_ additional: [String: JSONValue], to result: PrimitiveActionResult) -> PrimitiveActionResult {
+        var details = result.details
+        details.merge(additional) { _, new in new }
+        return PrimitiveActionResult(
+            action: result.action,
+            target: result.target,
+            strategy: result.strategy,
+            success: result.success,
+            message: result.message,
+            details: details
+        )
+    }
+
     private func actionResponse(id: JSONRPCID?, _ body: () throws -> PrimitiveActionResult) -> JSONRPCResponse {
         do {
             return JSONRPCResponse(id: id, result: ["action": try body().jsonValue])
+        } catch let failure as LocatorResolutionFailure {
+            return JSONRPCResponse(
+                id: id,
+                error: JSONRPCError(
+                    code: -32602,
+                    message: "Locator did not resolve uniquely: \(failure.resolution.status.rawValue)",
+                    data: .object(["targetResolution": compactTargetResolution(failure.resolution)])
+                )
+            )
         } catch let error as JSONRPCError {
             return JSONRPCResponse(id: id, error: error)
         } catch let error as AXElementStoreError {
@@ -1350,6 +1439,12 @@ private struct WaitForValueResult {
 private struct ResolvedPointerTarget {
     let target: PointerTarget
     let locationResolution: TextLocationResolvedPoint?
+    let targetResolution: LocatorResolution?
+}
+
+private struct ResolvedElementTarget {
+    let handle: String
+    let resolution: LocatorResolution?
 }
 
 private struct TextLocationResolvedPoint {
@@ -1407,4 +1502,9 @@ private extension Array where Element == ScreenTextItem {
         JSONValue.array(map { $0.jsonValue(activeSecretRedactor: activeSecretRedactor) })
             .containsActiveCredentialRedaction()
     }
+}
+
+
+private struct LocatorResolutionFailure: Error {
+    let resolution: LocatorResolution
 }

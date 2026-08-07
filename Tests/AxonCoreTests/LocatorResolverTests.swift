@@ -21,6 +21,46 @@ import Testing
     #expect(resolution.best?.reasons.contains("title exact NEW") == true)
 }
 
+@Test func locatorResolverReportsAbsentActionEvidence() {
+    let snapshot = locatorFixtureSnapshot(buttons: ["NEW"])
+    let resolution = LocatorResolver().resolve(
+        AXLocator(role: "AXButton", title: .exact("NEW"), actions: ["AXShowMenu"]),
+        in: snapshot
+    )
+
+    #expect(resolution.best?.evidence.first(where: { $0.field == .actions })?.outcome == .absent)
+}
+
+@Test func locatorResolverDoesNotTreatPathScopedNearbyTextAsAbsent() {
+    let snapshot = locatorFixtureSnapshot(buttons: ["NEW"])
+    let resolution = LocatorResolver().resolve(
+        AXLocator(role: "AXButton", title: .exact("NEW"), nearbyText: [.exact("Toolbar")]),
+        in: snapshot,
+        path: .predicate,
+        context: .path
+    )
+
+    #expect(resolution.path == .predicate)
+    #expect(resolution.context == .path)
+    #expect(resolution.best?.evidence.first(where: { $0.field == .nearbyText })?.outcome == .unevaluated)
+}
+
+@Test func locatorResolverObservedLocatorUsesRecordedLocatorRules() throws {
+    let node = AXNode(role: "AXButton", title: "Save", actions: ["AXPress"])
+    let ancestors = [AXNode(role: "AXWindow", title: "Main"), AXNode(role: "AXToolbar", title: "Actions")]
+    let snapshot = AppSnapshot(
+        id: SnapshotID("observed"),
+        app: AppIdentity(bundleIdentifier: "com.example.App", name: "Example", processIdentifier: 42),
+        windows: [AXNode(role: "AXWindow", title: "Main", children: [AXNode(role: "AXToolbar", title: "Actions", children: [node])])],
+        screenshot: nil
+    )
+
+    let resolution = LocatorResolver().resolve(AXLocator(role: "AXButton", title: .exact("Save")), in: snapshot)
+    let expected = try AXLocator(jsonValue: .object(RecordedLocatorBuilder.locator(from: node, ancestors: ancestors, windowTitle: "Main")))
+
+    #expect(resolution.best?.observedLocator == expected)
+}
+
 @Test func textMatchUsesLocaleIndependentUnicodeLowercasingWithoutRemovingDiacritics() {
     #expect(TextMatch.exact("ärger").matches("ÄRGER"))
     #expect(TextMatch.contains("CAFÉ").matches("Un café noir"))
@@ -206,6 +246,7 @@ import Testing
     #expect(resolution.status == .unique)
     #expect(resolution.best?.handle?.rawValue == "locator-fixture:1")
     #expect(resolution.best?.reasons.contains { $0.hasPrefix("value ") } == false)
+    #expect(resolution.best?.evidence.first(where: { $0.field == .value })?.outcome == .tolerated)
 }
 
 @Test func locatorResolverTreatsEditableTitleAndLabelAsReplayHints() throws {

@@ -2008,3 +2008,151 @@ private func axnActiveCredentialFilter(values: [String]) throws -> ActiveCredent
         createdAt: Date(timeIntervalSince1970: 1_775_000_000)
     )
 }
+
+
+@Test func runWritesVerifiedHealedCopyWithoutModifyingSource() throws {
+    let directory = FileManager.default.temporaryDirectory
+        .appendingPathComponent(UUID().uuidString, isDirectory: true)
+    try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let sourceURL = directory.appendingPathComponent("source.axn")
+    let healedURL = directory.appendingPathComponent("healed.axn")
+    let source = """
+    version: 1
+    actions:
+      - id: a001
+        tool: click
+        target:
+          app: Example
+          locator:
+            role: AXButton
+            title: Save
+    """
+    try source.write(to: sourceURL, atomically: true, encoding: .utf8)
+
+    let runner = AxnRunner { request in
+        if request.method == "find" {
+            return JSONRPCResponse(id: request.id, result: [
+                "resolution": .object([
+                    "status": .string("unique"),
+                    "confidence": .string("high")
+                ])
+            ])
+        }
+        return JSONRPCResponse(id: request.id, result: [
+            "action": .object([
+                "success": .bool(true),
+                "targetResolution": .object([
+                    "status": .string("unique"),
+                    "confidence": .string("medium"),
+                    "path": .string("scopedScan"),
+                    "context": .string("path"),
+                    "observedLocator": .object([
+                        "role": .string("AXButton"),
+                        "title": .string("Save Draft")
+                    ]),
+                    "evidence": .array([
+                        .object([
+                            "field": .string("title"),
+                            "outcome": .string("tolerated"),
+                            "expected": .string("Save"),
+                            "actual": .string("Save Draft")
+                        ])
+                    ])
+                ])
+            ])
+        ])
+    }
+
+    let result = try runner.run(params: [
+        "path": .string(sourceURL.path),
+        "healedPath": .string(healedURL.path)
+    ])
+
+    #expect(result["heal"]?["count"] == .int(1))
+    #expect(result["trace"]?[0]?["heal"]?["status"] == .string("proposed"))
+    #expect(result["healedPath"] == .string(healedURL.path))
+    #expect(try String(contentsOf: sourceURL, encoding: .utf8) == source)
+    let healed = try Axn(source: String(contentsOf: healedURL, encoding: .utf8))
+    #expect(healed.blocks[0].jsonValue["target"]?["locator"]?["title"] == .string("Save Draft"))
+}
+
+@Test func dryRunNeverWritesHealedCopy() throws {
+    let path = FileManager.default.temporaryDirectory
+        .appendingPathComponent(UUID().uuidString).path
+    defer { try? FileManager.default.removeItem(atPath: path) }
+    let runner = AxnRunner { request in
+        Issue.record("dry run must not dispatch")
+        return JSONRPCResponse(id: request.id, result: [:])
+    }
+
+    _ = try runner.run(params: [
+        "dryRun": .bool(true),
+        "healedPath": .string(path),
+        "actions": .array([
+            .object([
+                "tool": .string("click"),
+                "target": .object([
+                    "app": .string("Example"),
+                    "locator": .object(["role": .string("AXButton")])
+                ])
+            ])
+        ])
+    ])
+
+    #expect(!FileManager.default.fileExists(atPath: path))
+}
+
+
+@Test func healedPathCannotAliasSourcePath() throws {
+    let sourceURL = FileManager.default.temporaryDirectory
+        .appendingPathComponent(UUID().uuidString)
+        .appendingPathExtension("axn")
+    let source = """
+    version: 1
+    actions:
+      - tool: click
+        target:
+          app: Example
+          locator:
+            role: AXButton
+            title: Save
+    """
+    try source.write(to: sourceURL, atomically: true, encoding: .utf8)
+    defer { try? FileManager.default.removeItem(at: sourceURL) }
+    let runner = AxnRunner { request in
+        if request.method == "find" {
+            return JSONRPCResponse(id: request.id, result: [
+                "resolution": .object(["status": .string("unique"), "confidence": .string("high")])
+            ])
+        }
+        return JSONRPCResponse(id: request.id, result: [
+            "action": .object([
+                "success": .bool(true),
+                "targetResolution": .object([
+                    "status": .string("unique"),
+                    "confidence": .string("medium"),
+                    "path": .string("predicate"),
+                    "context": .string("path"),
+                    "observedLocator": .object([
+                        "role": .string("AXButton"),
+                        "title": .string("Save Draft")
+                    ]),
+                    "evidence": .array([
+                        .object(["field": .string("title"), "outcome": .string("tolerated")])
+                    ])
+                ])
+            ])
+        ])
+    }
+
+    #expect(throws: AxnRunError.self) {
+        _ = try runner.run(params: [
+            "path": .string(sourceURL.path),
+            "healedPath": .string(sourceURL.deletingLastPathComponent()
+                .appendingPathComponent(".")
+                .appendingPathComponent(sourceURL.lastPathComponent).path)
+        ])
+    }
+    #expect(try String(contentsOf: sourceURL, encoding: .utf8) == source)
+}

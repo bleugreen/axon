@@ -53,8 +53,11 @@ public struct AxnRunner {
         let preparedRun = try prepareRun(axn, callerArgValues: callerArgValues(in: params))
         let dryRun = bool("dryRun", in: params) ?? bool("dryRun", in: axn.unknownTopLevelFields) ?? false
         let continueOnError = bool("continueOnError", in: params) ?? bool("continueOnError", in: axn.unknownTopLevelFields) ?? false
+        let healedPath = optionalString("healedPath", in: params)
+            ?? optionalString("healedPath", in: axn.unknownTopLevelFields)
 
         var trace: [JSONValue] = []
+        var healEvents: [LocatorHealEvent] = []
         var facts: [String: RecordedFact] = [:]
         var success = true
 
@@ -64,7 +67,8 @@ public struct AxnRunner {
                 index: action.index,
                 dryRun: dryRun,
                 secretTaintedFields: action.secretTaintedFields,
-                facts: &facts
+                facts: &facts,
+                healEvents: &healEvents
             )
             trace.append(record)
             if record["success"] == .bool(false) {
@@ -75,12 +79,37 @@ public struct AxnRunner {
             }
         }
 
-        return .object([
+        var result: [String: JSONValue] = [
             "success": .bool(success),
             "dryRun": .bool(dryRun),
             "continueOnError": .bool(continueOnError),
             "trace": .array(trace)
-        ])
+        ]
+        if !healEvents.isEmpty {
+            result["heal"] = .object([
+                "count": .int(healEvents.count),
+                "events": .array(healEvents.map(\.jsonValue))
+            ])
+        }
+        if !dryRun, let healedPath,
+           healEvents.contains(where: { $0.status == .proposed }) {
+            if case let .string(sourcePath)? = params["path"] {
+                let sourceURL = URL(fileURLWithPath: sourcePath).standardizedFileURL.resolvingSymlinksInPath()
+                let healedURL = URL(fileURLWithPath: healedPath).standardizedFileURL.resolvingSymlinksInPath()
+                guard sourceURL != healedURL else {
+                    throw AxnRunError.invalidParams("healedPath must differ from the source path")
+                }
+            }
+            do {
+                let revised = AxnHealing.revise(axn, with: healEvents)
+                let source = AxnHealing.header(for: healEvents) + (try revised.yamlString())
+                try source.write(toFile: healedPath, atomically: true, encoding: .utf8)
+                result["healedPath"] = .string(healedPath)
+            } catch {
+                throw AxnRunError.invalidParams("could not write healed file: \(error)")
+            }
+        }
+        return .object(result)
     }
 
     public func debugSession(
@@ -105,12 +134,14 @@ public struct AxnRunner {
         dryRun: Bool,
         facts: inout [String: RecordedFact]
     ) -> JSONValue {
-        runAction(
+        var healEvents: [LocatorHealEvent] = []
+        return runAction(
             action.action,
             index: action.index,
             dryRun: dryRun,
             secretTaintedFields: action.secretTaintedFields,
-            facts: &facts
+            facts: &facts,
+            healEvents: &healEvents
         )
     }
 
@@ -273,7 +304,8 @@ public struct AxnRunner {
         index: Int,
         dryRun: Bool,
         secretTaintedFields: Set<String>,
-        facts: inout [String: RecordedFact]
+        facts: inout [String: RecordedFact],
+        healEvents: inout [LocatorHealEvent]
     ) -> JSONValue {
         do {
             var object = action.fields
@@ -319,6 +351,18 @@ public struct AxnRunner {
                 secretTaintedFields: secretTaintedFields
             )
             if let error = response.error {
+                if case let .object(data)? = error.data,
+                   let resolution = data["targetResolution"],
+                   let event = AxnHealing.event(
+                       action: action,
+                       index: index,
+                       resolution: resolution,
+                       verify: { _, _ in false },
+                       activeSecretRedactor: activeSecretRedactorProvider()
+                   ) {
+                    healEvents.append(event)
+                    record["heal"] = event.jsonValue
+                }
                 record["success"] = .bool(false)
                 record["error"] = traceError(error.message, hasSecretTaint: !secretTaintedFields.isEmpty)
                 return .object(record)
@@ -327,6 +371,23 @@ public struct AxnRunner {
             let canVerifyDispatchOnly = !expectedFacts.isEmpty
                 && hasCausalExpectation
                 && dispatchedWithoutSemanticVerification(in: response.result)
+            if let resolution = targetResolution(in: response.result),
+               let event = AxnHealing.event(
+                   action: action,
+                   index: index,
+                   resolution: resolution,
+                   verify: { proposal, currentConfidence in
+                       verifyHealingProposal(
+                           action: action,
+                           locator: proposal,
+                           minimumConfidence: currentConfidence
+                       )
+                   },
+                   activeSecretRedactor: activeSecretRedactorProvider()
+               ) {
+                healEvents.append(event)
+                record["heal"] = event.jsonValue
+            }
             if primitiveSucceeded == false && !canVerifyDispatchOnly {
                 record["success"] = .bool(false)
                 record["result"] = traceResult(method: method, result: response.result ?? [:], hasSecretTaint: !secretTaintedFields.isEmpty)
@@ -660,7 +721,15 @@ public struct AxnRunner {
         case "wait_for_value":
             return result["wait"] ?? .object(result)
         default:
-            return result["action"] ?? .object(result)
+            guard case var .object(action)? = result["action"] else {
+                var trimmed = result
+                trimmed.removeValue(forKey: "targetResolution")
+                trimmed.removeValue(forKey: "targetResolutions")
+                return .object(trimmed)
+            }
+            action.removeValue(forKey: "targetResolution")
+            action.removeValue(forKey: "targetResolutions")
+            return .object(action)
         }
     }
 
@@ -706,6 +775,32 @@ public struct AxnRunner {
             return nil
         }
         return object
+    }
+
+    private func targetResolution(in result: [String: JSONValue]?) -> JSONValue? {
+        guard let action = objectValue(result?["action"]) else { return nil }
+        return action["targetResolution"]
+    }
+
+    private func verifyHealingProposal(
+        action: AxnAction,
+        locator: JSONValue,
+        minimumConfidence: String
+    ) -> Bool {
+        guard case let .object(target)? = action.fields["target"],
+              case let .string(app)? = target["app"] else { return false }
+        let request = JSONRPCRequest(
+            id: .string("run.heal.verify"),
+            method: "find",
+            params: .object(["app": .string(app), "locator": locator])
+        )
+        let response = commandHandler(request)
+        guard response.error == nil, let result = response.result,
+              case let .object(resolution)? = result["resolution"],
+              resolution["status"] == JSONValue.string("unique"),
+              case let .string(confidence)? = resolution["confidence"] else { return false }
+        let rank = ["none": 0, "low": 1, "medium": 2, "high": 3]
+        return (rank[confidence] ?? -1) >= (rank[minimumConfidence] ?? Int.max)
     }
 
     private func bool(_ key: String, in object: [String: JSONValue]) -> Bool? {

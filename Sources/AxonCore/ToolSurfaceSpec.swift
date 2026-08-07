@@ -199,9 +199,10 @@ public enum ToolSurfaceSpec {
                 ToolParameterSpec("path", .string, description: "Local .axn file path for the Axon daemon to read."),
                 ToolParameterSpec("argValues", .freeformObject, description: "Caller-supplied .axn argument values keyed by declared arg name. Valid only for args without a declared source."),
                 ToolParameterSpec("continueOnError", .boolean, default: .bool(false), description: "Continue after an action fails. Defaults to false."),
-                ToolParameterSpec("dryRun", .boolean, description: "Trace the run without dispatching actions.")
+                ToolParameterSpec("dryRun", .boolean, description: "Trace the run without dispatching actions."),
+                ToolParameterSpec("healedPath", .string, description: "Write a revised copy of the .axn to this path when replay resolves through drifted locator evidence. The source file is never modified.")
             ],
-            cliUsage: "axon run <path.axn> [--arg name=value] [--dry-run] [--continue-on-error]"
+            cliUsage: "axon run <path.axn> [--arg name=value] [--dry-run] [--healed-path file] [--continue-on-error]"
         ),
         ToolSpec(
             name: "save",

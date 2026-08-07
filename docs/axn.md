@@ -39,6 +39,27 @@ actions:
 }
 ```
 
+## Locator healing
+
+Replay reports when a recorded locator resolves uniquely but some of its saved
+evidence has drifted. To review a revised workflow, pass `healedPath` to the MCP
+`run` tool or `--healed-path <file>` to the CLI:
+
+```bash
+axon run ./workflow.axn --healed-path ./workflow.healed.axn
+```
+
+Axon writes a new `.axn`; it never modifies the source workflow. The revised
+locator is proposed only after it resolves uniquely at no lower confidence than
+the locator used during the run. Ambiguous resolutions halt healing rather than
+widening a locator. Evidence that the active resolution path could not evaluate
+is retained, and frame movement alone does not trigger a revision. Secret-tainted
+locator values are never written. A dry run reports what it can inspect without
+writing the healed file.
+
+Treat the output as a review artifact: inspect its locator diff, keep the source
+under version control, and replay the healed copy before replacing the original.
+
 When both `path` and `actions` are supplied, Axon loads the file first and then
 appends the inline actions. That supports parameterized replays without a second
 plan language.
@@ -90,6 +111,7 @@ workflows omit them.
 axon run ./workflow.axn
 axon run ./workflow.axn --arg assignee=Ada
 axon run ./workflow.axn --dry-run
+axon run ./workflow.axn --healed-path ./workflow.healed.axn
 axon save --path ./workflow.axn
 axon save --include-reads
 ```

@@ -688,6 +688,12 @@ private func runCommand(arguments: [String]) throws -> (method: String, params: 
         case "--dry-run":
             params["dryRun"] = .bool(true)
             index += 1
+        case "--healed-path":
+            guard index + 1 < arguments.count else {
+                throw CLIError.missingArguments("run --healed-path requires a file")
+            }
+            params["healedPath"] = .string(arguments[index + 1])
+            index += 2
         case "--arg":
             guard index + 1 < arguments.count else {
                 throw CLIError.missingArguments("run --arg requires name=value")

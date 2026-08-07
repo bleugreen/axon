@@ -349,7 +349,7 @@ private func stabilitySnapshot(id: String, title: String) -> AppSnapshot {
             return LocatorResolution(
                 status: .unique,
                 snapshotID: SnapshotID("live-locator"),
-                best: LocatorCandidate(index: 0, handle: SnapshotHandle(snapshotID: SnapshotID("live-locator"), nodeIndex: 0), role: "AXButton", title: "NEW", score: 2, reasons: []),
+                best: LocatorCandidate(index: 0, handle: SnapshotHandle(snapshotID: SnapshotID("live-locator"), nodeIndex: 0), role: "AXButton", title: "NEW", score: 1_000, reasons: []),
                 candidates: []
             )
         },
@@ -377,6 +377,10 @@ private func stabilitySnapshot(id: String, title: String) -> AppSnapshot {
 
     #expect(response.error == nil)
     #expect(response.result?["action"]?["target"] == .string("live-locator:0"))
+    #expect(response.result?["action"]?["targetResolution"]?["status"] == .string("unique"))
+    #expect(response.result?["action"]?["targetResolution"]?["confidence"] == .string("low"))
+    #expect(response.result?["action"]?["targetResolution"]?["best"] == nil)
+    #expect(response.result?["action"]?["targetResolution"]?["candidates"] == nil)
 }
 
 @Test func clickRequestAcceptsTextLocationTarget() {
@@ -794,6 +798,7 @@ private func stabilitySnapshot(id: String, title: String) -> AppSnapshot {
     ))
 
     #expect(response.error == nil)
+    #expect(response.result?["action"]?["targetResolution"]?["status"] == .string("unique"))
 }
 
 @Test func scrollRequestAcceptsTextLocationTarget() {
