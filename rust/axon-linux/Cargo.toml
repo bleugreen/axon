@@ -10,15 +10,11 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
 [target.'cfg(target_os = "linux")'.dependencies]
-# `default-features = false` deliberately drops `p2p`. That feature makes `AccessibilityConnection`
-# ask every registry application for `GetApplicationBusAddress` at startup and open a second,
-# peer-to-peer D-Bus connection to each one that answers, then repeat that on every name-owner
-# change. This backend never reads a peer: it addresses every proxy by explicit destination over
-# the one accessibility-bus connection, which is the mechanism AXN-41 established. Compiling the
-# peer subsystem in bought nothing and cost a round trip per application plus a failed peer for
-# every participant that answers with an empty address, such as a running screen reader.
+# Proxies and the wire types only. `atspi-connection` is deliberately not compiled in: its
+# `AccessibilityConnection` is inseparable from a peer-to-peer subsystem this backend never reads,
+# and that subsystem cannot be switched off from here because the crate's own default features
+# enable it. The backend opens its accessibility-bus connection itself, in `platform.rs`.
 atspi = { version = "0.30.0", default-features = false, features = [
-  "connection",
   "proxies",
   "tokio",
 ] }

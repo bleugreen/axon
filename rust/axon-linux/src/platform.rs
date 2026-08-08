@@ -1,8 +1,12 @@
 use crate::{PointerTargetVerifier, x11::X11Session};
 use atspi::{
-    AccessibilityConnection, CoordType, ObjectRefOwned,
-    proxy::{accessible::ObjectRefExt, proxy_ext::ProxyExt},
-    zbus::{fdo::DBusProxy, names::BusName},
+    CoordType, ObjectRefOwned,
+    proxy::{
+        accessible::{AccessibleProxy, ObjectRefExt},
+        bus::BusProxy,
+        proxy_ext::ProxyExt,
+    },
+    zbus::{self, fdo::DBusProxy, names::BusName, proxy::CacheProperties},
 };
 use axon_core::{
     AppQuery, Application, BackendError, Capability, CapabilityInfo, KeyboardIntent, Node,
@@ -16,6 +20,10 @@ use std::{
     thread,
     time::{Duration, Instant},
 };
+
+/// The well-known name of the AT-SPI registry, the one object whose location is known in advance.
+/// Every other object is reached from it, addressed by the bus name it reports.
+const REGISTRY: &str = "org.a11y.atspi.Registry";
 
 const MAX_DEPTH: usize = 18;
 const MAX_NODES: usize = 2_000;
@@ -433,17 +441,52 @@ impl PointerTargetVerifier for LinuxBackend {
 }
 
 struct Actor {
-    connection: AccessibilityConnection,
+    connection: zbus::Connection,
     retained: HashMap<String, Vec<ObjectRefOwned>>,
 }
 impl Actor {
+    /// Opens the one accessibility-bus connection this backend uses, by asking the session bus
+    /// where that bus lives.
+    ///
+    /// Deliberately hand-built rather than taken from `atspi`'s `AccessibilityConnection`. That
+    /// constructor also stands up a peer-to-peer subsystem: it asks every registered application
+    /// for a private socket address, opens a second D-Bus connection to each one that answers, and
+    /// leaves a task repeating that on every name-owner change. This backend never reads a peer.
+    /// It addresses every proxy by explicit destination over this single connection, which is the
+    /// mechanism AXN-41 established as the one that actually crosses embedded-application
+    /// boundaries. The peer subsystem was therefore cost without benefit, and it failed loudly
+    /// against any participant that answers with an empty address -- a running screen reader
+    /// among them.
     async fn connect() -> Result<Self, BackendError> {
+        let session = zbus::Connection::session()
+            .await
+            .map_err(|e| operation("connect session bus", e))?;
+        let address = BusProxy::new(&session)
+            .await
+            .map_err(|e| operation("locate accessibility bus", e))?
+            .get_address()
+            .await
+            .map_err(|e| operation("locate accessibility bus", e))?;
+        let connection = zbus::connection::Builder::address(address.as_str())
+            .map_err(|e| operation("connect AT-SPI", e))?
+            .build()
+            .await
+            .map_err(|e| operation("connect AT-SPI", e))?;
         Ok(Self {
-            connection: AccessibilityConnection::new()
-                .await
-                .map_err(|e| operation("connect AT-SPI", e))?,
+            connection,
             retained: HashMap::new(),
         })
+    }
+    /// The registry's root accessible.
+    ///
+    /// Property caching is off because the registry implements the D-Bus properties interface
+    /// incompletely, so a caching proxy fails to build against it.
+    async fn registry(&self) -> Result<AccessibleProxy<'_>, zbus::Error> {
+        AccessibleProxy::builder(&self.connection)
+            .destination(REGISTRY)?
+            .cache_properties(CacheProperties::No)
+            .build()
+            .await
     }
     async fn run(&mut self, rx: mpsc::Receiver<Command>) {
         while let Ok(command) = rx.recv() {
@@ -476,7 +519,7 @@ impl Actor {
         }
     }
     async fn roots(&self) -> Result<Vec<ObjectRefOwned>, BackendError> {
-        let registry = timeout("registry", self.connection.root_accessible_on_registry()).await?;
+        let registry = timeout("registry", self.registry()).await?;
         timeout("enumerate applications", registry.get_children()).await
     }
     async fn enumerate(&self) -> Result<Vec<Application>, BackendError> {
@@ -484,7 +527,7 @@ impl Actor {
         for object in self.roots().await? {
             let proxy = timeout(
                 "application proxy",
-                object.as_accessible_proxy(self.connection.connection()),
+                object.as_accessible_proxy(&self.connection),
             )
             .await?;
             let name = timeout("application name", proxy.name()).await?;
@@ -502,7 +545,7 @@ impl Actor {
     /// whole read: one application exiting mid-enumeration must not blind the backend to the rest
     /// of the session.
     async fn identities(&self) -> Result<Vec<AppIdentity>, BackendError> {
-        let dbus = timeout("D-Bus proxy", DBusProxy::new(self.connection.connection())).await?;
+        let dbus = timeout("D-Bus proxy", DBusProxy::new(&self.connection)).await?;
         let mut out = Vec::new();
         for object in self.roots().await? {
             let Some(bus) = object.name().cloned() else {
@@ -533,7 +576,7 @@ impl Actor {
         for object in self.roots().await? {
             let proxy = timeout(
                 "application proxy",
-                object.as_accessible_proxy(self.connection.connection()),
+                object.as_accessible_proxy(&self.connection),
             )
             .await?;
             let name = timeout("application name", proxy.name()).await?;
@@ -594,7 +637,7 @@ impl Actor {
             refs.push(object.clone());
             let proxy = timeout(
                 "accessible proxy",
-                object.as_accessible_proxy(self.connection.connection()),
+                object.as_accessible_proxy(&self.connection),
             )
             .await?;
             let role = timeout("role", proxy.get_role_name()).await?;
@@ -701,7 +744,7 @@ impl Actor {
         let object = self.object(h)?.clone();
         let proxy = timeout(
             "accessible proxy",
-            object.as_accessible_proxy(self.connection.connection()),
+            object.as_accessible_proxy(&self.connection),
         )
         .await?;
         let action = timeout(
@@ -729,7 +772,7 @@ impl Actor {
         let object = self.object(h)?.clone();
         let proxy = timeout(
             "accessible proxy",
-            object.as_accessible_proxy(self.connection.connection()),
+            object.as_accessible_proxy(&self.connection),
         )
         .await?;
         let p = timeout("interfaces", proxy.proxies()).await?;
@@ -747,7 +790,7 @@ impl Actor {
         let object = self.object(h)?.clone();
         let proxy = timeout(
             "accessible proxy",
-            object.as_accessible_proxy(self.connection.connection()),
+            object.as_accessible_proxy(&self.connection),
         )
         .await?;
         let p = timeout("interfaces", proxy.proxies()).await?;
@@ -764,7 +807,7 @@ impl Actor {
         let object = self.object(h)?.clone();
         let proxy = timeout(
             "accessible proxy",
-            object.as_accessible_proxy(self.connection.connection()),
+            object.as_accessible_proxy(&self.connection),
         )
         .await?;
         let p = timeout("interfaces", proxy.proxies()).await?;
