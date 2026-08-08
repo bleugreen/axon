@@ -151,6 +151,45 @@ fn wait_until_silent(path: &Path) -> bool {
 }
 
 #[test]
+fn a_client_that_stops_reading_its_answer_does_not_park_the_daemon() {
+    let path = endpoint("stalled");
+    let listener = UnixListener::bind(&path).expect("bind the endpoint");
+    let patience = Duration::from_millis(300);
+
+    let server = thread::spawn(move || {
+        serve_connections(&listener, patience, |line| {
+            // Comfortably past what a socket buffer holds, which is what makes the answer block
+            // in the daemon rather than disappear into the kernel and return. A `look` at a real
+            // application is large enough to reach the same state.
+            let answer = if line == "big" {
+                "x".repeat(8 * 1024 * 1024)
+            } else {
+                line.to_owned()
+            };
+            (json!({ "echo": answer }), line == "shutdown")
+        })
+    });
+
+    // Asks for a large answer, then never reads a byte of it while staying connected. Hanging up
+    // would hand the daemon an immediate broken pipe; this client extends no such courtesy, and
+    // an unbounded write would wait on it for as long as it cared to hold on.
+    let mut stalled = UnixStream::connect(&path).unwrap();
+    stalled.write_all(b"big\n").unwrap();
+
+    let answer: Value = serde_json::from_str(&ask(&path, "ping")).unwrap();
+    assert_eq!(
+        answer,
+        json!({"echo": "ping"}),
+        "the daemon answers other clients while one refuses to read"
+    );
+
+    drop(stalled);
+    let _ = ask(&path, "shutdown");
+    server.join().unwrap().expect("the loop ends cleanly");
+    let _ = std::fs::remove_file(&path);
+}
+
+#[test]
 fn a_client_that_connects_and_says_nothing_is_dropped_rather_than_served_forever() {
     let path = endpoint("silent");
     let listener = UnixListener::bind(&path).expect("bind the endpoint");
