@@ -162,7 +162,7 @@ pub fn serve_connections(
             // An accept can fail for reasons that belong to the connection being accepted: a
             // client that gave up while queued, an interrupted syscall, a momentarily exhausted
             // descriptor table. Retrying is right. An unbroken run of failures is a different
-            // claim -- the listener can no longer produce connections at all -- and spinning on
+            // claim — the listener can no longer produce connections at all — and spinning on
             // that would burn a core while serving nobody, so it is reported to the supervisor.
             Err(error) => {
                 failures += 1;

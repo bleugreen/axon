@@ -455,8 +455,8 @@ impl Actor {
     /// It addresses every proxy by explicit destination over this single connection, which is the
     /// mechanism AXN-41 established as the one that actually crosses embedded-application
     /// boundaries. The peer subsystem was therefore cost without benefit, and it failed loudly
-    /// against any participant that answers with an empty address -- a running screen reader
-    /// among them.
+    /// against any participant that answers with an empty address — a running screen reader among
+    /// them.
     async fn connect() -> Result<Self, BackendError> {
         let session = zbus::Connection::session()
             .await
