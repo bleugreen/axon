@@ -24,11 +24,12 @@ use axon_core::{CapabilityInfo, JsonRpcResponse, PlatformBackend};
 #[cfg(target_os = "linux")]
 use std::{fs, os::unix::fs::PermissionsExt};
 
-/// How long the daemon gives a connected client to send its request.
+/// How long the daemon waits on a client that has stopped participating, in either direction.
 ///
-/// The daemon answers one connection at a time, so a client that connects and then says nothing
-/// would hold the entire session hostage. Every Axon client writes its request immediately on
-/// connecting, so this bound is only ever reached by a client that has stopped participating.
+/// The daemon answers one connection at a time, so a client that connects and says nothing, or
+/// asks and then stops draining its answer, would otherwise hold the entire session hostage.
+/// Every Axon client writes its request immediately and reads the reply, so this bound is only
+/// ever reached by a client that has stopped taking part.
 pub const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// How many accept failures in a row mean the listener is broken rather than unlucky.
@@ -188,11 +189,22 @@ fn answer(
     request_timeout: Duration,
     handle: &mut impl FnMut(&str) -> (Value, bool),
 ) -> io::Result<bool> {
-    // The deadline is a guard, not a precondition. A client that closed before the daemon reached
+    // Both directions are bounded, because a client stops participating in two ways: it can go
+    // quiet before asking, and it can stop draining the answer it asked for. The second is the
+    // less obvious and the more expensive — a socket buffer holds a couple of hundred kilobytes
+    // and a `look` at a real application exceeds that, so an undrained answer parks the daemon
+    // inside one write while the whole session waits behind it.
+    //
+    // These are per-syscall bounds, not a deadline on the exchange: a client dribbling a byte at
+    // a time stays under them indefinitely. That is a far stranger client than a stalled one, and
+    // bounding it would mean a total-deadline machine this transport does not otherwise need.
+    //
+    // Each is a guard rather than a precondition. A client that closed before the daemon reached
     // this line can leave the socket in a state that refuses the option (macOS answers EINVAL)
     // while its request sits in the receive buffer, already arrived and still owed an attempt.
     // Failing the connection over an unset option would discard a request the daemon has in hand.
     let _ = stream.set_read_timeout(Some(request_timeout));
+    let _ = stream.set_write_timeout(Some(request_timeout));
     let mut line = String::new();
     // A connection that closes without sending anything asked nothing, so there is nothing to
     // answer and nothing to report: this is what a liveness probe looks like from in here.
@@ -201,8 +213,9 @@ fn answer(
     }
     let (response, stop) = handle(line.trim());
     // The request was received and carried out. A client that is no longer there to read the
-    // answer changes nothing about that, so the answer's fate is reported rather than propagated,
-    // and a `shutdown` whose caller walked away still shuts the daemon down.
+    // answer, or no longer willing to, changes nothing about that, so the answer's fate is
+    // reported rather than propagated, and a `shutdown` whose caller walked away still shuts the
+    // daemon down.
     if let Err(error) = writeln!(stream, "{}", serde_json::to_string(&response).unwrap()) {
         eprintln!("axon-linux: client hung up before its answer was written: {error}");
     }
