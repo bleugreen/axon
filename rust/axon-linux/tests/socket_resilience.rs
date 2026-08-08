@@ -104,6 +104,53 @@ fn a_client_that_hangs_up_never_takes_the_daemon_with_it() {
 }
 
 #[test]
+fn a_shutdown_whose_caller_walked_away_still_stops_the_daemon() {
+    let path = endpoint("shutdown");
+    let listener = UnixListener::bind(&path).expect("bind the endpoint");
+    let (release, held) = mpsc::channel::<()>();
+    let (entered, waiting) = mpsc::channel::<()>();
+
+    let server = thread::spawn(move || {
+        serve_connections(&listener, PATIENCE, move |line| {
+            entered.send(()).unwrap();
+            held.recv().unwrap();
+            (json!({ "echo": line }), line == "shutdown")
+        })
+    });
+
+    let mut caller = UnixStream::connect(&path).unwrap();
+    caller.write_all(b"shutdown\n").unwrap();
+    waiting
+        .recv_timeout(PATIENCE)
+        .expect("the daemon reached the handler");
+    drop(caller);
+    release.send(()).unwrap();
+
+    // The request was received and carried out; that the caller is no longer there to hear the
+    // answer does not un-ask it. Observing silence rather than joining first means a daemon that
+    // wrongly kept running fails this test instead of hanging the suite.
+    assert!(
+        wait_until_silent(&path),
+        "a shutdown request stops the daemon even when writing the answer fails"
+    );
+    server.join().unwrap().expect("the loop ends cleanly");
+    let _ = std::fs::remove_file(&path);
+}
+
+/// Whether the endpoint stops accepting within [`PATIENCE`], which is what a stopped daemon that
+/// has dropped its listener looks like from outside.
+fn wait_until_silent(path: &Path) -> bool {
+    let deadline = std::time::Instant::now() + PATIENCE;
+    while std::time::Instant::now() < deadline {
+        if UnixStream::connect(path).is_err() {
+            return true;
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+    false
+}
+
+#[test]
 fn a_client_that_connects_and_says_nothing_is_dropped_rather_than_served_forever() {
     let path = endpoint("silent");
     let listener = UnixListener::bind(&path).expect("bind the endpoint");
