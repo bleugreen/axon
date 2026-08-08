@@ -10,10 +10,16 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
 [target.'cfg(target_os = "linux")'.dependencies]
-# Proxies and the wire types only. `atspi-connection` is deliberately not compiled in: its
-# `AccessibilityConnection` is inseparable from a peer-to-peer subsystem this backend never reads,
-# and that subsystem cannot be switched off from here because the crate's own default features
-# enable it. The backend opens its accessibility-bus connection itself, in `platform.rs`.
+# Proxies and the wire types only. `atspi-connection` is deliberately absent from this crate's
+# dependencies: its `AccessibilityConnection` is inseparable from a peer-to-peer subsystem this
+# backend never reads, and that subsystem cannot be switched off through a feature, because the
+# crate's own defaults enable it whatever the facade asks for. The backend opens its
+# accessibility-bus connection itself, in `platform.rs`.
+#
+# Scope: `-p axon-linux` compiles no peer code at all, which is what the release and live lanes
+# build. A workspace-wide build still compiles it, because `axon-spike-linux` asks for the
+# `connection` feature on purpose — that spike is the recorded comparison between the facade path
+# and this one. Nothing in the product constructs an `AccessibilityConnection` either way.
 atspi = { version = "0.30.0", default-features = false, features = [
   "proxies",
   "tokio",

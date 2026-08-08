@@ -346,8 +346,9 @@ than equating “Linux” with one uniform tree.
 
 - The backend opens the accessibility bus itself and addresses every object by
   explicit destination on that single connection. `atspi`'s
-  `AccessibilityConnection` is deliberately not used, and the crate is compiled
-  without it: that constructor is inseparable from a peer-to-peer subsystem
+  `AccessibilityConnection` is deliberately not used, and `atspi-connection` is
+  not among the backend's dependencies: that constructor is inseparable from a
+  peer-to-peer subsystem
   which asks every registered application for a private socket address, opens a
   second D-Bus connection to each one that answers, and repeats that on every
   name-owner change. Axon never reads a peer — explicit destinations on the
