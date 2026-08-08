@@ -187,7 +187,11 @@ fn answer(
     request_timeout: Duration,
     handle: &mut impl FnMut(&str) -> (Value, bool),
 ) -> io::Result<bool> {
-    stream.set_read_timeout(Some(request_timeout))?;
+    // The deadline is a guard, not a precondition. A client that closed before the daemon reached
+    // this line can leave the socket in a state that refuses the option (macOS answers EINVAL)
+    // while its request sits in the receive buffer, already arrived and still owed an attempt.
+    // Failing the connection over an unset option would discard a request the daemon has in hand.
+    let _ = stream.set_read_timeout(Some(request_timeout));
     let mut line = String::new();
     // A connection that closes without sending anything asked nothing, so there is nothing to
     // answer and nothing to report: this is what a liveness probe looks like from in here.
