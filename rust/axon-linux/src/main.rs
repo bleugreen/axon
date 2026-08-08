@@ -61,10 +61,10 @@ other commands:
 #[cfg(target_os = "linux")]
 mod lifecycle {
     use axon_core::{ephemeral_path_warning, exit_code};
-    use axon_linux::socket;
     use axon_linux::lifecycle::{
         SessionEnvironment, UNIT_NAME, session_health, unit_executable, unit_file,
     };
+    use axon_linux::socket;
     use std::{fs, io, path::PathBuf, process::Command, time::Duration};
 
     /// Where systemd looks for a user unit this CLI owns.
@@ -257,8 +257,8 @@ mod lifecycle {
 mod status {
     use super::lifecycle;
     use axon_core::{HealthReport, exit_code};
-    use axon_linux::socket;
     use axon_linux::lifecycle::{SessionEnvironment, incompatible, not_running, registration};
+    use axon_linux::socket;
     use std::io;
 
     pub fn run(args: &[String]) -> Result<i32, Box<dyn std::error::Error>> {

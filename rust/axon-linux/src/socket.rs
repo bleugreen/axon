@@ -74,7 +74,8 @@ pub fn daemon_health() -> io::Result<DaemonReport> {
         .ok_or_else(|| io::Error::other(format!("daemon rejected health: {response}")))?;
     // InvalidData rather than a generic error: a daemon that answers unintelligibly is a
     // running daemon of another version, and the caller reports that differently from silence.
-    serde_json::from_value(result).map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
+    serde_json::from_value(result)
+        .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))
 }
 
 /// Waits for a successful health round trip.
