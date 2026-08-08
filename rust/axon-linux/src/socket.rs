@@ -24,12 +24,12 @@ use axon_core::{CapabilityInfo, JsonRpcResponse, PlatformBackend};
 #[cfg(target_os = "linux")]
 use std::{fs, os::unix::fs::PermissionsExt};
 
-/// How long a connected client has to send its request.
+/// How long the daemon gives a connected client to send its request.
 ///
 /// The daemon answers one connection at a time, so a client that connects and then says nothing
 /// would hold the entire session hostage. Every Axon client writes its request immediately on
 /// connecting, so this bound is only ever reached by a client that has stopped participating.
-const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+pub const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// How many accept failures in a row mean the listener is broken rather than unlucky.
 const ACCEPT_FAILURE_LIMIT: usize = 16;
@@ -143,8 +143,12 @@ pub fn shutdown_rpc() -> io::Result<u32> {
 /// moment, including between sending its request and reading the answer, and none of that is the
 /// daemon's to die of: that connection ends and the loop goes on. The daemon leaves this loop
 /// only when a request asks it to, or when the listener itself stops producing connections.
+///
+/// `request_timeout` bounds the wait for a connected client's request; the daemon passes
+/// [`REQUEST_TIMEOUT`], and a test passes something it is willing to wait for.
 pub fn serve_connections(
     listener: &UnixListener,
+    request_timeout: Duration,
     mut handle: impl FnMut(&str) -> (Value, bool),
 ) -> io::Result<()> {
     let mut failures = 0usize;
@@ -168,7 +172,7 @@ pub fn serve_connections(
                 continue;
             }
         };
-        match answer(stream, &mut handle) {
+        match answer(stream, request_timeout, &mut handle) {
             Ok(true) => return Ok(()),
             Ok(false) => {}
             Err(error) => eprintln!("axon-linux: dropped a client connection: {error}"),
@@ -180,9 +184,10 @@ pub fn serve_connections(
 /// Reads one request, answers it, and reports whether that request asked the daemon to stop.
 fn answer(
     mut stream: UnixStream,
+    request_timeout: Duration,
     handle: &mut impl FnMut(&str) -> (Value, bool),
 ) -> io::Result<bool> {
-    stream.set_read_timeout(Some(REQUEST_TIMEOUT))?;
+    stream.set_read_timeout(Some(request_timeout))?;
     let mut line = String::new();
     // A connection that closes without sending anything asked nothing, so there is nothing to
     // answer and nothing to report: this is what a liveness probe looks like from in here.
@@ -222,7 +227,7 @@ pub fn serve() -> io::Result<()> {
     let listener = UnixListener::bind(&path)?;
     fs::set_permissions(&path, fs::Permissions::from_mode(0o600))?;
     let endpoint = path.display().to_string();
-    let result = serve_connections(&listener, |line| {
+    let result = serve_connections(&listener, REQUEST_TIMEOUT, |line| {
         dispatch(line, &mut router, &reported, &endpoint)
     });
     let _ = fs::remove_file(path);

@@ -10,7 +10,18 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
 [target.'cfg(target_os = "linux")'.dependencies]
-atspi = { version = "0.30.0", features = ["connection", "proxies", "tokio"] }
+# `default-features = false` deliberately drops `p2p`. That feature makes `AccessibilityConnection`
+# ask every registry application for `GetApplicationBusAddress` at startup and open a second,
+# peer-to-peer D-Bus connection to each one that answers, then repeat that on every name-owner
+# change. This backend never reads a peer: it addresses every proxy by explicit destination over
+# the one accessibility-bus connection, which is the mechanism AXN-41 established. Compiling the
+# peer subsystem in bought nothing and cost a round trip per application plus a failed peer for
+# every participant that answers with an empty address, such as a running screen reader.
+atspi = { version = "0.30.0", default-features = false, features = [
+  "connection",
+  "proxies",
+  "tokio",
+] }
 tokio = { version = "1.47.1", features = ["rt", "time"] }
 # Pure Rust, so no libxtst development package is needed to build this crate anywhere.
 x11rb = { version = "0.14", features = ["xtest"] }
