@@ -413,8 +413,10 @@ jobs:
             sleep 0.25
           done
           if [[ "$answering" != true ]]; then
-            echo "::error::the desktop Axon daemon was restarted but is not answering at $("$daemon" status --json | jq -r '.daemon.endpoint'); this runner needs attention before the next live run"
-            systemctl --user is-active axon.service || true
+            # Both halves reported, because the two failures look nothing alike to whoever reads
+            # this next: a unit that never came up, or a unit that is down while something else
+            # answers on its endpoint.
+            echo "::error::the desktop axon.service did not come back at $(printf '%s' "$status" | jq -r '.daemon.endpoint') -- unit is $(systemctl --user is-active axon.service || true), a daemon answering: $(printf '%s' "$status" | jq -r '.daemon.running'); this runner needs attention before the next live run"
             journalctl --user -u axon.service -n 20 --no-pager || true
             exit 1
           fi
