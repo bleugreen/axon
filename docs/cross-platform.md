@@ -823,8 +823,18 @@ names one is the ordinary case rather than the unlucky one, and a desktop whose
 start-at-login registration names it can lose that registration to a scan it
 never ran.
 
-Three consequences shape the lane. Each build is executed once — a `version`
-call — before anything on the desktop is borrowed, which is where
+Windows also records its debt where the debt can outlive the job. `$GITHUB_ENV`
+dies with the runner, so on macOS and Linux a job whose runner service is killed
+outright leaves a desktop stopped with nothing that remembers why. The Windows
+park writes what it found to a file on the machine before it stops anything, and
+the next park carries an unpaid debt forward rather than overwriting it — without
+that, the following run would find no daemon, record that there had never been
+one to put back, and let its own restore clear the debt and report success,
+turning an outage that a logon would have ended into one that lasts the whole
+login session.
+
+Three further consequences shape the lane. Each build is executed once — a
+`version` call — before anything on the desktop is borrowed, which is where
 block-at-first-sight's delay of up to a minute is paid and where a quarantine
 costs nothing, since the machine still has its own daemon at that point; it also
 keeps that delay out of the daemon's readiness measurement, which had been
@@ -860,12 +870,17 @@ requires recreating its localhost SSH key and installing that public key for the
 desktop user with a forced command that runs only
 `C:\\ProgramData\\Axon\\live-probe.cmd`; disable forwarding and pseudo-terminal
 allocation with the authorized-key `restrict` option. That file's source is
-`.github/scripts/windows-live-relay.cmd`, kept in the repository because it
-cannot be read from a checkout — the key must not be able to run anything a pull
-request could write. It accepts only the four stage names and runs the
-checked-out probe script for one of them; a runner whose copy predates the staged
-lane refuses every stage with exit code 126, which the workflow reports by name.
-Deploy it whenever either file changes. Give the private key only
+`.github/scripts/windows-live-relay.cmd`. It lives on the machine rather than
+being read from the workspace, so changing what the key dispatches to takes
+machine access — but what each stage then runs is the probe script from the
+runner's own checkout, so the relay constrains *which stage* runs and not *what
+code* runs. The boundary for untrusted changes is the repository's Actions
+approval policy for outside contributors, not this file. It accepts only the four
+stage names, and it expands the requested one with delayed expansion, because a
+value substituted before `cmd` tokenizes the line lets an `&` in it run as a
+separate command before the allowlist is ever consulted. A runner whose copy
+predates the staged lane refuses every stage with exit code 126, which the
+workflow reports by name. Deploy it whenever either file changes. Give the private key only
 to `NETWORK SERVICE` and `SYSTEM`, pin the localhost host key in the runner's
 `known_hosts`, and verify an arbitrary SSH command is rejected before enabling
 the runner. This narrow relay is necessary because Windows services run in
