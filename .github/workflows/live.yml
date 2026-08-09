@@ -220,7 +220,10 @@ jobs:
               exit 1
             fi
           elif [ "${AXON_APP_WAS_RUNNING:-false}" = true ]; then
-            open -a /Applications/Axon.app
+            if ! open -a /Applications/Axon.app; then
+              echo "::error::this job stopped the desktop's Axon.app and could not reopen it; this machine has no Axon daemon until someone starts it by hand"
+              exit 1
+            fi
           else
             echo 'this desktop had no Axon daemon when the job arrived; leaving it stopped'
             exit 0
@@ -235,7 +238,11 @@ jobs:
           agent_pid=""
           for _ in {1..40}; do
             status="$("$cli" status --json)"
-            agent_pid="$(launchctl print "gui/$(id -u)/$AXON_LAUNCH_AGENT_LABEL" 2>/dev/null | awk '/^[[:space:]]*pid = / { print $3; exit }')"
+            # Tolerated deliberately, and the only place in this step where that is right: an
+            # unloaded label is one of the answers being asked for, and `launchctl print` reports
+            # it by exiting non-zero, which `pipefail` would otherwise turn into the step dying
+            # with a bare exit code instead of the diagnosis below.
+            agent_pid="$(launchctl print "gui/$(id -u)/$AXON_LAUNCH_AGENT_LABEL" 2>/dev/null | awk '/^[[:space:]]*pid = / { print $3; exit }' || true)"
             if printf '%s' "$status" | jq -e '.daemon.running' >/dev/null; then
               answering=true
               break
