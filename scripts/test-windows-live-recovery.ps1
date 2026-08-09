@@ -54,7 +54,7 @@ $ProbeScript = (Resolve-Path $ProbeScript).Path
 
 $StubbedSeams = @(
     'Write-Note', 'Wait-Tick', 'Test-ProcessIsRunning', 'Get-AxonProcess', 'Stop-ProcessById',
-    'Get-DesktopRegistrationPath', 'Start-DesktopDaemonTask', 'Register-ProbeTask',
+    'Get-DesktopRegistrationPath', 'Get-DesktopTaskState', 'Start-DesktopDaemonTask', 'Register-ProbeTask',
     'Unregister-ProbeTask', 'Start-ProbeTask', 'Invoke-Axon', 'Invoke-AxonMcp', 'Get-ExpectedVersion',
     'Invoke-CargoBuild', 'Copy-ProbeExecutable', 'Read-ParkState', 'Write-ParkState', 'Clear-ParkState'
 )
@@ -188,6 +188,9 @@ $ReadinessTimeoutSeconds = 1
 $PipeFreeTimeoutSeconds = 1
 $ProcessDiscoveryTimeoutSeconds = 1
 $RestoreTimeoutSeconds = 1
+$TaskInstanceTimeoutSeconds = 1
+# $RestoreStartAttempts is deliberately left at its real value. It is a count rather than a bound,
+# and how many times the restore will start this desktop's registration is the behaviour under test.
 
 $ExpectedVersion = (Get-Content (Join-Path $RepositoryRoot 'VERSION')).Trim()
 $DesktopInstallPath = 'C:\Users\mitch\AppData\Local\Axon\0.2.1\axon-win-0.2.1-windows-x86_64\axon-win.exe'
@@ -235,8 +238,23 @@ function Reset-Machine {
         # gone by the time anything asks whether it is running.
         DeadPids = @()
         McpResponder = $null
+        # Reads of the desktop task's state that report a running instance while nothing is running
+        # from the registered path: an instance that has exited but has not finished, which is what
+        # makes a start against it a silent no-op. Counted in reads rather than in seconds because
+        # this harness's Wait-Tick does not sleep.
+        WindingDownReads = 0
+        # Starts that launch a daemon which exits before it is ready -- the daemon's own 30-second
+        # UIA bound on a machine too slow to meet it.
+        StartsThatDie = 0
     }
     Start-FakeDesktopDaemon
+}
+
+function Test-FakeDesktopTaskIsRunning {
+    <# What Task Scheduler would report for this desktop's registration. The registered action is
+    `serve`, so the task runs for exactly as long as the daemon it started is alive. #>
+    if ($script:Machine.WindingDownReads -gt 0) { return $true }
+    [bool] @($script:Machine.Processes | Where-Object { $_.ExecutablePath -eq $script:Machine.DesktopRegistration })
 }
 
 function New-FakeHealth {
@@ -318,8 +336,29 @@ function Get-DesktopRegistrationPath {
     $script:Machine.DesktopRegistration
 }
 
+function Get-DesktopTaskState {
+    $script:Machine.Log.Add('read-desktop-task-state')
+    $running = Test-FakeDesktopTaskIsRunning
+    if ($script:Machine.WindingDownReads -gt 0) { $script:Machine.WindingDownReads-- }
+    if ($running) { 'Running' } else { 'Ready' }
+}
+
 function Start-DesktopDaemonTask {
     $script:Machine.Log.Add('start-desktop-task')
+    if (Test-FakeDesktopTaskIsRunning) {
+        # Task Scheduler discards a start against a task whose previous instance has not finished,
+        # and `schtasks /run` reports success while discarding it. The registration carries no
+        # multiple-instances policy, so the default -- IgnoreNew -- is what applies.
+        $script:Machine.Log.Add('start-desktop-task-discarded')
+        return
+    }
+    if ($script:Machine.StartsThatDie -gt 0) {
+        $script:Machine.StartsThatDie--
+        # Started, and gone before it was ready. Task Scheduler is finished with this instance, so
+        # the next start is not discarded -- it is simply never issued unless the lane makes one.
+        $script:Machine.Log.Add('start-desktop-task-exited')
+        return
+    }
     Start-FakeDesktopDaemon
 }
 
@@ -473,6 +512,13 @@ function Test-Said {
 function Test-Did {
     param([string] $Pattern)
     [bool] @($script:Machine.Log | Where-Object { $_ -match $Pattern })
+}
+
+function Get-Count {
+    <# How many times exactly this happened. Exact rather than a match, so that a log entry which
+    records a call being *discarded* cannot be counted as the call succeeding. #>
+    param([Parameter(Mandatory)][string] $Entry)
+    @($script:Machine.Log | Where-Object { $_ -eq $Entry }).Count
 }
 
 function Get-Position {
