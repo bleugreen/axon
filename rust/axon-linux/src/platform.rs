@@ -588,6 +588,8 @@ impl Actor {
         .await?;
         timeout("children", proxy.get_children()).await
     }
+    /// Every application on the bus — or, when there are none and the session explains why, that
+    /// explanation. A caller wondering where their applications went reaches this before capture.
     async fn enumerate(&self) -> Result<Vec<Application>, BackendError> {
         let mut out = Vec::new();
         for object in self.roots().await? {
@@ -602,6 +604,11 @@ impl Actor {
                 identifier: Some(identity(&object)),
                 windows: vec![],
             });
+        }
+        if out.is_empty()
+            && let Some(explained) = nothing_on_the_bus(self.accessibility_enabled().await)
+        {
+            return Err(explained);
         }
         Ok(out)
     }
@@ -706,8 +713,9 @@ impl Actor {
     /// is a call into one application's own tree. It belongs to the capture of that application,
     /// exactly like the MSAA touch the Windows backend performs before capturing a WebView2 target.
     ///
-    /// A provider that never publishes costs one capture the timeout and is then reported as it
-    /// answers, carrying [`SUBTREE_UNPUBLISHED`] rather than passing for a complete empty tree.
+    /// A provider that never publishes costs its first capture the timeout and is then reported as
+    /// it answers, carrying [`SUBTREE_UNPUBLISHED`] rather than passing for a complete empty tree.
+    /// Later captures of it skip this entirely, because the caller remembers having asked.
     async fn wake_provider(&self, root: &ObjectRefOwned) {
         // The reply is discarded because the call itself is the signal, and a provider that does
         // not implement attributes is not one that needed waking.
@@ -724,23 +732,30 @@ impl Actor {
             tokio::time::sleep(ACTIVATION_POLL).await;
         }
     }
-    /// Whether this application still answers with the null reference where a child belongs.
+    /// Whether this application is still claiming a tree it has not published.
     ///
-    /// Two levels deep, which is where Chromium exhibits it: the application root holds windows and
-    /// a window holds the null reference. Cheap enough to poll, and a false negative only costs the
-    /// wait ending early, after which the re-walk reports whatever the provider actually answers.
+    /// Two levels deep, which is the shape the probe measured: the application root holds windows,
+    /// and a window claims a child and answers with nothing but the null reference. It is the wait
+    /// condition and nothing more — a provider that parks the null reference deeper than this ends
+    /// the wait early rather than being missed, because the walk that follows carries
+    /// [`SUBTREE_UNPUBLISHED`] on whichever node withheld, wherever it sits.
+    ///
+    /// Costs one round trip per window per poll, so a many-windowed application spends a few
+    /// hundred D-Bus calls across a full wait. That is the price of the case it exists for, and it
+    /// is paid once per application.
     async fn withholding(&self, root: &ObjectRefOwned) -> bool {
-        let Ok(windows) = self.children(root).await else {
+        let Ok(answered) = self.children(root).await else {
             return false;
         };
-        if windows.iter().any(ObjectRefOwned::is_null) {
+        let (windows, withheld) = published(answered);
+        if withheld {
             return true;
         }
         for window in &windows {
             if self
                 .children(window)
                 .await
-                .is_ok_and(|kids| kids.iter().any(ObjectRefOwned::is_null))
+                .is_ok_and(|answered| published(answered).1)
             {
                 return true;
             }
