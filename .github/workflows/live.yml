@@ -234,25 +234,43 @@ jobs:
           # may have exited already, and `shutdown` finding nothing to stop looks the same.
           "$cli" shutdown >/dev/null 2>&1 || true
           killall Calculator >/dev/null 2>&1 || true
+          # `shutdown` stops a daemon by asking it to, so it cannot reach a probe app that never
+          # bound the endpoint and therefore answers nothing. That process is this job's own, and
+          # if it bound and then wedged it holds the socket lock -- which would make the bootstrap
+          # below fail on an obstacle this step had left in its own way.
+          scripts/stop-probe-app "$GITHUB_WORKSPACE/dist/Axon.app/Contents/MacOS/Axon"
 
+          if [ "$AXON_AGENT_WAS_LOADED" != true ] && [ "${AXON_APP_WAS_RUNNING:-false}" != true ]; then
+            echo 'this desktop had no Axon daemon when the job arrived; leaving it stopped'
+            exit 0
+          fi
+
+          restart_output=""
           if [ "$AXON_AGENT_WAS_LOADED" = true ]; then
             # `daemon restart`, never `daemon install`: restart bootstraps the plist that is on
             # disk without rewriting it, while install would repoint the desktop's registration at
             # the invoking binary -- here a `dist` directory the next run overwrites. The build
             # under test asks, because the installed CLI is whichever release this desktop last
             # installed and need not carry the verb at all.
-            if ! "$cli" daemon restart; then
-              echo "::error::this job booted the desktop's Axon LaunchAgent out and could not bootstrap it back; this runner has no start-at-login daemon until someone logs in again"
-              exit 1
-            fi
+            #
+            # Its status is recorded rather than acted on. `daemon restart` is `launchctl
+            # bootstrap` plus a readiness wait that parses the answer with *this* build's decoder,
+            # so the release skew this step already expects elsewhere -- the pid comparison below
+            # tolerates a document too old to name a process -- would fail here for a daemon that
+            # came back perfectly. The verdict is the pair below; this output is for the diagnosis
+            # when that pair fails.
+            restart_status=0
+            restart_output="$("$cli" daemon restart 2>&1)" || restart_status=$?
+            printf '%s\n' "$restart_output"
+            echo "daemon restart exited $restart_status"
           elif [ "${AXON_APP_WAS_RUNNING:-false}" = true ]; then
-            if ! open -a /Applications/Axon.app; then
-              echo "::error::this job stopped the desktop's Axon.app and could not reopen it; this machine has no Axon daemon until someone starts it by hand"
+            # The app was this desktop's daemon, so it has to be back before the health round trip
+            # below can mean anything. When the agent is being restored too, the app is reopened
+            # after that instead, so the agent wins the endpoint and the pid check describes it.
+            if ! open -a "${AXON_APP_BUNDLE:-/Applications/Axon.app}"; then
+              echo "::error::this job stopped the desktop's ${AXON_APP_BUNDLE:-/Applications/Axon.app} and could not reopen it; this machine has no Axon daemon until someone starts it by hand"
               exit 1
             fi
-          else
-            echo 'this desktop had no Axon daemon when the job arrived; leaving it stopped'
-            exit 0
           fi
 
           # Neither `daemon restart` nor `open` is trusted on its exit code: both report on
@@ -277,6 +295,9 @@ jobs:
           done
           if [[ "$answering" != true ]]; then
             echo "::error::the desktop Axon daemon did not come back at $(printf '%s' "$status" | jq -r '.daemon.endpoint'); this runner needs attention before the next live run"
+            if [ -n "$restart_output" ]; then
+              printf -- '--- daemon restart ---\n%s\n' "$restart_output"
+            fi
             launchctl print "gui/$(id -u)/$AXON_LAUNCH_AGENT_LABEL" 2>&1 | head -20 || true
             tail -20 "$HOME/Library/Logs/Axon/daemon.err.log" 2>/dev/null || true
             exit 1
