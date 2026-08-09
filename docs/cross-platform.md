@@ -614,6 +614,16 @@ desktop is a GNOME Wayland session, which is the worst possible place to verify
 X11 activation, and the live lane asserts the opposite property there — that
 global input stays withheld at both policies with a reason naming Wayland.
 
+The `Test` workflow's macOS job also rehearses the live lane's recovery
+branches. Because the live workflow has no `pull_request` trigger, its steps
+otherwise first execute on a real desktop with nothing having tried them, and
+the branches deciding whether that desktop keeps its start-at-login daemon only
+run once a probe has already failed. `scripts/test-macos-live-recovery` extracts
+those step bodies from the workflow file itself and drives them against stubbed
+`launchctl`, `pgrep`, `open`, and Axon commands, asserting the branch and the
+message each scenario produces. It runs on the macOS runner rather than a hosted
+one so that the shell interpreting it is the same `bash` 3.2 the live lane gets.
+
 The separate `Live desktop verification` workflow is a reporting lane. It runs
 only after a push to `main` or an explicit manual dispatch, never for a pull
 request. Its self-hosted jobs use dedicated `axon-live-*` labels and serialize
@@ -678,7 +688,23 @@ directory and is never the restore. Neither lane trusts the restart's exit code,
 because whatever starts a daemon reports on starting it: `systemctl start` is a
 claim about `exec` under `Type=simple`, and `launchctl bootstrap` is a claim
 about loading a job. Both therefore require the restored daemon to answer a
-health round trip and to be the process systemd or launchd names.
+health round trip and to be the process systemd or launchd names, and neither
+treats the restart command's own status as the verdict — on macOS that command
+includes a readiness wait parsed with the *building* release's decoder, which a
+release skew the rest of the step deliberately tolerates could fail on its own.
+
+The macOS probe leaves one thing behind that its Linux counterpart cannot, and
+`scripts/stop-probe-app` is what removes it. The two daemons behave differently
+when they lose the endpoint: `serve` exits, while the app bundle catches the
+socket error, records it in its menu, and keeps running. A probe app that never
+bound is therefore a live process answering no health request, which `axon
+shutdown` can neither see nor stop, since it stops a daemon by asking it to —
+and one that bound and then wedged still holds the advisory lock that makes the
+next `serve` refuse. Left alone it outlives its job and survives the next
+checkout, because deleting an executable does not change a running process's
+arguments. Both the parking and restore steps sweep it by workspace path, which
+is what keeps the sweep from ever reaching an installed copy; the Windows job's
+`Remove leaked live-probe daemons` is the same measure for the same reason.
 
 Windows still narrows the window without closing it. It snapshots and replaces
 the scheduled interactive-session daemon for the duration of its probe, but
