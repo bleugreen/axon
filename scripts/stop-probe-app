@@ -1,0 +1,55 @@
+#!/usr/bin/env bash
+# Stops every process running a live probe's app bundle, and fails if any survive.
+#
+# The macOS probe launches an app bundle rather than `serve`, and the two behave differently when
+# they cannot have the endpoint. `serve` calls `fail(...)` and exits. `AxonDaemonApp.startServer`
+# catches the `SocketServer` error, records it in the menu, and keeps running -- so a probe app that
+# never bound is a live GUI process answering no health request, which is invisible to
+# `axon shutdown`, since that stops a daemon by asking it to. Worse, an app that did bind and then
+# wedged still holds the advisory lock in `SocketOwnership`, so the next `serve` is refused with
+# `socketAlreadyServed` no matter how the endpoint looks.
+#
+# Left alone such a process outlives its job. It also survives the next checkout, because deleting
+# an executable does not change a running process's argv, so it keeps matching the same pattern and
+# every later run finds two candidates where it requires one.
+#
+# The pattern is a path under the job's own workspace, which is what keeps this from ever reaching
+# an installed copy of Axon. It is the macOS counterpart of the Windows job's
+# `Remove leaked live-probe daemons`.
+#
+# Usage: scripts/stop-probe-app <bundle-executable-path>
+set -euo pipefail
+
+if [[ $# -ne 1 ]]; then
+  printf 'usage: %s <bundle-executable-path>\n' "$0" >&2
+  exit 2
+fi
+
+EXECUTABLE="$1"
+
+running() {
+  pgrep -f "$EXECUTABLE" 2>/dev/null || true
+}
+
+remaining="$(running)"
+if [[ -z "$remaining" ]]; then
+  exit 0
+fi
+
+printf 'stopping probe app processes: %s\n' "$(printf '%s' "$remaining" | tr '\n' ' ')"
+# TERM first so an app with state to flush can take it, then KILL, because a wedged app is exactly
+# the case this exists for and it may not be answering its run loop either.
+for signal in TERM KILL; do
+  pkill -"$signal" -f "$EXECUTABLE" >/dev/null 2>&1 || true
+  for _ in {1..20}; do
+    remaining="$(running)"
+    if [[ -z "$remaining" ]]; then
+      exit 0
+    fi
+    sleep 0.25
+  done
+done
+
+printf '::error::%s is still running as pid(s) %s after TERM and KILL; this runner needs attention before the next live run\n' \
+  "$EXECUTABLE" "$(printf '%s' "$remaining" | tr '\n' ' ')"
+exit 1
