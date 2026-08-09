@@ -179,7 +179,7 @@ import Testing
             label: "dev.axon.test",
             program: DaemonProgram(
                 executablePath: "/Applications/Axon.app/Contents/MacOS/Axon",
-                identity: .appBundle(identifier: "com.bleugreen.axon", bundlePath: "/Applications/Axon.app")
+                identity: .appBundle(identifier: "com.bleugreen.axon")
             ),
             socketPath: "/tmp/axon-test.sock",
             environment: [:]
@@ -212,7 +212,7 @@ import Testing
             label: "dev.axon.test",
             program: DaemonProgram(
                 executablePath: installed,
-                identity: .appBundle(identifier: "com.bleugreen.axon", bundlePath: "/Applications/Axon.app")
+                identity: .appBundle(identifier: "com.bleugreen.axon")
             ),
             socketPath: "/tmp/axon-test.sock",
             environment: [:]

@@ -19,8 +19,10 @@ import Foundation
 public struct DaemonProgram: Equatable, Sendable {
     /// Who macOS thinks is asking, when the registered program requests a privacy grant.
     public enum Identity: Equatable, Sendable {
-        /// A bundle's main executable: grants follow the bundle identifier across paths.
-        case appBundle(identifier: String, bundlePath: String)
+        /// A bundle's main executable: grants follow the bundle identifier across paths. The
+        /// identifier is the whole identity — two installs of the same app at different versioned
+        /// paths are the same TCC subject, which is the property this change exists to hold.
+        case appBundle(identifier: String)
         /// Any other executable: grants are keyed to this absolute path and are re-approved when
         /// it changes.
         case executablePath
@@ -50,7 +52,7 @@ public struct DaemonProgram: Equatable, Sendable {
     /// two rules its permissions will follow rather than having to know this contract.
     public var identityDescription: String {
         switch identity {
-        case let .appBundle(identifier, _):
+        case let .appBundle(identifier):
             return "\(identifier) (app bundle; permissions persist across upgrades)"
         case .executablePath:
             return "\(executablePath) (executable path; permissions must be granted again if it moves)"
@@ -75,7 +77,7 @@ public struct DaemonProgram: Equatable, Sendable {
         }
         return DaemonProgram(
             executablePath: mainExecutable,
-            identity: .appBundle(identifier: identifier, bundlePath: bundle.path)
+            identity: .appBundle(identifier: identifier)
         )
     }
 }
