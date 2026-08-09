@@ -473,6 +473,9 @@ impl PointerTargetVerifier for LinuxBackend {
 
 struct Actor {
     connection: zbus::Connection,
+    /// The session bus, kept past bus discovery because `org.a11y.Status` lives there and is what
+    /// explains an application that is missing rather than thin.
+    session: zbus::Connection,
     retained: HashMap<String, Vec<ObjectRefOwned>>,
 }
 impl Actor {
@@ -505,6 +508,7 @@ impl Actor {
             .map_err(|e| operation("connect AT-SPI", e))?;
         Ok(Self {
             connection,
+            session,
             retained: HashMap::new(),
         })
     }
@@ -551,7 +555,17 @@ impl Actor {
     }
     async fn roots(&self) -> Result<Vec<ObjectRefOwned>, BackendError> {
         let registry = timeout("registry", self.registry()).await?;
-        timeout("enumerate applications", registry.get_children()).await
+        let answered = timeout("enumerate applications", registry.get_children()).await?;
+        Ok(published(answered).0)
+    }
+    /// The children a provider actually has, and whether it withheld any.
+    async fn children(&self, object: &ObjectRefOwned) -> Result<Vec<ObjectRefOwned>, BackendError> {
+        let proxy = timeout(
+            "accessible proxy",
+            object.as_accessible_proxy(&self.connection),
+        )
+        .await?;
+        timeout("children", proxy.get_children()).await
     }
     async fn enumerate(&self) -> Result<Vec<Application>, BackendError> {
         let mut out = Vec::new();
