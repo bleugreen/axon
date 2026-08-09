@@ -424,3 +424,77 @@ The activation dispatch and traversal outcome remain separate facts. Setting the
 The `Invalid address string` warning above was attributed to WebKit returning a same-bus unique name from `GetApplicationBusAddress`. Live diagnosis on `bglab-ub` for AXN-81 found a different cause. `atspi`'s peer initialization asks *every* registry application for a bus address, and the failure came from a participant that answers with an empty string rather than from WebKit and rather than from a unique name. Asking each peer directly returned real `unix:path=.../at-spi2-*/socket` addresses for `gnome-shell`, `evolution-alarm-notify`, `ibus-extension-gtk3`, `gjs`, and `xdg-desktop-portal-gtk`, and `""` for `orca`, the screen reader. The unique name in the message is the *application's* name, not the address it returned, which is what made the earlier reading plausible.
 
 The traversal conclusion is unaffected and now stronger: explicit destinations over the shared accessibility-bus connection remain the mechanism, and the production backend opens that connection itself instead of through `AccessibilityConnection`, so peer initialization never runs at all. The failing peer was never missing from capture either — the daemon enumerates and captures `orca` exactly as it does every other registry child, and a screen reader's complete tree is a bare application root with no children.
+
+
+## Chromium-family activation on Linux, 2026-08-08
+
+Run on `bglab-ub` for AXN-84, to settle a claim `docs/cross-platform.md` had been
+carrying without evidence: that Chromium and Electron withhold their trees until
+an AT-SPI listener registers, making registration part of backend readiness. The
+claim is wrong in both halves, and what replaces it is two separate gates.
+
+The desktop could not answer the question. It runs Orca with
+`org.a11y.Status.IsEnabled` already true, so every Chromium tree on it is awake
+for reasons unrelated to Axon. Each application under test was therefore given a
+private session bus, a private accessibility bus, and a private registry, with
+`GSETTINGS_BACKEND=memory` so `at-spi-bus-launcher` could not write
+`toolkit-accessibility` into the real user's dconf. Every phase also read the
+desktop's own bus, so an application that woke up somewhere else could not be
+misread as one that never woke up. That check earned its place: `libatspi`
+consults the X root window's `AT_SPI_BUS` property before the session bus, so an
+application on the desktop's display joins the desktop's accessibility bus
+unless `AT_SPI_BUS_ADDRESS` is exported, and the first run of this probe was
+measuring the wrong bus without saying so.
+
+Subjects were Electron 33.2.1 (Chromium 130) and Chrome for Testing
+151.0.7922.77, each a self-contained download rather than an installed package,
+run against a page carrying known markers.
+
+| condition | result |
+| --- | --- |
+| `IsEnabled` false, no listener | application absent from the bus |
+| `IsEnabled` false, listener registered, application already running | absent; `IsEnabled` unchanged |
+| `IsEnabled` false, listener registered, application relaunched | still absent |
+| `IsEnabled` set true while the application runs | no effect on that application |
+| `IsEnabled` true at startup, no listener | application, window, and the null reference: 3 nodes |
+| `IsEnabled` true at startup, listener registered | identical, 3 nodes |
+| the above, then `GetAttributes` or `GetRelationSet` on the application root | Chrome 284 nodes after 1.12s, Electron 26 nodes after 0.09s, both with `document web` |
+| `--force-renderer-accessibility` (application-side flag) | full tree with no client action |
+
+GNOME Calculator, a GTK4 provider, registered on the bus with `IsEnabled` false,
+so the first gate is specific to the Chromium family rather than a property of
+the session.
+
+The mechanism behind the second gate is named in Chromium's own source:
+`AtkRefRelationSet` and `AtkGetAttributes` both call
+`AXPlatform::OnExtendedPropertiesUsedInWebContent()`, commented as a signal that
+Orca in particular produces. One `GetAttributes` on the application root is
+enough; the window does not need to be touched.
+
+The listener folklore has a real source. Upstream `at-spi-bus-launcher` has
+grown a handler that flips `IsEnabled` when a client registers an event
+listener, which would let registration reach the first gate indirectly — and
+would also write the desktop's `toolkit-accessibility` setting as a side effect.
+The 2.60.4 build on this stack contains no such handler (`strings` finds
+`toolkit-accessibility` and no `EventListenerRegistered`), and even where it
+does, the second gate is untouched by it.
+
+Through the daemon rather than the raw probe, `look Chrome` answered `operation
+accessible proxy failed: atspi: null reference` before AXN-84, because
+`/org/a11y/atspi/null` implements no interfaces and the walk asked it for a role.
+After AXN-84 the same capture returned 284 nodes including the web document, and
+GNOME Calculator still returned 107 nodes at unchanged latency, since a provider
+that publishes its tree is never asked to.
+
+### Re-running this
+
+The rig is four pieces and no installed software beyond the desktop's own:
+start `dbus-daemon --session --print-address --fork` with a private
+`XDG_RUNTIME_DIR`; start `/usr/libexec/at-spi-bus-launcher --launch-immediately`
+against it with `GSETTINGS_BACKEND=memory`; export `AT_SPI_BUS_ADDRESS` for the
+application under test so the X property cannot redirect it; then drive
+`org.a11y.Status.IsEnabled`, `org.a11y.atspi.Registry.RegisterEvent` (held open
+by a live connection, since the launcher watches the sender's name), and
+`org.a11y.atspi.Accessible.GetAttributes` while walking
+`/org/a11y/atspi/accessible/root`. Re-date the claim in
+`docs/cross-platform.md` when the backend area or the browser generation changes.

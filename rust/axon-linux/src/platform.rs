@@ -6,14 +6,19 @@ use atspi::{
         bus::BusProxy,
         proxy_ext::ProxyExt,
     },
-    zbus::{self, fdo::DBusProxy, names::BusName, proxy::CacheProperties},
+    zbus::{
+        self,
+        fdo::{DBusProxy, PropertiesProxy},
+        names::{BusName, InterfaceName},
+        proxy::CacheProperties,
+    },
 };
 use axon_core::{
     AppQuery, Application, BackendError, Capability, CapabilityInfo, KeyboardIntent, Node,
     Observation, PlatformBackend, RecordedCall, Screenshot, Snapshot, SnapshotHandle, Window,
 };
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     future::Future,
     pin::Pin,
     sync::mpsc,
@@ -28,6 +33,45 @@ const REGISTRY: &str = "org.a11y.atspi.Registry";
 const MAX_DEPTH: usize = 18;
 const MAX_NODES: usize = 2_000;
 const CALL_TIMEOUT: Duration = Duration::from_secs(2);
+
+/// How long a provider is given to publish a tree it has claimed, and how often that is checked.
+///
+/// Chromium builds the tree in its renderer and pushes it to the browser process, so the answer is
+/// neither immediate nor slow: the 2026-08-08 probe recorded in `docs/cross-platform.md` measured
+/// 0.09s for Electron 33 and 1.12s for Chrome 151. The ceiling is generous against a loaded machine
+/// and a heavy page. Only an application that is actually withholding waits at all, and only on the
+/// first capture of it, so a provider that never publishes cannot tax every later `look`.
+const ACTIVATION_TIMEOUT: Duration = Duration::from_secs(3);
+const ACTIVATION_POLL: Duration = Duration::from_millis(50);
+
+const NODE_LIMIT_REACHED: &str = "node limit reached";
+
+/// Said of a node the walk never asked about, because it sits at [`MAX_DEPTH`]. Reporting it as a
+/// childless leaf would be the same lie as reporting a withheld subtree as an empty one.
+const DEPTH_LIMIT_REACHED: &str = "depth limit reached";
+
+/// Said of a node whose provider answered with AT-SPI's null reference in place of a child.
+///
+/// States what was observed and diagnoses nothing. `Null` is AT-SPI's general sentinel for "no
+/// object": a provider that has not built a subtree emits it, and so does one with an ordinary
+/// hole in its child range — a cell not yet instantiated, a child destroyed mid-enumeration.
+/// Those are different situations, but they leave the caller holding fewer children than the
+/// provider claimed, and that is true of both and worth saying either way. A window that published
+/// a menu bar and withheld everything else must not read as a window that contains only a menu
+/// bar. Which answers are worth *waiting* on is a stricter question, and it is answered in
+/// [`Actor::withholding`] rather than here.
+const CHILD_NOT_PUBLISHED: &str = "the provider returned a null reference in place of a child";
+
+/// The session fact that most often explains an application a caller cannot find.
+///
+/// Chromium and its embedders read `org.a11y.Status.IsEnabled` once at process start and never join
+/// the accessibility bus while it is false. On such a session those applications are not thin —
+/// they are absent, which is indistinguishable from a misspelled name unless the caller is told.
+const ACCESSIBILITY_DISABLED: &str = "this session reports accessibility disabled \
+     (org.a11y.Status.IsEnabled is false), so applications that read it at startup — Chromium, \
+     Electron, and Chromium-backed webviews — are not on the bus at all";
+const NO_APPLICATION_MATCHED: &str = "no AT-SPI application matched";
+const NOTHING_ON_THE_BUS: &str = "no applications are on the accessibility bus";
 
 /// How long the application-to-process map is trusted before it is read again.
 ///
@@ -442,6 +486,17 @@ impl PointerTargetVerifier for LinuxBackend {
 
 struct Actor {
     connection: zbus::Connection,
+    /// The session bus, kept past bus discovery because `org.a11y.Status` lives there and is what
+    /// explains an application that is missing rather than thin.
+    session: zbus::Connection,
+    /// Applications this daemon has already asked to publish their tree.
+    ///
+    /// Activation is a one-way switch inside the application, so asking twice buys nothing, and
+    /// an application that ignores the ask must not make every later `look` at it pay the wait.
+    /// Keyed by AT-SPI identity, which carries the unique bus name: a restarted application owns a
+    /// different one, so a stale entry can never suppress activation for the process that replaced
+    /// it, and the set grows by one short string per application this daemon has ever captured.
+    activated: HashSet<String>,
     retained: HashMap<String, Vec<ObjectRefOwned>>,
 }
 impl Actor {
@@ -474,6 +529,8 @@ impl Actor {
             .map_err(|e| operation("connect AT-SPI", e))?;
         Ok(Self {
             connection,
+            session,
+            activated: HashSet::new(),
             retained: HashMap::new(),
         })
     }
@@ -520,8 +577,20 @@ impl Actor {
     }
     async fn roots(&self) -> Result<Vec<ObjectRefOwned>, BackendError> {
         let registry = timeout("registry", self.registry()).await?;
-        timeout("enumerate applications", registry.get_children()).await
+        let answered = timeout("enumerate applications", registry.get_children()).await?;
+        Ok(published(answered).0)
     }
+    /// The children a provider actually has, and whether it withheld any.
+    async fn children(&self, object: &ObjectRefOwned) -> Result<Vec<ObjectRefOwned>, BackendError> {
+        let proxy = timeout(
+            "accessible proxy",
+            object.as_accessible_proxy(&self.connection),
+        )
+        .await?;
+        timeout("children", proxy.get_children()).await
+    }
+    /// Every application on the bus — or, when there are none and the session explains why, that
+    /// explanation. A caller wondering where their applications went reaches this before capture.
     async fn enumerate(&self) -> Result<Vec<Application>, BackendError> {
         let mut out = Vec::new();
         for object in self.roots().await? {
@@ -536,6 +605,11 @@ impl Actor {
                 identifier: Some(identity(&object)),
                 windows: vec![],
             });
+        }
+        if out.is_empty()
+            && let Some(explained) = nothing_on_the_bus(self.accessibility_enabled().await)
+        {
+            return Err(explained);
         }
         Ok(out)
     }
@@ -602,11 +676,14 @@ impl Actor {
         Ok(partial)
     }
     async fn capture(&mut self, q: AppQuery) -> Result<Snapshot, BackendError> {
-        let (root, name) = self
-            .select(&q)
-            .await?
-            .ok_or_else(|| operation("select application", "no AT-SPI application matched"))?;
-        let identifier = Some(identity(&root));
+        let Some((root, name)) = self.select(&q).await? else {
+            return Err(no_application_matched(self.accessibility_enabled().await));
+        };
+        let identifier = identity(&root);
+        if !self.activated.contains(&identifier) && self.wake_provider(&root).await {
+            self.activated.insert(identifier.clone());
+        }
+        let identifier = Some(identifier);
         let mut refs = Vec::new();
         let mut remaining = MAX_NODES;
         let node = self.node(root, 0, &mut remaining, &mut refs).await?;
@@ -622,6 +699,93 @@ impl Actor {
         self.retained.insert(snapshot.id.0.clone(), refs);
         Ok(snapshot)
     }
+    /// Asks a provider that is withholding its tree to publish it, then waits boundedly for that.
+    ///
+    /// Chromium and everything embedding it — Electron, and Chromium-backed webviews — publish an
+    /// application root and a window whose only child is AT-SPI's null reference until an assistive
+    /// technology asks a node for its attributes or its relations. Either call reaches
+    /// `AXPlatform::OnExtendedPropertiesUsedInWebContent` in Chromium, which is what turns the
+    /// web-content accessibility mode on; the tree is then built in the renderer and pushed across,
+    /// so the touch has to be followed by a wait rather than trusted to have already taken effect.
+    ///
+    /// Registering an AT-SPI event listener is not what does this, whatever the folklore says: the
+    /// 2026-08-08 probe in `docs/cross-platform.md` found registration changes nothing observable
+    /// about these applications. Nor can activation live on the readiness path, because the trigger
+    /// is a call into one application's own tree. It belongs to the capture of that application,
+    /// exactly like the MSAA touch the Windows backend performs before capturing a WebView2 target.
+    ///
+    /// A provider that never publishes costs its first capture the timeout and is then reported as
+    /// it answers, carrying [`CHILD_NOT_PUBLISHED`] rather than passing for a complete empty tree.
+    /// Later captures of it skip this entirely, because the caller remembers having asked.
+    ///
+    /// Returns whether the ask reached the application, which is what the caller may remember. A
+    /// reply, an error reply, and a timeout on this side all count: the call was delivered, and
+    /// the switch inside the application has been thrown or declined on its own terms. Only
+    /// failing to build the proxy means nothing was sent, and remembering that as an ask would
+    /// suppress activation for that application for the rest of the daemon's life.
+    async fn wake_provider(&self, root: &ObjectRefOwned) -> bool {
+        let Ok(proxy) = timeout(
+            "accessible proxy",
+            root.as_accessible_proxy(&self.connection),
+        )
+        .await
+        else {
+            return false;
+        };
+        // The reply is discarded because the call itself is the signal, and a provider that does
+        // not implement attributes is not one that needed waking.
+        let _ = timeout("attributes", proxy.get_attributes()).await;
+        let deadline = Instant::now() + ACTIVATION_TIMEOUT;
+        while self.withholding(root).await && Instant::now() < deadline {
+            tokio::time::sleep(ACTIVATION_POLL).await;
+        }
+        true
+    }
+    /// Whether this application is still claiming a tree it has not published.
+    ///
+    /// Two levels deep, which is the shape the probe measured: the application root holds windows,
+    /// and a window claims a child and answers with nothing but the null reference. It is the wait
+    /// condition and nothing more — a provider that parks the null reference deeper than this ends
+    /// the wait early rather than being missed, because the walk that follows carries
+    /// [`CHILD_NOT_PUBLISHED`] on whichever node withheld, wherever it sits.
+    ///
+    /// Costs one round trip per window per poll, so a many-windowed application spends a few
+    /// hundred D-Bus calls across a full wait. That is the price of the case it exists for, and it
+    /// is paid once per application.
+    async fn withholding(&self, root: &ObjectRefOwned) -> bool {
+        let Ok(answered) = self.children(root).await else {
+            return false;
+        };
+        let (windows, dropped) = published(answered);
+        if published_nothing(&windows, dropped) {
+            return true;
+        }
+        for window in &windows {
+            if self.children(window).await.is_ok_and(|answered| {
+                let (kids, dropped) = published(answered);
+                published_nothing(&kids, dropped)
+            }) {
+                return true;
+            }
+        }
+        false
+    }
+    /// Whether this session has accessibility switched on, or `None` when the bus will not say.
+    async fn accessibility_enabled(&self) -> Option<bool> {
+        let properties = PropertiesProxy::builder(&self.session)
+            .destination("org.a11y.Bus")
+            .ok()?
+            .path("/org/a11y/bus")
+            .ok()?
+            .build()
+            .await
+            .ok()?;
+        let status = InterfaceName::try_from("org.a11y.Status").ok()?;
+        let value = timeout("accessibility status", properties.get(status, "IsEnabled"))
+            .await
+            .ok()?;
+        bool::try_from(value).ok()
+    }
     fn node<'a>(
         &'a self,
         object: ObjectRefOwned,
@@ -631,7 +795,7 @@ impl Actor {
     ) -> Pin<Box<dyn Future<Output = Result<Node, BackendError>> + 'a>> {
         Box::pin(async move {
             if *remaining == 0 {
-                return Err(operation("capture", "node limit reached"));
+                return Err(operation("capture", NODE_LIMIT_REACHED));
             }
             *remaining -= 1;
             refs.push(object.clone());
@@ -694,14 +858,19 @@ impl Actor {
             } else {
                 false
             };
-            let children_refs = if depth < MAX_DEPTH && *remaining > 0 {
+            let depth_limit_reached = depth >= MAX_DEPTH;
+            let asked = !depth_limit_reached && *remaining > 0;
+            let answered = if asked {
                 timeout("children", proxy.get_children())
                     .await
                     .unwrap_or_default()
             } else {
                 vec![]
             };
-            let child_count = children_refs.len();
+            let (children_refs, dropped) = published(answered);
+            // A node nobody asked about has no child count, rather than a count of zero. Saying it
+            // is childless is the same lie as reporting a withheld subtree as an empty one.
+            let child_count = asked.then_some(children_refs.len());
             let mut children = Vec::new();
             for child in children_refs {
                 if *remaining == 0 {
@@ -722,8 +891,12 @@ impl Actor {
                 frame,
                 editable,
                 children,
-                child_count: Some(child_count),
-                truncation_reason: (*remaining == 0).then(|| "node limit reached".into()),
+                child_count,
+                truncation_reason: incompleteness(
+                    *remaining == 0,
+                    depth_limit_reached,
+                    dropped > 0,
+                ),
             })
         })
     }
@@ -831,6 +1004,74 @@ where
         .map_err(|_| operation(name, "timed out"))?
         .map_err(|e| operation(name, e))
 }
+/// Splits what a provider answered into the children that exist and the number of references it
+/// returned in place of one.
+///
+/// AT-SPI's null reference means "no object", and it must never become a node: it implements no
+/// interfaces, so asking it for a role answers `UnknownMethod` and fails the whole capture rather
+/// than yielding an empty branch. Dropping it is therefore unconditional, and how many were
+/// dropped is reported rather than discarded so that neither caller has to re-derive it.
+fn published(children: Vec<ObjectRefOwned>) -> (Vec<ObjectRefOwned>, usize) {
+    let claimed = children.len();
+    let children: Vec<ObjectRefOwned> = children.into_iter().filter(|c| !c.is_null()).collect();
+    let dropped = claimed - children.len();
+    (children, dropped)
+}
+
+/// Whether a provider answered with nothing but null references: it claimed a subtree and
+/// published none of it.
+///
+/// The strict reading, and the only one worth waiting on. A partial answer — real children
+/// alongside a null — is reported through [`CHILD_NOT_PUBLISHED`] but never waited on, because a
+/// hole in a child range will not fill in however long anyone stands there, and the wait costs
+/// [`ACTIVATION_TIMEOUT`].
+fn published_nothing(published: &[ObjectRefOwned], dropped: usize) -> bool {
+    dropped > 0 && published.is_empty()
+}
+
+/// What a caller is owed about a subtree that is not complete.
+///
+/// Ordered by how total the statement is. A walk that stopped counting has nothing to say about
+/// depth or about the provider; a walk that stopped descending never asked the provider anything,
+/// so it cannot report withholding either.
+fn incompleteness(
+    node_limit_reached: bool,
+    depth_limit_reached: bool,
+    child_not_published: bool,
+) -> Option<String> {
+    match (node_limit_reached, depth_limit_reached, child_not_published) {
+        (true, _, _) => Some(NODE_LIMIT_REACHED.into()),
+        (false, true, _) => Some(DEPTH_LIMIT_REACHED.into()),
+        (false, false, true) => Some(CHILD_NOT_PUBLISHED.into()),
+        (false, false, false) => None,
+    }
+}
+
+/// Why nothing matched, said with the session fact that most often explains it.
+fn no_application_matched(accessibility_enabled: Option<bool>) -> BackendError {
+    match accessibility_enabled {
+        Some(false) => operation(
+            "select application",
+            format!("{NO_APPLICATION_MATCHED}; {ACCESSIBILITY_DISABLED}"),
+        ),
+        _ => operation("select application", NO_APPLICATION_MATCHED),
+    }
+}
+
+/// Why an enumeration came back empty, when the session explains it.
+///
+/// An empty desktop is an ordinary answer and stays one. An empty desktop on a session with
+/// accessibility switched off is a broken session, and saying so here reaches the caller before
+/// they have guessed at an application name.
+fn nothing_on_the_bus(accessibility_enabled: Option<bool>) -> Option<BackendError> {
+    (accessibility_enabled == Some(false)).then(|| {
+        operation(
+            "enumerate applications",
+            format!("{NOTHING_ON_THE_BUS}; {ACCESSIBILITY_DISABLED}"),
+        )
+    })
+}
+
 /// The identity string Axon uses for an AT-SPI object.
 ///
 /// AT-SPI names an object by a `(bus name, object path)` pair, and the path alone is not unique.
@@ -864,6 +1105,100 @@ pub(crate) fn capability(capability: Capability, reason: &str) -> BackendError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use atspi::ObjectRef;
+
+    fn real(path: &'static str) -> ObjectRefOwned {
+        ObjectRefOwned::from_static_str_unchecked(":1.7", path)
+    }
+
+    fn null() -> ObjectRefOwned {
+        ObjectRefOwned::new(ObjectRef::Null)
+    }
+
+    #[test]
+    fn the_null_reference_is_never_a_child() {
+        // Walking it is what fails a Chromium capture outright: it implements no interfaces, so
+        // the role call that opens every node answers UnknownMethod.
+        let (children, _) = published(vec![
+            real("/org/a11y/atspi/accessible/1"),
+            null(),
+            real("/org/a11y/atspi/accessible/2"),
+        ]);
+        assert_eq!(children.len(), 2);
+        assert!(children.iter().all(|c| !c.is_null()));
+    }
+
+    #[test]
+    fn every_dropped_reference_is_reported_and_only_a_total_one_is_worth_waiting_on() {
+        // The shape Chromium presents: children claimed, none published. Reported, and waited on.
+        let (children, dropped) = published(vec![null()]);
+        assert!(dropped > 0 && published_nothing(&children, dropped));
+
+        // A partial answer is reported and never waited on. Saying nothing would let a window that
+        // published a menu bar and withheld everything else pass for a window containing a menu
+        // bar; waiting on it would spend the activation timeout on a hole that will not fill in.
+        let (children, dropped) = published(vec![real("/org/a11y/atspi/accessible/1"), null()]);
+        assert_eq!(children.len(), 1);
+        assert!(dropped > 0);
+        assert!(!published_nothing(&children, dropped));
+
+        // A genuinely childless node is a different fact again, and stays silent.
+        let (children, dropped) = published(vec![]);
+        assert!(children.is_empty() && dropped == 0);
+        assert!(!published_nothing(&children, dropped));
+    }
+
+    #[test]
+    fn incompleteness_is_ordered_by_how_total_the_statement_is() {
+        assert_eq!(incompleteness(false, false, false), None);
+        assert_eq!(
+            incompleteness(false, false, true).as_deref(),
+            Some(CHILD_NOT_PUBLISHED)
+        );
+        // A node at the depth limit was never asked about its children, so it is neither empty nor
+        // able to report anything about the provider — the failure this change exists to stop.
+        assert_eq!(
+            incompleteness(false, true, false).as_deref(),
+            Some(DEPTH_LIMIT_REACHED)
+        );
+        assert_eq!(
+            incompleteness(true, true, true).as_deref(),
+            Some(NODE_LIMIT_REACHED),
+            "a walk that stopped counting cannot also speak for depth or for the provider"
+        );
+    }
+
+    #[test]
+    fn a_session_with_accessibility_off_says_so_instead_of_blaming_the_name() {
+        // Chromium and its embedders read org.a11y.Status.IsEnabled once at startup, so on such a
+        // session they are absent rather than thin, and the bare refusals below would send the
+        // caller looking for a typo.
+        for (enabled, bare) in [
+            (Some(false), false),
+            (Some(true), true),
+            (None::<bool>, true),
+        ] {
+            let BackendError::Operation { message, .. } = no_application_matched(enabled) else {
+                panic!("a miss is an operation failure");
+            };
+            assert!(message.starts_with(NO_APPLICATION_MATCHED));
+            assert_eq!(message.contains(ACCESSIBILITY_DISABLED), !bare);
+        }
+    }
+
+    #[test]
+    fn an_empty_bus_is_explained_only_when_the_session_explains_it() {
+        // An empty desktop is an ordinary answer; an empty desktop with accessibility off is a
+        // broken session, and enumerate is where someone looks before guessing at a name.
+        let explained = nothing_on_the_bus(Some(false)).expect("a disabled session is explained");
+        assert!(matches!(
+            explained,
+            BackendError::Operation { ref message, .. }
+                if message.starts_with(NOTHING_ON_THE_BUS) && message.contains(ACCESSIBILITY_DISABLED)
+        ));
+        assert!(nothing_on_the_bus(Some(true)).is_none());
+        assert!(nothing_on_the_bus(None).is_none());
+    }
 
     const USABLE: SessionFacts = SessionFacts {
         wayland: false,

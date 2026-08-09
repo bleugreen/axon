@@ -62,6 +62,7 @@ These are the only sources that promote or sustain a **Supported** cell.
 | Windows live loop | `.github/workflows/live.yml` `windows` job | the interactive-session daemon serves `look` with a real window root through the DACL-restricted pipe | every push to `main` |
 | Hermetic X11 foreground test | `.github/workflows/test.yml` Linux job; `rust/axon-linux/tests/x11_foreground.rs` | the X11 activate/prove/dispatch/restore conversation against a real X server with a miniature EWMH window manager | every pull request |
 | Windows session-1 probes | `axon-win probe value`, `events`, `timeout`, `pixel-click`, `foreground`; findings recorded in this document | value set and readback, event delivery, provider timeouts, the pixel-click allowlist entry, the foreground hand-back finding | manual; re-run and re-date when the area changes |
+| Linux Chromium activation probe | recorded in [Linux backend](#linux-backend) | that Chromium-family trees are gated by `org.a11y.Status.IsEnabled` and by an attributes or relations call, and not by AT-SPI listener registration; the daemon's before-and-after capture of Chrome | manual (2026-08-08); re-run and re-date when the area changes |
 | Platform spikes | `rust/SPIKE-FINDINGS.md` | session topology, WebView2 and WebKitGTK activation and traversal, the Mutter geometry caveat, verified invoke dispatch | dated snapshots (2026-08-02 through 2026-08-04) |
 
 ### Environment notes
@@ -130,11 +131,14 @@ should be discoverable here first.
 - Recording (`save` from live history, global user-input observation): macOS
   only. `serializeHistory` and `observeGlobalInput` are unimplemented on both
   Rust backends.
-- Chromium-family renderer accessibility: WebView2 activation is built into
-  the Windows backend and spike-verified; the WebKitGTK same-bus peer
-  traversal is proven only in `axon-spike-linux` and is not yet in the
-  shipping Linux backend, and no AT-SPI event listener registration exists
-  there to wake Chromium-family renderers.
+- WebKitGTK renderer accessibility on Linux: the same-bus peer traversal is
+  proven only in `axon-spike-linux` and is not in the shipping Linux backend,
+  so WebKitGTK page content is still out of reach. Chromium-family activation
+  is implemented on both backends — an MSAA touch before capture on Windows
+  (spike-verified) and an attributes touch at capture on Linux (probe-verified
+  2026-08-08) — and a Linux session whose `org.a11y.Status.IsEnabled` is false
+  hides those applications from the bus entirely, which capture now reports by
+  name rather than as a missing application.
 - macOS pixel, foreground, and screenshot paths: implemented and
   unit-verified, with no live probe (see the macOS note above).
 
@@ -356,9 +360,50 @@ than equating “Linux” with one uniform tree.
   bought nothing and cost a round trip per application plus a loud failure for
   every participant that answers with an empty address, a running screen reader
   among them.
-- Chromium and Electron applications may not expose their accessibility trees
-  until an AT-SPI listener registers. Listener registration is therefore part
-  of backend readiness, not an optional optimization.
+- Chromium and everything embedding it — Electron, and Chromium-backed webviews
+  — gate their accessibility twice, and neither gate is an AT-SPI listener
+  registration. The first gate is `org.a11y.Status.IsEnabled` on the session
+  bus, read once at process start and never revisited: while it is false those
+  applications are not thin on the bus, they are absent from it, and switching
+  it on afterwards does not reach a process that is already running. GTK
+  providers are unaffected and publish either way, which is why a session can
+  look healthy while every Chromium-family tree is missing. The second gate is
+  on-demand: an application that is on the bus publishes an application root and
+  a window whose only child is AT-SPI's null reference, and builds the tree
+  behind that window only once a client asks some node for its attributes or its
+  relations. Both calls reach `AXPlatform::OnExtendedPropertiesUsedInWebContent`
+  in Chromium, which is the switch.
+- Activation therefore belongs to capture, not to readiness. The trigger is a
+  call into one application's own tree, so there is nothing a starting daemon
+  could do on behalf of an application that does not exist yet. The first time
+  `LinuxBackend` captures an application it asks the application root for its
+  attributes, waits — bounded — while the application is still claiming a tree
+  it has not published, and then walks once. That is the order the Windows
+  backend already uses before capturing a WebView2 target, where the MSAA touch
+  precedes a bounded wait for the root web area. The ask is remembered per
+  application, keyed by the unique bus name in its AT-SPI identity, because
+  activation is a one-way switch inside the application: asking twice buys
+  nothing, and an application that ignores the ask must not make every later
+  `look` pay the wait. A restarted application owns a different unique name, so
+  it is asked again.
+- The null reference is `/org/a11y/atspi/null` and means "no object". It
+  implements no interfaces, so walking it as an ordinary child fails the whole
+  capture rather than yielding an empty branch, and it is dropped from every
+  provider's answer, unconditionally. Reporting it and waiting on it are then
+  separate decisions. Every dropped reference is reported, as the observation it
+  is rather than as a diagnosis of why it was there: a window that published a
+  menu bar and withheld everything else must not read as a window that contains
+  a menu bar. Waiting is the stricter condition, and only an answer that dropped
+  something and published nothing earns it — `Null` is a general sentinel, and a
+  provider with an ordinary hole in its child range, a cell not yet instantiated
+  or a child destroyed mid-enumeration, will not fill that hole in however long
+  anyone waits.
+- An incomplete subtree says which kind of incomplete it is, in
+  `truncationReason`: the walk hit the node limit, the walk stopped at the depth
+  limit and never asked, or the provider returned a null reference in place of a
+  child. A node the walk never asked about reports no child count at all rather
+  than a count of zero, because a node nobody asked is not a node with no
+  children.
 - Under X11, XTest is the practical synthetic-input mechanism and global
   observation is feasible. Reaching either requires an X11 client layer in the
   backend, separate from the AT-SPI connection that carries capture and the
@@ -381,6 +426,36 @@ than equating “Linux” with one uniform tree.
   input into a session depends on global observation and may therefore be
   unavailable on Wayland. The capability report must distinguish these facets.
 
+The Chromium-family claims above were probed on `bglab-ub` on 2026-08-08,
+against Electron 33.2.1 (Chromium 130) and Chrome for Testing 151.0.7922.77.
+Each application was given a private session bus, accessibility bus, and
+registry, so that the desktop's own running screen reader could not be mistaken
+for the mechanism under test. With a listener registered and nothing else, both
+applications stayed absent from the bus, whether they were already running or
+launched afterwards. With `IsEnabled` true at startup both appeared as exactly
+three nodes — application, window, null reference — and stayed that way whether
+or not a listener was registered. One `GetAttributes` on the application root
+produced the full tree: 284 nodes for Chrome and 26 for Electron, arriving after
+1.12s and 0.09s. Through the daemon, the same Chrome capture answered `operation
+accessible proxy failed: atspi: null reference` before this was implemented, and
+the complete tree including the `document web` afterwards, at the same cost on
+the first `look` as on the third. GNOME Calculator captured 107 nodes at
+unchanged latency, because a provider that publishes its tree pays only the ask.
+
+Two details are worth carrying to whoever re-runs that probe. `libatspi` reads
+the X root window's `AT_SPI_BUS` property before it consults the session bus, so
+an application on the desktop's display silently joins the *desktop's*
+accessibility bus unless `AT_SPI_BUS_ADDRESS` is exported — an isolation that
+looks airtight and is not. And the folklore about listener registration is not
+baseless, just wrong here: upstream `at-spi-bus-launcher` has grown a handler
+that flips `IsEnabled` when a client registers an event listener, which would
+make registration reach the first gate indirectly. The 2.60.4 build on this
+stack contains no such handler, and even where it did, that only puts the
+application on the bus — the empty tree behind the window stays empty until
+something asks for attributes or relations. It is also not a free action: that
+handler writes the desktop's `toolkit-accessibility` setting, turning
+accessibility on for every application on the session.
+
 ## First integration target: Cairn
 
 The first real-world target is Cairn's own interface: WebView2, backed by
@@ -389,7 +464,7 @@ embedded webviews is the load-bearing integration risk. A backend that can
 enumerate native controls but cannot obtain the webview content tree does not
 meet Cairn's use case.
 
-Early backend work should therefore test listener activation, complete webview
+Early backend work should therefore test provider activation, complete webview
 subtree capture, stable developer identifiers, native activation, editable
 values, event delivery, and coordinate conversion against Cairn before broad
 desktop coverage. KVM access to each executor allows the semantic result to be
