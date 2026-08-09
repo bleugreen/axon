@@ -50,6 +50,12 @@ jobs:
           set -euo pipefail
           cli="$PWD/dist/Axon.app/Contents/Resources/bin/axon"
 
+          # A probe app that outlived an earlier job, which `if: always()` cannot prevent because a
+          # killed runner runs nothing. It goes first: a leftover holds the socket lock if it bound
+          # and then wedged, and answers nothing if it never bound, so `shutdown` below can neither
+          # see it nor stop it, and every step after that would fail on an obstacle nobody names.
+          scripts/stop-probe-app "$PWD/dist/Axon.app/Contents/MacOS/Axon"
+
           # Whether start-at-login was live when the job arrived, which is the only fact that says
           # whether the restore owes this machine a daemon. The plist cannot answer it: `shutdown`
           # boots the agent out and deliberately leaves the registration on disk, so a machine this
@@ -60,20 +66,38 @@ jobs:
             agent_was_loaded=true
           fi
           # A daemon can also come from a running Axon.app, which launchd does not own and which
-          # `daemon restart` would not bring back. Recorded separately because it is put back
-          # differently, and matched by process name because the app serves from its own process
-          # rather than through a `serve` child.
+          # `daemon restart` would not bring back. Recorded separately because both can be true at
+          # once and each is put back differently. The bundle that is actually running is recorded
+          # rather than assumed to be the one in /Applications, because reopening a different copy
+          # would be reopening a different program.
           app_was_running=false
-          if pgrep -x Axon >/dev/null; then
+          app_bundle=""
+          running_app_pid="$(pgrep -x Axon | head -1 || true)"
+          if [ -n "$running_app_pid" ]; then
             app_was_running=true
+            app_bundle="$(ps -p "$running_app_pid" -o comm= | sed 's|/Contents/MacOS/Axon$||')"
           fi
           # Handed to the restore step before anything is stopped, so a machine the stop below
           # fails on still gets its daemon back.
           {
             echo "AXON_AGENT_WAS_LOADED=$agent_was_loaded"
             echo "AXON_APP_WAS_RUNNING=$app_was_running"
+            echo "AXON_APP_BUNDLE=$app_bundle"
           } >> "$GITHUB_ENV"
-          echo "found this desktop as: LaunchAgent loaded=$agent_was_loaded, Axon.app running=$app_was_running"
+          echo "found this desktop as: LaunchAgent loaded=$agent_was_loaded, Axon.app running=$app_was_running${app_bundle:+ ($app_bundle)}"
+
+          # The label above is this workflow's copy of `LaunchAgentConfiguration`'s default, and
+          # nothing makes the two agree. Drift would fail in the worst way available: `launchctl
+          # print` would report the desktop's agent as not loaded, `shutdown` would boot it out
+          # under the CLI's own label regardless, and the restore would then leave the machine
+          # stopped on purpose. `registration.registered` is computed by the CLI from its own
+          # label's plist path, so a registration it can see where this job cannot name one is
+          # exactly that disagreement, caught before anything is stopped.
+          if "$cli" status --json | jq -e '.registration.registered' >/dev/null \
+            && [ ! -e "$HOME/Library/LaunchAgents/$AXON_LAUNCH_AGENT_LABEL.plist" ]; then
+            echo "::error::the CLI reports a LaunchAgent registration, but none exists at ~/Library/LaunchAgents/$AXON_LAUNCH_AGENT_LABEL.plist; AXON_LAUNCH_AGENT_LABEL has drifted from LaunchAgentConfiguration and this job cannot address this desktop's agent"
+            exit 1
+          fi
 
           # The build under test does the stopping, and deliberately not the installed
           # `/opt/homebrew/bin/axon`: a runner's installed CLI is whichever release it last
