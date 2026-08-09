@@ -98,18 +98,20 @@ jobs:
             echo '::error::Calculator is already running; refusing to alter an existing desktop session.'
             exit 1
           fi
-          # Calculator alone. The daemon this step launches and the desktop's own belong to the
-          # restore step, so that they are handled even when this step dies before its trap is
-          # armed, and so that a failure here is diagnosed against a machine that still looks the
-          # way it failed.
+          # Calculator alone, because it is the only desktop state this step owns. The daemon it
+          # launches and the desktop's own belong to the restore step instead: a trap cannot run
+          # when the runner cancels the job, and putting a machine's start-at-login daemon back is
+          # not something to leave to a handler that a cancellation skips.
           trap 'killall Calculator >/dev/null 2>&1 || true' EXIT
 
           # `open -n` launches the bundle, and the app serves the endpoint from inside its own
           # process -- there is no `serve` child to wait on -- so the app process is the daemon
           # under test and its pid is what ties the document below to this build. `open` reports no
           # pid, so it is found by the bundle executable's path, which no other install on the
-          # machine shares. Exactly one match is required: a second would be a leftover from an
-          # earlier run, and choosing between them would be a guess.
+          # machine shares -- `pgrep -f` reads that path as a regular expression, which is harmless
+          # for a workspace path but would need quoting for one carrying metacharacters. Exactly
+          # one match is required: a second would be a leftover from an earlier run, and choosing
+          # between them would be a guess.
           open -n "$PWD/dist/Axon.app"
           app_pid=""
           for _ in {1..40}; do
