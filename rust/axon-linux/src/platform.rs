@@ -50,16 +50,17 @@ const NODE_LIMIT_REACHED: &str = "node limit reached";
 /// childless leaf would be the same lie as reporting a withheld subtree as an empty one.
 const DEPTH_LIMIT_REACHED: &str = "depth limit reached";
 
-/// Said of a node whose provider claimed children and published none of them, every reference in
-/// its answer being AT-SPI's null reference.
+/// Said of a node whose provider answered with AT-SPI's null reference in place of a child.
 ///
-/// Deliberately narrower than "the answer contained a null reference". `Null` is AT-SPI's general
-/// sentinel for "no object", and a provider with a hole in its child range — a cell not yet
-/// instantiated, a child destroyed mid-enumeration — puts one on the wire while withholding
-/// nothing at all. A hole is dropped silently, because dropping it is always right and calling it
-/// a withheld subtree would not be. Claiming children and publishing none is the shape Chromium
-/// presents, and the only shape this says anything about.
-const SUBTREE_UNPUBLISHED: &str = "provider claimed children and published none of them";
+/// States what was observed and diagnoses nothing. `Null` is AT-SPI's general sentinel for "no
+/// object": a provider that has not built a subtree emits it, and so does one with an ordinary
+/// hole in its child range — a cell not yet instantiated, a child destroyed mid-enumeration.
+/// Those are different situations, but they leave the caller holding fewer children than the
+/// provider claimed, and that is true of both and worth saying either way. A window that published
+/// a menu bar and withheld everything else must not read as a window that contains only a menu
+/// bar. Which answers are worth *waiting* on is a stricter question, and it is answered in
+/// [`Actor::withholding`] rather than here.
+const CHILD_NOT_PUBLISHED: &str = "the provider returned a null reference in place of a child";
 
 /// The session fact that most often explains an application a caller cannot find.
 ///
@@ -747,16 +748,15 @@ impl Actor {
         let Ok(answered) = self.children(root).await else {
             return false;
         };
-        let (windows, withheld) = published(answered);
-        if withheld {
+        let (windows, dropped) = published(answered);
+        if published_nothing(&windows, dropped) {
             return true;
         }
         for window in &windows {
-            if self
-                .children(window)
-                .await
-                .is_ok_and(|answered| published(answered).1)
-            {
+            if self.children(window).await.is_ok_and(|answered| {
+                let (kids, dropped) = published(answered);
+                published_nothing(&kids, dropped)
+            }) {
                 return true;
             }
         }
@@ -859,7 +859,7 @@ impl Actor {
             } else {
                 vec![]
             };
-            let (children_refs, withheld) = published(answered);
+            let (children_refs, dropped) = published(answered);
             // A node nobody asked about has no child count, rather than a count of zero. Saying it
             // is childless is the same lie as reporting a withheld subtree as an empty one.
             let child_count = asked.then_some(children_refs.len());
@@ -884,7 +884,7 @@ impl Actor {
                 editable,
                 children,
                 child_count,
-                truncation_reason: incompleteness(*remaining == 0, depth_limit_reached, withheld),
+                truncation_reason: incompleteness(*remaining == 0, depth_limit_reached, dropped > 0),
             })
         })
     }
@@ -992,19 +992,29 @@ where
         .map_err(|_| operation(name, "timed out"))?
         .map_err(|e| operation(name, e))
 }
-/// Splits what a provider answered into the children that exist, and whether it published none of
-/// the children it claimed.
+/// Splits what a provider answered into the children that exist and the number of references it
+/// returned in place of one.
 ///
 /// AT-SPI's null reference means "no object", and it must never become a node: it implements no
 /// interfaces, so asking it for a role answers `UnknownMethod` and fails the whole capture rather
-/// than yielding an empty branch. Dropping it is therefore unconditional. Concluding anything from
-/// it is not — see [`SUBTREE_UNPUBLISHED`] for why only an answer that is *entirely* null
-/// references is read as a provider withholding a subtree.
-fn published(children: Vec<ObjectRefOwned>) -> (Vec<ObjectRefOwned>, bool) {
+/// than yielding an empty branch. Dropping it is therefore unconditional, and how many were
+/// dropped is reported rather than discarded so that neither caller has to re-derive it.
+fn published(children: Vec<ObjectRefOwned>) -> (Vec<ObjectRefOwned>, usize) {
     let claimed = children.len();
     let children: Vec<ObjectRefOwned> = children.into_iter().filter(|c| !c.is_null()).collect();
-    let withheld = claimed > 0 && children.is_empty();
-    (children, withheld)
+    let dropped = claimed - children.len();
+    (children, dropped)
+}
+
+/// Whether a provider answered with nothing but null references: it claimed a subtree and
+/// published none of it.
+///
+/// The strict reading, and the only one worth waiting on. A partial answer — real children
+/// alongside a null — is reported through [`CHILD_NOT_PUBLISHED`] but never waited on, because a
+/// hole in a child range will not fill in however long anyone stands there, and the wait costs
+/// [`ACTIVATION_TIMEOUT`].
+fn published_nothing(published: &[ObjectRefOwned], dropped: usize) -> bool {
+    dropped > 0 && published.is_empty()
 }
 
 /// What a caller is owed about a subtree that is not complete.
@@ -1015,12 +1025,12 @@ fn published(children: Vec<ObjectRefOwned>) -> (Vec<ObjectRefOwned>, bool) {
 fn incompleteness(
     node_limit_reached: bool,
     depth_limit_reached: bool,
-    withheld: bool,
+    child_not_published: bool,
 ) -> Option<String> {
-    match (node_limit_reached, depth_limit_reached, withheld) {
+    match (node_limit_reached, depth_limit_reached, child_not_published) {
         (true, _, _) => Some(NODE_LIMIT_REACHED.into()),
         (false, true, _) => Some(DEPTH_LIMIT_REACHED.into()),
-        (false, false, true) => Some(SUBTREE_UNPUBLISHED.into()),
+        (false, false, true) => Some(CHILD_NOT_PUBLISHED.into()),
         (false, false, false) => None,
     }
 }
