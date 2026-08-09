@@ -673,12 +673,34 @@ jobs:
       cancel-in-progress: false
     timeout-minutes: 25
     steps:
+      # Before checkout, and the only stage that cannot go through the relay: a leaked daemon holds
+      # its image file open, which is what breaks the checkout that would deliver the probe script
+      # (AXN-38). It is a second implementation of the probe script's own sweep for that reason
+      # alone, and carries the same refusal, because sweeping by path on a machine whose own
+      # registration points into one of these directories would stop the desktop's daemon and call
+      # it a leftover.
       - name: Remove leaked live-probe daemons
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
           $workspaceRoot = 'C:\actions-runner-axon\_work\'
           $liveRoot = 'C:\ProgramData\Axon\live\'
+
+          # The runner service is NETWORK SERVICE and the task belongs to the desktop user, so it
+          # may not be readable from here. An unreadable registration is reported and tolerated:
+          # the probe script's own guard runs as that user and refuses there.
+          $desktopTask = Get-ScheduledTask -TaskName 'Axon Windows Daemon' -ErrorAction SilentlyContinue
+          if ($null -eq $desktopTask) {
+            Write-Output 'this runner has no Axon Windows Daemon registration visible from the runner service'
+          }
+          else {
+            $registered = (@($desktopTask.Actions)[0].Execute ?? '').Trim().Trim('"')
+            foreach ($root in @($workspaceRoot, $liveRoot)) {
+              if ($registered.StartsWith($root, [System.StringComparison]::OrdinalIgnoreCase)) {
+                throw "Axon Windows Daemon is registered at $registered, inside this lane's own $root; an earlier run repointed this desktop's start-at-login registration and it must be reinstalled from its permanent path before this lane can run again"
+              }
+            }
+          }
 
           function Get-LiveProbeDaemons {
             @(Get-CimInstance Win32_Process -Filter "Name = 'axon-win.exe'" |
