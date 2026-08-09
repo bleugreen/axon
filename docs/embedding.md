@@ -145,11 +145,21 @@ returning.
 
 ### Exclusive ownership
 
-One server owns an endpoint at a time. A second daemon refuses to start rather than displacing the
+One server owns an endpoint at a time. A second daemon refuses to serve rather than displacing the
 running one, so an embedding consumer cannot install its way past an `Axon.app` already serving the
 default path: stop that server, or give the daemon an endpoint of its own with `AXON_SOCKET_PATH`.
 Ownership is released when the owning process exits, including when it crashes, so a restart never
 needs a cleanup step.
+
+A daemon that loses the race exits rather than lingering, and launchd restarts it on its throttle
+interval until the endpoint frees up. That is what makes a contended login self-healing instead of
+something a person has to notice: the registration stays correct, and the daemon takes over the
+moment the incumbent leaves. Note that `daemon install` still reports ready in this case, because
+the health round trip it waits for is answered by whoever owns the endpoint.
+
+Because launchd keeps the registered daemon alive, **Quit** in the app's menu bar restarts it
+rather than stopping it. `shutdown` stops the running daemon and `daemon uninstall` removes the
+registration; those are the controls that mean what they say once a registration exists.
 
 On macOS ownership is an exclusive advisory lock taken before the socket is bound, and the refusal
 names the process holding it. On Windows the pipe is created as a single instance and the operating

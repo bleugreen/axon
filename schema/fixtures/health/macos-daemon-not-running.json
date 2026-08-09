@@ -12,7 +12,7 @@
   "registration": {
     "registered": true,
     "mechanism": "launchd",
-    "path": "/Applications/Axon.app/Contents/Resources/bin/axon"
+    "path": "/Applications/Axon.app/Contents/MacOS/Axon"
   },
   "session": {
     "interactive": true,

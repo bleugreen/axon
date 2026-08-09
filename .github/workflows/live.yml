@@ -65,9 +65,11 @@ jobs:
           if launchctl print "gui/$(id -u)/$AXON_LAUNCH_AGENT_LABEL" >/dev/null 2>&1; then
             agent_was_loaded=true
           fi
-          # A daemon can also come from a running Axon.app, which launchd does not own and which
-          # `daemon restart` would not bring back. Recorded separately because both can be true at
-          # once and each is put back differently. The bundle that is actually running is recorded
+          # A daemon can also come from a running Axon.app. On a machine whose agent registers the
+          # app, launchd does own it and both flags go true together; a hand-launched app it does
+          # not own, and `daemon restart` would not bring that one back. Recorded separately
+          # because both can be true at once and each is put back differently — the agent branch
+          # wins, and restoring the agent restores the app it registers. The bundle that is actually running is recorded
           # rather than assumed to be the one in /Applications, because reopening a different copy
           # would be reopening a different program.
           app_was_running=false
