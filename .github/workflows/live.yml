@@ -347,7 +347,14 @@ jobs:
         if: always()
         run: |
           set -euo pipefail
-          unit="${AXON_UNIT:-$HOME/.config/systemd/user/axon.service}"
+          # Set only by the parking step, and the reason this step may remove a registration at
+          # all: without it the job never touched the desktop's own, and the unit sitting there is
+          # that registration rather than a probe's leftover.
+          if [ -z "${AXON_UNIT:-}" ]; then
+            echo 'the registration was never parked; leaving the desktop alone'
+            exit 0
+          fi
+          unit="$AXON_UNIT"
           daemon="$GITHUB_WORKSPACE/rust/target/debug/axon-linux"
           # Any registration or daemon still here belongs to the probes, because the desktop's own
           # were parked and stopped. Both have to go before the parked unit is put back, or the
