@@ -134,7 +134,10 @@ import Testing
 @Test func launchAgentConfigurationBuildsDaemonPlist() throws {
     let configuration = LaunchAgentConfiguration(
         label: "dev.axon.test",
-        executablePath: "/Users/mitch/projects/axon/.build/debug/axon",
+        program: DaemonProgram(
+            executablePath: "/Users/mitch/projects/axon/.build/debug/axon",
+            identity: .executablePath
+        ),
         socketPath: "/tmp/axon-test.sock",
         environment: [
             "AXON_VISUAL_OVERLAY": "1",
@@ -174,7 +177,10 @@ import Testing
     let manager = LaunchAgentManager(
         configuration: LaunchAgentConfiguration(
             label: "dev.axon.test",
-            executablePath: "/Applications/Axon.app/Contents/Resources/bin/axon",
+            program: DaemonProgram(
+                executablePath: "/Applications/Axon.app/Contents/MacOS/Axon",
+                identity: .appBundle(identifier: "com.bleugreen.axon", bundlePath: "/Applications/Axon.app")
+            ),
             socketPath: "/tmp/axon-test.sock",
             environment: [:]
         ),
@@ -189,7 +195,7 @@ import Testing
     // would have registered, so a stale registration is visible instead of assumed correct.
     #expect(manager.registration() == .present(
         mechanism: .launchd,
-        path: "/Applications/Axon.app/Contents/Resources/bin/axon"
+        path: "/Applications/Axon.app/Contents/MacOS/Axon"
     ))
 }
 
@@ -200,11 +206,14 @@ import Testing
     try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
     let plistPath = root.appendingPathComponent("dev.axon.test.plist")
 
-    let installed = "/Applications/Axon.app/Contents/Resources/bin/axon"
+    let installed = "/Applications/Axon.app/Contents/MacOS/Axon"
     try LaunchAgentManager(
         configuration: LaunchAgentConfiguration(
             label: "dev.axon.test",
-            executablePath: installed,
+            program: DaemonProgram(
+                executablePath: installed,
+                identity: .appBundle(identifier: "com.bleugreen.axon", bundlePath: "/Applications/Axon.app")
+            ),
             socketPath: "/tmp/axon-test.sock",
             environment: [:]
         ),
@@ -218,7 +227,10 @@ import Testing
     let ephemeral = LaunchAgentManager(
         configuration: LaunchAgentConfiguration(
             label: "dev.axon.test",
-            executablePath: "/tmp/build-slot/.build/debug/axon",
+            program: DaemonProgram(
+                executablePath: "/tmp/build-slot/.build/debug/axon",
+                identity: .executablePath
+            ),
             socketPath: "/tmp/axon-test.sock",
             environment: [:]
         ),
@@ -241,7 +253,10 @@ import Testing
     let manager = LaunchAgentManager(
         configuration: LaunchAgentConfiguration(
             label: "dev.axon.test",
-            executablePath: "/tmp/build-slot/.build/debug/axon",
+            program: DaemonProgram(
+                executablePath: "/tmp/build-slot/.build/debug/axon",
+                identity: .executablePath
+            ),
             socketPath: "/tmp/axon-test.sock",
             environment: [:]
         ),
@@ -265,7 +280,7 @@ import Testing
     #expect(warning?.contains("permanent path") == true)
     #expect(DaemonRegistrationPath.ephemeralWarning(for: "/tmp/axon") != nil)
     #expect(DaemonRegistrationPath.ephemeralWarning(
-        for: "/Applications/Axon.app/Contents/Resources/bin/axon"
+        for: "/Applications/Axon.app/Contents/MacOS/Axon"
     ) == nil)
 }
 
@@ -323,7 +338,7 @@ import Testing
     let plistPath = root.appendingPathComponent("dev.axon.test.plist")
     let configuration = LaunchAgentConfiguration(
         label: "dev.axon.test",
-        executablePath: "/tmp/axon",
+        program: DaemonProgram(executablePath: "/tmp/axon", identity: .executablePath),
         socketPath: "/tmp/axon.sock",
         environment: [:]
     )
