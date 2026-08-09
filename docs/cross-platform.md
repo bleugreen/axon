@@ -375,47 +375,31 @@ than equating “Linux” with one uniform tree.
   in Chromium, which is the switch.
 - Activation therefore belongs to capture, not to readiness. The trigger is a
   call into one application's own tree, so there is nothing a starting daemon
-  could do on behalf of an application that does not exist yet. `LinuxBackend`
-  walks first, and only an application that answered with the null reference is
-  asked for its attributes and then given a bounded wait for the tree to arrive.
-  This is the same shape as the MSAA touch the Windows backend performs before
-  capturing a WebView2 target. A subtree still unpublished when the wait ends is
-  reported as withheld rather than passed off as empty, because those are
-  different facts about the application.
+  could do on behalf of an application that does not exist yet. The first time
+  `LinuxBackend` captures an application it asks the application root for its
+  attributes, waits — bounded — while the application is still claiming a tree
+  it has not published, and then walks once. That is the order the Windows
+  backend already uses before capturing a WebView2 target, where the MSAA touch
+  precedes a bounded wait for the root web area. The ask is remembered per
+  application, keyed by the unique bus name in its AT-SPI identity, because
+  activation is a one-way switch inside the application: asking twice buys
+  nothing, and an application that ignores the ask must not make every later
+  `look` pay the wait. A restarted application owns a different unique name, so
+  it is asked again.
 - The null reference is `/org/a11y/atspi/null` and means "no object". It
   implements no interfaces, so walking it as an ordinary child fails the whole
-  capture rather than yielding an empty branch; it is dropped from every
-  provider's answer, and the fact that it was there is what marks the subtree
-  withheld.
-
-Probed on `bglab-ub` on 2026-08-08, against Electron 33.2.1 (Chromium 130) and
-Chrome for Testing 151.0.7922.77. Each application was given a private session
-bus, accessibility bus, and registry, so that the desktop's own running screen
-reader could not be mistaken for the mechanism under test. With a listener
-registered and nothing else, both applications stayed absent from the bus,
-whether they were already running or launched afterwards. With `IsEnabled` true
-at startup both appeared as exactly three nodes — application, window, null
-reference — and stayed that way whether or not a listener was registered. One
-`GetAttributes` on the application root produced the full tree: 284 nodes for
-Chrome and 26 for Electron, arriving after 1.12s and 0.09s. Through the daemon,
-the same Chrome capture answered `operation accessible proxy failed: atspi: null
-reference` before this was implemented, and 284 nodes including the `document
-web` afterwards; GNOME Calculator captured 107 nodes at unchanged latency, since
-a provider that publishes its tree is never asked to.
-
-Two details are worth carrying to whoever re-runs that probe. `libatspi` reads
-the X root window's `AT_SPI_BUS` property before it consults the session bus, so
-an application on the desktop's display silently joins the *desktop's*
-accessibility bus unless `AT_SPI_BUS_ADDRESS` is exported — an isolation that
-looks airtight and is not. And the folklore about listener registration is not
-baseless, just wrong here: upstream `at-spi-bus-launcher` has grown a handler
-that flips `IsEnabled` when a client registers an event listener, which would
-make registration reach the first gate indirectly. The 2.60.4 build on this
-stack contains no such handler, and even where it did, that only puts the
-application on the bus — the empty tree behind the window stays empty until
-something asks for attributes or relations. It is also not a free action: that
-handler writes the desktop's `toolkit-accessibility` setting, turning
-accessibility on for every application on the session.
+  capture rather than yielding an empty branch, and it is dropped from every
+  provider's answer. What is concluded from it is narrower than the drop: only a
+  node that claimed children and published none of them is reported as
+  withholding a subtree. `Null` is a general sentinel, and a provider with a
+  hole in its child range — a cell not yet instantiated, a child destroyed
+  mid-enumeration — emits one while withholding nothing, so a hole is dropped
+  silently rather than described as something it is not.
+- An incomplete subtree says which kind of incomplete it is, in
+  `truncationReason`: the walk hit the node limit, the walk stopped at the depth
+  limit and never asked, or the provider claimed children and published none. A
+  node the walk never asked about reports no child count at all rather than a
+  count of zero, because a node nobody asked is not a node with no children.
 - Under X11, XTest is the practical synthetic-input mechanism and global
   observation is feasible. Reaching either requires an X11 client layer in the
   backend, separate from the AT-SPI connection that carries capture and the
