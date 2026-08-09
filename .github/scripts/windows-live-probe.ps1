@@ -591,6 +591,89 @@ function Remove-ProbeInstallation {
     Stop-ProbeDaemonProcess
 }
 
+function Get-ServingDaemon {
+    <# The health document of whatever daemon is answering the pipe, or $null when none is.
+
+    More than one candidate for the reason Get-AxonStatus takes a list: the restore must work when
+    the build under test has vanished mid-run, and the executable this desktop's own registration
+    names is the one release guaranteed to be able to read its own daemon's reply. #>
+    param([Parameter(Mandatory)][string[]] $Candidates)
+
+    $status = Get-AxonStatus -Candidates $Candidates
+    if ($null -ne $status -and $status.daemon.running) { return $status }
+    $null
+}
+
+function Wait-ForDesktopDaemon {
+    <# The same round trip, polled until a daemon answers or the bound expires. #>
+    param(
+        [Parameter(Mandatory)][string[]] $Candidates,
+        [Parameter(Mandatory)][double] $TimeoutSeconds
+    )
+
+    $timer = [System.Diagnostics.Stopwatch]::StartNew()
+    do {
+        $status = Get-ServingDaemon -Candidates $Candidates
+        if ($null -ne $status) { return $status }
+        Wait-Tick
+    } while ($timer.Elapsed.TotalSeconds -lt $TimeoutSeconds)
+    $null
+}
+
+function Start-DesktopDaemonWithRetries {
+    <# Starts this desktop's own registration until a daemon answers, or gives up loudly.
+
+    Task Scheduler starts the registration at its own path and needs no Axon binary at all, which is
+    what keeps this reachable when the build under test has been quarantined mid-run.
+
+    One start is not enough, and the reason is a fact about the machine rather than about the lane.
+    On 2026-08-09 a background Windows servicing operation made this desktop 10 to 100 times slower
+    for three minutes; the daemon a restart had started spent longer than its own 30-second UIA
+    readiness bound getting a UI Automation client and exited, which is that bound doing its job. The
+    lane's single fallback start then landed on a task whose previous instance had not finished, Task
+    Scheduler discarded it, and the restore failed on a desktop that answered a start in 40
+    milliseconds four minutes later. The patience belongs here and not in the daemon's bound.
+
+    Which is also why the task's state is read before every start rather than after. A start issued
+    against an instance that has not finished is not a failed attempt, it is no attempt at all, and
+    nothing says so: `schtasks /run` reports success while discarding it. The wait for that instance
+    polls the health round trip throughout, because `Running` is equally what a healthy daemon looks
+    like -- the registered action is `serve` -- so the answer that usually ends the wait is this
+    desktop's daemon already being back. #>
+    param([Parameter(Mandatory)][string[]] $Candidates)
+
+    Write-Note "starting $DesktopTaskName through Task Scheduler instead"
+    foreach ($attempt in 1..$RestoreStartAttempts) {
+        $taskState = $null
+        $timer = [System.Diagnostics.Stopwatch]::StartNew()
+        while ($true) {
+            $status = Get-ServingDaemon -Candidates $Candidates
+            if ($null -ne $status) { return $status }
+            $taskState = Get-DesktopTaskState
+            if ($taskState -ne 'Running' -and $taskState -ne 'Queued') { break }
+            if ($timer.Elapsed.TotalSeconds -ge $TaskInstanceTimeoutSeconds) { break }
+            Wait-Tick
+        }
+        if ($taskState -eq 'Running' -or $taskState -eq 'Queued') {
+            Write-Note "attempt $attempt of ${RestoreStartAttempts}: $DesktopTaskName is $taskState and nothing is answering; a start now would be discarded, so this attempt waited for that instance instead"
+            continue
+        }
+
+        try { Start-DesktopDaemonTask }
+        catch {
+            # Recorded rather than thrown, like every other start in this stage: what is owed here is
+            # a verdict on whether a daemon is answering, and a start that could not be issued is one
+            # attempt's worth of that verdict rather than the verdict.
+            Write-Note "attempt $attempt of ${RestoreStartAttempts}: could not start ${DesktopTaskName}: $($_.Exception.Message)"
+            continue
+        }
+        $status = Wait-ForDesktopDaemon -Candidates $Candidates -TimeoutSeconds $RestoreTimeoutSeconds
+        if ($null -ne $status) { return $status }
+        Write-Note "attempt $attempt of ${RestoreStartAttempts}: nothing answered within $RestoreTimeoutSeconds seconds of starting $DesktopTaskName"
+    }
+    $null
+}
+
 function Invoke-RestoreStage {
     $state = Read-ParkState
     if ($null -eq $state) {
@@ -635,28 +718,28 @@ function Invoke-RestoreStage {
     # older release could fail it while coming back perfectly.
     $restart = Invoke-Axon -Executable $ProbeExecutable -Arguments @('daemon', 'restart')
     Write-Note "daemon restart exited $($restart.ExitCode): $($restart.Output)"
-    if ($restart.ExitCode -ne 0) {
-        # The build under test can be gone -- quarantined mid-run is exactly how this lane's worst
-        # day started -- and this desktop's daemon must come back regardless. Task Scheduler starts
-        # the registration at its own path and needs no Axon binary at all.
-        Write-Note "starting $DesktopTaskName through Task Scheduler instead"
-        Start-DesktopDaemonTask
-    }
 
-    # Neither command is trusted on its exit code: both report on starting a daemon, not on one
-    # serving. The verdict is a health round trip, read through the build under test when it can
-    # still run and through the executable this desktop's own registration names when it cannot.
+    # Nothing that starts a daemon is trusted on its exit code, because all of them report on
+    # starting one rather than on one serving. The verdict is a health round trip, read through the
+    # build under test when it can still run and through the executable this desktop's own
+    # registration names when it cannot.
+    #
+    # A restart that exited zero has already waited for readiness itself, so this window confirms
+    # rather than waits. A restart that exited non-zero gets no window of its own: the ladder below
+    # opens with the same round trip, and a wait here would only ask the same question twice before
+    # the recovery that can actually change the answer.
     $candidates = @($ProbeExecutable, $state.registrationPath)
-    $timer = [System.Diagnostics.Stopwatch]::StartNew()
     $status = $null
-    while ($timer.Elapsed.TotalSeconds -lt $RestoreTimeoutSeconds) {
-        $status = Get-AxonStatus -Candidates $candidates
-        if ($null -ne $status -and $status.daemon.running) { break }
-        $status = $null
-        Wait-Tick
+    if ($restart.ExitCode -eq 0) {
+        $status = Wait-ForDesktopDaemon -Candidates $candidates -TimeoutSeconds $RestoreTimeoutSeconds
     }
     if ($null -eq $status) {
-        throw "this desktop's Axon daemon did not come back; this runner needs attention before the next live run$(if ($sweepError) { " (this lane also left a daemon of its own behind: $sweepError)" })"
+        # The build under test can be gone -- quarantined mid-run is exactly how this lane's worst
+        # day started -- and this desktop's daemon must come back regardless.
+        $status = Start-DesktopDaemonWithRetries -Candidates $candidates
+    }
+    if ($null -eq $status) {
+        throw "this desktop's Axon daemon did not come back after $RestoreStartAttempts attempts to start $DesktopTaskName; this runner needs attention before the next live run$(if ($sweepError) { " (this lane also left a daemon of its own behind: $sweepError)" })"
     }
 
     # The registration has to be what it was, or this lane damaged the machine even though a daemon
