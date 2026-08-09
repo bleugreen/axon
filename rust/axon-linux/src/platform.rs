@@ -755,7 +755,7 @@ impl Actor {
     ) -> Pin<Box<dyn Future<Output = Result<Node, BackendError>> + 'a>> {
         Box::pin(async move {
             if *remaining == 0 {
-                return Err(operation("capture", "node limit reached"));
+                return Err(operation("capture", NODE_LIMIT_REACHED));
             }
             *remaining -= 1;
             refs.push(object.clone());
@@ -818,13 +818,14 @@ impl Actor {
             } else {
                 false
             };
-            let children_refs = if depth < MAX_DEPTH && *remaining > 0 {
+            let answered = if depth < MAX_DEPTH && *remaining > 0 {
                 timeout("children", proxy.get_children())
                     .await
                     .unwrap_or_default()
             } else {
                 vec![]
             };
+            let (children_refs, withheld) = published(answered);
             let child_count = children_refs.len();
             let mut children = Vec::new();
             for child in children_refs {
@@ -847,7 +848,7 @@ impl Actor {
                 editable,
                 children,
                 child_count: Some(child_count),
-                truncation_reason: (*remaining == 0).then(|| "node limit reached".into()),
+                truncation_reason: incompleteness(*remaining == 0, withheld),
             })
         })
     }
@@ -955,6 +956,46 @@ where
         .map_err(|_| operation(name, "timed out"))?
         .map_err(|e| operation(name, e))
 }
+/// Splits what a provider answered into the children that exist and whether it withheld any.
+///
+/// AT-SPI's null reference means "no object", and it must never become a node: it implements no
+/// interfaces, so asking it for a role answers `UnknownMethod` and fails the whole capture rather
+/// than yielding an empty branch. Chromium-family providers answer with it in place of a subtree
+/// they have not built, so dropping it silently would turn a withheld tree into an empty one —
+/// which is why the caller gets the fact back alongside the children.
+fn published(children: Vec<ObjectRefOwned>) -> (Vec<ObjectRefOwned>, bool) {
+    let claimed = children.len();
+    let children: Vec<ObjectRefOwned> = children.into_iter().filter(|c| !c.is_null()).collect();
+    let withheld = children.len() < claimed;
+    (children, withheld)
+}
+
+/// What a caller is owed about a subtree that is not complete.
+///
+/// The node limit outranks a withheld subtree because it is the more total statement: a walk that
+/// stopped counting has nothing to say about what the provider would have published.
+fn incompleteness(node_limit_reached: bool, withheld: bool) -> Option<String> {
+    match (node_limit_reached, withheld) {
+        (true, _) => Some(NODE_LIMIT_REACHED.into()),
+        (false, true) => Some(SUBTREE_UNPUBLISHED.into()),
+        (false, false) => None,
+    }
+}
+
+/// Whether a captured tree contains a provider that has said it is withholding a subtree.
+fn awaiting_provider(node: &Node) -> bool {
+    node.truncation_reason.as_deref() == Some(SUBTREE_UNPUBLISHED)
+        || node.children.iter().any(awaiting_provider)
+}
+
+/// Why nothing matched, said with the session fact that most often explains it.
+fn no_application_matched(accessibility_enabled: Option<bool>) -> BackendError {
+    match accessibility_enabled {
+        Some(false) => operation("select application", ACCESSIBILITY_DISABLED),
+        _ => operation("select application", NO_APPLICATION_MATCHED),
+    }
+}
+
 /// The identity string Axon uses for an AT-SPI object.
 ///
 /// AT-SPI names an object by a `(bus name, object path)` pair, and the path alone is not unique.
