@@ -55,8 +55,17 @@ $ProbeScript = (Resolve-Path $ProbeScript).Path
 $StubbedSeams = @(
     'Write-Note', 'Wait-Tick', 'Test-ProcessIsRunning', 'Get-AxonProcess', 'Stop-ProcessById',
     'Get-DesktopRegistrationPath', 'Start-DesktopDaemonTask', 'Register-ProbeTask',
-    'Unregister-ProbeTask', 'Start-ProbeTask', 'Invoke-Axon', 'Invoke-AxonMcp', 'Invoke-CargoBuild',
-    'Copy-ProbeExecutable', 'Read-ParkState', 'Write-ParkState', 'Clear-ParkState'
+    'Unregister-ProbeTask', 'Start-ProbeTask', 'Invoke-Axon', 'Invoke-AxonMcp', 'Get-ExpectedVersion',
+    'Invoke-CargoBuild', 'Copy-ProbeExecutable', 'Read-ParkState', 'Write-ParkState', 'Clear-ParkState'
+)
+
+# Commands that reach this machine. A stage may only get to them through a seam, so finding one in
+# any other function is the census failing rather than a style note.
+$MachineCommands = @(
+    'Get-ScheduledTask', 'Register-ScheduledTask', 'Unregister-ScheduledTask', 'Start-ScheduledTask',
+    'Stop-Process', 'Get-Process', 'Get-CimInstance', 'Start-Sleep', 'Copy-Item', 'Remove-Item',
+    'New-Item', 'Set-Content', 'Get-Content', 'Push-Location', 'Pop-Location', 'Write-Host',
+    'Write-Warning', 'Write-Output'
 )
 
 $declaredSeams = @()
@@ -65,6 +74,13 @@ foreach ($line in Get-Content -LiteralPath $ProbeScript) {
     if ($line -match '^#region seams') { $inSeamRegion = $true; continue }
     if ($line -match '^#endregion') { $inSeamRegion = $false; continue }
     if ($inSeamRegion -and $line -match '^function\s+([\w-]+)') { $declaredSeams += $Matches[1] }
+}
+
+# One region, one end. A nested `#endregion` inside the block would end the scan early and leave
+# every seam after it neither declared nor flagged.
+$regionMarkers = @(Get-Content -LiteralPath $ProbeScript | Where-Object { $_ -match '^#(region|endregion)' })
+if ($regionMarkers.Count -ne 2) {
+    throw "expected exactly one '#region seams' and one '#endregion' in $ProbeScript, found $($regionMarkers.Count) region markers"
 }
 
 $unstubbed = @($declaredSeams | Where-Object { $StubbedSeams -notcontains $_ })
@@ -77,6 +93,28 @@ if ($unstubbed.Count -ne 0) {
 }
 if ($phantom.Count -ne 0) {
     throw "this harness stubs functions the probe script no longer declares as seams: $($phantom -join ', ')"
+}
+
+# The census above audits the seam region. This audits everything else, which is what makes the
+# constraint in the docstring the one actually enforced: a helper added next to a stage that reached
+# for `Stop-Process` or `Get-ScheduledTask` inline would otherwise pass through untouched and drive
+# a real desktop during the pull-request job that runs this file.
+$probeAst = [System.Management.Automation.Language.Parser]::ParseFile($ProbeScript, [ref] $null, [ref] $null)
+$functions = $probeAst.FindAll({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $true)
+foreach ($function in $functions) {
+    if ($StubbedSeams -contains $function.Name) { continue }
+    $commands = $function.Body.FindAll({ param($node) $node -is [System.Management.Automation.Language.CommandAst] }, $true)
+    foreach ($command in $commands) {
+        $name = $command.GetCommandName()
+        if ($null -eq $name) {
+            # `& $something` -- an executable named by a variable, which is how this lane runs Axon.
+            # Allowed in seams, never outside them.
+            throw "$($function.Name) invokes a command by variable; only a seam may run an executable, or the harness would run it for real"
+        }
+        if ($MachineCommands -contains $name) {
+            throw "$($function.Name) calls $name directly; move it behind a seam in the '#region seams' block or this harness cannot keep it off a real desktop"
+        }
+    }
 }
 
 # Every PowerShell file this lane runs, parsed. The scenarios below exercise the probe script by
@@ -126,7 +164,19 @@ function Reset-Machine {
         ProbeTaskStartsTwice = $false
         ServingProcessId = $null
         Session = @{ interactive = $true; graphical = $true }
+        # Every field the probe stage asserts on is a knob, so that each of those assertions has a
+        # scenario that can falsify it. A fake that can only tell the truth makes them unfalsifiable.
+        SchemaVersion = 'health-v1'
+        Version = $ExpectedVersion
+        Platform = 'windows'
         CapabilityCount = 15
+        CapabilityWithoutReason = $false
+        McpIsError = $false
+        StopProcessFails = $false
+        # Pids the process table still lists but that are no longer alive. Real, not contrived: the
+        # discovery loop reads a CIM snapshot, so a daemon can be found by image path and then be
+        # gone by the time anything asks whether it is running.
+        DeadPids = @()
         McpResponder = $null
     }
     Start-FakeDesktopDaemon
@@ -135,14 +185,22 @@ function Reset-Machine {
 function New-FakeHealth {
     param([int] $ProcessId)
 
+    $capabilities = @(1..$script:Machine.CapabilityCount | ForEach-Object {
+        if ($script:Machine.CapabilityWithoutReason -and $_ -eq 1) {
+            @{ capability = "capability$_"; usable = $false }
+        }
+        else {
+            @{ capability = "capability$_"; usable = $true }
+        }
+    })
     @{
-        schemaVersion = 'health-v1'
-        version = $ExpectedVersion
-        platform = 'windows'
+        schemaVersion = $script:Machine.SchemaVersion
+        version = $script:Machine.Version
+        platform = $script:Machine.Platform
         daemon = @{ running = $true; ready = $true; endpoint = '\\.\pipe\axon-v1'; processId = $ProcessId }
         registration = @{ registered = $true; mechanism = 'scheduledTask'; path = $script:Machine.DesktopRegistration }
         session = $script:Machine.Session
-        capabilities = @(1..$script:Machine.CapabilityCount | ForEach-Object { @{ capability = "capability$_"; usable = $true } })
+        capabilities = $capabilities
     }
 }
 
@@ -162,15 +220,8 @@ function Stop-FakeDaemon {
         $serving = $script:Machine.Health.daemon.processId
         $script:Machine.Processes = @($script:Machine.Processes | Where-Object { $_.ProcessId -ne $serving })
     }
-    $script:Machine.Health = @{
-        schemaVersion = 'health-v1'
-        version = $ExpectedVersion
-        platform = 'windows'
-        daemon = @{ running = $false; ready = $false; endpoint = '\\.\pipe\axon-v1'; processId = $null }
-        registration = @{ registered = $true; mechanism = 'scheduledTask'; path = $script:Machine.DesktopRegistration }
-        session = $script:Machine.Session
-        capabilities = @(1..$script:Machine.CapabilityCount | ForEach-Object { @{ capability = "capability$_"; usable = $true } })
-    }
+    $script:Machine.Health = New-FakeHealth -ProcessId 0
+    $script:Machine.Health.daemon = @{ running = $false; ready = $false; endpoint = '\\.\pipe\axon-v1'; processId = $null }
 }
 
 # ---------------------------------------------------------------------------------------------
@@ -187,6 +238,7 @@ function Wait-Tick { }
 
 function Test-ProcessIsRunning {
     param([Parameter(Mandatory)][int] $ProcessId)
+    if ($script:Machine.DeadPids -contains $ProcessId) { return $false }
     [bool] @($script:Machine.Processes | Where-Object { $_.ProcessId -eq $ProcessId })
 }
 
@@ -197,6 +249,7 @@ function Get-AxonProcess {
 function Stop-ProcessById {
     param([Parameter(Mandatory)][int] $ProcessId)
     $script:Machine.Log.Add("stop-process $ProcessId")
+    if ($script:Machine.StopProcessFails) { throw "Access is denied stopping pid $ProcessId" }
     $script:Machine.Processes = @($script:Machine.Processes | Where-Object { $_.ProcessId -ne $ProcessId })
     if ($null -ne $script:Machine.Health -and $script:Machine.Health.daemon.processId -eq $ProcessId) {
         Stop-FakeDaemon
@@ -271,7 +324,7 @@ function Invoke-AxonMcp {
     $script:Machine.Log.Add('mcp')
     if ($null -ne $script:Machine.McpResponder) { return & $script:Machine.McpResponder $Request }
     if ($Request -notmatch '"app"') {
-        return @{ result = @{ isError = $false; structuredContent = @(@{ name = 'Notepad' }) } } |
+        return @{ result = @{ isError = $script:Machine.McpIsError; structuredContent = @(@{ name = 'Notepad'; identifier = 4242 }) } } |
             ConvertTo-Json -Depth 10 | ConvertFrom-Json -Depth 100
     }
     @{
@@ -280,6 +333,10 @@ function Invoke-AxonMcp {
             structuredContent = @{ id = 'snapshot-1'; app = @{ windows = @(@{ root = @{ role = 'Window' } }) } }
         }
     } | ConvertTo-Json -Depth 10 | ConvertFrom-Json -Depth 100
+}
+
+function Get-ExpectedVersion {
+    $ExpectedVersion
 }
 
 function Invoke-CargoBuild {
@@ -386,10 +443,24 @@ function Test-Order {
 Test-Scenario 'build: a clean machine builds, copies, and proves the copy runs' {
     $result = Invoke-StageUnderTest -Name 'build'
     Check 'the stage succeeds' (-not $result.Failed) $result.Error
-    Check 'it builds and copies' (Test-Did 'cargo-build') 
+    Check 'it builds' (Test-Did 'cargo-build')
+    Check 'it copies the build to the probe path' (Test-Did 'copy-probe-executable')
     Check 'it runs the fresh binary once' (Test-Did 'axon version')
     Check 'it reports the first-execution cost' (Test-Said 'ran it for the first time')
     Check 'it never stops this desktop' (-not (Test-Did 'axon shutdown'))
+}
+
+Test-Scenario 'build: leftovers from a killed job go before anything is built' {
+    # A daemon a killed job left behind holds its image against the checkout and would answer the
+    # pipe for every assertion the probe stage makes.
+    Add-FakeProcess -ProcessId 5150 -ExecutablePath $ProbeExecutable
+    $script:Machine.ProbeTaskRegistered = $true
+    $result = Invoke-StageUnderTest -Name 'build'
+    Check 'the stage succeeds' (-not $result.Failed) $result.Error
+    Check 'the leftover task is gone' ($script:Machine.ProbeTaskRegistered -eq $false)
+    Check 'the leftover daemon is gone' (@($script:Machine.Processes | Where-Object { $_.ProcessId -eq 5150 }).Count -eq 0)
+    Test-Order -First 'unregister-probe-task' -Then 'cargo-build'
+    Test-Order -First 'stop-process 5150' -Then 'cargo-build'
 }
 
 Test-Scenario 'build: a quarantined build fails before this desktop is touched' {
@@ -420,6 +491,41 @@ Test-Scenario 'build: a desktop registration inside a probe directory is refused
 # ---------------------------------------------------------------------------------------------
 # park
 # ---------------------------------------------------------------------------------------------
+
+Test-Scenario 'park: a desktop registration inside a probe directory is refused' {
+    $script:Machine.DesktopRegistration = $ProbeExecutable
+    Start-FakeDesktopDaemon
+    $result = Invoke-StageUnderTest -Name 'park'
+    Check 'the stage fails' $result.Failed
+    Check 'it names the repair' ($result.Error -match 'must be reinstalled from its permanent path') $result.Error
+    Check 'it stopped nothing' (-not (Test-Did 'axon shutdown'))
+    Check 'it recorded nothing' ($null -eq $script:Machine.ParkState)
+}
+
+Test-Scenario 'park: a debt an earlier run never paid is carried forward, not erased' {
+    # The sequence this exists for: a run parks, the runner service dies before its restore, and the
+    # next run arrives at a desktop with no daemon. Recording "there was nothing to put back" would
+    # let that run's restore clear the debt and report success, leaving the desktop stopped for the
+    # rest of the login session.
+    Stop-FakeDaemon
+    $script:Machine.ParkState = @{
+        recordedAt = (Get-Date).ToString('o')
+        desktopTaskName = 'Axon Windows Daemon'
+        registrationPath = $DesktopInstallPath
+        daemonWasRunning = $true
+        daemonProcessId = $DesktopPid
+    } | ConvertTo-Json -Depth 5 | ConvertFrom-Json
+    $result = Invoke-StageUnderTest -Name 'park'
+    Check 'the stage succeeds' (-not $result.Failed) $result.Error
+    Check 'the debt survives' ($script:Machine.ParkState.daemonWasRunning -eq $true)
+    Check 'it says so' (Test-Said 'never restored it; carrying that debt forward')
+    Check 'it stopped nothing, since nothing was running' (-not (Test-Did 'axon shutdown'))
+
+    # And the restore that follows actually pays it.
+    $restore = Invoke-StageUnderTest -Name 'restore'
+    Check 'the restore succeeds' (-not $restore.Failed) $restore.Error
+    Check 'the desktop has its daemon back' ($script:Machine.Health.daemon.running -eq $true)
+}
 
 Test-Scenario 'park: a running desktop daemon is recorded, then stopped' {
     $result = Invoke-StageUnderTest -Name 'park'
@@ -528,16 +634,58 @@ Test-Scenario 'probe: two daemons at the probe path are refused rather than chos
 
 Test-Scenario 'probe: a daemon that exits instead of serving is named' {
     Set-ParkedMachine
-    $script:Machine.ServingProcessId = 0
     $original = Get-Item function:Start-ProbeTask
     function Start-ProbeTask {
         & $original
-        # Registered, discovered, and then gone -- what a daemon that cannot bind the pipe looks like.
+        # Started, discovered by image path, and then gone -- what a daemon that loses the pipe bind
+        # and exits looks like from here. It stays in the process table, because that is what the
+        # discovery loop reads, and stops being alive, which is what the readiness loop checks.
+        $script:Machine.DeadPids = @($ProbePid)
         $script:Machine.Health = $null
     }
     $result = Invoke-StageUnderTest -Name 'probe'
     Check 'the stage fails' $result.Failed
-    Check 'it names readiness or exit' ($result.Error -match 'never became ready|exited instead of serving') $result.Error
+    Check 'it names the exit rather than a timeout' ($result.Error -match 'exited instead of serving the pipe') $result.Error
+}
+
+Test-Scenario 'probe: a health document from another schema fails the stage' {
+    Set-ParkedMachine
+    $script:Machine.SchemaVersion = 'health-v2'
+    $result = Invoke-StageUnderTest -Name 'probe'
+    Check 'the stage fails' $result.Failed
+    Check 'it names the schema' ($result.Error -match 'unexpected schemaVersion health-v2') $result.Error
+}
+
+Test-Scenario 'probe: a daemon reporting a version the checkout does not expect fails the stage' {
+    Set-ParkedMachine
+    $script:Machine.Version = '0.0.1'
+    $result = Invoke-StageUnderTest -Name 'probe'
+    Check 'the stage fails' $result.Failed
+    Check 'it names both versions' ($result.Error -match 'status reports version 0.0.1') $result.Error
+}
+
+Test-Scenario 'probe: a daemon reporting another platform fails the stage' {
+    Set-ParkedMachine
+    $script:Machine.Platform = 'linux'
+    $result = Invoke-StageUnderTest -Name 'probe'
+    Check 'the stage fails' $result.Failed
+    Check 'it names the platform' ($result.Error -match 'status reports platform linux') $result.Error
+}
+
+Test-Scenario 'probe: an unusable capability with no reason fails the stage' {
+    Set-ParkedMachine
+    $script:Machine.CapabilityWithoutReason = $true
+    $result = Invoke-StageUnderTest -Name 'probe'
+    Check 'the stage fails' $result.Failed
+    Check 'it names the capability' ($result.Error -match 'is unusable without a reason') $result.Error
+}
+
+Test-Scenario 'probe: an app-list request that errors fails the stage' {
+    Set-ParkedMachine
+    $script:Machine.McpIsError = $true
+    $result = Invoke-StageUnderTest -Name 'probe'
+    Check 'the stage fails' $result.Failed
+    Check 'it names the request' ($result.Error -match 'app-list look request failed') $result.Error
 }
 
 Test-Scenario "probe: the daemon's own console window is not evidence about a desktop" {
@@ -602,7 +750,7 @@ Test-Scenario 'restore: a job that never parked leaves the machine alone' {
     $result = Invoke-StageUnderTest -Name 'restore'
     Check 'the stage succeeds' (-not $result.Failed) $result.Error
     Check 'it says so' (Test-Said 'never parked')
-    Check 'it touched nothing' (-not (Test-Did 'axon|stop-process|start-desktop-task'))
+    Check 'it touched nothing' (-not (Test-Did '^(axon |stop-process|start-desktop-task|register-probe-task|unregister-probe-task)'))
 }
 
 Test-Scenario 'restore: the desktop gets its daemon back and the verdict is a health round trip' {
@@ -694,6 +842,21 @@ Test-Scenario 'restore: a health document too old to name a process is tolerated
     $result = Invoke-StageUnderTest -Name 'restore'
     Check 'the stage succeeds' (-not $result.Failed) $result.Error
     Check 'the debt is cleared' ($null -eq $script:Machine.ParkState)
+}
+
+Test-Scenario 'restore: a sweep that cannot finish still gives the desktop its daemon back' {
+    # Remove-ProbeInstallation throws when a probe daemon survives every kill attempt. Letting that
+    # propagate would end the job with this desktop stopped and a message about the leftover that
+    # never mentions it.
+    Set-ParkedMachine
+    Add-FakeProcess -ProcessId 5150 -ExecutablePath $ProbeExecutable
+    $script:Machine.StopProcessFails = $true
+    $result = Invoke-StageUnderTest -Name 'restore'
+    Check 'the stage still fails, because a leftover breaks the next checkout' $result.Failed
+    Check 'but it says the desktop is back first' ($result.Error -match "desktop's daemon is back") $result.Error
+    Check 'the desktop daemon is answering' ($script:Machine.Health.daemon.running -eq $true)
+    Check 'the debt is cleared' ($null -eq $script:Machine.ParkState)
+    Test-Order -First 'warning: this lane could not remove' -Then 'axon daemon restart'
 }
 
 Test-Scenario 'restore: the probe registration goes before the desktop task is started' {
