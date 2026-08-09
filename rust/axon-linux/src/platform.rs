@@ -6,7 +6,12 @@ use atspi::{
         bus::BusProxy,
         proxy_ext::ProxyExt,
     },
-    zbus::{self, fdo::DBusProxy, names::BusName, proxy::CacheProperties},
+    zbus::{
+        self,
+        fdo::{DBusProxy, PropertiesProxy},
+        names::{BusName, InterfaceName},
+        proxy::CacheProperties,
+    },
 };
 use axon_core::{
     AppQuery, Application, BackendError, Capability, CapabilityInfo, KeyboardIntent, Node,
@@ -28,6 +33,32 @@ const REGISTRY: &str = "org.a11y.atspi.Registry";
 const MAX_DEPTH: usize = 18;
 const MAX_NODES: usize = 2_000;
 const CALL_TIMEOUT: Duration = Duration::from_secs(2);
+
+/// How long a provider is given to publish a subtree it has claimed, and how often that is checked.
+///
+/// Chromium builds the tree in its renderer and pushes it to the browser process, so the answer is
+/// neither immediate nor slow: the 2026-08-08 probe recorded in `docs/cross-platform.md` measured
+/// 0.09s for Electron 33 and 1.12s for Chrome 151. The ceiling is generous against a loaded machine
+/// and a heavy page, and it is only ever paid by an application that said it was withholding.
+const ACTIVATION_TIMEOUT: Duration = Duration::from_secs(3);
+const ACTIVATION_POLL: Duration = Duration::from_millis(50);
+
+const NODE_LIMIT_REACHED: &str = "node limit reached";
+
+/// Said of a node whose provider claimed a child and answered with AT-SPI's null reference instead
+/// of one. That is a subtree which exists and has not been published, and it is a different fact
+/// from a node that genuinely has no children — the distinction this string exists to keep.
+const SUBTREE_UNPUBLISHED: &str = "provider has not published this subtree";
+
+/// What a caller is owed when nothing matched and the session explains why.
+///
+/// Chromium and its embedders read `org.a11y.Status.IsEnabled` once at process start and never join
+/// the accessibility bus while it is false. On such a session those applications are not thin —
+/// they are absent, which is indistinguishable from a misspelled name unless the caller is told.
+const ACCESSIBILITY_DISABLED: &str = "no AT-SPI application matched; this session reports \
+     accessibility disabled (org.a11y.Status.IsEnabled is false), so applications that read it at \
+     startup — Chromium, Electron, and Chromium-backed webviews — are not on the bus at all";
+const NO_APPLICATION_MATCHED: &str = "no AT-SPI application matched";
 
 /// How long the application-to-process map is trusted before it is read again.
 ///
