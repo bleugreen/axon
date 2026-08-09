@@ -7,6 +7,16 @@ import Foundation
 /// bundle from whichever of them is running — locating the sibling editor app, and choosing the
 /// identity `daemon install` registers — so the walk lives here rather than once per caller.
 public struct AppBundle: Equatable, Sendable {
+    /// The identifier of Axon's own daemon app bundle.
+    ///
+    /// Three modules assert this string independently — the CLI locating the running app, the app
+    /// declaring itself, and `DaemonProgram` deciding whose privacy grants a registration may
+    /// inherit — so it lives in one place rather than three that can drift apart.
+    public static let axonDaemonIdentifier = "com.bleugreen.axon"
+
+    /// The identifier of the sibling editor app bundle.
+    public static let axonEditorIdentifier = "com.bleugreen.axon.editor"
+
     /// The bundle directory, such as `/Applications/Axon.app`.
     public let path: String
 

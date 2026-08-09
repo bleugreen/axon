@@ -37,7 +37,19 @@ public struct SocketCommandRouter: JSONRPCCommandHandling {
 public enum AxonEnvironment {
     public static let defaultSocketPath = "/tmp/axon.sock"
 
+    /// Set in the registered daemon's environment to tell it that launchd will restart it.
+    ///
+    /// The daemon behaves differently depending on whether anything is supervising it, and it
+    /// cannot infer that from the process alone.
+    public static let launchdManagedKey = "AXON_DAEMON_MANAGED_BY_LAUNCHD"
+
     public static func socketPath(_ environment: [String: String] = ProcessInfo.processInfo.environment) -> String {
         environment["AXON_SOCKET_PATH"] ?? defaultSocketPath
+    }
+
+    public static func isLaunchdManaged(
+        _ environment: [String: String] = ProcessInfo.processInfo.environment
+    ) -> Bool {
+        environment[launchdManagedKey] == "1"
     }
 }

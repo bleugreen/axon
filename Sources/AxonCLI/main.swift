@@ -7,8 +7,8 @@ let command = arguments.first ?? "bootstrap"
 let socketPath = AxonEnvironment.socketPath()
 let jsonEncoder = JSONEncoder()
 let jsonDecoder = JSONDecoder()
-let axonAppBundleIdentifier = "com.bleugreen.axon"
-let axonEditorBundleIdentifier = "com.bleugreen.axon.editor"
+let axonAppBundleIdentifier = AppBundle.axonDaemonIdentifier
+let axonEditorBundleIdentifier = AppBundle.axonEditorIdentifier
 
 do {
     switch command {

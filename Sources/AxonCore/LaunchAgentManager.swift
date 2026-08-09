@@ -61,23 +61,31 @@ public struct DaemonProgram: Equatable, Sendable {
 
     /// The program to register on behalf of a CLI running at `invokedExecutable`.
     ///
-    /// A bundle that cannot name a main executable — no `Info.plist`, or one pointing at a file
-    /// that is not there — falls back to the invoking CLI. A registration that starts a daemon with
-    /// a path-keyed identity is worth more than one that starts nothing.
+    /// Only Axon's own app bundle is adopted. Merely sitting inside some `.app` proves nothing: the
+    /// embedding contract invites a consumer to ship the CLI inside *their* application, and that
+    /// layout is indistinguishable from Axon's own by shape alone. Registering whatever bundle
+    /// encloses the CLI would hand launchd a foreign application with `RunAtLoad` and `KeepAlive`
+    /// set on it — relaunched at every login, serving nothing, and impossible to quit — so the
+    /// identifier has to match. Nothing is lost by being strict, because the grants worth
+    /// inheriting are recorded against Axon's identifier and no other.
+    ///
+    /// Everything that is not Axon's app falls back to the invoking CLI, including a bundle whose
+    /// `Info.plist` is missing or names a main executable that is not there. A registration that
+    /// starts a daemon with a path-keyed identity is worth more than one that starts nothing.
     public static func resolved(
         invokedExecutable: String,
         fileManager: FileManager = .default
     ) -> DaemonProgram {
         guard
             let bundle = AppBundle.enclosing(invokedExecutable, fileManager: fileManager),
-            let identifier = bundle.identifier,
+            bundle.identifier == AppBundle.axonDaemonIdentifier,
             let mainExecutable = bundle.mainExecutablePath
         else {
             return DaemonProgram(executablePath: invokedExecutable, identity: .executablePath)
         }
         return DaemonProgram(
             executablePath: mainExecutable,
-            identity: .appBundle(identifier: identifier)
+            identity: .appBundle(identifier: AppBundle.axonDaemonIdentifier)
         )
     }
 }
@@ -101,7 +109,8 @@ public struct LaunchAgentConfiguration: Equatable, Sendable {
         self.socketPath = socketPath
 
         var daemonEnvironment: [String: String] = [
-            "AXON_SOCKET_PATH": socketPath
+            "AXON_SOCKET_PATH": socketPath,
+            AxonEnvironment.launchdManagedKey: "1"
         ]
         for key in [
             "AXON_VISUAL_OVERLAY",
