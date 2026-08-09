@@ -735,7 +735,10 @@ failure reports a real integration regression without blocking a pull request:
   cannot run when a cancelled job kills the `ssh` client and the remote shell
   with it. The probe registers a scheduled task of its own name, requires the
   daemon answering `\\\\.\\pipe\\axon-v1` to be the process that task started,
-  and reads a real window root off the interactive desktop.
+  and reads a real window root off the interactive desktop from an application it
+  did not start — the daemon runs as a console process and enumerates its own
+  window, which would otherwise let a session with nothing running satisfy the
+  assertion.
 
 Every live runner is also somebody's desktop, which is the source of the one
 failure mode that would quietly hollow these lanes out. The endpoint is a

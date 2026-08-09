@@ -471,8 +471,18 @@ function Invoke-ProbeStage {
         $listResponse = Invoke-AxonMcp -Request $listRequest
         if ($listResponse.result.isError -ne $false) { throw 'the app-list look request failed' }
 
+        # The daemon under test is itself an application on this desktop: Task Scheduler runs
+        # `serve` as a console process, and `look` enumerates its window like any other. Reading
+        # that one would make the lane's evidence self-referential -- a session with no applications
+        # running at all would satisfy it -- so a window from a process this lane did not start is
+        # what the assertion requires.
         $verified = $null
+        $considered = @()
         foreach ($app in $listResponse.result.structuredContent) {
+            if ($app.name -and $app.name.Equals($ProbeExecutable, [System.StringComparison]::OrdinalIgnoreCase)) {
+                continue
+            }
+            $considered += $app.name
             $request = @{
                 jsonrpc = '2.0'
                 id = 1
@@ -487,7 +497,9 @@ function Invoke-ProbeStage {
                 break
             }
         }
-        if ($null -eq $verified) { throw 'look did not return a Window root from the interactive desktop' }
+        if ($null -eq $verified) {
+            throw "look returned no Window root from any application this lane did not start (considered: $($considered -join ', '))"
+        }
         Write-Note "isError:false snapshot=$($verified.response.result.structuredContent.id) root=$($verified.window.role) app=$($verified.app)"
     }
     finally {
