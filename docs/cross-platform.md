@@ -255,6 +255,13 @@ reported per session rather than per build, because the same binary can deliver
 them on an X11 session with a window manager and cannot on a Wayland one, and the
 same answer feeds both `status` and the dispatch ladder.
 
+Nothing a client does ends the daemon. A hang-up before the request, partway
+through it, or between the request and its answer ends that connection alone,
+and a request deadline bounds a client that connects and then says nothing,
+since the daemon answers one connection at a time. That loop lives in the
+`axon-linux` library rather than in the binary precisely so a test can drive
+hostile clients against it without a desktop or an accessibility bus.
+
 ## Windows backend
 
 Windows is first because UIA provides strong semantic capture, patterns, and
@@ -337,6 +344,18 @@ The backend must expect differences among desktop environments, widget
 toolkits, compositors, and application accessibility implementations rather
 than equating “Linux” with one uniform tree.
 
+- The backend opens the accessibility bus itself and addresses every object by
+  explicit destination on that single connection. `atspi`'s
+  `AccessibilityConnection` is deliberately not used, and `atspi-connection` is
+  not among the backend's dependencies: that constructor is inseparable from a
+  peer-to-peer subsystem
+  which asks every registered application for a private socket address, opens a
+  second D-Bus connection to each one that answers, and repeats that on every
+  name-owner change. Axon never reads a peer — explicit destinations on the
+  shared bus are what cross embedded-application boundaries — so the subsystem
+  bought nothing and cost a round trip per application plus a loud failure for
+  every participant that answers with an empty address, a running screen reader
+  among them.
 - Chromium and Electron applications may not expose their accessibility trees
   until an AT-SPI listener registers. Listener registration is therefore part
   of backend readiness, not an optional optimization.

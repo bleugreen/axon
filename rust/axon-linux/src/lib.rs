@@ -12,6 +12,10 @@ use serde_json::{Map, Value, json};
 
 pub mod keys;
 pub mod lifecycle;
+/// The daemon's local socket transport, in the library so its resilience to hostile clients is
+/// testable without a desktop or an AT-SPI bus.
+#[cfg(unix)]
+pub mod socket;
 
 #[cfg(target_os = "linux")]
 mod platform;

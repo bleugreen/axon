@@ -21,6 +21,8 @@ Decision: Use JSON-RPC first.
 
 JSON-RPC is simple, debuggable, and maps cleanly to request/response commands without inventing a bespoke protocol. It is also neutral enough that the daemon protocol can stay separate from MCP transport details.
 
+One connection carries one request and one response, and no client's failure is the daemon's. A client may vanish before it asks anything, halfway through asking, or between asking and hearing the answer; each of those ends that connection and nothing else. A daemon serves a whole desktop session, so an outage for everything else on it is far too much to pay for one abandoned socket. A request that was received and carried out keeps its effect even when the answer cannot be delivered, which is why a `shutdown` whose caller walked away still stops the daemon.
+
 ## Wrapper Strategy
 
 Decision: Prefer direct `ApplicationServices` unless a spike proves AXSwift saves enough work to justify the dependency.
