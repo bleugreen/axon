@@ -1,0 +1,61 @@
+#!/usr/bin/env bash
+# Asserts that a daemon a live probe just spawned is the one serving the Axon socket.
+#
+# The socket is a rendezvous, not a proof of authorship. Every subcommand except `serve` is a
+# client, so a probe that starts its own daemon and then talks to the socket is answered by
+# whichever daemon holds it. On a live runner that is routinely somebody's installed release: the
+# spawned `serve` exits immediately with AddrInUse, and because a probe backgrounds it, `set -e`
+# never sees that. Every assertion after it then passes on evidence about a binary nobody changed,
+# which is worse than no lane at all, because the lane is trusted.
+#
+# The health document reports the serving process's own pid, so requiring it to equal the pid that
+# was spawned is the exact check: it fails when the bind was lost to another daemon, when the
+# daemon died after binding, and when a stale daemon was left behind by an earlier run.
+#
+# Usage: scripts/assert-daemon-under-test <daemon-binary> <pid> <daemon-log>
+set -euo pipefail
+
+if [[ $# -ne 3 ]]; then
+  printf 'usage: %s <daemon-binary> <pid> <daemon-log>\n' "$0" >&2
+  exit 2
+fi
+
+DAEMON="$1"
+EXPECTED_PID="$2"
+LOG="$3"
+
+fail() {
+  printf '::error::%s\n' "$1"
+  if [[ -f "$LOG" ]]; then
+    printf -- '--- %s ---\n' "$LOG"
+    cat "$LOG"
+  fi
+  exit 1
+}
+
+# The daemon binds its socket only after the accessibility backend finishes starting, so a probe's
+# first request has to wait for it.
+status=""
+for _ in {1..80}; do
+  if ! kill -0 "$EXPECTED_PID" 2>/dev/null; then
+    fail "the daemon under test (pid $EXPECTED_PID) exited instead of serving the socket"
+  fi
+  status="$("$DAEMON" status --json 2>/dev/null || true)"
+  if printf '%s' "$status" | jq -e '.daemon.running and .daemon.ready' >/dev/null 2>&1; then
+    break
+  fi
+  status=""
+  sleep 0.25
+done
+
+if [[ -z "$status" ]]; then
+  fail "the daemon under test (pid $EXPECTED_PID) never became ready"
+fi
+
+endpoint="$(printf '%s' "$status" | jq -r '.daemon.endpoint')"
+served_pid="$(printf '%s' "$status" | jq -r '.daemon.processId // "unknown"')"
+if [[ "$served_pid" != "$EXPECTED_PID" ]]; then
+  fail "$endpoint is served by pid $served_pid, not the daemon under test (pid $EXPECTED_PID); every assertion after this would describe that daemon instead of this build"
+fi
+
+printf 'the daemon under test (pid %s) is serving %s\n' "$EXPECTED_PID" "$endpoint"

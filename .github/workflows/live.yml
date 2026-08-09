@@ -124,6 +124,71 @@ jobs:
       - name: Check out Axon
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
+      # Built once and named as its own step rather than as a side effect of the first probe,
+      # because every step below runs this binary and each one is a claim about it.
+      - name: Build the daemon under test
+        working-directory: rust
+        run: cargo build --quiet --locked -p axon-linux
+
+      # A live runner is also somebody's desktop, so an Axon registration already being present --
+      # installed, enabled, and serving the socket -- is the normal case rather than a reason to
+      # refuse. It is parked once for the whole job rather than once per step, because every probe
+      # below starts its own daemon and can only be evidence about this build if that daemon is
+      # the one answering. The last step puts the registration back exactly as it was found.
+      - name: Park the installed Axon registration
+        working-directory: rust
+        run: |
+          set -euo pipefail
+          unit="$HOME/.config/systemd/user/axon.service"
+          parked=""
+          was_enabled=false
+          was_active=false
+          if [ -e "$unit" ]; then
+            if systemctl --user is-enabled axon.service >/dev/null 2>&1; then was_enabled=true; fi
+            if systemctl --user is-active axon.service >/dev/null 2>&1; then was_active=true; fi
+            parked="$(mktemp)"
+            cp -p "$unit" "$parked"
+            systemctl --user stop axon.service >/dev/null 2>&1 || true
+            systemctl --user disable axon.service >/dev/null 2>&1 || true
+            rm -f "$unit"
+            systemctl --user daemon-reload >/dev/null 2>&1 || true
+            echo "parked the existing registration (enabled=$was_enabled active=$was_active)"
+          else
+            echo 'no existing registration to park'
+          fi
+          # Handed to the restore step before the socket is checked, so a machine this step
+          # refuses to run on still gets its registration back.
+          {
+            echo "AXON_UNIT=$unit"
+            echo "AXON_PARKED=$parked"
+            echo "AXON_WAS_ENABLED=$was_enabled"
+            echo "AXON_WAS_ACTIVE=$was_active"
+          } >> "$GITHUB_ENV"
+
+          # Removing the registration is not the same as freeing the socket, and stopping the
+          # service is asynchronous. Anything still answering here would answer the probes too, so
+          # this names it rather than killing a process the job has no way to put back.
+          daemon=target/debug/axon-linux
+          status=""
+          free=false
+          for _ in {1..40}; do
+            status="$("$daemon" status --json)"
+            if printf '%s' "$status" | jq -e '.daemon.running == false' >/dev/null; then
+              free=true
+              break
+            fi
+            sleep 0.25
+          done
+          if [[ "$free" != true ]]; then
+            echo "::error::$(printf '%s' "$status" | jq -r '.daemon.endpoint') is still served by pid $(printf '%s' "$status" | jq -r '.daemon.processId // "unknown"') after the registration was parked; nothing below could be evidence about this build while it holds the socket"
+            exit 1
+          fi
+          # Says what it checked. `serve` refuses on a successful connect to the endpoint, which is
+          # a narrower question than whether anything answered a health request -- something bound
+          # but mute reads as absent here. That case is not lost, it just fails one step later and
+          # by name, when the probe's own daemon cannot bind.
+          echo 'no daemon is answering on the Axon socket'
+
       - name: Capture, resolve, act, and verify
         working-directory: rust
         run: |
@@ -134,12 +199,7 @@ jobs:
             echo '::error::GNOME Calculator is already running; refusing to alter an existing desktop session.'
             exit 1
           fi
-          cleanup() {
-            pkill -u "$(id -u)" -f '[/]usr/bin/gnome-calculator' >/dev/null 2>&1 || true
-          }
-          trap cleanup EXIT
 
-          cargo build --quiet --locked -p axon-linux
           daemon=target/debug/axon-linux
           "$daemon" serve >/tmp/axon-linux-daemon.log 2>&1 &
           daemon_pid=$!
@@ -155,6 +215,10 @@ jobs:
             pkill -u "$(id -u)" -f '[/]usr/bin/gnome-calculator' >/dev/null 2>&1 || true
           }
           trap cleanup EXIT
+
+          # Everything below is a client of the socket, so this is what makes it evidence about
+          # the daemon this step started rather than about whichever one is listening.
+          ../scripts/assert-daemon-under-test "$daemon" "$daemon_pid" /tmp/axon-linux-daemon.log
 
           gnome-calculator --equation 0 >/dev/null 2>&1 &
           for _ in {1..40}; do
@@ -210,20 +274,10 @@ jobs:
           trap cleanup EXIT
 
           # The daemon binds its socket after AT-SPI comes up, so the first request has to wait for
-          # it. Without this the connect fails with ENOENT and the refusal below is never exercised.
-          ready=false
-          for _ in {1..80}; do
-            if "$daemon" status --json 2>/dev/null | jq -e '.daemon.running and .daemon.ready' >/dev/null 2>&1; then
-              ready=true
-              break
-            fi
-            sleep 0.25
-          done
-          if [[ "$ready" != true ]]; then
-            echo '::error::the Wayland-refusal daemon never became ready'
-            cat /tmp/axon-linux-wayland.log
-            exit 1
-          fi
+          # it; without that wait the connect fails with ENOENT and the refusal below is never
+          # exercised. Waiting on this daemon's own pid is also what ties the refusal to this build
+          # rather than to whatever else might be holding the socket.
+          ../scripts/assert-daemon-under-test "$daemon" "$daemon_pid" /tmp/axon-linux-wayland.log
 
           for policy in backgroundOnly foregroundPermitted; do
             refused="$(jq -cn --arg policy "$policy" '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"keyboard","arguments":{"text":"x","deliveryPolicy":$policy}}}' | "$daemon" mcp)"
@@ -240,52 +294,15 @@ jobs:
           echo 'Linux under Wayland withheld the foreground rung at both policies'
 
       # The lifecycle and the published status document, exercised against a real logged-in GNOME
-      # session. Scoped and restorable: the job refuses to run if a registration already exists,
-      # so uninstall returns the machine to exactly the state it started in.
+      # session. The desktop's own registration was parked at the top of the job, so `daemon
+      # install` registers this build and nothing else, and the restore step below unregisters it
+      # even when an assertion here fails.
       - name: Install, report status, shut down, and uninstall
         working-directory: rust
         run: |
           set -euo pipefail
           unit="$HOME/.config/systemd/user/axon.service"
-          # A live runner is also somebody's desktop, so an existing Axon registration is the
-          # normal case rather than a reason to refuse. Park it for the duration of the probe and
-          # put it back exactly as it was found -- contents, enablement, and running state.
-          parked=""
-          was_enabled=false
-          was_active=false
-          if [ -e "$unit" ]; then
-            if systemctl --user is-enabled axon.service >/dev/null 2>&1; then was_enabled=true; fi
-            if systemctl --user is-active axon.service >/dev/null 2>&1; then was_active=true; fi
-            parked="$(mktemp)"
-            cp -p "$unit" "$parked"
-            systemctl --user stop axon.service >/dev/null 2>&1 || true
-            systemctl --user disable axon.service >/dev/null 2>&1 || true
-            rm -f "$unit"
-            systemctl --user daemon-reload >/dev/null 2>&1 || true
-            echo "parked the existing registration (enabled=$was_enabled active=$was_active)"
-          fi
-
           daemon="$PWD/target/debug/axon-linux"
-          restore() {
-            "$daemon" daemon uninstall >/dev/null 2>&1 || true
-            rm -f "$unit"
-            if [ -n "$parked" ]; then
-              mkdir -p "$(dirname "$unit")"
-              cp -p "$parked" "$unit"
-              rm -f "$parked"
-              systemctl --user daemon-reload >/dev/null 2>&1 || true
-              if [ "$was_enabled" = true ]; then
-                systemctl --user enable axon.service >/dev/null 2>&1 || true
-              fi
-              if [ "$was_active" = true ]; then
-                systemctl --user start axon.service >/dev/null 2>&1 || true
-              fi
-              echo "restored the parked registration"
-            else
-              systemctl --user daemon-reload >/dev/null 2>&1 || true
-            fi
-          }
-          trap restore EXIT
 
           expected_version="$(cat ../VERSION)"
           test "$("$daemon" version)" = "$expected_version"
@@ -293,13 +310,21 @@ jobs:
           "$daemon" daemon install
           test "$(systemctl --user is-enabled axon.service)" = enabled
 
+          # Read together on purpose: an `on-failure` restart landing between the two would fail
+          # the pid assertion below over a restart rather than over the thing being tested.
           status="$("$daemon" status --json)"
+          main_pid="$(systemctl --user show -p MainPID --value axon.service)"
           printf '%s' "$status" | jq -e '.schemaVersion == "health-v1"' >/dev/null
           printf '%s' "$status" | jq -e --arg v "$expected_version" '.version == $v' >/dev/null
           printf '%s' "$status" | jq -e '.platform == "linux"' >/dev/null
           printf '%s' "$status" | jq -e '.daemon.running and .daemon.ready' >/dev/null
           printf '%s' "$status" | jq -e '.session.interactive and .session.graphical' >/dev/null
           printf '%s' "$status" | jq -e --arg p "$daemon" '.registration.registered and .registration.path == $p' >/dev/null
+          # For the same reason the probes above check the pid they spawned: the registration is
+          # read from the unit file, while everything else in this document comes from whichever
+          # daemon answered. Requiring that to be the service just installed is what keeps the two
+          # halves describing the same process.
+          printf '%s' "$status" | jq -e --argjson pid "$main_pid" '.daemon.processId == $pid' >/dev/null
           # The complete vocabulary, every unusable entry explained.
           printf '%s' "$status" | jq -e '.capabilities | length == 15' >/dev/null
           printf '%s' "$status" | jq -e '[.capabilities[] | select(.usable == false and (.reason // "") == "")] | length == 0' >/dev/null
@@ -320,6 +345,94 @@ jobs:
           test ! -e "$unit"
           "$daemon" status --json | jq -e '.registration.registered == false and .registration.reason == "not-registered"' >/dev/null
           echo 'Linux systemd-user lifecycle installed, reported health-v1, restarted, shut down, and uninstalled'
+
+      # The counterpart to the parking step, and the reason any step above may leave the machine
+      # in whatever state it fails in. `always()` because a failed probe is exactly when the
+      # desktop most needs its own daemon back.
+      - name: Restore the installed Axon registration
+        if: always()
+        run: |
+          set -euo pipefail
+          # Set only by the parking step, and the reason this step may remove a registration at
+          # all: without it the job never touched the desktop's own, and the unit sitting there is
+          # that registration rather than a probe's leftover.
+          if [ -z "${AXON_UNIT:-}" ]; then
+            echo 'the registration was never parked; leaving the desktop alone'
+            exit 0
+          fi
+          unit="$AXON_UNIT"
+          daemon="$GITHUB_WORKSPACE/rust/target/debug/axon-linux"
+          # Any registration or daemon still here belongs to the probes, because the desktop's own
+          # were parked and stopped. Both have to go before the parked unit is put back, or the
+          # restored service starts into a socket that is already taken. Best-effort: an end state
+          # already reached looks the same as a command that had nothing to do.
+          "$daemon" daemon uninstall >/dev/null 2>&1 || true
+          "$daemon" shutdown >/dev/null 2>&1 || true
+          rm -f "$unit"
+          systemctl --user daemon-reload >/dev/null 2>&1 || true
+
+          if [ -z "${AXON_PARKED:-}" ]; then
+            echo 'no parked registration to restore'
+            exit 0
+          fi
+          mkdir -p "$(dirname "$unit")"
+          cp -p "$AXON_PARKED" "$unit"
+          rm -f "$AXON_PARKED"
+          systemctl --user daemon-reload
+          # Not tolerated the way the parking side is: a restore that quietly does not happen
+          # leaves the desktop without the daemon it had, and nobody finds out until the next run.
+          if [ "${AXON_WAS_ENABLED:-false}" = true ] && ! systemctl --user enable axon.service; then
+            echo '::error::the desktop Axon registration was restored but could not be re-enabled'
+            exit 1
+          fi
+          echo 'restored the parked registration'
+
+          if [ "${AXON_WAS_ACTIVE:-false}" != true ]; then
+            exit 0
+          fi
+          if ! systemctl --user start axon.service; then
+            echo '::error::the desktop Axon daemon was restored but did not start again'
+            exit 1
+          fi
+          # `systemctl start` succeeding is not the daemon working, and this unit says so itself:
+          # Type=simple means systemd calls it started at exec, which is before Axon can bind, so a
+          # zero exit here covers a daemon that exec'd and died on a socket a probe never released.
+          # Trusting it would be the same silent failure this job exists to close, one step further
+          # out. Both halves are required: systemd's view alone is the exec claim above, and an
+          # answer alone could come from a probe's orphan that bound while the socket was being
+          # swept -- which is the case that leaves the restored unit dead on AddrInUse.
+          answering=false
+          for _ in {1..40}; do
+            status="$("$daemon" status --json)"
+            main_pid="$(systemctl --user show -p MainPID --value axon.service)"
+            if [ "$(systemctl --user is-active axon.service || true)" = active ] \
+              && printf '%s' "$status" | jq -e '.daemon.running' >/dev/null; then
+              answering=true
+              break
+            fi
+            sleep 0.25
+          done
+          if [[ "$answering" != true ]]; then
+            # Both halves reported, because the two failures look nothing alike to whoever reads
+            # this next: a unit that never came up, or a unit that is down while something else
+            # answers on its endpoint.
+            echo "::error::the desktop axon.service did not come back at $(printf '%s' "$status" | jq -r '.daemon.endpoint') -- unit is $(systemctl --user is-active axon.service || true), a daemon answering: $(printf '%s' "$status" | jq -r '.daemon.running'); this runner needs attention before the next live run"
+            journalctl --user -u axon.service -n 20 --no-pager || true
+            exit 1
+          fi
+          # Exact whenever the document allows it. A daemon this build can parse names its own
+          # process, so requiring that to be systemd's is what rules out an orphan answering in the
+          # restored service's place. `ready` and a mandatory pid are deliberately not required:
+          # the desktop runs whichever release it installed, and a payload this build is too new to
+          # parse reports a daemon that is up with no process id at all, where the pair above is
+          # the most that can honestly be asserted.
+          if printf '%s' "$status" | jq -e '.daemon.processId != null' >/dev/null \
+            && ! printf '%s' "$status" | jq -e --argjson pid "$main_pid" '.daemon.processId == $pid' >/dev/null; then
+            echo "::error::$(printf '%s' "$status" | jq -r '.daemon.endpoint') is answered by pid $(printf '%s' "$status" | jq -r '.daemon.processId'), not the restored axon.service (pid $main_pid)"
+            journalctl --user -u axon.service -n 20 --no-pager || true
+            exit 1
+          fi
+          echo 'the desktop Axon daemon is answering again'
 
   windows:
     name: Windows live loop

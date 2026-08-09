@@ -635,6 +635,35 @@ failure reports a real integration regression without blocking a pull request:
   requires a real window root, and restores the prior task and running state in
   a `finally` block.
 
+Every live runner is also somebody's desktop, which is the source of the one
+failure mode that would quietly hollow these lanes out. The endpoint is a
+rendezvous, not a proof of authorship: only `serve` binds it and every other
+subcommand is a client, so a probe that starts its own daemon and then talks to
+the endpoint is answered by whichever daemon holds it — routinely the installed
+release the desktop user already runs. The freshly built daemon loses the bind,
+and when a probe backgrounds it the shell never sees that it exited, so every
+assertion afterwards is true of a binary nobody changed.
+
+Only the Linux lane currently closes this. It parks the desktop's systemd
+registration once for the whole job rather than once per probe, confirms nothing
+is answering on the endpoint before any probe starts, and has each probe assert
+that the process id in the health document is the process id it spawned
+(`scripts/assert-daemon-under-test`). A final step restores the parked
+registration — contents, enablement, and running state — whatever the probes did
+to the machine, and requires the restored daemon to answer for itself rather
+than accepting `systemctl start`, which this unit's `Type=simple` makes a claim
+about `exec` rather than about readiness.
+
+macOS and Windows narrow the window without closing it. macOS shuts the
+installed daemon down before launching the build under test, which boots its
+LaunchAgent out so `KeepAlive` cannot bring it back mid-step; what remains open
+is the same-version case, since the only assertion tying the health document to
+the checkout is a version comparison that an installed daemon built from this
+repository satisfies just as well. Windows snapshots and replaces the scheduled
+interactive-session daemon for the duration of its probe. A lane without an
+authorship check reports that some daemon on the machine works, which is worse
+than having no lane, because the lane is trusted.
+
 The repository's Actions policy requires approval for every outside
 contributor's workflow run before pull-request code can reach the self-hosted
 desktops. The live workflow still has no `pull_request` trigger because its
