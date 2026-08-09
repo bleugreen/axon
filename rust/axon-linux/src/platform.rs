@@ -488,6 +488,14 @@ struct Actor {
     /// The session bus, kept past bus discovery because `org.a11y.Status` lives there and is what
     /// explains an application that is missing rather than thin.
     session: zbus::Connection,
+    /// Applications this daemon has already asked to publish their tree.
+    ///
+    /// Activation is a one-way switch inside the application, so asking twice buys nothing, and
+    /// an application that ignores the ask must not make every later `look` at it pay the wait.
+    /// Keyed by AT-SPI identity, which carries the unique bus name: a restarted application owns a
+    /// different one, so a stale entry can never suppress activation for the process that replaced
+    /// it, and the set grows by one short string per application this daemon has ever captured.
+    activated: HashSet<String>,
     retained: HashMap<String, Vec<ObjectRefOwned>>,
 }
 impl Actor {
@@ -521,6 +529,7 @@ impl Actor {
         Ok(Self {
             connection,
             session,
+            activated: HashSet::new(),
             retained: HashMap::new(),
         })
     }
@@ -662,20 +671,14 @@ impl Actor {
         let Some((root, name)) = self.select(&q).await? else {
             return Err(no_application_matched(self.accessibility_enabled().await));
         };
-        let identifier = Some(identity(&root));
+        let identifier = identity(&root);
+        if self.activated.insert(identifier.clone()) {
+            self.wake_provider(&root).await;
+        }
+        let identifier = Some(identifier);
         let mut refs = Vec::new();
         let mut remaining = MAX_NODES;
-        let mut node = self
-            .node(root.clone(), 0, &mut remaining, &mut refs)
-            .await?;
-        // The first walk is what detects an unactivated provider, so nothing is paid for this by an
-        // application that publishes its tree the way most toolkits do.
-        if awaiting_provider(&node) {
-            self.wake_provider(&root).await;
-            refs.clear();
-            remaining = MAX_NODES;
-            node = self.node(root, 0, &mut remaining, &mut refs).await?;
-        }
+        let node = self.node(root, 0, &mut remaining, &mut refs).await?;
         let snapshot = Snapshot::new(Application {
             name,
             identifier,
