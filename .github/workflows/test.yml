@@ -32,6 +32,18 @@ jobs:
       - name: Check out Axon
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
+      # The live workflow has no `pull_request` trigger, so its steps first execute on a real
+      # desktop with nothing having rehearsed them -- and the branches that decide whether that
+      # desktop keeps its start-at-login daemon only run when a probe has already failed. This
+      # drives those branches against stubbed system commands, from the workflow file itself.
+      # First in the job, and before Swift, because it needs neither and a workflow-logic
+      # regression should not wait behind a compiler.
+      #
+      # It runs here rather than on a hosted runner on purpose: `bash` resolves to 3.2 on this
+      # machine, which is what the live lane will actually be interpreted by.
+      - name: Rehearse the macOS live lane's recovery branches
+        run: ./scripts/test-macos-live-recovery
+
       - name: Set up Swift
         uses: swift-actions/setup-swift@7ca6abe6b3b0e8b5421b88be48feee39cbf52c6a # v2
         with:
