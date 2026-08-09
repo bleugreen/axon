@@ -310,6 +310,7 @@ jobs:
             # which is the case that leaves the next bootstrap dead on an address already in use.
             if [ -z "$agent_pid" ]; then
               echo "::error::a daemon is answering at $(printf '%s' "$status" | jq -r '.daemon.endpoint') but launchd is not running $AXON_LAUNCH_AGENT_LABEL; this desktop's start-at-login registration is still booted out"
+              printf -- '--- daemon restart ---\n%s\n' "$restart_output"
               exit 1
             fi
             # Exact whenever the document allows it. A daemon this build can parse names its own
@@ -320,6 +321,19 @@ jobs:
             if printf '%s' "$status" | jq -e '.daemon.processId != null' >/dev/null \
               && ! printf '%s' "$status" | jq -e --argjson pid "$agent_pid" '.daemon.processId == $pid' >/dev/null; then
               echo "::error::$(printf '%s' "$status" | jq -r '.daemon.endpoint') is answered by pid $(printf '%s' "$status" | jq -r '.daemon.processId'), not the restored LaunchAgent (pid $agent_pid)"
+              printf -- '--- daemon restart ---\n%s\n' "$restart_output"
+              exit 1
+            fi
+          fi
+
+          # Reopened last, and only now. A desktop can run the menu-bar app on a machine whose
+          # LaunchAgent is registered too -- whichever binds first holds the endpoint -- which is
+          # why the two facts were recorded separately rather than as alternatives. Bringing the
+          # app back before the agent had settled would let it win the endpoint, and the check
+          # above would then be describing the wrong process.
+          if [ "$AXON_AGENT_WAS_LOADED" = true ] && [ "${AXON_APP_WAS_RUNNING:-false}" = true ]; then
+            if ! open -a "${AXON_APP_BUNDLE:-/Applications/Axon.app}"; then
+              echo "::error::the desktop's Axon daemon is answering again, but ${AXON_APP_BUNDLE:-/Applications/Axon.app} was also running when this job arrived and could not be reopened"
               exit 1
             fi
           fi
