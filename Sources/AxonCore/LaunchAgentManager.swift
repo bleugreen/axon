@@ -274,9 +274,10 @@ public struct LaunchAgentManager {
 
 /// Whether a path is somewhere a daemon registration should never point.
 ///
-/// `daemon install` registers the invoking executable, so invoking it from a build directory
-/// registers a path that disappears on the next clean. Mirrored by `ephemeral_path_warning` in
-/// `rust/axon-core/src/lifecycle.rs`.
+/// `daemon install` registers where the invoking install lives — the enclosing app bundle's main
+/// executable, or the CLI itself when there is no bundle — so installing from a build directory or
+/// an unpacked temporary copy registers a path that disappears. Mirrored by
+/// `ephemeral_path_warning` in `rust/axon-core/src/lifecycle.rs`.
 public enum DaemonRegistrationPath {
     /// Path fragments that mark a location as temporary or build-scoped.
     static let ephemeralMarkers = [

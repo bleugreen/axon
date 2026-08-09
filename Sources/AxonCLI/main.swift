@@ -208,8 +208,10 @@ do {
           status [--json]   describe daemon, registration, session, permissions, capabilities
           version           print the product version
 
-        `daemon install` registers the path of the executable you invoked, so run it from a
-        permanent location. Installing from a build directory registers a path that disappears.
+        `daemon install` registers this install's daemon: the enclosing Axon.app when the CLI is
+        inside one, so permissions ride the app bundle and survive upgrades, and otherwise the
+        invoking executable itself. Run it from a permanent location either way — installing from
+        a build directory registers a path that disappears.
 
         commands:
           axon     launch Axon.app and request permissions when needed
@@ -688,17 +690,13 @@ private func axonEditorAppURL() -> URL? {
 }
 
 private func bundledAxonAppURL() -> URL? {
-    guard let executable = try? resolvedExecutablePath() else {
+    guard
+        let executable = try? resolvedExecutablePath(),
+        let bundle = AppBundle.enclosing(executable)
+    else {
         return nil
     }
-    var url = URL(fileURLWithPath: executable).deletingLastPathComponent()
-    while url.path != "/" {
-        if url.pathExtension == "app" {
-            return url
-        }
-        url.deleteLastPathComponent()
-    }
-    return nil
+    return URL(fileURLWithPath: bundle.path, isDirectory: true)
 }
 
 private func runCommand(arguments: [String]) throws -> (method: String, params: [String: JSONValue]) {
@@ -755,12 +753,13 @@ private func runCommand(arguments: [String]) throws -> (method: String, params: 
     return ("run", params)
 }
 
-/// The CLI-managed embedding lifecycle: a LaunchAgent whose program is this executable.
+/// The CLI-managed embedding lifecycle: a LaunchAgent whose program is this install's daemon.
 ///
 /// There is one registration truth. Earlier versions copied the binary into an Application Support
 /// bundle and registered the copy, which meant the path a consumer installed and the path macOS
 /// launched could drift apart, and an upgrade in place left the old copy running. The agent now
-/// points at the invoking executable, which is why callers must invoke it from a permanent path.
+/// points inside the invoking install, which is why callers must invoke it from a permanent path.
+/// `DaemonProgram` decides which executable of that install is registered.
 private func handleDaemonCommand(arguments: [String]) throws {
     guard let subcommand = arguments.dropFirst().first else {
         throw CLIError.missingArguments("daemon requires install, uninstall, or restart")
@@ -768,10 +767,15 @@ private func handleDaemonCommand(arguments: [String]) throws {
     let manager = LaunchAgentManager(configuration: try launchAgentConfiguration())
     switch subcommand {
     case "install":
-        warnAboutEphemeralInstall(manager.configuration.executablePath)
+        let program = manager.configuration.program
+        warnAboutEphemeralInstall(program.executablePath)
         try manager.start()
         let report = try waitForDaemonReport()
-        print("registered \(manager.configuration.label) -> \(manager.configuration.executablePath)")
+        print("registered \(manager.configuration.label) -> \(program.executablePath)")
+        // Which of the two TCC rules this registration follows is the thing a consumer cannot see
+        // from the path alone, and it decides whether the next upgrade needs a human in
+        // System Settings.
+        print("identity: \(program.identityDescription)")
         print("daemon ready (pid \(report.processId), version \(report.version))")
     case "restart":
         // Restart deliberately does not re-register. It restarts the daemon that is installed,
@@ -780,7 +784,7 @@ private func handleDaemonCommand(arguments: [String]) throws {
         let registration = manager.registration()
         try manager.restart()
         let report = try waitForDaemonReport()
-        print("restarted \(manager.configuration.label) -> \(registration.path ?? manager.configuration.executablePath)")
+        print("restarted \(manager.configuration.label) -> \(registration.path ?? manager.configuration.program.executablePath)")
         print("daemon ready (pid \(report.processId), version \(report.version))")
     case "uninstall":
         try manager.uninstall()
@@ -936,7 +940,7 @@ private func warnAboutEphemeralInstall(_ path: String) {
 
 private func launchAgentConfiguration() throws -> LaunchAgentConfiguration {
     LaunchAgentConfiguration(
-        executablePath: try resolvedExecutablePath(),
+        program: DaemonProgram.resolved(invokedExecutable: try resolvedExecutablePath()),
         socketPath: socketPath,
         environment: ProcessInfo.processInfo.environment
     )
