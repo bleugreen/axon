@@ -926,6 +926,59 @@ Test-Scenario 'restore: a desktop whose daemon never comes back fails loudly' {
     Check 'the stage fails' $result.Failed
     Check 'it asks for attention' ($result.Error -match 'needs attention before the next live run') $result.Error
     Check 'the debt is not cleared' ($null -ne $script:Machine.ParkState)
+    # The other half of the patience below: a budget that never expires is a lane that hangs instead
+    # of reporting a machine nobody can fix from here.
+    Check 'it spent the whole retry budget and no more' ((Get-Count 'start-desktop-task') -eq $RestoreStartAttempts) "started it $(Get-Count 'start-desktop-task') time(s)"
+}
+
+Test-Scenario 'restore: a start is not issued against an instance that has not finished' {
+    # Run 31339688217, in the shape that burned it. A background Windows servicing operation made
+    # this desktop unusably slow for three minutes; the daemon `daemon restart` started exited on its
+    # own 30-second UIA readiness bound, and the lane's one fallback start landed on a task whose
+    # previous instance had not finished. Task Scheduler discards a start in that window -- silently,
+    # and reporting success -- so nothing started at all, and the poll that followed was waiting for
+    # a daemon nobody had launched.
+    Set-ParkedMachine
+    $script:Machine.RestartFails = $true
+    $script:Machine.WindingDownReads = 3
+    $result = Invoke-StageUnderTest -Name 'restore'
+    Check 'the stage succeeds' (-not $result.Failed) $result.Error
+    Check 'it read the task state before starting it' ((Get-Position 'read-desktop-task-state') -ge 0)
+    Test-Order -First 'read-desktop-task-state' -Then 'start-desktop-task'
+    Check 'it issued no start Task Scheduler would discard' ((Get-Count 'start-desktop-task-discarded') -eq 0)
+    Check 'it started the task once the instance had finished' ((Get-Count 'start-desktop-task') -eq 1) "started it $(Get-Count 'start-desktop-task') time(s)"
+    Check 'the desktop has its daemon back' ($script:Machine.Health.daemon.running -eq $true)
+    Check 'the debt is cleared' ($null -eq $script:Machine.ParkState)
+}
+
+Test-Scenario 'restore: a start whose daemon dies under load is followed by another' {
+    # The daemon's 30-second UIA readiness bound is fail-fast by design, so a machine slow enough to
+    # blow it produces a start that launches a process and still leaves nothing answering. That is
+    # the daemon behaving correctly; a lane with one start turns it into a red run.
+    Set-ParkedMachine
+    $script:Machine.RestartFails = $true
+    $script:Machine.StartsThatDie = 1
+    $result = Invoke-StageUnderTest -Name 'restore'
+    Check 'the stage succeeds' (-not $result.Failed) $result.Error
+    Check 'the first start produced nothing' ((Get-Count 'start-desktop-task-exited') -eq 1)
+    Check 'it says so' (Test-Said 'nothing answered within')
+    Check 'it started the task again' ((Get-Count 'start-desktop-task') -eq 2) "started it $(Get-Count 'start-desktop-task') time(s)"
+    Check 'the desktop has its daemon back' ($script:Machine.Health.daemon.running -eq $true)
+    Check 'the debt is cleared' ($null -eq $script:Machine.ParkState)
+}
+
+Test-Scenario 'restore: an instance that never finishes fails rather than being started over' {
+    # A task that reports a running instance while nothing answers is a machine that needs a human.
+    # Every start here would be discarded, so making them would only make the failure quieter.
+    Set-ParkedMachine
+    $script:Machine.RestartFails = $true
+    $script:Machine.WindingDownReads = [int]::MaxValue
+    $result = Invoke-StageUnderTest -Name 'restore'
+    Check 'the stage fails' $result.Failed
+    Check 'it asks for attention' ($result.Error -match 'needs attention before the next live run') $result.Error
+    Check 'it started nothing that would have been discarded' ((Get-Count 'start-desktop-task') -eq 0)
+    Check 'it says what it was waiting for' (Test-Said 'a start now would be discarded')
+    Check 'the debt is not cleared' ($null -ne $script:Machine.ParkState)
 }
 
 Test-Scenario 'restore: a daemon answering from somewhere else is not this desktop back' {
