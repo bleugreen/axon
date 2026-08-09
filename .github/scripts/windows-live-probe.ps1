@@ -428,6 +428,8 @@ function Invoke-ProbeStage {
         throw 'this desktop was never parked; refusing to start a daemon on a machine whose own may still hold the pipe'
     }
     $expectedVersion = Get-ExpectedVersion
+    $stageError = $null
+    $sweepError = $null
 
     try {
         # The probe's own registration, at its own name. `daemon install` is deliberately not used:
@@ -525,11 +527,27 @@ function Invoke-ProbeStage {
         }
         Write-Note "isError:false snapshot=$($verified.response.result.structuredContent.id) root=$($verified.window.role) app=$($verified.app)"
     }
+    catch {
+        # Held rather than propagated, because a throw from the `finally` below would supersede it.
+        # The sweep failing is a fact about this lane's leftovers; whatever brought the stage here is
+        # the fact about the build, and losing it to a cleanup error is how a failure on a machine
+        # nobody can attach to becomes expensive to reconstruct.
+        $stageError = $_
+    }
     finally {
         # The probe's own registration and daemon go now rather than in the restore stage, so that a
         # job which never reaches the restore still leaves nothing of this lane's registered. The
         # restore repeats both, because a stage that dies here reaches neither.
-        Remove-ProbeInstallation
+        try { Remove-ProbeInstallation }
+        catch {
+            $sweepError = $_.Exception.Message
+            Write-Note "warning: this lane could not remove all of its own daemons: $sweepError"
+        }
+    }
+
+    if ($null -ne $stageError) { throw $stageError }
+    if ($null -ne $sweepError) {
+        throw "the probe succeeded, but this lane left one of its own daemons running and could not stop it: $sweepError; it will hold its image against the next checkout"
     }
 }
 
@@ -572,6 +590,14 @@ function Invoke-RestoreStage {
         Write-Note 'this desktop had no Axon daemon when the job arrived; leaving it stopped'
         Clear-ParkState
         return
+    }
+
+    # A daemon with no registration behind it was started by hand, and Task Scheduler has nothing to
+    # start. The record is cleared even so: repeating this failure on every future run would tell
+    # nobody anything the first report did not, and would wedge the lane on a machine it cannot fix.
+    if ([string]::IsNullOrWhiteSpace($state.registrationPath)) {
+        Clear-ParkState
+        throw "this desktop had a daemon when the job arrived but no $DesktopTaskName registration to start it from; it was started by hand and this lane cannot put it back"
     }
 
     # `daemon restart` restarts the registration that is on disk without rewriting it

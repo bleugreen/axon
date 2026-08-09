@@ -65,7 +65,9 @@ $MachineCommands = @(
     'Get-ScheduledTask', 'Register-ScheduledTask', 'Unregister-ScheduledTask', 'Start-ScheduledTask',
     'Stop-Process', 'Get-Process', 'Get-CimInstance', 'Start-Sleep', 'Copy-Item', 'Remove-Item',
     'New-Item', 'Set-Content', 'Get-Content', 'Push-Location', 'Pop-Location', 'Write-Host',
-    'Write-Warning', 'Write-Output'
+    'Write-Warning', 'Write-Output',
+    # The external equivalents, which reach the same objects without going through a cmdlet.
+    'schtasks', 'taskkill', 'sc', 'reg', 'wmic', 'cargo'
 )
 
 $declaredSeams = @()
@@ -114,6 +116,12 @@ foreach ($function in $functions) {
         if ($MachineCommands -contains $name) {
             throw "$($function.Name) calls $name directly; move it behind a seam in the '#region seams' block or this harness cannot keep it off a real desktop"
         }
+        # `& 'C:\...\axon-win.exe'` names its executable literally rather than through a variable, so
+        # the guard above sees a command name and lets it through. Anything that looks like a path to
+        # a program belongs in a seam for the same reason everything else here does.
+        if ($name -match '[\\/]' -or $name -match '\.exe$') {
+            throw "$($function.Name) runs $name directly; only a seam may run an executable, or this harness would run it for real"
+        }
     }
 }
 
@@ -148,6 +156,7 @@ for ($index = $jobStarts[0] + 1; $index -lt $workflowLines.Count; $index++) {
 $jobLines = $workflowLines[$jobStarts[0]..($jobEnd - 1)]
 
 $runBlocks = 0
+$sweptRegistration = $false
 for ($index = 0; $index -lt $jobLines.Count; $index++) {
     if ($jobLines[$index] -notmatch '^(\s*)run: \|\s*$') { continue }
     $indent = $Matches[1].Length + 2
@@ -158,14 +167,19 @@ for ($index = 0; $index -lt $jobLines.Count; $index++) {
         $body += if ($line.Length -ge $indent) { $line.Substring($indent) } else { '' }
     }
     $runBlocks++
+    $text = $body -join "`n"
+    if ($text -match 'Axon Windows Daemon' -and $text -match 'Get-LiveProbeDaemons') { $sweptRegistration = $true }
     $blockErrors = $null
-    [System.Management.Automation.Language.Parser]::ParseInput(($body -join "`n"), [ref] $null, [ref] $blockErrors) | Out-Null
+    [System.Management.Automation.Language.Parser]::ParseInput($text, [ref] $null, [ref] $blockErrors) | Out-Null
     if ($blockErrors) {
         throw "a run: block in the windows job does not parse: line $($blockErrors[0].Extent.StartLineNumber): $($blockErrors[0].Message)"
     }
 }
-if ($runBlocks -lt 3) {
-    throw "expected at least three run: blocks in the windows job, found $runBlocks; the extractor has drifted from the workflow and is checking nothing"
+# Anchored to the step this exists for rather than to a count, which would drift every time a step
+# moved between a block scalar and a one-liner. A pass that checked nothing would otherwise look
+# exactly like a pass.
+if (-not $sweptRegistration) {
+    throw "the windows job's pre-checkout sweep was not among the $runBlocks run: block(s) found; the extractor has drifted from the workflow and is checking nothing"
 }
 
 # Every bound in the probe script, shrunk. A scenario that has to sit through the real one is a
@@ -198,6 +212,9 @@ function Reset-Machine {
         Health = $null
         VersionOutput = $ExpectedVersion
         ShutdownFails = $false
+        # A daemon that acknowledges `shutdown` and then does not exit: the wedged case the sweep
+        # exists for, and the only way a probe stage can succeed and still leave a daemon behind.
+        ShutdownLeavesProcess = $false
         RestartFails = $false
         BuildFails = $false
         ProbeTaskStartsNothing = $false
@@ -346,6 +363,11 @@ function Invoke-Axon {
         'version' { return [pscustomobject]@{ ExitCode = 0; Output = $script:Machine.VersionOutput } }
         'shutdown' {
             if ($script:Machine.ShutdownFails) { return [pscustomobject]@{ ExitCode = 1; Output = 'a daemon is still answering' } }
+            if ($script:Machine.ShutdownLeavesProcess) {
+                $script:Machine.Health = New-FakeHealth -ProcessId 0
+                $script:Machine.Health.daemon = @{ running = $false; ready = $false; endpoint = '\\.\pipe\axon-v1'; processId = $null }
+                return [pscustomobject]@{ ExitCode = 0; Output = 'stopped' }
+            }
             Stop-FakeDaemon
             return [pscustomobject]@{ ExitCode = 0; Output = 'stopped' }
         }
@@ -656,6 +678,30 @@ Test-Scenario 'probe: another daemon answering the pipe fails the stage' {
     Check 'it still removed its own registration' ($script:Machine.ProbeTaskRegistered -eq $false)
 }
 
+Test-Scenario 'probe: a sweep it cannot finish does not replace the reason it failed' {
+    # A throw from `finally` supersedes the exception in flight. The authorship failure is the fact
+    # about the build; the sweep failure is a fact about this lane's own leftovers, and losing the
+    # first to the second is how a failure on a machine nobody can attach to becomes expensive to
+    # reconstruct.
+    Set-ParkedMachine
+    $script:Machine.ServingProcessId = 9999
+    $script:Machine.StopProcessFails = $true
+    $result = Invoke-StageUnderTest -Name 'probe'
+    Check 'the stage fails' $result.Failed
+    Check 'it reports the authorship failure' ($result.Error -match 'not the daemon under test') $result.Error
+    Check 'and it still says the sweep failed' (Test-Said 'could not remove all of its own daemons')
+}
+
+Test-Scenario 'probe: a clean probe that leaves a daemon behind is not a pass' {
+    Set-ParkedMachine
+    $script:Machine.ShutdownLeavesProcess = $true
+    $script:Machine.StopProcessFails = $true
+    $result = Invoke-StageUnderTest -Name 'probe'
+    Check 'the stage fails' $result.Failed
+    Check 'it says the probe itself succeeded' ($result.Error -match 'the probe succeeded, but this lane left') $result.Error
+    Check 'it names the cost' ($result.Error -match 'against the next checkout') $result.Error
+}
+
 Test-Scenario 'probe: a task that starts nothing fails by name' {
     Set-ParkedMachine
     $script:Machine.ProbeTaskStartsNothing = $true
@@ -859,6 +905,22 @@ Test-Scenario 'restore: a registration that moved is a damaged machine even with
     $result = Invoke-StageUnderTest -Name 'restore'
     Check 'the stage fails' $result.Failed
     Check 'it names both paths' ($result.Error -match 'now points at') $result.Error
+}
+
+Test-Scenario 'restore: a hand-started daemon with no registration is named, not retried forever' {
+    Set-ParkedMachine
+    $script:Machine.ParkState = @{
+        recordedAt = (Get-Date).ToString('o')
+        desktopTaskName = 'Axon Windows Daemon'
+        registrationPath = $null
+        daemonWasRunning = $true
+        daemonProcessId = $DesktopPid
+    } | ConvertTo-Json -Depth 5 | ConvertFrom-Json
+    $result = Invoke-StageUnderTest -Name 'restore'
+    Check 'the stage fails' $result.Failed
+    Check 'it says the daemon was started by hand' ($result.Error -match 'started by hand and this lane cannot put it back') $result.Error
+    Check 'it does not wedge every future run' ($null -eq $script:Machine.ParkState)
+    Check 'it started nothing' (-not (Test-Did 'start-desktop-task'))
 }
 
 Test-Scenario 'restore: a desktop that had no daemon is left stopped' {
