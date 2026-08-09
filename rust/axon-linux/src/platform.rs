@@ -892,7 +892,11 @@ impl Actor {
                 editable,
                 children,
                 child_count,
-                truncation_reason: incompleteness(*remaining == 0, depth_limit_reached, dropped > 0),
+                truncation_reason: incompleteness(
+                    *remaining == 0,
+                    depth_limit_reached,
+                    dropped > 0,
+                ),
             })
         })
     }
