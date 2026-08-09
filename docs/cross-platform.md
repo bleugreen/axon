@@ -389,17 +389,21 @@ than equating “Linux” with one uniform tree.
 - The null reference is `/org/a11y/atspi/null` and means "no object". It
   implements no interfaces, so walking it as an ordinary child fails the whole
   capture rather than yielding an empty branch, and it is dropped from every
-  provider's answer. What is concluded from it is narrower than the drop: only a
-  node that claimed children and published none of them is reported as
-  withholding a subtree. `Null` is a general sentinel, and a provider with a
-  hole in its child range — a cell not yet instantiated, a child destroyed
-  mid-enumeration — emits one while withholding nothing, so a hole is dropped
-  silently rather than described as something it is not.
+  provider's answer, unconditionally. Reporting it and waiting on it are then
+  separate decisions. Every dropped reference is reported, as the observation it
+  is rather than as a diagnosis of why it was there: a window that published a
+  menu bar and withheld everything else must not read as a window that contains
+  a menu bar. Waiting is the stricter condition, and only an answer that dropped
+  something and published nothing earns it — `Null` is a general sentinel, and a
+  provider with an ordinary hole in its child range, a cell not yet instantiated
+  or a child destroyed mid-enumeration, will not fill that hole in however long
+  anyone waits.
 - An incomplete subtree says which kind of incomplete it is, in
   `truncationReason`: the walk hit the node limit, the walk stopped at the depth
-  limit and never asked, or the provider claimed children and published none. A
-  node the walk never asked about reports no child count at all rather than a
-  count of zero, because a node nobody asked is not a node with no children.
+  limit and never asked, or the provider returned a null reference in place of a
+  child. A node the walk never asked about reports no child count at all rather
+  than a count of zero, because a node nobody asked is not a node with no
+  children.
 - Under X11, XTest is the practical synthetic-input mechanism and global
   observation is feasible. Reaching either requires an X11 client layer in the
   backend, separate from the AT-SPI connection that carries capture and the
