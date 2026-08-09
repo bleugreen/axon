@@ -708,23 +708,49 @@ jobs:
       - name: Check out Axon
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
-      - name: Restart the interactive daemon and inspect a real window
+      # Each stage is one call across the forced-command relay into the desktop user's session, and
+      # they are separate steps for the same reason the Linux and macOS jobs are: a job that dies
+      # after the park still owes this desktop its daemon, and a `finally` block inside a single
+      # remote call cannot pay that debt, because a cancelled job kills the `ssh` client and the
+      # remote shell with it. What each stage does is documented in the probe script itself.
+
+      # Built, copied outside the workspace, and proved runnable before anything on this desktop is
+      # touched. The first execution of a never-seen binary is where Defender's block-at-first-sight
+      # is paid, and paying it here is what makes a quarantine cost nothing: this machine still has
+      # its own daemon at that point.
+      - name: Build the daemon under test
+        shell: pwsh
+        run: .github\scripts\invoke-windows-live-stage.ps1 -Stage build
+
+      # A live runner is also somebody's desktop, so a daemon already serving the pipe is the normal
+      # case rather than a reason to refuse. It is stopped once for the whole job, because the probe
+      # starts its own daemon and can only be evidence about this build if that daemon is the one
+      # answering. This stage reads the desktop's registration and never writes it: the only thing
+      # borrowed is the pipe, and the restore below pays it back.
+      - name: Park the desktop's Axon daemon
         shell: pwsh
         run: |
-          $ErrorActionPreference = 'Stop'
-          $ssh = 'C:\Program Files\Git\usr\bin\ssh.exe'
-          $arguments = @(
-            '-F', 'C:\actions-runner-axon\.ssh\empty_config',
-            '-i', 'C:\actions-runner-axon\.ssh\axon-live-probe',
-            '-o', 'BatchMode=yes',
-            '-o', 'IdentitiesOnly=yes',
-            '-o', 'ConnectTimeout=5',
-            '-o', 'StrictHostKeyChecking=yes',
-            '-o', 'UserKnownHostsFile=C:\actions-runner-axon\.ssh\known_hosts',
-            'mitch@localhost',
-            'probe'
-          )
-          & $ssh @arguments
-          if ($LASTEXITCODE -ne 0) {
-            throw "interactive probe failed with exit code $LASTEXITCODE"
+          # Recorded before the relay is called rather than after it returns. From the moment this
+          # stage starts, the job may have stopped a daemon it owes this machine, and a park that
+          # dies halfway must still leave a restore behind it.
+          'AXON_WINDOWS_PARKED=true' | Out-File -FilePath $env:GITHUB_ENV -Append -Encoding utf8
+          .github\scripts\invoke-windows-live-stage.ps1 -Stage park
+
+      - name: Serve the interactive desktop and inspect a real window
+        shell: pwsh
+        run: .github\scripts\invoke-windows-live-stage.ps1 -Stage probe
+
+      # The counterpart to the parking step, and the reason the probe above may leave the machine in
+      # whatever state it failed in. `always()` because a failed probe is exactly when this desktop
+      # most needs its own daemon back.
+      - name: Restore the desktop's Axon daemon
+        if: always()
+        shell: pwsh
+        run: |
+          # Set only by the parking step, and the reason this step may touch this desktop at all:
+          # without it the job borrowed nothing, and whatever is serving here is this machine's own.
+          if (-not $env:AXON_WINDOWS_PARKED) {
+            Write-Output 'this desktop was never parked; leaving it alone'
+            exit 0
           }
+          .github\scripts\invoke-windows-live-stage.ps1 -Stage restore
