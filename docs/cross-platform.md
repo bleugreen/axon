@@ -636,20 +636,26 @@ failure reports a real integration regression without blocking a pull request:
   a `finally` block.
 
 Every live runner is also somebody's desktop, which is the source of the one
-failure mode that would quietly hollow these lanes out. Axon's endpoint is a
+failure mode that would quietly hollow these lanes out. The endpoint is a
 rendezvous, not a proof of authorship: only `serve` binds it and every other
 subcommand is a client, so a probe that starts its own daemon and then talks to
 the endpoint is answered by whichever daemon holds it — routinely the installed
-release the desktop user already runs. The freshly built `serve` loses the bind,
-and because a probe backgrounds it, the shell never sees that it exited. Each
-platform closes this the same way, by making the probe's own daemon the only
-candidate and then proving it: the desktop's registration is parked once for the
-whole job and restored unconditionally at the end, the endpoint is confirmed
-free before any probe starts, and each probe asserts that the process id in the
-health document is the process id it spawned
-(`scripts/assert-daemon-under-test`). Without that assertion a lane's green
-means "some daemon on this machine works", which is worse than having no lane,
-because the lane is trusted.
+release the desktop user already runs. The freshly built daemon loses the bind,
+and when a probe backgrounds it the shell never sees that it exited, so every
+assertion afterwards is true of a binary nobody changed.
+
+Each lane closes this, by different means. macOS shuts the installed daemon
+down before launching the build under test, which boots its LaunchAgent out so
+`KeepAlive` cannot bring it back mid-step, and pins the reported version to the
+checked-out `VERSION`. Linux parks the desktop's systemd registration once for
+the whole job rather than once per probe, confirms the endpoint is free before
+any probe starts, and has each probe assert that the process id in the health
+document is the process id it spawned (`scripts/assert-daemon-under-test`); a
+final step restores the parked registration — contents, enablement, and running
+state — whatever the probes did to the machine. Windows snapshots and replaces
+the scheduled interactive-session daemon for the duration of its probe. A lane
+without this reports that some daemon on the machine works, which is worse than
+having no lane, because the lane is trusted.
 
 The repository's Actions policy requires approval for every outside
 contributor's workflow run before pull-request code can reach the self-hosted
