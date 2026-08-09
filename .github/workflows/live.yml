@@ -124,6 +124,67 @@ jobs:
       - name: Check out Axon
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
+      # Built once and named as its own step rather than as a side effect of the first probe,
+      # because every step below runs this binary and each one is a claim about it.
+      - name: Build the daemon under test
+        working-directory: rust
+        run: cargo build --quiet --locked -p axon-linux
+
+      # A live runner is also somebody's desktop, so an Axon registration already being present --
+      # installed, enabled, and serving the socket -- is the normal case rather than a reason to
+      # refuse. It is parked once for the whole job rather than once per step, because every probe
+      # below starts its own daemon and can only be evidence about this build if that daemon is
+      # the one answering. The last step puts the registration back exactly as it was found.
+      - name: Park the installed Axon registration
+        working-directory: rust
+        run: |
+          set -euo pipefail
+          unit="$HOME/.config/systemd/user/axon.service"
+          parked=""
+          was_enabled=false
+          was_active=false
+          if [ -e "$unit" ]; then
+            if systemctl --user is-enabled axon.service >/dev/null 2>&1; then was_enabled=true; fi
+            if systemctl --user is-active axon.service >/dev/null 2>&1; then was_active=true; fi
+            parked="$(mktemp)"
+            cp -p "$unit" "$parked"
+            systemctl --user stop axon.service >/dev/null 2>&1 || true
+            systemctl --user disable axon.service >/dev/null 2>&1 || true
+            rm -f "$unit"
+            systemctl --user daemon-reload >/dev/null 2>&1 || true
+            echo "parked the existing registration (enabled=$was_enabled active=$was_active)"
+          else
+            echo 'no existing registration to park'
+          fi
+          # Handed to the restore step before the socket is checked, so a machine this step
+          # refuses to run on still gets its registration back.
+          {
+            echo "AXON_UNIT=$unit"
+            echo "AXON_PARKED=$parked"
+            echo "AXON_WAS_ENABLED=$was_enabled"
+            echo "AXON_WAS_ACTIVE=$was_active"
+          } >> "$GITHUB_ENV"
+
+          # Removing the registration is not the same as freeing the socket, and stopping the
+          # service is asynchronous. Anything still answering here would answer the probes too, so
+          # this names it rather than killing a process the job has no way to put back.
+          daemon=target/debug/axon-linux
+          status=""
+          free=false
+          for _ in {1..40}; do
+            status="$("$daemon" status --json)"
+            if printf '%s' "$status" | jq -e '.daemon.running == false' >/dev/null; then
+              free=true
+              break
+            fi
+            sleep 0.25
+          done
+          if [[ "$free" != true ]]; then
+            echo "::error::$(printf '%s' "$status" | jq -r '.daemon.endpoint') is still served by pid $(printf '%s' "$status" | jq -r '.daemon.processId // "unknown"') after the registration was parked; nothing below could be evidence about this build while it holds the socket"
+            exit 1
+          fi
+          echo 'the Axon socket is free'
+
       - name: Capture, resolve, act, and verify
         working-directory: rust
         run: |
@@ -134,12 +195,7 @@ jobs:
             echo '::error::GNOME Calculator is already running; refusing to alter an existing desktop session.'
             exit 1
           fi
-          cleanup() {
-            pkill -u "$(id -u)" -f '[/]usr/bin/gnome-calculator' >/dev/null 2>&1 || true
-          }
-          trap cleanup EXIT
 
-          cargo build --quiet --locked -p axon-linux
           daemon=target/debug/axon-linux
           "$daemon" serve >/tmp/axon-linux-daemon.log 2>&1 &
           daemon_pid=$!
@@ -155,6 +211,10 @@ jobs:
             pkill -u "$(id -u)" -f '[/]usr/bin/gnome-calculator' >/dev/null 2>&1 || true
           }
           trap cleanup EXIT
+
+          # Everything below is a client of the socket, so this is what makes it evidence about
+          # the daemon this step started rather than about whichever one is listening.
+          ../scripts/assert-daemon-under-test "$daemon" "$daemon_pid" /tmp/axon-linux-daemon.log
 
           gnome-calculator --equation 0 >/dev/null 2>&1 &
           for _ in {1..40}; do
@@ -210,20 +270,10 @@ jobs:
           trap cleanup EXIT
 
           # The daemon binds its socket after AT-SPI comes up, so the first request has to wait for
-          # it. Without this the connect fails with ENOENT and the refusal below is never exercised.
-          ready=false
-          for _ in {1..80}; do
-            if "$daemon" status --json 2>/dev/null | jq -e '.daemon.running and .daemon.ready' >/dev/null 2>&1; then
-              ready=true
-              break
-            fi
-            sleep 0.25
-          done
-          if [[ "$ready" != true ]]; then
-            echo '::error::the Wayland-refusal daemon never became ready'
-            cat /tmp/axon-linux-wayland.log
-            exit 1
-          fi
+          # it; without that wait the connect fails with ENOENT and the refusal below is never
+          # exercised. Waiting on this daemon's own pid is also what ties the refusal to this build
+          # rather than to whatever else might be holding the socket.
+          ../scripts/assert-daemon-under-test "$daemon" "$daemon_pid" /tmp/axon-linux-wayland.log
 
           for policy in backgroundOnly foregroundPermitted; do
             refused="$(jq -cn --arg policy "$policy" '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"keyboard","arguments":{"text":"x","deliveryPolicy":$policy}}}' | "$daemon" mcp)"
