@@ -21,6 +21,15 @@ on the same machine as the live lane and shares no concurrency group with it, so
 reaches a real `launchctl`, `pkill`, or `open` would be doing so on somebody's desktop, possibly
 mid-live-run. If a step starts calling something new, stub it here in the same change.
 
+And a warning for whoever extends this. The only way to know a scenario asserts anything is to break
+the step and watch it fail, which means editing the workflow and re-running -- but a mutation that
+silently fails to apply reports exactly what a vacuous assertion reports, so the mutation has to be
+verified before its verdict means anything. That is not hypothetical: the ordering assertions below
+were nearly deleted as useless because a mutation meant to move a sweep after the command it
+protects had in fact moved it to just before that command, leaving the order correct and the harness
+rightly green. Print the positions, assert the edit landed, and only then read the result. It is the
+same failure this file exists to catch, one level up.
+
 Usage: scripts/test-macos-live-recovery [path/to/live.yml]
 """
 from __future__ import annotations
