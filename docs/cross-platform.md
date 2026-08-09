@@ -59,7 +59,7 @@ These are the only sources that promote or sustain a **Supported** cell.
 | --- | --- | --- | --- |
 | macOS live loop | `.github/workflows/live.yml` `macos` job | capture → resolve → `invoke` `AXPress` → verified Calculator display; complete health-v1 document; Accessibility grant — each asserted against the app bundle the job launched, by process id | every push to `main` |
 | Linux live loop | `.github/workflows/live.yml` `linux` job | AT-SPI capture/resolve/invoke with verified readback on GNOME Calculator under GNOME/Mutter Wayland; honest refusal of global input at both policies; systemd-user lifecycle and health-v1 | every push to `main` |
-| Windows live loop | `.github/workflows/live.yml` `windows` job | the interactive-session daemon serves `look` with a real window root through the DACL-restricted pipe | every push to `main` |
+| Windows live loop | `.github/workflows/live.yml` `windows` job | the interactive-session daemon serves `look` with a real window root through the DACL-restricted pipe, and the complete health-v1 document — each asserted against the task the job registered, by process id, with the desktop's own registration proved unchanged across the run | every push to `main` |
 | Hermetic X11 foreground test | `.github/workflows/test.yml` Linux job; `rust/axon-linux/tests/x11_foreground.rs` | the X11 activate/prove/dispatch/restore conversation against a real X server with a miniature EWMH window manager | every pull request |
 | Windows session-1 probes | `axon-win probe value`, `events`, `timeout`, `pixel-click`, `foreground`; findings recorded in this document | value set and readback, event delivery, provider timeouts, the pixel-click allowlist entry, the foreground hand-back finding | manual; re-run and re-date when the area changes |
 | Linux Chromium activation probe | recorded in [Linux backend](#linux-backend) | that Chromium-family trees are gated by `org.a11y.Status.IsEnabled` and by an attributes or relations call, and not by AT-SPI listener registration; the daemon's before-and-after capture of Chrome | manual (2026-08-08); re-run and re-date when the area changes |
@@ -308,8 +308,10 @@ events with a close conceptual fit to AX.
   invoking executable, and starts it; this is the canonical installation path
   because Task Scheduler launches `serve` in the logged-in desktop session even
   when the command is issued over an SSH session-0 shell. `axon-win daemon restart`
-  sends the authenticated `shutdown` RPC, updates the task to the current
-  executable, and relaunches it. The daemon acknowledges shutdown with its process
+  sends the authenticated `shutdown` RPC and starts the registered task again
+  without rewriting it, so a restart issued from a build directory cannot repoint
+  a working installation at a path that is about to disappear; `daemon install` is
+  the only verb that writes the registration. The daemon acknowledges shutdown with its process
   ID before closing the pipe. Lifecycle commands wait for that process to exit
   after its UIA thread joins and the COM apartment is torn down, avoiding a Task
   Scheduler relaunch race. Busy pipe instances are retried rather than mistaken
@@ -699,6 +701,15 @@ those step bodies from the workflow file itself and drives them against stubbed
 message each scenario produces. It runs on the macOS runner rather than a hosted
 one so that the shell interpreting it is the same `bash` 3.2 the live lane gets.
 
+The `Test` workflow's Windows job does the same for the Windows lane, whose
+stages live in `.github/scripts/windows-live-probe.ps1` rather than in the
+workflow file. `scripts/test-windows-live-recovery.ps1` dot-sources those stages
+and replaces every function that touches the machine with one that drives a fake
+it can inspect afterwards, so a scenario can assert which branch ran, what it
+said, and what order it did things in. The probe script keeps those functions
+together in a marked region and the harness fails when it finds one it does not
+stub, because a seam nobody stubbed is a scenario reaching a real desktop.
+
 The separate `Live desktop verification` workflow is a reporting lane. It runs
 only after a push to `main` or an explicit manual dispatch, never for a pull
 request. Its self-hosted jobs use dedicated `axon-live-*` labels and serialize
@@ -716,11 +727,18 @@ failure reports a real integration regression without blocking a pull request:
   `keyboard` refuses with `noDeliveryCandidate` at both policies because the
   session is Wayland;
 - Windows uses a localhost-only, forced-command SSH key to cross from the
-  runner's session-0 service into the desktop user's process context. The fixed
-  probe rebuilds `axon-win`, snapshots and temporarily replaces the scheduled
-  interactive-session daemon, sends `look` through `\\\\.\\pipe\\axon-v1`,
-  requires a real window root, and restores the prior task and running state in
-  a `finally` block.
+  runner's session-0 service into the desktop user's process context, because
+  Task Scheduler is what puts a daemon on the logged-in desktop and a
+  service-session process can never see one. It crosses that relay four times —
+  build, park, probe, restore — rather than once, so the restore is an
+  `if: always()` step of its own: a `finally` block inside a single remote call
+  cannot run when a cancelled job kills the `ssh` client and the remote shell
+  with it. The probe registers a scheduled task of its own name, requires the
+  daemon answering `\\\\.\\pipe\\axon-v1` to be the process that task started,
+  and reads a real window root off the interactive desktop from an application it
+  did not start — the daemon runs as a console process and enumerates its own
+  window, which would otherwise let a session with nothing running satisfy the
+  assertion.
 
 Every live runner is also somebody's desktop, which is the source of the one
 failure mode that would quietly hollow these lanes out. The endpoint is a
@@ -731,16 +749,22 @@ release the desktop user already runs. The freshly built daemon loses the bind,
 and when a probe backgrounds it the shell never sees that it exited, so every
 assertion afterwards is true of a binary nobody changed.
 
-The Linux and macOS lanes close this; Windows does not yet. Each stops the
-desktop's own daemon once for the whole job rather than once per probe, confirms
-nothing is answering on the endpoint before any probe starts, and asserts that
-the process id in the health document is the process id it launched
-(`scripts/assert-daemon-under-test`). What that pid names differs by platform.
+All three lanes close this. Each stops the desktop's own daemon once for the
+whole job rather than once per probe, confirms nothing is answering on the
+endpoint before any probe starts, and asserts that the process id in the health
+document is the process id it launched. What that pid names differs by platform.
 On Linux it is the `serve` process the probe backgrounded. On macOS the app
 bundle serves the endpoint from inside its own process — there is no `serve`
 child — so it is the pid of the app that `open -n` launched, found by the bundle
 executable's path under the workspace, which no installed copy shares, and
-required to be the only process running from it.
+required to be the only process running from it. On Windows nothing the job runs
+launches the daemon at all: Task Scheduler does, in the logged-in session, and it
+reports nothing about the process it started, so the pid is found by the probe
+executable's path — outside the workspace, and shared by no installed copy — and
+likewise required to be the only process running from it.
+`scripts/assert-daemon-under-test` carries the check for the two lanes that run
+under `bash`; the Windows stage carries its own, because the relay's environment
+is PowerShell in session 0 with no `jq`.
 
 Two properties of the stop matter as much as making one. It has to be performed
 by the build under test rather than by the runner's installed CLI, which is
@@ -781,11 +805,50 @@ arguments. Both the parking and restore steps sweep it by workspace path, which
 is what keeps the sweep from ever reaching an installed copy; the Windows job's
 `Remove leaked live-probe daemons` is the same measure for the same reason.
 
-Windows still narrows the window without closing it. It snapshots and replaces
-the scheduled interactive-session daemon for the duration of its probe, but
-nothing ties the answer on the pipe to the binary the job built. A lane without
-an authorship check reports that some daemon on the machine works, which is
-worse than having no lane, because the lane is trusted.
+Windows carries one rule the other two do not need, because its registration is
+a machine-wide object that a security product can act on by name. The daemon
+under test runs from a scheduled task of the probe's own, and the machine's
+`Axon Windows Daemon` task is read and started but never written — not
+unregistered, not repointed, not restored, because nothing touches it.
+
+The earlier lane did write it. It unregistered the desktop's task, registered its
+own under the same name at a binary freshly built into `C:\ProgramData\Axon\live`,
+and put the original back in a `finally`. On 2026-08-08 Defender classified that
+binary as execution and persistence malware and quarantined it between the
+install and the restart. A behavioural detection of that kind removes what refers
+to the file as well as the file: an earlier detection on the same runner took
+`C:\Windows\System32\Tasks\Axon Windows Daemon` and its TaskCache registry keys
+with it. Every fresh CI build is a never-seen binary, so a registration that
+names one is the ordinary case rather than the unlucky one, and a desktop whose
+start-at-login registration names it can lose that registration to a scan it
+never ran.
+
+Windows also records its debt where the debt can outlive the job. `$GITHUB_ENV`
+dies with the runner, so on macOS and Linux a job whose runner service is killed
+outright leaves a desktop stopped with nothing that remembers why. The Windows
+park writes what it found to a file on the machine before it stops anything, and
+the next park carries an unpaid debt forward rather than overwriting it — without
+that, the following run would find no daemon, record that there had never been
+one to put back, and let its own restore clear the debt and report success,
+turning an outage that a logon would have ended into one that lasts the whole
+login session. The restore step is conditioned only on the checkout having
+succeeded, and not on this job having parked anything, for the same reason: a
+job-scoped sentinel is a second answer to a question the machine already answers,
+and it can only subtract — exactly in the case the record exists for, since a run
+that fails before its own park is precisely the run that would otherwise walk
+past a debt it could have paid.
+
+Three further consequences shape the lane. Each build is executed once — a
+`version` call — before anything on the desktop is borrowed, which is where
+block-at-first-sight's delay of up to a minute is paid and where a quarantine
+costs nothing, since the machine still has its own daemon at that point; it also
+keeps that delay out of the daemon's readiness measurement, which had been
+reporting 47 seconds for a daemon whose own startup log said 1.46. The probe
+re-asserts at the end that the desktop's registration still points where the park
+recorded it, so a lane that repointed the machine could not report success. And
+the restore needs no Axon binary at all when the build under test has vanished:
+Task Scheduler starts the registration at its own path, and the health round trip
+that decides the verdict is read through the executable that registration names.
 
 The repository's Actions policy requires approval for every outside
 contributor's workflow run before pull-request code can reach the self-hosted
@@ -811,7 +874,18 @@ The Windows service remains under `NETWORK SERVICE`. Re-enrollment also
 requires recreating its localhost SSH key and installing that public key for the
 desktop user with a forced command that runs only
 `C:\\ProgramData\\Axon\\live-probe.cmd`; disable forwarding and pseudo-terminal
-allocation with the authorized-key `restrict` option. Give the private key only
+allocation with the authorized-key `restrict` option. That file's source is
+`.github/scripts/windows-live-relay.cmd`. It lives on the machine rather than
+being read from the workspace, so changing what the key dispatches to takes
+machine access — but what each stage then runs is the probe script from the
+runner's own checkout, so the relay constrains *which stage* runs and not *what
+code* runs. The boundary for untrusted changes is the repository's Actions
+approval policy for outside contributors, not this file. It accepts only the four
+stage names, and it expands the requested one with delayed expansion, because a
+value substituted before `cmd` tokenizes the line lets an `&` in it run as a
+separate command before the allowlist is ever consulted. A runner whose copy
+predates the staged lane refuses every stage with exit code 126, which the
+workflow reports by name. Deploy it whenever either file changes. Give the private key only
 to `NETWORK SERVICE` and `SYSTEM`, pin the localhost host key in the runner's
 `known_hosts`, and verify an arbitrary SSH command is rejected before enabling
 the runner. This narrow relay is necessary because Windows services run in

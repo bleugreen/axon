@@ -673,12 +673,34 @@ jobs:
       cancel-in-progress: false
     timeout-minutes: 25
     steps:
+      # Before checkout, and the only stage that cannot go through the relay: a leaked daemon holds
+      # its image file open, which is what breaks the checkout that would deliver the probe script
+      # (AXN-38). It is a second implementation of the probe script's own sweep for that reason
+      # alone, and carries the same refusal, because sweeping by path on a machine whose own
+      # registration points into one of these directories would stop the desktop's daemon and call
+      # it a leftover.
       - name: Remove leaked live-probe daemons
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
           $workspaceRoot = 'C:\actions-runner-axon\_work\'
           $liveRoot = 'C:\ProgramData\Axon\live\'
+
+          # The runner service is NETWORK SERVICE and the task belongs to the desktop user, so it
+          # may not be readable from here. An unreadable registration is reported and tolerated:
+          # the probe script's own guard runs as that user and refuses there.
+          $desktopTask = Get-ScheduledTask -TaskName 'Axon Windows Daemon' -ErrorAction SilentlyContinue
+          if ($null -eq $desktopTask) {
+            Write-Output 'this runner has no Axon Windows Daemon registration visible from the runner service'
+          }
+          else {
+            $registered = (@($desktopTask.Actions)[0].Execute ?? '').Trim().Trim('"')
+            foreach ($root in @($workspaceRoot, $liveRoot)) {
+              if ($registered.StartsWith($root, [System.StringComparison]::OrdinalIgnoreCase)) {
+                throw "Axon Windows Daemon is registered at $registered, inside this lane's own $root; an earlier run repointed this desktop's start-at-login registration and it must be reinstalled from its permanent path before this lane can run again"
+              }
+            }
+          }
 
           function Get-LiveProbeDaemons {
             @(Get-CimInstance Win32_Process -Filter "Name = 'axon-win.exe'" |
@@ -706,25 +728,47 @@ jobs:
           }
 
       - name: Check out Axon
+        id: checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
-      - name: Restart the interactive daemon and inspect a real window
+      # Each stage is one call across the forced-command relay into the desktop user's session, and
+      # they are separate steps for the same reason the Linux and macOS jobs are: a job that dies
+      # after the park still owes this desktop its daemon, and a `finally` block inside a single
+      # remote call cannot pay that debt, because a cancelled job kills the `ssh` client and the
+      # remote shell with it. What each stage does is documented in the probe script itself.
+
+      # Built, copied outside the workspace, and proved runnable before anything on this desktop is
+      # touched. The first execution of a never-seen binary is where Defender's block-at-first-sight
+      # is paid, and paying it here is what makes a quarantine cost nothing: this machine still has
+      # its own daemon at that point.
+      - name: Build the daemon under test
         shell: pwsh
-        run: |
-          $ErrorActionPreference = 'Stop'
-          $ssh = 'C:\Program Files\Git\usr\bin\ssh.exe'
-          $arguments = @(
-            '-F', 'C:\actions-runner-axon\.ssh\empty_config',
-            '-i', 'C:\actions-runner-axon\.ssh\axon-live-probe',
-            '-o', 'BatchMode=yes',
-            '-o', 'IdentitiesOnly=yes',
-            '-o', 'ConnectTimeout=5',
-            '-o', 'StrictHostKeyChecking=yes',
-            '-o', 'UserKnownHostsFile=C:\actions-runner-axon\.ssh\known_hosts',
-            'mitch@localhost',
-            'probe'
-          )
-          & $ssh @arguments
-          if ($LASTEXITCODE -ne 0) {
-            throw "interactive probe failed with exit code $LASTEXITCODE"
-          }
+        run: .github\scripts\invoke-windows-live-stage.ps1 -Stage build
+
+      # A live runner is also somebody's desktop, so a daemon already serving the pipe is the normal
+      # case rather than a reason to refuse. It is stopped once for the whole job, because the probe
+      # starts its own daemon and can only be evidence about this build if that daemon is the one
+      # answering. This stage reads the desktop's registration and never writes it: the only thing
+      # borrowed is the pipe, and the restore below pays it back.
+      - name: Park the desktop's Axon daemon
+        shell: pwsh
+        run: .github\scripts\invoke-windows-live-stage.ps1 -Stage park
+
+      - name: Serve the interactive desktop and inspect a real window
+        shell: pwsh
+        run: .github\scripts\invoke-windows-live-stage.ps1 -Stage probe
+
+      # The counterpart to the parking step, and the reason the probe above may leave the machine in
+      # whatever state it failed in. `always()` because a failed probe is exactly when this desktop
+      # most needs its own daemon back.
+      #
+      # The condition asks only whether the probe script is on disk, deliberately. Whether this
+      # machine is owed a daemon is a fact about the machine, recorded there, and the restore stage
+      # reads it -- so a job-scoped sentinel here could only subtract from that answer. It would
+      # subtract in exactly the case the machine-side record exists for: a debt left by a run whose
+      # restore failed or whose runner died is paid by the next job that gets this far, and that job
+      # may well be one that never reached its own park because the build stage failed.
+      - name: Restore the desktop's Axon daemon
+        if: always() && steps.checkout.outcome == 'success'
+        shell: pwsh
+        run: .github\scripts\invoke-windows-live-stage.ps1 -Stage restore
