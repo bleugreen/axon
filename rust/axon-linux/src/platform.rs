@@ -1093,100 +1093,85 @@ mod tests {
         ObjectRefOwned::new(ObjectRef::Null)
     }
 
-    fn node(truncation_reason: Option<&str>, children: Vec<Node>) -> Node {
-        Node {
-            role: "frame".into(),
-            subrole: None,
-            name: None,
-            title: None,
-            label: None,
-            value: None,
-            description: None,
-            identifier: None,
-            actions: vec![],
-            frame: None,
-            editable: false,
-            children,
-            child_count: None,
-            truncation_reason: truncation_reason.map(Into::into),
-        }
-    }
-
     #[test]
-    fn the_null_reference_is_never_a_child_and_is_never_silently_dropped() {
-        let (children, withheld) = published(vec![
+    fn the_null_reference_is_never_a_child() {
+        // Walking it is what fails a Chromium capture outright: it implements no interfaces, so
+        // the role call that opens every node answers UnknownMethod.
+        let (children, _) = published(vec![
             real("/org/a11y/atspi/accessible/1"),
             null(),
             real("/org/a11y/atspi/accessible/2"),
         ]);
-        // Walking the null reference is what fails a Chromium capture outright: it implements no
-        // interfaces, so the role call that opens every node answers UnknownMethod.
         assert_eq!(children.len(), 2);
         assert!(children.iter().all(|c| !c.is_null()));
-        assert!(
-            withheld,
-            "a provider that answered with the null reference is withholding, not empty"
-        );
     }
 
     #[test]
-    fn a_provider_that_published_everything_reports_nothing_withheld() {
-        let (children, withheld) = published(vec![real("/org/a11y/atspi/accessible/1")]);
-        assert_eq!(children.len(), 1);
-        assert!(!withheld);
-        // A genuinely childless node is a different fact from a withheld subtree, and stays silent.
+    fn only_a_provider_that_published_none_of_its_claimed_children_is_withholding() {
+        // The shape Chromium presents: one claimed child, nothing published.
+        assert!(published(vec![null()]).1);
+        assert!(published(vec![null(), null()]).1);
+
+        // A hole in a child range is a hole. `Null` is AT-SPI's general "no object" sentinel, and
+        // a provider that published real children alongside one is withholding nothing — reading
+        // it as withholding would put a false statement in the caller's tree and, worse, send
+        // every capture of that application through an activation wait that cannot change it.
+        assert!(!published(vec![real("/org/a11y/atspi/accessible/1"), null()]).1);
+
+        // A genuinely childless node is a different fact again, and stays silent.
         assert_eq!(published(vec![]), (vec![], false));
     }
 
     #[test]
-    fn incompleteness_is_reported_and_the_node_limit_outranks_a_withheld_subtree() {
-        assert_eq!(incompleteness(false, false), None);
+    fn incompleteness_is_ordered_by_how_total_the_statement_is() {
+        assert_eq!(incompleteness(false, false, false), None);
         assert_eq!(
-            incompleteness(false, true).as_deref(),
+            incompleteness(false, false, true).as_deref(),
             Some(SUBTREE_UNPUBLISHED)
         );
+        // A node at the depth limit was never asked about its children, so it is neither empty nor
+        // able to report withholding — the failure this whole change exists to stop.
         assert_eq!(
-            incompleteness(true, false).as_deref(),
-            Some(NODE_LIMIT_REACHED)
+            incompleteness(false, true, false).as_deref(),
+            Some(DEPTH_LIMIT_REACHED)
         );
         assert_eq!(
-            incompleteness(true, true).as_deref(),
+            incompleteness(true, true, true).as_deref(),
             Some(NODE_LIMIT_REACHED),
-            "a walk that stopped counting cannot also speak for the provider"
+            "a walk that stopped counting cannot also speak for depth or for the provider"
         );
-    }
-
-    #[test]
-    fn a_withheld_subtree_anywhere_in_the_tree_asks_for_activation() {
-        let complete = node(None, vec![node(None, vec![])]);
-        assert!(!awaiting_provider(&complete));
-
-        // The shape Chromium presents: an application root, a window, and nothing published under
-        // it. The marker is nested rather than at the root, which is why the search is recursive.
-        let chromium = node(None, vec![node(Some(SUBTREE_UNPUBLISHED), vec![])]);
-        assert!(awaiting_provider(&chromium));
-
-        // A tree truncated by the node limit is complete as far as the provider is concerned, and
-        // must not send capture round again for an activation that would change nothing.
-        let truncated = node(None, vec![node(Some(NODE_LIMIT_REACHED), vec![])]);
-        assert!(!awaiting_provider(&truncated));
     }
 
     #[test]
     fn a_session_with_accessibility_off_says_so_instead_of_blaming_the_name() {
         // Chromium and its embedders read org.a11y.Status.IsEnabled once at startup, so on such a
-        // session they are absent rather than thin, and "no application matched" alone would send
-        // the caller looking for a typo.
-        assert!(matches!(
-            no_application_matched(Some(false)),
-            BackendError::Operation { ref message, .. } if message == ACCESSIBILITY_DISABLED
-        ));
-        for known in [Some(true), None] {
-            assert!(matches!(
-                no_application_matched(known),
-                BackendError::Operation { ref message, .. } if message == NO_APPLICATION_MATCHED
-            ));
+        // session they are absent rather than thin, and the bare refusals below would send the
+        // caller looking for a typo.
+        for (enabled, bare) in [
+            (Some(false), false),
+            (Some(true), true),
+            (None::<bool>, true),
+        ] {
+            let BackendError::Operation { message, .. } = no_application_matched(enabled) else {
+                panic!("a miss is an operation failure");
+            };
+            assert!(message.starts_with(NO_APPLICATION_MATCHED));
+            assert_eq!(message.contains(ACCESSIBILITY_DISABLED), !bare);
         }
+    }
+
+    #[test]
+    fn an_empty_bus_is_explained_only_when_the_session_explains_it() {
+        // An empty desktop is an ordinary answer; an empty desktop with accessibility off is a
+        // broken session, and enumerate is where someone looks before guessing at a name.
+        let explained = nothing_on_the_bus(Some(false)).expect("a disabled session is explained");
+        assert!(matches!(
+            explained,
+            BackendError::Operation { ref message, .. }
+                if message.starts_with(NOTHING_ON_THE_BUS) && message.contains(ACCESSIBILITY_DISABLED)
+        ));
+        assert!(nothing_on_the_bus(Some(true)).is_none());
+        assert!(nothing_on_the_bus(None).is_none());
     }
 
     const USABLE: SessionFacts = SessionFacts {
