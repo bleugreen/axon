@@ -131,11 +131,14 @@ should be discoverable here first.
 - Recording (`save` from live history, global user-input observation): macOS
   only. `serializeHistory` and `observeGlobalInput` are unimplemented on both
   Rust backends.
-- Chromium-family renderer accessibility: WebView2 activation is built into
-  the Windows backend and spike-verified; the WebKitGTK same-bus peer
-  traversal is proven only in `axon-spike-linux` and is not yet in the
-  shipping Linux backend, and no AT-SPI event listener registration exists
-  there to wake Chromium-family renderers.
+- WebKitGTK renderer accessibility on Linux: the same-bus peer traversal is
+  proven only in `axon-spike-linux` and is not in the shipping Linux backend,
+  so WebKitGTK page content is still out of reach. Chromium-family activation
+  is implemented on both backends — an MSAA touch before capture on Windows
+  (spike-verified) and an attributes touch at capture on Linux (probe-verified
+  2026-08-08) — and a Linux session whose `org.a11y.Status.IsEnabled` is false
+  hides those applications from the bus entirely, which capture now reports by
+  name rather than as a missing application.
 - macOS pixel, foreground, and screenshot paths: implemented and
   unit-verified, with no live probe (see the macOS note above).
 
