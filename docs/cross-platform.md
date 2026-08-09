@@ -635,6 +635,22 @@ failure reports a real integration regression without blocking a pull request:
   requires a real window root, and restores the prior task and running state in
   a `finally` block.
 
+Every live runner is also somebody's desktop, which is the source of the one
+failure mode that would quietly hollow these lanes out. Axon's endpoint is a
+rendezvous, not a proof of authorship: only `serve` binds it and every other
+subcommand is a client, so a probe that starts its own daemon and then talks to
+the endpoint is answered by whichever daemon holds it — routinely the installed
+release the desktop user already runs. The freshly built `serve` loses the bind,
+and because a probe backgrounds it, the shell never sees that it exited. Each
+platform closes this the same way, by making the probe's own daemon the only
+candidate and then proving it: the desktop's registration is parked once for the
+whole job and restored unconditionally at the end, the endpoint is confirmed
+free before any probe starts, and each probe asserts that the process id in the
+health document is the process id it spawned
+(`scripts/assert-daemon-under-test`). Without that assertion a lane's green
+means "some daemon on this machine works", which is worse than having no lane,
+because the lane is trusted.
+
 The repository's Actions policy requires approval for every outside
 contributor's workflow run before pull-request code can reach the self-hosted
 desktops. The live workflow still has no `pull_request` trigger because its
