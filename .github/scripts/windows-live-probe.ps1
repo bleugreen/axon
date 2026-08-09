@@ -76,7 +76,17 @@ $ProbeRoots = @($LiveDirectory, $BuildDirectory, 'C:\actions-runner-axon\_work')
 $ReadinessTimeoutSeconds = 90
 $PipeFreeTimeoutSeconds = 30
 $ProcessDiscoveryTimeoutSeconds = 60
+# How long one start of this desktop's own registration is given to produce a daemon that answers,
+# and how many such starts the restore will make before it gives up. Three of them, because the
+# machine underneath is somebody's desktop and can be busy for minutes at a time: on 2026-08-09 a
+# background Windows servicing operation made this one 10 to 100 times slower for three minutes, and
+# a restore with a single fallback start failed on a machine that answered a start in 40
+# milliseconds four minutes later.
 $RestoreTimeoutSeconds = 60
+$RestoreStartAttempts = 3
+# How long a start waits for an instance of the task that has not finished. A start issued in that
+# window is discarded rather than queued, so waiting is the only thing that makes the next one real.
+$TaskInstanceTimeoutSeconds = 30
 
 #region seams -- everything below this line that touches the machine
 
@@ -121,7 +131,25 @@ function Get-DesktopRegistrationPath {
     $execute.Trim().Trim('"')
 }
 
+function Get-DesktopTaskState {
+    <# Task Scheduler's own word for what this desktop's registration is doing, or $null when nothing
+    is registered.
+
+    `Running` is not a transient here. The registered action is `serve`, so the task runs for as long
+    as its daemon lives, and a desktop with a healthy daemon reads `Running` forever. What makes the
+    state worth reading at all is the opposite case: an instance that has exited but not finished
+    still reads `Running`, and a start issued against it is discarded. #>
+    $task = Get-ScheduledTask -TaskName $DesktopTaskName -ErrorAction SilentlyContinue
+    if ($null -eq $task) { return $null }
+    [string] $task.State
+}
+
 function Start-DesktopDaemonTask {
+    <# Asks Task Scheduler to run this desktop's registration. Not a promise that it did: the task
+    carries no multiple-instances policy (`schtasks /create` in rust/axon-win/src/main.rs), so Task
+    Scheduler applies its default of IgnoreNew and discards a start whose predecessor is still
+    running -- reporting success while discarding it. Whether a daemon is answering is the only
+    thing that answers that, which is what the callers below do. #>
     Start-ScheduledTask -TaskName $DesktopTaskName
 }
 
