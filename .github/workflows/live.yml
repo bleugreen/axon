@@ -673,7 +673,10 @@ jobs:
     concurrency:
       group: axon-live-windows
       cancel-in-progress: false
-    timeout-minutes: 25
+    # Room for the restore's retry budget. It can spend several minutes starting this desktop's
+    # registration on a machine under transient load, and a job cancelled mid-restore is a desktop
+    # left without its own daemon for the rest of the login session.
+    timeout-minutes: 30
     steps:
       # Before checkout, and the only stage that cannot go through the relay: a leaked daemon holds
       # its image file open, which is what breaks the checkout that would deliver the probe script

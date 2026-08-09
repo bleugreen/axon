@@ -642,7 +642,7 @@ function Start-DesktopDaemonWithRetries {
     desktop's daemon already being back. #>
     param([Parameter(Mandatory)][string[]] $Candidates)
 
-    Write-Note "starting $DesktopTaskName through Task Scheduler instead"
+    Write-Note "nothing is answering the pipe; recovering $DesktopTaskName through Task Scheduler instead"
     foreach ($attempt in 1..$RestoreStartAttempts) {
         $taskState = $null
         $timer = [System.Diagnostics.Stopwatch]::StartNew()
