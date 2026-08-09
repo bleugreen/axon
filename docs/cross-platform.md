@@ -57,7 +57,7 @@ These are the only sources that promote or sustain a **Supported** cell.
 
 | evidence | where | what it proves | cadence |
 | --- | --- | --- | --- |
-| macOS live loop | `.github/workflows/live.yml` `macos` job | capture → resolve → `invoke` `AXPress` → verified Calculator display; complete health-v1 document; Accessibility grant | every push to `main` |
+| macOS live loop | `.github/workflows/live.yml` `macos` job | capture → resolve → `invoke` `AXPress` → verified Calculator display; complete health-v1 document; Accessibility grant — each asserted against the app bundle the job launched, by process id | every push to `main` |
 | Linux live loop | `.github/workflows/live.yml` `linux` job | AT-SPI capture/resolve/invoke with verified readback on GNOME Calculator under GNOME/Mutter Wayland; honest refusal of global input at both policies; systemd-user lifecycle and health-v1 | every push to `main` |
 | Windows live loop | `.github/workflows/live.yml` `windows` job | the interactive-session daemon serves `look` with a real window root through the DACL-restricted pipe | every push to `main` |
 | Hermetic X11 foreground test | `.github/workflows/test.yml` Linux job; `rust/axon-linux/tests/x11_foreground.rs` | the X11 activate/prove/dispatch/restore conversation against a real X server with a miniature EWMH window manager | every pull request |
@@ -620,9 +620,11 @@ request. Its self-hosted jobs use dedicated `axon-live-*` labels and serialize
 per machine because the same desktops also serve as Cairn executors. A live-lane
 failure reports a real integration regression without blocking a pull request:
 
-- macOS builds and Developer-ID-signs the checked-out app, starts that app under
-  the stable Accessibility-approved identity, then captures Calculator, resolves
-  a button, invokes `AXPress`, and verifies the display changed;
+- macOS builds and Developer-ID-signs the checked-out app, stops the desktop's
+  own daemon so the endpoint is free, starts that app under the stable
+  Accessibility-approved identity, then captures Calculator, resolves a button,
+  invokes `AXPress`, and verifies the display changed — putting the desktop's
+  own daemon back afterwards whatever the probe did;
 - Linux connects to the logged-in GNOME session's AT-SPI bus and runs the
   hardened Calculator probe, which verifies the expected text transition on the
   same AT-SPI object that was captured before dispatch, then asserts that
@@ -644,25 +646,45 @@ release the desktop user already runs. The freshly built daemon loses the bind,
 and when a probe backgrounds it the shell never sees that it exited, so every
 assertion afterwards is true of a binary nobody changed.
 
-Only the Linux lane currently closes this. It parks the desktop's systemd
-registration once for the whole job rather than once per probe, confirms nothing
-is answering on the endpoint before any probe starts, and has each probe assert
-that the process id in the health document is the process id it spawned
-(`scripts/assert-daemon-under-test`). A final step restores the parked
-registration — contents, enablement, and running state — whatever the probes did
-to the machine, and requires the restored daemon to answer for itself rather
-than accepting `systemctl start`, which this unit's `Type=simple` makes a claim
-about `exec` rather than about readiness.
+The Linux and macOS lanes close this; Windows does not yet. Each stops the
+desktop's own daemon once for the whole job rather than once per probe, confirms
+nothing is answering on the endpoint before any probe starts, and asserts that
+the process id in the health document is the process id it launched
+(`scripts/assert-daemon-under-test`). What that pid names differs by platform.
+On Linux it is the `serve` process the probe backgrounded. On macOS the app
+bundle serves the endpoint from inside its own process — there is no `serve`
+child — so it is the pid of the app that `open -n` launched, found by the bundle
+executable's path under the workspace, which no installed copy shares, and
+required to be the only process running from it.
 
-macOS and Windows narrow the window without closing it. macOS shuts the
-installed daemon down before launching the build under test, which boots its
-LaunchAgent out so `KeepAlive` cannot bring it back mid-step; what remains open
-is the same-version case, since the only assertion tying the health document to
-the checkout is a version comparison that an installed daemon built from this
-repository satisfies just as well. Windows snapshots and replaces the scheduled
-interactive-session daemon for the duration of its probe. A lane without an
-authorship check reports that some daemon on the machine works, which is worse
-than having no lane, because the lane is trusted.
+Two properties of the stop matter as much as making one. It has to be performed
+by the build under test rather than by the runner's installed CLI, which is
+whichever release that desktop last installed and may predate the verb entirely;
+the macOS lane called `shutdown` on an installed binary that had no such
+subcommand, and `|| true` meant nothing ever reported it. And it must not be
+tolerated: `axon shutdown` and `systemctl stop` exit non-zero while anything is
+still answering, which is exactly what makes their success the endpoint-is-free
+guarantee the probes rest on.
+
+A stop also incurs a debt, and a final `if: always()` step pays it. `axon
+shutdown` is not a pause — it boots the LaunchAgent out precisely so `KeepAlive`
+cannot relaunch the daemon between it acknowledging the request and exiting, and
+the agent then stays unloaded for the rest of the login session while the plist
+sits on disk still reading as registered. Linux puts its systemd unit back:
+contents, enablement, and running state. macOS reloads the agent with `axon
+daemon restart`, which bootstraps the plist on disk without rewriting it;
+`daemon install` would repoint the desktop's registration at the job's `dist`
+directory and is never the restore. Neither lane trusts the restart's exit code,
+because whatever starts a daemon reports on starting it: `systemctl start` is a
+claim about `exec` under `Type=simple`, and `launchctl bootstrap` is a claim
+about loading a job. Both therefore require the restored daemon to answer a
+health round trip and to be the process systemd or launchd names.
+
+Windows still narrows the window without closing it. It snapshots and replaces
+the scheduled interactive-session daemon for the duration of its probe, but
+nothing ties the answer on the pipe to the binary the job built. A lane without
+an authorship check reports that some daemon on the machine works, which is
+worse than having no lane, because the lane is trusted.
 
 The repository's Actions policy requires approval for every outside
 contributor's workflow run before pull-request code can reach the self-hosted
