@@ -175,6 +175,10 @@ function Invoke-AxonMcp {
     $Request | & $ProbeExecutable mcp | ConvertFrom-Json -Depth 100
 }
 
+function Get-ExpectedVersion {
+    (Get-Content (Join-Path $RepositoryRoot 'VERSION')).Trim()
+}
+
 function Invoke-CargoBuild {
     Push-Location (Join-Path $RepositoryRoot 'rust')
     try {
@@ -342,7 +346,7 @@ function Invoke-BuildStage {
     # at which that costs nothing -- this desktop still has its own daemon and nothing has been
     # borrowed. It also keeps the readiness measurement in the probe stage honest, since the scan is
     # paid here rather than being counted as daemon startup.
-    $expectedVersion = (Get-Content (Join-Path $RepositoryRoot 'VERSION')).Trim()
+    $expectedVersion = Get-ExpectedVersion
     $timer = [System.Diagnostics.Stopwatch]::StartNew()
     $version = Invoke-Axon -Executable $ProbeExecutable -Arguments @('version')
     $timer.Stop()
@@ -362,7 +366,19 @@ function Invoke-ParkStage {
     $registrationPath = Get-DesktopRegistrationPath
     Assert-DesktopRegistrationIsNotAProbePath -RegistrationPath $registrationPath
     $status = Get-AxonStatus -Candidates @($ProbeExecutable, $registrationPath)
-    $wasRunning = $null -ne $status -and $status.daemon.running
+    $isServing = $null -ne $status -and $status.daemon.running
+
+    # A debt this machine is owed outlives the job that took it on, and the state file is the only
+    # part of this lane that survives a killed runner -- `if: always()` runs nothing when the runner
+    # service itself dies. Without this, the next job finds a desktop with no daemon, records that
+    # there was never one to put back, and clears the record: a temporary outage becomes a permanent
+    # one, reported by a green job. An unpaid debt is therefore carried forward, never overwritten.
+    $previous = Read-ParkState
+    $owesADaemon = $isServing
+    if (-not $isServing -and $null -ne $previous -and $previous.daemonWasRunning) {
+        Write-Note 'an earlier run parked this desktop and never restored it; carrying that debt forward'
+        $owesADaemon = $true
+    }
 
     # Written before the daemon is stopped, so a park that dies halfway still tells the restore what
     # it owes. A park that dies before this point has taken nothing.
@@ -370,12 +386,12 @@ function Invoke-ParkStage {
         recordedAt = (Get-Date).ToString('o')
         desktopTaskName = $DesktopTaskName
         registrationPath = $registrationPath
-        daemonWasRunning = $wasRunning
-        daemonProcessId = if ($wasRunning) { $status.daemon.processId } else { $null }
+        daemonWasRunning = $owesADaemon
+        daemonProcessId = if ($isServing) { $status.daemon.processId } else { $null }
     }
-    Write-Note "found this desktop as: registration=$(if ($registrationPath) { $registrationPath } else { 'none' }), daemon running=$wasRunning$(if ($wasRunning) { " (pid $($status.daemon.processId))" })"
+    Write-Note "found this desktop as: registration=$(if ($registrationPath) { $registrationPath } else { 'none' }), daemon running=$isServing$(if ($isServing) { " (pid $($status.daemon.processId))" })"
 
-    if (-not $wasRunning) {
+    if (-not $isServing) {
         Write-Note 'no daemon is answering on the Axon pipe'
         return
     }
@@ -411,7 +427,7 @@ function Invoke-ProbeStage {
     if ($null -eq $state) {
         throw 'this desktop was never parked; refusing to start a daemon on a machine whose own may still hold the pipe'
     }
-    $expectedVersion = (Get-Content (Join-Path $RepositoryRoot 'VERSION')).Trim()
+    $expectedVersion = Get-ExpectedVersion
 
     try {
         # The probe's own registration, at its own name. `daemon install` is deliberately not used:
