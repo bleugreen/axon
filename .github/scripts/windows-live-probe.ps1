@@ -70,30 +70,40 @@ $BuildDirectory = Join-Path $RepositoryRoot 'rust\target\debug'
 # in scope.
 $ProbeRoots = @($LiveDirectory, $BuildDirectory, 'C:\actions-runner-axon\_work')
 
+# Named rather than inline so scripts/test-windows-live-recovery.ps1 can shrink them; every one of
+# them bounds a wait on a machine, and a scenario that has to sit through the real bound would be a
+# scenario nobody adds.
+$ReadinessTimeoutSeconds = 90
+$PipeFreeTimeoutSeconds = 30
+$ProcessDiscoveryTimeoutSeconds = 60
+$RestoreTimeoutSeconds = 60
+
 #region seams -- everything below this line that touches the machine
+
+function Write-Note {
+    <# Every human-readable line this lane emits.
+
+    A function rather than `Write-Output` because these lines are a log, not a return value: a stage
+    helper that both reports and answers would otherwise hand its caller the report as part of the
+    answer. It is also the seam the recovery harness reads what each scenario said through. #>
+    param([Parameter(Mandatory)][string] $Message)
+
+    Write-Host $Message
+}
 
 function Wait-Tick {
     Start-Sleep -Milliseconds 250
 }
 
-function Get-ProbeDaemonProcess {
-    <# Live axon-win processes running from a directory this lane owns. #>
-    $roots = $ProbeRoots | ForEach-Object { if ($_.EndsWith('\')) { $_ } else { "$_\" } }
-    @(Get-CimInstance Win32_Process -Filter "Name = 'axon-win.exe'" |
-        Where-Object {
-            $path = $_.ExecutablePath
-            $null -ne $path -and ($roots | Where-Object {
-                $path.StartsWith($_, [System.StringComparison]::OrdinalIgnoreCase)
-            })
-        } |
-        Where-Object { $null -ne (Get-Process -Id $_.ProcessId -ErrorAction SilentlyContinue) })
+function Test-ProcessIsRunning {
+    param([Parameter(Mandatory)][int] $ProcessId)
+
+    $null -ne (Get-Process -Id $ProcessId -ErrorAction SilentlyContinue)
 }
 
-function Get-ProcessByExecutable {
-    param([Parameter(Mandatory)][string] $Executable)
-
-    @(Get-CimInstance Win32_Process -Filter "Name = 'axon-win.exe'" |
-        Where-Object { $_.ExecutablePath -and $_.ExecutablePath.Equals($Executable, [System.StringComparison]::OrdinalIgnoreCase) })
+function Get-AxonProcess {
+    <# Every axon-win process on this machine, this lane's and this desktop's alike. #>
+    @(Get-CimInstance Win32_Process -Filter "Name = 'axon-win.exe'")
 }
 
 function Stop-ProcessById {
@@ -158,6 +168,13 @@ function Invoke-Axon {
     }
 }
 
+function Invoke-AxonMcp {
+    <# One MCP request through the daemon under test, as a parsed response. #>
+    param([Parameter(Mandatory)][string] $Request)
+
+    $Request | & $ProbeExecutable mcp | ConvertFrom-Json -Depth 100
+}
+
 function Invoke-CargoBuild {
     Push-Location (Join-Path $RepositoryRoot 'rust')
     try {
@@ -195,6 +212,29 @@ function Clear-ParkState {
 
 #endregion
 
+function Get-ProbeDaemonProcess {
+    <# Live axon-win processes running from a directory this lane owns.
+
+    Scoped by path rather than by process name so the sweep below can never reach the release the
+    desktop user installed, which runs under the same name from a directory this lane never writes. #>
+    $roots = $ProbeRoots | ForEach-Object { if ($_.EndsWith('\')) { $_ } else { "$_\" } }
+    @(Get-AxonProcess |
+        Where-Object {
+            $path = $_.ExecutablePath
+            $null -ne $path -and ($roots | Where-Object {
+                $path.StartsWith($_, [System.StringComparison]::OrdinalIgnoreCase)
+            })
+        } |
+        Where-Object { Test-ProcessIsRunning -ProcessId $_.ProcessId })
+}
+
+function Get-ProcessByExecutable {
+    param([Parameter(Mandatory)][string] $Executable)
+
+    @(Get-AxonProcess |
+        Where-Object { $_.ExecutablePath -and $_.ExecutablePath.Equals($Executable, [System.StringComparison]::OrdinalIgnoreCase) })
+}
+
 function Get-AxonStatus {
     <# The first candidate that answers with a health document, or $null.
 
@@ -221,9 +261,9 @@ function Stop-ProbeDaemonProcess {
     still hold it against the restored desktop daemon. #>
     foreach ($attempt in 1..5) {
         foreach ($process in Get-ProbeDaemonProcess) {
-            Write-Output "stopping live-probe daemon pid=$($process.ProcessId) path=$($process.ExecutablePath)"
+            Write-Note "stopping live-probe daemon pid=$($process.ProcessId) path=$($process.ExecutablePath)"
             try { Stop-ProcessById -ProcessId $process.ProcessId }
-            catch { Write-Warning "could not stop pid=$($process.ProcessId) on attempt ${attempt}: $_" }
+            catch { Write-Note "warning: could not stop pid=$($process.ProcessId) on attempt ${attempt}: $_" }
         }
         if ((Get-ProbeDaemonProcess).Count -eq 0) { return }
         Wait-Tick
@@ -264,15 +304,12 @@ function Assert-DaemonUnderTest {
 
     The bash sibling scripts/assert-daemon-under-test does this for the Linux and macOS lanes. It
     cannot be reused here: the relay's environment is PowerShell in session 0, with no jq. #>
-    param(
-        [Parameter(Mandatory)][int] $ExpectedProcessId,
-        [int] $TimeoutSeconds = 90
-    )
+    param([Parameter(Mandatory)][int] $ExpectedProcessId)
 
     $timer = [System.Diagnostics.Stopwatch]::StartNew()
     $status = $null
-    while ($timer.Elapsed.TotalSeconds -lt $TimeoutSeconds) {
-        if ((Get-Process -Id $ExpectedProcessId -ErrorAction SilentlyContinue) -eq $null) {
+    while ($timer.Elapsed.TotalSeconds -lt $ReadinessTimeoutSeconds) {
+        if (-not (Test-ProcessIsRunning -ProcessId $ExpectedProcessId)) {
             throw "the daemon under test (pid $ExpectedProcessId) exited instead of serving the pipe"
         }
         $status = Get-AxonStatus -Candidates @($ProbeExecutable)
@@ -281,12 +318,12 @@ function Assert-DaemonUnderTest {
         Wait-Tick
     }
     if ($null -eq $status) {
-        throw "the daemon under test (pid $ExpectedProcessId) never became ready within $TimeoutSeconds seconds"
+        throw "the daemon under test (pid $ExpectedProcessId) never became ready within $ReadinessTimeoutSeconds seconds"
     }
     if ($status.daemon.processId -ne $ExpectedProcessId) {
         throw "$($status.daemon.endpoint) is served by pid $($status.daemon.processId), not the daemon under test (pid $ExpectedProcessId); every assertion after this would describe that daemon instead of this build"
     }
-    Write-Output "the daemon under test (pid $ExpectedProcessId) is serving $($status.daemon.endpoint) after $([Math]::Round($timer.Elapsed.TotalSeconds, 2)) seconds"
+    Write-Note "the daemon under test (pid $ExpectedProcessId) is serving $($status.daemon.endpoint) after $([Math]::Round($timer.Elapsed.TotalSeconds, 2)) seconds"
     $status
 }
 
@@ -315,7 +352,7 @@ function Invoke-BuildStage {
     if ($version.Output.Trim() -ne $expectedVersion) {
         throw "version reports $($version.Output.Trim()), expected $expectedVersion"
     }
-    Write-Output "built $ProbeExecutable and ran it for the first time in $([Math]::Round($timer.Elapsed.TotalSeconds, 2)) seconds (version $expectedVersion)"
+    Write-Note "built $ProbeExecutable and ran it for the first time in $([Math]::Round($timer.Elapsed.TotalSeconds, 2)) seconds (version $expectedVersion)"
 }
 
 function Invoke-ParkStage {
@@ -336,10 +373,10 @@ function Invoke-ParkStage {
         daemonWasRunning = $wasRunning
         daemonProcessId = if ($wasRunning) { $status.daemon.processId } else { $null }
     }
-    Write-Output "found this desktop as: registration=$(if ($registrationPath) { $registrationPath } else { 'none' }), daemon running=$wasRunning$(if ($wasRunning) { " (pid $($status.daemon.processId))" })"
+    Write-Note "found this desktop as: registration=$(if ($registrationPath) { $registrationPath } else { 'none' }), daemon running=$wasRunning$(if ($wasRunning) { " (pid $($status.daemon.processId))" })"
 
     if (-not $wasRunning) {
-        Write-Output 'no daemon is answering on the Axon pipe'
+        Write-Note 'no daemon is answering on the Axon pipe'
         return
     }
 
@@ -355,10 +392,10 @@ function Invoke-ParkStage {
     # Stopping is asynchronous, and anything still answering here would answer the probe too. This
     # names it rather than killing a process the job has no way to put back.
     $timer = [System.Diagnostics.Stopwatch]::StartNew()
-    while ($timer.Elapsed.TotalSeconds -lt 30) {
+    while ($timer.Elapsed.TotalSeconds -lt $PipeFreeTimeoutSeconds) {
         $status = Get-AxonStatus -Candidates @($ProbeExecutable)
         if ($null -ne $status -and -not $status.daemon.running) {
-            Write-Output 'no daemon is answering on the Axon pipe'
+            Write-Note 'no daemon is answering on the Axon pipe'
             return
         }
         Wait-Tick
@@ -378,7 +415,7 @@ function Invoke-ProbeStage {
         # it writes the machine's name, which is what repointed this desktop's start-at-login
         # registration at a quarantined build and left it with nothing to start.
         Register-ProbeTask
-        Write-Output "registered $ProbeTaskName -> $ProbeExecutable"
+        Write-Note "registered $ProbeTaskName -> $ProbeExecutable"
         Start-ProbeTask
 
         # Task Scheduler reports nothing about the process it launched, so the daemon under test is
@@ -386,7 +423,7 @@ function Invoke-ProbeStage {
         # second would be a leftover from an earlier run, and choosing between them would be a guess.
         $timer = [System.Diagnostics.Stopwatch]::StartNew()
         $processes = @()
-        while ($timer.Elapsed.TotalSeconds -lt 60) {
+        while ($timer.Elapsed.TotalSeconds -lt $ProcessDiscoveryTimeoutSeconds) {
             $processes = Get-ProcessByExecutable -Executable $ProbeExecutable
             if ($processes.Count -ge 1) { break }
             Wait-Tick
@@ -425,10 +462,10 @@ function Invoke-ProbeStage {
                 throw "$($capability.capability) is unusable without a reason"
             }
         }
-        Write-Output "status ok: version=$($status.version) ready=$($status.daemon.ready) capabilities=$($status.capabilities.Count) registration=$($status.registration.path)"
+        Write-Note "status ok: version=$($status.version) ready=$($status.daemon.ready) capabilities=$($status.capabilities.Count) registration=$($status.registration.path)"
 
         $listRequest = '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"look","arguments":{}}}'
-        $listResponse = $listRequest | & $ProbeExecutable mcp | ConvertFrom-Json -Depth 100
+        $listResponse = Invoke-AxonMcp -Request $listRequest
         if ($listResponse.result.isError -ne $false) { throw 'the app-list look request failed' }
 
         $verified = $null
@@ -439,7 +476,7 @@ function Invoke-ProbeStage {
                 method = 'tools/call'
                 params = @{ name = 'look'; arguments = @{ app = $app.name } }
             } | ConvertTo-Json -Compress -Depth 10
-            $response = $request | & $ProbeExecutable mcp | ConvertFrom-Json -Depth 100
+            $response = Invoke-AxonMcp -Request $request
             $window = $response.result.structuredContent.app.windows |
                 ForEach-Object root | Where-Object role -eq 'Window' | Select-Object -First 1
             if ($response.result.isError -eq $false -and $null -ne $window) {
@@ -448,7 +485,7 @@ function Invoke-ProbeStage {
             }
         }
         if ($null -eq $verified) { throw 'look did not return a Window root from the interactive desktop' }
-        Write-Output "isError:false snapshot=$($verified.response.result.structuredContent.id) root=$($verified.window.role) app=$($verified.app)"
+        Write-Note "isError:false snapshot=$($verified.response.result.structuredContent.id) root=$($verified.window.role) app=$($verified.app)"
     }
     finally {
         # The probe's own registration and daemon go now rather than in the restore stage, so that a
@@ -464,7 +501,7 @@ function Remove-ProbeInstallation {
     if ($shutdown.ExitCode -ne 0) {
         # Tolerated here alone: a probe daemon that already exited and one that never started look
         # the same to `shutdown`, and the sweep below is what actually guarantees the outcome.
-        Write-Output "the probe daemon did not answer shutdown: $($shutdown.Output)"
+        Write-Note "the probe daemon did not answer shutdown: $($shutdown.Output)"
     }
     Unregister-ProbeTask
     Stop-ProbeDaemonProcess
@@ -473,7 +510,7 @@ function Remove-ProbeInstallation {
 function Invoke-RestoreStage {
     $state = Read-ParkState
     if ($null -eq $state) {
-        Write-Output 'this desktop was never parked; leaving it alone'
+        Write-Note 'this desktop was never parked; leaving it alone'
         return
     }
 
@@ -483,7 +520,7 @@ function Invoke-RestoreStage {
     Remove-ProbeInstallation
 
     if (-not $state.daemonWasRunning) {
-        Write-Output 'this desktop had no Axon daemon when the job arrived; leaving it stopped'
+        Write-Note 'this desktop had no Axon daemon when the job arrived; leaving it stopped'
         Clear-ParkState
         return
     }
@@ -494,12 +531,12 @@ function Invoke-RestoreStage {
     # readiness wait that parses the reply with *this* build's decoder, so a desktop running an
     # older release could fail it while coming back perfectly.
     $restart = Invoke-Axon -Executable $ProbeExecutable -Arguments @('daemon', 'restart')
-    Write-Output "daemon restart exited $($restart.ExitCode): $($restart.Output)"
+    Write-Note "daemon restart exited $($restart.ExitCode): $($restart.Output)"
     if ($restart.ExitCode -ne 0) {
         # The build under test can be gone -- quarantined mid-run is exactly how this lane's worst
         # day started -- and this desktop's daemon must come back regardless. Task Scheduler starts
         # the registration at its own path and needs no Axon binary at all.
-        Write-Output "starting $DesktopTaskName through Task Scheduler instead"
+        Write-Note "starting $DesktopTaskName through Task Scheduler instead"
         Start-DesktopDaemonTask
     }
 
@@ -509,7 +546,7 @@ function Invoke-RestoreStage {
     $candidates = @($ProbeExecutable, $state.registrationPath)
     $timer = [System.Diagnostics.Stopwatch]::StartNew()
     $status = $null
-    while ($timer.Elapsed.TotalSeconds -lt 60) {
+    while ($timer.Elapsed.TotalSeconds -lt $RestoreTimeoutSeconds) {
         $status = Get-AxonStatus -Candidates $candidates
         if ($null -ne $status -and $status.daemon.running) { break }
         $status = $null
@@ -540,7 +577,7 @@ function Invoke-RestoreStage {
     }
 
     Clear-ParkState
-    Write-Output "this desktop's Axon daemon is answering again (pid $($status.daemon.processId), version $($status.version), registration $($status.registration.path))"
+    Write-Note "this desktop's Axon daemon is answering again (pid $($status.daemon.processId), version $($status.version), registration $($status.registration.path))"
 }
 
 function Invoke-Stage {
@@ -558,14 +595,14 @@ function Invoke-Stage {
 # drive the stages against stubbed seams, and must not run one on import.
 if ($MyInvocation.InvocationName -ne '.') {
     if ([string]::IsNullOrWhiteSpace($Stage)) {
-        Write-Output '::error::windows-live-probe.ps1 requires -Stage <build|park|probe|restore>'
+        Write-Note '::error::windows-live-probe.ps1 requires -Stage <build|park|probe|restore>'
         exit 2
     }
     try {
         Invoke-Stage -Name $Stage
     }
     catch {
-        Write-Output "::error::$($_.Exception.Message)"
+        Write-Note "::error::$($_.Exception.Message)"
         exit 1
     }
 }
