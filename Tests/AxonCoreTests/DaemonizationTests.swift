@@ -131,6 +131,135 @@ import Testing
     #expect(response?.result?["structuredContent"]?["snapshot"]?["snapshot"] == .string("snapshot-1"))
 }
 
+/// Builds the shipped release layout: one `.app` holding the daemon app at `Contents/MacOS/Axon`
+/// and the CLI that invokes `daemon install` at `Contents/Resources/bin/axon`.
+///
+/// Returns the CLI path, because that is what `daemon install` sees as its own executable and the
+/// only input the registration decision gets.
+@discardableResult
+private func makeReleaseBundle(
+    at bundleURL: URL,
+    identifier: String? = "com.bleugreen.axon",
+    executableName: String? = "Axon",
+    createMainExecutable: Bool = true
+) throws -> String {
+    let fileManager = FileManager.default
+    let macOS = bundleURL.appendingPathComponent("Contents/MacOS")
+    let binDirectory = bundleURL.appendingPathComponent("Contents/Resources/bin")
+    try fileManager.createDirectory(at: macOS, withIntermediateDirectories: true)
+    try fileManager.createDirectory(at: binDirectory, withIntermediateDirectories: true)
+
+    var info: [String: Any] = [:]
+    info["CFBundleIdentifier"] = identifier
+    info["CFBundleExecutable"] = executableName
+    let infoData = try PropertyListSerialization.data(fromPropertyList: info, format: .xml, options: 0)
+    try infoData.write(to: bundleURL.appendingPathComponent("Contents/Info.plist"))
+
+    if createMainExecutable, let executableName {
+        fileManager.createFile(
+            atPath: macOS.appendingPathComponent(executableName).path,
+            contents: Data(),
+            attributes: [.posixPermissions: 0o755]
+        )
+    }
+    let cli = binDirectory.appendingPathComponent("axon").path
+    fileManager.createFile(atPath: cli, contents: Data(), attributes: [.posixPermissions: 0o755])
+    return cli
+}
+
+@Test func daemonInstallRegistersTheAppBundleRatherThanTheCLIBesideIt() throws {
+    let root = FileManager.default.temporaryDirectory
+        .appendingPathComponent("axon-bundle-\(UUID().uuidString)")
+    defer { try? FileManager.default.removeItem(at: root) }
+    let bundle = root.appendingPathComponent("Axon.app")
+    let cli = try makeReleaseBundle(at: bundle)
+
+    let program = DaemonProgram.resolved(invokedExecutable: cli)
+
+    // macOS keys a privacy grant to the bundle only for the bundle's main executable. The CLI
+    // lives in Resources, so registering it is what minted a new path-keyed Accessibility row on
+    // every versioned upgrade.
+    #expect(program.executablePath == bundle.appendingPathComponent("Contents/MacOS/Axon").path)
+    #expect(program.identity == .appBundle(identifier: "com.bleugreen.axon"))
+    // The app daemon serves the socket on its own; `serve` is a CLI verb and launchd launches the
+    // app argument-less.
+    #expect(program.arguments.isEmpty)
+}
+
+@Test func upgradingToANewVersionedPathKeepsTheSameTCCIdentity() throws {
+    let root = FileManager.default.temporaryDirectory
+        .appendingPathComponent("axon-upgrade-\(UUID().uuidString)")
+    defer { try? FileManager.default.removeItem(at: root) }
+    let installed = try makeReleaseBundle(at: root.appendingPathComponent("0.2.2/Axon.app"))
+    let upgraded = try makeReleaseBundle(at: root.appendingPathComponent("0.2.3/Axon.app"))
+
+    let before = DaemonProgram.resolved(invokedExecutable: installed)
+    let after = DaemonProgram.resolved(invokedExecutable: upgraded)
+
+    // This is the whole point of the change. The embedding contract puts every release at its own
+    // path, so the registered executable necessarily moves; what must not move is who macOS thinks
+    // is asking, because that is what decides whether a human has to revisit System Settings.
+    #expect(before.executablePath != after.executablePath)
+    #expect(before.identity == after.identity)
+    #expect(after.identity == .appBundle(identifier: "com.bleugreen.axon"))
+}
+
+@Test func daemonInstallRegistersAnUnbundledCLIAsItself() {
+    // A dev build from `.build/` has no bundle to inherit from. Registering it as itself keeps
+    // `daemon install` working there, with the path-keyed identity that implies.
+    let program = DaemonProgram.resolved(invokedExecutable: "/Users/dev/axon/.build/debug/axon")
+
+    #expect(program.executablePath == "/Users/dev/axon/.build/debug/axon")
+    #expect(program.identity == .executablePath)
+    #expect(program.arguments == ["serve"])
+    #expect(program.identityDescription.contains("granted again"))
+}
+
+@Test func daemonInstallFallsBackToTheCLIWhenTheBundleNamesNoUsableExecutable() throws {
+    let root = FileManager.default.temporaryDirectory
+        .appendingPathComponent("axon-broken-bundle-\(UUID().uuidString)")
+    defer { try? FileManager.default.removeItem(at: root) }
+    let missing = try makeReleaseBundle(
+        at: root.appendingPathComponent("missing/Axon.app"),
+        createMainExecutable: false
+    )
+    let unidentified = try makeReleaseBundle(
+        at: root.appendingPathComponent("unidentified/Axon.app"),
+        identifier: nil
+    )
+
+    // A registration that starts a daemon with a path-keyed identity beats one that starts
+    // nothing, so a malformed bundle degrades to the old behavior rather than failing to install.
+    #expect(DaemonProgram.resolved(invokedExecutable: missing)
+        == DaemonProgram(executablePath: missing, identity: .executablePath))
+    #expect(DaemonProgram.resolved(invokedExecutable: unidentified)
+        == DaemonProgram(executablePath: unidentified, identity: .executablePath))
+}
+
+@Test func launchAgentPlistLaunchesTheAppDaemonWithoutArguments() throws {
+    let configuration = LaunchAgentConfiguration(
+        label: "dev.axon.test",
+        program: DaemonProgram(
+            executablePath: "/Applications/Axon.app/Contents/MacOS/Axon",
+            identity: .appBundle(identifier: "com.bleugreen.axon")
+        ),
+        socketPath: "/tmp/axon-test.sock",
+        environment: [:]
+    )
+
+    let plist = try PropertyListSerialization.propertyList(
+        from: configuration.propertyListData(),
+        options: [],
+        format: nil
+    ) as? [String: Any]
+
+    #expect(plist?["ProgramArguments"] as? [String] == ["/Applications/Axon.app/Contents/MacOS/Axon"])
+    // The app is a GUI process: it needs a login session, and the rest of the contract is unchanged
+    // by which executable is registered.
+    #expect(plist?["LimitLoadToSessionType"] as? String == "Aqua")
+    #expect((plist?["EnvironmentVariables"] as? [String: String])?["AXON_SOCKET_PATH"] == "/tmp/axon-test.sock")
+}
+
 @Test func launchAgentConfigurationBuildsDaemonPlist() throws {
     let configuration = LaunchAgentConfiguration(
         label: "dev.axon.test",
