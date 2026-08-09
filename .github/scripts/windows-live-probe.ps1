@@ -492,10 +492,17 @@ function Invoke-ProbeStage {
         # that one would make the lane's evidence self-referential -- a session with no applications
         # running at all would satisfy it -- so a window from a process this lane did not start is
         # what the assertion requires.
+        # `enumerate` names an application by its top-level window's UIA name, which for a console
+        # process is the console title -- today exactly the executable path. Both facts are checked
+        # because neither is guaranteed: the title could grow an argument, and the window may be
+        # reported against the console host's process rather than the daemon's.
         $verified = $null
         $considered = @()
         foreach ($app in $listResponse.result.structuredContent) {
             if ($app.name -and $app.name.Equals($ProbeExecutable, [System.StringComparison]::OrdinalIgnoreCase)) {
+                continue
+            }
+            if ($null -ne $app.identifier -and $app.identifier -eq $daemonProcessId) {
                 continue
             }
             $considered += $app.name
@@ -548,7 +555,18 @@ function Invoke-RestoreStage {
     # Anything of this lane's still here belongs to the probe, because the desktop's own daemon was
     # stopped at park. It has to go before the desktop's task is started, or the restored daemon
     # starts into a pipe that is already taken.
-    Remove-ProbeInstallation
+    #
+    # A sweep that cannot finish is recorded rather than fatal. An orphan that will not die is a real
+    # obstacle -- it may hold the pipe against the daemon being restored, and it locks its image
+    # against the next checkout -- but abandoning the restore here is how a desktop ends the job with
+    # no daemon at all, reported by a message that never mentions it. The restart is attempted
+    # anyway, and the leftover is reported at the end alongside whatever the restart achieved.
+    $sweepError = $null
+    try { Remove-ProbeInstallation }
+    catch {
+        $sweepError = $_.Exception.Message
+        Write-Note "warning: this lane could not remove all of its own daemons: $sweepError"
+    }
 
     if (-not $state.daemonWasRunning) {
         Write-Note 'this desktop had no Axon daemon when the job arrived; leaving it stopped'
@@ -584,7 +602,7 @@ function Invoke-RestoreStage {
         Wait-Tick
     }
     if ($null -eq $status) {
-        throw "this desktop's Axon daemon did not come back; this runner needs attention before the next live run"
+        throw "this desktop's Axon daemon did not come back; this runner needs attention before the next live run$(if ($sweepError) { " (this lane also left a daemon of its own behind: $sweepError)" })"
     }
 
     # The registration has to be what it was, or this lane damaged the machine even though a daemon
@@ -607,8 +625,14 @@ function Invoke-RestoreStage {
         }
     }
 
+    # Cleared before the leftover is reported: the debt this stage owed has been paid, and a
+    # leftover of this lane's own is the next run's problem rather than a reason to make the next
+    # park think this desktop is still owed a daemon.
     Clear-ParkState
     Write-Note "this desktop's Axon daemon is answering again (pid $($status.daemon.processId), version $($status.version), registration $($status.registration.path))"
+    if ($sweepError) {
+        throw "this desktop's daemon is back, but this lane left one of its own running and could not stop it: $sweepError; it will hold its image against the next checkout"
+    }
 }
 
 function Invoke-Stage {
