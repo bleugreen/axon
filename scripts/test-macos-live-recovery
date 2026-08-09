@@ -227,7 +227,13 @@ def main() -> int:
     harness = Harness()
     failures: list[str] = []
 
-    def check(step, script, label, want_exit, expect=(), forbid=(), **kwargs):
+    def check(step, script, label, want_exit, expect=(), forbid=(), order=(), **kwargs):
+        """Runs one scenario. `order` names calls that must appear in the log in that sequence.
+
+        Sequence is asserted separately from presence because for several of these steps the order
+        *is* the behaviour: a reap that happens after the stop it was meant to clear the way for
+        has happened, and has done nothing.
+        """
         result, calls, github_env = harness.run(script, **kwargs)
         combined = result.stdout + result.stderr
         problems = []
@@ -239,6 +245,17 @@ def main() -> int:
         for needle in forbid:
             if needle in combined or needle in calls:
                 problems.append(f"unexpected {needle!r}")
+        placed = []
+        for needle in order:
+            index = calls.find(needle)
+            if index < 0:
+                problems.append(f"{needle!r} never happened, so its position cannot be checked")
+                placed = []
+                break
+            placed.append((needle, index))
+        for (earlier, first), (later, second) in zip(placed, placed[1:]):
+            if first > second:
+                problems.append(f"{later!r} happened before {earlier!r}")
         status = "ok  " if not problems else "FAIL"
         print(f"  [{status}] {step}: {label}")
         for problem in problems:
@@ -257,8 +274,10 @@ def main() -> int:
     check("park", park, "hands the restore its facts even when the stop fails", 1,
           expect=["AXON_AGENT_WAS_LOADED=true"],
           STUB_AGENT_PID=4242, STUB_SHUTDOWN_EXIT=1)
-    check("park", park, "reaps a probe app left by an earlier run", 0,
-          expect=["stopping probe app processes", "pkill"],
+    # Before the stop, not merely during the step: a leftover holding the socket lock answers no
+    # health request, so the untolerated `shutdown` would fail on it for a reason nobody names.
+    check("park", park, "reaps a probe app left by an earlier run, before stopping anything", 0,
+          expect=["stopping probe app processes"], order=["pkill", "axon shutdown"],
           leftovers="901", STUB_AGENT_PID=4242)
     check("park", park, "fails when a leftover probe app will not die", 1,
           expect=["still running as pid(s) 901"],
@@ -276,7 +295,7 @@ def main() -> int:
     check("probe", probe_pid_resolution, "fails when a leftover is also alive", 1,
           expect=["5150 6161"], leftovers="5150 6161")
     check("probe", probe_pid_resolution, "refuses a desktop already running Calculator", 1,
-          expect=["Calculator is already running"], leftovers="5150", app_pids="777")
+          expect=["Calculator is already running"], leftovers="5150", calculator_pids="777")
 
     print("Restore step")
     check("restore", restore, "leaves a desktop it never parked alone", 0,
@@ -312,22 +331,20 @@ def main() -> int:
     check("restore", restore, "leaves a desktop that had no daemon stopped", 0,
           expect=["leaving it stopped"], forbid=["axon daemon restart", "open -a"],
           AXON_AGENT_WAS_LOADED="false", AXON_APP_WAS_RUNNING="false")
-    check("restore", restore, "reaps a probe app that answers nothing", 0,
-          expect=["pkill"],
+    # Before the bootstrap, for the mirror-image reason: `daemon restart` would otherwise put an
+    # agent into an endpoint this step was about to free, and `KeepAlive` would crash-loop it.
+    check("restore", restore, "reaps a probe app that answers nothing, before bootstrapping", 0,
+          order=["axon shutdown", "pkill", "axon daemon restart"],
           leftovers="902", AXON_AGENT_WAS_LOADED="true",
           STUB_AGENT_PID=4242, STUB_STATUS=status_doc(pid=4242))
 
-    calls = check("restore", restore, "restores both the agent and the app, agent first", 0,
-                  expect=["axon daemon restart", "open -a /Applications/Axon.app"],
-                  AXON_AGENT_WAS_LOADED="true", AXON_APP_WAS_RUNNING="true",
-                  AXON_APP_BUNDLE="/Applications/Axon.app",
-                  STUB_AGENT_PID=4242, STUB_STATUS=status_doc(pid=4242))
-    # Ordering is the point of that scenario, not just that both happened: an app reopened first
-    # could win the endpoint and make the pid check describe the wrong process.
-    if "axon daemon restart" in calls and "open -a" in calls:
-        if calls.index("axon daemon restart") > calls.index("open -a"):
-            failures.append("restore: the app was reopened before the agent was restarted")
-            print("           the app was reopened before the agent was restarted")
+    # An app reopened first could win the endpoint, and the pid check would then describe it rather
+    # than the restored agent -- failing a restore that in fact succeeded.
+    check("restore", restore, "restores both the agent and the app, agent first", 0,
+          order=["axon daemon restart", "open -a /Applications/Axon.app"],
+          AXON_AGENT_WAS_LOADED="true", AXON_APP_WAS_RUNNING="true",
+          AXON_APP_BUNDLE="/Applications/Axon.app",
+          STUB_AGENT_PID=4242, STUB_STATUS=status_doc(pid=4242))
 
     harness.cleanup()
     print()
