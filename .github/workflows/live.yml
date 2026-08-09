@@ -181,6 +181,96 @@ jobs:
             | jq -e '.indexedNodes | any(.role == "AXStaticText" and (.value | strings | contains("1")))'
           echo 'Calculator display verified'
 
+      # The counterpart to the parking step, and the reason the probe above may leave the machine
+      # in whatever state it failed in. `always()` because a failed probe is exactly when the
+      # desktop most needs its own daemon back.
+      #
+      # It needs a step of its own rather than a trap because `shutdown` is not a pause: it boots
+      # the LaunchAgent out so `KeepAlive` cannot relaunch the daemon mid-request, and the agent
+      # then stays unloaded for the rest of the login session. A job that calls it owes this
+      # machine a bootstrap, and a trap inside a step that the runner cancels never runs.
+      - name: Restore the installed Axon daemon
+        if: always()
+        run: |
+          set -euo pipefail
+          cli="$GITHUB_WORKSPACE/dist/Axon.app/Contents/Resources/bin/axon"
+
+          # Set only by the parking step, and the reason this step may stop a daemon at all:
+          # without it the job never touched this desktop, and anything serving here is its own.
+          if [ -z "${AXON_AGENT_WAS_LOADED:-}" ]; then
+            echo 'the installed daemon was never parked; leaving the desktop alone'
+            exit 0
+          fi
+
+          # Anything still serving is the probe's, because the desktop's own was stopped at the top
+          # of the job. It has to go before the agent is bootstrapped back, or the restored daemon
+          # starts into an endpoint that is already taken. Best-effort here alone: the probe's app
+          # may have exited already, and `shutdown` finding nothing to stop looks the same.
+          "$cli" shutdown >/dev/null 2>&1 || true
+          killall Calculator >/dev/null 2>&1 || true
+
+          if [ "$AXON_AGENT_WAS_LOADED" = true ]; then
+            # `daemon restart`, never `daemon install`: restart bootstraps the plist that is on
+            # disk without rewriting it, while install would repoint the desktop's registration at
+            # the invoking binary -- here a `dist` directory the next run overwrites. The build
+            # under test asks, because the installed CLI is whichever release this desktop last
+            # installed and need not carry the verb at all.
+            if ! "$cli" daemon restart; then
+              echo "::error::this job booted the desktop's Axon LaunchAgent out and could not bootstrap it back; this runner has no start-at-login daemon until someone logs in again"
+              exit 1
+            fi
+          elif [ "${AXON_APP_WAS_RUNNING:-false}" = true ]; then
+            open -a /Applications/Axon.app
+          else
+            echo 'this desktop had no Axon daemon when the job arrived; leaving it stopped'
+            exit 0
+          fi
+
+          # Neither `daemon restart` nor `open` is trusted on its exit code: both report on
+          # starting a daemon, not on one serving, and `launchctl bootstrap` returning zero is a
+          # claim about loading a job. Read together on purpose, so the pair below describes one
+          # moment rather than two.
+          answering=false
+          status=""
+          agent_pid=""
+          for _ in {1..40}; do
+            status="$("$cli" status --json)"
+            agent_pid="$(launchctl print "gui/$(id -u)/$AXON_LAUNCH_AGENT_LABEL" 2>/dev/null | awk '/^[[:space:]]*pid = / { print $3; exit }')"
+            if printf '%s' "$status" | jq -e '.daemon.running' >/dev/null; then
+              answering=true
+              break
+            fi
+            sleep 0.25
+          done
+          if [[ "$answering" != true ]]; then
+            echo "::error::the desktop Axon daemon did not come back at $(printf '%s' "$status" | jq -r '.daemon.endpoint'); this runner needs attention before the next live run"
+            launchctl print "gui/$(id -u)/$AXON_LAUNCH_AGENT_LABEL" 2>&1 | head -20 || true
+            tail -20 "$HOME/Library/Logs/Axon/daemon.err.log" 2>/dev/null || true
+            exit 1
+          fi
+
+          if [ "$AXON_AGENT_WAS_LOADED" = true ]; then
+            # A daemon answering is not the agent running. Both halves are required, because the
+            # two failures look nothing alike to whoever reads this next: an agent that never came
+            # back, or an agent that is unloaded while something else answers on its endpoint --
+            # which is the case that leaves the next bootstrap dead on an address already in use.
+            if [ -z "$agent_pid" ]; then
+              echo "::error::a daemon is answering at $(printf '%s' "$status" | jq -r '.daemon.endpoint') but launchd is not running $AXON_LAUNCH_AGENT_LABEL; this desktop's start-at-login registration is still booted out"
+              exit 1
+            fi
+            # Exact whenever the document allows it. A daemon this build can parse names its own
+            # process, so requiring that to be launchd's is what rules out one of the probe's
+            # orphans answering in the restored daemon's place. A missing pid is tolerated rather
+            # than required: this desktop runs whichever release it installed, and a payload this
+            # build is too new to parse reports a daemon that is up with no process id at all.
+            if printf '%s' "$status" | jq -e '.daemon.processId != null' >/dev/null \
+              && ! printf '%s' "$status" | jq -e --argjson pid "$agent_pid" '.daemon.processId == $pid' >/dev/null; then
+              echo "::error::$(printf '%s' "$status" | jq -r '.daemon.endpoint') is answered by pid $(printf '%s' "$status" | jq -r '.daemon.processId'), not the restored LaunchAgent (pid $agent_pid)"
+              exit 1
+            fi
+          fi
+          echo 'the desktop Axon daemon is answering again'
+
   linux:
     name: Linux live loop
     runs-on: [self-hosted, axon-live-linux]
