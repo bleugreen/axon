@@ -422,6 +422,36 @@ than equating “Linux” with one uniform tree.
   input into a session depends on global observation and may therefore be
   unavailable on Wayland. The capability report must distinguish these facets.
 
+The Chromium-family claims above were probed on `bglab-ub` on 2026-08-08,
+against Electron 33.2.1 (Chromium 130) and Chrome for Testing 151.0.7922.77.
+Each application was given a private session bus, accessibility bus, and
+registry, so that the desktop's own running screen reader could not be mistaken
+for the mechanism under test. With a listener registered and nothing else, both
+applications stayed absent from the bus, whether they were already running or
+launched afterwards. With `IsEnabled` true at startup both appeared as exactly
+three nodes — application, window, null reference — and stayed that way whether
+or not a listener was registered. One `GetAttributes` on the application root
+produced the full tree: 284 nodes for Chrome and 26 for Electron, arriving after
+1.12s and 0.09s. Through the daemon, the same Chrome capture answered `operation
+accessible proxy failed: atspi: null reference` before this was implemented, and
+the complete tree including the `document web` afterwards, at the same cost on
+the first `look` as on the third. GNOME Calculator captured 107 nodes at
+unchanged latency, because a provider that publishes its tree pays only the ask.
+
+Two details are worth carrying to whoever re-runs that probe. `libatspi` reads
+the X root window's `AT_SPI_BUS` property before it consults the session bus, so
+an application on the desktop's display silently joins the *desktop's*
+accessibility bus unless `AT_SPI_BUS_ADDRESS` is exported — an isolation that
+looks airtight and is not. And the folklore about listener registration is not
+baseless, just wrong here: upstream `at-spi-bus-launcher` has grown a handler
+that flips `IsEnabled` when a client registers an event listener, which would
+make registration reach the first gate indirectly. The 2.60.4 build on this
+stack contains no such handler, and even where it did, that only puts the
+application on the bus — the empty tree behind the window stays empty until
+something asks for attributes or relations. It is also not a free action: that
+handler writes the desktop's `toolkit-accessibility` setting, turning
+accessibility on for every application on the session.
+
 ## First integration target: Cairn
 
 The first real-world target is Cairn's own interface: WebView2, backed by
