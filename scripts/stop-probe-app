@@ -17,6 +17,13 @@
 # an installed copy of Axon. It is the macOS counterpart of the Windows job's
 # `Remove leaked live-probe daemons`.
 #
+# macOS only, and load-bearingly so. The pattern arrives as `$1`, so it is in the command line of
+# this very script and of the shell that invoked it. BSD `pgrep` excludes itself and all of its
+# ancestors from the match list by default, which is the only reason `pkill -f` below does not kill
+# this script and take the whole step with it. Two consequences for anyone editing this: adding `-a`
+# to either invocation restores the ancestors and turns the sweep suicidal, and procps `pgrep` on
+# Linux excludes only itself, so this cannot be reused by the Linux lane as written.
+#
 # Usage: scripts/stop-probe-app <bundle-executable-path>
 set -euo pipefail
 
