@@ -1029,6 +1029,111 @@ pub(crate) fn capability(capability: Capability, reason: &str) -> BackendError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use atspi::ObjectRef;
+
+    fn real(path: &'static str) -> ObjectRefOwned {
+        ObjectRefOwned::from_static_str_unchecked(":1.7", path)
+    }
+
+    fn null() -> ObjectRefOwned {
+        ObjectRefOwned::new(ObjectRef::Null)
+    }
+
+    fn node(truncation_reason: Option<&str>, children: Vec<Node>) -> Node {
+        Node {
+            role: "frame".into(),
+            subrole: None,
+            name: None,
+            title: None,
+            label: None,
+            value: None,
+            description: None,
+            identifier: None,
+            actions: vec![],
+            frame: None,
+            editable: false,
+            children,
+            child_count: None,
+            truncation_reason: truncation_reason.map(Into::into),
+        }
+    }
+
+    #[test]
+    fn the_null_reference_is_never_a_child_and_is_never_silently_dropped() {
+        let (children, withheld) = published(vec![
+            real("/org/a11y/atspi/accessible/1"),
+            null(),
+            real("/org/a11y/atspi/accessible/2"),
+        ]);
+        // Walking the null reference is what fails a Chromium capture outright: it implements no
+        // interfaces, so the role call that opens every node answers UnknownMethod.
+        assert_eq!(children.len(), 2);
+        assert!(children.iter().all(|c| !c.is_null()));
+        assert!(
+            withheld,
+            "a provider that answered with the null reference is withholding, not empty"
+        );
+    }
+
+    #[test]
+    fn a_provider_that_published_everything_reports_nothing_withheld() {
+        let (children, withheld) = published(vec![real("/org/a11y/atspi/accessible/1")]);
+        assert_eq!(children.len(), 1);
+        assert!(!withheld);
+        // A genuinely childless node is a different fact from a withheld subtree, and stays silent.
+        assert_eq!(published(vec![]), (vec![], false));
+    }
+
+    #[test]
+    fn incompleteness_is_reported_and_the_node_limit_outranks_a_withheld_subtree() {
+        assert_eq!(incompleteness(false, false), None);
+        assert_eq!(
+            incompleteness(false, true).as_deref(),
+            Some(SUBTREE_UNPUBLISHED)
+        );
+        assert_eq!(
+            incompleteness(true, false).as_deref(),
+            Some(NODE_LIMIT_REACHED)
+        );
+        assert_eq!(
+            incompleteness(true, true).as_deref(),
+            Some(NODE_LIMIT_REACHED),
+            "a walk that stopped counting cannot also speak for the provider"
+        );
+    }
+
+    #[test]
+    fn a_withheld_subtree_anywhere_in_the_tree_asks_for_activation() {
+        let complete = node(None, vec![node(None, vec![])]);
+        assert!(!awaiting_provider(&complete));
+
+        // The shape Chromium presents: an application root, a window, and nothing published under
+        // it. The marker is nested rather than at the root, which is why the search is recursive.
+        let chromium = node(None, vec![node(Some(SUBTREE_UNPUBLISHED), vec![])]);
+        assert!(awaiting_provider(&chromium));
+
+        // A tree truncated by the node limit is complete as far as the provider is concerned, and
+        // must not send capture round again for an activation that would change nothing.
+        let truncated = node(None, vec![node(Some(NODE_LIMIT_REACHED), vec![])]);
+        assert!(!awaiting_provider(&truncated));
+    }
+
+    #[test]
+    fn a_session_with_accessibility_off_says_so_instead_of_blaming_the_name() {
+        // Chromium and its embedders read org.a11y.Status.IsEnabled once at startup, so on such a
+        // session they are absent rather than thin, and "no application matched" alone would send
+        // the caller looking for a typo.
+        assert!(matches!(
+            no_application_matched(Some(false)),
+            BackendError::Operation { ref message, .. } if message == ACCESSIBILITY_DISABLED
+        ));
+        for known in [Some(true), None] {
+            assert!(matches!(
+                no_application_matched(known),
+                BackendError::Operation { ref message, .. } if message == NO_APPLICATION_MATCHED
+            ));
+        }
+    }
 
     const USABLE: SessionFacts = SessionFacts {
         wayland: false,
