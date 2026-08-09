@@ -128,6 +128,46 @@ foreach ($file in Get-ChildItem -Path (Join-Path $RepositoryRoot '.github\script
     }
 }
 
+# The lane logic that lives in the workflow file rather than in a script: the pre-checkout sweep,
+# which cannot go through the relay because it runs before the checkout that would deliver it, plus
+# the two steps that wrap the relay calls. Nothing else would notice a syntax error in them until a
+# push to `main` had already reached the runner. Parsed rather than executed — the sweep talks to
+# Task Scheduler and to processes directly, which is exactly what this file may not do. It is read
+# as text so this harness needs no YAML module; a `${{ }}` expression in one of these blocks would
+# fail the parse, which is the right moment to think about it rather than a false alarm.
+$workflowPath = Join-Path $RepositoryRoot '.github\workflows\live.yml'
+$workflowLines = @(Get-Content -LiteralPath $workflowPath)
+$jobStarts = @(0..($workflowLines.Count - 1) | Where-Object { $workflowLines[$_] -eq '  windows:' })
+if ($jobStarts.Count -ne 1) {
+    throw "expected exactly one 'windows:' job in $workflowPath, found $($jobStarts.Count)"
+}
+$jobEnd = $workflowLines.Count
+for ($index = $jobStarts[0] + 1; $index -lt $workflowLines.Count; $index++) {
+    if ($workflowLines[$index] -match '^  \S') { $jobEnd = $index; break }
+}
+$jobLines = $workflowLines[$jobStarts[0]..($jobEnd - 1)]
+
+$runBlocks = 0
+for ($index = 0; $index -lt $jobLines.Count; $index++) {
+    if ($jobLines[$index] -notmatch '^(\s*)run: \|\s*$') { continue }
+    $indent = $Matches[1].Length + 2
+    $body = @()
+    for ($cursor = $index + 1; $cursor -lt $jobLines.Count; $cursor++) {
+        $line = $jobLines[$cursor]
+        if ($line.Trim() -and -not $line.StartsWith(' ' * $indent)) { break }
+        $body += if ($line.Length -ge $indent) { $line.Substring($indent) } else { '' }
+    }
+    $runBlocks++
+    $blockErrors = $null
+    [System.Management.Automation.Language.Parser]::ParseInput(($body -join "`n"), [ref] $null, [ref] $blockErrors) | Out-Null
+    if ($blockErrors) {
+        throw "a run: block in the windows job does not parse: line $($blockErrors[0].Extent.StartLineNumber): $($blockErrors[0].Message)"
+    }
+}
+if ($runBlocks -lt 3) {
+    throw "expected at least three run: blocks in the windows job, found $runBlocks; the extractor has drifted from the workflow and is checking nothing"
+}
+
 # Every bound in the probe script, shrunk. A scenario that has to sit through the real one is a
 # scenario nobody adds.
 $ReadinessTimeoutSeconds = 1
