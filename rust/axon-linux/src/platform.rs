@@ -647,14 +647,21 @@ impl Actor {
         Ok(partial)
     }
     async fn capture(&mut self, q: AppQuery) -> Result<Snapshot, BackendError> {
-        let (root, name) = self
-            .select(&q)
-            .await?
-            .ok_or_else(|| operation("select application", "no AT-SPI application matched"))?;
+        let Some((root, name)) = self.select(&q).await? else {
+            return Err(no_application_matched(self.accessibility_enabled().await));
+        };
         let identifier = Some(identity(&root));
         let mut refs = Vec::new();
         let mut remaining = MAX_NODES;
-        let node = self.node(root, 0, &mut remaining, &mut refs).await?;
+        let mut node = self.node(root.clone(), 0, &mut remaining, &mut refs).await?;
+        // The first walk is what detects an unactivated provider, so nothing is paid for this by an
+        // application that publishes its tree the way most toolkits do.
+        if awaiting_provider(&node) {
+            self.wake_provider(&root).await;
+            refs.clear();
+            remaining = MAX_NODES;
+            node = self.node(root, 0, &mut remaining, &mut refs).await?;
+        }
         let snapshot = Snapshot::new(Application {
             name,
             identifier,
@@ -666,6 +673,78 @@ impl Actor {
         self.retained.clear();
         self.retained.insert(snapshot.id.0.clone(), refs);
         Ok(snapshot)
+    }
+    /// Asks a provider that is withholding its tree to publish it, then waits boundedly for that.
+    ///
+    /// Chromium and everything embedding it — Electron, and Chromium-backed webviews — publish an
+    /// application root and a window whose only child is AT-SPI's null reference until an assistive
+    /// technology asks a node for its attributes or its relations. Either call reaches
+    /// `AXPlatform::OnExtendedPropertiesUsedInWebContent` in Chromium, which is what turns the
+    /// web-content accessibility mode on; the tree is then built in the renderer and pushed across,
+    /// so the touch has to be followed by a wait rather than trusted to have already taken effect.
+    ///
+    /// Registering an AT-SPI event listener is not what does this, whatever the folklore says: the
+    /// 2026-08-08 probe in `docs/cross-platform.md` found registration changes nothing observable
+    /// about these applications. Nor can activation live on the readiness path, because the trigger
+    /// is a call into one application's own tree. It belongs to the capture of that application,
+    /// exactly like the MSAA touch the Windows backend performs before capturing a WebView2 target.
+    ///
+    /// A provider that never publishes costs one capture the timeout and is then reported as it
+    /// answers, carrying [`SUBTREE_UNPUBLISHED`] rather than passing for a complete empty tree.
+    async fn wake_provider(&self, root: &ObjectRefOwned) {
+        // The reply is discarded because the call itself is the signal, and a provider that does
+        // not implement attributes is not one that needed waking.
+        if let Ok(proxy) = timeout(
+            "accessible proxy",
+            root.as_accessible_proxy(&self.connection),
+        )
+        .await
+        {
+            let _ = timeout("attributes", proxy.get_attributes()).await;
+        }
+        let deadline = Instant::now() + ACTIVATION_TIMEOUT;
+        while self.withholding(root).await && Instant::now() < deadline {
+            tokio::time::sleep(ACTIVATION_POLL).await;
+        }
+    }
+    /// Whether this application still answers with the null reference where a child belongs.
+    ///
+    /// Two levels deep, which is where Chromium exhibits it: the application root holds windows and
+    /// a window holds the null reference. Cheap enough to poll, and a false negative only costs the
+    /// wait ending early, after which the re-walk reports whatever the provider actually answers.
+    async fn withholding(&self, root: &ObjectRefOwned) -> bool {
+        let Ok(windows) = self.children(root).await else {
+            return false;
+        };
+        if windows.iter().any(ObjectRefOwned::is_null) {
+            return true;
+        }
+        for window in &windows {
+            if self
+                .children(window)
+                .await
+                .is_ok_and(|kids| kids.iter().any(ObjectRefOwned::is_null))
+            {
+                return true;
+            }
+        }
+        false
+    }
+    /// Whether this session has accessibility switched on, or `None` when the bus will not say.
+    async fn accessibility_enabled(&self) -> Option<bool> {
+        let properties = PropertiesProxy::builder(&self.session)
+            .destination("org.a11y.Bus")
+            .ok()?
+            .path("/org/a11y/bus")
+            .ok()?
+            .build()
+            .await
+            .ok()?;
+        let status = InterfaceName::try_from("org.a11y.Status").ok()?;
+        let value = timeout("accessibility status", properties.get(status, "IsEnabled"))
+            .await
+            .ok()?;
+        bool::try_from(value).ok()
     }
     fn node<'a>(
         &'a self,
