@@ -183,7 +183,11 @@ jobs:
             echo "::error::$(printf '%s' "$status" | jq -r '.daemon.endpoint') is still served by pid $(printf '%s' "$status" | jq -r '.daemon.processId // "unknown"') after the registration was parked; nothing below could be evidence about this build while it holds the socket"
             exit 1
           fi
-          echo 'the Axon socket is free'
+          # Says what it checked. `serve` refuses on a successful connect to the endpoint, which is
+          # a narrower question than whether anything answered a health request -- something bound
+          # but mute reads as absent here. That case is not lost, it just fails one step later and
+          # by name, when the probe's own daemon cannot bind.
+          echo 'no daemon is answering on the Axon socket'
 
       - name: Capture, resolve, act, and verify
         working-directory: rust
@@ -306,7 +310,10 @@ jobs:
           "$daemon" daemon install
           test "$(systemctl --user is-enabled axon.service)" = enabled
 
+          # Read together on purpose: an `on-failure` restart landing between the two would fail
+          # the pid assertion below over a restart rather than over the thing being tested.
           status="$("$daemon" status --json)"
+          main_pid="$(systemctl --user show -p MainPID --value axon.service)"
           printf '%s' "$status" | jq -e '.schemaVersion == "health-v1"' >/dev/null
           printf '%s' "$status" | jq -e --arg v "$expected_version" '.version == $v' >/dev/null
           printf '%s' "$status" | jq -e '.platform == "linux"' >/dev/null
@@ -317,7 +324,6 @@ jobs:
           # read from the unit file, while everything else in this document comes from whichever
           # daemon answered. Requiring that to be the service just installed is what keeps the two
           # halves describing the same process.
-          main_pid="$(systemctl --user show -p MainPID --value axon.service)"
           printf '%s' "$status" | jq -e --argjson pid "$main_pid" '.daemon.processId == $pid' >/dev/null
           # The complete vocabulary, every unusable entry explained.
           printf '%s' "$status" | jq -e '.capabilities | length == 15' >/dev/null
@@ -358,11 +364,10 @@ jobs:
           daemon="$GITHUB_WORKSPACE/rust/target/debug/axon-linux"
           # Any registration or daemon still here belongs to the probes, because the desktop's own
           # were parked and stopped. Both have to go before the parked unit is put back, or the
-          # restored service starts into a socket that is already taken.
-          if [ -x "$daemon" ]; then
-            "$daemon" daemon uninstall >/dev/null 2>&1 || true
-            "$daemon" shutdown >/dev/null 2>&1 || true
-          fi
+          # restored service starts into a socket that is already taken. Best-effort: an end state
+          # already reached looks the same as a command that had nothing to do.
+          "$daemon" daemon uninstall >/dev/null 2>&1 || true
+          "$daemon" shutdown >/dev/null 2>&1 || true
           rm -f "$unit"
           systemctl --user daemon-reload >/dev/null 2>&1 || true
 
@@ -380,11 +385,37 @@ jobs:
             echo '::error::the desktop Axon registration was restored but could not be re-enabled'
             exit 1
           fi
-          if [ "${AXON_WAS_ACTIVE:-false}" = true ] && ! systemctl --user start axon.service; then
+          echo 'restored the parked registration'
+
+          if [ "${AXON_WAS_ACTIVE:-false}" != true ]; then
+            exit 0
+          fi
+          if ! systemctl --user start axon.service; then
             echo '::error::the desktop Axon daemon was restored but did not start again'
             exit 1
           fi
-          echo 'restored the parked registration'
+          # `systemctl start` succeeding is not the daemon working, and this unit says so itself:
+          # Type=simple means systemd calls it started at exec, which is before Axon can bind, so a
+          # zero exit here covers a daemon that exec'd and died on a socket a probe never released.
+          # Trusting it would be the same silent failure this job exists to close, one step further
+          # out. Only `running` is required -- not `ready`, and not a matching pid: the desktop runs
+          # whichever release it installed, and a health payload this build is too new to parse
+          # still reports a daemon that is up.
+          answering=false
+          for _ in {1..40}; do
+            if "$daemon" status --json | jq -e '.daemon.running' >/dev/null; then
+              answering=true
+              break
+            fi
+            sleep 0.25
+          done
+          if [[ "$answering" != true ]]; then
+            echo "::error::the desktop Axon daemon was restarted but is not answering at $("$daemon" status --json | jq -r '.daemon.endpoint'); this runner needs attention before the next live run"
+            systemctl --user is-active axon.service || true
+            journalctl --user -u axon.service -n 20 --no-pager || true
+            exit 1
+          fi
+          echo 'the desktop Axon daemon is answering again'
 
   windows:
     name: Windows live loop
