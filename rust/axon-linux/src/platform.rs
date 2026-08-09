@@ -850,7 +850,9 @@ impl Actor {
             } else {
                 false
             };
-            let answered = if depth < MAX_DEPTH && *remaining > 0 {
+            let depth_limit_reached = depth >= MAX_DEPTH;
+            let asked = !depth_limit_reached && *remaining > 0;
+            let answered = if asked {
                 timeout("children", proxy.get_children())
                     .await
                     .unwrap_or_default()
@@ -858,7 +860,9 @@ impl Actor {
                 vec![]
             };
             let (children_refs, withheld) = published(answered);
-            let child_count = children_refs.len();
+            // A node nobody asked about has no child count, rather than a count of zero. Saying it
+            // is childless is the same lie as reporting a withheld subtree as an empty one.
+            let child_count = asked.then_some(children_refs.len());
             let mut children = Vec::new();
             for child in children_refs {
                 if *remaining == 0 {
@@ -879,8 +883,8 @@ impl Actor {
                 frame,
                 editable,
                 children,
-                child_count: Some(child_count),
-                truncation_reason: incompleteness(*remaining == 0, withheld),
+                child_count,
+                truncation_reason: incompleteness(*remaining == 0, depth_limit_reached, withheld),
             })
         })
     }
@@ -988,44 +992,62 @@ where
         .map_err(|_| operation(name, "timed out"))?
         .map_err(|e| operation(name, e))
 }
-/// Splits what a provider answered into the children that exist and whether it withheld any.
+/// Splits what a provider answered into the children that exist, and whether it published none of
+/// the children it claimed.
 ///
 /// AT-SPI's null reference means "no object", and it must never become a node: it implements no
 /// interfaces, so asking it for a role answers `UnknownMethod` and fails the whole capture rather
-/// than yielding an empty branch. Chromium-family providers answer with it in place of a subtree
-/// they have not built, so dropping it silently would turn a withheld tree into an empty one —
-/// which is why the caller gets the fact back alongside the children.
+/// than yielding an empty branch. Dropping it is therefore unconditional. Concluding anything from
+/// it is not — see [`SUBTREE_UNPUBLISHED`] for why only an answer that is *entirely* null
+/// references is read as a provider withholding a subtree.
 fn published(children: Vec<ObjectRefOwned>) -> (Vec<ObjectRefOwned>, bool) {
     let claimed = children.len();
     let children: Vec<ObjectRefOwned> = children.into_iter().filter(|c| !c.is_null()).collect();
-    let withheld = children.len() < claimed;
+    let withheld = claimed > 0 && children.is_empty();
     (children, withheld)
 }
 
 /// What a caller is owed about a subtree that is not complete.
 ///
-/// The node limit outranks a withheld subtree because it is the more total statement: a walk that
-/// stopped counting has nothing to say about what the provider would have published.
-fn incompleteness(node_limit_reached: bool, withheld: bool) -> Option<String> {
-    match (node_limit_reached, withheld) {
-        (true, _) => Some(NODE_LIMIT_REACHED.into()),
-        (false, true) => Some(SUBTREE_UNPUBLISHED.into()),
-        (false, false) => None,
+/// Ordered by how total the statement is. A walk that stopped counting has nothing to say about
+/// depth or about the provider; a walk that stopped descending never asked the provider anything,
+/// so it cannot report withholding either.
+fn incompleteness(
+    node_limit_reached: bool,
+    depth_limit_reached: bool,
+    withheld: bool,
+) -> Option<String> {
+    match (node_limit_reached, depth_limit_reached, withheld) {
+        (true, _, _) => Some(NODE_LIMIT_REACHED.into()),
+        (false, true, _) => Some(DEPTH_LIMIT_REACHED.into()),
+        (false, false, true) => Some(SUBTREE_UNPUBLISHED.into()),
+        (false, false, false) => None,
     }
-}
-
-/// Whether a captured tree contains a provider that has said it is withholding a subtree.
-fn awaiting_provider(node: &Node) -> bool {
-    node.truncation_reason.as_deref() == Some(SUBTREE_UNPUBLISHED)
-        || node.children.iter().any(awaiting_provider)
 }
 
 /// Why nothing matched, said with the session fact that most often explains it.
 fn no_application_matched(accessibility_enabled: Option<bool>) -> BackendError {
     match accessibility_enabled {
-        Some(false) => operation("select application", ACCESSIBILITY_DISABLED),
+        Some(false) => operation(
+            "select application",
+            format!("{NO_APPLICATION_MATCHED}; {ACCESSIBILITY_DISABLED}"),
+        ),
         _ => operation("select application", NO_APPLICATION_MATCHED),
     }
+}
+
+/// Why an enumeration came back empty, when the session explains it.
+///
+/// An empty desktop is an ordinary answer and stays one. An empty desktop on a session with
+/// accessibility switched off is a broken session, and saying so here reaches the caller before
+/// they have guessed at an application name.
+fn nothing_on_the_bus(accessibility_enabled: Option<bool>) -> Option<BackendError> {
+    (accessibility_enabled == Some(false)).then(|| {
+        operation(
+            "enumerate applications",
+            format!("{NOTHING_ON_THE_BUS}; {ACCESSIBILITY_DISABLED}"),
+        )
+    })
 }
 
 /// The identity string Axon uses for an AT-SPI object.
