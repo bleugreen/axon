@@ -393,12 +393,15 @@ function Invoke-ParkStage {
     # names it rather than killing a process the job has no way to put back.
     $timer = [System.Diagnostics.Stopwatch]::StartNew()
     while ($timer.Elapsed.TotalSeconds -lt $PipeFreeTimeoutSeconds) {
-        $status = Get-AxonStatus -Candidates @($ProbeExecutable)
+        $status = Get-AxonStatus -Candidates @($ProbeExecutable, $registrationPath)
         if ($null -ne $status -and -not $status.daemon.running) {
             Write-Note 'no daemon is answering on the Axon pipe'
             return
         }
         Wait-Tick
+    }
+    if ($null -eq $status) {
+        throw "nothing on this machine could report whether the Axon pipe is free after this desktop's daemon was stopped"
     }
     throw "$($status.daemon.endpoint) is still served by pid $($status.daemon.processId) after this desktop's daemon was stopped; nothing below could be evidence about this build while it holds the pipe"
 }
