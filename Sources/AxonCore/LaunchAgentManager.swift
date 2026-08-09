@@ -1,9 +1,88 @@
 import Darwin
 import Foundation
 
+/// What launchd runs, and whose privacy grants it therefore inherits.
+///
+/// macOS records a TCC grant against the bundle identity of a bundle's *main* executable, and
+/// against the absolute path of anything else — including a helper binary inside
+/// `Contents/Resources`. Axon installs every release at its own versioned path, so registering the
+/// CLI minted a fresh Accessibility identity on each upgrade and demanded a new human approval,
+/// while the Screen Recording grant held by the app bundle carried across untouched. Registering
+/// the bundle's main executable makes every TCC grant ride `CFBundleIdentifier`, where it survives
+/// upgrades and moves alike. Code signing is not involved in this: the designated requirements were
+/// already stable across releases.
+///
+/// The app is a complete daemon in its own right — the same `SocketServer` and `CommandRouter` on
+/// the same socket, plus the menu bar — so it needs no arguments. A CLI outside any bundle, which
+/// is what a dev build from `.build/` is, is registered as itself with `serve` and keeps the
+/// path-keyed identity that implies.
+public struct DaemonProgram: Equatable, Sendable {
+    /// Who macOS thinks is asking, when the registered program requests a privacy grant.
+    public enum Identity: Equatable, Sendable {
+        /// A bundle's main executable: grants follow the bundle identifier across paths.
+        case appBundle(identifier: String, bundlePath: String)
+        /// Any other executable: grants are keyed to this absolute path and are re-approved when
+        /// it changes.
+        case executablePath
+    }
+
+    public let executablePath: String
+    public let identity: Identity
+
+    public init(executablePath: String, identity: Identity) {
+        self.executablePath = executablePath
+        self.identity = identity
+    }
+
+    /// The arguments launchd passes. Derived from the identity rather than stored, because the two
+    /// answers are the same fact: the app daemon is launched argument-less, and the CLI needs the
+    /// verb that turns it into one.
+    public var arguments: [String] {
+        switch identity {
+        case .appBundle:
+            return []
+        case .executablePath:
+            return ["serve"]
+        }
+    }
+
+    /// How `daemon install` names the identity it registered, so a consumer can see which of the
+    /// two rules its permissions will follow rather than having to know this contract.
+    public var identityDescription: String {
+        switch identity {
+        case let .appBundle(identifier, _):
+            return "\(identifier) (app bundle; permissions persist across upgrades)"
+        case .executablePath:
+            return "\(executablePath) (executable path; permissions must be granted again if it moves)"
+        }
+    }
+
+    /// The program to register on behalf of a CLI running at `invokedExecutable`.
+    ///
+    /// A bundle that cannot name a main executable — no `Info.plist`, or one pointing at a file
+    /// that is not there — falls back to the invoking CLI. A registration that starts a daemon with
+    /// a path-keyed identity is worth more than one that starts nothing.
+    public static func resolved(
+        invokedExecutable: String,
+        fileManager: FileManager = .default
+    ) -> DaemonProgram {
+        guard
+            let bundle = AppBundle.enclosing(invokedExecutable, fileManager: fileManager),
+            let identifier = bundle.identifier,
+            let mainExecutable = bundle.mainExecutablePath
+        else {
+            return DaemonProgram(executablePath: invokedExecutable, identity: .executablePath)
+        }
+        return DaemonProgram(
+            executablePath: mainExecutable,
+            identity: .appBundle(identifier: identifier, bundlePath: bundle.path)
+        )
+    }
+}
+
 public struct LaunchAgentConfiguration: Equatable, Sendable {
     public let label: String
-    public let executablePath: String
+    public let program: DaemonProgram
     public let socketPath: String
     public let environmentVariables: [String: String]
     public let standardOutPath: String
@@ -11,12 +90,12 @@ public struct LaunchAgentConfiguration: Equatable, Sendable {
 
     public init(
         label: String = "dev.axon.daemon",
-        executablePath: String,
+        program: DaemonProgram,
         socketPath: String = AxonEnvironment.defaultSocketPath,
         environment: [String: String] = ProcessInfo.processInfo.environment
     ) {
         self.label = label
-        self.executablePath = executablePath
+        self.program = program
         self.socketPath = socketPath
 
         var daemonEnvironment: [String: String] = [
@@ -41,10 +120,7 @@ public struct LaunchAgentConfiguration: Equatable, Sendable {
     public var propertyListObject: [String: Any] {
         [
             "Label": label,
-            "ProgramArguments": [
-                executablePath,
-                "serve"
-            ],
+            "ProgramArguments": [program.executablePath] + program.arguments,
             "EnvironmentVariables": environmentVariables,
             "RunAtLoad": true,
             "KeepAlive": true,
