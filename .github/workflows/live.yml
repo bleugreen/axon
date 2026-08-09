@@ -17,6 +17,12 @@ jobs:
       group: axon-live-mac
       cancel-in-progress: false
     timeout-minutes: 30
+    env:
+      # The label `LaunchAgentConfiguration` registers by, in
+      # `Sources/AxonCore/LaunchAgentManager.swift`. Named once here because the parking and restore
+      # steps address the agent through `launchctl` directly, which the CLI cannot do for them: the
+      # question they ask is whether the agent is loaded, and no Axon subcommand reports that.
+      AXON_LAUNCH_AGENT_LABEL: dev.axon.daemon
     steps:
       - name: Check out Axon
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -35,44 +41,137 @@ jobs:
           AXON_CODESIGN_IDENTITY: 2A1FE6185D48E55E22FA9DB390B452D2E06AD665
         run: ./scripts/package-app
 
+      # A live runner is also somebody's desktop, so an Axon daemon already serving the endpoint is
+      # the normal case rather than a reason to refuse. It is stopped once for the whole job rather
+      # than from inside the probe, because the probe launches its own daemon and can only be
+      # evidence about this build if that daemon is the one answering. The last step puts it back.
+      - name: Park the installed Axon daemon
+        run: |
+          set -euo pipefail
+          cli="$PWD/dist/Axon.app/Contents/Resources/bin/axon"
+
+          # A probe app that outlived an earlier job, which `if: always()` cannot prevent because a
+          # killed runner runs nothing. It goes first: a leftover holds the socket lock if it bound
+          # and then wedged, and answers nothing if it never bound, so `shutdown` below can neither
+          # see it nor stop it, and every step after that would fail on an obstacle nobody names.
+          scripts/stop-probe-app "$PWD/dist/Axon.app/Contents/MacOS/Axon"
+
+          # Whether start-at-login was live when the job arrived, which is the only fact that says
+          # whether the restore owes this machine a daemon. The plist cannot answer it: `shutdown`
+          # boots the agent out and deliberately leaves the registration on disk, so a machine this
+          # job unloaded still reads as registered. `launchctl print` exits non-zero for a label
+          # that is not loaded in the domain.
+          agent_was_loaded=false
+          if launchctl print "gui/$(id -u)/$AXON_LAUNCH_AGENT_LABEL" >/dev/null 2>&1; then
+            agent_was_loaded=true
+          fi
+          # A daemon can also come from a running Axon.app, which launchd does not own and which
+          # `daemon restart` would not bring back. Recorded separately because both can be true at
+          # once and each is put back differently. The bundle that is actually running is recorded
+          # rather than assumed to be the one in /Applications, because reopening a different copy
+          # would be reopening a different program.
+          app_was_running=false
+          app_bundle=""
+          running_app_pid="$(pgrep -x Axon | head -1 || true)"
+          if [ -n "$running_app_pid" ]; then
+            app_was_running=true
+            app_bundle="$(ps -p "$running_app_pid" -o comm= | sed 's|/Contents/MacOS/Axon$||')"
+          fi
+          # Handed to the restore step before anything is stopped, so a machine the stop below
+          # fails on still gets its daemon back.
+          {
+            echo "AXON_AGENT_WAS_LOADED=$agent_was_loaded"
+            echo "AXON_APP_WAS_RUNNING=$app_was_running"
+            echo "AXON_APP_BUNDLE=$app_bundle"
+          } >> "$GITHUB_ENV"
+          echo "found this desktop as: LaunchAgent loaded=$agent_was_loaded, Axon.app running=$app_was_running${app_bundle:+ ($app_bundle)}"
+
+          # The label above is this workflow's copy of `LaunchAgentConfiguration`'s default, and
+          # nothing makes the two agree. Drift would fail in the worst way available: `launchctl
+          # print` would report the desktop's agent as not loaded, `shutdown` would boot it out
+          # under the CLI's own label regardless, and the restore would then leave the machine
+          # stopped on purpose. `registration.registered` is computed by the CLI from its own
+          # label's plist path, so a registration it can see where this job cannot name one is
+          # exactly that disagreement, caught before anything is stopped.
+          if "$cli" status --json | jq -e '.registration.registered' >/dev/null \
+            && [ ! -e "$HOME/Library/LaunchAgents/$AXON_LAUNCH_AGENT_LABEL.plist" ]; then
+            echo "::error::the CLI reports a LaunchAgent registration, but none exists at ~/Library/LaunchAgents/$AXON_LAUNCH_AGENT_LABEL.plist; AXON_LAUNCH_AGENT_LABEL has drifted from LaunchAgentConfiguration and this job cannot address this desktop's agent"
+            exit 1
+          fi
+
+          # The build under test does the stopping, and deliberately not the installed
+          # `/opt/homebrew/bin/axon`: a runner's installed CLI is whichever release it last
+          # installed, so a verb that release predates fails there, and `|| true` swallows it. That
+          # is not hypothetical -- the macOS runner's installed binary had no `shutdown` at all,
+          # which made this whole protection a no-op that nothing reported.
+          #
+          # Untolerated for the same reason. `shutdown` boots the agent out before asking the
+          # daemon to exit, so `KeepAlive` cannot relaunch it in the gap, and it exits non-zero
+          # while anything is still answering -- which makes its success the endpoint-is-free
+          # guarantee the probe depends on. A daemon left holding the endpoint would answer every
+          # assertion below.
+          "$cli" shutdown
+
       - name: Capture, resolve, act, and verify
         run: |
           set -euo pipefail
           cli="$PWD/dist/Axon.app/Contents/Resources/bin/axon"
+          app_executable="$PWD/dist/Axon.app/Contents/MacOS/Axon"
 
           if pgrep -x Calculator >/dev/null; then
             echo '::error::Calculator is already running; refusing to alter an existing desktop session.'
             exit 1
           fi
-          axon_was_running=false
-          if pgrep -x Axon >/dev/null; then
-            axon_was_running=true
-          fi
-          restore_desktop() {
-            "$cli" shutdown >/dev/null 2>&1 || true
-            killall Calculator >/dev/null 2>&1 || true
-            if [[ "$axon_was_running" == true ]]; then
-              open -a /Applications/Axon.app >/dev/null 2>&1 || true
-            fi
-          }
-          trap restore_desktop EXIT
+          # Calculator alone, because it is the only desktop state this step owns. The daemon it
+          # launches and the desktop's own belong to the restore step instead: a trap cannot run
+          # when the runner cancels the job, and putting a machine's start-at-login daemon back is
+          # not something to leave to a handler that a cancellation skips.
+          trap 'killall Calculator >/dev/null 2>&1 || true' EXIT
 
-          # `shutdown` stops whichever daemon holds the socket, so the freshly built app can bind
-          # it. Only one daemon may serve the endpoint; a second would now refuse to start.
-          /opt/homebrew/bin/axon shutdown >/dev/null 2>&1 || true
+          # `open -n` launches the bundle, and the app serves the endpoint from inside its own
+          # process -- there is no `serve` child to wait on -- so the app process is the daemon
+          # under test and its pid is what ties the document below to this build. `open` reports no
+          # pid, so it is found by the bundle executable's path, which no other install on the
+          # machine shares -- `pgrep -f` reads that path as a regular expression, which is harmless
+          # for a workspace path but would need quoting for one carrying metacharacters. Exactly
+          # one match is required: a second would be a leftover from an earlier run, and choosing
+          # between them would be a guess.
           open -n "$PWD/dist/Axon.app"
+          app_pid=""
           for _ in {1..40}; do
-            if "$cli" status --json | jq -e '.daemon.ready' >/dev/null 2>&1; then
+            app_pid="$(pgrep -f "$app_executable" || true)"
+            if [[ -n "$app_pid" ]]; then
               break
             fi
             sleep 0.25
           done
+          if [[ -z "$app_pid" ]]; then
+            echo "::error::nothing is running $app_executable; the app under test never launched"
+            exit 1
+          fi
+          if [[ "$(printf '%s\n' "$app_pid" | wc -l | tr -d '[:space:]')" != 1 ]]; then
+            echo "::error::$app_executable is running as pids $(printf '%s' "$app_pid" | tr '\n' ' '); an earlier run left one behind, and which of them answers the endpoint is a guess"
+            exit 1
+          fi
+
+          # Everything below is a client of the endpoint, so this is what makes the document
+          # evidence about the app this step launched rather than about whichever daemon is
+          # listening. Parking the installed one narrows that window but cannot close it: the
+          # version comparison below cannot tell this build from an installed daemon reporting the
+          # same version, and this runner's install is built from this repository.
+          scripts/assert-daemon-under-test "$cli" "$app_pid"
 
           # The published contract, checked against a real logged-in Mac.
           expected_version="$(cat VERSION)"
+          # A local binary invocation, so a statement about the checkout rather than about the
+          # daemon. The document's own `.version` below is the daemon's claim, and the pid
+          # assertion is what makes that claim about this build.
           test "$("$cli" version)" = "$expected_version"
           status="$("$cli" status --json)"
           printf '%s' "$status" | jq -e '.schemaVersion == "health-v1"' >/dev/null
+          # Re-asserted on this document rather than inherited from the check above, so that every
+          # claim read out of it describes the one process the pid names.
+          printf '%s' "$status" | jq -e --argjson pid "$app_pid" '.daemon.processId == $pid' >/dev/null
           printf '%s' "$status" | jq -e --arg v "$expected_version" '.version == $v' >/dev/null
           printf '%s' "$status" | jq -e '.platform == "macos"' >/dev/null
           printf '%s' "$status" | jq -e '.daemon.running and .daemon.ready' >/dev/null
@@ -107,6 +206,138 @@ jobs:
           "$cli" look Calculator --json \
             | jq -e '.indexedNodes | any(.role == "AXStaticText" and (.value | strings | contains("1")))'
           echo 'Calculator display verified'
+
+      # The counterpart to the parking step, and the reason the probe above may leave the machine
+      # in whatever state it failed in. `always()` because a failed probe is exactly when the
+      # desktop most needs its own daemon back.
+      #
+      # It needs a step of its own rather than a trap because `shutdown` is not a pause: it boots
+      # the LaunchAgent out so `KeepAlive` cannot relaunch the daemon mid-request, and the agent
+      # then stays unloaded for the rest of the login session. A job that calls it owes this
+      # machine a bootstrap, and a trap inside a step that the runner cancels never runs.
+      - name: Restore the installed Axon daemon
+        if: always()
+        run: |
+          set -euo pipefail
+          cli="$GITHUB_WORKSPACE/dist/Axon.app/Contents/Resources/bin/axon"
+
+          # Set only by the parking step, and the reason this step may stop a daemon at all:
+          # without it the job never touched this desktop, and anything serving here is its own.
+          if [ -z "${AXON_AGENT_WAS_LOADED:-}" ]; then
+            echo 'the installed daemon was never parked; leaving the desktop alone'
+            exit 0
+          fi
+
+          # Anything still serving is the probe's, because the desktop's own was stopped at the top
+          # of the job. It has to go before the agent is bootstrapped back, or the restored daemon
+          # starts into an endpoint that is already taken. Best-effort here alone: the probe's app
+          # may have exited already, and `shutdown` finding nothing to stop looks the same.
+          "$cli" shutdown >/dev/null 2>&1 || true
+          killall Calculator >/dev/null 2>&1 || true
+          # `shutdown` stops a daemon by asking it to, so it cannot reach a probe app that never
+          # bound the endpoint and therefore answers nothing. That process is this job's own, and
+          # if it bound and then wedged it holds the socket lock -- which would make the bootstrap
+          # below fail on an obstacle this step had left in its own way.
+          scripts/stop-probe-app "$GITHUB_WORKSPACE/dist/Axon.app/Contents/MacOS/Axon"
+
+          if [ "$AXON_AGENT_WAS_LOADED" != true ] && [ "${AXON_APP_WAS_RUNNING:-false}" != true ]; then
+            echo 'this desktop had no Axon daemon when the job arrived; leaving it stopped'
+            exit 0
+          fi
+
+          restart_output=""
+          if [ "$AXON_AGENT_WAS_LOADED" = true ]; then
+            # `daemon restart`, never `daemon install`: restart bootstraps the plist that is on
+            # disk without rewriting it, while install would repoint the desktop's registration at
+            # the invoking binary -- here a `dist` directory the next run overwrites. The build
+            # under test asks, because the installed CLI is whichever release this desktop last
+            # installed and need not carry the verb at all.
+            #
+            # Its status is recorded rather than acted on. `daemon restart` is `launchctl
+            # bootstrap` plus a readiness wait that parses the answer with *this* build's decoder,
+            # so the release skew this step already expects elsewhere -- the pid comparison below
+            # tolerates a document too old to name a process -- would fail here for a daemon that
+            # came back perfectly. The verdict is the pair below; this output is for the diagnosis
+            # when that pair fails.
+            restart_status=0
+            restart_output="$("$cli" daemon restart 2>&1)" || restart_status=$?
+            printf '%s\n' "$restart_output"
+            echo "daemon restart exited $restart_status"
+          elif [ "${AXON_APP_WAS_RUNNING:-false}" = true ]; then
+            # The app was this desktop's daemon, so it has to be back before the health round trip
+            # below can mean anything. When the agent is being restored too, the app is reopened
+            # after that instead, so the agent wins the endpoint and the pid check describes it.
+            if ! open -a "${AXON_APP_BUNDLE:-/Applications/Axon.app}"; then
+              echo "::error::this job stopped the desktop's ${AXON_APP_BUNDLE:-/Applications/Axon.app} and could not reopen it; this machine has no Axon daemon until someone starts it by hand"
+              exit 1
+            fi
+          fi
+
+          # Neither `daemon restart` nor `open` is trusted on its exit code: both report on
+          # starting a daemon, not on one serving, and `launchctl bootstrap` returning zero is a
+          # claim about loading a job. Read together on purpose, so the pair below describes one
+          # moment rather than two.
+          answering=false
+          status=""
+          agent_pid=""
+          for _ in {1..40}; do
+            status="$("$cli" status --json)"
+            # Tolerated deliberately, and the only place in this step where that is right: an
+            # unloaded label is one of the answers being asked for, and `launchctl print` reports
+            # it by exiting non-zero, which `pipefail` would otherwise turn into the step dying
+            # with a bare exit code instead of the diagnosis below.
+            agent_pid="$(launchctl print "gui/$(id -u)/$AXON_LAUNCH_AGENT_LABEL" 2>/dev/null | awk '/^[[:space:]]*pid = / { print $3; exit }' || true)"
+            if printf '%s' "$status" | jq -e '.daemon.running' >/dev/null; then
+              answering=true
+              break
+            fi
+            sleep 0.25
+          done
+          if [[ "$answering" != true ]]; then
+            echo "::error::the desktop Axon daemon did not come back at $(printf '%s' "$status" | jq -r '.daemon.endpoint'); this runner needs attention before the next live run"
+            if [ -n "$restart_output" ]; then
+              printf -- '--- daemon restart ---\n%s\n' "$restart_output"
+            fi
+            launchctl print "gui/$(id -u)/$AXON_LAUNCH_AGENT_LABEL" 2>&1 | head -20 || true
+            tail -20 "$HOME/Library/Logs/Axon/daemon.err.log" 2>/dev/null || true
+            exit 1
+          fi
+
+          if [ "$AXON_AGENT_WAS_LOADED" = true ]; then
+            # A daemon answering is not the agent running. Both halves are required, because the
+            # two failures look nothing alike to whoever reads this next: an agent that never came
+            # back, or an agent that is unloaded while something else answers on its endpoint --
+            # which is the case that leaves the next bootstrap dead on an address already in use.
+            if [ -z "$agent_pid" ]; then
+              echo "::error::a daemon is answering at $(printf '%s' "$status" | jq -r '.daemon.endpoint') but launchd is not running $AXON_LAUNCH_AGENT_LABEL; this desktop's start-at-login registration is still booted out"
+              printf -- '--- daemon restart ---\n%s\n' "$restart_output"
+              exit 1
+            fi
+            # Exact whenever the document allows it. A daemon this build can parse names its own
+            # process, so requiring that to be launchd's is what rules out one of the probe's
+            # orphans answering in the restored daemon's place. A missing pid is tolerated rather
+            # than required: this desktop runs whichever release it installed, and a payload this
+            # build is too new to parse reports a daemon that is up with no process id at all.
+            if printf '%s' "$status" | jq -e '.daemon.processId != null' >/dev/null \
+              && ! printf '%s' "$status" | jq -e --argjson pid "$agent_pid" '.daemon.processId == $pid' >/dev/null; then
+              echo "::error::$(printf '%s' "$status" | jq -r '.daemon.endpoint') is answered by pid $(printf '%s' "$status" | jq -r '.daemon.processId'), not the restored LaunchAgent (pid $agent_pid)"
+              printf -- '--- daemon restart ---\n%s\n' "$restart_output"
+              exit 1
+            fi
+          fi
+
+          # Reopened last, and only now. A desktop can run the menu-bar app on a machine whose
+          # LaunchAgent is registered too -- whichever binds first holds the endpoint -- which is
+          # why the two facts were recorded separately rather than as alternatives. Bringing the
+          # app back before the agent had settled would let it win the endpoint, and the check
+          # above would then be describing the wrong process.
+          if [ "$AXON_AGENT_WAS_LOADED" = true ] && [ "${AXON_APP_WAS_RUNNING:-false}" = true ]; then
+            if ! open -a "${AXON_APP_BUNDLE:-/Applications/Axon.app}"; then
+              echo "::error::the desktop's Axon daemon is answering again, but ${AXON_APP_BUNDLE:-/Applications/Axon.app} was also running when this job arrived and could not be reopened"
+              exit 1
+            fi
+          fi
+          echo 'the desktop Axon daemon is answering again'
 
   linux:
     name: Linux live loop

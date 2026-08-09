@@ -1,0 +1,368 @@
+#!/usr/bin/env python3
+"""Drives the macOS live lane's park, probe, and restore steps against stubbed system commands.
+
+These three steps decide what happens to a shared desktop when a probe fails, and they are the one
+part of the live workflow that cannot be rehearsed before it runs: the lane has no `pull_request`
+trigger, and its failure branches only execute when something has already gone wrong on the runner.
+A mistake in them is therefore discovered by a developer machine losing its start-at-login daemon,
+which is exactly the failure the steps exist to prevent.
+
+So the step bodies are extracted from `.github/workflows/live.yml` itself -- never copied -- and run
+with `launchctl`, `pgrep`, `pkill`, `open`, `ps`, `killall`, `sleep`, and the Axon CLI replaced by
+stubs on PATH. What is asserted is the branch each scenario lands on and the message it produces,
+because a restore that silently takes the wrong branch is the whole hazard.
+
+Run it on macOS to also exercise the runner's own `/bin/bash` 3.2, whose treatment of empty arrays
+under `set -u` differs from every newer bash and has already shaped how these steps are written.
+
+A constraint on every scenario added here, not merely a property that happens to hold today: every
+system command these steps reach for must be shadowed on PATH. The `Test` workflow's macOS job runs
+on the same machine as the live lane and shares no concurrency group with it, so a scenario that
+reaches a real `launchctl`, `pkill`, or `open` would be doing so on somebody's desktop, possibly
+mid-live-run. If a step starts calling something new, stub it here in the same change.
+
+And a warning for whoever extends this. The only way to know a scenario asserts anything is to break
+the step and watch it fail, which means editing the workflow and re-running -- but a mutation that
+silently fails to apply reports exactly what a vacuous assertion reports, so the mutation has to be
+verified before its verdict means anything. That is not hypothetical: the ordering assertions below
+were nearly deleted as useless because a mutation meant to move a sweep after the command it
+protects had in fact moved it to just before that command, leaving the order correct and the harness
+rightly green. Print the positions, assert the edit landed, and only then read the result. It is the
+same failure this file exists to catch, one level up.
+
+Usage: scripts/test-macos-live-recovery [path/to/live.yml]
+"""
+from __future__ import annotations
+
+import json
+import os
+import shutil
+import stat
+import subprocess
+import sys
+import tempfile
+from pathlib import Path
+
+REPO = Path(__file__).resolve().parent.parent
+WORKFLOW = Path(sys.argv[1]) if len(sys.argv) > 1 else REPO / ".github/workflows/live.yml"
+LABEL = "dev.axon.daemon"
+BASH = "/bin/bash" if Path("/bin/bash").exists() else shutil.which("bash")
+
+
+def job_lines(text: str, job_name: str) -> list[str]:
+    """Returns the lines belonging to one job.
+
+    Scoped because step names repeat across jobs -- `Capture, resolve, act, and verify` names both
+    the macOS and the Linux probe -- and a harness that silently picked the wrong platform's step
+    would be worse than one that did nothing.
+    """
+    lines = text.splitlines()
+    starts = [i for i, line in enumerate(lines) if line == f"  {job_name}:"]
+    if len(starts) != 1:
+        raise SystemExit(f"expected exactly one job named {job_name!r}, found {len(starts)}")
+    for end in range(starts[0] + 1, len(lines)):
+        stripped = lines[end]
+        if stripped.strip() and not stripped.startswith("   ") and stripped.startswith("  "):
+            return lines[starts[0]:end]
+    return lines[starts[0]:]
+
+
+def run_block(lines: list[str], step_name: str) -> str:
+    """Returns a named step's `run:` body, dedented.
+
+    Read as text rather than through a YAML parser so this script needs nothing installed. The
+    lookups fail loudly instead of returning something plausible, because a harness that silently
+    tests an empty string would report success for steps it never ran.
+    """
+    starts = [i for i, line in enumerate(lines) if line.strip() == f"- name: {step_name}"]
+    if len(starts) != 1:
+        raise SystemExit(f"expected exactly one step named {step_name!r}, found {len(starts)}")
+    runs = [j for j in range(starts[0], len(lines)) if lines[j].strip() == "run: |"]
+    if not runs:
+        raise SystemExit(f"step {step_name!r} has no `run: |` block")
+    head = runs[0]
+    indent = len(lines[head]) - len(lines[head].lstrip()) + 2
+    body: list[str] = []
+    for line in lines[head + 1:]:
+        if line.strip() and not line.startswith(" " * indent):
+            break
+        body.append(line[indent:] if len(line) >= indent else "")
+    block = "\n".join(body).rstrip() + "\n"
+    if not block.strip():
+        raise SystemExit(f"extracted an empty body for step {step_name!r}")
+    return block
+
+
+STUBS = {
+    # Prints a launchd job's pid the way `launchctl print` does, or exits 113 like a label that is
+    # not loaded in the domain -- the exit code the park step reads as "start-at-login was not live".
+    "launchctl": """
+        if [ "$1" = print ]; then
+          if [ "$STUB_AGENT_PID" = none ]; then exit 113; fi
+          printf '\\tstate = running\\n\\tpid = %s\\n' "$STUB_AGENT_PID"
+        fi
+    """,
+    # Backed by files so `pkill` can actually change what a later `pgrep` sees, which is what
+    # `scripts/stop-probe-app` loops on. `-x` is keyed by the process name it was asked about, so a
+    # scenario can say that Calculator is running without also claiming Axon is. Note that this
+    # cannot model BSD `pgrep`'s exclusion of its own ancestry, which `stop-probe-app` depends on --
+    # that dependency is verified by reading `man pgrep`, not by this harness.
+    "pgrep": """
+        case "$1" in
+          -f) file="$STUB_STATE/pgrep_f" ;;
+          -x) file="$STUB_STATE/pgrep_x_$2" ;;
+          *)  exit 1 ;;
+        esac
+        pids="$(cat "$file" 2>/dev/null || true)"
+        [ -n "$pids" ] || exit 1
+        printf '%s\\n' $pids
+    """,
+    "pkill": """
+        echo "pkill $*" >> "$STUB_LOG"
+        if [ "${STUB_PKILL_STICKY:-false}" = true ]; then exit 0; fi
+        : > "$STUB_STATE/pgrep_f"
+    """,
+    "killall": 'echo "killall $*" >> "$STUB_LOG"',
+    "open": 'echo "open $*" >> "$STUB_LOG"; exit ${STUB_OPEN_EXIT:-0}',
+    "ps": 'printf "%s\\n" "$STUB_APP_COMM"',
+    # Stubbed so the bounded retry loops cost nothing; the loops' bounds are not what is under test.
+    "sleep": "exit 0",
+}
+
+CLI = """
+    echo "axon $*" >> "$STUB_LOG"
+    case "$1" in
+      shutdown) exit ${STUB_SHUTDOWN_EXIT:-0} ;;
+      daemon)   printf 'restarted %s\\n' "$STUB_LABEL"; exit ${STUB_RESTART_EXIT:-0} ;;
+      status)   printf '%s' "$STUB_STATUS" ;;
+      version)  printf '%s' "${STUB_VERSION:-0.0.0}" ;;
+    esac
+"""
+
+
+def status_doc(running=True, pid=4242, registered=True):
+    daemon = {"running": running, "ready": running, "endpoint": "/tmp/axon.sock"}
+    if pid is not None:
+        daemon["processId"] = pid
+    return json.dumps({
+        "schemaVersion": "health-v1",
+        "version": "0.0.0",
+        "platform": "macos",
+        "daemon": daemon,
+        "registration": {"registered": registered, "mechanism": "launchd"},
+    })
+
+
+class Harness:
+    def __init__(self):
+        self.root = Path(tempfile.mkdtemp(prefix="axon-live-recovery-"))
+        self.bin = self.root / "stub-bin"
+        self.bin.mkdir()
+        for name, body in STUBS.items():
+            self._write_executable(self.bin / name, body)
+        # A workspace shaped like the real one, so the step scripts' path arithmetic is exercised
+        # rather than bypassed -- and so any command that escaped the stubs would name a temp path
+        # that matches nothing on the machine.
+        self.workspace = self.root / "workspace"
+        cli_dir = self.workspace / "dist/Axon.app/Contents/Resources/bin"
+        cli_dir.mkdir(parents=True)
+        self._write_executable(cli_dir / "axon", CLI)
+        (self.workspace / "scripts").symlink_to(REPO / "scripts")
+        self.probe_app = self.workspace / "dist/Axon.app/Contents/MacOS/Axon"
+
+    @staticmethod
+    def _write_executable(path: Path, body: str) -> None:
+        path.write_text("#!/bin/bash\n" + "\n".join(l[8:] if l.startswith(" " * 8) else l
+                                                    for l in body.strip("\n").splitlines()) + "\n")
+        path.chmod(path.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
+
+    def run(self, script: str, *, leftovers="", app_pids="", calculator_pids="",
+            home_has_plist=True, **stub_env):
+        state = self.root / "state"
+        shutil.rmtree(state, ignore_errors=True)
+        state.mkdir()
+        (state / "pgrep_f").write_text(leftovers)
+        (state / "pgrep_x_Axon").write_text(app_pids)
+        (state / "pgrep_x_Calculator").write_text(calculator_pids)
+        home = self.root / "home"
+        shutil.rmtree(home, ignore_errors=True)
+        (home / "Library/LaunchAgents").mkdir(parents=True)
+        (home / "Library/Logs/Axon").mkdir(parents=True)
+        if home_has_plist:
+            (home / f"Library/LaunchAgents/{LABEL}.plist").write_text("<plist/>")
+        log = self.root / "calls.log"
+        log.write_text("")
+        github_env = self.root / "github_env"
+        github_env.write_text("")
+
+        env = {
+            "PATH": f"{self.bin}{os.pathsep}{os.environ['PATH']}",
+            "HOME": str(home),
+            "GITHUB_WORKSPACE": str(self.workspace),
+            "GITHUB_ENV": str(github_env),
+            "AXON_LAUNCH_AGENT_LABEL": LABEL,
+            "STUB_LOG": str(log),
+            "STUB_STATE": str(state),
+            "STUB_LABEL": LABEL,
+            "STUB_AGENT_PID": "none",
+            "STUB_STATUS": status_doc(),
+            "STUB_APP_COMM": "/Applications/Axon.app/Contents/MacOS/Axon",
+        }
+        env.update({k: str(v) for k, v in stub_env.items()})
+
+        path = self.root / "step.sh"
+        path.write_text(script)
+        result = subprocess.run([BASH, str(path)], capture_output=True, text=True,
+                                env=env, cwd=self.workspace)
+        return result, log.read_text(), github_env.read_text()
+
+    def cleanup(self):
+        shutil.rmtree(self.root, ignore_errors=True)
+
+
+def main() -> int:
+    macos = job_lines(WORKFLOW.read_text(), "macos")
+    park = run_block(macos, "Park the installed Axon daemon")
+    probe = run_block(macos, "Capture, resolve, act, and verify")
+    restore = run_block(macos, "Restore the installed Axon daemon")
+
+    anchor = "\nscripts/assert-daemon-under-test"
+    if anchor not in probe:
+        raise SystemExit("the probe step no longer calls scripts/assert-daemon-under-test")
+    # Only the part that decides which process the lane will call the daemon under test; everything
+    # after it needs a real desktop.
+    probe_pid_resolution = probe.split(anchor)[0] + '\necho "RESOLVED=[$app_pid]"\n'
+
+    harness = Harness()
+    failures: list[str] = []
+
+    def check(step, script, label, want_exit, expect=(), forbid=(), order=(), **kwargs):
+        """Runs one scenario. `order` names calls that must appear in the log in that sequence.
+
+        Sequence is asserted separately from presence because for several of these steps the order
+        *is* the behaviour: a reap that happens after the stop it was meant to clear the way for
+        has happened, and has done nothing.
+        """
+        result, calls, github_env = harness.run(script, **kwargs)
+        combined = result.stdout + result.stderr
+        problems = []
+        if result.returncode != want_exit:
+            problems.append(f"exit {result.returncode}, wanted {want_exit}")
+        for needle in expect:
+            if needle not in combined and needle not in github_env and needle not in calls:
+                problems.append(f"missing {needle!r}")
+        for needle in forbid:
+            if needle in combined or needle in calls:
+                problems.append(f"unexpected {needle!r}")
+        placed = []
+        for needle in order:
+            index = calls.find(needle)
+            if index < 0:
+                problems.append(f"{needle!r} never happened, so its position cannot be checked")
+                placed = []
+                break
+            placed.append((needle, index))
+        for (earlier, first), (later, second) in zip(placed, placed[1:]):
+            if first > second:
+                problems.append(f"{later!r} happened before {earlier!r}")
+        status = "ok  " if not problems else "FAIL"
+        print(f"  [{status}] {step}: {label}")
+        for problem in problems:
+            print(f"           {problem}")
+            failures.append(f"{step}: {label}: {problem}")
+        return calls
+
+    print("Park step")
+    check("park", park, "records a loaded agent and a running app", 0,
+          expect=["AXON_AGENT_WAS_LOADED=true", "AXON_APP_WAS_RUNNING=true",
+                  "AXON_APP_BUNDLE=/Applications/Axon.app"],
+          app_pids="600", STUB_AGENT_PID=4242)
+    check("park", park, "records a desktop with no daemon at all", 0,
+          expect=["AXON_AGENT_WAS_LOADED=false", "AXON_APP_WAS_RUNNING=false"],
+          STUB_AGENT_PID="none", STUB_STATUS=status_doc(registered=False))
+    check("park", park, "hands the restore its facts even when the stop fails", 1,
+          expect=["AXON_AGENT_WAS_LOADED=true"],
+          STUB_AGENT_PID=4242, STUB_SHUTDOWN_EXIT=1)
+    # Before the stop, not merely during the step: a leftover holding the socket lock answers no
+    # health request, so the untolerated `shutdown` would fail on it for a reason nobody names.
+    check("park", park, "reaps a probe app left by an earlier run, before stopping anything", 0,
+          expect=["stopping probe app processes"], order=["pkill", "axon shutdown"],
+          leftovers="901", STUB_AGENT_PID=4242)
+    check("park", park, "fails when a leftover probe app will not die", 1,
+          expect=["still running as pid(s) 901"],
+          leftovers="901", STUB_PKILL_STICKY="true", STUB_AGENT_PID=4242)
+    check("park", park, "fails when the agent label has drifted from the CLI's", 1,
+          expect=["has drifted from LaunchAgentConfiguration"],
+          forbid=["axon shutdown"],
+          home_has_plist=False, STUB_AGENT_PID="none", STUB_STATUS=status_doc(registered=True))
+
+    print("Probe step (pid resolution)")
+    check("probe", probe_pid_resolution, "resolves the one process running the bundle", 0,
+          expect=["RESOLVED=[5150]"], leftovers="5150")
+    check("probe", probe_pid_resolution, "fails when the app never launched", 1,
+          expect=["never launched"])
+    check("probe", probe_pid_resolution, "fails when a leftover is also alive", 1,
+          expect=["5150 6161"], leftovers="5150 6161")
+    check("probe", probe_pid_resolution, "refuses a desktop already running Calculator", 1,
+          expect=["Calculator is already running"], leftovers="5150", calculator_pids="777")
+
+    print("Restore step")
+    check("restore", restore, "leaves a desktop it never parked alone", 0,
+          expect=["never parked"], forbid=["axon daemon restart"])
+    check("restore", restore, "restores the agent and matches launchd's pid", 0,
+          expect=["answering again"],
+          AXON_AGENT_WAS_LOADED="true", STUB_AGENT_PID=4242, STUB_STATUS=status_doc(pid=4242))
+    check("restore", restore, "accepts a document too old to name its process", 0,
+          expect=["answering again"],
+          AXON_AGENT_WAS_LOADED="true", STUB_AGENT_PID=4242, STUB_STATUS=status_doc(pid=None))
+    check("restore", restore, "accepts a nonzero daemon restart when the daemon is in fact back", 0,
+          expect=["answering again", "daemon restart exited 1"],
+          AXON_AGENT_WAS_LOADED="true", STUB_RESTART_EXIT=1,
+          STUB_AGENT_PID=4242, STUB_STATUS=status_doc(pid=4242))
+    check("restore", restore, "fails, with the restart output, when nothing answers", 1,
+          expect=["did not come back", "--- daemon restart ---"],
+          AXON_AGENT_WAS_LOADED="true", STUB_RESTART_EXIT=1,
+          STUB_AGENT_PID="none", STUB_STATUS=status_doc(running=False))
+    check("restore", restore, "fails when a daemon answers but the agent is still booted out", 1,
+          expect=["start-at-login registration is still booted out"],
+          AXON_AGENT_WAS_LOADED="true", STUB_AGENT_PID="none", STUB_STATUS=status_doc(pid=4242))
+    check("restore", restore, "fails when an orphan answers in the agent's place", 1,
+          expect=["not the restored LaunchAgent (pid 4242)"],
+          AXON_AGENT_WAS_LOADED="true", STUB_AGENT_PID=4242, STUB_STATUS=status_doc(pid=9999))
+    check("restore", restore, "reopens the app on a desktop the agent never served", 0,
+          expect=["open -a /Applications/Axon.app"], forbid=["axon daemon restart"],
+          AXON_AGENT_WAS_LOADED="false", AXON_APP_WAS_RUNNING="true",
+          AXON_APP_BUNDLE="/Applications/Axon.app", STUB_STATUS=status_doc(pid=7))
+    check("restore", restore, "fails when that app will not reopen", 1,
+          expect=["could not reopen it"],
+          AXON_AGENT_WAS_LOADED="false", AXON_APP_WAS_RUNNING="true",
+          AXON_APP_BUNDLE="/Applications/Axon.app", STUB_OPEN_EXIT=1, STUB_STATUS=status_doc(pid=7))
+    check("restore", restore, "leaves a desktop that had no daemon stopped", 0,
+          expect=["leaving it stopped"], forbid=["axon daemon restart", "open -a"],
+          AXON_AGENT_WAS_LOADED="false", AXON_APP_WAS_RUNNING="false")
+    # Before the bootstrap, for the mirror-image reason: `daemon restart` would otherwise put an
+    # agent into an endpoint this step was about to free, and `KeepAlive` would crash-loop it.
+    check("restore", restore, "reaps a probe app that answers nothing, before bootstrapping", 0,
+          order=["axon shutdown", "pkill", "axon daemon restart"],
+          leftovers="902", AXON_AGENT_WAS_LOADED="true",
+          STUB_AGENT_PID=4242, STUB_STATUS=status_doc(pid=4242))
+
+    # An app reopened first could win the endpoint, and the pid check would then describe it rather
+    # than the restored agent -- failing a restore that in fact succeeded.
+    check("restore", restore, "restores both the agent and the app, agent first", 0,
+          order=["axon daemon restart", "open -a /Applications/Axon.app"],
+          AXON_AGENT_WAS_LOADED="true", AXON_APP_WAS_RUNNING="true",
+          AXON_APP_BUNDLE="/Applications/Axon.app",
+          STUB_AGENT_PID=4242, STUB_STATUS=status_doc(pid=4242))
+
+    harness.cleanup()
+    print()
+    if failures:
+        print(f"{len(failures)} failure(s)")
+        return 1
+    print("all macOS live-lane recovery scenarios behaved as documented")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
