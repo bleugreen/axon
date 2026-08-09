@@ -54,7 +54,7 @@ $ProbeScript = (Resolve-Path $ProbeScript).Path
 
 $StubbedSeams = @(
     'Write-Note', 'Wait-Tick', 'Test-ProcessIsRunning', 'Get-AxonProcess', 'Stop-ProcessById',
-    'Get-DesktopRegistrationPath', 'Start-DesktopDaemonTask', 'Register-ProbeTask',
+    'Get-DesktopRegistrationPath', 'Get-DesktopTaskState', 'Start-DesktopDaemonTask', 'Register-ProbeTask',
     'Unregister-ProbeTask', 'Start-ProbeTask', 'Invoke-Axon', 'Invoke-AxonMcp', 'Get-ExpectedVersion',
     'Invoke-CargoBuild', 'Copy-ProbeExecutable', 'Read-ParkState', 'Write-ParkState', 'Clear-ParkState'
 )
@@ -188,6 +188,9 @@ $ReadinessTimeoutSeconds = 1
 $PipeFreeTimeoutSeconds = 1
 $ProcessDiscoveryTimeoutSeconds = 1
 $RestoreTimeoutSeconds = 1
+$TaskInstanceTimeoutSeconds = 1
+# $RestoreStartAttempts is deliberately left at its real value. It is a count rather than a bound,
+# and how many times the restore will start this desktop's registration is the behaviour under test.
 
 $ExpectedVersion = (Get-Content (Join-Path $RepositoryRoot 'VERSION')).Trim()
 $DesktopInstallPath = 'C:\Users\mitch\AppData\Local\Axon\0.2.1\axon-win-0.2.1-windows-x86_64\axon-win.exe'
@@ -235,8 +238,23 @@ function Reset-Machine {
         # gone by the time anything asks whether it is running.
         DeadPids = @()
         McpResponder = $null
+        # Reads of the desktop task's state that report a running instance while nothing is running
+        # from the registered path: an instance that has exited but has not finished, which is what
+        # makes a start against it a silent no-op. Counted in reads rather than in seconds because
+        # this harness's Wait-Tick does not sleep.
+        WindingDownReads = 0
+        # Starts that launch a daemon which exits before it is ready -- the daemon's own 30-second
+        # UIA bound on a machine too slow to meet it.
+        StartsThatDie = 0
     }
     Start-FakeDesktopDaemon
+}
+
+function Test-FakeDesktopTaskIsRunning {
+    <# What Task Scheduler would report for this desktop's registration. The registered action is
+    `serve`, so the task runs for exactly as long as the daemon it started is alive. #>
+    if ($script:Machine.WindingDownReads -gt 0) { return $true }
+    [bool] @($script:Machine.Processes | Where-Object { $_.ExecutablePath -eq $script:Machine.DesktopRegistration })
 }
 
 function New-FakeHealth {
@@ -318,8 +336,29 @@ function Get-DesktopRegistrationPath {
     $script:Machine.DesktopRegistration
 }
 
+function Get-DesktopTaskState {
+    $script:Machine.Log.Add('read-desktop-task-state')
+    $running = Test-FakeDesktopTaskIsRunning
+    if ($script:Machine.WindingDownReads -gt 0) { $script:Machine.WindingDownReads-- }
+    if ($running) { 'Running' } else { 'Ready' }
+}
+
 function Start-DesktopDaemonTask {
     $script:Machine.Log.Add('start-desktop-task')
+    if (Test-FakeDesktopTaskIsRunning) {
+        # Task Scheduler discards a start against a task whose previous instance has not finished,
+        # and `schtasks /run` reports success while discarding it. The registration carries no
+        # multiple-instances policy, so the default -- IgnoreNew -- is what applies.
+        $script:Machine.Log.Add('start-desktop-task-discarded')
+        return
+    }
+    if ($script:Machine.StartsThatDie -gt 0) {
+        $script:Machine.StartsThatDie--
+        # Started, and gone before it was ready. Task Scheduler is finished with this instance, so
+        # the next start is not discarded -- it is simply never issued unless the lane makes one.
+        $script:Machine.Log.Add('start-desktop-task-exited')
+        return
+    }
     Start-FakeDesktopDaemon
 }
 
@@ -473,6 +512,13 @@ function Test-Said {
 function Test-Did {
     param([string] $Pattern)
     [bool] @($script:Machine.Log | Where-Object { $_ -match $Pattern })
+}
+
+function Get-Count {
+    <# How many times exactly this happened. Exact rather than a match, so that a log entry which
+    records a call being *discarded* cannot be counted as the call succeeding. #>
+    param([Parameter(Mandatory)][string] $Entry)
+    @($script:Machine.Log | Where-Object { $_ -eq $Entry }).Count
 }
 
 function Get-Position {
@@ -879,6 +925,59 @@ Test-Scenario 'restore: a desktop whose daemon never comes back fails loudly' {
     $result = Invoke-StageUnderTest -Name 'restore'
     Check 'the stage fails' $result.Failed
     Check 'it asks for attention' ($result.Error -match 'needs attention before the next live run') $result.Error
+    Check 'the debt is not cleared' ($null -ne $script:Machine.ParkState)
+    # The other half of the patience below: a budget that never expires is a lane that hangs instead
+    # of reporting a machine nobody can fix from here.
+    Check 'it spent the whole retry budget and no more' ((Get-Count 'start-desktop-task') -eq $RestoreStartAttempts) "started it $(Get-Count 'start-desktop-task') time(s)"
+}
+
+Test-Scenario 'restore: a start is not issued against an instance that has not finished' {
+    # Run 31339688217, in the shape that burned it. A background Windows servicing operation made
+    # this desktop unusably slow for three minutes; the daemon `daemon restart` started exited on its
+    # own 30-second UIA readiness bound, and the lane's one fallback start landed on a task whose
+    # previous instance had not finished. Task Scheduler discards a start in that window -- silently,
+    # and reporting success -- so nothing started at all, and the poll that followed was waiting for
+    # a daemon nobody had launched.
+    Set-ParkedMachine
+    $script:Machine.RestartFails = $true
+    $script:Machine.WindingDownReads = 3
+    $result = Invoke-StageUnderTest -Name 'restore'
+    Check 'the stage succeeds' (-not $result.Failed) $result.Error
+    Check 'it read the task state before starting it' ((Get-Position 'read-desktop-task-state') -ge 0)
+    Test-Order -First 'read-desktop-task-state' -Then 'start-desktop-task'
+    Check 'it issued no start Task Scheduler would discard' ((Get-Count 'start-desktop-task-discarded') -eq 0)
+    Check 'it started the task once the instance had finished' ((Get-Count 'start-desktop-task') -eq 1) "started it $(Get-Count 'start-desktop-task') time(s)"
+    Check 'the desktop has its daemon back' ($script:Machine.Health.daemon.running -eq $true)
+    Check 'the debt is cleared' ($null -eq $script:Machine.ParkState)
+}
+
+Test-Scenario 'restore: a start whose daemon dies under load is followed by another' {
+    # The daemon's 30-second UIA readiness bound is fail-fast by design, so a machine slow enough to
+    # blow it produces a start that launches a process and still leaves nothing answering. That is
+    # the daemon behaving correctly; a lane with one start turns it into a red run.
+    Set-ParkedMachine
+    $script:Machine.RestartFails = $true
+    $script:Machine.StartsThatDie = 1
+    $result = Invoke-StageUnderTest -Name 'restore'
+    Check 'the stage succeeds' (-not $result.Failed) $result.Error
+    Check 'the first start produced nothing' ((Get-Count 'start-desktop-task-exited') -eq 1)
+    Check 'it says so' (Test-Said 'nothing answered within')
+    Check 'it started the task again' ((Get-Count 'start-desktop-task') -eq 2) "started it $(Get-Count 'start-desktop-task') time(s)"
+    Check 'the desktop has its daemon back' ($script:Machine.Health.daemon.running -eq $true)
+    Check 'the debt is cleared' ($null -eq $script:Machine.ParkState)
+}
+
+Test-Scenario 'restore: an instance that never finishes fails rather than being started over' {
+    # A task that reports a running instance while nothing answers is a machine that needs a human.
+    # Every start here would be discarded, so making them would only make the failure quieter.
+    Set-ParkedMachine
+    $script:Machine.RestartFails = $true
+    $script:Machine.WindingDownReads = [int]::MaxValue
+    $result = Invoke-StageUnderTest -Name 'restore'
+    Check 'the stage fails' $result.Failed
+    Check 'it asks for attention' ($result.Error -match 'needs attention before the next live run') $result.Error
+    Check 'it started nothing that would have been discarded' ((Get-Count 'start-desktop-task') -eq 0)
+    Check 'it says what it was waiting for' (Test-Said 'a start now would be discarded')
     Check 'the debt is not cleared' ($null -ne $script:Machine.ParkState)
 }
 

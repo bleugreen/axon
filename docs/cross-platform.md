@@ -853,6 +853,24 @@ the restore needs no Axon binary at all when the build under test has vanished:
 Task Scheduler starts the registration at its own path, and the health round trip
 that decides the verdict is read through the executable that registration names.
 
+That restore is also patient, and patient in a particular place. The daemon gives
+up thirty seconds after failing to get a UI Automation client, which is fail-fast
+behaviour worth keeping — and which a desktop under a background servicing
+operation can blow while being perfectly healthy four minutes later. So the lane
+carries the patience rather than the daemon's bound: when nothing is answering,
+the restore starts `Axon Windows Daemon` up to three times, and it reads the
+task's state before each start. That read is the part that is easy to leave out.
+Task Scheduler discards a start against a task whose previous instance has not
+finished, and `schtasks /run` reports success while discarding it, so a fallback
+that fires blindly can start nothing at all and leave a poll waiting for a daemon
+nobody launched — which is how run 31339688217 ended with a red lane and a
+healthy desktop. A running instance is therefore waited out rather than started
+over, with the health round trip polled throughout, since `Running` is equally
+what a healthy daemon looks like: the registered action is `serve`, so the task
+runs for as long as its daemon lives. When the budget expires with nothing
+answering, the stage fails exactly as loudly as before, because a desktop that
+cannot get its daemon back is a runner that needs a human.
+
 The repository's Actions policy requires approval for every outside
 contributor's workflow run before pull-request code can reach the self-hosted
 desktops. The live workflow still has no `pull_request` trigger because its
