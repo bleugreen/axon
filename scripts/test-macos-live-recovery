@@ -15,6 +15,12 @@ because a restore that silently takes the wrong branch is the whole hazard.
 Run it on macOS to also exercise the runner's own `/bin/bash` 3.2, whose treatment of empty arrays
 under `set -u` differs from every newer bash and has already shaped how these steps are written.
 
+A constraint on every scenario added here, not merely a property that happens to hold today: every
+system command these steps reach for must be shadowed on PATH. The `Test` workflow's macOS job runs
+on the same machine as the live lane and shares no concurrency group with it, so a scenario that
+reaches a real `launchctl`, `pkill`, or `open` would be doing so on somebody's desktop, possibly
+mid-live-run. If a step starts calling something new, stub it here in the same change.
+
 Usage: scripts/test-macos-live-recovery [path/to/live.yml]
 """
 from __future__ import annotations
@@ -88,11 +94,14 @@ STUBS = {
         fi
     """,
     # Backed by files so `pkill` can actually change what a later `pgrep` sees, which is what
-    # `scripts/stop-probe-app` loops on.
+    # `scripts/stop-probe-app` loops on. `-x` is keyed by the process name it was asked about, so a
+    # scenario can say that Calculator is running without also claiming Axon is. Note that this
+    # cannot model BSD `pgrep`'s exclusion of its own ancestry, which `stop-probe-app` depends on --
+    # that dependency is verified by reading `man pgrep`, not by this harness.
     "pgrep": """
         case "$1" in
           -f) file="$STUB_STATE/pgrep_f" ;;
-          -x) file="$STUB_STATE/pgrep_x" ;;
+          -x) file="$STUB_STATE/pgrep_x_$2" ;;
           *)  exit 1 ;;
         esac
         pids="$(cat "$file" 2>/dev/null || true)"
@@ -158,12 +167,14 @@ class Harness:
                                                     for l in body.strip("\n").splitlines()) + "\n")
         path.chmod(path.stat().st_mode | stat.S_IEXEC | stat.S_IXGRP | stat.S_IXOTH)
 
-    def run(self, script: str, *, leftovers="", app_pids="", home_has_plist=True, **stub_env):
+    def run(self, script: str, *, leftovers="", app_pids="", calculator_pids="",
+            home_has_plist=True, **stub_env):
         state = self.root / "state"
         shutil.rmtree(state, ignore_errors=True)
         state.mkdir()
         (state / "pgrep_f").write_text(leftovers)
-        (state / "pgrep_x").write_text(app_pids)
+        (state / "pgrep_x_Axon").write_text(app_pids)
+        (state / "pgrep_x_Calculator").write_text(calculator_pids)
         home = self.root / "home"
         shutil.rmtree(home, ignore_errors=True)
         (home / "Library/LaunchAgents").mkdir(parents=True)
