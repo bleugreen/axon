@@ -4,5 +4,5 @@
 /// derived copy because Swift needs it at compile time. `scripts/check-version` fails the build
 /// when the two disagree, and `scripts/check-version --write` resynchronizes them.
 public enum AxonVersion {
-    public static let current = "0.2.2"
+    public static let current = "0.2.3"
 }
