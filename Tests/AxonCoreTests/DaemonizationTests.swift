@@ -204,6 +204,50 @@ private func makeReleaseBundle(
     #expect(after.identity == .appBundle(identifier: "com.bleugreen.axon"))
 }
 
+@Test func daemonInstallRefusesToAdoptABundleThatIsNotAxons() throws {
+    let root = FileManager.default.temporaryDirectory
+        .appendingPathComponent("axon-foreign-bundle-\(UUID().uuidString)")
+    defer { try? FileManager.default.removeItem(at: root) }
+    let consumer = root.appendingPathComponent("MyConsumerApp.app")
+    let cli = try makeReleaseBundle(
+        at: consumer,
+        identifier: "com.example.myapp",
+        executableName: "MyConsumerApp"
+    )
+
+    let program = DaemonProgram.resolved(invokedExecutable: cli)
+
+    // The embedding contract invites a consumer to ship the CLI inside their own application, so
+    // an enclosing `.app` is not evidence that the app is Axon. Adopting it would register their
+    // program as the daemon: launched at every login by RunAtLoad, serving nothing, and restarted
+    // by KeepAlive whenever the user quits it.
+    #expect(program.executablePath == cli)
+    #expect(program.identity == .executablePath)
+    #expect(program.arguments == ["serve"])
+}
+
+@Test func enclosingBundleIsFoundEvenWithoutAReadableInfoPlist() throws {
+    let root = FileManager.default.temporaryDirectory
+        .appendingPathComponent("axon-plistless-\(UUID().uuidString)")
+    defer { try? FileManager.default.removeItem(at: root) }
+    let bundle = root.appendingPathComponent("Axon.app")
+    let binDirectory = bundle.appendingPathComponent("Contents/Resources/bin")
+    try FileManager.default.createDirectory(at: binDirectory, withIntermediateDirectories: true)
+    let cli = binDirectory.appendingPathComponent("axon").path
+    FileManager.default.createFile(atPath: cli, contents: Data())
+
+    let found = AppBundle.enclosing(cli)
+
+    // `axon edit` finds the sibling editor app by walking to the enclosing bundle, and needs the
+    // path even when the plist tells it nothing. Making this initializer failable would silently
+    // send that lookup to its LaunchServices fallback instead.
+    #expect(found?.path == bundle.path)
+    #expect(found?.identifier == nil)
+    #expect(found?.mainExecutablePath == nil)
+    // Registration still declines it, because it cannot be shown to be Axon's own app.
+    #expect(DaemonProgram.resolved(invokedExecutable: cli).identity == .executablePath)
+}
+
 @Test func daemonInstallRegistersAnUnbundledCLIAsItself() {
     // A dev build from `.build/` has no bundle to inherit from. Registering it as itself keeps
     // `daemon install` working there, with the path-keyed identity that implies.
@@ -257,7 +301,13 @@ private func makeReleaseBundle(
     // The app is a GUI process: it needs a login session, and the rest of the contract is unchanged
     // by which executable is registered.
     #expect(plist?["LimitLoadToSessionType"] as? String == "Aqua")
-    #expect((plist?["EnvironmentVariables"] as? [String: String])?["AXON_SOCKET_PATH"] == "/tmp/axon-test.sock")
+    let environment = plist?["EnvironmentVariables"] as? [String: String]
+    #expect(environment?["AXON_SOCKET_PATH"] == "/tmp/axon-test.sock")
+    // KeepAlive only restarts a process that exits, so the registered daemon has to be told it is
+    // supervised. Without this the app absorbs a lost socket race and stays up answering nothing.
+    #expect(environment?[AxonEnvironment.launchdManagedKey] == "1")
+    #expect(AxonEnvironment.isLaunchdManaged(environment ?? [:]))
+    #expect(!AxonEnvironment.isLaunchdManaged([:]))
 }
 
 @Test func launchAgentConfigurationBuildsDaemonPlist() throws {
