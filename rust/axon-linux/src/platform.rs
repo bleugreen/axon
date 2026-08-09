@@ -747,7 +747,7 @@ impl Actor {
     /// and a window claims a child and answers with nothing but the null reference. It is the wait
     /// condition and nothing more — a provider that parks the null reference deeper than this ends
     /// the wait early rather than being missed, because the walk that follows carries
-    /// [`SUBTREE_UNPUBLISHED`] on whichever node withheld, wherever it sits.
+    /// [`CHILD_NOT_PUBLISHED`] on whichever node withheld, wherever it sits.
     ///
     /// Costs one round trip per window per poll, so a many-windowed application spends a few
     /// hundred D-Bus calls across a full wait. That is the price of the case it exists for, and it
@@ -1125,19 +1125,23 @@ mod tests {
     }
 
     #[test]
-    fn only_a_provider_that_published_none_of_its_claimed_children_is_withholding() {
-        // The shape Chromium presents: one claimed child, nothing published.
-        assert!(published(vec![null()]).1);
-        assert!(published(vec![null(), null()]).1);
+    fn every_dropped_reference_is_reported_and_only_a_total_one_is_worth_waiting_on() {
+        // The shape Chromium presents: children claimed, none published. Reported, and waited on.
+        let (children, dropped) = published(vec![null()]);
+        assert!(dropped > 0 && published_nothing(&children, dropped));
 
-        // A hole in a child range is a hole. `Null` is AT-SPI's general "no object" sentinel, and
-        // a provider that published real children alongside one is withholding nothing — reading
-        // it as withholding would put a false statement in the caller's tree and, worse, send
-        // every capture of that application through an activation wait that cannot change it.
-        assert!(!published(vec![real("/org/a11y/atspi/accessible/1"), null()]).1);
+        // A partial answer is reported and never waited on. Saying nothing would let a window that
+        // published a menu bar and withheld everything else pass for a window containing a menu
+        // bar; waiting on it would spend the activation timeout on a hole that will not fill in.
+        let (children, dropped) = published(vec![real("/org/a11y/atspi/accessible/1"), null()]);
+        assert_eq!(children.len(), 1);
+        assert!(dropped > 0);
+        assert!(!published_nothing(&children, dropped));
 
         // A genuinely childless node is a different fact again, and stays silent.
-        assert_eq!(published(vec![]), (vec![], false));
+        let (children, dropped) = published(vec![]);
+        assert!(children.is_empty() && dropped == 0);
+        assert!(!published_nothing(&children, dropped));
     }
 
     #[test]
@@ -1145,10 +1149,10 @@ mod tests {
         assert_eq!(incompleteness(false, false, false), None);
         assert_eq!(
             incompleteness(false, false, true).as_deref(),
-            Some(SUBTREE_UNPUBLISHED)
+            Some(CHILD_NOT_PUBLISHED)
         );
         // A node at the depth limit was never asked about its children, so it is neither empty nor
-        // able to report withholding — the failure this whole change exists to stop.
+        // able to report anything about the provider — the failure this change exists to stop.
         assert_eq!(
             incompleteness(false, true, false).as_deref(),
             Some(DEPTH_LIMIT_REACHED)
