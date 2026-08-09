@@ -56,7 +56,7 @@ mechanism.
 
 | Verb | Effect |
 | --- | --- |
-| `daemon install` | Register the invoking executable to start at login, then wait for the daemon to answer a health request |
+| `daemon install` | Register this install's daemon to start at login, then wait for the daemon to answer a health request |
 | `daemon uninstall` | Stop the daemon and remove the registration |
 | `daemon restart` | Restart the daemon that is already registered, without changing the registration |
 | `shutdown` | Stop the running daemon, leaving the registration in place |
@@ -86,12 +86,44 @@ Registration is platform-native:
 | Windows | Scheduled task | `Axon Windows Daemon`, `ONLOGON`, restricted to the current interactive user |
 | Linux | systemd user unit | `~/.config/systemd/user/axon.service`, bound to `graphical-session.target` |
 
+### What gets registered
+
+`daemon install` registers a daemon that lives inside the install it was invoked from. It never
+copies the binary anywhere. Which executable of that install it names depends on the platform, and
+on macOS the answer is decided by the operating system's privacy model rather than by convenience.
+
+On macOS the release ships one `Axon.app` holding two executables: the daemon app at
+`Contents/MacOS/Axon` and the CLI at `Contents/Resources/bin/axon`. **`daemon install` registers the
+app**, argument-less. macOS attributes a privacy grant — Accessibility, Screen Recording — to a
+bundle identity only for that bundle's *main* executable; anything else, including a helper binary
+under `Contents/Resources`, is recorded against its absolute path. Because every release installs
+at its own versioned path, registering the CLI made each upgrade a new subject in System Settings
+and demanded a fresh human approval, while grants held by the app carried across untouched.
+Registering the app makes every grant ride `CFBundleIdentifier`, so permissions survive upgrades
+and moves alike. Code signing plays no part in this; the designated requirements were already
+stable across releases.
+
+The app is a complete daemon in its own right — the same server and command router on the same
+socket, plus the menu bar and recorder — so it needs no arguments, and `axon serve` remains a
+development and probe entry point rather than a second thing to install.
+
+When the invoking CLI is not inside a bundle, which is what a development build is, it is
+registered as itself with `serve` and keeps the path-keyed identity that implies. A bundle that
+cannot name a usable main executable degrades the same way: a daemon that starts with a path-keyed
+identity is worth more than a registration that starts nothing. `daemon install` prints the
+identity it registered, because which of the two rules applies is not visible from the path alone
+and decides whether the next upgrade needs a human in System Settings.
+
+Windows and Linux have no equivalent per-application grant, and register the invoking executable
+with `serve`.
+
 ### Install from a permanent path
 
-**`daemon install` registers the path of the executable you invoked.** It does not copy the binary
-anywhere. Invoking it from a build directory, an unpacked temporary directory, or a CI workspace
-registers a path that disappears, leaving a registration that can never start again. Install from
-the permanent location the binary will live at.
+**The registered path is the one you invoked from; nothing is copied.** Invoking `daemon install`
+from a build directory, an unpacked temporary directory, or a CI workspace registers a path that
+disappears, leaving a registration that can never start again. Install from the permanent location
+the binary will live at. This holds for the app registration too: the path stops mattering to
+permissions, but launchd still has to find the bundle.
 
 The CLI resolves symlinks before registering, and warns on stderr when the resolved path looks
 temporary or build-scoped. The warning is not a refusal; a consumer that knows better can proceed.
@@ -160,7 +192,7 @@ Accessibility grant all produce schema-valid documents rather than transport err
   "version": "0.2.2",
   "platform": "macos",
   "daemon": { "running": true, "ready": true, "endpoint": "/tmp/axon.sock", "processId": 4210 },
-  "registration": { "registered": true, "mechanism": "launchd", "path": "/Applications/Axon.app/Contents/Resources/bin/axon" },
+  "registration": { "registered": true, "mechanism": "launchd", "path": "/Applications/Axon.app/Contents/MacOS/Axon" },
   "session": { "interactive": true, "graphical": true },
   "permissions": [{ "name": "accessibility", "granted": true }],
   "capabilities": [{ "capability": "enumerate", "usable": true }]
