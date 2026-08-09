@@ -653,7 +653,9 @@ impl Actor {
         let identifier = Some(identity(&root));
         let mut refs = Vec::new();
         let mut remaining = MAX_NODES;
-        let mut node = self.node(root.clone(), 0, &mut remaining, &mut refs).await?;
+        let mut node = self
+            .node(root.clone(), 0, &mut remaining, &mut refs)
+            .await?;
         // The first walk is what detects an unactivated provider, so nothing is paid for this by an
         // application that publishes its tree the way most toolkits do.
         if awaiting_provider(&node) {
