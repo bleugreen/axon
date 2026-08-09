@@ -204,6 +204,20 @@ private func makeReleaseBundle(
     #expect(after.identity == .appBundle(identifier: "com.bleugreen.axon"))
 }
 
+@Test func acceptRetriesAClientHangupRatherThanEndingTheDaemon() {
+    // The registered daemon exits when accept throws, so this classification decides whether one
+    // peer disappearing at the wrong moment takes the whole daemon down with it — and with it any
+    // recording in progress. A signal and an aborted handshake are ordinary; a bad descriptor is
+    // the server being done.
+    #expect(SocketServer.isRetryableAcceptError(EINTR))
+    #expect(SocketServer.isRetryableAcceptError(ECONNABORTED))
+    #expect(!SocketServer.isRetryableAcceptError(EBADF))
+    #expect(!SocketServer.isRetryableAcceptError(EINVAL))
+    // Absent on purpose: the listener blocks, so EAGAIN would mean a state this loop cannot
+    // interpret, and retrying it would spin.
+    #expect(!SocketServer.isRetryableAcceptError(EAGAIN))
+}
+
 @Test func daemonInstallRefusesToAdoptABundleThatIsNotAxons() throws {
     let root = FileManager.default.temporaryDirectory
         .appendingPathComponent("axon-foreign-bundle-\(UUID().uuidString)")
