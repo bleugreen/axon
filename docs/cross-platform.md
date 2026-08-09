@@ -831,7 +831,12 @@ the next park carries an unpaid debt forward rather than overwriting it — with
 that, the following run would find no daemon, record that there had never been
 one to put back, and let its own restore clear the debt and report success,
 turning an outage that a logon would have ended into one that lasts the whole
-login session.
+login session. The restore step is conditioned only on the checkout having
+succeeded, and not on this job having parked anything, for the same reason: a
+job-scoped sentinel is a second answer to a question the machine already answers,
+and it can only subtract — exactly in the case the record exists for, since a run
+that fails before its own park is precisely the run that would otherwise walk
+past a debt it could have paid.
 
 Three further consequences shape the lane. Each build is executed once — a
 `version` call — before anything on the desktop is borrowed, which is where
