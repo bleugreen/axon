@@ -63,13 +63,34 @@ public struct SocketServer: @unchecked Sendable {
         try handleClient(try acceptClient(on: descriptor))
     }
 
+    /// Accepts the next client, retrying the failures that are not this server's.
+    ///
+    /// Throwing here ends the daemon, because the registered program exits so launchd can restart
+    /// it. That makes the distinction load-bearing: a client that hangs up during the accept
+    /// handshake, or a signal arriving mid-call, says nothing about whether this server can serve,
+    /// and tearing the process down for one would discard whatever it was holding — an in-progress
+    /// user recording, for instance — to no purpose. Both conditions consume the pending
+    /// connection, so the loop advances rather than spinning.
     private func acceptClient(on descriptor: Int32) throws -> Int32 {
-        let client = accept(descriptor, nil, nil)
-        guard client >= 0 else {
-            throw SocketError.failed("accept")
+        while true {
+            let client = accept(descriptor, nil, nil)
+            if client >= 0 {
+                setNoSigPipe(client)
+                return client
+            }
+            guard SocketServer.isRetryableAcceptError(errno) else {
+                throw SocketError.failed("accept")
+            }
         }
-        setNoSigPipe(client)
-        return client
+    }
+
+    /// Whether an `accept()` failure is an ordinary interruption rather than a server that is done.
+    ///
+    /// Deliberately narrow: only the two conditions that mean "try again for reasons outside this
+    /// server". `EAGAIN` is absent because the listener blocks, so seeing it would mean the socket
+    /// is in a state this loop does not understand, and spinning on it would burn a core.
+    static func isRetryableAcceptError(_ code: Int32) -> Bool {
+        code == EINTR || code == ECONNABORTED
     }
 
     private func handleClient(_ client: Int32) throws {

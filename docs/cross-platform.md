@@ -223,11 +223,14 @@ start-at-login is a platform-native concern: a LaunchAgent limited to the Aqua
 session on macOS, an interactive `ONLOGON` scheduled task on Windows, and a
 systemd user unit bound to `graphical-session.target` on Linux.
 
-All three register the *invoking* executable rather than copying a binary
-anywhere, so there is exactly one registration truth and callers must invoke
-from a permanent path. All three treat a successful authenticated health round
-trip as the readiness contract; a bound socket or an existing pipe is never
-taken as evidence that a daemon is serving.
+None of the three copies a binary anywhere, so there is exactly one
+registration truth and callers must invoke from a permanent path. Windows and
+Linux register the *invoking* executable; macOS registers the enclosing
+`Axon.app` when there is one, because that is the only way a privacy grant
+binds to the bundle identity instead of to a path that changes every release.
+All three treat a successful authenticated health round trip as the readiness
+contract; a bound socket or an existing pipe is never taken as evidence that a
+daemon is serving.
 
 Status is one versioned document, `health-v1`, described by
 `schema/health-v1.schema.json` and modelled in both Swift (`AxonCore`) and Rust

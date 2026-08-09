@@ -141,7 +141,7 @@ For a consumer embedding Axon in something else, the CLI-managed daemon lifecycl
 path from the menu bar app. See [Embedding Axon](embedding.md) for the full contract:
 
 ```sh
-axon daemon install     # register this executable to start at login, then wait for health
+axon daemon install     # register this install's daemon to start at login, then wait for health
 axon daemon restart
 axon daemon uninstall
 axon shutdown           # stop the daemon, keep the registration
@@ -149,10 +149,17 @@ axon status --json      # the machine-readable health-v1 document
 axon version
 ```
 
-The two are distinct on purpose. `Axon.app` is the ordinary user experience: a visible menu bar
-service to inspect, quit, and approve. The `daemon` verbs register the invoking executable with
-launchd so a consumer can manage Axon without a person in the loop; because they register the
-invoking path, they must be run from a permanent location.
+The two differ in how you drive Axon, not in what runs. `Axon.app` is the ordinary user
+experience: a visible menu bar service to inspect, quit, and approve. The `daemon` verbs put that
+same app under launchd so a consumer can manage Axon without a person in the loop — on macOS
+`daemon install` registers the enclosing `Axon.app`, so Accessibility and Screen Recording are
+granted to the app bundle once and survive every upgrade. See
+[Embedding Axon](embedding.md#what-gets-registered) for why. Invoke it from a permanent location
+regardless, because launchd still has to find the bundle.
+
+One consequence worth knowing: when a registration is installed, launchd keeps the app alive, so
+**Quit** in the menu bar restarts it rather than stopping it. Use `axon shutdown` to stop the
+running daemon, or `axon daemon uninstall` to remove the registration as well.
 
 The lower-level socket server still exists:
 
@@ -160,7 +167,8 @@ The lower-level socket server still exists:
 axon serve
 ```
 
-That is what the LaunchAgent runs, and it is useful directly when debugging.
+It is what a registration without an enclosing app bundle runs — a development build, for
+instance — and it is useful directly when debugging.
 
 ## Register with an Agent
 
@@ -249,8 +257,8 @@ lsof /tmp/axon.sock
 
 More than one holder means an older install is still running alongside `Axon.app`, usually a
 `dev.axon.daemon` LaunchAgent from when the CLI installed a copied daemon bundle into Application
-Support. That workflow is gone — `daemon install` now registers the executable you invoke — so
-remove the leftover once:
+Support. That workflow is gone — `daemon install` now registers a daemon inside the install you
+invoke it from, never a copy — so remove the leftover once:
 
 ```sh
 launchctl bootout gui/$(id -u)/dev.axon.daemon

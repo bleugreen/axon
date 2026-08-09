@@ -19,8 +19,8 @@ final class AxonDaemonAppDelegate: NSObject, NSApplicationDelegate, @unchecked S
         case editor(documentID: String, beforeBlockID: String?, scope: UserRecordingScope?)
     }
 
-    nonisolated private static let appBundleIdentifier = "com.bleugreen.axon"
-    nonisolated private static let editorBundleIdentifier = "com.bleugreen.axon.editor"
+    nonisolated private static let appBundleIdentifier = AppBundle.axonDaemonIdentifier
+    nonisolated private static let editorBundleIdentifier = AppBundle.axonEditorIdentifier
     nonisolated private static let homebrewCaskName = "axon"
 
     private let socketPath = AxonEnvironment.socketPath()
@@ -90,16 +90,34 @@ final class AxonDaemonAppDelegate: NSObject, NSApplicationDelegate, @unchecked S
         serverQueue.async { [socketPath] in
             do {
                 try SocketServer(path: socketPath, router: router).run()
+                Self.serverEnded("socket server stopped accepting connections", app: self)
             } catch {
-                let message = String(describing: error)
-                Task { @MainActor in
-                    self.serverState = "failed"
-                    self.serverError = message
-                    self.installMenu()
-                }
+                Self.serverEnded("socket server failed: \(String(describing: error))", app: self)
             }
         }
         serverState = "running"
+    }
+
+    /// What to do when the socket server stops, which depends on who is supervising this process.
+    ///
+    /// Under launchd the daemon must exit so `KeepAlive` restarts it. Losing the socket race at
+    /// login is ordinary — an incumbent may still be shutting down — and exiting is what lets the
+    /// job take the endpoint as soon as it frees up. `axon serve` has always recovered this way;
+    /// staying alive instead would leave launchd supervising a process it believes is healthy while
+    /// it answers nothing, recoverable only by a person running `daemon restart`.
+    ///
+    /// Hand-launched there is nobody to restart it, so the failure belongs in the menu where
+    /// someone can read it rather than in a process that vanishes.
+    nonisolated private static func serverEnded(_ message: String, app: AxonDaemonAppDelegate) {
+        if AxonEnvironment.isLaunchdManaged() {
+            FileHandle.standardError.write(Data("axon: \(message)\n".utf8))
+            exit(1)
+        }
+        Task { @MainActor in
+            app.serverState = "failed"
+            app.serverError = message
+            app.installMenu()
+        }
     }
 
     private func installMenu() {
