@@ -644,18 +644,25 @@ release the desktop user already runs. The freshly built daemon loses the bind,
 and when a probe backgrounds it the shell never sees that it exited, so every
 assertion afterwards is true of a binary nobody changed.
 
-Each lane closes this, by different means. macOS shuts the installed daemon
-down before launching the build under test, which boots its LaunchAgent out so
-`KeepAlive` cannot bring it back mid-step, and pins the reported version to the
-checked-out `VERSION`. Linux parks the desktop's systemd registration once for
-the whole job rather than once per probe, confirms the endpoint is free before
-any probe starts, and has each probe assert that the process id in the health
-document is the process id it spawned (`scripts/assert-daemon-under-test`); a
-final step restores the parked registration — contents, enablement, and running
-state — whatever the probes did to the machine. Windows snapshots and replaces
-the scheduled interactive-session daemon for the duration of its probe. A lane
-without this reports that some daemon on the machine works, which is worse than
-having no lane, because the lane is trusted.
+Only the Linux lane currently closes this. It parks the desktop's systemd
+registration once for the whole job rather than once per probe, confirms nothing
+is answering on the endpoint before any probe starts, and has each probe assert
+that the process id in the health document is the process id it spawned
+(`scripts/assert-daemon-under-test`). A final step restores the parked
+registration — contents, enablement, and running state — whatever the probes did
+to the machine, and requires the restored daemon to answer for itself rather
+than accepting `systemctl start`, which this unit's `Type=simple` makes a claim
+about `exec` rather than about readiness.
+
+macOS and Windows narrow the window without closing it. macOS shuts the
+installed daemon down before launching the build under test, which boots its
+LaunchAgent out so `KeepAlive` cannot bring it back mid-step; what remains open
+is the same-version case, since the only assertion tying the health document to
+the checkout is a version comparison that an installed daemon built from this
+repository satisfies just as well. Windows snapshots and replaces the scheduled
+interactive-session daemon for the duration of its probe. A lane without an
+authorship check reports that some daemon on the machine works, which is worse
+than having no lane, because the lane is trusted.
 
 The repository's Actions policy requires approval for every outside
 contributor's workflow run before pull-request code can reach the self-hosted
