@@ -680,8 +680,8 @@ impl Actor {
             return Err(no_application_matched(self.accessibility_enabled().await));
         };
         let identifier = identity(&root);
-        if self.activated.insert(identifier.clone()) {
-            self.wake_provider(&root).await;
+        if !self.activated.contains(&identifier) && self.wake_provider(&root).await {
+            self.activated.insert(identifier.clone());
         }
         let identifier = Some(identifier);
         let mut refs = Vec::new();
@@ -715,23 +715,31 @@ impl Actor {
     /// exactly like the MSAA touch the Windows backend performs before capturing a WebView2 target.
     ///
     /// A provider that never publishes costs its first capture the timeout and is then reported as
-    /// it answers, carrying [`SUBTREE_UNPUBLISHED`] rather than passing for a complete empty tree.
+    /// it answers, carrying [`CHILD_NOT_PUBLISHED`] rather than passing for a complete empty tree.
     /// Later captures of it skip this entirely, because the caller remembers having asked.
-    async fn wake_provider(&self, root: &ObjectRefOwned) {
-        // The reply is discarded because the call itself is the signal, and a provider that does
-        // not implement attributes is not one that needed waking.
-        if let Ok(proxy) = timeout(
+    ///
+    /// Returns whether the ask reached the application, which is what the caller may remember. A
+    /// reply, an error reply, and a timeout on this side all count: the call was delivered, and
+    /// the switch inside the application has been thrown or declined on its own terms. Only
+    /// failing to build the proxy means nothing was sent, and remembering that as an ask would
+    /// suppress activation for that application for the rest of the daemon's life.
+    async fn wake_provider(&self, root: &ObjectRefOwned) -> bool {
+        let Ok(proxy) = timeout(
             "accessible proxy",
             root.as_accessible_proxy(&self.connection),
         )
         .await
-        {
-            let _ = timeout("attributes", proxy.get_attributes()).await;
-        }
+        else {
+            return false;
+        };
+        // The reply is discarded because the call itself is the signal, and a provider that does
+        // not implement attributes is not one that needed waking.
+        let _ = timeout("attributes", proxy.get_attributes()).await;
         let deadline = Instant::now() + ACTIVATION_TIMEOUT;
         while self.withholding(root).await && Instant::now() < deadline {
             tokio::time::sleep(ACTIVATION_POLL).await;
         }
+        true
     }
     /// Whether this application is still claiming a tree it has not published.
     ///
