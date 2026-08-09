@@ -398,12 +398,15 @@ jobs:
           # Type=simple means systemd calls it started at exec, which is before Axon can bind, so a
           # zero exit here covers a daemon that exec'd and died on a socket a probe never released.
           # Trusting it would be the same silent failure this job exists to close, one step further
-          # out. Only `running` is required -- not `ready`, and not a matching pid: the desktop runs
-          # whichever release it installed, and a health payload this build is too new to parse
-          # still reports a daemon that is up.
+          # out. Both halves are required: systemd's view alone is the exec claim above, and an
+          # answer alone could come from a probe's orphan that bound while the socket was being
+          # swept -- which is the case that leaves the restored unit dead on AddrInUse.
           answering=false
           for _ in {1..40}; do
-            if "$daemon" status --json | jq -e '.daemon.running' >/dev/null; then
+            status="$("$daemon" status --json)"
+            main_pid="$(systemctl --user show -p MainPID --value axon.service)"
+            if [ "$(systemctl --user is-active axon.service || true)" = active ] \
+              && printf '%s' "$status" | jq -e '.daemon.running' >/dev/null; then
               answering=true
               break
             fi
@@ -412,6 +415,18 @@ jobs:
           if [[ "$answering" != true ]]; then
             echo "::error::the desktop Axon daemon was restarted but is not answering at $("$daemon" status --json | jq -r '.daemon.endpoint'); this runner needs attention before the next live run"
             systemctl --user is-active axon.service || true
+            journalctl --user -u axon.service -n 20 --no-pager || true
+            exit 1
+          fi
+          # Exact whenever the document allows it. A daemon this build can parse names its own
+          # process, so requiring that to be systemd's is what rules out an orphan answering in the
+          # restored service's place. `ready` and a mandatory pid are deliberately not required:
+          # the desktop runs whichever release it installed, and a payload this build is too new to
+          # parse reports a daemon that is up with no process id at all, where the pair above is
+          # the most that can honestly be asserted.
+          if printf '%s' "$status" | jq -e '.daemon.processId != null' >/dev/null \
+            && ! printf '%s' "$status" | jq -e --argjson pid "$main_pid" '.daemon.processId == $pid' >/dev/null; then
+            echo "::error::$(printf '%s' "$status" | jq -r '.daemon.endpoint') is answered by pid $(printf '%s' "$status" | jq -r '.daemon.processId'), not the restored axon.service (pid $main_pid)"
             journalctl --user -u axon.service -n 20 --no-pager || true
             exit 1
           fi
