@@ -79,6 +79,17 @@ if ($phantom.Count -ne 0) {
     throw "this harness stubs functions the probe script no longer declares as seams: $($phantom -join ', ')"
 }
 
+# Every PowerShell file this lane runs, parsed. The scenarios below exercise the probe script by
+# dot-sourcing it, but nothing would notice a syntax error in the runner-side stage invoker until a
+# push to `main` had already reached the runner.
+foreach ($file in Get-ChildItem -Path (Join-Path $RepositoryRoot '.github\scripts') -Filter '*.ps1') {
+    $parseErrors = $null
+    [System.Management.Automation.Language.Parser]::ParseFile($file.FullName, [ref] $null, [ref] $parseErrors) | Out-Null
+    if ($parseErrors) {
+        throw "$($file.Name) does not parse: line $($parseErrors[0].Extent.StartLineNumber): $($parseErrors[0].Message)"
+    }
+}
+
 # Every bound in the probe script, shrunk. A scenario that has to sit through the real one is a
 # scenario nobody adds.
 $ReadinessTimeoutSeconds = 1
