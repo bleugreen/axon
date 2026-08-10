@@ -225,3 +225,42 @@ jobs:
           test -x "dist/axon-linux-$VERSION-linux-x86_64/axon-linux"
           ACTUAL="$(dist/axon-linux-$VERSION-linux-x86_64/axon-linux version)"
           [[ "$ACTUAL" == "$VERSION" ]]
+
+      # The Windows release job stages, signs, and archives as three separate steps, so the archive
+      # it publishes is only correct if the archiving phase reads the staging directory as it stands
+      # at that moment. The phases are platform-independent, and this is the one host in CI where
+      # package-rust runs outside a release, so the contract is checked here.
+      - name: Smoke-test the split staging and archiving phases
+        run: |
+          set -euo pipefail
+          VERSION="$(./scripts/check-version)"
+          NAME="axon-linux-$VERSION-linux-x86_64"
+          rm -rf "dist/$NAME" "dist/$NAME.tar.gz" "dist/$NAME.tar.gz.sha256"
+
+          # Archiving must not invent a release out of a staging directory nobody built.
+          if ./scripts/package-rust axon-linux --archive-only > /dev/null 2>&1; then
+            echo "::error::--archive-only produced an archive with nothing staged"
+            exit 1
+          fi
+
+          ./scripts/package-rust axon-linux --stage-only > /dev/null
+          test -x "dist/$NAME/axon-linux"
+          test ! -e "dist/$NAME.tar.gz"
+
+          # A staging directory left behind by a different revision carries the same version in its
+          # name, so only the recorded provenance distinguishes it from this build's.
+          STAMP="dist/.$NAME.stage"
+          KEPT="$(cat "$STAMP")"
+          echo "axon-linux $VERSION 0000000000000000000000000000000000000000" > "$STAMP"
+          if ./scripts/package-rust axon-linux --archive-only > /dev/null 2>&1; then
+            echo "::error::--archive-only archived a staging directory built from another revision"
+            exit 1
+          fi
+          echo "$KEPT" > "$STAMP"
+
+          # Stand in for the signing step, which rewrites the staged binary between the phases.
+          printf 'signature' >> "dist/$NAME/axon-linux"
+          ./scripts/package-rust axon-linux --archive-only > /dev/null
+          cd dist
+          sha256sum -c "$NAME.tar.gz.sha256"
+          tar -xzf "$NAME.tar.gz" -O "$NAME/axon-linux" | cmp - "$NAME/axon-linux"

@@ -79,6 +79,39 @@ An action reported as unsupported is not a refusal, and the difference decides w
 
 The consequence to be honest about: the two strategies interpret the delta differently. The wheel honors the documented pixel distance; `AXScrollToVisible` cannot, because the app decides how far to move to reveal the chosen descendant. Unifying that is a tool-vocabulary change, not a bug fix.
 
+## Release Signing
+
+Decision: sign Windows release binaries with Azure Artifact Signing, using a GitHub OIDC federated
+credential.
+
+Signing a Windows binary is usually filed under polish — the SmartScreen warning a user clicks
+through on first launch. For Axon it is load-bearing, because an automation daemon is structurally
+indistinguishable from malware to a behavioral classifier: it registers a scheduled task, relaunches
+itself into the interactive session, and serves a pipe. Judged on behavior alone, an unsigned build
+is judged badly. Two measurements on the Windows lab machine settled this. Defender's
+block-at-first-sight held a freshly built `axon-win.exe` for about 47 seconds before its first
+instruction ran, waiting on a cloud verdict for a file it had never seen — the daemon's own stage
+log showed 1.46 seconds from process start to ready, so the entire delay preceded the process. And
+Defender's machine-learning behavioral detections quarantined an unsigned build outright, mid-run.
+A signature does not argue that the behavior is benign; it makes each build another artifact from a
+publisher already known rather than a new unknown file, which is the input those systems actually
+weigh.
+
+A machine-level antivirus exclusion fixes the lab and nothing else. Every consumer installing Axon
+meets the same first-seen friction on their own machine, which is why the exclusion is an operator's
+convenience and signing is the deliverable.
+
+Azure Artifact Signing was chosen over the alternatives on operational grounds rather than
+technical ones. A hardware OV/EV token means PIN automation in CI and a physical dependency in the
+release path. SignPath's open-source tier is free but slower to onboard and issues a certificate
+named for the sponsoring foundation rather than the publisher. Azure issues short-lived
+certificates from a managed service, which is why every signature must be timestamped: without one
+the signature outlives its certificate by days rather than years. Authentication is a federated
+OIDC credential scoped to a GitHub environment, so the release path holds no signing secret at all.
+
+macOS already had the equivalent — Developer ID plus notarization — and Linux has no comparable
+desktop trust check, so the checksum remains the whole story there.
+
 ## Deferred Design Notes
 
 These are not blocking questions. They are details that should be decided when implementation reaches the relevant layer.

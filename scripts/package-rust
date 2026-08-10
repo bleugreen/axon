@@ -1,17 +1,36 @@
 #!/usr/bin/env bash
 # Builds a release archive for one of the Rust daemons.
 #
-# Usage: scripts/package-rust <axon-win|axon-linux>
+# Usage: scripts/package-rust <axon-win|axon-linux> [--stage-only|--archive-only]
 #
 # Archives are named with both the version and the target, because a consumer pins an exact
 # release and has to be able to name the artifact it wants without guessing. Nothing here resolves
 # a mutable "latest".
+#
+# Packaging has two phases with the staging directory as the handoff between them: staging builds
+# the binary and lays out the directory that becomes the archive, archiving compresses that
+# directory and writes the checksum. They run together by default. They are separable because
+# code signing has to happen in between — a signature applied after archiving would not be inside
+# the archive a consumer downloads, and one applied after checksumming would make the checksum
+# describe bytes that no longer exist. See docs/embedding.md for the release-signing contract.
+#
+# Splitting the phases means the archive's contents arrive through a filesystem path rather than
+# from the build that just ran, and that path is keyed by version alone. So staging records what it
+# built and archiving refuses a directory it does not recognize, for the same reason the host check
+# below exists: an archive named for a version has to contain that version's build, or the name a
+# consumer pins is a lie.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
+usage() {
+  printf 'usage: scripts/package-rust <axon-win|axon-linux> [--stage-only|--archive-only]\n' >&2
+  exit 2
+}
+
 CRATE="${1:-}"
+PHASE="${2:---all}"
 VERSION="$("$ROOT/scripts/check-version")"
 DIST_DIR="$ROOT/dist"
 
@@ -27,8 +46,25 @@ case "$CRATE" in
     EXPECTED_HOST="linux"
     ;;
   *)
-    printf 'usage: scripts/package-rust <axon-win|axon-linux>\n' >&2
-    exit 2
+    usage
+    ;;
+esac
+
+case "$PHASE" in
+  --all)
+    DO_STAGE=1
+    DO_ARCHIVE=1
+    ;;
+  --stage-only)
+    DO_STAGE=1
+    DO_ARCHIVE=0
+    ;;
+  --archive-only)
+    DO_STAGE=0
+    DO_ARCHIVE=1
+    ;;
+  *)
+    usage
     ;;
 esac
 
@@ -47,18 +83,58 @@ if [[ "$HOST" != "$EXPECTED_HOST" ]]; then
 fi
 
 STAGING="$DIST_DIR/$CRATE-$VERSION-$TARGET"
-rm -rf "$STAGING"
-mkdir -p "$STAGING"
+# Kept beside the staging directory rather than inside it, so provenance never ships in the archive.
+STAMP="$DIST_DIR/.$(basename "$STAGING").stage"
 
-(cd rust && cargo build --release --locked -p "$CRATE")
-cp "rust/target/release/$BINARY" "$STAGING/$BINARY"
-chmod 755 "$STAGING/$BINARY"
+# What a staging directory is a build of. A dirty worktree is marked but cannot be identified
+# further, so edits made between the two phases of one dirty checkout are not caught; what this
+# does catch is the case that silently publishes wrong bytes, a staging directory left behind by a
+# different revision that happened to carry the same version number.
+stage_identity() {
+  local revision="no-revision"
+  if git rev-parse HEAD >/dev/null 2>&1; then
+    revision="$(git rev-parse HEAD)"
+    if [[ -n "$(git status --porcelain)" ]]; then
+      revision="$revision-dirty"
+    fi
+  fi
+  printf '%s %s %s\n' "$CRATE" "$VERSION" "$revision"
+}
 
-# The unit template ships with the binary: `daemon install` renders it, so a consumer who wants to
-# inspect what will be registered before installing can read it out of the archive.
-if [[ "$CRATE" == "axon-linux" ]]; then
-  mkdir -p "$STAGING/systemd"
-  cp rust/axon-linux/systemd/axon.service.in "$STAGING/systemd/axon.service.in"
+if [[ "$DO_STAGE" == 1 ]]; then
+  rm -rf "$STAGING"
+  mkdir -p "$STAGING"
+
+  (cd rust && cargo build --release --locked -p "$CRATE")
+  cp "rust/target/release/$BINARY" "$STAGING/$BINARY"
+  chmod 755 "$STAGING/$BINARY"
+
+  # The unit template ships with the binary: `daemon install` renders it, so a consumer who wants
+  # to inspect what will be registered before installing can read it out of the archive.
+  if [[ "$CRATE" == "axon-linux" ]]; then
+    mkdir -p "$STAGING/systemd"
+    cp rust/axon-linux/systemd/axon.service.in "$STAGING/systemd/axon.service.in"
+  fi
+
+  stage_identity > "$STAMP"
+  printf 'staged: %s\n' "$STAGING"
+fi
+
+if [[ "$DO_ARCHIVE" == 0 ]]; then
+  exit 0
+fi
+
+if [[ ! -f "$STAGING/$BINARY" ]]; then
+  printf '%s not found; run scripts/package-rust %s --stage-only first\n' "$STAGING/$BINARY" "$CRATE" >&2
+  exit 1
+fi
+
+if [[ ! -f "$STAMP" || "$(cat "$STAMP")" != "$(stage_identity)" ]]; then
+  printf 'staging directory %s was not built from this checkout; re-run scripts/package-rust %s --stage-only\n' \
+    "$STAGING" "$CRATE" >&2
+  printf '  staged: %s\n' "$(cat "$STAMP" 2>/dev/null || printf '<no record>')" >&2
+  printf '  wanted: %s\n' "$(stage_identity)" >&2
+  exit 1
 fi
 
 sha256_of() {
