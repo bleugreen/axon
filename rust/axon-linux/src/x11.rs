@@ -54,6 +54,36 @@ pub struct X11Session {
     atoms: Atoms,
     /// True when a Wayland compositor is also present, which means this X server is XWayland.
     under_wayland: bool,
+    /// The timestamp carried by synthetic events sent to a target window.
+    ///
+    /// A sent event has to carry a time, and this client cannot read the server's clock without a
+    /// round trip per event. Seeded from the wall clock and advanced per event, which is exactly
+    /// what the acceptance harness did: the values are far larger than any server uptime, so a
+    /// toolkit that discards events older than the last one it saw sees these as current, and each
+    /// event in a sequence is strictly later than the one before it. Matching the harness matters
+    /// more than elegance here, because the harness is what measured that these events are acted
+    /// on at all.
+    event_clock: AtomicU32,
+}
+
+/// A window's position on screen and its size: the resolved geometry a pixel-rung coordinate is
+/// converted through, and the reading that says whether it has moved since.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct WindowGeometry {
+    pub origin: (i16, i16),
+    pub size: (u16, u16),
+}
+
+impl WindowGeometry {
+    /// Whether a screen point falls inside this window.
+    pub fn contains(&self, (x, y): (i16, i16)) -> bool {
+        let right = i32::from(self.origin.0) + i32::from(self.size.0);
+        let bottom = i32::from(self.origin.1) + i32::from(self.size.1);
+        i32::from(x) >= i32::from(self.origin.0)
+            && i32::from(y) >= i32::from(self.origin.1)
+            && i32::from(x) < right
+            && i32::from(y) < bottom
+    }
 }
 
 impl X11Session {
