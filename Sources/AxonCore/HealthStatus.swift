@@ -177,12 +177,25 @@ public struct RegistrationHealth: Codable, Equatable, Sendable {
 public struct SessionHealth: Codable, Equatable, Sendable {
     public var interactive: Bool
     public var graphical: Bool
+    /// Whether the session's own accessibility switch is on, where the platform has one.
+    ///
+    /// `nil` is no claim rather than false. macOS has no such switch, so this build never sets it;
+    /// it is carried because a Linux document reports `org.a11y.Status.IsEnabled` here, and both
+    /// languages parse every health document rather than only their own platform's.
+    public var accessibilityEnabled: Bool?
     public var reason: String?
     public var detail: String?
 
-    public init(interactive: Bool, graphical: Bool, reason: String? = nil, detail: String? = nil) {
+    public init(
+        interactive: Bool,
+        graphical: Bool,
+        accessibilityEnabled: Bool? = nil,
+        reason: String? = nil,
+        detail: String? = nil
+    ) {
         self.interactive = interactive
         self.graphical = graphical
+        self.accessibilityEnabled = accessibilityEnabled
         self.reason = reason
         self.detail = detail
     }

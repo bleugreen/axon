@@ -86,6 +86,12 @@ impl<B: PointerTargetVerifier> Router<B> {
             snapshot: None,
         }
     }
+    /// The backend this router drives, for the facts a daemon answers outside the tool surface.
+    /// `health` is the whole of that today: the session's accessibility switch is a live reading,
+    /// not a static capability, so it is asked for at the moment a health request arrives.
+    pub fn backend(&self) -> &B {
+        &self.backend
+    }
     pub fn request(&mut self, request: JsonRpcRequest) -> Option<JsonRpcResponse> {
         let id = request.id?;
         let params = request

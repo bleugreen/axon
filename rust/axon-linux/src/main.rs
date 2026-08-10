@@ -120,7 +120,7 @@ mod lifecycle {
         // Without a desktop the unit is enabled but deliberately not started. `--now` would start
         // it anyway, contradicting the unit's own binding to graphical-session.target and leaving
         // a daemon running where it has no desktop to automate.
-        let session = session_health(&SessionEnvironment::from_env());
+        let session = session_health(&SessionEnvironment::from_env(), None);
         if !session.graphical {
             systemctl(&["enable", UNIT_NAME])?;
             println!("registered {UNIT_NAME} -> {executable}");
@@ -169,7 +169,7 @@ mod lifecycle {
         systemctl(&["restart", UNIT_NAME])?;
         println!("restarted {UNIT_NAME} -> {path}");
 
-        let session = session_health(&SessionEnvironment::from_env());
+        let session = session_health(&SessionEnvironment::from_env(), None);
         if !session.graphical {
             println!(
                 "daemon not started: {}; it will start with the graphical session",
@@ -330,7 +330,13 @@ mod status {
             "{:<18}{}",
             "Session:",
             match (report.session.interactive, report.session.graphical) {
-                (_, true) => "graphical".to_owned(),
+                // A desktop can be up and still degraded — accessibility switched off is the one
+                // that reaches here — so the reason is printed rather than swallowed by the
+                // healthy-looking booleans in front of it.
+                (_, true) => match report.session.reason.as_deref() {
+                    Some(reason) => format!("graphical, degraded ({reason})"),
+                    None => "graphical".to_owned(),
+                },
                 (true, false) => format!(
                     "interactive, no desktop ({})",
                     report.session.reason.as_deref().unwrap_or("unknown")

@@ -44,6 +44,9 @@ pub mod reason {
     pub const SESSION_BUS_UNAVAILABLE: &str = "session-bus-unavailable";
     /// The AT-SPI accessibility bus is absent or refused a connection.
     pub const ATSPI_UNAVAILABLE: &str = "atspi-unavailable";
+    /// The session's accessibility switch is off. The desktop is up and the bus is reachable, but
+    /// every application that reads that switch at startup is missing from it.
+    pub const ACCESSIBILITY_DISABLED: &str = "accessibility-disabled";
     /// Wayland's security model forbids the operation for an unprivileged client.
     pub const WAYLAND_RESTRICTED: &str = "wayland-restricted";
     /// A desktop portal authorization flow is required before the operation can run.
@@ -167,6 +170,14 @@ impl RegistrationHealth {
 pub struct SessionHealth {
     pub interactive: bool,
     pub graphical: bool,
+    /// Whether the session's own accessibility switch is on, where the platform has one.
+    ///
+    /// `None` is no claim rather than false: on macOS and Windows there is no such switch, and on
+    /// Linux it means nothing that could read `org.a11y.Status.IsEnabled` answered. A session can
+    /// be interactive, graphical, and still report `Some(false)` — that is the point of carrying it
+    /// separately from the two booleans.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub accessibility_enabled: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -178,6 +189,7 @@ impl SessionHealth {
         Self {
             interactive: true,
             graphical: true,
+            accessibility_enabled: None,
             reason: None,
             detail,
         }
@@ -192,6 +204,7 @@ impl SessionHealth {
         Self {
             interactive,
             graphical,
+            accessibility_enabled: None,
             reason: Some(reason.into()),
             detail,
         }

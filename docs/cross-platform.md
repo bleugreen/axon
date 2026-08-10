@@ -58,10 +58,10 @@ These are the only sources that promote or sustain a **Supported** cell.
 | evidence | where | what it proves | cadence |
 | --- | --- | --- | --- |
 | macOS live loop | `.github/workflows/live.yml` `macos` job | capture → resolve → `invoke` `AXPress` → verified Calculator display; complete health-v1 document; Accessibility grant — each asserted against the app bundle the job launched, by process id | every push to `main` |
-| Linux live loop | `.github/workflows/live.yml` `linux` job | AT-SPI capture/resolve/invoke with verified readback on GNOME Calculator under GNOME/Mutter Wayland; honest refusal of global input at both policies; systemd-user lifecycle and health-v1 | every push to `main` |
+| Linux live loop | `.github/workflows/live.yml` `linux` job | AT-SPI capture/resolve/invoke with verified readback on GNOME Calculator under GNOME/Mutter Wayland; honest refusal of global input at both policies; systemd-user lifecycle and health-v1, including the session accessibility switch this runner has on | every push to `main` |
 | Windows live loop | `.github/workflows/live.yml` `windows` job | the interactive-session daemon serves `look` with a real window root through the DACL-restricted pipe, and the complete health-v1 document — each asserted against the task the job registered, by process id, with the desktop's own registration proved unchanged across the run | every push to `main` |
 | Hermetic X11 foreground test | `.github/workflows/test.yml` Linux job; `rust/axon-linux/tests/x11_foreground.rs` | the X11 activate/prove/dispatch/restore conversation against a real X server with a miniature EWMH window manager | every pull request |
-| Hermetic AT-SPI activation test | `.github/workflows/test.yml` Linux job; `rust/axon-linux/tests/atspi_activation.rs` | that the attributes call is issued against the application root and only once per application, that the bounded wait ends when a withholding provider publishes rather than when the bound expires, and that a provider which never publishes is reported as withheld rather than as empty — against a private session bus and a provider built to withhold the way Chromium does | every pull request |
+| Hermetic AT-SPI activation test | `.github/workflows/test.yml` Linux job; `rust/axon-linux/tests/atspi_activation.rs` | that the attributes call is issued against the application root and only once per application, that the bounded wait ends when a withholding provider publishes rather than when the bound expires, and that a provider which never publishes is reported as withheld rather than as empty — against a private session bus and a provider built to withhold the way Chromium does; and, on a second private bus, that the session's accessibility switch is read live rather than remembered and reaches health-v1 as a degraded session | every pull request |
 | Windows session-1 probes | `axon-win probe value`, `events`, `timeout`, `pixel-click`, `foreground`; findings recorded in this document | value set and readback, event delivery, provider timeouts, the pixel-click allowlist entry, the foreground hand-back finding | manual; re-run and re-date when the area changes |
 | Linux Chromium activation probe | recorded in [Linux backend](#linux-backend) | that Chromium-family trees are gated by `org.a11y.Status.IsEnabled` and by an attributes or relations call, and not by AT-SPI listener registration; the daemon's before-and-after capture of Chrome. What only real browsers can show — the daemon's own half of the mechanism is gated per pull request by the hermetic AT-SPI test above | manual (2026-08-08); re-run and re-date when the area changes |
 | Platform spikes | `rust/SPIKE-FINDINGS.md` | session topology, WebView2 and WebKitGTK activation and traversal, the Mutter geometry caveat, verified invoke dispatch | dated snapshots (2026-08-02 through 2026-08-04) |
@@ -99,6 +99,17 @@ untrustworthy for GTK4 descendants (spike-recorded, dated). Mutter advertises
 the RemoteDesktop and ScreenCast portals; nothing about unattended
 authorization is proven, so portals keep screenshots and synthetic input out
 of the supported columns.
+
+One thing about that runner is not a property of GNOME and must not be read as
+one: a screen reader runs on it, so its `toolkit-accessibility` is already true
+and `org.a11y.Status.IsEnabled` answers true. A stock GNOME session answers
+false, and on that session every Chromium-family application is absent from the
+AT-SPI bus. Nothing in the live loop depends on the difference, because the loop
+exercises GNOME Calculator and GTK providers publish either way — but no cell
+above is evidence about a session with accessibility switched off. The loop
+asserts the switch in the health document precisely so this paragraph stays
+falsifiable: if the runner ever loses its screen reader, the lane goes red here
+rather than quietly broadening what green means.
 
 **KWin and Sway/wlroots.** Neither has ever run Axon. The expectations in
 their rows follow from the Wayland session classification and toolkit AT-SPI
@@ -139,8 +150,10 @@ should be discoverable here first.
   (spike-verified) and an attributes touch at capture on Linux (probe-verified
   2026-08-08 against real browsers, and gated on every pull request by a
   hermetic AT-SPI provider test) — and a Linux session whose `org.a11y.Status.IsEnabled` is false
-  hides those applications from the bus entirely, which capture now reports by
-  name rather than as a missing application.
+  hides those applications from the bus entirely. That session reports itself:
+  `status --json` carries `session.accessibilityEnabled` false with reason
+  `accessibility-disabled` before anyone has asked for an application, and
+  capture names it again for a caller who did.
 - macOS pixel, foreground, and screenshot paths: implemented and
   unit-verified, with no live probe (see the macOS note above).
 
@@ -380,6 +393,26 @@ than equating “Linux” with one uniform tree.
   behind that window only once a client asks some node for its attributes or its
   relations. Both calls reach `AXPlatform::OnExtendedPropertiesUsedInWebContent`
   in Chromium, which is the switch.
+- The first gate is a fact about the session rather than about any one
+  application, so it is reported as one. The daemon reads
+  `org.a11y.Status.IsEnabled` from the session bus when a health request arrives
+  and publishes it as `session.accessibilityEnabled`, with reason
+  `accessibility-disabled` on a session that answers false. Such a session is
+  interactive, graphical, and degraded at the same time — capture works, because
+  GTK providers publish either way, while every Chromium-family application is
+  absent from the bus — so a consumer reading only the two session booleans
+  would call it healthy. The reading is taken per request rather than remembered
+  at startup, because an assistive technology can switch accessibility on under
+  a running daemon and every application launched afterwards then joins the bus.
+- Axon reports that switch and never sets it. Every assistive technology sets
+  it, and `at-spi-bus-launcher` accepts the write — but the launcher writes the
+  desktop's `toolkit-accessibility` setting when it does, turning accessibility
+  on for every application on the session and leaving it on after the last
+  listener goes away. That is a persistent, global change to someone's desktop
+  made on behalf of one automation run, the same family of side effect as the
+  keysym remapping refused below, and it would not even rescue the run that
+  provoked it: an application already running never revisits the property.
+  Health-v1 names the state, and whoever owns the desktop decides.
 - Activation therefore belongs to capture, not to readiness. The trigger is a
   call into one application's own tree, so there is nothing a starting daemon
   could do on behalf of an application that does not exist yet. The first time

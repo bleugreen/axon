@@ -1,3 +1,4 @@
+use crate::lifecycle::ACCESSIBILITY_DISABLED;
 use crate::{PointerTargetVerifier, x11::X11Session};
 use atspi::{
     CoordType, ObjectRefOwned,
@@ -62,14 +63,6 @@ const DEPTH_LIMIT_REACHED: &str = "depth limit reached";
 /// [`Actor::withholding`] rather than here.
 pub const CHILD_NOT_PUBLISHED: &str = "the provider returned a null reference in place of a child";
 
-/// The session fact that most often explains an application a caller cannot find.
-///
-/// Chromium and its embedders read `org.a11y.Status.IsEnabled` once at process start and never join
-/// the accessibility bus while it is false. On such a session those applications are not thin —
-/// they are absent, which is indistinguishable from a misspelled name unless the caller is told.
-const ACCESSIBILITY_DISABLED: &str = "this session reports accessibility disabled \
-     (org.a11y.Status.IsEnabled is false), so applications that read it at startup — Chromium, \
-     Electron, and Chromium-backed webviews — are not on the bus at all";
 const NO_APPLICATION_MATCHED: &str = "no AT-SPI application matched";
 const NOTHING_ON_THE_BUS: &str = "no applications are on the accessibility bus";
 
@@ -96,6 +89,7 @@ enum Command {
     Identities(Reply<Vec<AppIdentity>>),
     Identity(AppQuery, Reply<Option<String>>),
     Capture(AppQuery, Reply<Snapshot>),
+    AccessibilityEnabled(Reply<Option<bool>>),
     Invoke(SnapshotHandle, String, Reply<()>),
     Read(SnapshotHandle, Reply<Option<String>>),
     Set(SnapshotHandle, String, Reply<()>),
@@ -239,6 +233,17 @@ impl LinuxBackend {
             InputSession::Available(session) => Ok(session.as_ref()),
             InputSession::Unavailable(reason) => Err(capability(capability_needed, reason)),
         }
+    }
+
+    /// Whether this session has accessibility switched on, or `None` when the bus will not say.
+    ///
+    /// Read on demand rather than remembered. An assistive technology can switch it on at any
+    /// moment, and while that does not reach an application already running, every application
+    /// started afterwards joins the bus — so a remembered answer would describe a session that no
+    /// longer exists. This is what the health document reports as the session's
+    /// `accessibilityEnabled`.
+    pub fn accessibility_enabled(&self) -> Option<bool> {
+        self.ask(Command::AccessibilityEnabled).ok().flatten()
     }
 
     fn input_restriction(&self) -> Option<&'static str> {
@@ -559,6 +564,9 @@ impl Actor {
                 }
                 Command::Capture(q, r) => {
                     let _ = r.send(self.capture(q).await);
+                }
+                Command::AccessibilityEnabled(r) => {
+                    let _ = r.send(Ok(self.accessibility_enabled().await));
                 }
                 Command::Invoke(h, a, r) => {
                     let _ = r.send(self.invoke(&h, &a).await);

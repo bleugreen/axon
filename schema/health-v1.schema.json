@@ -94,6 +94,10 @@
       "properties": {
         "interactive": { "type": "boolean" },
         "graphical": { "type": "boolean" },
+        "accessibilityEnabled": {
+          "description": "Whether the session's own accessibility switch is on, where the platform has one. Linux reports `org.a11y.Status.IsEnabled` from the session bus: while it is false, Chromium and everything embedding it never join the accessibility bus, so those applications are absent from it rather than thin on it, and the session reports reason `accessibility-disabled` while remaining interactive and graphical. Absent means no claim rather than false: the platform has no such switch, or nothing that could read it answered.",
+          "type": ["boolean", "null"]
+        },
         "reason": { "oneOf": [{ "$ref": "#/$defs/reason" }, { "type": "null" }] },
         "detail": { "$ref": "#/$defs/detail" }
       }

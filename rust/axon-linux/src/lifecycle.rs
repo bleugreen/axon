@@ -13,6 +13,19 @@ use axon_core::{
 /// The AT-SPI accessibility bus, which is the one gate Linux applies to automation.
 pub const ACCESSIBILITY_BUS: &str = "accessibilityBus";
 
+/// What a session with `org.a11y.Status.IsEnabled` false is, said once.
+///
+/// Chromium and its embedders read that property at process start and never join the accessibility
+/// bus while it is false. On such a session those applications are not thin — they are absent,
+/// which is indistinguishable from a misspelled name unless the caller is told. The same sentence
+/// serves both places a caller can meet the fact: the health document's session detail, and the
+/// capture refusal that names it for someone who has already asked for an application. It lives
+/// here rather than in the backend because this module compiles on every host, and because one
+/// sentence in two voices is how the two surfaces drift apart.
+pub const ACCESSIBILITY_DISABLED: &str = "this session reports accessibility disabled \
+     (org.a11y.Status.IsEnabled is false), so applications that read it at startup — Chromium, \
+     Electron, and Chromium-backed webviews — are not on the bus at all";
+
 pub const UNIT_NAME: &str = "axon.service";
 const UNIT_TEMPLATE: &str = include_str!("../systemd/axon.service.in");
 const EXEC_PLACEHOLDER: &str = "@EXEC@";
@@ -127,7 +140,25 @@ impl SessionEnvironment {
 /// A host can have a user manager and a session bus and still sit at the greeter with no desktop,
 /// which is the state that must report honestly rather than claim readiness. Each condition is
 /// therefore checked separately instead of collapsing into one "is it working" guess.
-pub fn session_health(env: &SessionEnvironment) -> SessionHealth {
+///
+/// `accessibility_enabled` is `org.a11y.Status.IsEnabled` as the daemon read it, and `None` where
+/// nobody asked: the property lives on the session bus, so only a running daemon holding that
+/// connection can answer it, and a CLI reporting on a daemon that never came up says nothing about
+/// it rather than guessing. It is the one fact here that is not an environment variable, which is
+/// why it arrives as an argument instead of being read from `env`.
+pub fn session_health(
+    env: &SessionEnvironment,
+    accessibility_enabled: Option<bool>,
+) -> SessionHealth {
+    SessionHealth {
+        accessibility_enabled,
+        ..classify(env, accessibility_enabled)
+    }
+}
+
+/// The verdict alone. Its caller stamps `accessibility_enabled` onto whichever branch answers, so
+/// the fact is carried by every session this classifies and not only by the one it explains.
+fn classify(env: &SessionEnvironment, accessibility_enabled: Option<bool>) -> SessionHealth {
     if env.runtime_dir.is_none() {
         return SessionHealth::degraded(
             false,
@@ -155,13 +186,26 @@ pub fn session_health(env: &SessionEnvironment) -> SessionHealth {
             Some("DBUS_SESSION_BUS_ADDRESS is unset, so AT-SPI cannot be reached".into()),
         );
     }
-    SessionHealth::usable(Some(env.session_type.clone().unwrap_or_else(|| {
+    let session_type = env.session_type.clone().unwrap_or_else(|| {
         if env.is_wayland() {
             "wayland".into()
         } else {
             "x11".into()
         }
-    })))
+    });
+    if accessibility_enabled == Some(false) {
+        // Interactive and graphical, and degraded anyway: the desktop is up and the AT-SPI bus is
+        // reachable, while every Chromium-family application on it is missing from that bus. A
+        // consumer that only reads the two booleans sees a healthy session, which is why this is
+        // also a reason rather than only a field.
+        return SessionHealth::degraded(
+            true,
+            true,
+            reason::ACCESSIBILITY_DISABLED,
+            Some(format!("{session_type}; {ACCESSIBILITY_DISABLED}")),
+        );
+    }
+    SessionHealth::usable(Some(session_type))
 }
 
 /// Overlays the runtime restrictions the backend's static capability list cannot know about.
@@ -192,12 +236,17 @@ pub fn capabilities(reported: &[CapabilityInfo], env: &SessionEnvironment) -> Ve
 }
 
 /// The daemon's own answer to a `health` request.
+///
+/// The two accessibility facts are separate questions and neither implies the other.
+/// `accessibility_bus` is whether this daemon reached the AT-SPI bus at all;
+/// `accessibility_enabled` is whether the session told the applications on it to publish.
 pub fn daemon_report(
     endpoint: String,
     process_id: u32,
     reported: &[CapabilityInfo],
     env: &SessionEnvironment,
     accessibility_bus: bool,
+    accessibility_enabled: Option<bool>,
 ) -> DaemonReport {
     DaemonReport {
         version: env!("CARGO_PKG_VERSION").into(),
@@ -207,7 +256,7 @@ pub fn daemon_report(
         ready: true,
         process_id,
         endpoint,
-        session: session_health(env),
+        session: session_health(env, accessibility_enabled),
         permissions: vec![if accessibility_bus {
             PermissionState::granted(ACCESSIBILITY_BUS)
         } else {
@@ -233,7 +282,7 @@ pub fn incompatible(
         HealthPlatform::Linux,
         endpoint,
         registration,
-        session_health(env),
+        session_health(env, None),
         detail,
     )
 }
@@ -249,7 +298,10 @@ pub fn not_running(
     env: &SessionEnvironment,
     detail: Option<String>,
 ) -> HealthReport {
-    let session = session_health(env);
+    // No daemon answered, so nothing held the session bus connection that could have read the
+    // accessibility switch. Saying nothing about it is the honest answer, and the schema spells
+    // an absent `accessibilityEnabled` as exactly that.
+    let session = session_health(env, None);
     let permission = if session.graphical {
         PermissionState::ungranted(ACCESSIBILITY_BUS, reason::DAEMON_NOT_RUNNING, None)
     } else {
@@ -352,11 +404,83 @@ mod tests {
 
     #[test]
     fn a_logged_in_desktop_is_interactive_and_graphical() {
-        let session = session_health(&graphical());
+        let session = session_health(&graphical(), Some(true));
 
         assert!(session.interactive);
         assert!(session.graphical);
         assert_eq!(session.reason, None);
+        assert_eq!(session.accessibility_enabled, Some(true));
+    }
+
+    #[test]
+    fn a_session_with_accessibility_off_is_degraded_while_still_being_a_desktop() {
+        // The state AXN-84 measured: the desktop is up, the AT-SPI bus answers, and every
+        // Chromium-family application is absent from it. Reporting only the two booleans would
+        // publish that session as healthy, which is the hole this fact fills.
+        let session = session_health(&graphical(), Some(false));
+
+        assert!(session.interactive && session.graphical);
+        assert_eq!(session.accessibility_enabled, Some(false));
+        assert_eq!(
+            session.reason.as_deref(),
+            Some(reason::ACCESSIBILITY_DISABLED)
+        );
+        let detail = session.detail.expect("a disabled session explains itself");
+        assert!(
+            detail.starts_with("wayland; "),
+            "the session type survives alongside the explanation: {detail}"
+        );
+        assert!(detail.contains("org.a11y.Status.IsEnabled"));
+    }
+
+    #[test]
+    fn a_switch_nobody_read_is_not_reported_as_off() {
+        // `None` is the CLI's answer whenever no daemon held the session bus. Absent means no
+        // claim; publishing it as false would invent a broken desktop out of a missing daemon.
+        let session = session_health(&graphical(), None);
+
+        assert_eq!(session.accessibility_enabled, None);
+        assert_eq!(session.reason, None);
+    }
+
+    #[test]
+    fn a_greeter_outranks_the_accessibility_switch_and_still_carries_it() {
+        // One reason slot, filled by the most total statement: a host with no desktop is not
+        // meaningfully a host whose Chromium trees are missing. The fact itself is still data.
+        let env = SessionEnvironment {
+            wayland_display: None,
+            x11_display: None,
+            ..graphical()
+        };
+
+        let session = session_health(&env, Some(false));
+
+        assert_eq!(
+            session.reason.as_deref(),
+            Some(reason::NO_GRAPHICAL_SESSION)
+        );
+        assert_eq!(session.accessibility_enabled, Some(false));
+    }
+
+    #[test]
+    fn the_daemon_document_carries_both_accessibility_facts_separately() {
+        // Reaching the bus and being told to publish are different questions: this daemon is on
+        // the bus, and the session has switched the applications off.
+        let report = daemon_report(
+            "/run/user/1000/axon-v1.sock".into(),
+            17,
+            &[],
+            &graphical(),
+            true,
+            Some(false),
+        );
+
+        assert!(report.permissions[0].granted, "the bus itself answered");
+        assert_eq!(report.session.accessibility_enabled, Some(false));
+        assert_eq!(
+            report.session.reason.as_deref(),
+            Some(reason::ACCESSIBILITY_DISABLED)
+        );
     }
 
     #[test]
@@ -369,7 +493,7 @@ mod tests {
             ..graphical()
         };
 
-        let session = session_health(&env);
+        let session = session_health(&env, None);
 
         assert!(session.interactive);
         assert!(!session.graphical);
@@ -381,7 +505,7 @@ mod tests {
 
     #[test]
     fn a_missing_user_manager_is_not_an_interactive_session() {
-        let session = session_health(&SessionEnvironment::default());
+        let session = session_health(&SessionEnvironment::default(), None);
 
         assert!(!session.interactive);
         assert_eq!(
@@ -398,7 +522,7 @@ mod tests {
         };
 
         assert_eq!(
-            session_health(&env).reason.as_deref(),
+            session_health(&env, None).reason.as_deref(),
             Some(reason::SESSION_BUS_UNAVAILABLE)
         );
     }
