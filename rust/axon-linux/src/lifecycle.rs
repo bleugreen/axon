@@ -156,6 +156,8 @@ pub fn session_health(
     }
 }
 
+/// The verdict alone. Its caller stamps `accessibility_enabled` onto whichever branch answers, so
+/// the fact is carried by every session this classifies and not only by the one it explains.
 fn classify(env: &SessionEnvironment, accessibility_enabled: Option<bool>) -> SessionHealth {
     if env.runtime_dir.is_none() {
         return SessionHealth::degraded(
