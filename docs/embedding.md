@@ -252,6 +252,11 @@ Accessibility grant all produce schema-valid documents rather than transport err
 - **`session`** describes the session the reported daemon occupies, or the session the reporting
   CLI occupies when no daemon is running. `interactive` is a logged-in user session rather than a
   service session; `graphical` is a usable desktop rather than a greeter.
+  `accessibilityEnabled` is the session's own accessibility switch where the platform has one:
+  Linux reports `org.a11y.Status.IsEnabled`, and an absent field is no claim rather than false.
+  A session can be interactive, graphical, and still carry a `reason` — that is exactly the
+  Linux session whose accessibility is switched off, and it is why the two booleans alone are not
+  a health check.
 - **`permissions`** lists the operating-system grants that gate automation. An absent entry means
   the platform has no such gate, not that it is granted. macOS reports `accessibility` and
   `screenRecording`; Linux reports `accessibilityBus`; Windows applies no per-application gate and
@@ -278,6 +283,7 @@ human-readable prose and must never be parsed.
 | `screen-recording-not-granted` | macOS has not granted Screen Recording to the daemon identity |
 | `session-bus-unavailable` | The user's session D-Bus is not reachable |
 | `atspi-unavailable` | The AT-SPI accessibility bus is absent or refused a connection |
+| `accessibility-disabled` | The session's accessibility switch is off, so every application that reads it at startup is missing from the bus |
 | `wayland-restricted` | Wayland's security model forbids the operation for an unprivileged client |
 | `portal-authorization-required` | A desktop portal authorization flow is required first |
 | `no-x-display` | No X display is reachable, so there is no synthetic input device |
@@ -315,6 +321,14 @@ expect to see in production.
 - **Linux at the greeter.** `session.graphical` is false with reason `no-graphical-session` and
   `accessibilityBus` is ungranted with reason `atspi-unavailable`. The registration can still be
   present and correct; the desktop simply is not up yet.
+- **Linux with accessibility switched off.** The daemon is ready, the desktop is up, and
+  `session.accessibilityEnabled` is false with reason `accessibility-disabled`. Capture stays
+  usable, because it is: GTK applications publish on the bus either way. What is missing is
+  Chromium and everything embedding it — Electron and Chromium-backed webviews — which read that
+  switch once at startup and never join the bus while it is false. A consumer that treats an empty
+  or browser-less desktop as an Axon fault should read this field first. Switching it on does not
+  reach an application that is already running, so the fix is to enable accessibility for the
+  session and restart the applications; Axon reports the state and does not change it.
 - **Linux under Wayland.** The daemon is ready, but `pointerInput` and `keyboardInput` are unusable
   with reason `wayland-restricted`, and `screenshot` is unusable with reason
   `portal-authorization-required`. `observeGlobalInput` is unusable with reason `not-implemented`,
