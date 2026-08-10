@@ -440,14 +440,18 @@ impl<B: PointerTargetVerifier + BackgroundPixelInput> Router<B> {
                         // Keyboard input never touches the cursor, and capturing a pointer it does
                         // not move would report a restoration that never happened.
                         restores_pointer: false,
-                        verification: json!({"verified":false,"reason":"keyboard input has no declared postcondition"}),
+                        verification,
                         resolution: None,
                     },
                     move |backend| backend.keyboard(&app, intent),
                 )
             }
             "drag" => {
-                let ladder = self.global_input_ladder(Capability::PointerInput, "XTest pointer");
+                let ladder = self.global_input_ladder(
+                    Capability::PointerInput,
+                    "XTest pointer",
+                    &PixelPlan::unavailable(NO_DRAG_PIXEL),
+                );
                 // Drag has no semantic rung at all, so a refusal here is the whole answer.
                 if self.selected(&ladder, policy).is_none() {
                     return Ok(self.refusal(&ladder, policy));
