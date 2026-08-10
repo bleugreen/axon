@@ -7,7 +7,7 @@ use axon_core::{
     JsonRpcId, JsonRpcRequest, JsonRpcResponse, KeyboardIntent, Locator, LocatorResolver,
     PlatformBackend, Resolution, ResolutionStatus, RunEnvelope, RunOptions, Snapshot,
     SnapshotHandle, TextLocationResolver, TextLocationSource, TextLocationTarget,
-    TextRecognitionProvider, ToolDispatcher, dispatch_in_foreground, select_delivery,
+    TextRecognitionProvider, ToolDispatcher, dispatch_in_foreground, goal_success, select_delivery,
 };
 use serde_json::{Map, Value, json};
 
@@ -413,8 +413,15 @@ impl<
         if !dispatch.pointer_unchanged {
             problems.push("the real pointer moved across the dispatch".to_string());
         }
+        // Mechanism acceptance and goal success are kept apart because at this rung the gap between
+        // them is the whole problem. A completed post proves each message was accepted and returned
+        // from; a window procedure that examined one and did nothing returns exactly like one that
+        // acted on it, which is the stated reason `PIXEL_MESSAGE_CLASSES` exists at all. Collapsing
+        // the two would hollow out that table's own defence: a class that regressed, or one that
+        // behaved differently in a context nobody probed, would produce an accepted post, intact
+        // invariants, and a report that the caller's click had worked.
         let mut result = json!({
-            "success": dispatch.complete && problems.is_empty(),
+            "success": goal_success(&verification, dispatch.complete && problems.is_empty()),
             "dispatch": {"success": dispatch.complete, "mechanism": candidate.mechanism},
             "verification": verification,
             "backgroundDelivery": {
@@ -747,10 +754,13 @@ impl<
         }
 
         let result = json!({
+            // Two separate things have to hold here, and this rung is the one that adds the second.
             // Dispatch evidence survives a failed hand-back, but the action as a whole did not
-            // succeed: the user's session was not put back where they left it. A cursor left where
-            // synthetic input dropped it counts as much as a window that never came forward again.
-            "success": dispatch.cleanup.session_restored(),
+            // succeed if the user's session was not put back where they left it — a cursor left
+            // where synthetic input dropped it counts as much as a window that never came forward
+            // again. And a session handed back immaculately still says nothing about whether the
+            // target acted on what `SendInput` posted, so the verification has to hold as well.
+            "success": goal_success(&verification, dispatch.cleanup.session_restored()),
             "dispatch": {"success": true, "mechanism": candidate.mechanism},
             "verification": verification,
             "foreground": dispatch.cleanup,
