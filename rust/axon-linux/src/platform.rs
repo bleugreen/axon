@@ -41,7 +41,7 @@ const CALL_TIMEOUT: Duration = Duration::from_secs(2);
 /// 0.09s for Electron 33 and 1.12s for Chrome 151. The ceiling is generous against a loaded machine
 /// and a heavy page. Only an application that is actually withholding waits at all, and only on the
 /// first capture of it, so a provider that never publishes cannot tax every later `look`.
-const ACTIVATION_TIMEOUT: Duration = Duration::from_secs(3);
+pub const ACTIVATION_TIMEOUT: Duration = Duration::from_secs(3);
 const ACTIVATION_POLL: Duration = Duration::from_millis(50);
 
 const NODE_LIMIT_REACHED: &str = "node limit reached";
@@ -60,7 +60,7 @@ const DEPTH_LIMIT_REACHED: &str = "depth limit reached";
 /// a menu bar and withheld everything else must not read as a window that contains only a menu
 /// bar. Which answers are worth *waiting* on is a stricter question, and it is answered in
 /// [`Actor::withholding`] rather than here.
-const CHILD_NOT_PUBLISHED: &str = "the provider returned a null reference in place of a child";
+pub const CHILD_NOT_PUBLISHED: &str = "the provider returned a null reference in place of a child";
 
 /// The session fact that most often explains an application a caller cannot find.
 ///
