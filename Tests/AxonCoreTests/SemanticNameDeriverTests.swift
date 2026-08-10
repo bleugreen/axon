@@ -29,7 +29,7 @@ import Testing
     let reordered = SemanticNameDeriver.derive(from: try snapshot(ids: ["share-secondary", "share-primary"]))
     let result = SemanticNameDeriver.stability(from: first, to: reordered)
 
-    #expect(Set(first.elements.map(\.name)) == ["main/share-share-primary", "main/share-share-secondary"])
+    #expect(Set(first.elements.map(\.name)) == ["main", "main/share-share-primary", "main/share-share-secondary"])
     #expect(first.summary.collisionFreeCount == 3)
     #expect(result.comparableElements == 3)
     #expect(result.stableNames == 3)

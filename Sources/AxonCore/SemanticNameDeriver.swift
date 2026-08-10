@@ -153,6 +153,9 @@ public enum SemanticNameDeriver {
         guard !collapsed.isEmpty else { return nil }
         if collapsed.count <= maximumLength { return collapsed }
         let prefix = collapsed.prefix(maximumLength)
+        if prefix.last == "-" || collapsed.dropFirst(maximumLength).first == "-" {
+            return String(prefix).trimmingCharacters(in: CharacterSet(charactersIn: "-")).nilIfEmpty
+        }
         return String(prefix).split(separator: "-", omittingEmptySubsequences: true).dropLast().joined(separator: "-").nilIfEmpty
             ?? String(prefix)
     }
