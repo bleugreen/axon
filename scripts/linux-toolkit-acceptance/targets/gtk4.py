@@ -32,6 +32,15 @@ class Target:
         box.append(self.entry)
         box.append(self.button)
         self.window.set_child(box)
+        # Raw arrival, reported separately from the effect, for the reason in the GTK 3 target.
+        keys = Gtk.EventControllerKey()
+        keys.set_propagation_phase(Gtk.PropagationPhase.CAPTURE)
+        keys.connect("key-pressed", self.on_raw_key)
+        self.window.add_controller(keys)
+        clicks = Gtk.GestureClick()
+        clicks.set_propagation_phase(Gtk.PropagationPhase.CAPTURE)
+        clicks.connect("pressed", self.on_raw_click)
+        self.window.add_controller(clicks)
         self.window.present()
         self.entry.grab_focus()
         GLib.timeout_add(600, self.announce)
@@ -67,6 +76,13 @@ class Target:
             }
         )
         return False
+
+    def on_raw_key(self, _controller, _keyval, _keycode, _state) -> bool:
+        report({"kind": "raw", "event": "key-press"})
+        return False
+
+    def on_raw_click(self, _gesture, _count, _x, _y) -> None:
+        report({"kind": "raw", "event": "button-press"})
 
     def on_click(self, _button) -> None:
         self.clicks += 1

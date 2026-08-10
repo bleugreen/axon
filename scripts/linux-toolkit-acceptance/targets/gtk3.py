@@ -8,7 +8,7 @@ import gi
 
 gi.require_version("Gtk", "3.0")
 gi.require_version("GdkX11", "3.0")
-from gi.repository import GdkX11, GLib, Gtk  # noqa: E402
+from gi.repository import Gdk, GdkX11, GLib, Gtk  # noqa: E402
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from report import report  # noqa: E402
@@ -31,6 +31,12 @@ class Target:
         box.pack_start(self.entry, False, False, 0)
         box.pack_start(self.button, False, False, 0)
         self.window.add(box)
+        # Raw arrival is reported separately from the effect. "The toolkit never saw the event" and
+        # "the toolkit saw it and declined to act" are different answers about a delivery mechanism,
+        # and a harness that only watches the effect cannot tell them apart.
+        self.window.add_events(Gdk.EventMask.BUTTON_PRESS_MASK | Gdk.EventMask.KEY_PRESS_MASK)
+        self.window.connect("button-press-event", self.on_raw, "button-press")
+        self.window.connect("key-press-event", self.on_raw, "key-press")
         self.window.show_all()
         self.entry.grab_focus()
         GLib.timeout_add(400, self.announce)
@@ -54,6 +60,12 @@ class Target:
                     "entry": self.rectangle(self.entry),
                 },
             }
+        )
+        return False
+
+    def on_raw(self, _widget, event, what: str) -> bool:
+        report(
+            {"kind": "raw", "event": what, "sendEvent": bool(getattr(event, "send_event", False))}
         )
         return False
 

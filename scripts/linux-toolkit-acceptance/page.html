@@ -38,6 +38,13 @@
       entry.addEventListener("input", (event) => {
         send({ kind: "text", widget: "entry", value: event.target.value });
       });
+      for (const type of ["mousedown", "keydown"]) {
+        window.addEventListener(
+          type,
+          (event) => send({ kind: "raw", event: type, isTrusted: event.isTrusted }),
+          true,
+        );
+      }
       window.addEventListener("load", () => {
         entry.focus();
         send({ kind: "page", widgets: { button: rect(button), entry: rect(entry) } });

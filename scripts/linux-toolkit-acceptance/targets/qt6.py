@@ -9,19 +9,35 @@ import os
 import sys
 
 try:
-    from PyQt6.QtCore import QPoint, QTimer, QT_VERSION_STR
+    from PyQt6.QtCore import QEvent, QObject, QPoint, QTimer, QT_VERSION_STR
     from PyQt6.QtWidgets import QApplication, QLineEdit, QPushButton, QVBoxLayout, QWidget
 
     BINDING = "PyQt6"
 except ImportError:  # whichever binding this machine has
     from PySide6 import __version__ as QT_VERSION_STR
-    from PySide6.QtCore import QPoint, QTimer
+    from PySide6.QtCore import QEvent, QObject, QPoint, QTimer
     from PySide6.QtWidgets import QApplication, QLineEdit, QPushButton, QVBoxLayout, QWidget
 
     BINDING = "PySide6"
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from report import report  # noqa: E402
+
+
+class RawWatch(QObject):
+    """Reports raw arrival at the toolkit, separately from the effect.
+
+    "Qt never saw the event" and "Qt saw it and declined to act" are different answers about a
+    delivery mechanism, and only the effect is visible from outside the process.
+    """
+
+    WATCHED = {QEvent.Type.MouseButtonPress: "button-press", QEvent.Type.KeyPress: "key-press"}
+
+    def eventFilter(self, receiver, event) -> bool:
+        what = self.WATCHED.get(event.type())
+        if what:
+            report({"kind": "raw", "event": what, "spontaneous": bool(event.spontaneous())})
+        return False
 
 
 class Target(QWidget):
@@ -72,5 +88,7 @@ class Target(QWidget):
 
 
 application = QApplication(sys.argv)
+watch = RawWatch()
+application.installEventFilter(watch)
 target = Target()
 sys.exit(application.exec())
