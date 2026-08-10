@@ -237,6 +237,47 @@ class Session:
             time.sleep(0.1)
         return None
 
+    def raise_window(self, window) -> None:
+        """Puts the target on top without focusing it.
+
+        On a session with a window manager the target can be launched underneath something else, and
+        a control click that lands on whatever is covering it measures the wrong window. Raising
+        changes the stacking order only; it is not activation and does not move the focus.
+        """
+        window.configure(stack_mode=X.Above)
+        self.display.sync()
+
+    def window_under(self, x: int, y: int):
+        """The deepest window at a root point, which is where a real pointer click would land."""
+        window = self.root
+        while True:
+            try:
+                reply = window.translate_coords(self.root, x, y)
+            except Exception:
+                return window
+            child = getattr(reply, "child", None)
+            if not child or child == X.NONE:
+                return window
+            window = child
+
+    def window_by_id(self, identifier: int):
+        return self.display.create_resource_object("window", identifier)
+
+    def contains(self, ancestor, window) -> bool:
+        """Whether a window is the given one or lives inside it."""
+        current = window
+        for _ in range(16):
+            if current.id == ancestor.id:
+                return True
+            try:
+                parent = current.query_tree().parent
+            except Exception:
+                return False
+            if parent is None or parent.id == self.root.id:
+                return False
+            current = parent
+        return False
+
     def origin(self, window) -> tuple[int, int]:
         reply = self.root.translate_coords(window, 0, 0)
         return (reply.x, reply.y)
@@ -448,6 +489,7 @@ def measure(spec: Spec, session: Session, reports: Reports, decoy, port: int) ->
             result["detail"] = f"no viewable toplevel window found for pid {pid}"
             return result
         result["window"] = {"xid": window.id, "reportedXid": ready.get("xid")}
+        session.raise_window(window)
 
         origin = session.origin(window)
         geometry = window.get_geometry()
@@ -481,6 +523,11 @@ def measure(spec: Spec, session: Session, reports: Reports, decoy, port: int) ->
         text = _background_text(session, reports, window)
         text["invariants"] = _invariants(session, before)
         result["background"] = {"click": click, "text": text}
+        # Whether a real click at these coordinates would even have reached the target. When it
+        # would not, the pointer control below is measuring whatever is covering the target, and the
+        # row has to say so rather than report a silent toolkit.
+        under = session.window_under(*root_point)
+        result["targetIsTopmostAtPoint"] = session.contains(window, under)
         result["invariants"] = _invariants(session, before)
 
         # Deliberately after the invariants: this one moves the pointer.
@@ -634,11 +681,25 @@ def _controls(session: Session, reports: Reports, window, root_point) -> dict:
     pointer_click = reports.wait_for("click", REACTION_TIMEOUT) is not None
 
     reports.clear()
+    # A window manager may refuse or undo a bare focus request, and typing into a target that never
+    # took the focus measures nothing. Whether the focus was actually acquired is recorded alongside
+    # the result rather than assumed.
     session.take_focus(window)
-    time.sleep(0.3)
+    acquired = False
+    deadline = time.monotonic() + 2.0
+    while time.monotonic() < deadline:
+        focus = session.focus()
+        if focus == window.id or session.contains(window, session.window_by_id(focus)):
+            acquired = True
+            break
+        time.sleep(0.1)
     session.xtest_text(TYPED_TEXT)
     focused_text = reports.wait_for("text", REACTION_TIMEOUT) is not None
-    return {"pointerClick": pointer_click, "focusedText": focused_text}
+    return {
+        "pointerClick": pointer_click,
+        "focusedText": focused_text,
+        "focusAcquired": acquired,
+    }
 
 
 def _drain(process: subprocess.Popen) -> str:
