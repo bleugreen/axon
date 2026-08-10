@@ -149,7 +149,7 @@ struct Entry {
 /// The measured table. A toolkit absent from it refuses, and a toolkit is never added because it
 /// looks like it should work.
 ///
-/// Two absences are deliberate rather than untested. **GTK 4** is excluded twice over: it acts on
+/// Some absences are deliberate rather than untested. **GTK 4** is excluded twice over: it acts on
 /// neither event, and its AT-SPI extents report correct sizes at `(0, 0)` origins, so a pixel rung
 /// would have no usable coordinate source there even if delivery worked. **Firefox** is excluded
 /// despite accepting keystrokes, because it publishes no AT-SPI application at all: the target
@@ -157,6 +157,17 @@ struct Entry {
 /// nothing can be revalidated before dispatch, so every precondition the contract puts on the rung
 /// fails before delivery is even reached. It has no signature to key an entry on, which is why its
 /// absence here is structural rather than a decision.
+///
+/// The rest are `Refused` rather than absent, so the argument against each one is readable beside
+/// the evidence for the entry it sits in, and a caller is told which of them declined.
+///
+/// One of those three refuses a row the fixtures record as accepted, and it is worth being plain
+/// about why. Chromium's keyboard row was measured immediately after its click row, on the same
+/// window, and Chromium routes background key events to a window only once a background click has
+/// landed there. The fixture therefore records the post-click state; a window that has not been
+/// clicked drops every delivered key event in silence. AXN-102 tracks re-measuring it against a
+/// target that received nothing else. Until then the entry claims only the click, which is what
+/// was measured independently and what was reconfirmed through the daemon on real Chromium.
 ///
 /// ## The Chromium entry is family-wide, because its signature is
 ///
@@ -365,10 +376,12 @@ mod tests {
     /// so. Which is the one failure mode an evidence-keyed allowlist cannot tolerate.
     ///
     /// Deliberately one-directional. It asserts the table never claims more than was measured, and
-    /// says nothing about the reverse, because two rows the harness measured as accepting are
-    /// refused on judgement rather than on evidence: Qt's click asks to be activated, and GTK's
-    /// click needs the real cursor already inside the target. Those arguments live in the table's
-    /// own `Refused` reasons, where a reader can disagree with them.
+    /// says nothing about the reverse, because three rows the harness measured as accepting are
+    /// refused anyway: Qt's click asks to be activated, GTK's click needs the real cursor already
+    /// inside the target, and Chromium's keystrokes were measured on a window its own click phase
+    /// had just clicked. Those arguments live in the table's `Refused` reasons, where a reader can
+    /// disagree with them; a test that demanded the table match the fixtures in both directions
+    /// would be demanding it stop making them.
     #[test]
     fn no_entry_claims_more_than_both_fixtures_measured() {
         for (lane, fixture) in FIXTURES {
