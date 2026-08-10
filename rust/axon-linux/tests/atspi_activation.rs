@@ -27,14 +27,18 @@
 #![cfg(target_os = "linux")]
 
 use atspi::{ObjectRef, ObjectRefOwned};
-use axon_core::{AppQuery, Node, PlatformBackend, Snapshot};
+use axon_core::{AppQuery, Node, PlatformBackend, Snapshot, reason};
+use axon_linux::lifecycle::{SessionEnvironment, daemon_report};
 use axon_linux::{ACTIVATION_TIMEOUT, CHILD_NOT_PUBLISHED, LinuxBackend};
 use std::{
     collections::HashMap,
     io::{BufRead, BufReader},
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
-    sync::{Arc, Mutex},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+    },
     time::{Duration, Instant},
 };
 use zbus::{connection, interface, names::UniqueName, zvariant::ObjectPath};
@@ -291,11 +295,11 @@ fn leave_proof_of_the_inner_run() {
 ///
 /// Its output is inherited rather than captured, so a failing assertion inside the inner run reads
 /// as an ordinary test failure rather than as a child process that exited non-zero.
-fn supervise_an_inner_run() {
+fn supervise_an_inner_run(test: &str) {
     let bus = SessionBus::start();
     let ran = bus.directory.join("inner-run-completed");
     let status = Command::new(std::env::current_exe().expect("this test binary's own path"))
-        .args([TEST, "--exact", "--ignored", "--nocapture"])
+        .args([test, "--exact", "--ignored", "--nocapture"])
         .env(INNER_RUN, &ran)
         .env("DBUS_SESSION_BUS_ADDRESS", &bus.address)
         .status()
@@ -307,7 +311,7 @@ fn supervise_an_inner_run() {
     assert!(
         ran.exists(),
         "the inner run exited successfully without reaching the end of the test body -- a libtest \
-         filter that matches nothing is a pass, so `TEST` has drifted from the name of the test \
+         filter that matches nothing is a pass, so {test:?} has drifted from the name of the test \
          function and this test has been proving nothing"
     );
 }
@@ -491,15 +495,18 @@ impl A11yBus {
     }
 }
 
-/// The first of Chromium's two gates, answered the way a session with accessibility switched on
-/// answers it. The backend reads this only to explain an application it could not find.
-struct A11yStatus;
+/// The first of Chromium's two gates, and a live property rather than a constant: a real session
+/// switches accessibility on when an assistive technology starts and leaves it off otherwise, and
+/// what the daemon owes a caller is the session's answer now.
+struct A11yStatus {
+    enabled: Arc<AtomicBool>,
+}
 
 #[interface(name = "org.a11y.Status")]
 impl A11yStatus {
     #[zbus(property)]
     fn is_enabled(&self) -> bool {
-        true
+        self.enabled.load(Ordering::Relaxed)
     }
 
     #[zbus(property)]
