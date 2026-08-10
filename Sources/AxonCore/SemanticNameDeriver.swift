@@ -226,6 +226,19 @@ public enum SemanticNameDeriver {
 
         var groups = Dictionary(grouping: candidates.indices, by: { candidates[$0].segments.joined(separator: "/") })
         for indices in groups.values where indices.count > 1 {
+            let identifierSlugs = indices.compactMap { index in
+                candidates[index].stableIdentifier.flatMap { slug($0, maximumLength: 24) }
+            }
+            if identifierSlugs.count == indices.count, Set(identifierSlugs).count == indices.count {
+                for (index, identifierSlug) in zip(indices, identifierSlugs) {
+                    candidates[index].segments[candidates[index].segments.count - 1] += "-\(identifierSlug)"
+                    candidates[index].disambiguation = "identifier"
+                }
+            }
+        }
+
+        groups = Dictionary(grouping: candidates.indices, by: { candidates[$0].segments.joined(separator: "/") })
+        for indices in groups.values where indices.count > 1 {
             let roles = Set(indices.map { candidates[$0].role })
             if roles.count > 1 {
                 for index in indices {
