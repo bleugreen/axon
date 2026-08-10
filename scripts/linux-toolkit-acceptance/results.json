@@ -1,5 +1,5 @@
 {
-  "measuredAt": "2026-08-10T01:50:27-0400",
+  "measuredAt": "2026-08-10T02:10:14-0400",
   "session": "hermetic Xvfb on :99",
   "display": ":99",
   "xServer": "The X.Org Foundation release 12101021",
@@ -127,7 +127,9 @@
               432,
               80
             ],
-            "offsetBy": [
+            "deltas": [
+              0,
+              0,
               0,
               0
             ],
@@ -146,7 +148,9 @@
               432,
               34
             ],
-            "offsetBy": [
+            "deltas": [
+              0,
+              0,
               0,
               0
             ],
@@ -284,9 +288,11 @@
               432,
               80
             ],
-            "offsetBy": [
+            "deltas": [
               -24,
-              -82
+              -82,
+              0,
+              0
             ],
             "agrees": false
           },
@@ -303,9 +309,11 @@
               432,
               34
             ],
-            "offsetBy": [
+            "deltas": [
               -24,
-              -24
+              -24,
+              0,
+              0
             ],
             "agrees": false
           }
@@ -440,7 +448,9 @@
               432,
               80
             ],
-            "offsetBy": [
+            "deltas": [
+              0,
+              0,
               0,
               0
             ],
@@ -459,7 +469,9 @@
               432,
               25
             ],
-            "offsetBy": [
+            "deltas": [
+              0,
+              0,
               0,
               0
             ],
@@ -598,7 +610,9 @@
               300,
               120
             ],
-            "offsetBy": [
+            "deltas": [
+              0,
+              0,
               0,
               0
             ],
@@ -680,10 +694,10 @@
           "reaction": {
             "kind": "text",
             "widget": "entry",
-            "value": "a"
+            "value": "axon"
           },
           "reachedToolkit": {
-            "targeted": 3
+            "targeted": 4
           },
           "before": {
             "pointer": [
@@ -746,8 +760,10 @@
               300,
               120
             ],
-            "offsetBy": [
+            "deltas": [
               4,
+              0,
+              0,
               0
             ],
             "agrees": true
@@ -765,8 +781,10 @@
               308,
               46
             ],
-            "offsetBy": [
+            "deltas": [
               4,
+              0,
+              0,
               0
             ],
             "agrees": true
@@ -903,7 +921,9 @@
               300,
               120
             ],
-            "offsetBy": [
+            "deltas": [
+              0,
+              0,
               0,
               0
             ],
@@ -922,7 +942,9 @@
               308,
               46
             ],
-            "offsetBy": [
+            "deltas": [
+              0,
+              0,
               0,
               0
             ],
@@ -1060,7 +1082,9 @@
               300,
               120
             ],
-            "offsetBy": [
+            "deltas": [
+              0,
+              0,
               0,
               0
             ],
@@ -1079,7 +1103,9 @@
               308,
               46
             ],
-            "offsetBy": [
+            "deltas": [
+              0,
+              0,
               0,
               0
             ],
@@ -1224,7 +1250,7 @@
             "agrees": null
           }
         },
-        "error": "no AT-SPI application for pid 3058561",
+        "error": "no AT-SPI application for pid 3268190",
         "extentsUsable": null
       },
       "controls": {

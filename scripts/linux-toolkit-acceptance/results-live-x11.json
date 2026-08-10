@@ -1,5 +1,5 @@
 {
-  "measuredAt": "2026-08-10T01:57:18-0400",
+  "measuredAt": "2026-08-10T02:11:15-0400",
   "session": "tty session on :0",
   "display": ":0",
   "xServer": "The X.Org Foundation release 12101021",
@@ -127,7 +127,9 @@
               432,
               80
             ],
-            "offsetBy": [
+            "deltas": [
+              0,
+              0,
               0,
               0
             ],
@@ -146,7 +148,9 @@
               432,
               34
             ],
-            "offsetBy": [
+            "deltas": [
+              0,
+              0,
               0,
               0
             ],
@@ -182,8 +186,8 @@
           "accepted": false,
           "variant": null,
           "at": [
-            720,
-            405
+            960,
+            527
           ],
           "triedVariants": [
             "targeted",
@@ -256,8 +260,8 @@
         "accepted": false,
         "reachedToolkit": 0,
         "pointerAt": [
-          720,
-          405
+          960,
+          527
         ],
         "focusUnchanged": true
       },
@@ -273,10 +277,10 @@
         "widgets": {
           "button": {
             "expected": [
-              703,
-              400,
-              34,
-              10
+              744,
+              487,
+              432,
+              80
             ],
             "atspi": [
               0,
@@ -284,18 +288,20 @@
               432,
               80
             ],
-            "offsetBy": [
-              -703,
-              -400
+            "deltas": [
+              -744,
+              -487,
+              0,
+              0
             ],
             "agrees": false
           },
           "entry": {
             "expected": [
-              711,
-              404,
-              18,
-              2
+              744,
+              429,
+              432,
+              34
             ],
             "atspi": [
               0,
@@ -303,9 +309,11 @@
               432,
               34
             ],
-            "offsetBy": [
-              -711,
-              -404
+            "deltas": [
+              -744,
+              -429,
+              0,
+              0
             ],
             "agrees": false
           }
@@ -313,7 +321,7 @@
         "extentsUsable": false
       },
       "controls": {
-        "pointerClick": false,
+        "pointerClick": true,
         "focusedText": true,
         "focusAcquired": true
       },
@@ -440,7 +448,9 @@
               432,
               80
             ],
-            "offsetBy": [
+            "deltas": [
+              0,
+              0,
               0,
               0
             ],
@@ -459,7 +469,9 @@
               432,
               25
             ],
-            "offsetBy": [
+            "deltas": [
+              0,
+              0,
               0,
               0
             ],
@@ -598,7 +610,9 @@
               300,
               120
             ],
-            "offsetBy": [
+            "deltas": [
+              0,
+              0,
               0,
               0
             ],
@@ -746,8 +760,10 @@
               300,
               120
             ],
-            "offsetBy": [
+            "deltas": [
               4,
+              0,
+              0,
               0
             ],
             "agrees": true
@@ -765,8 +781,10 @@
               308,
               46
             ],
-            "offsetBy": [
+            "deltas": [
               4,
+              0,
+              0,
               0
             ],
             "agrees": true
@@ -903,7 +921,9 @@
               300,
               120
             ],
-            "offsetBy": [
+            "deltas": [
+              0,
+              0,
               0,
               0
             ],
@@ -922,7 +942,9 @@
               308,
               46
             ],
-            "offsetBy": [
+            "deltas": [
+              0,
+              0,
               0,
               0
             ],
@@ -994,7 +1016,7 @@
           "reaction": {
             "kind": "text",
             "widget": "entry",
-            "value": "axon"
+            "value": "axo"
           },
           "reachedToolkit": {
             "targeted": 4
@@ -1060,7 +1082,9 @@
               300,
               120
             ],
-            "offsetBy": [
+            "deltas": [
+              0,
+              0,
               0,
               0
             ],
@@ -1079,7 +1103,9 @@
               308,
               46
             ],
-            "offsetBy": [
+            "deltas": [
+              0,
+              0,
               0,
               0
             ],
@@ -1099,7 +1125,7 @@
       "target": "firefox",
       "signature": "Mozilla Firefox 147.0.1",
       "window": {
-        "xid": 54525955,
+        "xid": 50331651,
         "reportedXid": null
       },
       "before": {
@@ -1224,7 +1250,7 @@
             "agrees": null
           }
         },
-        "error": "no AT-SPI application for pid 3098097",
+        "error": "no AT-SPI application for pid 3274980",
         "extentsUsable": null
       },
       "controls": {

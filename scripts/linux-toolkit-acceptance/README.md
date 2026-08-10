@@ -92,10 +92,17 @@ experimenter's cursor is over the window being tested. Arranging that condition 
 user's pointer, which is the foreground rung by definition, so the harness parks the pointer clear of
 the target and measures the condition separately as `pointerOverTarget`.
 
-**AT-SPI geometry is usable everywhere except GTK 4.** For GTK 3, Qt, WebKitGTK and Chromium the
-extents match the toolkit's own rectangles to the pixel. GTK 4 reports correct sizes at `(0, 0)`
-origins, which confirms the finding in `rust/SPIKE-FINDINGS.md` against ground truth and settles it as
-a toolkit fact rather than a compositor one. Firefox publishes no AT-SPI application at all.
+**AT-SPI geometry is usable everywhere except GTK 4.** Each target reports its own widget rectangles
+from inside the toolkit and the harness compares all four components against what AT-SPI publishes,
+with a four-pixel tolerance for padding. GTK 3, Qt, WebKitGTK and Electron 22 and 30 agree exactly —
+every delta zero on both lanes. Electron 43 sits four pixels to the right in x, consistently on both
+lanes and inside the tolerance. GTK 4 reports the correct *sizes* at `(0, 0)` origins, which confirms
+the finding in `rust/SPIKE-FINDINGS.md` against ground truth and settles it as a toolkit fact rather
+than a compositor one.
+
+Two gaps in that column are worth naming rather than reading as agreement. WebKitGTK does not expose
+the page's text field over AT-SPI at all, so its `usable` rests on the button alone. Firefox publishes
+no AT-SPI application whatsoever, so it has no geometry column to read.
 
 ### The decision
 
@@ -109,6 +116,10 @@ no more.
 | --- | --- | --- |
 | `click` | `Chromium`, any version | Chromium 108, 124 and 150, both lanes |
 | `keyboard` | `gtk` 3.24.x, `Qt` 6.11.x, `Chromium` any version | GTK 3.24.51, WebKitGTK 2.50.4 (which reports `gtk` 3.24.51), Qt 6.11.1, Chromium 108/124/150, both lanes |
+
+Every row in both fixtures has both of its controls reacting, so every verdict above is a statement
+about the toolkit. A column whose control fails is rendered as carrying no verdict, rather than as a
+negative the harness never earned.
 
 Everything else refuses `backgroundPixelUnsupported` naming the toolkit that refused. That includes
 two deliberate exclusions and one structural one:

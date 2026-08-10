@@ -284,10 +284,12 @@ engine generations rather than one, with the obligation to re-measure when the
 family releases, because a Chromium that began filtering these events would be
 undetectable by signature.
 
-The same run also settles the rung's coordinate source: AT-SPI `Component`
-extents match the toolkit's own rectangles exactly for GTK 3, Qt, WebKitGTK and
-Chromium, and GTK 4 reports correct sizes at `(0, 0)` origins, so a GTK 4 target
-has no usable coordinate source whatever the delivery mechanism does.
+The same run also settles the rung's coordinate source. Each target reports its
+own widget rectangles from inside the toolkit, and all four components are
+compared against what AT-SPI publishes: GTK 3, Qt, WebKitGTK and Chromium agree,
+exactly in every case but one, which sits four pixels out in x on both lanes.
+GTK 4 reports the correct sizes at `(0, 0)` origins, so a GTK 4 target has no
+usable coordinate source whatever the delivery mechanism does.
 
 The foreground rung is not merely "global input". It is global input that hands
 back what it borrowed, and a backend that cannot do that must not offer the rung
