@@ -1062,8 +1062,16 @@ mod tests {
         pixel_result: Rc<RefCell<Result<PixelDispatch, PixelDispatchError>>>,
         /// What was asked to be planned, and what was actually delivered. Recorded so a test can
         /// prove the identity the router bound with, and that a refusal sent nothing.
-        planned: Rc<RefCell<Vec<(String, Option<SnapshotHandle>, Option<(f64, f64)>)>>>,
+        planned: Rc<RefCell<Vec<PlanRequest>>>,
         pixel_dispatches: Rc<RefCell<Vec<PixelTarget>>>,
+    }
+    /// One planning request the router made: the application identity it bound against, and the
+    /// element and point when the action had one.
+    #[derive(Clone, Debug)]
+    struct PlanRequest {
+        application: String,
+        handle: Option<SnapshotHandle>,
+        point: Option<(f64, f64)>,
     }
     impl PointerTargetVerifier for FakeBackend {
         fn verify_pointer_target(
@@ -1082,13 +1090,19 @@ mod tests {
             handle: &SnapshotHandle,
             point: (f64, f64),
         ) -> Result<PixelPlan, BackendError> {
-            self.planned
-                .borrow_mut()
-                .push((application.into(), Some(handle.clone()), Some(point)));
+            self.planned.borrow_mut().push(PlanRequest {
+                application: application.into(),
+                handle: Some(handle.clone()),
+                point: Some(point),
+            });
             self.click_plan.borrow().clone()
         }
         fn plan_pixel_keyboard(&mut self, application: &str) -> Result<PixelPlan, BackendError> {
-            self.planned.borrow_mut().push((application.into(), None, None));
+            self.planned.borrow_mut().push(PlanRequest {
+                application: application.into(),
+                handle: None,
+                point: None,
+            });
             self.keyboard_plan.borrow().clone()
         }
         fn dispatch_pixel_click(
@@ -2280,9 +2294,12 @@ actions:
             assert_eq!(result["dispatchSuccess"], json!(true));
             // Bound by the backend's own identity for the application, not by the display name the
             // request carried — which is the distinction that decides which window is typed into.
-            assert_eq!(
-                planned.borrow().first().map(|(app, ..)| app.clone()),
-                Some(APP_IDENTITY.to_string())
+            let planned = planned.borrow();
+            let request = planned.first().expect("the router planned the pixel rung");
+            assert_eq!(request.application, APP_IDENTITY);
+            assert!(
+                request.handle.is_none() && request.point.is_none(),
+                "keyboard input names an application rather than an element"
             );
             assert_eq!(*keystrokes.borrow(), 0, "the pixel rung is not XTest");
             // Keystrokes name an application rather than an element, so the bound target carries
