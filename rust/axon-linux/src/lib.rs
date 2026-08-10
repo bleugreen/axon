@@ -137,7 +137,9 @@ pub enum PixelPlan {
     /// No target-bound mechanism here. `reason` names the specific obstacle, because a caller told
     /// only "unsupported" cannot tell a GTK 4 window from an unmeasured Qt release from an
     /// application whose window is currently covered by someone else's.
-    Unavailable { reason: String },
+    Unavailable {
+        reason: String,
+    },
 }
 
 impl PixelPlan {
@@ -304,11 +306,9 @@ impl<B: PointerTargetVerifier + BackgroundPixelInput> Router<B> {
                 // planner may discard this plan and refuse, and by then nothing native may have
                 // happened.
                 let plan = match self.resolved_application() {
-                    Some(application) => Self::planned(self.backend.plan_pixel_click(
-                        &application,
-                        &handle,
-                        point,
-                    )),
+                    Some(application) => {
+                        Self::planned(self.backend.plan_pixel_click(&application, &handle, point))
+                    }
                     None => PixelPlan::unavailable(NO_RESOLVED_APPLICATION),
                 };
                 let ladder =
@@ -460,10 +460,9 @@ impl<B: PointerTargetVerifier + BackgroundPixelInput> Router<B> {
                     ForegroundDispatch {
                         policy,
                         candidate: &candidate,
-                        target: target.as_deref().map_or(
-                            ForegroundTarget::Frontmost,
-                            ForegroundTarget::Application,
-                        ),
+                        target: target
+                            .as_deref()
+                            .map_or(ForegroundTarget::Frontmost, ForegroundTarget::Application),
                         // Keyboard input never touches the cursor, and capturing a pointer it does
                         // not move would report a restoration that never happened.
                         restores_pointer: false,
@@ -571,9 +570,7 @@ impl<B: PointerTargetVerifier + BackgroundPixelInput> Router<B> {
     /// `Unavailable` plan; this is for the calls underneath that simply failed — a bus timeout, an
     /// X server that dropped the connection — which are still an honest reason this rung is not
     /// available for this action right now.
-    fn planned(
-        plan: Result<PixelPlan, axon_core::BackendError>,
-    ) -> PixelPlan {
+    fn planned(plan: Result<PixelPlan, axon_core::BackendError>) -> PixelPlan {
         plan.unwrap_or_else(|error| {
             PixelPlan::unavailable(format!(
                 "the target-bound delivery path could not be planned: {error}"

@@ -116,7 +116,10 @@ impl Versions {
 /// The `major.minor` prefix of a version string, which is the granularity an entry keys on.
 fn series_of(version: &str) -> (&str, &str) {
     let mut parts = version.split('.');
-    (parts.next().unwrap_or_default(), parts.next().unwrap_or_default())
+    (
+        parts.next().unwrap_or_default(),
+        parts.next().unwrap_or_default(),
+    )
 }
 
 /// What the harness measured for one toolkit and one action.

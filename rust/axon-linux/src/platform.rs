@@ -21,7 +21,7 @@ use atspi::{
 };
 use axon_core::{
     AppQuery, Application, BackendError, Capability, CapabilityInfo, KeyboardIntent, Node,
-    Observation, PlatformBackend, Rect, RecordedCall, Screenshot, Snapshot, SnapshotHandle, Window,
+    Observation, PlatformBackend, RecordedCall, Rect, Screenshot, Snapshot, SnapshotHandle, Window,
 };
 use std::{
     collections::{HashMap, HashSet},
@@ -663,7 +663,10 @@ impl LinuxBackend {
         };
         match &target.aim {
             Some(aim) => {
-                let point = (coordinate(aim.screen_point.0), coordinate(aim.screen_point.1));
+                let point = (
+                    coordinate(aim.screen_point.0),
+                    coordinate(aim.screen_point.1),
+                );
                 let owner = session
                     .managed_window_at(target.process_identifier, point)
                     .map_err(PixelDispatchError::Backend)?;
@@ -816,8 +819,14 @@ impl BackgroundPixelInput for LinuxBackend {
         };
         let window = target.window;
         let variant = target.variant;
-        let window_point = (coordinate(aim.window_point.0), coordinate(aim.window_point.1));
-        let screen = (coordinate(aim.screen_point.0), coordinate(aim.screen_point.1));
+        let window_point = (
+            coordinate(aim.window_point.0),
+            coordinate(aim.window_point.1),
+        );
+        let screen = (
+            coordinate(aim.screen_point.0),
+            coordinate(aim.screen_point.1),
+        );
         self.deliver(target, move |session| {
             session.send_click(window, window_point, screen, variant)
         })
@@ -1355,8 +1364,8 @@ impl Actor {
         .await?;
         let interfaces = timeout("interfaces", proxy.proxies()).await?;
         let component = timeout("component interface", interfaces.component()).await?;
-        let (x, y, width, height) = timeout("extents", component.get_extents(CoordType::Screen))
-            .await?;
+        let (x, y, width, height) =
+            timeout("extents", component.get_extents(CoordType::Screen)).await?;
         Ok((width > 0 && height > 0).then_some(Rect {
             x: x.into(),
             y: y.into(),

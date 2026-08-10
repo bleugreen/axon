@@ -448,7 +448,12 @@ impl X11Session {
                 state,
                 same_screen: true,
             };
-            self.send(window, mask_for(kind, variant), event, "send a click to a window")?;
+            self.send(
+                window,
+                mask_for(kind, variant),
+                event,
+                "send a click to a window",
+            )?;
         }
         self.flush("send a click to a window")
     }
@@ -639,7 +644,6 @@ impl X11Session {
             .first()
             .copied())
     }
-
 
     fn property(
         &self,
