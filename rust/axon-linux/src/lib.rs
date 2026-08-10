@@ -393,16 +393,16 @@ impl<B: PointerTargetVerifier + BackgroundPixelInput> Router<B> {
                 // The intent is validated before the ladder, so a malformed request is an error
                 // rather than a refusal.
                 let intent = keyboard_intent(params)?;
-                let ladder = self.global_input_ladder(Capability::KeyboardInput, "XTest keyboard");
-                let Some(candidate) = self.selected(&ladder, policy) else {
-                    return Ok(self.refusal(&ladder, policy));
-                };
                 let app = app_query(params);
                 // `keyboard` naming no application is explicitly addressed at whatever holds the
-                // foreground: nothing to activate, nothing to restore. Naming one makes it aimed,
-                // and the transaction compares and activates the backend's own identity for that
-                // application — not the display name or caller-facing identifier the request
-                // carried, which no backend answers with.
+                // foreground: nothing to activate, nothing to restore, and nothing to bind a
+                // target window to either. Naming one makes it aimed, and both rungs then work
+                // from the backend's own identity for that application — not the display name or
+                // caller-facing identifier the request carried, which no backend answers with.
+                //
+                // Resolved before the ladder rather than after it, because the pixel rung needs
+                // that identity to bind a window, and a plan has to exist before the ladder can
+                // offer the rung or refuse it by name.
                 let aimed = app.name.is_some() || app.identifier.is_some();
                 let target = if aimed {
                     match self
