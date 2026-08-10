@@ -852,11 +852,23 @@ def render(document: dict) -> str:
         controls = result.get("controls", {})
         geometry = result.get("geometry", {})
         usable = geometry.get("extentsUsable")
+        # A control that could not reach the target says nothing about the target. Something covering
+        # the point (a screensaver, a panel, another window) or a window manager that would not hand
+        # over the focus is an obstructed measurement, not a silent toolkit.
+        obstructed = result.get("targetIsTopmostAtPoint") is False
+        pointer_control = "obstructed" if obstructed else (
+            "reacted" if controls.get("pointerClick") else "no reaction"
+        )
+        focus_control = (
+            "reacted"
+            if controls.get("focusedText")
+            else ("focus refused" if controls.get("focusAcquired") is False else "no reaction")
+        )
         lines.append(
             f"| `{result['target']}` | {result.get('signature', '')} | {_toolkit(result)} |"
             f" {_verdict(background.get('click'))} | {_verdict(background.get('text'))} |"
-            f" {'reacted' if controls.get('pointerClick') else 'no reaction'} |"
-            f" {'reacted' if controls.get('focusedText') else 'no reaction'} |"
+            f" {pointer_control} |"
+            f" {focus_control} |"
             f" {'usable' if usable else ('unusable' if usable is False else 'not reported')} |"
         )
     lines += [
