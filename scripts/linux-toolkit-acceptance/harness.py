@@ -34,6 +34,9 @@ TARGETS = HERE / "targets"
 REACTION_TIMEOUT = 2.0
 READY_TIMEOUT = 40.0
 TYPED_TEXT = "axon"
+# How far AT-SPI may disagree with a toolkit's own rectangle before the disagreement is a defect
+# rather than padding.
+TOLERANCE = 4
 
 
 class Reports:
@@ -436,9 +439,11 @@ def compare_geometry(truth: dict, atspi: dict, origin: tuple[int, int]) -> dict:
         if measured is None:
             entry["agrees"] = None
         else:
+            # All four components. Comparing only the origin would record a target that reported a
+            # nonsense size as agreeing with AT-SPI, which is the opposite of what this measures.
             # A few pixels of disagreement is toolkit padding, not a broken coordinate source.
-            entry["offsetBy"] = [measured[0] - expected[0], measured[1] - expected[1]]
-            entry["agrees"] = abs(entry["offsetBy"][0]) <= 4 and abs(entry["offsetBy"][1]) <= 4
+            entry["deltas"] = [measured[index] - expected[index] for index in range(4)]
+            entry["agrees"] = all(abs(delta) <= TOLERANCE for delta in entry["deltas"])
             usable = entry["agrees"] if usable is None else (usable and entry["agrees"])
         comparison["widgets"][widget] = entry
     comparison["extentsUsable"] = usable
@@ -492,6 +497,12 @@ def measure(spec: Spec, session: Session, reports: Reports, decoy, port: int) ->
         if window is None:
             result["status"] = "failed"
             result["detail"] = f"no viewable toplevel window found for pid {pid}"
+            return result
+        implausible = _implausible(widgets, window.get_geometry())
+        if implausible:
+            result["status"] = "failed"
+            result["detail"] = implausible
+            result["widgets"] = widgets
             return result
         result["window"] = {"xid": window.id, "reportedXid": ready.get("xid")}
         session.raise_window(window)
@@ -548,6 +559,31 @@ def measure(spec: Spec, session: Session, reports: Reports, decoy, port: int) ->
         return result
     finally:
         _stop(process)
+
+
+def _implausible(widgets: dict, geometry) -> str | None:
+    """Why a target's own widget rectangles cannot be ground truth, if they cannot.
+
+    A toolkit asked for a widget's bounds before it has laid the widget out answers with something
+    degenerate rather than with an error. Measuring against that produces a geometry verdict about
+    the harness's timing dressed up as one about the toolkit, so it is a failed row instead.
+    """
+    for name, rect in sorted(widgets.items()):
+        if rect[2] < 8 or rect[3] < 8:
+            return (
+                f"the target reported a degenerate {name} rectangle {rect}, so it had not laid out"
+            )
+        if rect[0] < 0 or rect[1] < 0:
+            return f"the target reported a {name} rectangle {rect} outside its own window"
+        if (
+            rect[0] + rect[2] > geometry.width + TOLERANCE
+            or rect[1] + rect[3] > geometry.height + TOLERANCE
+        ):
+            return (
+                f"the target reported a {name} rectangle {rect} larger than its "
+                f"{geometry.width}x{geometry.height} window"
+            )
+    return None
 
 
 def _background_preconditions(session: Session, decoy, window, origin, geometry) -> dict:
@@ -843,7 +879,7 @@ def specs() -> list[Spec]:
 # -- rendering --------------------------------------------------------------------------------
 
 
-def _verdict(phase: dict | None) -> str:
+def _verdict(phase: dict | None, control: bool | None) -> str:
     """One phase's outcome, in the vocabulary the decision needs.
 
     Three outcomes matter and they are not the same. An event that never reached the toolkit says
@@ -854,6 +890,10 @@ def _verdict(phase: dict | None) -> str:
     """
     if not phase:
         return "-"
+    # The control is what makes a negative mean something. Without it this column would report a
+    # toolkit verdict earned by a harness that never reached the target.
+    if control is False:
+        return "no verdict — control failed"
     invariants = phase.get("invariants") or {}
     if phase.get("accepted"):
         broke = [
@@ -908,6 +948,7 @@ def render(document: dict) -> str:
         # the point (a screensaver, a panel, another window) or a window manager that would not hand
         # over the focus is an obstructed measurement, not a silent toolkit.
         obstructed = result.get("targetIsTopmostAtPoint") is False
+        click_control = bool(controls.get("pointerClick"))
         pointer_control = "obstructed" if obstructed else (
             "reacted" if controls.get("pointerClick") else "no reaction"
         )
@@ -918,7 +959,8 @@ def render(document: dict) -> str:
         )
         lines.append(
             f"| `{result['target']}` | {result.get('signature', '')} | {_toolkit(result)} |"
-            f" {_verdict(background.get('click'))} | {_verdict(background.get('text'))} |"
+            f" {_verdict(background.get('click'), click_control)} |"
+            f" {_verdict(background.get('text'), controls.get('focusedText'))} |"
             f" {pointer_control} |"
             f" {focus_control} |"
             f" {'usable' if usable else ('unusable' if usable is False else 'not reported')} |"

@@ -46,7 +46,12 @@ class Target:
         self.window.add_controller(clicks)
         self.window.present()
         self.entry.grab_focus()
-        GLib.timeout_add(600, self.announce)
+        self.previous: dict | None = None
+        # GTK 4 answers `compute_bounds` before it has laid the widget out, with something small and
+        # wrong rather than with an error, so the announcement waits for two identical readings
+        # instead of for a fixed delay. A rectangle measured mid-layout would be published as this
+        # toolkit's ground truth and quietly become a geometry verdict about the harness's timing.
+        GLib.timeout_add(200, self.announce)
 
     def rectangle(self, widget):
         found, bounds = widget.compute_bounds(self.window)
@@ -60,6 +65,22 @@ class Target:
         ]
 
     def announce(self) -> bool:
+        widgets = {
+            name: rectangle
+            for name, rectangle in (
+                ("button", self.rectangle(self.button)),
+                ("entry", self.rectangle(self.entry)),
+            )
+            if rectangle
+        }
+        settled = (
+            len(widgets) == 2
+            and all(rect[2] >= 8 and rect[3] >= 8 for rect in widgets.values())
+            and widgets == self.previous
+        )
+        if not settled:
+            self.previous = widgets
+            return True
         surface = self.window.get_surface()
         report(
             {
@@ -68,14 +89,7 @@ class Target:
                 "xid": GdkX11.X11Surface.get_xid(surface) if surface else None,
                 "signature": "GTK %d.%d.%d"
                 % (Gtk.get_major_version(), Gtk.get_minor_version(), Gtk.get_micro_version()),
-                "widgets": {
-                    name: rectangle
-                    for name, rectangle in (
-                        ("button", self.rectangle(self.button)),
-                        ("entry", self.rectangle(self.entry)),
-                    )
-                    if rectangle
-                },
+                "widgets": widgets,
             }
         )
         return False
