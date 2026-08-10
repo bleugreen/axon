@@ -147,6 +147,11 @@ jobs:
   # automation daemon does (register a scheduled task, relaunch into the interactive session, serve a
   # pipe). Signing is applied between staging and archiving so the archive a consumer downloads and
   # the checksum that vouches for it both describe the signed bytes.
+  #
+  # The AXON_WIN_SIGNING repository variable exists only because the certificate profile is waiting
+  # on Azure's organization identity validation, and an ungated signing step would fail every
+  # release until that clears. Delete the variable and the `if:` conditions below once a signed
+  # release has shipped: signing a release is not an option to keep switching off.
   windows:
     name: Build Windows
     needs: version
@@ -210,6 +215,10 @@ jobs:
           timestamp-digest: SHA256
           description: Axon
           description-url: https://github.com/bleugreen/axon
+          # The `Azure login` step above is the only credential this job has, so every other source
+          # DefaultAzureCredential would try is a guaranteed miss that only delays the real failure.
+          exclude-environment-credential: true
+          exclude-azure-cli-credential: false
 
       - name: Verify the packaged daemon reports the release version
         env:
