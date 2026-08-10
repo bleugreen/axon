@@ -738,11 +738,11 @@ def specs() -> list[Spec]:
     A missing toolkit is recorded as unavailable rather than dropped: a result table has to say what
     it did not see, or a reader will take the absence for a verdict.
     """
-    def python_target(name: str, script: str, requirement: str, note: str) -> Spec:
+    def python_target(name: str, script: str, requirements: list[str], note: str) -> Spec:
         return Spec(
             name=name,
             argv=[sys.executable, str(TARGETS / script)],
-            unavailable=None if _importable(requirement) else note,
+            unavailable=None if any(_importable(each) for each in requirements) else note,
         )
 
     electron = TARGETS / "electron"
@@ -750,27 +750,25 @@ def specs() -> list[Spec]:
         python_target(
             "gtk3",
             "gtk3.py",
-            "import gi; gi.require_version('Gtk', '3.0')",
+            ["import gi; gi.require_version('Gtk', '3.0')"],
             "GTK 3 GObject introspection is not installed",
         ),
         python_target(
             "gtk4",
             "gtk4.py",
-            "import gi; gi.require_version('Gtk', '4.0')",
+            ["import gi; gi.require_version('Gtk', '4.0')"],
             "GTK 4 GObject introspection is not installed",
         ),
         python_target(
             "qt6",
             "qt6.py",
-            "import PyQt6.QtWidgets",
+            ["import PyQt6.QtWidgets", "import PySide6.QtWidgets"],
             "neither PyQt6 nor PySide6 is installed",
-        )
-        if _importable("import PyQt6.QtWidgets") or _importable("import PySide6.QtWidgets")
-        else Spec("qt6", [], unavailable="neither PyQt6 nor PySide6 is installed"),
+        ),
         python_target(
             "webkitgtk",
             "webkitgtk.py",
-            "import gi; gi.require_version('WebKit2', '4.1')",
+            ["import gi; gi.require_version('WebKit2', '4.1')"],
             "WebKitGTK GObject introspection is not installed",
         ),
         Spec(
