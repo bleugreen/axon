@@ -27,6 +27,9 @@ class Target:
         self.entry = Gtk.Entry()
         self.button = Gtk.Button(label="Target Button")
         self.button.set_size_request(200, 80)
+        # The button must not take widget focus: a click landing on it would otherwise move focus
+        # off the text field and turn the keyboard phases into a measurement of the button.
+        self.button.set_focusable(False)
         self.button.connect("clicked", self.on_click)
         self.entry.connect("changed", self.on_text)
         box.append(self.entry)

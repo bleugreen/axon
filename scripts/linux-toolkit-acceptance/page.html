@@ -29,6 +29,9 @@
         return [Math.round(box.x), Math.round(box.y), Math.round(box.width), Math.round(box.height)];
       };
       const button = document.getElementById("button");
+      // Keep focus in the text field: a click that moved it would turn the keyboard phases into a
+      // measurement of the button.
+      button.addEventListener("mousedown", (event) => event.preventDefault());
       const entry = document.getElementById("entry");
       let clicks = 0;
       button.addEventListener("click", (event) => {

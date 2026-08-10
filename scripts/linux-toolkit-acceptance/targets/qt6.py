@@ -9,13 +9,13 @@ import os
 import sys
 
 try:
-    from PyQt6.QtCore import QEvent, QObject, QPoint, QTimer, QT_VERSION_STR
+    from PyQt6.QtCore import QEvent, QObject, QPoint, Qt, QTimer, QT_VERSION_STR
     from PyQt6.QtWidgets import QApplication, QLineEdit, QPushButton, QVBoxLayout, QWidget
 
     BINDING = "PyQt6"
 except ImportError:  # whichever binding this machine has
     from PySide6 import __version__ as QT_VERSION_STR
-    from PySide6.QtCore import QEvent, QObject, QPoint, QTimer
+    from PySide6.QtCore import QEvent, QObject, QPoint, Qt, QTimer
     from PySide6.QtWidgets import QApplication, QLineEdit, QPushButton, QVBoxLayout, QWidget
 
     BINDING = "PySide6"
@@ -52,6 +52,9 @@ class Target(QWidget):
         self.entry = QLineEdit(self)
         self.button = QPushButton("Target Button", self)
         self.button.setMinimumSize(200, 80)
+        # The button must not take widget focus: a click landing on it would otherwise move focus
+        # off the text field and turn the keyboard phases into a measurement of the button.
+        self.button.setFocusPolicy(Qt.FocusPolicy.NoFocus)
         self.button.clicked.connect(self.on_click)
         self.entry.textChanged.connect(self.on_text)
         layout.addWidget(self.entry)
