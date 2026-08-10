@@ -328,16 +328,15 @@ mod tests {
 
     #[test]
     fn the_table_offers_exactly_what_the_fixtures_measured() {
-        // Chromium: both actions, targeted, at any version, because its signature carries none.
+        // Chromium clicks at any version, because its signature carries none. Its keystrokes are
+        // refused: they land only on a window a background click has already reached, and a
+        // window that has not been clicked drops them in silence.
         for version in ["1.0", "999.0"] {
             assert_eq!(
                 variant(PixelAction::Click, "Chromium", version),
                 Some(SendVariant::Targeted)
             );
-            assert_eq!(
-                variant(PixelAction::Keyboard, "Chromium", version),
-                Some(SendVariant::Targeted)
-            );
+            assert_eq!(variant(PixelAction::Keyboard, "Chromium", version), None);
         }
         // GTK 3 types but does not click, and types only through the owner variant. WebKitGTK
         // reports this same signature, which is how it inherits the entry.
@@ -493,6 +492,21 @@ mod tests {
         let refusal = accepts(PixelAction::Keyboard, &toolkit("", ""))
             .expect_err("no signature is not a match");
         assert!(refusal.contains("no AT-SPI toolkit"), "{refusal}");
+    }
+
+    #[test]
+    fn chromium_keystrokes_refuse_and_say_what_they_would_do_instead_of_working() {
+        // The failure mode this refusal exists to stop is silent: the events are delivered, the
+        // server accepts them, the invariants all hold, and the application does nothing. A
+        // caller who is told "unsupported" can escalate; one who is told "delivered" cannot.
+        let refusal = accepts(
+            PixelAction::Keyboard,
+            &toolkit("Chromium", "1.0"),
+        )
+        .expect_err("Chromium keystrokes need a click to have landed first");
+        assert!(refusal.contains("Chromium 1.0"), "{refusal}");
+        assert!(refusal.contains("click"), "{refusal}");
+        assert!(refusal.contains("silence"), "{refusal}");
     }
 
     #[test]
