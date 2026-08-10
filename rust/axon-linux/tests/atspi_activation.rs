@@ -599,6 +599,9 @@ fn configuration(directory: &Path) -> String {
   <listen>unix:dir={directory}</listen>
   <policy context="default">
     <allow send_destination="*"/>
+    <!-- A bus denies receiving by default, method replies and the driver's own name signals
+         included, and a client whose reply is dropped simply waits. -->
+    <allow receive_sender="*"/>
     <allow own="*"/>
   </policy>
 </busconfig>
