@@ -328,7 +328,7 @@ public enum SemanticNameDeriver {
                 resolution: elements.count == 1 ? .unique : .ambiguous
             )
         }.sorted(by: { $0.name < $1.name })
-        SemanticNameStudy(
+        return SemanticNameStudy(
             elements: elements,
             groups: groups,
             summary: SemanticNameSummary(

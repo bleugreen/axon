@@ -201,7 +201,13 @@ public struct AxnRunner {
                 return axn
             }
             if params["actions"] != nil {
-                return try Axn(jsonValue: .object(params))
+                var document = params
+                // Inline `run(actions:)` requests are not persisted .axn documents. Treat an
+                // omitted version as the current contract while still rejecting an explicit v1.
+                if document["version"] == nil {
+                    document["version"] = .int(2)
+                }
+                return try Axn(jsonValue: .object(document))
             }
             throw AxnRunError.invalidParams("run requires actions or path")
         } catch let error as AxnRunError {
