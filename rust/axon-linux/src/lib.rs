@@ -1998,4 +1998,339 @@ actions:
                 .contains("required fact")
         );
     }
+
+    /// The pixel rung's router half: which rung an action takes, what a refusal names, and what a
+    /// delivered result reports. Every case here runs against a fake, because the decision is the
+    /// part that is the same on any machine — the X11 conversation underneath it is exercised by
+    /// `tests/x11_pixel.rs` against a real server.
+    mod pixel_rung {
+        use super::*;
+        use crate::pixel::{PixelAction, Toolkit};
+
+        /// A backend whose click plan is bound, and which can also reach the foreground rung, so
+        /// each case shows the pixel rung being *chosen* rather than being all that was left.
+        fn bound_backend(aimed: bool) -> FakeBackend {
+            let backend = transactional_backend();
+            let plan = Ok(PixelPlan::Bound(Box::new(pixel_target(aimed))));
+            *backend.click_plan.borrow_mut() = plan.clone();
+            *backend.keyboard_plan.borrow_mut() = plan;
+            backend
+        }
+
+        fn router_for(backend: FakeBackend) -> Router<FakeBackend> {
+            let mut router = Router::new(backend);
+            router.snapshot = Some(router.backend.snapshot.clone());
+            router
+        }
+
+        #[test]
+        fn a_bound_click_takes_the_pixel_rung_under_the_default_policy() {
+            let backend = bound_backend(true);
+            let handle = backend.snapshot.handle(0);
+            let clicks = backend.clicks.clone();
+            let activations = backend.activations.clone();
+            let dispatches = backend.pixel_dispatches.clone();
+            let mut router = router_for(backend);
+
+            let response = router
+                .request(request("click", json!({"target": handle.0})))
+                .unwrap();
+
+            let result = refusal(&response);
+            assert_eq!(result["delivery"], json!("pixel"));
+            assert_eq!(result["dispatchSuccess"], json!(true));
+            assert_eq!(result["success"], json!(true));
+            assert_eq!(result["deliveryPolicy"], json!("backgroundOnly"));
+            assert_eq!(result["refusal"], Value::Null);
+            // The rung is defined by what it does not do, so the two things it must not have
+            // touched are asserted rather than assumed.
+            assert_eq!(*clicks.borrow(), 0, "the pixel rung is not XTest");
+            assert!(
+                activations.borrow().is_empty(),
+                "the pixel rung activates nothing"
+            );
+            assert_eq!(dispatches.borrow().len(), 1);
+            // A caller who resolved a target still gets the resolution back, exactly as at the
+            // foreground rung.
+            assert_eq!(result["resolution"]["status"], json!("unique"));
+        }
+
+        #[test]
+        fn a_delivered_result_reports_the_window_the_transform_and_the_measurement() {
+            let backend = bound_backend(true);
+            let handle = backend.snapshot.handle(0);
+            let mut router = router_for(backend);
+
+            let response = router
+                .request(request("click", json!({"target": handle.0})))
+                .unwrap();
+
+            let result = refusal(&response);
+            let window = &result["targetWindow"];
+            assert_eq!(window["nativeWindowHandle"], json!("0x00600003"));
+            assert_eq!(window["windowOrigin"], json!({"x": 100.0, "y": 80.0}));
+            assert_eq!(window["windowPoint"], json!({"x": 10.0, "y": 10.0}));
+            assert_eq!(window["sourceCoordinateSpace"], json!("screen"));
+            // The signature that authorized this, and the delivery variant it was measured under:
+            // a dispatch into someone's window should say on what evidence it was allowed.
+            assert_eq!(window["toolkit"], json!("Chromium"));
+            assert_eq!(window["toolkitVersion"], json!("1.0"));
+            assert_eq!(window["deliveryVariant"], json!("targeted"));
+            assert_eq!(window["measuredBy"], json!("a fixture citation"));
+            let background = &result["backgroundDelivery"];
+            assert_eq!(background["targetProcessIdentifier"], json!(4242));
+            assert_eq!(background["frontmostAppUnchanged"], json!(true));
+            assert_eq!(background["inputFocusUnchanged"], json!(true));
+            assert_eq!(background["pointerUnchanged"], json!(true));
+            // Delivered is not verified. The contract is explicit that acceptance is evidence and
+            // that goal success needs a readback or a declared postcondition.
+            assert_eq!(result["verification"]["verified"], json!(false));
+        }
+
+        #[test]
+        fn a_dispatch_that_moved_the_focus_is_not_a_background_delivery() {
+            // Qt's click is refused by the acceptance table for exactly this, and the table is the
+            // defence. This is the backstop underneath it: a toolkit that acts on a delivered
+            // event by asking to be activated does not get to have that reported as success.
+            let backend = bound_backend(true);
+            *backend.pixel_result.borrow_mut() = Ok(PixelDispatch {
+                complete: true,
+                partial: None,
+                frontmost_unchanged: true,
+                input_focus_unchanged: false,
+                pointer_unchanged: true,
+            });
+            let handle = backend.snapshot.handle(0);
+            let mut router = router_for(backend);
+
+            let response = router
+                .request(request("click", json!({"target": handle.0})))
+                .unwrap();
+
+            let result = refusal(&response);
+            assert_eq!(result["delivery"], json!("pixel"));
+            // The evidence that the events were delivered survives; the claim that the session was
+            // left alone does not.
+            assert_eq!(result["dispatchSuccess"], json!(true));
+            assert_eq!(result["success"], json!(false));
+            assert!(
+                result["message"]
+                    .as_str()
+                    .unwrap()
+                    .contains("X input focus moved"),
+                "{}",
+                result["message"]
+            );
+        }
+
+        #[test]
+        fn a_stale_target_aborts_before_delivery_as_an_error_rather_than_a_refusal() {
+            // Revalidation failing is not the daemon declining to act: the request was fine and
+            // the target is no longer what it was, which a caller has to be able to tell apart
+            // from a policy or capability decision.
+            let backend = bound_backend(true);
+            *backend.pixel_result.borrow_mut() = Err(PixelDispatchError::Stale(
+                "the resolved element no longer covers the point this plan aimed at".into(),
+            ));
+            let handle = backend.snapshot.handle(0);
+            let clicks = backend.clicks.clone();
+            let mut router = router_for(backend);
+
+            let response = router
+                .request(request("click", json!({"target": handle.0})))
+                .unwrap();
+
+            let JsonRpcResponse::Failure(failure) = response else {
+                panic!("a stale target is a transport error, not an action result")
+            };
+            assert_eq!(failure.error.code, -32003);
+            assert!(
+                failure.error.message.contains("no longer covers the point"),
+                "{}",
+                failure.error.message
+            );
+            // Nothing escalated to the loud rung behind the caller's back.
+            assert_eq!(*clicks.borrow(), 0);
+        }
+
+        #[test]
+        fn the_pixel_candidate_carries_the_toolkits_own_refusal() {
+            // Each of these is the message the acceptance table itself produces, so this asserts
+            // the whole path from a measured verdict to what a caller is told, rather than a
+            // string the test invented.
+            let router = Router::new(backend(vec![], None));
+            let cases = [
+                // Measured and refused: GTK 4 receives neither event.
+                (
+                    PixelAction::Click,
+                    Toolkit {
+                        name: "GTK".into(),
+                        version: "4.20.3".into(),
+                    },
+                    "4.20.3",
+                ),
+                // A version series nobody measured, naming the series that was.
+                (
+                    PixelAction::Keyboard,
+                    Toolkit {
+                        name: "Qt".into(),
+                        version: "6.12.0".into(),
+                    },
+                    "6.11.x",
+                ),
+                // Measured, accepted, and still refused: Qt asks to be activated on a click.
+                (
+                    PixelAction::Click,
+                    Toolkit {
+                        name: "Qt".into(),
+                        version: "6.11.1".into(),
+                    },
+                    "requests activation",
+                ),
+            ];
+            for (action, toolkit, expected) in cases {
+                let reason = pixel::accepts(action, &toolkit)
+                    .expect_err("none of these toolkits accept this action in the background");
+                let ladder = router.global_input_ladder(
+                    Capability::PointerInput,
+                    "XTest pointer",
+                    &PixelPlan::unavailable(reason),
+                );
+
+                let candidate = &ladder[0];
+                assert_eq!(candidate.rung, DeliveryRung::Pixel);
+                assert_eq!(
+                    candidate.unavailable,
+                    Some(DeliveryRefusalReason::BackgroundPixelUnsupported)
+                );
+                let message = candidate.unavailable_message.clone().unwrap();
+                assert!(message.contains(&toolkit.name), "{message}");
+                assert!(message.contains(expected), "{message}");
+            }
+        }
+
+        #[test]
+        fn a_point_no_window_of_the_application_owns_refuses_by_name() {
+            // The geometry half of the binding. A target whose toolkit was cleared still has no
+            // pixel rung when its window is not the one on top at the resolved point, and the
+            // caller is told which of the two it was.
+            let backend = transactional_backend();
+            *backend.click_plan.borrow_mut() = Ok(PixelPlan::unavailable(
+                "no top-level window of the Chromium 1.0 application running as process 4242 owns \
+                 the point the resolved element sits at; it is either off-screen or covered by \
+                 another window there",
+            ));
+            let handle = backend.snapshot.handle(0);
+            let dispatches = backend.pixel_dispatches.clone();
+            let mut router = router_for(backend);
+
+            let response = router
+                .request(request("click", json!({"target": handle.0})))
+                .unwrap();
+
+            let result = refusal(&response);
+            // The policy boundary outranks it in the reason a caller is given, because opting in
+            // is the thing they can act on and it would work. See AXN-101 for the message that
+            // does not currently survive that ranking.
+            assert_eq!(result["refusal"]["reason"], json!("foregroundNotPermitted"));
+            assert_eq!(result["delivery"], Value::Null);
+            assert!(dispatches.borrow().is_empty(), "nothing was delivered");
+        }
+
+        #[test]
+        fn a_planner_that_failed_leaves_the_foreground_rung_reachable() {
+            // A bus timeout while planning is not a reason to fail a click that could still have
+            // travelled the loud rung, so it becomes an unavailable plan carrying its own cause.
+            let backend = transactional_backend();
+            *backend.click_plan.borrow_mut() = Err(BackendError::Operation {
+                operation: "toolkit name".into(),
+                message: "timed out".into(),
+                diagnostic: None,
+            });
+            let handle = backend.snapshot.handle(0);
+            let clicks = backend.clicks.clone();
+            let mut router = router_for(backend);
+
+            let response = router
+                .request(request(
+                    "click",
+                    json!({"target": handle.0, "deliveryPolicy": "foregroundPermitted"}),
+                ))
+                .unwrap();
+
+            let result = refusal(&response);
+            assert_eq!(result["delivery"], json!("foreground"));
+            assert_eq!(*clicks.borrow(), 1);
+        }
+
+        #[test]
+        fn an_aimed_keyboard_request_binds_the_application_it_named() {
+            let backend = bound_backend(false);
+            let keystrokes = backend.keystrokes.clone();
+            let planned = backend.planned.clone();
+            let dispatches = backend.pixel_dispatches.clone();
+            let mut router = router_for(backend);
+
+            let response = router
+                .request(request("keyboard", json!({"app": "App", "text": "axon"})))
+                .unwrap();
+
+            let result = refusal(&response);
+            assert_eq!(result["delivery"], json!("pixel"));
+            assert_eq!(result["dispatchSuccess"], json!(true));
+            // Bound by the backend's own identity for the application, not by the display name the
+            // request carried — which is the distinction that decides which window is typed into.
+            assert_eq!(
+                planned.borrow().first().map(|(app, ..)| app.clone()),
+                Some(APP_IDENTITY.to_string())
+            );
+            assert_eq!(*keystrokes.borrow(), 0, "the pixel rung is not XTest");
+            // Keystrokes name an application rather than an element, so the bound target carries
+            // a window and no converted point.
+            assert!(dispatches.borrow()[0].aim.is_none());
+            assert!(result["targetWindow"].get("windowPoint").is_none());
+        }
+
+        #[test]
+        fn keyboard_naming_no_application_has_no_target_window_to_bind() {
+            // Not a gap being papered over: a request addressed at whatever holds the foreground
+            // is a request with no target, and the pixel rung is target-bound by definition.
+            let backend = bound_backend(false);
+            let planned = backend.planned.clone();
+            let keystrokes = backend.keystrokes.clone();
+            let mut router = router_for(backend);
+
+            let response = router
+                .request(request(
+                    "keyboard",
+                    json!({"text": "axon", "deliveryPolicy": "foregroundPermitted"}),
+                ))
+                .unwrap();
+
+            let result = refusal(&response);
+            assert_eq!(result["delivery"], json!("foreground"));
+            assert_eq!(*keystrokes.borrow(), 1);
+            assert!(
+                planned.borrow().is_empty(),
+                "an unaimed request has no application to plan against"
+            );
+        }
+
+        #[test]
+        fn drag_has_no_pixel_rung_because_nothing_measured_a_held_button() {
+            let router = Router::new(backend(vec![], None));
+            let ladder = router.global_input_ladder(
+                Capability::PointerInput,
+                "XTest pointer",
+                &PixelPlan::unavailable(NO_DRAG_PIXEL),
+            );
+
+            assert_eq!(
+                ladder[0].unavailable,
+                Some(DeliveryRefusalReason::BackgroundPixelUnsupported)
+            );
+            let message = ladder[0].unavailable_message.clone().unwrap();
+            assert!(message.contains("holds a button down"), "{message}");
+        }
+    }
 }
