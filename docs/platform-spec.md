@@ -257,23 +257,37 @@ run measured GTK 3, GTK 4, Qt 6, WebKitGTK, Electron and Firefox in a hermetic
 Xvfb lane and again on a live X11 session, and the two lanes agree.
 
 What it found is that the rung is real and narrow. Chromium acts on a background
-click with the frontmost application and the real pointer provably unchanged.
-GTK 3, WebKitGTK, Firefox and Chromium act on background keystrokes under the
-same conditions. GTK 4 receives neither. Qt acts on both but asks to be activated
-while doing so, which is not an acceptance this rung may use. Separately, a
-synthetic click is honoured by GTK only while the real cursor is already inside
-the target window — the reason hand experiments conclude otherwise — and
-arranging that is the foreground rung by definition.
+click with the frontmost application and the real pointer provably unchanged, on
+every engine generation measured. GTK 3, WebKitGTK, Qt, Firefox and Chromium act
+on background keystrokes under the same conditions. GTK 4 receives neither. Qt
+also acts on a click, but requests activation while doing so — the focus moved on
+the lane with no window manager and was held only by focus-stealing prevention on
+the live one, and an acceptance that survives only while a window manager declines
+to honour the application is not a background delivery. Separately, a synthetic
+click is honoured by GTK only while the real cursor is already inside the target
+window — the reason hand experiments conclude otherwise — and arranging that is
+the foreground rung by definition.
 
 A backend may therefore offer the pixel candidate only for a toolkit the harness
 measured as accepting, keyed on the AT-SPI toolkit name and version the
 application declares about itself. Inferring acceptance from `WM_CLASS` or from
 loaded libraries is a guess wearing a probe's clothes. Everything else refuses
-`backgroundPixelUnsupported` naming the toolkit that refused. The same run also
-settles the rung's coordinate source: AT-SPI `Component` extents match the
-toolkit's own rectangles exactly for GTK 3, Qt, WebKitGTK and Chromium, and GTK 4
-reports correct sizes at `(0, 0)` origins, so a GTK 4 target has no usable
-coordinate source whatever the delivery mechanism does.
+`backgroundPixelUnsupported` naming the toolkit that refused, including a version
+series nobody measured.
+
+That key is only as precise as the toolkit chooses to be, and one entry is
+coarser than the rest. Chromium reports itself as toolkit `Chromium` version
+`1.0` — a constant carrying neither the engine version nor the application — so
+an entry keyed on it authorizes the whole family and no narrower key exists to
+move to. It is therefore held to a higher evidentiary bar: measured across three
+engine generations rather than one, with the obligation to re-measure when the
+family releases, because a Chromium that began filtering these events would be
+undetectable by signature.
+
+The same run also settles the rung's coordinate source: AT-SPI `Component`
+extents match the toolkit's own rectangles exactly for GTK 3, Qt, WebKitGTK and
+Chromium, and GTK 4 reports correct sizes at `(0, 0)` origins, so a GTK 4 target
+has no usable coordinate source whatever the delivery mechanism does.
 
 The foreground rung is not merely "global input". It is global input that hands
 back what it borrowed, and a backend that cannot do that must not offer the rung
