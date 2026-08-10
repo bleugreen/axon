@@ -47,6 +47,11 @@ and names the publisher. The signature is timestamped, so it stays valid after t
 certificate itself expires. The release workflow verifies this from inside the published archive
 before uploading it, because that is the file a consumer actually downloads.
 
+Windows signing begins with the first release the signing-enabled pipeline builds; releases
+published before the signing certificate was provisioned carry a valid checksum and no signature.
+Checking a given version is the same one-line command either way, so a consumer never has to guess
+which side of that line a pin falls on.
+
 Signing is not a substitute for the checksum. The checksum says the bytes are the bytes that were
 published; the signature says who published them and that Windows should treat them accordingly.
 
