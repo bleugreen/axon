@@ -1,0 +1,828 @@
+{
+  "measuredAt": "2026-08-10T01:34:57-0400",
+  "session": "tty session on :0",
+  "display": ":0",
+  "xServer": "The X.Org Foundation release 12101021",
+  "results": [
+    {
+      "target": "gtk3",
+      "signature": "GTK 3.24.51",
+      "window": {
+        "xid": 50331651,
+        "reportedXid": 50331651
+      },
+      "before": {
+        "pointer": [
+          1240,
+          1079
+        ],
+        "focus": 46137344,
+        "pointerOverTarget": false
+      },
+      "background": {
+        "click": {
+          "accepted": false,
+          "variant": null,
+          "at": [
+            960,
+            527
+          ],
+          "triedVariants": [
+            "targeted",
+            "owner",
+            "child"
+          ],
+          "reachedToolkit": {
+            "targeted": 0,
+            "owner": 0
+          },
+          "invariants": {
+            "pointerUnchanged": true,
+            "focusUnchanged": true,
+            "pointerAt": [
+              1240,
+              1079
+            ],
+            "focusWindow": 46137344
+          }
+        },
+        "text": {
+          "accepted": true,
+          "variant": "owner",
+          "reaction": {
+            "kind": "text",
+            "widget": "entry",
+            "value": "axon"
+          },
+          "reachedToolkit": {
+            "targeted": 0,
+            "owner": 8
+          },
+          "invariants": {
+            "pointerUnchanged": true,
+            "focusUnchanged": true,
+            "pointerAt": [
+              1240,
+              1079
+            ],
+            "focusWindow": 46137344
+          }
+        }
+      },
+      "targetIsTopmostAtPoint": true,
+      "invariants": {
+        "pointerUnchanged": true,
+        "focusUnchanged": true,
+        "pointerAt": [
+          1240,
+          1079
+        ],
+        "focusWindow": 46137344
+      },
+      "pointerOverTarget": {
+        "accepted": true,
+        "reachedToolkit": 1,
+        "pointerAt": [
+          960,
+          527
+        ],
+        "focusUnchanged": true
+      },
+      "atspiToolkit": {
+        "name": "gtk",
+        "version": "3.24.51"
+      },
+      "geometry": {
+        "origin": [
+          720,
+          405
+        ],
+        "widgets": {
+          "button": {
+            "expected": [
+              744,
+              487,
+              432,
+              80
+            ],
+            "atspi": [
+              744,
+              487,
+              432,
+              80
+            ],
+            "offsetBy": [
+              0,
+              0
+            ],
+            "agrees": true
+          },
+          "entry": {
+            "expected": [
+              744,
+              429,
+              432,
+              34
+            ],
+            "atspi": [
+              744,
+              429,
+              432,
+              34
+            ],
+            "offsetBy": [
+              0,
+              0
+            ],
+            "agrees": true
+          }
+        },
+        "extentsUsable": true
+      },
+      "controls": {
+        "pointerClick": true,
+        "focusedText": true,
+        "focusAcquired": true
+      },
+      "status": "measured"
+    },
+    {
+      "target": "gtk4",
+      "signature": "GTK 4.20.3",
+      "window": {
+        "xid": 50331652,
+        "reportedXid": 50331652
+      },
+      "before": {
+        "pointer": [
+          1240,
+          1079
+        ],
+        "focus": 46137344,
+        "pointerOverTarget": false
+      },
+      "background": {
+        "click": {
+          "accepted": false,
+          "variant": null,
+          "at": [
+            720,
+            405
+          ],
+          "triedVariants": [
+            "targeted",
+            "owner",
+            "child"
+          ],
+          "reachedToolkit": {
+            "targeted": 0,
+            "owner": 0
+          },
+          "invariants": {
+            "pointerUnchanged": true,
+            "focusUnchanged": true,
+            "pointerAt": [
+              1240,
+              1079
+            ],
+            "focusWindow": 46137344
+          }
+        },
+        "text": {
+          "accepted": false,
+          "variant": null,
+          "triedVariants": [
+            "targeted",
+            "owner"
+          ],
+          "reachedToolkit": {
+            "targeted": 0,
+            "owner": 0
+          },
+          "invariants": {
+            "pointerUnchanged": true,
+            "focusUnchanged": true,
+            "pointerAt": [
+              1240,
+              1079
+            ],
+            "focusWindow": 46137344
+          }
+        }
+      },
+      "targetIsTopmostAtPoint": true,
+      "invariants": {
+        "pointerUnchanged": true,
+        "focusUnchanged": true,
+        "pointerAt": [
+          1240,
+          1079
+        ],
+        "focusWindow": 46137344
+      },
+      "pointerOverTarget": {
+        "accepted": false,
+        "reachedToolkit": 0,
+        "pointerAt": [
+          720,
+          405
+        ],
+        "focusUnchanged": true
+      },
+      "atspiToolkit": {
+        "name": "GTK",
+        "version": "4.20.3"
+      },
+      "geometry": {
+        "origin": [
+          720,
+          405
+        ],
+        "widgets": {
+          "button": {
+            "expected": [
+              703,
+              400,
+              34,
+              10
+            ],
+            "atspi": [
+              0,
+              0,
+              432,
+              80
+            ],
+            "offsetBy": [
+              -703,
+              -400
+            ],
+            "agrees": false
+          },
+          "entry": {
+            "expected": [
+              711,
+              404,
+              18,
+              2
+            ],
+            "atspi": [
+              0,
+              0,
+              432,
+              34
+            ],
+            "offsetBy": [
+              -711,
+              -404
+            ],
+            "agrees": false
+          }
+        },
+        "extentsUsable": false
+      },
+      "controls": {
+        "pointerClick": false,
+        "focusedText": true,
+        "focusAcquired": true
+      },
+      "status": "measured"
+    },
+    {
+      "target": "qt6",
+      "signature": "Qt 6.11.0 via PyQt6",
+      "window": {
+        "xid": 50331655,
+        "reportedXid": 50331655
+      },
+      "before": {
+        "pointer": [
+          1240,
+          1079
+        ],
+        "focus": 46137344,
+        "pointerOverTarget": false
+      },
+      "background": {
+        "click": {
+          "accepted": true,
+          "variant": "targeted",
+          "at": [
+            960,
+            518
+          ],
+          "reaction": {
+            "kind": "click",
+            "widget": "button",
+            "count": 1
+          },
+          "reachedToolkit": {
+            "targeted": 2
+          },
+          "invariants": {
+            "pointerUnchanged": true,
+            "focusUnchanged": true,
+            "pointerAt": [
+              1240,
+              1079
+            ],
+            "focusWindow": 46137344
+          }
+        },
+        "text": {
+          "accepted": true,
+          "variant": "targeted",
+          "reaction": {
+            "kind": "text",
+            "widget": "entry",
+            "value": "axon"
+          },
+          "reachedToolkit": {
+            "targeted": 8
+          },
+          "invariants": {
+            "pointerUnchanged": true,
+            "focusUnchanged": true,
+            "pointerAt": [
+              1240,
+              1079
+            ],
+            "focusWindow": 46137344
+          }
+        }
+      },
+      "targetIsTopmostAtPoint": true,
+      "invariants": {
+        "pointerUnchanged": true,
+        "focusUnchanged": true,
+        "pointerAt": [
+          1240,
+          1079
+        ],
+        "focusWindow": 46137344
+      },
+      "pointerOverTarget": {
+        "accepted": true,
+        "reachedToolkit": 1,
+        "pointerAt": [
+          960,
+          518
+        ],
+        "focusUnchanged": true
+      },
+      "atspiToolkit": {
+        "name": "Qt",
+        "version": "6.11.1"
+      },
+      "geometry": {
+        "origin": [
+          720,
+          405
+        ],
+        "widgets": {
+          "button": {
+            "expected": [
+              744,
+              478,
+              432,
+              80
+            ],
+            "atspi": [
+              744,
+              478,
+              432,
+              80
+            ],
+            "offsetBy": [
+              0,
+              0
+            ],
+            "agrees": true
+          },
+          "entry": {
+            "expected": [
+              744,
+              429,
+              432,
+              25
+            ],
+            "atspi": [
+              744,
+              429,
+              432,
+              25
+            ],
+            "offsetBy": [
+              0,
+              0
+            ],
+            "agrees": true
+          }
+        },
+        "extentsUsable": true
+      },
+      "controls": {
+        "pointerClick": true,
+        "focusedText": true,
+        "focusAcquired": true
+      },
+      "status": "measured"
+    },
+    {
+      "target": "webkitgtk",
+      "signature": "WebKitGTK 2.50.4",
+      "window": {
+        "xid": 50331660,
+        "reportedXid": 50331660
+      },
+      "before": {
+        "pointer": [
+          1240,
+          1079
+        ],
+        "focus": 46137344,
+        "pointerOverTarget": false
+      },
+      "background": {
+        "click": {
+          "accepted": false,
+          "variant": null,
+          "at": [
+            910,
+            605
+          ],
+          "triedVariants": [
+            "targeted",
+            "owner",
+            "child"
+          ],
+          "reachedToolkit": {
+            "targeted": 0,
+            "owner": 0
+          },
+          "invariants": {
+            "pointerUnchanged": true,
+            "focusUnchanged": true,
+            "pointerAt": [
+              1240,
+              1079
+            ],
+            "focusWindow": 46137344
+          }
+        },
+        "text": {
+          "accepted": true,
+          "variant": "owner",
+          "reaction": {
+            "kind": "text",
+            "widget": "entry",
+            "value": "axon"
+          },
+          "reachedToolkit": {
+            "targeted": 0,
+            "owner": 4
+          },
+          "invariants": {
+            "pointerUnchanged": true,
+            "focusUnchanged": true,
+            "pointerAt": [
+              1240,
+              1079
+            ],
+            "focusWindow": 46137344
+          }
+        }
+      },
+      "targetIsTopmostAtPoint": true,
+      "invariants": {
+        "pointerUnchanged": true,
+        "focusUnchanged": true,
+        "pointerAt": [
+          1240,
+          1079
+        ],
+        "focusWindow": 46137344
+      },
+      "pointerOverTarget": {
+        "accepted": true,
+        "reachedToolkit": 1,
+        "pointerAt": [
+          910,
+          605
+        ],
+        "focusUnchanged": true
+      },
+      "atspiToolkit": {
+        "name": "gtk",
+        "version": "3.24.51"
+      },
+      "geometry": {
+        "origin": [
+          720,
+          385
+        ],
+        "widgets": {
+          "button": {
+            "expected": [
+              760,
+              545,
+              300,
+              120
+            ],
+            "atspi": [
+              760,
+              545,
+              300,
+              120
+            ],
+            "offsetBy": [
+              0,
+              0
+            ],
+            "agrees": true
+          },
+          "entry": {
+            "expected": [
+              760,
+              425,
+              306,
+              46
+            ],
+            "atspi": null,
+            "agrees": null
+          }
+        },
+        "extentsUsable": true
+      },
+      "controls": {
+        "pointerClick": true,
+        "focusedText": true,
+        "focusAcquired": true
+      },
+      "status": "measured"
+    },
+    {
+      "target": "electron",
+      "signature": "Electron 43.3.0 (Chromium 150.0.7871.212)",
+      "window": {
+        "xid": 50331652,
+        "reportedXid": null
+      },
+      "before": {
+        "pointer": [
+          1244,
+          1079
+        ],
+        "focus": 46137344,
+        "pointerOverTarget": false
+      },
+      "background": {
+        "click": {
+          "accepted": true,
+          "variant": "targeted",
+          "at": [
+            906,
+            593
+          ],
+          "reaction": {
+            "kind": "click",
+            "widget": "button",
+            "count": 1,
+            "isTrusted": true
+          },
+          "reachedToolkit": {
+            "targeted": 1
+          },
+          "invariants": {
+            "pointerUnchanged": true,
+            "focusUnchanged": true,
+            "pointerAt": [
+              1244,
+              1079
+            ],
+            "focusWindow": 46137344
+          }
+        },
+        "text": {
+          "accepted": true,
+          "variant": "targeted",
+          "reaction": {
+            "kind": "text",
+            "widget": "entry",
+            "value": "axon"
+          },
+          "reachedToolkit": {
+            "targeted": 4
+          },
+          "invariants": {
+            "pointerUnchanged": true,
+            "focusUnchanged": true,
+            "pointerAt": [
+              1244,
+              1079
+            ],
+            "focusWindow": 46137344
+          }
+        }
+      },
+      "targetIsTopmostAtPoint": true,
+      "invariants": {
+        "pointerUnchanged": true,
+        "focusUnchanged": true,
+        "pointerAt": [
+          1244,
+          1079
+        ],
+        "focusWindow": 46137344
+      },
+      "pointerOverTarget": {
+        "accepted": true,
+        "reachedToolkit": 1,
+        "pointerAt": [
+          906,
+          593
+        ],
+        "focusUnchanged": true
+      },
+      "atspiToolkit": {
+        "name": "Chromium",
+        "version": "1.0"
+      },
+      "geometry": {
+        "origin": [
+          716,
+          373
+        ],
+        "widgets": {
+          "button": {
+            "expected": [
+              756,
+              533,
+              300,
+              120
+            ],
+            "atspi": [
+              760,
+              533,
+              300,
+              120
+            ],
+            "offsetBy": [
+              4,
+              0
+            ],
+            "agrees": true
+          },
+          "entry": {
+            "expected": [
+              756,
+              413,
+              308,
+              46
+            ],
+            "atspi": [
+              760,
+              413,
+              308,
+              46
+            ],
+            "offsetBy": [
+              4,
+              0
+            ],
+            "agrees": true
+          }
+        },
+        "extentsUsable": true
+      },
+      "controls": {
+        "pointerClick": true,
+        "focusedText": true,
+        "focusAcquired": true
+      },
+      "status": "measured"
+    },
+    {
+      "target": "firefox",
+      "signature": "Mozilla Firefox 147.0.1",
+      "window": {
+        "xid": 50331651,
+        "reportedXid": null
+      },
+      "before": {
+        "pointer": [
+          1919,
+          0
+        ],
+        "focus": 46137344,
+        "pointerOverTarget": false
+      },
+      "background": {
+        "click": {
+          "accepted": false,
+          "variant": null,
+          "at": [
+            190,
+            220
+          ],
+          "triedVariants": [
+            "targeted",
+            "owner",
+            "child"
+          ],
+          "reachedToolkit": {
+            "targeted": 0,
+            "owner": 0,
+            "child": 0
+          },
+          "invariants": {
+            "pointerUnchanged": true,
+            "focusUnchanged": true,
+            "pointerAt": [
+              1919,
+              0
+            ],
+            "focusWindow": 46137344
+          }
+        },
+        "text": {
+          "accepted": true,
+          "variant": "owner",
+          "reaction": {
+            "kind": "text",
+            "widget": "entry",
+            "value": "axon"
+          },
+          "reachedToolkit": {
+            "targeted": 0,
+            "owner": 4
+          },
+          "invariants": {
+            "pointerUnchanged": true,
+            "focusUnchanged": true,
+            "pointerAt": [
+              1919,
+              0
+            ],
+            "focusWindow": 46137344
+          }
+        }
+      },
+      "targetIsTopmostAtPoint": true,
+      "invariants": {
+        "pointerUnchanged": true,
+        "focusUnchanged": true,
+        "pointerAt": [
+          1919,
+          0
+        ],
+        "focusWindow": 46137344
+      },
+      "pointerOverTarget": {
+        "accepted": true,
+        "reachedToolkit": 1,
+        "pointerAt": [
+          190,
+          220
+        ],
+        "focusUnchanged": true
+      },
+      "atspiToolkit": null,
+      "geometry": {
+        "origin": [
+          0,
+          0
+        ],
+        "widgets": {
+          "button": {
+            "expected": [
+              40,
+              160,
+              300,
+              120
+            ],
+            "atspi": null,
+            "agrees": null
+          },
+          "entry": {
+            "expected": [
+              40,
+              40,
+              308,
+              46
+            ],
+            "atspi": null,
+            "agrees": null
+          }
+        },
+        "error": "no AT-SPI application for pid 2895083",
+        "extentsUsable": null
+      },
+      "controls": {
+        "pointerClick": true,
+        "focusedText": true,
+        "focusAcquired": true
+      },
+      "status": "measured"
+    }
+  ]
+}
