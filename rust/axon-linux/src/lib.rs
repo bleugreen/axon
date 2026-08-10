@@ -2066,7 +2066,8 @@ actions:
             let result = refusal(&response);
             assert_eq!(result["delivery"], json!("pixel"));
             assert_eq!(result["dispatchSuccess"], json!(true));
-            assert_eq!(result["success"], json!(true));
+            // Delivered, and not thereby successful. See the dedicated case below.
+            assert_eq!(result["success"], json!(false));
             assert_eq!(result["deliveryPolicy"], json!("backgroundOnly"));
             assert_eq!(result["refusal"], Value::Null);
             // The rung is defined by what it does not do, so the two things it must not have
@@ -2115,6 +2116,80 @@ actions:
         }
 
         #[test]
+        fn a_clean_delivery_is_dispatch_evidence_and_not_goal_success() {
+            // The distinction this rung exists inside. `XSendEvent` reports success as soon as the
+            // X server accepts the request, and every event it carries is flagged `send_event`,
+            // which a toolkit may drop in silence — so a completed delivery proves the events
+            // reached the target and never proves the application acted. Neither `click` nor
+            // `keyboard` declares a postcondition, so nothing here verifies the goal and `success`
+            // says so.
+            //
+            // Collapsing the two would hollow out the acceptance table's whole defence: a future
+            // Chromium that began filtering these events is undetectable by signature, and would
+            // otherwise produce an accepted send, intact invariants, and a report that the
+            // caller's click had worked.
+            let backend = bound_backend(true);
+            let handle = backend.snapshot.handle(0);
+            let dispatches = backend.pixel_dispatches.clone();
+            let mut router = router_for(backend);
+
+            let response = router
+                .request(request("click", json!({"target": handle.0})))
+                .unwrap();
+
+            let result = refusal(&response);
+            assert_eq!(dispatches.borrow().len(), 1, "the events were delivered");
+            assert_eq!(result["dispatchSuccess"], json!(true));
+            assert_eq!(result["dispatch"]["success"], json!(true));
+            assert_eq!(
+                result["success"],
+                json!(false),
+                "a delivered dispatch that verified nothing is not a successful action"
+            );
+            assert_eq!(result["verification"]["verified"], json!(false));
+            assert_eq!(
+                result["verification"]["reason"],
+                json!("click has no declared postcondition"),
+                "the caller is told what is missing rather than left to infer it"
+            );
+        }
+
+        #[test]
+        fn a_verified_goal_is_what_makes_a_pixel_dispatch_successful() {
+            // The other half of the same rule, so the assertion above cannot be satisfied by a
+            // `success` that is simply hardwired false. A postcondition that verified promotes the
+            // action, and the rung's own invariants still gate it.
+            let backend = bound_backend(true);
+            let handle = backend.snapshot.handle(0);
+            let mut router = router_for(backend);
+
+            let response = router
+                .request(request("click", json!({"target": handle.0})))
+                .unwrap();
+            let delivered = refusal(&response).clone();
+
+            let verified = json!({"verified": true, "observed": "anything"});
+            let candidate = DeliveryCandidate::available(
+                DeliveryRung::Pixel,
+                DeliveryCapability::BackgroundPixelInput,
+                PIXEL_MECHANISM,
+            );
+            let promoted = router
+                .dispatch_pixel(
+                    DeliveryPolicy::BackgroundOnly,
+                    &candidate,
+                    &pixel_target(true),
+                    verified,
+                    |backend, target| backend.dispatch_pixel_click(target),
+                )
+                .expect("a bound target dispatches");
+
+            assert_eq!(delivered["success"], json!(false));
+            assert_eq!(promoted["success"], json!(true));
+            assert_eq!(promoted["dispatchSuccess"], json!(true));
+        }
+
+        #[test]
         fn a_dispatch_that_moved_the_focus_is_not_a_background_delivery() {
             // Qt's click is refused by the acceptance table for exactly this, and the table is the
             // defence. This is the backstop underneath it: a toolkit that acts on a delivered
@@ -2137,7 +2212,8 @@ actions:
             let result = refusal(&response);
             assert_eq!(result["delivery"], json!("pixel"));
             // The evidence that the events were delivered survives; the claim that the session was
-            // left alone does not.
+            // left alone does not. `success` was already false for want of a postcondition, so the
+            // message is what carries this, and it has to.
             assert_eq!(result["dispatchSuccess"], json!(true));
             assert_eq!(result["success"], json!(false));
             assert!(
