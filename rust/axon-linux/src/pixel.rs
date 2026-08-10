@@ -216,13 +216,25 @@ const ACCEPTANCE: &[Entry] = &[
     },
 ];
 
+/// A cleared toolkit: how the event has to be sent, and the measurement that cleared it.
+///
+/// The citation travels with the permission rather than sitting beside it, so a dispatch result
+/// can say which fixture rows authorized background input into someone's window. That is the
+/// question anyone auditing one of these results actually has, and an answer that has to be looked
+/// up separately is an answer that goes unread.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Acceptance {
+    pub variant: SendVariant,
+    pub evidence: &'static str,
+}
+
 /// Whether this toolkit was measured to act on this action in the background, and how the event
 /// has to be sent if so.
 ///
 /// `Err` carries the whole refusal message, naming the toolkit that refused. A caller told only
 /// "unsupported" cannot tell a GTK 4 window from an unmeasured Qt release from a Chromium build
 /// that Axon would happily have driven, and those need different things done about them.
-pub fn accepts(action: PixelAction, toolkit: &Toolkit) -> Result<SendVariant, String> {
+pub fn accepts(action: PixelAction, toolkit: &Toolkit) -> Result<Acceptance, String> {
     if toolkit.name.is_empty() {
         return Err(format!(
             "the target application declares no AT-SPI toolkit, so there is no measured signature \
@@ -259,20 +271,16 @@ pub fn accepts(action: PixelAction, toolkit: &Toolkit) -> Result<SendVariant, St
     match action {
         PixelAction::Click => entry.click,
         PixelAction::Keyboard => entry.keyboard,
-    }
-    .into_result(action, toolkit)
-}
-
-impl Measured {
-    fn into_result(self, action: PixelAction, toolkit: &Toolkit) -> Result<SendVariant, String> {
-        match self {
-            Measured::Accepted(variant) => Ok(variant),
-            Measured::Refused(reason) => Err(format!(
-                "the target application reports AT-SPI toolkit {toolkit}, which does not accept {} \
-                 in the background: {reason}",
-                action.described()
-            )),
-        }
+    } {
+        Measured::Accepted(variant) => Ok(Acceptance {
+            variant,
+            evidence: entry.evidence,
+        }),
+        Measured::Refused(reason) => Err(format!(
+            "the target application reports AT-SPI toolkit {toolkit}, which does not accept {} in \
+             the background: {reason}",
+            action.described()
+        )),
     }
 }
 
