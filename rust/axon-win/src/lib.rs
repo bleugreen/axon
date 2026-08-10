@@ -2131,7 +2131,8 @@ actions:
             let result = action_result(&response);
             assert_eq!(result["delivery"], json!("pixel"));
             assert_eq!(result["dispatchSuccess"], json!(true));
-            assert_eq!(result["success"], json!(true));
+            // Delivered, and not thereby successful. See the dedicated case below.
+            assert_eq!(result["success"], json!(false));
             assert_eq!(result["refusal"], Value::Null);
             assert_eq!(result["deliveryPolicy"], json!("backgroundOnly"));
             assert_eq!(
@@ -2145,6 +2146,80 @@ actions:
                 activations.borrow().is_empty(),
                 "the pixel rung activates nothing"
             );
+        }
+
+        #[test]
+        fn a_clean_delivery_is_dispatch_evidence_and_not_goal_success() {
+            // The distinction this rung exists inside, and the one `PIXEL_MESSAGE_CLASSES` is
+            // built to defend. A window procedure that examines a message and does nothing
+            // returns from it exactly like one that acts on it, so a completed post proves the
+            // handler ran and never proves it did anything. `click` declares no postcondition, so
+            // nothing here verifies the goal and `success` says so.
+            //
+            // Collapsing the two would hollow out that table: a class that regressed, or one that
+            // behaved differently in a context nobody probed, would otherwise produce an accepted
+            // post, intact invariants, and a report that the caller's click had worked.
+            let backend = backend(vec![], None);
+            let handle = backend.snapshot.handle(0);
+            bound(&backend);
+            let dispatches = backend.pixel_dispatches.clone();
+            let mut router = Router::new(backend);
+            router.snapshot = Some(router.backend.snapshot.clone());
+
+            let response = router
+                .request(request("click", json!({"target": handle.0})))
+                .unwrap();
+
+            let result = action_result(&response);
+            assert_eq!(*dispatches.borrow(), 1, "the messages were posted");
+            assert_eq!(result["dispatchSuccess"], json!(true));
+            assert_eq!(result["dispatch"]["success"], json!(true));
+            assert_eq!(
+                result["success"],
+                json!(false),
+                "a delivered dispatch that verified nothing is not a successful action"
+            );
+            assert_eq!(result["verification"]["verified"], json!(false));
+            assert_eq!(
+                result["verification"]["reason"],
+                json!("click has no declared postcondition"),
+                "the caller is told what is missing rather than left to infer it"
+            );
+        }
+
+        #[test]
+        fn a_verified_goal_is_what_makes_a_pixel_dispatch_successful() {
+            // The other half of the same rule, so the assertion above cannot be satisfied by a
+            // `success` that is simply hardwired false. A postcondition that verified promotes the
+            // action, and the rung's own invariants still gate it.
+            let backend = backend(vec![], None);
+            let handle = backend.snapshot.handle(0);
+            bound(&backend);
+            let mut router = Router::new(backend);
+            router.snapshot = Some(router.backend.snapshot.clone());
+
+            let response = router
+                .request(request("click", json!({"target": handle.0})))
+                .unwrap();
+            let delivered = action_result(&response).clone();
+
+            let candidate = DeliveryCandidate::available(
+                DeliveryRung::Pixel,
+                DeliveryCapability::BackgroundPixelInput,
+                PIXEL_MECHANISM,
+            );
+            let promoted = router
+                .dispatch_pixel(
+                    DeliveryPolicy::BackgroundOnly,
+                    &candidate,
+                    &pixel_target(),
+                    json!({"verified": true, "observed": "anything"}),
+                )
+                .expect("a bound target dispatches");
+
+            assert_eq!(delivered["success"], json!(false));
+            assert_eq!(promoted["success"], json!(true));
+            assert_eq!(promoted["dispatchSuccess"], json!(true));
         }
 
         #[test]
