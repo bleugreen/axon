@@ -559,7 +559,7 @@ impl X11Session {
             .reply()
             .map_err(|error| operation("read the modifier mapping", error))?;
         Ok(ModifierMapping {
-            per_modifier: reply.keycodes_per_modifier.into(),
+            per_modifier: reply.keycodes_per_modifier().into(),
             keycodes: reply.keycodes,
         })
     }
