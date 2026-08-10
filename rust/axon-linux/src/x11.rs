@@ -10,22 +10,33 @@
 
 use crate::{
     keys::{self, Keysym},
+    pixel::SendVariant,
     platform::{capability, operation},
 };
 use axon_core::{BackendError, Capability, KeyboardIntent};
+use std::{
+    sync::atomic::{AtomicU32, Ordering},
+    time::{SystemTime, UNIX_EPOCH},
+};
 use x11rb::{
     connection::{Connection, RequestConnection as _},
     protocol::{
         xproto::{
-            Atom, AtomEnum, BUTTON_PRESS_EVENT, BUTTON_RELEASE_EVENT, ClientMessageEvent,
-            ConnectionExt as _, EventMask, KEY_PRESS_EVENT, KEY_RELEASE_EVENT, MOTION_NOTIFY_EVENT,
-            Window,
+            Atom, AtomEnum, BUTTON_PRESS_EVENT, BUTTON_RELEASE_EVENT, ButtonPressEvent,
+            ClientMessageEvent, ConnectionExt as _, EventMask, KEY_PRESS_EVENT, KEY_RELEASE_EVENT,
+            KeyButMask, KeyPressEvent, MOTION_NOTIFY_EVENT, Window,
         },
         xtest::{self, ConnectionExt as _},
     },
     rust_connection::RustConnection,
     wrapper::ConnectionExt as _,
 };
+
+/// How far a descent through the window tree or a climb back up it may go.
+///
+/// Deeply nested window trees exist; unbounded loops over a live one do not belong in a dispatch
+/// path, where the tree can be changing underneath the walk.
+const MAX_WINDOW_TREE_STEPS: usize = 32;
 
 x11rb::atom_manager! {
     Atoms: AtomsCookie {
