@@ -776,7 +776,9 @@ the macOS lane called `shutdown` on an installed binary that had no such
 subcommand, and `|| true` meant nothing ever reported it. And it must not be
 tolerated: `axon shutdown` and `systemctl stop` exit non-zero while anything is
 still answering, which is exactly what makes their success the endpoint-is-free
-guarantee the probes rest on.
+guarantee the probes rest on. A request that fails is a different question, and
+not one the exit code answers on its own — the Windows park works it out from
+the process, described with the rest of that lane's patience below.
 
 A stop also incurs a debt, and a final `if: always()` step pays it. `axon
 shutdown` is not a pause — it boots the LaunchAgent out precisely so `KeepAlive`
@@ -870,6 +872,27 @@ what a healthy daemon looks like: the registered action is `serve`, so the task
 runs for as long as its daemon lives. When the budget expires with nothing
 answering, the stage fails exactly as loudly as before, because a desktop that
 cannot get its daemon back is a runner that needs a human.
+
+The park is patient in the same way, and the daemon's bound is again what makes
+it necessary. `axon-win shutdown` waits ten seconds for the process it asked to
+stop, because the acknowledgement is sent before the UI Automation thread joins
+and the COM apartment is torn down, and reporting a stop before the process is
+gone races whatever runs next; anything slower than that wait it reports as a
+failure. On 2026-08-10 the wait expired on a runner that had just finished a
+cargo build, the stage failed the lane, and the process exited seconds later
+while the `if: always()` restore was already putting the desktop back — a red run
+over a healthy desktop. A failed request therefore opens a wait rather than
+ending the stage: the park polls the process the health document named, and asks
+again up to three times, roughly ninety seconds in all. A later request that
+finds nothing left to stop ends the wait the same way a process disappearing
+does, and a daemon whose document names no process id at all is waited for
+through the health round trip instead, which is the same tolerance the restore
+extends to an old enough release. What has not changed is what a stop that never
+takes costs: a daemon still running when the budget is gone fails the stage as
+loudly as it did before there was one, and it is named rather than killed,
+because a daemon this lane kills is a daemon it cannot put back. The debt is
+recorded before any of this, so a park that dies in the middle of it still tells
+the restore what it owes.
 
 The repository's Actions policy requires approval for every outside
 contributor's workflow run before pull-request code can reach the self-hosted
