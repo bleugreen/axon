@@ -16,13 +16,13 @@ Two read-only captures were taken several seconds apart. Segment and character c
 
 | Application | Eligible elements | Collision-free | Segments | Characters | Capture time (seconds) | Stable names |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| Notes | 318 | 304 (95.6%) | 2 / 3 / 3 / 5 | 9 / 25 / 40 / 56 | 1.10, 1.30 | 308 / 308 (100%) |
+| Notes | 318 | 304 (95.6%) | 2 / 3 / 3 / 5 | 9 / 25 / 40 / 57 | 1.10, 1.30 | 308 / 308 (100%) |
 | Finder | 1,196 | 618 (51.7%) | 1 / 3 / 4 / 4 | 5 / 32 / 54 / 71 | 7.40, 8.44 | 621 / 626 (99.2%) |
-| ChatGPT | 463 | 426 (92.0%) | 1 / 3 / 8 / 8 | 7 / 62 / 139 / 155 | 2.53, 2.95 | 426 / 426 (100%) |
-| Linear | 248 | 179 (72.2%) | 1 / 3 / 3 / 4 | 13 / 49 / 69 / 92 | 1.84, 2.07 | 200 / 200 (100%) |
+| ChatGPT | 463 | 426 (92.0%) | 1 / 3 / 8 / 8 | 7 / 63 / 139 / 155 | 2.53, 2.95 | 426 / 426 (100%) |
+| Linear | 248 | 225 (90.7%) | 1 / 3 / 3 / 4 | 13 / 50 / 68 / 92 | 1.84, 2.07 | 231 / 231 (100%) |
 | Firefox | 43 | 43 (100%) | 1 / 3 / 3 / 3 | 24 / 56 / 73 / 76 | 0.46, 0.29 | 43 / 43 (100%) |
 
-Finder had 570 elements whose semantic identity was already ambiguous and therefore could not provide honest same-element ground truth. Notes had 10, ChatGPT 37, Linear 48, and Firefox none. Finder's five breaks were elements that disappeared between captures, not geometry-induced renames.
+Finder had 570 elements whose semantic identity was already ambiguous and therefore could not provide honest same-element ground truth. Notes had 10, ChatGPT 37, Linear 17, and Firefox none. Finder's five breaks were elements that disappeared between captures, not geometry-induced renames.
 
 ### Representative names
 
@@ -49,7 +49,7 @@ True duplicates are common and application-specific:
 - Linear repeats priority images and short avatar or team text such as `ML` and `BL`.
 - Firefox tab close buttons disambiguate cleanly through the tab title.
 
-Deepening until global uniqueness is not an acceptable primary policy. ChatGPT needed eight segments at the 90th percentile and produced names up to 155 characters. Even where paths remained near three segments, long mutable document titles made median names 49 to 62 characters in Linear and ChatGPT. This violates the intended short vocabulary despite technically improving uniqueness.
+Deepening until global uniqueness is not an acceptable primary policy. ChatGPT needed eight segments at the 90th percentile and produced names up to 155 characters. Even where paths remained near three segments, long mutable document titles made median names 50 to 63 characters in Linear and ChatGPT. This violates the intended short vocabulary despite technically improving uniqueness.
 
 ## Stability conditions and capture cost
 
