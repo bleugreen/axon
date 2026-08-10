@@ -764,6 +764,34 @@ def _importable(statement: str) -> bool:
     return subprocess.run([sys.executable, "-c", statement], capture_output=True).returncode == 0
 
 
+def _electron_specs(directory: Path) -> list[Spec]:
+    """One target per installed Electron runtime.
+
+    Chromium reports itself over AT-SPI as toolkit `Chromium` version `1.0` whatever engine it is
+    built on, so a backend gating on that signature cannot tell one Chromium application from
+    another. An acceptance entry keyed on it therefore authorizes the whole family, and is only
+    honest if the family has been measured across more than one engine generation. Each runtime
+    installed under `runtime-*` is measured as its own row for exactly that reason.
+    """
+    launcher = str(directory / "launch.js")
+    runtimes = [("electron", directory / "node_modules" / "electron")]
+    runtimes += [
+        (f"electron-{path.name.removeprefix('runtime-')}", path / "node_modules" / "electron")
+        for path in sorted(directory.glob("runtime-*"))
+    ]
+    return [
+        Spec(
+            name=name,
+            argv=["node", launcher],
+            env={"AXON_HARNESS_ELECTRON": str(module)},
+            unavailable=None
+            if module.is_dir()
+            else "this Electron runtime is not installed; see scripts/linux-toolkit-acceptance/install-electron",
+        )
+        for name, module in runtimes
+    ]
+
+
 def specs() -> list[Spec]:
     """Every toolkit this harness knows how to measure, present or not.
 
@@ -803,13 +831,7 @@ def specs() -> list[Spec]:
             ["import gi; gi.require_version('WebKit2', '4.1')"],
             "WebKitGTK GObject introspection is not installed",
         ),
-        Spec(
-            name="electron",
-            argv=["node", str(electron / "launch.js")],
-            unavailable=None
-            if (electron / "node_modules" / "electron").is_dir()
-            else "electron is not installed; run scripts/linux-toolkit-acceptance/install-electron",
-        ),
+        *_electron_specs(electron),
         Spec(
             name="firefox",
             argv=[sys.executable, str(TARGETS / "firefox.py")],

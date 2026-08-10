@@ -4,7 +4,12 @@
 const { spawn } = require("node:child_process");
 const path = require("node:path");
 
-const electron = require(path.join(__dirname, "node_modules", "electron"));
+// Which runtime to launch. Chromium reports itself to AT-SPI as toolkit "Chromium" version "1.0"
+// whatever engine it is, so an acceptance table keyed on that signature authorizes the whole family
+// — which is only honest if the family has been measured across more than one engine generation.
+// Each installed runtime is measured separately for that reason.
+const runtime = process.env.AXON_HARNESS_ELECTRON || path.join(__dirname, "node_modules", "electron");
+const electron = require(runtime);
 
 const child = spawn(
   electron,
