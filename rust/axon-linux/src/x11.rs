@@ -647,6 +647,47 @@ impl X11Session {
     }
 }
 
+/// The event mask one sent event travels under, which is the whole of the delivery variant.
+///
+/// `Targeted` names the mask matching the event, so the server routes it to whichever clients
+/// selected for that event on the destination window. `Owner` sends an empty mask, which the
+/// server routes to the client that created the window regardless of what it selected. Which one a
+/// toolkit honours is measured, not chosen: GTK 3 acts only on the second, Qt and Chromium only on
+/// the first, and sending the wrong one arrives as silence.
+fn mask_for(kind: u8, variant: SendVariant) -> EventMask {
+    if variant == SendVariant::Owner {
+        return EventMask::NO_EVENT;
+    }
+    match kind {
+        BUTTON_PRESS_EVENT => EventMask::BUTTON_PRESS,
+        BUTTON_RELEASE_EVENT => EventMask::BUTTON_RELEASE,
+        KEY_PRESS_EVENT => EventMask::KEY_PRESS,
+        _ => EventMask::KEY_RELEASE,
+    }
+}
+
+/// Which of the eight modifier bits each keycode carries, as the server currently reports it.
+///
+/// Read from the server rather than assumed: only Shift, Lock and Control have fixed positions,
+/// and which of `Mod1`..`Mod5` carries Alt, Meta or Super is a property of the running layout.
+struct ModifierMapping {
+    per_modifier: usize,
+    keycodes: Vec<u8>,
+}
+
+impl ModifierMapping {
+    /// The mask bit a keycode sets while it is held, or zero for a key that is not a modifier.
+    fn mask_of(&self, keycode: u8) -> u16 {
+        if self.per_modifier == 0 {
+            return 0;
+        }
+        self.keycodes
+            .chunks(self.per_modifier)
+            .position(|codes| codes.contains(&keycode))
+            .map_or(0, |modifier| 1u16 << modifier)
+    }
+}
+
 /// One keystroke resolved against the live layout: the key to press, and the modifier keys held
 /// around it. Resolved before anything is posted, so an intent this layout cannot express is
 /// refused rather than half delivered.
