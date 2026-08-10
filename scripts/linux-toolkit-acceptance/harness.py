@@ -731,11 +731,38 @@ def specs() -> list[Spec]:
 
 
 def _verdict(phase: dict | None) -> str:
+    """One phase's outcome, in the vocabulary the decision needs.
+
+    Three outcomes matter and they are not the same. An event that never reached the toolkit says
+    the X server or the toolkit's event selection dropped it. One that reached the toolkit and
+    changed nothing says the toolkit saw `send_event` and declined. One that was acted on but moved
+    the session's focus or pointer is not an acceptance a pixel rung may use, because those are
+    exactly the side effects the rung promises not to have.
+    """
     if not phase:
         return "-"
+    invariants = phase.get("invariants") or {}
     if phase.get("accepted"):
+        broke = [
+            name
+            for name, held in (("focus", invariants.get("focusUnchanged")), ("pointer", invariants.get("pointerUnchanged")))
+            if held is False
+        ]
+        if broke:
+            return f"acted on, but moved the {' and '.join(broke)}"
         return f"accepted ({phase.get('variant')})"
-    return "ignored"
+    reached = phase.get("reachedToolkit") or {}
+    if any(count for count in reached.values()):
+        return "seen, declined"
+    return "never delivered"
+
+
+def _toolkit(result: dict) -> str:
+    toolkit = result.get("atspiToolkit")
+    if not toolkit:
+        return "not reported"
+    version = toolkit.get("version")
+    return f"`{toolkit.get('name')}`" + (f" {version}" if version else "")
 
 
 def render(document: dict) -> str:
@@ -748,15 +775,16 @@ def render(document: dict) -> str:
         f"- Session: {document['session']}",
         f"- X server: {document['xServer']}",
         "",
-        "| toolkit | signature | background click | background text | pointer control |"
-        " focus control | AT-SPI extents |",
-        "| --- | --- | --- | --- | --- | --- | --- |",
+        "| toolkit | version | AT-SPI toolkit | background click | background text |"
+        " pointer control | focus control | AT-SPI extents |",
+        "| --- | --- | --- | --- | --- | --- | --- | --- |",
     ]
     for result in document["results"]:
         if result.get("status") != "measured":
+            detail = result.get("detail", "")
             lines.append(
-                f"| `{result['target']}` | — | {result.get('status')} |"
-                f" {result.get('detail', '')} | — | — | — |"
+                f"| `{result['target']}` | — | — | {result.get('status')}: {detail} |"
+                " — | — | — | — |"
             )
             continue
         background = result.get("background", {})
@@ -764,7 +792,7 @@ def render(document: dict) -> str:
         geometry = result.get("geometry", {})
         usable = geometry.get("extentsUsable")
         lines.append(
-            f"| `{result['target']}` | {result.get('signature', '')} |"
+            f"| `{result['target']}` | {result.get('signature', '')} | {_toolkit(result)} |"
             f" {_verdict(background.get('click'))} | {_verdict(background.get('text'))} |"
             f" {'reacted' if controls.get('pointerClick') else 'no reaction'} |"
             f" {'reacted' if controls.get('focusedText') else 'no reaction'} |"
@@ -772,18 +800,35 @@ def render(document: dict) -> str:
         )
     lines += [
         "",
+        "## Reading this table",
+        "",
         "The controls are what make a refusal mean something. `pointer control` clicks the same",
         "coordinates with the real pointer through XTest, and `focus control` types into the target",
-        "while it holds the focus. A toolkit that reacts to both and ignores the background phase",
-        "rejected `send_event`; one that reacts to neither was not aimed at properly, and its",
-        "background row says nothing.",
+        "while it holds the focus. A row whose controls both reacted is a statement about",
+        "`send_event`; a row where they did not is a statement about the harness, and its background",
+        "columns say nothing.",
+        "",
+        "The background columns distinguish three outcomes. **never delivered** means the event did",
+        "not reach the toolkit at all. **seen, declined** means the toolkit received it, with",
+        "`send_event` set, and did nothing. **accepted** means the target acted on it while the",
+        "session's focus and real pointer stayed where they were, which is the only outcome a pixel",
+        "rung may be built on. An acceptance that moved the focus or the pointer is reported as such",
+        "and is not one.",
+        "",
+        "`AT-SPI toolkit` is what the application declares over the accessibility bus. It is the key",
+        "a backend can gate on at dispatch time, because it is the application saying what it is",
+        "built on rather than a guess read off `WM_CLASS`.",
         "",
         "`AT-SPI extents` compares what AT-SPI reports for the same widgets against the toolkit's own",
         "rectangles. `unusable` means a pixel rung could not get its coordinates from AT-SPI on that",
-        "toolkit even if delivery were accepted.",
+        "toolkit even where delivery is accepted.",
         "",
-        "Full detail, including which delivery variant was honoured and the exact rectangles, is in",
-        "`results.json`.",
+        "`results.json` holds the full detail: which delivery variant was honoured, the exact",
+        "rectangles, the per-phase invariant readings, and the separate `pointerOverTarget`",
+        "diagnostic, which repeats the click with the real cursor parked over the target. That last",
+        "one is not a contract-legal delivery — arranging it means moving the user's pointer — and it is",
+        "measured only because it explains why a hand experiment with a cursor already over the",
+        "window reaches a different conclusion.",
         "",
     ]
     return "\n".join(lines)
