@@ -450,7 +450,15 @@ function Stop-DesktopDaemon {
         # succeeded because the daemon exited during its own wait ends here immediately, which is the
         # ordinary park and costs one process check.
         if (Test-DesktopDaemonHasStopped -Candidates $Candidates -ProcessId $ProcessId) {
-            Write-Note "this desktop's daemon is stopped: $lastOutput"
+            if ($shutdown.ExitCode -eq 0) {
+                Write-Note "this desktop's daemon is stopped: $lastOutput"
+            }
+            else {
+                # Reachable with no process id to wait on, where the pipe is all there is to read and
+                # it has already gone quiet. Said differently from the line above so that a log never
+                # implies a request succeeded when it did not.
+                Write-Note "this desktop's daemon is stopped, though the request that asked for it reported otherwise: $lastOutput"
+            }
             return
         }
         if ($shutdown.ExitCode -eq 0) {

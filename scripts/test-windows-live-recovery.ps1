@@ -762,8 +762,8 @@ Test-Scenario 'park: a daemon whose health document names no process id is waite
     $script:Machine.LateExitAfterRequests = 1
     $result = Invoke-StageUnderTest -Name 'park'
     Check 'the stage succeeds' (-not $result.Failed) $result.Error
-    Check 'it asked once and then waited' ((Get-Count "axon shutdown [$ProbeExecutable]") -eq 1) "asked $(Get-Count "axon shutdown [$ProbeExecutable]") time(s)"
-    Check 'it says the exit outran the request' (Test-Said 'later than the request itself waited')
+    Check 'it asked once' ((Get-Count "axon shutdown [$ProbeExecutable]") -eq 1) "asked $(Get-Count "axon shutdown [$ProbeExecutable]") time(s)"
+    Check 'it does not report the failed request as a success' (Test-Said 'though the request that asked for it reported otherwise')
     Check 'the pipe is free' ($script:Machine.Health.daemon.running -eq $false)
     Check 'it recorded the pid it did not have as none' ($null -eq $script:Machine.ParkState.daemonProcessId)
     Check 'the restore still knows what is owed' ($script:Machine.ParkState.daemonWasRunning -eq $true)
