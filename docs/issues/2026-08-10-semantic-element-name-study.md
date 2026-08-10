@@ -16,7 +16,7 @@ Two read-only captures were taken several seconds apart. Segment and character c
 
 | Application | Eligible elements | Collision-free | Segments | Characters | Capture time (seconds) | Stable names |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| Notes | 318 | 302 (95.0%) | 2 / 3 / 3 / 5 | 9 / 25 / 40 / 56 | 1.10, 1.30 | 308 / 308 (100%) |
+| Notes | 318 | 304 (95.6%) | 2 / 3 / 3 / 5 | 9 / 25 / 40 / 56 | 1.10, 1.30 | 308 / 308 (100%) |
 | Finder | 1,196 | 618 (51.7%) | 1 / 3 / 4 / 4 | 5 / 32 / 54 / 71 | 7.40, 8.44 | 621 / 626 (99.2%) |
 | ChatGPT | 463 | 426 (92.0%) | 1 / 3 / 8 / 8 | 7 / 62 / 139 / 155 | 2.53, 2.95 | 426 / 426 (100%) |
 | Linear | 248 | 179 (72.2%) | 1 / 3 / 3 / 4 | 13 / 49 / 69 / 92 | 1.84, 2.07 | 200 / 200 (100%) |
