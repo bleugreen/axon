@@ -179,13 +179,23 @@ const ACCEPTANCE: &[Entry] = &[
         toolkit: "Chromium",
         versions: Versions::Any,
         click: Measured::Accepted(SendVariant::Targeted),
-        keyboard: Measured::Accepted(SendVariant::Targeted),
+        keyboard: Measured::Refused(
+            "Chromium acts on background keystrokes only once a background click has already \
+             landed in the same window. Delivered to a window that has not been clicked, every \
+             key event is dropped in silence — so offering the rung here would report a \
+             successful dispatch for keystrokes that reliably do nothing. The committed fixture's \
+             `text` row for this family records the post-click state rather than an independent \
+             acceptance, because the harness measures its keyboard phase after its click phase; \
+             AXN-102 tracks re-measuring it on a target that was never clicked",
+        ),
         evidence: "scripts/linux-toolkit-acceptance/RESULTS.md and RESULTS-live-x11.md, rows \
                    electron-22 (Chromium 108.0.5359.215), electron-30 (Chromium 124.0.6367.243) \
                    and electron (Chromium 150.0.7871.212): every generation acted on a background \
-                   click and on background keystrokes, on both the hermetic Xvfb lane and a live \
-                   Xfce X11 session, with the pointer and the session focus unchanged and both \
-                   controls reacting",
+                   click, on both the hermetic Xvfb lane and a live Xfce X11 session, with the \
+                   pointer and the session focus unchanged and both controls reacting. Confirmed \
+                   again through the daemon on the fedora bench against Electron 43 (Chromium \
+                   150.0.7871.212), where the page reported the click as isTrusted while the X \
+                   input focus and the real pointer were unchanged either side of it",
     },
     Entry {
         toolkit: "gtk",
