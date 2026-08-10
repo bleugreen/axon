@@ -1615,10 +1615,96 @@ mod tests {
         assert_eq!(success.result["delivery"], json!("foreground"));
         assert_eq!(success.result["foreground"]["pointerRestored"], json!(true));
         assert_eq!(success.result["foreground"]["restored"], json!(true));
-        assert_eq!(success.result["success"], json!(true));
         // Both halves of the session are as the user left them.
         assert_eq!(*pointer.borrow(), POINTER_ORIGIN);
         assert_eq!(frontmost.borrow().as_deref(), Some("Prior"));
+        // What the transaction kept is its own promise, and that is not the whole of success.
+        // See the dedicated case below.
+        assert_eq!(success.result["dispatchSuccess"], json!(true));
+        assert_eq!(success.result["success"], json!(false));
+    }
+
+    #[test]
+    fn a_restored_session_is_not_by_itself_goal_success() {
+        // The foreground rung's own condition and the action's verification are separate, and this
+        // rung is where they are most easily confused: a transaction that captured, activated,
+        // proved, dispatched and handed the session back has done everything it promised, and
+        // still knows nothing about whether the target acted on the events XTest posted. `click`
+        // declares no postcondition, so nothing here can say that it did.
+        let backend = transactional_backend();
+        let handle = backend.snapshot.handle(0);
+        let clicks = backend.clicks.clone();
+        let mut router = Router::new(backend);
+        router.snapshot = Some(router.backend.snapshot.clone());
+
+        let response = router
+            .request(request(
+                "click",
+                json!({
+                    "target": handle.0,
+                    "app": "App",
+                    "deliveryPolicy": "foregroundPermitted"
+                }),
+            ))
+            .unwrap();
+
+        let JsonRpcResponse::Success(success) = response else {
+            panic!("an opted-in click dispatches")
+        };
+        assert_eq!(*clicks.borrow(), 1, "the events went out");
+        assert_eq!(success.result["foreground"]["restored"], json!(true));
+        assert_eq!(success.result["dispatchSuccess"], json!(true));
+        assert_eq!(success.result["dispatch"]["success"], json!(true));
+        assert_eq!(
+            success.result["success"],
+            json!(false),
+            "a dispatch that verified nothing is not a successful action, however cleanly the \
+             session was handed back"
+        );
+        assert_eq!(
+            success.result["verification"]["reason"],
+            json!("click has no declared postcondition"),
+            "the caller is told what is missing rather than left to infer it"
+        );
+    }
+
+    #[test]
+    fn a_verified_goal_is_what_makes_a_foreground_dispatch_successful() {
+        // The other half of the same rule, so the assertion above cannot be satisfied by a
+        // `success` that is simply hardwired false. A postcondition that verified promotes the
+        // action, and the transaction's own condition still gates it.
+        let mut router = Router::new(transactional_backend());
+        let candidate = DeliveryCandidate::available(
+            DeliveryRung::Foreground,
+            DeliveryCapability::GlobalInput,
+            "XTest pointer",
+        );
+
+        let promoted = router
+            .foreground_dispatch(
+                ForegroundDispatch {
+                    policy: DeliveryPolicy::ForegroundPermitted,
+                    candidate: &candidate,
+                    target: ForegroundTarget::Application(APP_IDENTITY),
+                    restores_pointer: false,
+                    verification: json!({"verified": true, "observed": "anything"}),
+                    resolution: None,
+                },
+                |backend| {
+                    backend.keyboard(
+                        &AppQuery {
+                            name: Some("App".into()),
+                            identifier: None,
+                        },
+                        KeyboardIntent::Text("x"),
+                    )
+                },
+            )
+            .expect("a proved activation dispatches");
+
+        assert_eq!(promoted["success"], json!(true));
+        assert_eq!(promoted["dispatchSuccess"], json!(true));
+        assert_eq!(promoted["foreground"]["restored"], json!(true));
     }
 
     #[test]
@@ -1643,7 +1729,10 @@ mod tests {
         };
         assert_eq!(success.result["delivery"], json!("foreground"));
         assert_eq!(success.result["foreground"]["pointerRestored"], Value::Null);
-        assert_eq!(success.result["success"], json!(true));
+        // Nothing to put back is not the same as nothing to prove: keyboard input declares no
+        // postcondition either, so the dispatch is evidence and the action is unverified.
+        assert_eq!(success.result["dispatchSuccess"], json!(true));
+        assert_eq!(success.result["success"], json!(false));
     }
 
     #[test]
