@@ -6,7 +6,7 @@ use axon_core::{
     DeliveryRung, DeliverySelection, DispatchOutcome, ExpectedFact, ForegroundTarget, JsonRpcError,
     JsonRpcId, JsonRpcRequest, JsonRpcResponse, KeyboardIntent, Locator, LocatorResolver,
     PlatformBackend, Resolution, ResolutionStatus, RunEnvelope, RunOptions, Snapshot,
-    SnapshotHandle, ToolDispatcher, dispatch_in_foreground, select_delivery,
+    SnapshotHandle, ToolDispatcher, dispatch_in_foreground, goal_success, select_delivery,
 };
 use serde_json::{Map, Value, json};
 
@@ -594,21 +594,6 @@ impl<B: PointerTargetVerifier + BackgroundPixelInput> Router<B> {
             Err(PixelDispatchError::Stale(reason)) => return Err(rpc_error(-32003, reason)),
             Err(PixelDispatchError::Backend(error)) => return Err(backend_error(error)),
         };
-        // Goal success, kept separate from mechanism acceptance because at this rung the gap
-        // between them is the whole problem. A completed send proves the events reached the
-        // target's connection; every one of them carries `send_event`, and a toolkit that drops
-        // them does so in silence that nothing on this side can distinguish from delivery. So
-        // `success` waits on a readback or a declared `expects` postcondition, exactly as the
-        // contract requires, and neither `click` nor `keyboard` has one — which is why a clean
-        // delivery here reports `dispatchSuccess: true` alongside `success: false`.
-        //
-        // Promoting delivery to success would make the acceptance table's own defence hollow: a
-        // future Chromium that began filtering these events would produce an accepted send, intact
-        // invariants, and a report that the caller's click had worked.
-        let verified = verification
-            .get("verified")
-            .and_then(Value::as_bool)
-            .unwrap_or(false);
         // This rung is defined by what it does not do. A dispatch that changed the foreground or
         // moved the real pointer was not background delivery, whatever it managed to deliver, so
         // these gate success as well as being reported.
@@ -625,8 +610,15 @@ impl<B: PointerTargetVerifier + BackgroundPixelInput> Router<B> {
         if !dispatch.pointer_unchanged {
             problems.push("the real pointer moved across the dispatch".to_string());
         }
+        // Mechanism acceptance and goal success are kept apart because at this rung the gap between
+        // them is the whole problem. A completed send proves the events reached the target's
+        // connection; every one of them carries `send_event`, and a toolkit that drops them does so
+        // in silence that nothing on this side can distinguish from delivery. Collapsing the two
+        // would hollow out the acceptance table's own defence: a future Chromium that began
+        // filtering these events would produce an accepted send, intact invariants, and a report
+        // that the caller's click had worked.
         let mut result = json!({
-            "success": verified && dispatch.complete && problems.is_empty(),
+            "success": goal_success(&verification, dispatch.complete && problems.is_empty()),
             "dispatch": {"success": dispatch.complete, "mechanism": candidate.mechanism},
             "verification": verification,
             "backgroundDelivery": {
@@ -721,10 +713,13 @@ impl<B: PointerTargetVerifier + BackgroundPixelInput> Router<B> {
         }
 
         let mut result = json!({
+            // Two separate things have to hold here, and this rung is the one that adds the second.
             // Dispatch evidence survives a failed restoration, but the action as a whole did not
-            // succeed: the user's session was not put back where they left it. A cursor left where
-            // the click dropped it counts as much as a window that never came forward again.
-            "success": dispatch.cleanup.session_restored(),
+            // succeed if the user's session was not put back where they left it — a cursor left
+            // where the click dropped it counts as much as a window that never came forward again.
+            // And a session handed back immaculately still says nothing about whether the target
+            // acted on what XTest posted, so the verification has to hold as well.
+            "success": goal_success(&request.verification, dispatch.cleanup.session_restored()),
             "dispatch": {"success": true, "mechanism": request.candidate.mechanism},
             "verification": request.verification,
             "foreground": dispatch.cleanup,
