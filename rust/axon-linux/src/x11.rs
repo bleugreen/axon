@@ -176,12 +176,7 @@ impl X11Session {
     /// focus and X11 cannot see it — so it is an error there. Collapsing the two is how a backend
     /// ends up believing the session is empty and dispatching into someone's work.
     pub fn active_window_pid(&self) -> Result<Option<u32>, BackendError> {
-        let active = self.property(self.root, self.atoms._NET_ACTIVE_WINDOW, AtomEnum::WINDOW)?;
-        let window = active
-            .first()
-            .copied()
-            .filter(|window| *window != x11rb::NONE);
-        let Some(window) = window else {
+        let Some(window) = self.active_window()? else {
             if self.under_wayland {
                 return Err(operation(
                     "read the foreground window",
