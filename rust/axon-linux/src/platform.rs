@@ -514,12 +514,325 @@ impl PlatformBackend for LinuxBackend {
     }
 }
 impl PointerTargetVerifier for LinuxBackend {
+    /// Whether the resolved element still reports a rectangle covering the point the caller is
+    /// about to be clicked at.
+    ///
+    /// This is a freshness check and not a hit test, and the difference is worth stating: it
+    /// catches an element that moved, resized, or went away between resolution and dispatch, and
+    /// it says nothing about whether another window is sitting on top of it. AT-SPI has no
+    /// portable point-to-element lookup to ask that with. The pixel rung answers the occlusion
+    /// question separately, by requiring the target's own window to be the one the X server puts
+    /// on top at that point.
     fn verify_pointer_target(
         &mut self,
-        _: &SnapshotHandle,
-        _: (f64, f64),
+        handle: &SnapshotHandle,
+        point: (f64, f64),
     ) -> Result<bool, BackendError> {
-        Err(capability(Capability::HitTest, "not implemented"))
+        Ok(self
+            .element_extents(handle)?
+            .is_some_and(|extents| covers(extents, point)))
+    }
+}
+
+/// Whether a rectangle covers a point, on the half-open convention a window's own edge follows.
+fn covers(rect: Rect, (x, y): (f64, f64)) -> bool {
+    x >= rect.x && y >= rect.y && x < rect.x + rect.width && y < rect.y + rect.height
+}
+
+/// What the session looked like at one instant: the three facts a background delivery must leave
+/// exactly as it found them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct SessionState {
+    pointer: (i32, i32),
+    input_focus: u32,
+    frontmost: Option<u32>,
+}
+
+impl LinuxBackend {
+    fn toolkit_of(&self, application: &str) -> Result<Option<pixel::Toolkit>, BackendError> {
+        self.ask(|r| Command::Toolkit(application.to_string(), r))
+    }
+
+    fn element_extents(&self, handle: &SnapshotHandle) -> Result<Option<Rect>, BackendError> {
+        self.ask(|r| Command::Extents(handle.clone(), r))
+    }
+
+    fn process_of(&mut self, application: &str) -> Result<Option<u32>, BackendError> {
+        self.lookup(|app| (app.identity == application).then_some(app.process_id))
+    }
+
+    /// Binds one application to the single window a target-bound delivery may go to, or names the
+    /// obstacle that stops it.
+    ///
+    /// `at` is the screen point the action has to land on, when it has one. With a point, the
+    /// window is the process's own managed top-level that the X server puts on top there — which
+    /// establishes ownership and occlusion in the same question. Without one, the binding is
+    /// unambiguous only while the process has exactly one managed top-level window: keystrokes
+    /// name no element, so a second window is a second plausible destination and nothing here can
+    /// choose between them on the caller's behalf.
+    ///
+    /// Every refusal is returned as an `Unavailable` plan rather than an error, because each is a
+    /// fact about this target that leaves a louder rung free to carry the action.
+    fn bind_window(
+        &mut self,
+        application: &str,
+        action: PixelAction,
+        at: Option<(i16, i16)>,
+    ) -> Result<PixelPlan, BackendError> {
+        let Some(toolkit) = self.toolkit_of(application)? else {
+            return Ok(PixelPlan::unavailable(NO_TOOLKIT_SIGNATURE));
+        };
+        let acceptance = match pixel::accepts(action, &toolkit) {
+            Ok(acceptance) => acceptance,
+            Err(reason) => return Ok(PixelPlan::unavailable(reason)),
+        };
+        let Some(process_id) = self.process_of(application)? else {
+            return Ok(PixelPlan::unavailable(format!(
+                "the {toolkit} application on the accessibility bus could not be tied to a running \
+                 process, so none of its windows can be identified"
+            )));
+        };
+        let session = match &self.input {
+            InputSession::Available(session) => session.as_ref(),
+            InputSession::Unavailable(reason) => return Ok(PixelPlan::unavailable(*reason)),
+        };
+        let window = match at {
+            Some(point) => match session.managed_window_at(process_id, point)? {
+                Some(window) => window,
+                None => {
+                    return Ok(PixelPlan::unavailable(format!(
+                        "no top-level window of the {toolkit} application running as process \
+                         {process_id} owns the point the resolved element sits at; it is either \
+                         off-screen or covered by another window there"
+                    )));
+                }
+            },
+            None => match session.windows_for_pid(process_id)?.as_slice() {
+                [window] => *window,
+                [] => {
+                    return Ok(PixelPlan::unavailable(format!(
+                        "the {toolkit} application running as process {process_id} has no managed \
+                         top-level window to deliver to"
+                    )));
+                }
+                many => {
+                    return Ok(PixelPlan::unavailable(format!(
+                        "the {toolkit} application running as process {process_id} has {} \
+                         top-level windows, and keyboard input names no element to choose between \
+                         them",
+                        many.len()
+                    )));
+                }
+            },
+        };
+        let geometry = session.window_geometry(window)?;
+        Ok(PixelPlan::Bound(Box::new(PixelTarget {
+            application: application.to_string(),
+            process_identifier: process_id,
+            window,
+            window_origin: (geometry.origin.0.into(), geometry.origin.1.into()),
+            window_size: (geometry.size.0.into(), geometry.size.1.into()),
+            toolkit,
+            variant: acceptance.variant,
+            measured_by: acceptance.evidence,
+            aim: None,
+        })))
+    }
+
+    /// Re-checks everything the plan asserted, immediately before anything is sent.
+    ///
+    /// The transform comparison is the one that earns its place. A window that moved between
+    /// planning and dispatch still exists, still belongs to the same application, and still
+    /// carries the same id — and delivering the planned window coordinates into it would land
+    /// somewhere the caller never asked for.
+    fn revalidate(&mut self, target: &PixelTarget) -> Result<(), PixelDispatchError> {
+        let running = self
+            .process_of(&target.application)
+            .map_err(PixelDispatchError::Backend)?;
+        if running != Some(target.process_identifier) {
+            // A restarted application owns a different AT-SPI bus name, so this catches the
+            // process behind an identity changing under the plan rather than merely exiting.
+            return Err(stale(format!(
+                "the application this plan was bound to no longer runs as process {}",
+                target.process_identifier
+            )));
+        }
+        let session = match &self.input {
+            InputSession::Available(session) => session.as_ref(),
+            InputSession::Unavailable(reason) => return Err(stale((*reason).to_string())),
+        };
+        match &target.aim {
+            Some(aim) => {
+                let point = (coordinate(aim.screen_point.0), coordinate(aim.screen_point.1));
+                let owner = session
+                    .managed_window_at(target.process_identifier, point)
+                    .map_err(PixelDispatchError::Backend)?;
+                if owner != Some(target.window) {
+                    return Err(stale(
+                        "the bound window is no longer the target application's window on top at \
+                         the resolved point"
+                            .to_string(),
+                    ));
+                }
+                let geometry = session
+                    .window_geometry(target.window)
+                    .map_err(PixelDispatchError::Backend)?;
+                if (f64::from(geometry.origin.0), f64::from(geometry.origin.1))
+                    != target.window_origin
+                    || (f64::from(geometry.size.0), f64::from(geometry.size.1))
+                        != target.window_size
+                {
+                    return Err(stale(
+                        "the bound window moved or resized between planning and dispatch, so the \
+                         converted window coordinates now name somewhere else"
+                            .to_string(),
+                    ));
+                }
+            }
+            // Keystrokes convert no coordinates, so a window that moved is still the right window.
+            // What has to hold is that it is still the *only* candidate: an application that
+            // opened a second window since planning is one this backend may no longer choose for.
+            None => {
+                let windows = session
+                    .windows_for_pid(target.process_identifier)
+                    .map_err(PixelDispatchError::Backend)?;
+                if windows != [target.window] {
+                    return Err(stale(format!(
+                        "the target application no longer has exactly the one top-level window \
+                         this plan was bound to; it now has {}",
+                        windows.len()
+                    )));
+                }
+            }
+        }
+        let Some(aim) = &target.aim else {
+            return Ok(());
+        };
+        let extents = match self.element_extents(&aim.handle) {
+            Ok(extents) => extents,
+            // A retained reference the backend can no longer resolve is exactly a stale target:
+            // there is nothing left to revalidate, so nothing may be sent.
+            Err(BackendError::Operation {
+                operation, message, ..
+            }) if operation == RESOLVE_HANDLE => {
+                return Err(stale(format!(
+                    "the resolved element can no longer be reached: {message}"
+                )));
+            }
+            Err(error) => return Err(PixelDispatchError::Backend(error)),
+        };
+        match extents {
+            Some(extents) if covers(extents, aim.screen_point) => Ok(()),
+            Some(_) => Err(stale(
+                "the resolved element no longer covers the point this plan aimed at".to_string(),
+            )),
+            None => Err(stale(
+                "the resolved element no longer reports on-screen extents".to_string(),
+            )),
+        }
+    }
+
+    /// Delivers one revalidated plan, and reads the background invariants around it.
+    fn deliver(
+        &mut self,
+        target: &PixelTarget,
+        send: impl FnOnce(&X11Session) -> Result<(), BackendError>,
+    ) -> Result<PixelDispatch, PixelDispatchError> {
+        self.revalidate(target)?;
+        let session = match &self.input {
+            InputSession::Available(session) => session.as_ref(),
+            InputSession::Unavailable(reason) => return Err(stale((*reason).to_string())),
+        };
+        let before = observe(session).map_err(PixelDispatchError::Backend)?;
+        send(session).map_err(PixelDispatchError::Backend)?;
+        std::thread::sleep(PIXEL_SETTLE);
+        let after = observe(session).map_err(PixelDispatchError::Backend)?;
+        Ok(PixelDispatch {
+            // The X server processed every send request — which is the only completion this
+            // mechanism has. Whether the toolkit acted on them is what the acceptance table was
+            // measured to answer, and is never observed here.
+            complete: true,
+            partial: None,
+            frontmost_unchanged: before.frontmost == after.frontmost,
+            input_focus_unchanged: before.input_focus == after.input_focus,
+            pointer_unchanged: before.pointer == after.pointer,
+        })
+    }
+}
+
+fn stale(reason: String) -> PixelDispatchError {
+    PixelDispatchError::Stale(reason)
+}
+
+fn observe(session: &X11Session) -> Result<SessionState, BackendError> {
+    let pointer = session.pointer_location()?;
+    Ok(SessionState {
+        // Compared as integers because that is what the X server stores; a float round trip would
+        // make the comparison depend on how the reading was formatted.
+        pointer: (pointer.0 as i32, pointer.1 as i32),
+        input_focus: session.input_focus()?,
+        frontmost: session.active_window()?,
+    })
+}
+
+impl BackgroundPixelInput for LinuxBackend {
+    fn plan_pixel_click(
+        &mut self,
+        application: &str,
+        handle: &SnapshotHandle,
+        point: (f64, f64),
+    ) -> Result<PixelPlan, BackendError> {
+        let screen = (coordinate(point.0), coordinate(point.1));
+        let mut target = match self.bind_window(application, PixelAction::Click, Some(screen))? {
+            PixelPlan::Bound(target) => target,
+            unavailable => return Ok(unavailable),
+        };
+        let session = match &self.input {
+            InputSession::Available(session) => session.as_ref(),
+            InputSession::Unavailable(reason) => return Ok(PixelPlan::unavailable(*reason)),
+        };
+        let window_point = session.window_point(target.window, screen)?;
+        target.aim = Some(PixelAim {
+            handle: handle.clone(),
+            screen_point: point,
+            window_point: (window_point.0.into(), window_point.1.into()),
+        });
+        Ok(PixelPlan::Bound(target))
+    }
+
+    fn plan_pixel_keyboard(&mut self, application: &str) -> Result<PixelPlan, BackendError> {
+        self.bind_window(application, PixelAction::Keyboard, None)
+    }
+
+    fn dispatch_pixel_click(
+        &mut self,
+        target: &PixelTarget,
+    ) -> Result<PixelDispatch, PixelDispatchError> {
+        let Some(aim) = target.aim.as_ref() else {
+            return Err(PixelDispatchError::Backend(operation(
+                "deliver a background click",
+                "the plan carries no aimed point",
+            )));
+        };
+        let window = target.window;
+        let variant = target.variant;
+        let window_point = (coordinate(aim.window_point.0), coordinate(aim.window_point.1));
+        let screen = (coordinate(aim.screen_point.0), coordinate(aim.screen_point.1));
+        self.deliver(target, move |session| {
+            session.send_click(window, window_point, screen, variant)
+        })
+    }
+
+    fn dispatch_pixel_keyboard(
+        &mut self,
+        target: &PixelTarget,
+        intent: KeyboardIntent<'_>,
+    ) -> Result<PixelDispatch, PixelDispatchError> {
+        let window = target.window;
+        let variant = target.variant;
+        self.deliver(target, move |session| {
+            session.send_keyboard(window, intent, variant)
+        })
     }
 }
 
