@@ -248,7 +248,7 @@ struct ForegroundDispatch<'candidate, 'target> {
     resolution: Option<Resolution>,
 }
 
-impl<B: PointerTargetVerifier> Router<B> {
+impl<B: PointerTargetVerifier + BackgroundPixelInput> Router<B> {
     pub fn new(backend: B) -> Self {
         Self {
             backend,
@@ -300,10 +300,44 @@ impl<B: PointerTargetVerifier> Router<B> {
                 // resolved, and the daemon declined to act; the two must not be confused.
                 let (handle, resolution) = self.resolve(params)?;
                 let point = self.node_center(&handle)?;
-                let ladder = self.global_input_ladder(Capability::PointerInput, "XTest pointer");
+                // Planning is pure inspection, so it happens before the ladder decides. The
+                // planner may discard this plan and refuse, and by then nothing native may have
+                // happened.
+                let plan = match self.resolved_application() {
+                    Some(application) => Self::planned(self.backend.plan_pixel_click(
+                        &application,
+                        &handle,
+                        point,
+                    )),
+                    None => PixelPlan::unavailable(NO_RESOLVED_APPLICATION),
+                };
+                let ladder =
+                    self.global_input_ladder(Capability::PointerInput, "XTest pointer", &plan);
                 let Some(candidate) = self.selected(&ladder, policy) else {
                     return Ok(self.refusal(&ladder, policy));
                 };
+                let verification =
+                    json!({"verified":false,"reason":"click has no declared postcondition"});
+                if candidate.rung == DeliveryRung::Pixel {
+                    let PixelPlan::Bound(target) = plan else {
+                        unreachable!("the pixel rung is only offered for a bound plan")
+                    };
+                    // The plan's own revalidation runs inside the dispatch, immediately before
+                    // anything is sent, and re-reads both the element and the window. Asking the
+                    // freshness check below for the same fact first would only widen the gap
+                    // between what was checked and what was delivered into.
+                    let mut result = self.dispatch_pixel(
+                        policy,
+                        &candidate,
+                        &target,
+                        verification,
+                        |backend, target| backend.dispatch_pixel_click(target),
+                    )?;
+                    if let Some(object) = result.as_object_mut() {
+                        object.insert("resolution".into(), json!(resolution));
+                    }
+                    return Ok(result);
+                }
                 if !self
                     .backend
                     .verify_pointer_target(&handle, point)
@@ -333,7 +367,7 @@ impl<B: PointerTargetVerifier> Router<B> {
                         target: ForegroundTarget::Application(&application),
                         // A pointer click moves the real cursor, so the transaction puts it back.
                         restores_pointer: true,
-                        verification: json!({"verified":false,"reason":"click has no declared postcondition"}),
+                        verification,
                         resolution: Some(resolution),
                     },
                     |backend| backend.pointer_click(point),
