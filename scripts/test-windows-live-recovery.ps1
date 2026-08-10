@@ -223,13 +223,19 @@ function Reset-Machine {
         # A daemon that acknowledges `shutdown` and then does not exit: the wedged case the sweep
         # exists for, and the only way a probe stage can succeed and still leave a daemon behind.
         ShutdownLeavesProcess = $false
-        # A daemon whose exit outruns the ten-second wait `shutdown` performs itself: the request
-        # reports failure, and the daemon is gone this many reads later. Counted in reads rather than
-        # in seconds because this harness's Wait-Tick does not sleep, and in reads of whatever the
-        # stage can watch -- the process when the health document names one, the pipe when it does
-        # not. This is the 2026-08-10 park failure, where the process the stage gave up on was gone
-        # moments after.
+        # A daemon that acknowledges `shutdown` and then takes its time. The pipe goes with the
+        # acknowledgement, so the first request reports the wait it performs itself having expired
+        # and every request after it finds nothing to stop at all -- while the process is still
+        # tearing down behind both. It finally exits during the wait that follows this many requests:
+        # 1 is the 2026-08-10 park failure, where the process the stage gave up on was gone moments
+        # after, and 2 is that same teardown outlasting one of this lane's own windows, where a
+        # request reporting success is reporting on a pipe that went several seconds ago.
+        LateExitAfterRequests = 0
+        # Bookkeeping for the above rather than knobs. The exit is counted in liveness reads because
+        # this harness's Wait-Tick does not sleep.
+        ShutdownRequests = 0
         LateExitReads = 0
+        LateExitPid = $null
         RestartFails = $false
         BuildFails = $false
         ProbeTaskStartsNothing = $false
@@ -302,13 +308,27 @@ function Start-FakeDesktopDaemon {
     $script:Machine.Health = New-FakeHealth -ProcessId $DesktopPid
 }
 
-function Stop-FakeDaemon {
-    if ($null -ne $script:Machine.Health -and $null -ne $script:Machine.Health.daemon.processId) {
-        $serving = $script:Machine.Health.daemon.processId
-        $script:Machine.Processes = @($script:Machine.Processes | Where-Object { $_.ProcessId -ne $serving })
-    }
+function Remove-FakeProcess {
+    param([Parameter(Mandatory)][int] $ProcessId)
+
+    $script:Machine.Processes = @($script:Machine.Processes | Where-Object { $_.ProcessId -ne $ProcessId })
+}
+
+function Clear-FakePipe {
+    <# The pipe going while the process is still there.
+
+    Not an edge case to be modelled but the ordinary order of events: a daemon acknowledges
+    `shutdown` before its UI Automation thread joins and its COM apartment is torn down, so there is
+    always a window in which nothing is answering and the process is still running. #>
     $script:Machine.Health = New-FakeHealth -ProcessId 0
     $script:Machine.Health.daemon = @{ running = $false; ready = $false; endpoint = '\\.\pipe\axon-v1'; processId = $null }
+}
+
+function Stop-FakeDaemon {
+    if ($null -ne $script:Machine.Health -and $null -ne $script:Machine.Health.daemon.processId) {
+        Remove-FakeProcess -ProcessId $script:Machine.Health.daemon.processId
+    }
+    Clear-FakePipe
 }
 
 # ---------------------------------------------------------------------------------------------
@@ -327,10 +347,11 @@ function Test-ProcessIsRunning {
     param([Parameter(Mandatory)][int] $ProcessId)
     if ($script:Machine.DeadPids -contains $ProcessId) { return $false }
     # A daemon on its way out is alive on every read until it isn't, and the read that runs the count
-    # out is the one where it is finally gone -- the process leaves the table and the pipe with it.
-    if ($script:Machine.LateExitReads -gt 0 -and $ProcessId -eq $script:Machine.Health.daemon.processId) {
+    # out is the one where it is finally gone. Only the process goes here: its pipe went when it
+    # acknowledged the request that started all this.
+    if ($script:Machine.LateExitReads -gt 0 -and $null -ne $script:Machine.LateExitPid -and $ProcessId -eq $script:Machine.LateExitPid) {
         $script:Machine.LateExitReads--
-        if ($script:Machine.LateExitReads -eq 0) { Stop-FakeDaemon }
+        if ($script:Machine.LateExitReads -eq 0) { Remove-FakeProcess -ProcessId $script:Machine.LateExitPid }
     }
     [bool] @($script:Machine.Processes | Where-Object { $_.ProcessId -eq $ProcessId })
 }
@@ -414,31 +435,38 @@ function Invoke-Axon {
     }
     switch ($joined) {
         'status --json' {
-            # A daemon on its way out with no process id in its document can only be watched through
-            # the pipe, so its reads are these ones. The process is left where it is: what a caller
-            # with no pid learns is that nothing is answering, which is all it asked.
-            if ($script:Machine.LateExitReads -gt 0 -and $null -ne $script:Machine.Health -and $null -eq $script:Machine.Health.daemon.processId) {
-                $script:Machine.LateExitReads--
-                if ($script:Machine.LateExitReads -eq 0) { Stop-FakeDaemon }
-            }
             if ($null -eq $script:Machine.Health) { return [pscustomobject]@{ ExitCode = 1; Output = 'nothing answered' } }
             return [pscustomobject]@{ ExitCode = 0; Output = ($script:Machine.Health | ConvertTo-Json -Depth 10) }
         }
         'version' { return [pscustomobject]@{ ExitCode = 0; Output = $script:Machine.VersionOutput } }
         'shutdown' {
             # What the real command reports when the daemon it asked to stop is still there when its
-            # own ten-second wait expires (status::shutdown in rust/axon-win/src/main.rs). Whether
-            # that daemon is dying slowly or not dying at all is what the stage has to work out, so
-            # both cases say exactly this and differ only in what the process does next.
-            if ($script:Machine.ShutdownNeverExits -or $script:Machine.LateExitReads -gt 0) {
+            # own ten-second wait expires (status::shutdown in rust/axon-win/src/main.rs).
+            if ($script:Machine.ShutdownNeverExits) {
                 return [pscustomobject]@{
                     ExitCode = 1
                     Output = "daemon process $($script:Machine.Health.daemon.processId) did not exit"
                 }
             }
+            if ($script:Machine.LateExitAfterRequests -gt 0) {
+                $script:Machine.ShutdownRequests++
+                if ($script:Machine.ShutdownRequests -eq $script:Machine.LateExitAfterRequests) {
+                    # The wait that follows this request is the one the process finally exits during.
+                    $script:Machine.LateExitReads = 3
+                }
+                if ($script:Machine.ShutdownRequests -eq 1) {
+                    $script:Machine.LateExitPid = $script:Machine.Health.daemon.processId
+                    $asked = $script:Machine.LateExitPid
+                    Clear-FakePipe
+                    return [pscustomobject]@{ ExitCode = 1; Output = "daemon process $asked did not exit" }
+                }
+                # And every request after the first finds no pipe at all, which the real command
+                # reports as success. It is a true statement about the pipe and says nothing about
+                # the process, which is the distinction the park stage has to make.
+                return [pscustomobject]@{ ExitCode = 0; Output = 'no daemon was running; registration left in place' }
+            }
             if ($script:Machine.ShutdownLeavesProcess) {
-                $script:Machine.Health = New-FakeHealth -ProcessId 0
-                $script:Machine.Health.daemon = @{ running = $false; ready = $false; endpoint = '\\.\pipe\axon-v1'; processId = $null }
+                Clear-FakePipe
                 return [pscustomobject]@{ ExitCode = 0; Output = 'stopped' }
             }
             Stop-FakeDaemon
