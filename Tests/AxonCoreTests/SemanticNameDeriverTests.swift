@@ -60,7 +60,10 @@ import Testing
     func snapshot(identifiedFirst: Bool) throws -> JSONValue {
         let identified = #"{"role":"AXButton","title":"Share","identifier":"share-primary"}"#
         let anonymous = #"{"role":"AXButton","title":"Share"}"#
-        let children = identifiedFirst ? "\(identified),\(anonymous)" : "\(anonymous),\(identified)"
+        let visibleCollision = #"{"role":"AXButton","title":"Share share primary"}"#
+        let children = identifiedFirst
+            ? "\(identified),\(anonymous),\(visibleCollision)"
+            : "\(visibleCollision),\(anonymous),\(identified)"
         let raw = #"{"windows":[{"role":"AXWindow","title":"Main","children":[\#(children)]}]}"#
         return try JSONDecoder().decode(JSONValue.self, from: Data(raw.utf8))
     }
@@ -68,8 +71,10 @@ import Testing
     let reordered = SemanticNameDeriver.derive(from: try snapshot(identifiedFirst: false))
     let result = SemanticNameDeriver.stability(from: first, to: reordered)
 
-    #expect(Set(first.elements.map(\.name)) == ["main", "main/share", "main/share-share-primary"])
-    #expect(first.summary.collisionFreeCount == 3)
-    #expect(result.comparableElements == 3)
-    #expect(result.stableNames == 3)
+    #expect(Set(first.elements.map(\.name)) == [
+        "main", "main/share", "main/share-share-primary-id", "main/share-share-primary"
+    ])
+    #expect(first.summary.collisionFreeCount == 4)
+    #expect(result.comparableElements == 4)
+    #expect(result.stableNames == 4)
 }

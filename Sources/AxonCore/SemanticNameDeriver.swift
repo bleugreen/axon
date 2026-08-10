@@ -225,14 +225,23 @@ public enum SemanticNameDeriver {
         }
 
         var groups = Dictionary(grouping: candidates.indices, by: { candidates[$0].segments.joined(separator: "/") })
-        for indices in groups.values where indices.count > 1 {
+        var occupiedNames = Set(candidates.map { $0.segments.joined(separator: "/") })
+        for (_, indices) in groups.sorted(by: { $0.key < $1.key }) where indices.count > 1 {
             let identifierSlugs = indices.map { index in
                 candidates[index].stableIdentifier.flatMap { slug($0, maximumLength: 24) }
             }
             let counts = Dictionary(grouping: identifierSlugs.compactMap { $0 }, by: { $0 }).mapValues(\.count)
             for (index, identifierSlug) in zip(indices, identifierSlugs) {
                 if let identifierSlug, counts[identifierSlug] == 1 {
-                    candidates[index].segments[candidates[index].segments.count - 1] += "-\(identifierSlug)"
+                    let leaf = candidates[index].segments[candidates[index].segments.count - 1]
+                    var suffix = identifierSlug
+                    var attempt = 0
+                    while occupiedNames.contains((candidates[index].segments.dropLast() + ["\(leaf)-\(suffix)"]).joined(separator: "/")) {
+                        attempt += 1
+                        suffix = attempt == 1 ? "\(identifierSlug)-id" : "\(identifierSlug)-id-\(attempt)"
+                    }
+                    candidates[index].segments[candidates[index].segments.count - 1] = "\(leaf)-\(suffix)"
+                    occupiedNames.insert(candidates[index].segments.joined(separator: "/"))
                     candidates[index].disambiguation = "identifier"
                 }
             }
