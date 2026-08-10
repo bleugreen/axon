@@ -173,7 +173,7 @@ jobs:
       - name: Install AT-SPI build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libdbus-1-dev pkg-config xvfb x11-utils
+          sudo apt-get install -y libdbus-1-dev pkg-config xvfb x11-utils dbus
 
       # The lifecycle, session classification, status assembly, keysym translation, and the whole
       # router are pure and run headlessly. Only the systemd and socket calls need a real desktop.
@@ -181,15 +181,19 @@ jobs:
         working-directory: rust
         run: cargo test -p axon-linux
 
-      # The one part of this backend a fake cannot exercise. Activation is a client message to a
-      # window manager and proof is reading the answer back, so only a real X server can show that
-      # the conversation works. The test brings its own miniature EWMH manager, which is why a bare
-      # Xvfb is the entire requirement: no desktop, no toolkit, nothing to vary between runs.
+      # The parts of this backend a fake cannot exercise, because each one is a conversation rather
+      # than a decision. X11 foreground activation is a client message to a window manager and proof
+      # is reading the answer back, so it needs a real X server. Chromium-family activation is an
+      # attributes call that crosses D-Bus and is answered late, so it needs a real bus. Each test
+      # brings its own miniature server -- an EWMH window manager, an AT-SPI provider built to
+      # withhold like Chromium -- so a bare Xvfb and dbus-daemon are the entire requirement: no
+      # desktop, no toolkit, nothing to vary between runs. `--ignored` sweeps both, and whatever
+      # hermetic test is written next.
       #
       # This runs for pull requests, unlike the live lane. It has to: the project's only real Linux
       # desktop is a GNOME Wayland session, which is the worst possible place to verify X11
       # activation and is asserted to refuse instead.
-      - name: Run the hermetic X11 foreground test
+      - name: Run the hermetic desktop tests
         working-directory: rust
         env:
           DISPLAY: ":99"

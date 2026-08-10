@@ -61,8 +61,9 @@ These are the only sources that promote or sustain a **Supported** cell.
 | Linux live loop | `.github/workflows/live.yml` `linux` job | AT-SPI capture/resolve/invoke with verified readback on GNOME Calculator under GNOME/Mutter Wayland; honest refusal of global input at both policies; systemd-user lifecycle and health-v1 | every push to `main` |
 | Windows live loop | `.github/workflows/live.yml` `windows` job | the interactive-session daemon serves `look` with a real window root through the DACL-restricted pipe, and the complete health-v1 document — each asserted against the task the job registered, by process id, with the desktop's own registration proved unchanged across the run | every push to `main` |
 | Hermetic X11 foreground test | `.github/workflows/test.yml` Linux job; `rust/axon-linux/tests/x11_foreground.rs` | the X11 activate/prove/dispatch/restore conversation against a real X server with a miniature EWMH window manager | every pull request |
+| Hermetic AT-SPI activation test | `.github/workflows/test.yml` Linux job; `rust/axon-linux/tests/atspi_activation.rs` | that the attributes call is issued against the application root and only once per application, that the bounded wait ends when a withholding provider publishes rather than when the bound expires, and that a provider which never publishes is reported as withheld rather than as empty — against a private session bus and a provider built to withhold the way Chromium does | every pull request |
 | Windows session-1 probes | `axon-win probe value`, `events`, `timeout`, `pixel-click`, `foreground`; findings recorded in this document | value set and readback, event delivery, provider timeouts, the pixel-click allowlist entry, the foreground hand-back finding | manual; re-run and re-date when the area changes |
-| Linux Chromium activation probe | recorded in [Linux backend](#linux-backend) | that Chromium-family trees are gated by `org.a11y.Status.IsEnabled` and by an attributes or relations call, and not by AT-SPI listener registration; the daemon's before-and-after capture of Chrome | manual (2026-08-08); re-run and re-date when the area changes |
+| Linux Chromium activation probe | recorded in [Linux backend](#linux-backend) | that Chromium-family trees are gated by `org.a11y.Status.IsEnabled` and by an attributes or relations call, and not by AT-SPI listener registration; the daemon's before-and-after capture of Chrome. What only real browsers can show — the daemon's own half of the mechanism is gated per pull request by the hermetic AT-SPI test above | manual (2026-08-08); re-run and re-date when the area changes |
 | Platform spikes | `rust/SPIKE-FINDINGS.md` | session topology, WebView2 and WebKitGTK activation and traversal, the Mutter geometry caveat, verified invoke dispatch | dated snapshots (2026-08-02 through 2026-08-04) |
 
 ### Environment notes
@@ -136,7 +137,8 @@ should be discoverable here first.
   so WebKitGTK page content is still out of reach. Chromium-family activation
   is implemented on both backends — an MSAA touch before capture on Windows
   (spike-verified) and an attributes touch at capture on Linux (probe-verified
-  2026-08-08) — and a Linux session whose `org.a11y.Status.IsEnabled` is false
+  2026-08-08 against real browsers, and gated on every pull request by a
+  hermetic AT-SPI provider test) — and a Linux session whose `org.a11y.Status.IsEnabled` is false
   hides those applications from the bus entirely, which capture now reports by
   name rather than as a missing application.
 - macOS pixel, foreground, and screenshot paths: implemented and
@@ -390,7 +392,11 @@ than equating “Linux” with one uniform tree.
   activation is a one-way switch inside the application: asking twice buys
   nothing, and an application that ignores the ask must not make every later
   `look` pay the wait. A restarted application owns a different unique name, so
-  it is asked again.
+  it is asked again. Every clause of that paragraph crosses the wire, so none of
+  it can be held still by a unit test; `rust/axon-linux/tests/atspi_activation.rs`
+  holds it against a private session bus and a provider that withholds until it
+  is asked, which is what keeps the probe a record of discovery rather than the
+  only thing standing between a regression and a release.
 - The null reference is `/org/a11y/atspi/null` and means "no object". It
   implements no interfaces, so walking it as an ordinary child fails the whole
   capture rather than yielding an empty branch, and it is dropped from every

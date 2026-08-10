@@ -21,6 +21,11 @@ pub mod socket;
 mod platform;
 #[cfg(target_os = "linux")]
 pub use platform::LinuxBackend;
+/// The bound a withholding provider is given to publish, and the marker carried by a subtree it
+/// never published. Public so the hermetic AT-SPI test asserts against the values the backend uses
+/// rather than restating them, which is the kind of duplication that drifts silently.
+#[cfg(target_os = "linux")]
+pub use platform::{ACTIVATION_TIMEOUT, CHILD_NOT_PUBLISHED};
 /// The X11 half of the Linux backend, public so the hermetic foreground test can drive it against
 /// a real X server without a desktop session.
 #[cfg(target_os = "linux")]

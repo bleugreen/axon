@@ -28,10 +28,14 @@ tokio = { version = "1.47.1", features = ["rt", "time"] }
 # Pure Rust, so no libxtst development package is needed to build this crate anywhere.
 x11rb = { version = "0.14", features = ["xtest"] }
 
-# The hermetic foreground test is its own miniature window manager, so it needs the protocol
-# bindings directly rather than through the backend.
+# Each hermetic test is its own miniature desktop, so both need the protocol layer directly rather
+# than through the backend: `x11_foreground` an EWMH window manager, `atspi_activation` an AT-SPI
+# provider. The zbus features match what `atspi` already resolves, so serving a bus adds nothing to
+# what the backend itself is built against.
 [target.'cfg(target_os = "linux")'.dev-dependencies]
+tokio = { version = "1.47.1", features = ["rt-multi-thread", "time"] }
 x11rb = { version = "0.14", features = ["xtest"] }
+zbus = { version = "5.18", default-features = false, features = ["tokio"] }
 
 [[bin]]
 name = "axon-linux"
