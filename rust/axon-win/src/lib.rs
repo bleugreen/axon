@@ -2243,6 +2243,39 @@ actions:
         }
 
         #[test]
+        fn the_plans_own_obstacle_reaches_the_caller_beside_the_policy_refusal() {
+            // The whole path, from the plan this backend built to what a caller reads. The window
+            // class with no verified message path is the product of the probe work, and the policy
+            // boundary above it is the reported reason. Both have to arrive: one says what to do
+            // next, the other says whether the quiet rung would ever carry this target at all.
+            let backend = backend(vec![], None);
+            let handle = backend.snapshot.handle(0);
+            *backend.pixel_plan.borrow_mut() = PixelPlan::unavailable(
+                "window class Widget has no probe-verified client-coordinate message path",
+            );
+            let clicks = backend.clicks.clone();
+            let dispatches = backend.pixel_dispatches.clone();
+            let mut router = Router::new(backend);
+            router.snapshot = Some(router.backend.snapshot.clone());
+
+            let response = router
+                .request(request("click", json!({"target": handle.0})))
+                .unwrap();
+
+            let result = action_result(&response);
+            assert_eq!(result["refusal"]["reason"], json!("foregroundNotPermitted"));
+            let obstacle = &result["refusal"]["alsoRefused"][0];
+            assert_eq!(obstacle["rung"], json!("pixel"));
+            assert_eq!(obstacle["reason"], json!("backgroundPixelUnsupported"));
+            assert_eq!(
+                obstacle["message"],
+                json!("window class Widget has no probe-verified client-coordinate message path")
+            );
+            assert_eq!(*clicks.borrow(), 0);
+            assert_eq!(*dispatches.borrow(), 0);
+        }
+
+        #[test]
         fn an_unavailable_plan_escalates_to_the_foreground_when_permitted() {
             let backend = backend(vec![], None);
             let handle = backend.snapshot.handle(0);

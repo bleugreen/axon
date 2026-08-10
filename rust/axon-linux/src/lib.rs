@@ -2333,10 +2333,57 @@ actions:
 
             let result = refusal(&response);
             // The policy boundary outranks it in the reason a caller is given, because opting in
-            // is the thing they can act on and it would work. See AXN-101 for the message that
-            // does not currently survive that ranking.
+            // is the thing they can act on and it would work. The geometry obstacle it outranks
+            // still travels, so the caller learns which of the two halves of the binding failed.
             assert_eq!(result["refusal"]["reason"], json!("foregroundNotPermitted"));
             assert_eq!(result["delivery"], Value::Null);
+            assert!(
+                result["refusal"]["alsoRefused"][0]["message"]
+                    .as_str()
+                    .unwrap()
+                    .contains("owns the point the resolved element sits at"),
+                "{}",
+                result["refusal"]["alsoRefused"][0]["message"]
+            );
+            assert!(dispatches.borrow().is_empty(), "nothing was delivered");
+        }
+
+        #[test]
+        fn the_toolkits_own_refusal_reaches_the_caller_beside_the_policy_refusal() {
+            // The whole path, from the measured acceptance table to what a caller reads. The
+            // reported reason is the policy boundary, and the toolkit sentence rides beside it —
+            // without which a caller cannot tell a GTK 3 window, which will never take a
+            // background click, from one where opting in is all that stands in the way.
+            let toolkit = Toolkit {
+                name: "gtk".into(),
+                version: "3.24.51".into(),
+            };
+            let measured = pixel::accepts(PixelAction::Click, &toolkit)
+                .expect_err("GTK 3 does not accept a background click");
+            let backend = transactional_backend();
+            *backend.click_plan.borrow_mut() = Ok(PixelPlan::unavailable(measured.clone()));
+            let handle = backend.snapshot.handle(0);
+            let clicks = backend.clicks.clone();
+            let dispatches = backend.pixel_dispatches.clone();
+            let mut router = router_for(backend);
+
+            let response = router
+                .request(request("click", json!({"target": handle.0})))
+                .unwrap();
+
+            let result = refusal(&response);
+            assert_eq!(result["refusal"]["reason"], json!("foregroundNotPermitted"));
+            let obstacle = &result["refusal"]["alsoRefused"][0];
+            assert_eq!(obstacle["rung"], json!("pixel"));
+            assert_eq!(obstacle["reason"], json!("backgroundPixelUnsupported"));
+            // Byte for byte the acceptance table's own sentence, naming the toolkit and version.
+            assert_eq!(obstacle["message"], json!(measured));
+            assert!(
+                obstacle["message"].as_str().unwrap().contains("gtk 3.24.51"),
+                "{}",
+                obstacle["message"]
+            );
+            assert_eq!(*clicks.borrow(), 0);
             assert!(dispatches.borrow().is_empty(), "nothing was delivered");
         }
 
