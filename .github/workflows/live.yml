@@ -563,6 +563,13 @@ jobs:
           printf '%s' "$status" | jq -e '[.capabilities[] | select(.usable == false and (.reason // "") == "")] | length == 0' >/dev/null
           # Wayland withdraws synthetic input; the document must say so rather than promise it.
           printf '%s' "$status" | jq -e '[.capabilities[] | select(.capability == "pointerInput")][0] | .usable == false and .reason == "wayland-restricted"' >/dev/null
+          # This runner is a desktop with a screen reader running, so its accessibility switch is
+          # on and the daemon reads it from the session bus and says so. A stock GNOME session has
+          # it off, and every Chromium-family application is then absent from the bus -- a session
+          # this lane does not exercise, which is why the environment note in
+          # docs/cross-platform.md says so. This assertion is what keeps that note falsifiable: if
+          # the runner's accessibility is ever switched off, the note is wrong and this goes red.
+          printf '%s' "$status" | jq -e '.session.accessibilityEnabled == true' >/dev/null
 
           "$daemon" daemon restart
           printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"look","arguments":{}}}' \
