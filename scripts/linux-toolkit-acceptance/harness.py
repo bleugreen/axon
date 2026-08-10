@@ -282,6 +282,11 @@ class Session:
         reply = self.root.translate_coords(window, 0, 0)
         return (reply.x, reply.y)
 
+    def translate(self, root_point: tuple, window) -> tuple:
+        """A root point in a window's own coordinates."""
+        reply = window.translate_coords(self.root, root_point[0], root_point[1])
+        return (reply.x, reply.y)
+
     def child_at(self, window, x: int, y: int):
         """The child window of `window` containing a point in its coordinates, if any."""
         try:
@@ -497,31 +502,30 @@ def measure(spec: Spec, session: Session, reports: Reports, decoy, port: int) ->
         point = (button[0] + button[2] // 2, button[1] + button[3] // 2)
         root_point = (origin[0] + point[0], origin[1] + point[1])
 
-        # The decoy holds the focus and the pointer is parked outside the target's rectangle, so the
-        # target is in the background under both meanings of the word for the whole background phase.
-        #
-        # Parking it *outside* is load-bearing rather than tidy. GTK only acts on a synthetic button
-        # event when the real cursor is already inside the target window, so a pointer left over the
-        # target turns this into a measurement of something the pixel rung may not do.
-        session.take_focus(decoy)
-        parked = session.park_away_from(origin, (geometry.width, geometry.height))
-        time.sleep(0.2)
-        before = {"pointer": list(session.pointer()), "focus": session.focus()}
-        before["pointerOverTarget"] = False
+        before = _background_preconditions(session, decoy, window, origin, geometry)
         result["before"] = before
-        if before["focus"] == window.id:
+        if "error" in before:
             result["status"] = "failed"
-            result["detail"] = "the target held the focus, so nothing measured here is a background"
-            return result
-        if list(parked) != before["pointer"]:
-            result["status"] = "failed"
-            result["detail"] = "the pointer would not park clear of the target window"
+            result["detail"] = before["error"]
             return result
 
+        # Each phase re-establishes the background preconditions and proves them again before it
+        # sends anything. Running one phase on the preconditions the previous one was given is how a
+        # toolkit that takes the focus on a click turns the keyboard phase that follows into a
+        # foreground measurement wearing a background label.
         click = _background_click(session, reports, window, point, root_point)
+        click["before"] = before
         click["invariants"] = _invariants(session, before)
+
+        before = _background_preconditions(session, decoy, window, origin, geometry)
+        if "error" in before:
+            result["status"] = "failed"
+            result["detail"] = before["error"]
+            return result
         text = _background_text(session, reports, window)
+        text["before"] = before
         text["invariants"] = _invariants(session, before)
+
         result["background"] = {"click": click, "text": text}
         # Whether a real click at these coordinates would even have reached the target. When it
         # would not, the pointer control below is measuring whatever is covering the target, and the
@@ -546,6 +550,32 @@ def measure(spec: Spec, session: Session, reports: Reports, decoy, port: int) ->
         _stop(process)
 
 
+def _background_preconditions(session: Session, decoy, window, origin, geometry) -> dict:
+    """Puts the target back in the background, and proves it is there.
+
+    The decoy takes the focus and the pointer parks outside the target's rectangle. Parking it
+    *outside* is load-bearing rather than tidy: GTK acts on a synthetic button event only when the
+    real cursor is already inside the target window, so a pointer left over the target turns the
+    measurement into one of something the pixel rung may not do.
+
+    Returns the readings the phase will be judged against, or an `error` naming the precondition that
+    could not be established — which is a failed measurement, not a silent toolkit.
+    """
+    session.take_focus(decoy)
+    parked = session.park_away_from(origin, (geometry.width, geometry.height))
+    time.sleep(0.2)
+    before = {
+        "pointer": list(session.pointer()),
+        "focus": session.focus(),
+        "pointerOverTarget": False,
+    }
+    if before["focus"] == window.id:
+        before["error"] = "the target held the focus, so nothing measured here is a background"
+    elif list(parked) != before["pointer"]:
+        before["error"] = "the pointer would not park clear of the target window"
+    return before
+
+
 def _widget_rectangles(ready: dict, reports: Reports) -> dict:
     """Widget rectangles in the toplevel's coordinates.
 
@@ -567,14 +597,16 @@ def _widget_rectangles(ready: dict, reports: Reports) -> dict:
 def _background_click(session: Session, reports: Reports, window, point, root_point) -> dict:
     arrivals: dict = {}
     for variant in VARIANTS:
-        destination = window
+        destination, local = window, point
         if variant == "child":
             child = session.child_at(window, point[0], point[1])
             if child is None:
                 continue
-            destination = child
+            # An event's coordinates are relative to the window it is sent to, so aiming at a child
+            # window with the toplevel's coordinates would land somewhere else entirely.
+            destination, local = child, session.translate(root_point, child)
         reports.clear()
-        session.send_click(destination, point, root_point, variant)
+        session.send_click(destination, local, root_point, variant)
         reaction = reports.wait_for("click", REACTION_TIMEOUT)
         arrivals[variant] = _raw(reports, "button-press")
         if reaction:
