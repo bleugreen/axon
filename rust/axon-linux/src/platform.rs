@@ -614,6 +614,12 @@ impl Actor {
                 Command::Focus(h, r) => {
                     let _ = r.send(self.focus(&h).await);
                 }
+                Command::Toolkit(a, r) => {
+                    let _ = r.send(self.toolkit_of(&a).await);
+                }
+                Command::Extents(h, r) => {
+                    let _ = r.send(self.extents(&h).await);
+                }
             }
         }
     }
@@ -946,14 +952,14 @@ impl Actor {
         let (snapshot, index) = handle
             .0
             .split_once(':')
-            .ok_or_else(|| operation("resolve handle", "malformed handle"))?;
+            .ok_or_else(|| operation(RESOLVE_HANDLE, "malformed handle"))?;
         let index: usize = index
             .parse()
-            .map_err(|_| operation("resolve handle", "malformed handle"))?;
+            .map_err(|_| operation(RESOLVE_HANDLE, "malformed handle"))?;
         self.retained
             .get(snapshot)
             .and_then(|r| r.get(index))
-            .ok_or_else(|| operation("resolve handle", "stale or evicted AT-SPI reference"))
+            .ok_or_else(|| operation(RESOLVE_HANDLE, "stale or evicted AT-SPI reference"))
     }
     async fn invoke(&self, h: &SnapshotHandle, requested: &str) -> Result<(), BackendError> {
         let object = self.object(h)?.clone();
@@ -983,6 +989,69 @@ impl Actor {
             Err(operation("invoke", "provider rejected action"))
         }
     }
+    /// What an application declares about itself: the toolkit implementing its interface, and that
+    /// toolkit's version.
+    ///
+    /// This is the whole signature the pixel rung's acceptance table is keyed on. It is read from
+    /// the application rather than inferred from `WM_CLASS` or from the libraries the process
+    /// loaded, because those are guesses wearing a probe's clothes: an application says what it is
+    /// built with, and nothing else on the system does.
+    ///
+    /// `Ok(None)` means the application named no toolkit — either it is gone, or it declares
+    /// nothing — which refuses the rung rather than failing the request.
+    async fn toolkit_of(&self, application: &str) -> Result<Option<pixel::Toolkit>, BackendError> {
+        let found = self
+            .roots()
+            .await?
+            .into_iter()
+            .find(|object| identity(object) == application);
+        let Some(root) = found else {
+            return Ok(None);
+        };
+        let proxy = timeout(
+            "application proxy",
+            root.as_accessible_proxy(&self.connection),
+        )
+        .await?;
+        let interfaces = timeout("interfaces", proxy.proxies()).await?;
+        let application = timeout("application interface", interfaces.application()).await?;
+        // The properties are read leniently and the interface is not. A provider that does not
+        // implement `Application` at all is an operational surprise worth reporting; one that
+        // implements it and declines to name a toolkit has simply given no signature, and the
+        // acceptance table already refuses that by name.
+        let name = timeout("toolkit name", application.toolkit_name())
+            .await
+            .unwrap_or_default();
+        let version = timeout("toolkit version", application.version())
+            .await
+            .unwrap_or_default();
+        Ok((!name.is_empty()).then_some(pixel::Toolkit { name, version }))
+    }
+
+    /// A retained element's extents on screen, read fresh.
+    ///
+    /// The revalidation the pixel rung owes its target, and the freshness check the foreground
+    /// rung makes before it moves the real cursor. `Ok(None)` means the element reports no
+    /// on-screen rectangle at all, which is as disqualifying as reporting the wrong one.
+    async fn extents(&self, h: &SnapshotHandle) -> Result<Option<Rect>, BackendError> {
+        let object = self.object(h)?.clone();
+        let proxy = timeout(
+            "accessible proxy",
+            object.as_accessible_proxy(&self.connection),
+        )
+        .await?;
+        let interfaces = timeout("interfaces", proxy.proxies()).await?;
+        let component = timeout("component interface", interfaces.component()).await?;
+        let (x, y, width, height) = timeout("extents", component.get_extents(CoordType::Screen))
+            .await?;
+        Ok((width > 0 && height > 0).then_some(Rect {
+            x: x.into(),
+            y: y.into(),
+            width: width.into(),
+            height: height.into(),
+        }))
+    }
+
     async fn read(&self, h: &SnapshotHandle) -> Result<Option<String>, BackendError> {
         let object = self.object(h)?.clone();
         let proxy = timeout(
