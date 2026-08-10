@@ -86,6 +86,159 @@ pub trait PointerTargetVerifier: PlatformBackend {
     ) -> Result<bool, axon_core::BackendError>;
 }
 
+/// A target-bound input mechanism: events delivered to one verified window, without activating the
+/// application and without moving the real pointer.
+///
+/// This is the pixel rung's whole contract expressed as a seam. The router that decides *when* to
+/// use it is platform-neutral and testable on any machine against a fake; the mechanism behind it
+/// is an X11 conversation with a live toolkit and is not.
+pub trait BackgroundPixelInput: PlatformBackend {
+    /// Resolves a delivery plan for one click at a point inside a resolved element. Pure
+    /// inspection with no native side effect, because the planner may discard the result and
+    /// refuse before anything is allowed to happen.
+    fn plan_pixel_click(
+        &mut self,
+        application: &str,
+        handle: &SnapshotHandle,
+        point: (f64, f64),
+    ) -> Result<PixelPlan, axon_core::BackendError>;
+
+    /// Resolves a delivery plan for keystrokes aimed at one application.
+    ///
+    /// Keyboard input names an application rather than an element, so this binds a window without
+    /// converting any coordinates. The window is still resolved, verified against the application
+    /// the caller named, and revalidated before dispatch: what the contract forbids is a target
+    /// *inferred* from an unscoped point, and there is no point here to infer one from.
+    fn plan_pixel_keyboard(
+        &mut self,
+        application: &str,
+    ) -> Result<PixelPlan, axon_core::BackendError>;
+
+    /// Revalidates the plan and delivers a click. A revalidation failure returns `Stale` and must
+    /// send nothing: a window that moved or an element that is no longer where it was means the
+    /// recorded coordinates now name somewhere else.
+    fn dispatch_pixel_click(
+        &mut self,
+        target: &PixelTarget,
+    ) -> Result<PixelDispatch, PixelDispatchError>;
+
+    /// Revalidates the plan and delivers keystrokes, under the same rule.
+    fn dispatch_pixel_keyboard(
+        &mut self,
+        target: &PixelTarget,
+        intent: KeyboardIntent<'_>,
+    ) -> Result<PixelDispatch, PixelDispatchError>;
+}
+
+/// Whether a target-bound mechanism exists for one specific action.
+#[derive(Clone, Debug, PartialEq)]
+pub enum PixelPlan {
+    Bound(Box<PixelTarget>),
+    /// No target-bound mechanism here. `reason` names the specific obstacle, because a caller told
+    /// only "unsupported" cannot tell a GTK 4 window from an unmeasured Qt release from an
+    /// application whose window is currently covered by someone else's.
+    Unavailable { reason: String },
+}
+
+impl PixelPlan {
+    pub fn unavailable(reason: impl Into<String>) -> Self {
+        PixelPlan::Unavailable {
+            reason: reason.into(),
+        }
+    }
+}
+
+/// One window, bound to one application, with whatever the action needs to reach it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PixelTarget {
+    /// The backend's own identity for the owning application: an AT-SPI bus name and object path.
+    /// Revalidated before dispatch, because a restarted application owns a different bus name and
+    /// a window id the kernel and the X server have both reused is a different window.
+    pub application: String,
+    pub process_identifier: u32,
+    /// The X11 window that receives the events.
+    pub window: u32,
+    /// The window's origin on screen and its size: the transform itself, kept so it can be both
+    /// revalidated and reported.
+    pub window_origin: (f64, f64),
+    pub window_size: (f64, f64),
+    /// What the application declares about itself, and what that signature cleared it for.
+    pub toolkit: pixel::Toolkit,
+    pub variant: pixel::SendVariant,
+    /// The fixture rows that cleared this toolkit, carried so a dispatch result can cite the
+    /// measurement that authorized background input into someone's window.
+    pub measured_by: &'static str,
+    /// The element and the window-relative point its screen coordinates converted to. Present for
+    /// a click; absent for keyboard input, which names an application rather than an element and
+    /// therefore has no coordinates to convert.
+    pub aim: Option<PixelAim>,
+}
+
+/// One element, and the point inside the bound window that its resolved geometry converted to.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PixelAim {
+    pub handle: SnapshotHandle,
+    pub screen_point: (f64, f64),
+    pub window_point: (f64, f64),
+}
+
+impl PixelTarget {
+    /// The transform reported as evidence rather than implied.
+    ///
+    /// A dispatch that landed in the wrong place is only diagnosable after the fact if the window
+    /// it went to, the arithmetic that chose the point, and the signature that authorized the
+    /// whole thing are all on the wire.
+    pub fn evidence(&self) -> Value {
+        let mut evidence = json!({
+            "nativeWindowHandle": format!("0x{:08X}", self.window),
+            "windowOrigin": {"x": self.window_origin.0, "y": self.window_origin.1},
+            "windowSize": {"width": self.window_size.0, "height": self.window_size.1},
+            "toolkit": self.toolkit.name,
+            "toolkitVersion": self.toolkit.version,
+            "deliveryVariant": self.variant.key(),
+            "measuredBy": self.measured_by,
+        });
+        if let (Some(object), Some(aim)) = (evidence.as_object_mut(), &self.aim) {
+            object.insert(
+                "windowPoint".into(),
+                json!({"x": aim.window_point.0, "y": aim.window_point.1}),
+            );
+            object.insert("sourceCoordinateSpace".into(), json!("screen"));
+        }
+        evidence
+    }
+}
+
+/// What a delivered sequence did, and the evidence that it stayed in the background.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PixelDispatch {
+    /// Whether the whole sequence reached the target's connection.
+    ///
+    /// Delivered, not acted on, and the gap is wider here than on any other backend. `XSendEvent`
+    /// reports success as soon as the X server accepts the request, and every event it carries is
+    /// flagged `send_event`, which a toolkit is free to drop in silence. Nothing on this side can
+    /// tell acceptance from silence, which is why the acceptance table exists and why dispatch at
+    /// this rung is evidence rather than goal success.
+    pub complete: bool,
+    /// Set when part of the sequence was sent and the rest was not, naming the state the target
+    /// may have been left in. A partial dispatch never escalates.
+    pub partial: Option<String>,
+    /// Observed across the delivery. The frontmost window and the input focus are separate facts
+    /// and both are read: the harness caught Qt acting on a background click while asking to be
+    /// activated, which moved the input focus on a session with no window manager while
+    /// `_NET_ACTIVE_WINDOW` — which only a manager maintains — stood still.
+    pub frontmost_unchanged: bool,
+    pub input_focus_unchanged: bool,
+    pub pointer_unchanged: bool,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum PixelDispatchError {
+    /// Revalidation failed between planning and dispatch. Nothing was sent.
+    Stale(String),
+    Backend(axon_core::BackendError),
+}
+
 struct ForegroundDispatch<'candidate, 'target> {
     policy: DeliveryPolicy,
     candidate: &'candidate DeliveryCandidate,
