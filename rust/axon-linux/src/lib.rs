@@ -453,25 +453,36 @@ impl<B: PointerTargetVerifier> Router<B> {
         }
     }
 
-    /// The ladder for an action that can only travel as input: no semantic rung, no verified
-    /// background path on this backend, and a foreground rung only where the runtime has one.
+    /// The ladder for an action that can only travel as input: no semantic rung, a pixel rung the
+    /// backend answers for per target, and a foreground rung only where the runtime has one.
     fn global_input_ladder(
         &self,
         capability: Capability,
         mechanism: &str,
+        plan: &PixelPlan,
     ) -> Vec<DeliveryCandidate> {
-        let restriction = self
-            .capability_restriction(capability)
-            .or_else(|| self.foreground_transaction_restriction());
         vec![
-            DeliveryCandidate::unavailable(
-                DeliveryRung::Pixel,
-                DeliveryCapability::BackgroundPixelInput,
-                "X11 window-targeted input",
-                DeliveryRefusalReason::BackgroundPixelUnsupported,
-                NO_BACKGROUND_PIXEL,
-            ),
-            match restriction {
+            match plan {
+                PixelPlan::Bound(_) => DeliveryCandidate::available(
+                    DeliveryRung::Pixel,
+                    DeliveryCapability::BackgroundPixelInput,
+                    PIXEL_MECHANISM,
+                ),
+                // The plan's own reason travels intact, which is the whole point of building one
+                // before the ladder: a caller is owed the name of the toolkit that refused, not a
+                // flat "unsupported" that hides whether re-measuring would change the answer.
+                PixelPlan::Unavailable { reason } => DeliveryCandidate::unavailable(
+                    DeliveryRung::Pixel,
+                    DeliveryCapability::BackgroundPixelInput,
+                    PIXEL_MECHANISM,
+                    DeliveryRefusalReason::BackgroundPixelUnsupported,
+                    reason.clone(),
+                ),
+            },
+            match self
+                .capability_restriction(capability)
+                .or_else(|| self.foreground_transaction_restriction())
+            {
                 None => DeliveryCandidate::available(
                     DeliveryRung::Foreground,
                     DeliveryCapability::GlobalInput,
@@ -486,6 +497,83 @@ impl<B: PointerTargetVerifier> Router<B> {
                 ),
             },
         ]
+    }
+
+    /// Asks the backend to bind a target, turning an operational failure into an unavailable plan.
+    ///
+    /// A pixel rung that could not be planned must not take down an action that could still have
+    /// travelled the foreground rung. The backend already answers every obstacle it can name as an
+    /// `Unavailable` plan; this is for the calls underneath that simply failed — a bus timeout, an
+    /// X server that dropped the connection — which are still an honest reason this rung is not
+    /// available for this action right now.
+    fn planned(
+        plan: Result<PixelPlan, axon_core::BackendError>,
+    ) -> PixelPlan {
+        plan.unwrap_or_else(|error| {
+            PixelPlan::unavailable(format!(
+                "the target-bound delivery path could not be planned: {error}"
+            ))
+        })
+    }
+
+    /// Sends one bound sequence to one verified window, and reports what that proved.
+    fn dispatch_pixel(
+        &mut self,
+        policy: DeliveryPolicy,
+        candidate: &DeliveryCandidate,
+        target: &PixelTarget,
+        verification: Value,
+        deliver: impl FnOnce(&mut B, &PixelTarget) -> Result<PixelDispatch, PixelDispatchError>,
+    ) -> Result<Value, JsonRpcError> {
+        let dispatch = match deliver(&mut self.backend, target) {
+            Ok(dispatch) => dispatch,
+            // Revalidation failed, so nothing was sent and the plan now names somewhere else.
+            // That is the same stale target a moved element produces, and it reads the same way.
+            Err(PixelDispatchError::Stale(reason)) => return Err(rpc_error(-32003, reason)),
+            Err(PixelDispatchError::Backend(error)) => return Err(backend_error(error)),
+        };
+        // This rung is defined by what it does not do. A dispatch that changed the foreground or
+        // moved the real pointer was not background delivery, whatever it managed to deliver.
+        let mut problems = Vec::new();
+        if let Some(partial) = &dispatch.partial {
+            problems.push(partial.clone());
+        }
+        if !dispatch.frontmost_unchanged {
+            problems.push("the frontmost window changed across the dispatch".to_string());
+        }
+        if !dispatch.input_focus_unchanged {
+            problems.push("the X input focus moved across the dispatch".to_string());
+        }
+        if !dispatch.pointer_unchanged {
+            problems.push("the real pointer moved across the dispatch".to_string());
+        }
+        let mut result = json!({
+            "success": dispatch.complete && problems.is_empty(),
+            "dispatch": {"success": dispatch.complete, "mechanism": candidate.mechanism},
+            "verification": verification,
+            "backgroundDelivery": {
+                "targetApplication": target.application,
+                "targetProcessIdentifier": target.process_identifier,
+                "frontmostAppUnchanged": dispatch.frontmost_unchanged,
+                "inputFocusUnchanged": dispatch.input_focus_unchanged,
+                "pointerUnchanged": dispatch.pointer_unchanged,
+            },
+            "targetWindow": target.evidence(),
+        });
+        let object = result
+            .as_object_mut()
+            .expect("a JSON object literal is an object");
+        if !problems.is_empty() {
+            object.insert("message".into(), json!(problems.join("; ")));
+        }
+        DeliveryOutcome {
+            policy,
+            delivery: Some(DeliveryRung::Pixel),
+            dispatch_success: dispatch.complete,
+            refusal: None,
+        }
+        .merge_into(object);
+        Ok(result)
     }
 
     /// The foreground rung is global input that restores what it borrowed. A backend that cannot
