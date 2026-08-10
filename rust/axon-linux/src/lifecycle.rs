@@ -402,11 +402,83 @@ mod tests {
 
     #[test]
     fn a_logged_in_desktop_is_interactive_and_graphical() {
-        let session = session_health(&graphical());
+        let session = session_health(&graphical(), Some(true));
 
         assert!(session.interactive);
         assert!(session.graphical);
         assert_eq!(session.reason, None);
+        assert_eq!(session.accessibility_enabled, Some(true));
+    }
+
+    #[test]
+    fn a_session_with_accessibility_off_is_degraded_while_still_being_a_desktop() {
+        // The state AXN-84 measured: the desktop is up, the AT-SPI bus answers, and every
+        // Chromium-family application is absent from it. Reporting only the two booleans would
+        // publish that session as healthy, which is the hole this fact fills.
+        let session = session_health(&graphical(), Some(false));
+
+        assert!(session.interactive && session.graphical);
+        assert_eq!(session.accessibility_enabled, Some(false));
+        assert_eq!(
+            session.reason.as_deref(),
+            Some(reason::ACCESSIBILITY_DISABLED)
+        );
+        let detail = session.detail.expect("a disabled session explains itself");
+        assert!(
+            detail.starts_with("wayland; "),
+            "the session type survives alongside the explanation: {detail}"
+        );
+        assert!(detail.contains("org.a11y.Status.IsEnabled"));
+    }
+
+    #[test]
+    fn a_switch_nobody_read_is_not_reported_as_off() {
+        // `None` is the CLI's answer whenever no daemon held the session bus. Absent means no
+        // claim; publishing it as false would invent a broken desktop out of a missing daemon.
+        let session = session_health(&graphical(), None);
+
+        assert_eq!(session.accessibility_enabled, None);
+        assert_eq!(session.reason, None);
+    }
+
+    #[test]
+    fn a_greeter_outranks_the_accessibility_switch_and_still_carries_it() {
+        // One reason slot, filled by the most total statement: a host with no desktop is not
+        // meaningfully a host whose Chromium trees are missing. The fact itself is still data.
+        let env = SessionEnvironment {
+            wayland_display: None,
+            x11_display: None,
+            ..graphical()
+        };
+
+        let session = session_health(&env, Some(false));
+
+        assert_eq!(
+            session.reason.as_deref(),
+            Some(reason::NO_GRAPHICAL_SESSION)
+        );
+        assert_eq!(session.accessibility_enabled, Some(false));
+    }
+
+    #[test]
+    fn the_daemon_document_carries_both_accessibility_facts_separately() {
+        // Reaching the bus and being told to publish are different questions: this daemon is on
+        // the bus, and the session has switched the applications off.
+        let report = daemon_report(
+            "/run/user/1000/axon-v1.sock".into(),
+            17,
+            &[],
+            &graphical(),
+            true,
+            Some(false),
+        );
+
+        assert!(report.permissions[0].granted, "the bus itself answered");
+        assert_eq!(report.session.accessibility_enabled, Some(false));
+        assert_eq!(
+            report.session.reason.as_deref(),
+            Some(reason::ACCESSIBILITY_DISABLED)
+        );
     }
 
     #[test]
@@ -419,7 +491,7 @@ mod tests {
             ..graphical()
         };
 
-        let session = session_health(&env);
+        let session = session_health(&env, None);
 
         assert!(session.interactive);
         assert!(!session.graphical);
@@ -431,7 +503,7 @@ mod tests {
 
     #[test]
     fn a_missing_user_manager_is_not_an_interactive_session() {
-        let session = session_health(&SessionEnvironment::default());
+        let session = session_health(&SessionEnvironment::default(), None);
 
         assert!(!session.interactive);
         assert_eq!(
@@ -448,7 +520,7 @@ mod tests {
         };
 
         assert_eq!(
-            session_health(&env).reason.as_deref(),
+            session_health(&env, None).reason.as_deref(),
             Some(reason::SESSION_BUS_UNAVAILABLE)
         );
     }

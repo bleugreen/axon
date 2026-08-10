@@ -330,7 +330,13 @@ mod status {
             "{:<18}{}",
             "Session:",
             match (report.session.interactive, report.session.graphical) {
-                (_, true) => "graphical".to_owned(),
+                // A desktop can be up and still degraded — accessibility switched off is the one
+                // that reaches here — so the reason is printed rather than swallowed by the
+                // healthy-looking booleans in front of it.
+                (_, true) => match report.session.reason.as_deref() {
+                    Some(reason) => format!("graphical, degraded ({reason})"),
+                    None => "graphical".to_owned(),
+                },
                 (true, false) => format!(
                     "interactive, no desktop ({})",
                     report.session.reason.as_deref().unwrap_or("unknown")
