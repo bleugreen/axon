@@ -194,6 +194,33 @@ impl DeliveryRefusalReason {
     }
 }
 
+/// A rung the ladder walked past, and the obstacle that stopped it there.
+///
+/// Which refusal is *reported* is a ranking decision, and the ranking is right: among rungs that
+/// would otherwise work, the policy boundary is the most actionable thing a caller can be told.
+/// The obstacles below it are ranked against nothing, and they are where the platform-specific
+/// evidence lives — the toolkit and version that declined, the window class with no verified
+/// message path. A caller told only `foregroundNotPermitted` learns to opt in and learns nothing
+/// about whether the quiet rung would ever work against this target, which is a different piece of
+/// advice. So the winning reason keeps its place and every other obstacle rides along beside it.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeliveryObstacle {
+    pub rung: DeliveryRung,
+    pub reason: DeliveryRefusalReason,
+    pub message: String,
+}
+
+impl From<DeliveryRefusal> for DeliveryObstacle {
+    fn from(refusal: DeliveryRefusal) -> Self {
+        Self {
+            rung: refusal.required_rung,
+            reason: refusal.reason,
+            message: refusal.message,
+        }
+    }
+}
+
 /// A refusal is an action result, not a transport error: the request was well formed and the
 /// target resolved, and the backend declined.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -205,6 +232,10 @@ pub struct DeliveryRefusal {
     /// The mechanism class that was missing or forbidden, when one is responsible.
     pub capability: Option<DeliveryCapability>,
     pub message: String,
+    /// Every other rung the ladder walked past, in ladder order, each carrying its own obstacle.
+    /// Empty for a refusal that no ladder walk produced, such as one raised by a foreground
+    /// transaction that had already been selected.
+    pub also_refused: Vec<DeliveryObstacle>,
 }
 
 impl DeliveryRefusal {
@@ -219,7 +250,16 @@ impl DeliveryRefusal {
             required_rung,
             capability,
             message: message.into(),
+            also_refused: Vec::new(),
         }
+    }
+
+    /// Attaches the obstacles a ladder walk collected. Private on purpose: the planner is the only
+    /// thing that walks a ladder, so it is the only thing that can honestly say what was walked
+    /// past.
+    fn also_refusing(mut self, obstacles: Vec<DeliveryObstacle>) -> Self {
+        self.also_refused = obstacles;
+        self
     }
 }
 
@@ -309,6 +349,19 @@ pub enum DeliverySelection {
     Refusal(DeliveryRefusal),
 }
 
+/// Records a blocked candidate, keeping the newest as the refusal that will be reported and
+/// demoting the one it supersedes to an obstacle. The walk is in ladder order, so the obstacles
+/// stay in it too.
+fn supersede(
+    blocked: &mut Option<DeliveryRefusal>,
+    walked_past: &mut Vec<DeliveryObstacle>,
+    refusal: DeliveryRefusal,
+) {
+    if let Some(previous) = blocked.replace(refusal) {
+        walked_past.push(previous.into());
+    }
+}
+
 /// Chooses the rung an action will use before anything native happens.
 ///
 /// The ladder is fixed per action and ordered semantic, then pixel, then foreground. The planner's
@@ -323,56 +376,73 @@ pub fn select_delivery(
     ordered.sort_by_key(|candidate| candidate.rung.order());
 
     let mut blocked: Option<DeliveryRefusal> = None;
+    let mut walked_past: Vec<DeliveryObstacle> = Vec::new();
     for candidate in ordered {
         if after.is_some_and(|after| candidate.rung.order() <= after.order()) {
             continue;
         }
         if candidate.capability.is_forbidden() {
-            blocked = Some(DeliveryRefusal::new(
-                DeliveryRefusalReason::ClipboardForbidden,
-                candidate.rung,
-                Some(candidate.capability),
-                format!(
-                    "{} would deliver through the {} capability, which Axon never uses",
-                    candidate.mechanism,
-                    candidate.capability.key()
+            supersede(
+                &mut blocked,
+                &mut walked_past,
+                DeliveryRefusal::new(
+                    DeliveryRefusalReason::ClipboardForbidden,
+                    candidate.rung,
+                    Some(candidate.capability),
+                    format!(
+                        "{} would deliver through the {} capability, which Axon never uses",
+                        candidate.mechanism,
+                        candidate.capability.key()
+                    ),
                 ),
-            ));
+            );
             continue;
         }
         // A rung the runtime cannot offer is reported as missing whatever the policy says:
         // telling a caller to opt in to a mechanism that does not exist would be a lie.
         if let Some(unavailable) = candidate.unavailable {
-            blocked = Some(DeliveryRefusal::new(
-                unavailable,
-                candidate.rung,
-                Some(candidate.capability),
-                candidate.unavailable_message.clone().unwrap_or_else(|| {
-                    format!("{} is unavailable for this target", candidate.mechanism)
-                }),
-            ));
+            supersede(
+                &mut blocked,
+                &mut walked_past,
+                DeliveryRefusal::new(
+                    unavailable,
+                    candidate.rung,
+                    Some(candidate.capability),
+                    candidate.unavailable_message.clone().unwrap_or_else(|| {
+                        format!("{} is unavailable for this target", candidate.mechanism)
+                    }),
+                ),
+            );
             continue;
         }
         if candidate.rung.requires_foreground_opt_in() && !policy.permits_foreground() {
             // Among rungs that would otherwise work, the policy boundary is the most actionable
-            // thing a caller can be told, so it outranks any capability gap below it.
-            blocked = Some(DeliveryRefusal::new(
-                DeliveryRefusalReason::ForegroundNotPermitted,
-                candidate.rung,
-                Some(candidate.capability),
-                format!(
-                    "{} requires foreground delivery; this action ran under {}",
-                    candidate.mechanism,
-                    policy.key()
+            // thing a caller can be told, so it outranks any capability gap below it. What the
+            // gaps below still have to say travels in `alsoRefused` rather than being dropped.
+            supersede(
+                &mut blocked,
+                &mut walked_past,
+                DeliveryRefusal::new(
+                    DeliveryRefusalReason::ForegroundNotPermitted,
+                    candidate.rung,
+                    Some(candidate.capability),
+                    format!(
+                        "{} requires foreground delivery; this action ran under {}",
+                        candidate.mechanism,
+                        policy.key()
+                    ),
                 ),
-            ));
+            );
             continue;
         }
         return DeliverySelection::Candidate(candidate.clone());
     }
 
-    DeliverySelection::Refusal(blocked.unwrap_or_else(|| {
-        DeliveryRefusal::new(
+    DeliverySelection::Refusal(match blocked {
+        Some(refusal) => refusal.also_refusing(walked_past),
+        // Nothing declined this action; it simply has no mechanism, so there is no obstacle to
+        // report beyond the absence itself.
+        None => DeliveryRefusal::new(
             DeliveryRefusalReason::NoDeliveryCandidate,
             match after {
                 Some(DeliveryRung::Semantic) => DeliveryRung::Pixel,
@@ -381,8 +451,8 @@ pub fn select_delivery(
             },
             None,
             "No delivery mechanism remains for this action",
-        )
-    }))
+        ),
+    })
 }
 
 /// The four stable fields every action result carries, whatever the backend.
