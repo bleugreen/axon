@@ -678,6 +678,10 @@ Test-Scenario 'park: a running desktop daemon is recorded, then stopped' {
     Test-Order -First 'write-park-state' -Then 'axon shutdown'
     Check 'the pipe is free' ($script:Machine.Health.daemon.running -eq $false)
     Check 'it says so' (Test-Said 'no daemon is answering')
+    # A request that reports success is the whole stop, and nothing waits on anything. The scenarios
+    # below are what happens when one does not, and this is what says they are the exception.
+    Check 'it says the request itself did the stopping' (Test-Said "this desktop's daemon was stopped")
+    Check 'it waited on nothing' (-not (Test-Said 'later than the request itself waited'))
 }
 
 Test-Scenario 'park: a desktop with no daemon is recorded and left alone' {
