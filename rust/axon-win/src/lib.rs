@@ -1773,6 +1773,79 @@ mod tests {
             "activate the target, then hand the session back"
         );
         assert_eq!(frontmost.borrow().as_deref(), Some("Prior"));
+        // What the transaction kept is its own promise, and that is not the whole of success.
+        // See the dedicated case below.
+        assert_eq!(result["success"], json!(false));
+    }
+
+    #[test]
+    fn a_restored_session_is_not_by_itself_goal_success() {
+        // The foreground rung's own condition and the action's verification are separate, and this
+        // rung is where they are most easily confused: a transaction that captured, activated,
+        // proved, dispatched and handed the session back has done everything it promised, and
+        // still knows nothing about whether the target acted on what `SendInput` posted. `click`
+        // declares no postcondition, so nothing here can say that it did.
+        let backend = backend(vec![], None);
+        let handle = backend.snapshot.handle(0);
+        let clicks = backend.clicks.clone();
+        let mut router = Router::new(backend);
+        router.snapshot = Some(router.backend.snapshot.clone());
+
+        let response = router
+            .request(request(
+                "click",
+                json!({
+                    "target": handle.0,
+                    "app": "App",
+                    "deliveryPolicy": "foregroundPermitted"
+                }),
+            ))
+            .unwrap();
+
+        let result = action_result(&response);
+        assert_eq!(*clicks.borrow(), 1, "the events went out");
+        assert_eq!(result["foreground"]["restored"], json!(true));
+        assert_eq!(result["dispatchSuccess"], json!(true));
+        assert_eq!(result["dispatch"]["success"], json!(true));
+        assert_eq!(
+            result["success"],
+            json!(false),
+            "a dispatch that verified nothing is not a successful action, however cleanly the \
+             session was handed back"
+        );
+        assert_eq!(
+            result["verification"]["reason"],
+            json!("click has no declared postcondition"),
+            "the caller is told what is missing rather than left to infer it"
+        );
+    }
+
+    #[test]
+    fn a_verified_goal_is_what_makes_a_foreground_dispatch_successful() {
+        // The other half of the same rule, so the assertion above cannot be satisfied by a
+        // `success` that is simply hardwired false. A postcondition that verified promotes the
+        // action, and the transaction's own condition still gates it.
+        let mut router = Router::new(backend(vec![], None));
+        let candidate = DeliveryCandidate::available(
+            DeliveryRung::Foreground,
+            DeliveryCapability::GlobalInput,
+            "SendInput",
+        );
+
+        let promoted = router
+            .foreground_dispatch(
+                DeliveryPolicy::ForegroundPermitted,
+                &candidate,
+                ForegroundTarget::Application("App"),
+                false,
+                json!({"verified": true, "observed": "anything"}),
+                |backend| backend.pointer_click((10.0, 10.0)),
+            )
+            .expect("a proved activation dispatches");
+
+        assert_eq!(promoted["success"], json!(true));
+        assert_eq!(promoted["dispatchSuccess"], json!(true));
+        assert_eq!(promoted["foreground"]["restored"], json!(true));
     }
 
     #[test]
@@ -1825,6 +1898,32 @@ mod tests {
         assert_eq!(result["foreground"]["restored"], json!(false));
         // The events went out, but the user's session was not put back.
         assert_eq!(result["success"], json!(false));
+
+        // Asserted again with the verification satisfied, because an unverified click fails for
+        // its own reason and would report exactly the same thing if restoration stopped counting
+        // at all. Here it is the only variable left.
+        let candidate = DeliveryCandidate::available(
+            DeliveryRung::Foreground,
+            DeliveryCapability::GlobalInput,
+            "SendInput",
+        );
+        let verified = router
+            .foreground_dispatch(
+                DeliveryPolicy::ForegroundPermitted,
+                &candidate,
+                ForegroundTarget::Application("App"),
+                false,
+                json!({"verified": true, "observed": "anything"}),
+                |backend| backend.pointer_click((10.0, 10.0)),
+            )
+            .expect("a proved activation dispatches");
+        assert_eq!(verified["foreground"]["restored"], json!(false));
+        assert_eq!(verified["dispatchSuccess"], json!(true));
+        assert_eq!(
+            verified["success"],
+            json!(false),
+            "a verified goal does not excuse a session that was not handed back"
+        );
     }
 
     #[test]
