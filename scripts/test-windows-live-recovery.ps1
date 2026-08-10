@@ -189,8 +189,10 @@ $PipeFreeTimeoutSeconds = 1
 $ProcessDiscoveryTimeoutSeconds = 1
 $RestoreTimeoutSeconds = 1
 $TaskInstanceTimeoutSeconds = 1
-# $RestoreStartAttempts is deliberately left at its real value. It is a count rather than a bound,
-# and how many times the restore will start this desktop's registration is the behaviour under test.
+$ParkStopTimeoutSeconds = 1
+# $RestoreStartAttempts and $ParkStopAttempts are deliberately left at their real values. They are
+# counts rather than bounds, and how many times each stage will ask -- the restore for a daemon, the
+# park for a stop -- is the behaviour under test.
 
 $ExpectedVersion = (Get-Content (Join-Path $RepositoryRoot 'VERSION')).Trim()
 $DesktopInstallPath = 'C:\Users\mitch\AppData\Local\Axon\0.2.1\axon-win-0.2.1-windows-x86_64\axon-win.exe'
@@ -214,10 +216,18 @@ function Reset-Machine {
         Quarantined = @()
         Health = $null
         VersionOutput = $ExpectedVersion
-        ShutdownFails = $false
+        # A daemon that answers every `shutdown` request with the wait having expired and then keeps
+        # running: the genuinely stuck daemon the park stage's retry budget exists to tell apart from
+        # a slow one.
+        ShutdownNeverExits = $false
         # A daemon that acknowledges `shutdown` and then does not exit: the wedged case the sweep
         # exists for, and the only way a probe stage can succeed and still leave a daemon behind.
         ShutdownLeavesProcess = $false
+        # A daemon whose exit outruns the ten-second wait `shutdown` performs itself: the request
+        # reports failure, and the process is gone this many liveness reads later. Counted in reads
+        # rather than in seconds because this harness's Wait-Tick does not sleep. This is the
+        # 2026-08-10 park failure, where the process the stage gave up on was gone moments after.
+        LateExitReads = 0
         RestartFails = $false
         BuildFails = $false
         ProbeTaskStartsNothing = $false
@@ -314,6 +324,12 @@ function Wait-Tick { }
 function Test-ProcessIsRunning {
     param([Parameter(Mandatory)][int] $ProcessId)
     if ($script:Machine.DeadPids -contains $ProcessId) { return $false }
+    # A daemon on its way out is alive on every read until it isn't, and the read that runs the count
+    # out is the one where it is finally gone -- the process leaves the table and the pipe with it.
+    if ($script:Machine.LateExitReads -gt 0 -and $ProcessId -eq $script:Machine.Health.daemon.processId) {
+        $script:Machine.LateExitReads--
+        if ($script:Machine.LateExitReads -eq 0) { Stop-FakeDaemon }
+    }
     [bool] @($script:Machine.Processes | Where-Object { $_.ProcessId -eq $ProcessId })
 }
 
@@ -401,7 +417,16 @@ function Invoke-Axon {
         }
         'version' { return [pscustomobject]@{ ExitCode = 0; Output = $script:Machine.VersionOutput } }
         'shutdown' {
-            if ($script:Machine.ShutdownFails) { return [pscustomobject]@{ ExitCode = 1; Output = 'a daemon is still answering' } }
+            # What the real command reports when the daemon it asked to stop is still there when its
+            # own ten-second wait expires (status::shutdown in rust/axon-win/src/main.rs). Whether
+            # that daemon is dying slowly or not dying at all is what the stage has to work out, so
+            # both cases say exactly this and differ only in what the process does next.
+            if ($script:Machine.ShutdownNeverExits -or $script:Machine.LateExitReads -gt 0) {
+                return [pscustomobject]@{
+                    ExitCode = 1
+                    Output = "daemon process $($script:Machine.Health.daemon.processId) did not exit"
+                }
+            }
             if ($script:Machine.ShutdownLeavesProcess) {
                 $script:Machine.Health = New-FakeHealth -ProcessId 0
                 $script:Machine.Health.daemon = @{ running = $false; ready = $false; endpoint = '\\.\pipe\axon-v1'; processId = $null }
@@ -654,11 +679,33 @@ Test-Scenario 'park: a desktop with no daemon is recorded and left alone' {
     Check 'it stopped nothing' (-not (Test-Did 'axon shutdown'))
 }
 
-Test-Scenario 'park: a stop that does not take fails the stage, having already recorded the debt' {
-    $script:Machine.ShutdownFails = $true
+Test-Scenario 'park: a daemon slower than the shutdown request is a slow park, not a red run' {
+    # The 2026-08-10 failure. `shutdown` waits ten seconds for the process it asked to stop and
+    # reports anything slower as a failure; on a runner that had just finished a cargo build, that
+    # wait expired, the stage called the run red, and the process exited moments later. The lane's
+    # verdict here is the process, not the exit code.
+    $script:Machine.LateExitReads = 3
+    $result = Invoke-StageUnderTest -Name 'park'
+    Check 'the stage succeeds' (-not $result.Failed) $result.Error
+    Check 'it asked once and then waited' ((Get-Count "axon shutdown [$ProbeExecutable]") -eq 1) "asked $(Get-Count "axon shutdown [$ProbeExecutable]") time(s)"
+    Check 'it says the exit outran the request' (Test-Said 'later than the request itself waited')
+    Check 'the daemon really is gone' (@($script:Machine.Processes | Where-Object { $_.ProcessId -eq $DesktopPid }).Count -eq 0)
+    Check 'the pipe is free' ($script:Machine.Health.daemon.running -eq $false)
+    Check 'it killed nothing' (-not (Test-Did 'stop-process'))
+    Check 'the restore still knows what is owed' ($script:Machine.ParkState.daemonWasRunning -eq $true)
+}
+
+Test-Scenario 'park: a daemon that never exits fails the stage, having already recorded the debt' {
+    # The other half of the patience above: a daemon that is not slow but stuck. Every request in the
+    # budget is spent, and then the stage fails as loudly as it did before there was a budget --
+    # because nothing below could be evidence about this build while that daemon holds the pipe.
+    $script:Machine.ShutdownNeverExits = $true
     $result = Invoke-StageUnderTest -Name 'park'
     Check 'the stage fails' $result.Failed
     Check 'it names the stop' ($result.Error -match "could not stop this desktop's daemon") $result.Error
+    Check 'it says the daemon is still running' ($result.Error -match 'ended with it still running') $result.Error
+    Check 'it spent the whole retry budget and no more' ((Get-Count "axon shutdown [$ProbeExecutable]") -eq $ParkStopAttempts) "asked $(Get-Count "axon shutdown [$ProbeExecutable]") time(s)"
+    Check 'it killed nothing' (-not (Test-Did 'stop-process'))
     Check 'the restore still knows what is owed' ($script:Machine.ParkState.daemonWasRunning -eq $true)
 }
 
