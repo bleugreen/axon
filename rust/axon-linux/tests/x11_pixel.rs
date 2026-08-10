@@ -35,6 +35,7 @@ use x11rb::{
         },
     },
     rust_connection::RustConnection,
+    wrapper::ConnectionExt as _,
 };
 
 /// The process id the test's windows claim. Nothing resolves it against a real process: the
