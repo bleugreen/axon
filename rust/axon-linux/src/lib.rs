@@ -420,8 +420,9 @@ impl<B: PointerTargetVerifier + BackgroundPixelInput> Router<B> {
                                     DeliveryRefusalReason::TargetIdentityUnavailable,
                                     DeliveryRung::Foreground,
                                     Some(DeliveryCapability::GlobalInput),
-                                    "the requested application could not be identified, so \
-                                     foreground delivery cannot activate and prove it",
+                                    "the requested application could not be identified, so no \
+                                     window can be bound to it and foreground delivery cannot \
+                                     activate and prove it",
                                 ),
                             ));
                         }
@@ -429,6 +430,31 @@ impl<B: PointerTargetVerifier + BackgroundPixelInput> Router<B> {
                 } else {
                     None
                 };
+                let plan = match &target {
+                    Some(identity) => Self::planned(self.backend.plan_pixel_keyboard(identity)),
+                    None => PixelPlan::unavailable(NO_KEYBOARD_TARGET),
+                };
+                let ladder =
+                    self.global_input_ladder(Capability::KeyboardInput, "XTest keyboard", &plan);
+                let Some(candidate) = self.selected(&ladder, policy) else {
+                    return Ok(self.refusal(&ladder, policy));
+                };
+                let verification = json!({
+                    "verified": false,
+                    "reason": "keyboard input has no declared postcondition",
+                });
+                if candidate.rung == DeliveryRung::Pixel {
+                    let PixelPlan::Bound(bound) = plan else {
+                        unreachable!("the pixel rung is only offered for a bound plan")
+                    };
+                    return self.dispatch_pixel(
+                        policy,
+                        &candidate,
+                        &bound,
+                        verification,
+                        move |backend, bound| backend.dispatch_pixel_keyboard(bound, intent),
+                    );
+                }
                 self.foreground_dispatch(
                     ForegroundDispatch {
                         policy,
