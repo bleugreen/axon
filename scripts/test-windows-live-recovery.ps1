@@ -224,9 +224,11 @@ function Reset-Machine {
         # exists for, and the only way a probe stage can succeed and still leave a daemon behind.
         ShutdownLeavesProcess = $false
         # A daemon whose exit outruns the ten-second wait `shutdown` performs itself: the request
-        # reports failure, and the process is gone this many liveness reads later. Counted in reads
-        # rather than in seconds because this harness's Wait-Tick does not sleep. This is the
-        # 2026-08-10 park failure, where the process the stage gave up on was gone moments after.
+        # reports failure, and the daemon is gone this many reads later. Counted in reads rather than
+        # in seconds because this harness's Wait-Tick does not sleep, and in reads of whatever the
+        # stage can watch -- the process when the health document names one, the pipe when it does
+        # not. This is the 2026-08-10 park failure, where the process the stage gave up on was gone
+        # moments after.
         LateExitReads = 0
         RestartFails = $false
         BuildFails = $false
@@ -412,6 +414,13 @@ function Invoke-Axon {
     }
     switch ($joined) {
         'status --json' {
+            # A daemon on its way out with no process id in its document can only be watched through
+            # the pipe, so its reads are these ones. The process is left where it is: what a caller
+            # with no pid learns is that nothing is answering, which is all it asked.
+            if ($script:Machine.LateExitReads -gt 0 -and $null -ne $script:Machine.Health -and $null -eq $script:Machine.Health.daemon.processId) {
+                $script:Machine.LateExitReads--
+                if ($script:Machine.LateExitReads -eq 0) { Stop-FakeDaemon }
+            }
             if ($null -eq $script:Machine.Health) { return [pscustomobject]@{ ExitCode = 1; Output = 'nothing answered' } }
             return [pscustomobject]@{ ExitCode = 0; Output = ($script:Machine.Health | ConvertTo-Json -Depth 10) }
         }
@@ -692,6 +701,22 @@ Test-Scenario 'park: a daemon slower than the shutdown request is a slow park, n
     Check 'the daemon really is gone' (@($script:Machine.Processes | Where-Object { $_.ProcessId -eq $DesktopPid }).Count -eq 0)
     Check 'the pipe is free' ($script:Machine.Health.daemon.running -eq $false)
     Check 'it killed nothing' (-not (Test-Did 'stop-process'))
+    Check 'the restore still knows what is owed' ($script:Machine.ParkState.daemonWasRunning -eq $true)
+}
+
+Test-Scenario 'park: a daemon whose health document names no process id is waited for through the pipe' {
+    # A desktop running an old enough release reports a daemon that is up with no process id at all,
+    # and the restore tolerates the same gap. With no process to watch, the health round trip is the
+    # only thing that can say the daemon went, so that is what the wait polls -- one read of it is
+    # spent before the stop, which is why the count here outlasts the request.
+    $script:Machine.Health.daemon.processId = $null
+    $script:Machine.LateExitReads = 3
+    $result = Invoke-StageUnderTest -Name 'park'
+    Check 'the stage succeeds' (-not $result.Failed) $result.Error
+    Check 'it asked once and then waited' ((Get-Count "axon shutdown [$ProbeExecutable]") -eq 1) "asked $(Get-Count "axon shutdown [$ProbeExecutable]") time(s)"
+    Check 'it says the exit outran the request' (Test-Said 'later than the request itself waited')
+    Check 'the pipe is free' ($script:Machine.Health.daemon.running -eq $false)
+    Check 'it recorded the pid it did not have as none' ($null -eq $script:Machine.ParkState.daemonProcessId)
     Check 'the restore still knows what is owed' ($script:Machine.ParkState.daemonWasRunning -eq $true)
 }
 
