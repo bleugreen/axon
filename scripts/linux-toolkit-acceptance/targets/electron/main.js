@@ -1,13 +1,26 @@
 const { app, BrowserWindow } = require("electron");
+const http = require("http");
 
 app.commandLine.appendSwitch("force-renderer-accessibility");
 
+// Written against `http` rather than `fetch`: the older Electron majors measured here ship a Node
+// without a global fetch, and this file has to run identically on every one of them for their rows
+// to be comparable.
 function post(payload) {
-  return fetch(process.env.AXON_HARNESS_REPORT, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
-  }).catch(() => {});
+  const body = JSON.stringify(payload);
+  const url = new URL(process.env.AXON_HARNESS_REPORT);
+  const request = http.request(
+    {
+      hostname: url.hostname,
+      port: url.port,
+      path: url.pathname,
+      method: "POST",
+      headers: { "Content-Type": "application/json", "Content-Length": Buffer.byteLength(body) },
+    },
+    (response) => response.resume(),
+  );
+  request.on("error", () => {});
+  request.end(body);
 }
 
 app.whenReady().then(async () => {
