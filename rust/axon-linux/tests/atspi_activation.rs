@@ -519,6 +519,8 @@ impl A11yStatus {
 /// bus this process was handed, and nothing else.
 struct Desktop {
     providers: HashMap<&'static str, Arc<Provider>>,
+    /// The session's accessibility switch, shared with the object serving `org.a11y.Status`.
+    accessibility: Arc<AtomicBool>,
     /// Held open for the life of the test: dropping a connection takes its objects off the bus.
     connections: Vec<zbus::Connection>,
     /// Every connection above serves from this runtime's threads, so it outlives them.
@@ -535,6 +537,9 @@ impl Desktop {
             .build()
             .expect("a runtime for the fake providers");
 
+        // On at the start, the way a session with a screen reader running answers.
+        let accessibility = Arc::new(AtomicBool::new(true));
+        let switch = accessibility.clone();
         let (providers, connections) = runtime.block_on(async move {
             let mut providers = HashMap::new();
             let mut connections = Vec::new();
@@ -554,12 +559,13 @@ impl Desktop {
                 connections.push(connection);
                 applications.push(root);
             }
-            connections.push(registry(&address, applications).await);
+            connections.push(registry(&address, applications, switch).await);
             (providers, connections)
         });
 
         Self {
             providers,
+            accessibility,
             connections,
             runtime,
         }
@@ -567,6 +573,12 @@ impl Desktop {
 
     fn provider(&self, application: &str) -> &Provider {
         self.providers[application].as_ref()
+    }
+
+    /// Switches the session's accessibility off under a daemon that is already running, which is
+    /// the state a stock desktop with no assistive technology on it is in from the start.
+    fn switch_accessibility_off(&self) {
+        self.accessibility.store(false, Ordering::Relaxed);
     }
 }
 
@@ -673,7 +685,11 @@ async fn application(
 
 /// The one object whose location is known in advance, and the `org.a11y.Bus` answer that leads a
 /// client to it. Both live on one connection because the fake desktop has one bus.
-async fn registry(address: &str, applications: Vec<ObjectRefOwned>) -> zbus::Connection {
+async fn registry(
+    address: &str,
+    applications: Vec<ObjectRefOwned>,
+    accessibility: Arc<AtomicBool>,
+) -> zbus::Connection {
     connection::Builder::address(address)
         .expect("the bus address parses")
         .name("org.a11y.atspi.Registry")
@@ -700,7 +716,12 @@ async fn registry(address: &str, applications: Vec<ObjectRefOwned>) -> zbus::Con
             },
         )
         .expect("the bus locator registers")
-        .serve_at("/org/a11y/bus", A11yStatus)
+        .serve_at(
+            "/org/a11y/bus",
+            A11yStatus {
+                enabled: accessibility,
+            },
+        )
         .expect("the accessibility status registers")
         .build()
         .await
@@ -723,8 +744,14 @@ impl SessionBus {
         // `/tmp` rather than `std::env::temp_dir()`, because the address here becomes a Unix socket
         // path and those are capped near 108 bytes by `sockaddr_un`. A test runner's `TMPDIR` is
         // routinely deeper than that leaves room for, and `dbus-daemon` answers by refusing to
-        // start at all.
-        let directory = PathBuf::from("/tmp").join(format!("axon-atspi-{}", std::process::id()));
+        // start at all. The counter keeps the tests in this binary off each other's socket
+        // directory while staying short enough to spend on the same cap.
+        static BUSES: AtomicUsize = AtomicUsize::new(0);
+        let directory = PathBuf::from("/tmp").join(format!(
+            "axon-atspi-{}-{}",
+            std::process::id(),
+            BUSES.fetch_add(1, Ordering::Relaxed)
+        ));
         std::fs::create_dir_all(&directory).expect("a directory for the bus socket");
         let config = directory.join("bus.conf");
         std::fs::write(&config, configuration(&directory)).expect("the bus configuration writes");
