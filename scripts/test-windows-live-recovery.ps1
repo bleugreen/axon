@@ -712,7 +712,6 @@ Test-Scenario 'park: a daemon that never exits fails the stage, having already r
 Test-Scenario 'park: a daemon still answering after the stop is named rather than killed' {
     # `shutdown` reports success while something else keeps the pipe -- the case where a probe would
     # otherwise gather every assertion from a daemon nobody built.
-    $script:Machine.ShutdownFails = $false
     $original = Get-Item function:Invoke-Axon
     function Invoke-Axon {
         param([string] $Executable, [string[]] $Arguments)
