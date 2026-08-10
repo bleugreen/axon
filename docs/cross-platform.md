@@ -393,6 +393,26 @@ than equating “Linux” with one uniform tree.
   behind that window only once a client asks some node for its attributes or its
   relations. Both calls reach `AXPlatform::OnExtendedPropertiesUsedInWebContent`
   in Chromium, which is the switch.
+- The first gate is a fact about the session rather than about any one
+  application, so it is reported as one. The daemon reads
+  `org.a11y.Status.IsEnabled` from the session bus when a health request arrives
+  and publishes it as `session.accessibilityEnabled`, with reason
+  `accessibility-disabled` on a session that answers false. Such a session is
+  interactive, graphical, and degraded at the same time — capture works, because
+  GTK providers publish either way, while every Chromium-family application is
+  absent from the bus — so a consumer reading only the two session booleans
+  would call it healthy. The reading is taken per request rather than remembered
+  at startup, because an assistive technology can switch accessibility on under
+  a running daemon and every application launched afterwards then joins the bus.
+- Axon reports that switch and never sets it. Every assistive technology sets
+  it, and `at-spi-bus-launcher` accepts the write — but the launcher writes the
+  desktop's `toolkit-accessibility` setting when it does, turning accessibility
+  on for every application on the session and leaving it on after the last
+  listener goes away. That is a persistent, global change to someone's desktop
+  made on behalf of one automation run, the same family of side effect as the
+  keysym remapping refused below, and it would not even rescue the run that
+  provoked it: an application already running never revisits the property.
+  Health-v1 names the state, and whoever owns the desktop decides.
 - Activation therefore belongs to capture, not to readiness. The trigger is a
   call into one application's own tree, so there is nothing a starting daemon
   could do on behalf of an application that does not exist yet. The first time
