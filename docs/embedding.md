@@ -17,12 +17,38 @@ exact version and upgrade deliberately; nothing in the contract resolves a mutab
 | Target | Artifact | Contains |
 | --- | --- | --- |
 | macos/aarch64 | `Axon-<version>-macos-aarch64.zip` | signed `Axon.app`, `Axon Editor.app`, and the bundled `axon` CLI |
-| windows/x86_64 | `axon-win-<version>-windows-x86_64.zip` | `axon-win.exe` |
+| windows/x86_64 | `axon-win-<version>-windows-x86_64.zip` | Authenticode-signed `axon-win.exe` |
 | linux/x86_64 | `axon-linux-<version>-linux-x86_64.tar.gz` | `axon-linux` and its systemd user unit template |
 
 Every archive ships a `.sha256` sibling. The publishing job refuses to create a release unless all
 three archives and all three checksums are present, and it re-verifies the checksums against the
 bytes that reach the release rather than trusting the job that produced them.
+
+## Signed release binaries
+
+The macOS and Windows artifacts carry a publisher identity: a Developer ID signature plus an Apple
+notarization ticket on macOS, and an Authenticode signature on `axon-win.exe`. Linux has no
+equivalent desktop trust check, so the `.sha256` sibling is the whole story there.
+
+On Windows this is a functional requirement rather than a nicety. Axon's daemon does what malware
+does structurally — it registers a scheduled task, relaunches itself into the interactive session,
+and serves a named pipe — so an unsigned build is judged on behavior alone. Two things follow from
+that, both measured on the project's Windows lab machine. Defender's block-at-first-sight holds the
+first execution of a binary it has never seen while it waits on a cloud verdict, which delayed a
+fresh unsigned `axon-win.exe` by about 47 seconds before its first instruction ran; a signature
+turns each build into another artifact from a publisher already known rather than a new unknown
+file. And Defender's machine-learning behavioral detections quarantined an unsigned build outright
+mid-run, which is the same judgement reached with more consequence. A consumer installing an
+unsigned build hits both.
+
+What this means for a consumer: verify the checksum for integrity, and verify the signature for
+provenance. On Windows, `Get-AuthenticodeSignature` on the extracted `axon-win.exe` reports `Valid`
+and names the publisher. The signature is timestamped, so it stays valid after the signing
+certificate itself expires. The release workflow verifies this from inside the published archive
+before uploading it, because that is the file a consumer actually downloads.
+
+Signing is not a substitute for the checksum. The checksum says the bytes are the bytes that were
+published; the signature says who published them and that Windows should treat them accordingly.
 
 The repository-root `VERSION` file is the release source. The Swift and Rust literals are derived
 copies, `scripts/check-version` fails the build when they drift, and a release tag that disagrees
