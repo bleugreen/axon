@@ -84,6 +84,15 @@ $ProcessDiscoveryTimeoutSeconds = 60
 # milliseconds four minutes later.
 $RestoreTimeoutSeconds = 60
 $RestoreStartAttempts = 3
+# How long the park stage waits for a daemon that outlived its own shutdown request to be gone, and
+# how many such requests it will make before calling that daemon stuck. `shutdown` carries a
+# ten-second wait of its own (status::shutdown in rust/axon-win/src/main.rs) and reports a process
+# slower than that as a failure, which is fail-fast behaviour worth keeping in the daemon and worth
+# not believing here: on 2026-08-10 that wait expired on a runner that had just finished a cargo
+# build, the process exited seconds later, and the lane went red while the desktop was healthy. The
+# patience belongs in this lane for the same reason the restore's does.
+$ParkStopTimeoutSeconds = 20
+$ParkStopAttempts = 3
 # How long a start waits for an instance of the task that has not finished. A start issued in that
 # window is discarded rather than queued, so waiting is the only thing that makes the next one real.
 $TaskInstanceTimeoutSeconds = 30
@@ -387,6 +396,91 @@ function Invoke-BuildStage {
     Write-Note "built $ProbeExecutable and ran it for the first time in $([Math]::Round($timer.Elapsed.TotalSeconds, 2)) seconds (version $expectedVersion)"
 }
 
+function Test-DesktopDaemonHasStopped {
+    <# Whether the daemon the park stage asked to stop is gone.
+
+    The process is the signal this poll exists for. A daemon that outran its shutdown request's own
+    wait has already stopped answering the request that would say so, and the process table is the
+    only thing left that knows when it finally exits.
+
+    The health round trip is the fallback for a daemon whose document names no process id, which a
+    desktop running an old enough release can report; the restore tolerates the same gap for the same
+    reason. It is weaker evidence -- nothing answering is not the same as nothing running -- and it
+    is used only when there is no pid to watch. #>
+    param(
+        [Parameter(Mandatory)][string[]] $Candidates,
+        [int] $ProcessId = 0
+    )
+
+    if ($ProcessId -gt 0) { return -not (Test-ProcessIsRunning -ProcessId $ProcessId) }
+    $status = Get-AxonStatus -Candidates $Candidates
+    ($null -ne $status -and -not $status.daemon.running)
+}
+
+function Stop-DesktopDaemon {
+    <# Asks this desktop's daemon to stop, and keeps asking for as long as it keeps running.
+
+    An exit code is not the verdict here, in either direction, so the process is asked after every
+    request. A request that reports failure need not mean the daemon is still there: `shutdown` waits
+    ten seconds for the process it asked to stop and reports anything slower as a failure, and a
+    desktop that has just finished a cargo build can take longer than that to tear down a UI
+    Automation apartment without anything being wrong with it. Such a request opens a wait rather
+    than ending the stage.
+
+    And a request that reports success need not mean the daemon is gone. The pipe goes when a daemon
+    acknowledges the request, and the process goes when it has finished tearing down, so once one
+    request has been acknowledged every request after it finds no pipe and says exactly that --
+    `no daemon was running` is a fact about the pipe, and treating it as one about the process is the
+    race the command's own wait exists to prevent.
+
+    What fails is a daemon that is still running after every request in the budget, which is a stuck
+    daemon and is reported exactly as loudly as before -- and it is reported by this stage rather
+    than acted on, because a daemon this lane kills is a daemon it cannot put back. #>
+    param(
+        [Parameter(Mandatory)][string[]] $Candidates,
+        [int] $ProcessId = 0
+    )
+
+    $timer = [System.Diagnostics.Stopwatch]::StartNew()
+    $lastOutput = ''
+    foreach ($attempt in 1..$ParkStopAttempts) {
+        $shutdown = Invoke-Axon -Executable $ProbeExecutable -Arguments @('shutdown')
+        $lastOutput = $shutdown.Output
+        # Asked before the exit code is read, and asked the same way every time round: a request that
+        # succeeded because the daemon exited during its own wait ends here immediately, which is the
+        # ordinary park and costs one process check.
+        if (Test-DesktopDaemonHasStopped -Candidates $Candidates -ProcessId $ProcessId) {
+            if ($shutdown.ExitCode -eq 0) {
+                Write-Note "this desktop's daemon is stopped: $lastOutput"
+            }
+            else {
+                # Reachable with no process id to wait on, where the pipe is all there is to read and
+                # it has already gone quiet. Said differently from the line above so that a log never
+                # implies a request succeeded when it did not.
+                Write-Note "this desktop's daemon is stopped, though the request that asked for it reported otherwise: $lastOutput"
+            }
+            return
+        }
+        if ($shutdown.ExitCode -eq 0) {
+            Write-Note "attempt $attempt of ${ParkStopAttempts}: the shutdown request found no daemon left to stop ($lastOutput), but the one it was asked about is still running; the pipe goes when a daemon acknowledges the request and the process goes when it has finished tearing down"
+        }
+        else {
+            Write-Note "attempt $attempt of ${ParkStopAttempts}: the shutdown request's own wait expired with this desktop's daemon still running: $lastOutput"
+        }
+
+        $waited = [System.Diagnostics.Stopwatch]::StartNew()
+        while ($waited.Elapsed.TotalSeconds -lt $ParkStopTimeoutSeconds) {
+            if (Test-DesktopDaemonHasStopped -Candidates $Candidates -ProcessId $ProcessId) {
+                Write-Note "this desktop's daemon stopped $([Math]::Round($timer.Elapsed.TotalSeconds, 2)) seconds after it was asked to, later than the request itself waited"
+                return
+            }
+            Wait-Tick
+        }
+    }
+
+    throw "could not stop this desktop's daemon: $ParkStopAttempts shutdown requests over $([Math]::Round($timer.Elapsed.TotalSeconds, 2)) seconds each ended with it still running (last request: $lastOutput)"
+}
+
 function Invoke-ParkStage {
     # What this desktop looks like before anything is borrowed. The registration is recorded to be
     # asserted unchanged later, never to be rewritten: this stage does not unregister, disable, or
@@ -426,12 +520,9 @@ function Invoke-ParkStage {
 
     # The build under test does the stopping, and deliberately not the installed release: a runner's
     # installed CLI is whichever release it last installed, so a verb that release predates fails
-    # there. Untolerated, because `shutdown` exits non-zero while anything is still answering, which
-    # is what makes its success the pipe-is-free guarantee the probe stage depends on.
-    $shutdown = Invoke-Axon -Executable $ProbeExecutable -Arguments @('shutdown')
-    if ($shutdown.ExitCode -ne 0) {
-        throw "could not stop this desktop's daemon: $($shutdown.Output)"
-    }
+    # there. The pid comes from the health document rather than from the process table, so that what
+    # is waited on is the process this stage just found serving the pipe.
+    Stop-DesktopDaemon -Candidates @($ProbeExecutable, $registrationPath) -ProcessId ([int] $status.daemon.processId)
 
     # Stopping is asynchronous, and anything still answering here would answer the probe too. This
     # names it rather than killing a process the job has no way to put back.
