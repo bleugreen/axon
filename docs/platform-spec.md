@@ -114,6 +114,14 @@ the intended semantic result was verified, either by direct readback or by an
 explicit `expects` postcondition. A backend that cannot verify the effect reports
 that honestly rather than promoting dispatch to success.
 
+A rung's own conditions narrow that further and never substitute for it. The
+pixel rung additionally requires that the send completed and left the foreground
+and the real pointer alone; the foreground rung, that the user's session was
+handed back. `success` is every applicable condition together, so an action whose
+rung kept all of its own promises is still not successful while its goal is
+unverified. The rule has one home across the Rust backends, `goal_success` in
+`rust/axon-core/src/delivery.rs`, so no rung can hold half of it.
+
 ## Delivery contract
 
 Axon's preference for accessibility-level actions is a caller-visible guarantee,
@@ -231,6 +239,11 @@ cannot be proved, nothing is posted and the action refuses with
 `activationNotProved`. If a dispatch moves the real pointer, the pointer is
 captured and restored around it. If restoration fails after dispatch, the result
 keeps its `delivery` and `dispatchSuccess` evidence and reports overall failure.
+
+Restoration is a condition on the action's `success`, not a stand-in for having
+verified it. A session handed back immaculately says nothing about whether the
+target acted on what was posted, so a foreground dispatch of an action with no
+postcondition reports `dispatchSuccess: true` alongside `success: false`.
 
 The result reports that evidence under `foreground`: `priorApp`,
 `priorAppProcessIdentifier`, `alreadyFrontmost`, `activationProved`, `restored`,

@@ -7,7 +7,7 @@ use axon_core::{
     JsonRpcId, JsonRpcRequest, JsonRpcResponse, KeyboardIntent, Locator, LocatorResolver,
     PlatformBackend, Resolution, ResolutionStatus, RunEnvelope, RunOptions, Snapshot,
     SnapshotHandle, TextLocationResolver, TextLocationSource, TextLocationTarget,
-    TextRecognitionProvider, ToolDispatcher, dispatch_in_foreground, select_delivery,
+    TextRecognitionProvider, ToolDispatcher, dispatch_in_foreground, goal_success, select_delivery,
 };
 use serde_json::{Map, Value, json};
 
@@ -413,8 +413,15 @@ impl<
         if !dispatch.pointer_unchanged {
             problems.push("the real pointer moved across the dispatch".to_string());
         }
+        // Mechanism acceptance and goal success are kept apart because at this rung the gap between
+        // them is the whole problem. A completed post proves each message was accepted and returned
+        // from; a window procedure that examined one and did nothing returns exactly like one that
+        // acted on it, which is the stated reason `PIXEL_MESSAGE_CLASSES` exists at all. Collapsing
+        // the two would hollow out that table's own defence: a class that regressed, or one that
+        // behaved differently in a context nobody probed, would produce an accepted post, intact
+        // invariants, and a report that the caller's click had worked.
         let mut result = json!({
-            "success": dispatch.complete && problems.is_empty(),
+            "success": goal_success(&verification, dispatch.complete && problems.is_empty()),
             "dispatch": {"success": dispatch.complete, "mechanism": candidate.mechanism},
             "verification": verification,
             "backgroundDelivery": {
@@ -747,10 +754,13 @@ impl<
         }
 
         let result = json!({
+            // Two separate things have to hold here, and this rung is the one that adds the second.
             // Dispatch evidence survives a failed hand-back, but the action as a whole did not
-            // succeed: the user's session was not put back where they left it. A cursor left where
-            // synthetic input dropped it counts as much as a window that never came forward again.
-            "success": dispatch.cleanup.session_restored(),
+            // succeed if the user's session was not put back where they left it — a cursor left
+            // where synthetic input dropped it counts as much as a window that never came forward
+            // again. And a session handed back immaculately still says nothing about whether the
+            // target acted on what `SendInput` posted, so the verification has to hold as well.
+            "success": goal_success(&verification, dispatch.cleanup.session_restored()),
             "dispatch": {"success": true, "mechanism": candidate.mechanism},
             "verification": verification,
             "foreground": dispatch.cleanup,
@@ -1763,6 +1773,79 @@ mod tests {
             "activate the target, then hand the session back"
         );
         assert_eq!(frontmost.borrow().as_deref(), Some("Prior"));
+        // What the transaction kept is its own promise, and that is not the whole of success.
+        // See the dedicated case below.
+        assert_eq!(result["success"], json!(false));
+    }
+
+    #[test]
+    fn a_restored_session_is_not_by_itself_goal_success() {
+        // The foreground rung's own condition and the action's verification are separate, and this
+        // rung is where they are most easily confused: a transaction that captured, activated,
+        // proved, dispatched and handed the session back has done everything it promised, and
+        // still knows nothing about whether the target acted on what `SendInput` posted. `click`
+        // declares no postcondition, so nothing here can say that it did.
+        let backend = backend(vec![], None);
+        let handle = backend.snapshot.handle(0);
+        let clicks = backend.clicks.clone();
+        let mut router = Router::new(backend);
+        router.snapshot = Some(router.backend.snapshot.clone());
+
+        let response = router
+            .request(request(
+                "click",
+                json!({
+                    "target": handle.0,
+                    "app": "App",
+                    "deliveryPolicy": "foregroundPermitted"
+                }),
+            ))
+            .unwrap();
+
+        let result = action_result(&response);
+        assert_eq!(*clicks.borrow(), 1, "the events went out");
+        assert_eq!(result["foreground"]["restored"], json!(true));
+        assert_eq!(result["dispatchSuccess"], json!(true));
+        assert_eq!(result["dispatch"]["success"], json!(true));
+        assert_eq!(
+            result["success"],
+            json!(false),
+            "a dispatch that verified nothing is not a successful action, however cleanly the \
+             session was handed back"
+        );
+        assert_eq!(
+            result["verification"]["reason"],
+            json!("click has no declared postcondition"),
+            "the caller is told what is missing rather than left to infer it"
+        );
+    }
+
+    #[test]
+    fn a_verified_goal_is_what_makes_a_foreground_dispatch_successful() {
+        // The other half of the same rule, so the assertion above cannot be satisfied by a
+        // `success` that is simply hardwired false. A postcondition that verified promotes the
+        // action, and the transaction's own condition still gates it.
+        let mut router = Router::new(backend(vec![], None));
+        let candidate = DeliveryCandidate::available(
+            DeliveryRung::Foreground,
+            DeliveryCapability::GlobalInput,
+            "SendInput",
+        );
+
+        let promoted = router
+            .foreground_dispatch(
+                DeliveryPolicy::ForegroundPermitted,
+                &candidate,
+                ForegroundTarget::Application("App"),
+                false,
+                json!({"verified": true, "observed": "anything"}),
+                |backend| backend.pointer_click((10.0, 10.0)),
+            )
+            .expect("a proved activation dispatches");
+
+        assert_eq!(promoted["success"], json!(true));
+        assert_eq!(promoted["dispatchSuccess"], json!(true));
+        assert_eq!(promoted["foreground"]["restored"], json!(true));
     }
 
     #[test]
@@ -1815,6 +1898,35 @@ mod tests {
         assert_eq!(result["foreground"]["restored"], json!(false));
         // The events went out, but the user's session was not put back.
         assert_eq!(result["success"], json!(false));
+
+        // Asserted again with the verification satisfied, because an unverified click fails for
+        // its own reason and would report exactly the same thing if restoration stopped counting
+        // at all. Here it is the only variable left. The first dispatch left the target forward,
+        // so the foreground is put back by hand first: a target that already holds it activates
+        // nothing and has nothing to restore, which is a different case than the one under test.
+        *router.backend.frontmost.borrow_mut() = Some("Prior".into());
+        let candidate = DeliveryCandidate::available(
+            DeliveryRung::Foreground,
+            DeliveryCapability::GlobalInput,
+            "SendInput",
+        );
+        let verified = router
+            .foreground_dispatch(
+                DeliveryPolicy::ForegroundPermitted,
+                &candidate,
+                ForegroundTarget::Application("App"),
+                false,
+                json!({"verified": true, "observed": "anything"}),
+                |backend| backend.pointer_click((10.0, 10.0)),
+            )
+            .expect("a proved activation dispatches");
+        assert_eq!(verified["foreground"]["restored"], json!(false));
+        assert_eq!(verified["dispatchSuccess"], json!(true));
+        assert_eq!(
+            verified["success"],
+            json!(false),
+            "a verified goal does not excuse a session that was not handed back"
+        );
     }
 
     #[test]
@@ -2121,7 +2233,8 @@ actions:
             let result = action_result(&response);
             assert_eq!(result["delivery"], json!("pixel"));
             assert_eq!(result["dispatchSuccess"], json!(true));
-            assert_eq!(result["success"], json!(true));
+            // Delivered, and not thereby successful. See the dedicated case below.
+            assert_eq!(result["success"], json!(false));
             assert_eq!(result["refusal"], Value::Null);
             assert_eq!(result["deliveryPolicy"], json!("backgroundOnly"));
             assert_eq!(
@@ -2135,6 +2248,80 @@ actions:
                 activations.borrow().is_empty(),
                 "the pixel rung activates nothing"
             );
+        }
+
+        #[test]
+        fn a_clean_delivery_is_dispatch_evidence_and_not_goal_success() {
+            // The distinction this rung exists inside, and the one `PIXEL_MESSAGE_CLASSES` is
+            // built to defend. A window procedure that examines a message and does nothing
+            // returns from it exactly like one that acts on it, so a completed post proves the
+            // handler ran and never proves it did anything. `click` declares no postcondition, so
+            // nothing here verifies the goal and `success` says so.
+            //
+            // Collapsing the two would hollow out that table: a class that regressed, or one that
+            // behaved differently in a context nobody probed, would otherwise produce an accepted
+            // post, intact invariants, and a report that the caller's click had worked.
+            let backend = backend(vec![], None);
+            let handle = backend.snapshot.handle(0);
+            bound(&backend);
+            let dispatches = backend.pixel_dispatches.clone();
+            let mut router = Router::new(backend);
+            router.snapshot = Some(router.backend.snapshot.clone());
+
+            let response = router
+                .request(request("click", json!({"target": handle.0})))
+                .unwrap();
+
+            let result = action_result(&response);
+            assert_eq!(*dispatches.borrow(), 1, "the messages were posted");
+            assert_eq!(result["dispatchSuccess"], json!(true));
+            assert_eq!(result["dispatch"]["success"], json!(true));
+            assert_eq!(
+                result["success"],
+                json!(false),
+                "a delivered dispatch that verified nothing is not a successful action"
+            );
+            assert_eq!(result["verification"]["verified"], json!(false));
+            assert_eq!(
+                result["verification"]["reason"],
+                json!("click has no declared postcondition"),
+                "the caller is told what is missing rather than left to infer it"
+            );
+        }
+
+        #[test]
+        fn a_verified_goal_is_what_makes_a_pixel_dispatch_successful() {
+            // The other half of the same rule, so the assertion above cannot be satisfied by a
+            // `success` that is simply hardwired false. A postcondition that verified promotes the
+            // action, and the rung's own invariants still gate it.
+            let backend = backend(vec![], None);
+            let handle = backend.snapshot.handle(0);
+            bound(&backend);
+            let mut router = Router::new(backend);
+            router.snapshot = Some(router.backend.snapshot.clone());
+
+            let response = router
+                .request(request("click", json!({"target": handle.0})))
+                .unwrap();
+            let delivered = action_result(&response).clone();
+
+            let candidate = DeliveryCandidate::available(
+                DeliveryRung::Pixel,
+                DeliveryCapability::BackgroundPixelInput,
+                PIXEL_MECHANISM,
+            );
+            let promoted = router
+                .dispatch_pixel(
+                    DeliveryPolicy::BackgroundOnly,
+                    &candidate,
+                    &pixel_target(),
+                    json!({"verified": true, "observed": "anything"}),
+                )
+                .expect("a bound target dispatches");
+
+            assert_eq!(delivered["success"], json!(false));
+            assert_eq!(promoted["success"], json!(true));
+            assert_eq!(promoted["dispatchSuccess"], json!(true));
         }
 
         #[test]

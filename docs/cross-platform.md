@@ -694,6 +694,14 @@ EWMH-capable window manager, withholding it everywhere else. The seams live on
 and reach opposite conclusions is the point: the rung is offered on what the
 running session can actually prove, not on what the build contains.
 
+What a dispatch at either rung is allowed to *claim* is shared in that same
+module. `goal_success` takes the action's verification and the carrying rung's
+own conditions and answers with the action's `success`, so requiring one and
+forgetting the other is not something an individual backend can do. macOS reaches
+the same rule through a different shape: `PrimitiveActionResult.unverifiedDispatch`
+constructs the delivered-but-unproved result directly, rather than computing it
+at each call site.
+
 ### Windows session and integrity constraints
 
 `SendInput` is the foreground rung and needs the explicit opt-in. It also needs a

@@ -6,7 +6,7 @@ use axon_core::{
     DeliveryRung, DeliverySelection, DispatchOutcome, ExpectedFact, ForegroundTarget, JsonRpcError,
     JsonRpcId, JsonRpcRequest, JsonRpcResponse, KeyboardIntent, Locator, LocatorResolver,
     PlatformBackend, Resolution, ResolutionStatus, RunEnvelope, RunOptions, Snapshot,
-    SnapshotHandle, ToolDispatcher, dispatch_in_foreground, select_delivery,
+    SnapshotHandle, ToolDispatcher, dispatch_in_foreground, goal_success, select_delivery,
 };
 use serde_json::{Map, Value, json};
 
@@ -594,21 +594,6 @@ impl<B: PointerTargetVerifier + BackgroundPixelInput> Router<B> {
             Err(PixelDispatchError::Stale(reason)) => return Err(rpc_error(-32003, reason)),
             Err(PixelDispatchError::Backend(error)) => return Err(backend_error(error)),
         };
-        // Goal success, kept separate from mechanism acceptance because at this rung the gap
-        // between them is the whole problem. A completed send proves the events reached the
-        // target's connection; every one of them carries `send_event`, and a toolkit that drops
-        // them does so in silence that nothing on this side can distinguish from delivery. So
-        // `success` waits on a readback or a declared `expects` postcondition, exactly as the
-        // contract requires, and neither `click` nor `keyboard` has one — which is why a clean
-        // delivery here reports `dispatchSuccess: true` alongside `success: false`.
-        //
-        // Promoting delivery to success would make the acceptance table's own defence hollow: a
-        // future Chromium that began filtering these events would produce an accepted send, intact
-        // invariants, and a report that the caller's click had worked.
-        let verified = verification
-            .get("verified")
-            .and_then(Value::as_bool)
-            .unwrap_or(false);
         // This rung is defined by what it does not do. A dispatch that changed the foreground or
         // moved the real pointer was not background delivery, whatever it managed to deliver, so
         // these gate success as well as being reported.
@@ -625,8 +610,15 @@ impl<B: PointerTargetVerifier + BackgroundPixelInput> Router<B> {
         if !dispatch.pointer_unchanged {
             problems.push("the real pointer moved across the dispatch".to_string());
         }
+        // Mechanism acceptance and goal success are kept apart because at this rung the gap between
+        // them is the whole problem. A completed send proves the events reached the target's
+        // connection; every one of them carries `send_event`, and a toolkit that drops them does so
+        // in silence that nothing on this side can distinguish from delivery. Collapsing the two
+        // would hollow out the acceptance table's own defence: a future Chromium that began
+        // filtering these events would produce an accepted send, intact invariants, and a report
+        // that the caller's click had worked.
         let mut result = json!({
-            "success": verified && dispatch.complete && problems.is_empty(),
+            "success": goal_success(&verification, dispatch.complete && problems.is_empty()),
             "dispatch": {"success": dispatch.complete, "mechanism": candidate.mechanism},
             "verification": verification,
             "backgroundDelivery": {
@@ -721,10 +713,13 @@ impl<B: PointerTargetVerifier + BackgroundPixelInput> Router<B> {
         }
 
         let mut result = json!({
+            // Two separate things have to hold here, and this rung is the one that adds the second.
             // Dispatch evidence survives a failed restoration, but the action as a whole did not
-            // succeed: the user's session was not put back where they left it. A cursor left where
-            // the click dropped it counts as much as a window that never came forward again.
-            "success": dispatch.cleanup.session_restored(),
+            // succeed if the user's session was not put back where they left it — a cursor left
+            // where the click dropped it counts as much as a window that never came forward again.
+            // And a session handed back immaculately still says nothing about whether the target
+            // acted on what XTest posted, so the verification has to hold as well.
+            "success": goal_success(&request.verification, dispatch.cleanup.session_restored()),
             "dispatch": {"success": true, "mechanism": request.candidate.mechanism},
             "verification": request.verification,
             "foreground": dispatch.cleanup,
@@ -1590,6 +1585,38 @@ mod tests {
         // The events went out, but the user's session was not put back.
         assert_eq!(success.result["success"], json!(false));
         assert_eq!(*clicks.borrow(), 1);
+
+        // Asserted again with the verification satisfied, because an unverified click fails for
+        // its own reason and would report exactly the same thing if restoration stopped counting
+        // at all. Here it is the only variable left. The first dispatch left the target forward,
+        // so the foreground is put back by hand first: a target that already holds it activates
+        // nothing and has nothing to restore, which is a different case than the one under test.
+        *router.backend.frontmost.borrow_mut() = Some("Prior".into());
+        let candidate = DeliveryCandidate::available(
+            DeliveryRung::Foreground,
+            DeliveryCapability::GlobalInput,
+            "XTest pointer",
+        );
+        let verified = router
+            .foreground_dispatch(
+                ForegroundDispatch {
+                    policy: DeliveryPolicy::ForegroundPermitted,
+                    candidate: &candidate,
+                    target: ForegroundTarget::Application(APP_IDENTITY),
+                    restores_pointer: false,
+                    verification: json!({"verified": true, "observed": "anything"}),
+                    resolution: None,
+                },
+                |backend| backend.pointer_click((10.0, 10.0)),
+            )
+            .expect("a proved activation dispatches");
+        assert_eq!(verified["foreground"]["restored"], json!(false));
+        assert_eq!(verified["dispatchSuccess"], json!(true));
+        assert_eq!(
+            verified["success"],
+            json!(false),
+            "a verified goal does not excuse a session that was not handed back"
+        );
     }
 
     #[test]
@@ -1620,10 +1647,96 @@ mod tests {
         assert_eq!(success.result["delivery"], json!("foreground"));
         assert_eq!(success.result["foreground"]["pointerRestored"], json!(true));
         assert_eq!(success.result["foreground"]["restored"], json!(true));
-        assert_eq!(success.result["success"], json!(true));
         // Both halves of the session are as the user left them.
         assert_eq!(*pointer.borrow(), POINTER_ORIGIN);
         assert_eq!(frontmost.borrow().as_deref(), Some("Prior"));
+        // What the transaction kept is its own promise, and that is not the whole of success.
+        // See the dedicated case below.
+        assert_eq!(success.result["dispatchSuccess"], json!(true));
+        assert_eq!(success.result["success"], json!(false));
+    }
+
+    #[test]
+    fn a_restored_session_is_not_by_itself_goal_success() {
+        // The foreground rung's own condition and the action's verification are separate, and this
+        // rung is where they are most easily confused: a transaction that captured, activated,
+        // proved, dispatched and handed the session back has done everything it promised, and
+        // still knows nothing about whether the target acted on the events XTest posted. `click`
+        // declares no postcondition, so nothing here can say that it did.
+        let backend = transactional_backend();
+        let handle = backend.snapshot.handle(0);
+        let clicks = backend.clicks.clone();
+        let mut router = Router::new(backend);
+        router.snapshot = Some(router.backend.snapshot.clone());
+
+        let response = router
+            .request(request(
+                "click",
+                json!({
+                    "target": handle.0,
+                    "app": "App",
+                    "deliveryPolicy": "foregroundPermitted"
+                }),
+            ))
+            .unwrap();
+
+        let JsonRpcResponse::Success(success) = response else {
+            panic!("an opted-in click dispatches")
+        };
+        assert_eq!(*clicks.borrow(), 1, "the events went out");
+        assert_eq!(success.result["foreground"]["restored"], json!(true));
+        assert_eq!(success.result["dispatchSuccess"], json!(true));
+        assert_eq!(success.result["dispatch"]["success"], json!(true));
+        assert_eq!(
+            success.result["success"],
+            json!(false),
+            "a dispatch that verified nothing is not a successful action, however cleanly the \
+             session was handed back"
+        );
+        assert_eq!(
+            success.result["verification"]["reason"],
+            json!("click has no declared postcondition"),
+            "the caller is told what is missing rather than left to infer it"
+        );
+    }
+
+    #[test]
+    fn a_verified_goal_is_what_makes_a_foreground_dispatch_successful() {
+        // The other half of the same rule, so the assertion above cannot be satisfied by a
+        // `success` that is simply hardwired false. A postcondition that verified promotes the
+        // action, and the transaction's own condition still gates it.
+        let mut router = Router::new(transactional_backend());
+        let candidate = DeliveryCandidate::available(
+            DeliveryRung::Foreground,
+            DeliveryCapability::GlobalInput,
+            "XTest pointer",
+        );
+
+        let promoted = router
+            .foreground_dispatch(
+                ForegroundDispatch {
+                    policy: DeliveryPolicy::ForegroundPermitted,
+                    candidate: &candidate,
+                    target: ForegroundTarget::Application(APP_IDENTITY),
+                    restores_pointer: false,
+                    verification: json!({"verified": true, "observed": "anything"}),
+                    resolution: None,
+                },
+                |backend| {
+                    backend.keyboard(
+                        &AppQuery {
+                            name: Some("App".into()),
+                            identifier: None,
+                        },
+                        KeyboardIntent::Text("x"),
+                    )
+                },
+            )
+            .expect("a proved activation dispatches");
+
+        assert_eq!(promoted["success"], json!(true));
+        assert_eq!(promoted["dispatchSuccess"], json!(true));
+        assert_eq!(promoted["foreground"]["restored"], json!(true));
     }
 
     #[test]
@@ -1648,7 +1761,10 @@ mod tests {
         };
         assert_eq!(success.result["delivery"], json!("foreground"));
         assert_eq!(success.result["foreground"]["pointerRestored"], Value::Null);
-        assert_eq!(success.result["success"], json!(true));
+        // Nothing to put back is not the same as nothing to prove: keyboard input declares no
+        // postcondition either, so the dispatch is evidence and the action is unverified.
+        assert_eq!(success.result["dispatchSuccess"], json!(true));
+        assert_eq!(success.result["success"], json!(false));
     }
 
     #[test]

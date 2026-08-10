@@ -525,6 +525,38 @@ impl DeliveryOutcome {
     }
 }
 
+/// Whether a `verification` object claims the goal was actually proved.
+///
+/// Anything that is not an explicit `verified: true` is unverified. A missing field, a malformed
+/// one, or a value of the wrong type is precisely the state this rule exists to refuse to promote,
+/// so none of them may read as proof.
+fn verified(verification: &Value) -> bool {
+    verification
+        .get("verified")
+        .and_then(Value::as_bool)
+        .unwrap_or(false)
+}
+
+/// The `success` of an action that reached a rung and dispatched.
+///
+/// Two independent things have to hold, and the contract keeps them independent, which is why this
+/// takes both rather than either alone. `verification` is the action's own evidence that the
+/// intended semantic result happened — a readback, or an `expects` postcondition — and without it a
+/// dispatch proves only that the mechanism accepted what it was handed. `rung_held` is whatever the
+/// carrying rung separately promised: at the pixel rung, that the send completed and left the
+/// foreground and the real pointer alone; at the foreground rung, that the user's session was
+/// handed back afterwards. Neither stands in for the other, and a rung that kept its own promise
+/// perfectly has still not shown that the target acted.
+///
+/// `click`, `keyboard`, `invoke` and `scroll` declare no postcondition on any backend, so a clean
+/// dispatch of one of them reports `dispatchSuccess: true` alongside `success: false`. That is the
+/// contract working rather than a shortfall in the backend: a target that examined the input and
+/// did nothing is indistinguishable from one that acted on it, from this side, and a caller has to
+/// be able to tell "your click was delivered" from "your click worked".
+pub fn goal_success(verification: &Value, rung_held: bool) -> bool {
+    rung_held && verified(verification)
+}
+
 /// What a foreground escalation produced, alongside the evidence that it was transactional.
 pub struct ForegroundDispatch<T> {
     /// None when nothing was dispatched, which happens only when activation could not be proved.
