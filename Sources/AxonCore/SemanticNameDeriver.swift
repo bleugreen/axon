@@ -9,7 +9,22 @@ public struct SemanticElementName: Codable, Equatable, Sendable {
     public let characterCount: Int
     public let collisionFree: Bool
     public let disambiguation: String?
+    /// A presentation-only label for distinguishing candidates that share an ambiguous name.
+    public let candidateLabel: String?
+    public let resolution: SemanticNameResolution
     public let identityKey: String
+}
+
+public enum SemanticNameResolution: String, Codable, Equatable, Sendable {
+    case unique
+    case ambiguous
+}
+
+/// A name-centric view suitable for building a semantic index without re-grouping elements.
+public struct SemanticNameGroup: Codable, Equatable, Sendable {
+    public let name: String
+    public let sourceIndices: [Int]
+    public let resolution: SemanticNameResolution
 }
 
 public struct SemanticNameSummary: Codable, Equatable, Sendable {
@@ -31,6 +46,7 @@ public struct SemanticNameSummary: Codable, Equatable, Sendable {
 
 public struct SemanticNameStudy: Codable, Equatable, Sendable {
     public let elements: [SemanticElementName]
+    public let groups: [SemanticNameGroup]
     public let summary: SemanticNameSummary
 }
 
@@ -61,6 +77,7 @@ public enum SemanticNameDeriver {
         var segments: [String]
         var collisionFree = true
         var disambiguation: String?
+        var candidateLabel: String?
 
         var identityKey: String {
             ([role, label] + lineage + [stableIdentifier ?? ""]).joined(separator: "\u{1f}")
@@ -98,6 +115,8 @@ public enum SemanticNameDeriver {
                 characterCount: name.count,
                 collisionFree: candidate.collisionFree,
                 disambiguation: candidate.disambiguation,
+                candidateLabel: candidate.candidateLabel,
+                resolution: candidate.collisionFree ? .unique : .ambiguous,
                 identityKey: candidate.identityKey
             )
         }
@@ -214,21 +233,30 @@ public enum SemanticNameDeriver {
     }
 
     private static func disambiguate(_ candidates: inout [Candidate]) {
-        var changed = true
-        while changed {
-            changed = false
-            let groups = Dictionary(grouping: candidates.indices, by: { candidates[$0].segments.joined(separator: "/") })
-            for indices in groups.values where indices.count > 1 {
-                for index in indices where candidates[index].segments.count < candidates[index].lineage.count {
-                    let depth = candidates[index].segments.count + 1
-                    candidates[index].segments = Array(candidates[index].lineage.suffix(depth))
-                    changed = true
-                }
+        var groups = Dictionary(grouping: candidates.indices, by: { candidates[$0].segments.joined(separator: "/") })
+        var occupiedNames = Set(groups.keys)
+
+        // A fourth segment is allowed only when one human-readable ancestor resolves the
+        // entire collision. Never continue walking toward the root to manufacture uniqueness.
+        for (_, indices) in groups.sorted(by: { $0.key < $1.key }) where indices.count > 1 {
+            let proposals = indices.map { index -> [String]? in
+                let candidate = candidates[index]
+                guard candidate.segments.count == 3, candidate.lineage.count > 3 else { return nil }
+                return [candidate.lineage[candidate.lineage.count - 4]] + candidate.segments
+            }
+            let names = proposals.compactMap { $0?.joined(separator: "/") }
+            guard names.count == indices.count,
+                  Set(names).count == indices.count,
+                  names.allSatisfy({ !occupiedNames.contains($0) })
+            else { continue }
+            for (index, proposal) in zip(indices, proposals) {
+                candidates[index].segments = proposal!
+                candidates[index].disambiguation = "ancestor"
+                occupiedNames.insert(proposal!.joined(separator: "/"))
             }
         }
 
-        var groups = Dictionary(grouping: candidates.indices, by: { candidates[$0].segments.joined(separator: "/") })
-        var occupiedNames = Set(candidates.map { $0.segments.joined(separator: "/") })
+        groups = Dictionary(grouping: candidates.indices, by: { candidates[$0].segments.joined(separator: "/") })
         for (_, indices) in groups.sorted(by: { $0.key < $1.key }) where indices.count > 1 {
             let identifierSlugs = indices.map { index in
                 candidates[index].stableIdentifier.flatMap { slug($0, maximumLength: 24) }
@@ -273,9 +301,9 @@ public enum SemanticNameDeriver {
         groups = Dictionary(grouping: candidates.indices, by: { candidates[$0].segments.joined(separator: "/") })
         for indices in groups.values where indices.count > 1 {
             for (ordinal, index) in indices.sorted(by: { candidates[$0].index < candidates[$1].index }).enumerated() {
-                candidates[index].segments[candidates[index].segments.count - 1] += "-\(ordinal + 1)"
                 candidates[index].collisionFree = false
-                candidates[index].disambiguation = "ordinal"
+                candidates[index].disambiguation = "ambiguous"
+                candidates[index].candidateLabel = "\(candidates[index].segments.joined(separator: "/"))-\(ordinal + 1)"
             }
         }
     }
@@ -293,8 +321,16 @@ public enum SemanticNameDeriver {
     }
 
     private static func study(from elements: [SemanticElementName]) -> SemanticNameStudy {
+        let groups = Dictionary(grouping: elements, by: \.name).map { name, elements in
+            SemanticNameGroup(
+                name: name,
+                sourceIndices: elements.map(\.sourceIndex).sorted(),
+                resolution: elements.count == 1 ? .unique : .ambiguous
+            )
+        }.sorted(by: { $0.name < $1.name })
         SemanticNameStudy(
             elements: elements,
+            groups: groups,
             summary: SemanticNameSummary(
                 eligibleElementCount: elements.count,
                 collisionFreeCount: elements.filter(\.collisionFree).count,
@@ -316,13 +352,14 @@ public enum SemanticNameDeriver {
     private static func normalizedRole(_ role: String?) -> String {
         switch role {
         case "AXWindow", "window": "window"
-        case "AXButton", "button": "button"
-        case "AXTextField", "AXTextArea", "AXComboBox", "AXSearchField", "field": "field"
+        case "AXButton", "button", "Button", "ControlType.Button", "push button": "button"
+        case "AXTextField", "AXTextArea", "AXComboBox", "AXSearchField", "field",
+             "Edit", "ControlType.Edit", "text entry": "field"
         case "AXStaticText", "text": "text"
         case "AXHeading", "heading": "heading"
-        case "AXLink", "link": "link"
+        case "AXLink", "link", "Hyperlink", "ControlType.Hyperlink": "link"
         case "AXMenu", "AXMenuBar", "AXMenuItem", "menu": "menu"
-        case "AXList", "AXOutline", "AXTable", "list": "list"
+        case "AXList", "AXOutline", "AXTable", "list", "List", "ControlType.List": "list"
         case "AXRow", "row": "row"
         case "AXCell", "cell": "cell"
         case "AXWebArea", "web": "web"
