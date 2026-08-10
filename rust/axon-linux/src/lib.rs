@@ -1585,6 +1585,38 @@ mod tests {
         // The events went out, but the user's session was not put back.
         assert_eq!(success.result["success"], json!(false));
         assert_eq!(*clicks.borrow(), 1);
+
+        // Asserted again with the verification satisfied, because an unverified click fails for
+        // its own reason and would report exactly the same thing if restoration stopped counting
+        // at all. Here it is the only variable left. The first dispatch left the target forward,
+        // so the foreground is put back by hand first: a target that already holds it activates
+        // nothing and has nothing to restore, which is a different case than the one under test.
+        *router.backend.frontmost.borrow_mut() = Some("Prior".into());
+        let candidate = DeliveryCandidate::available(
+            DeliveryRung::Foreground,
+            DeliveryCapability::GlobalInput,
+            "XTest pointer",
+        );
+        let verified = router
+            .foreground_dispatch(
+                ForegroundDispatch {
+                    policy: DeliveryPolicy::ForegroundPermitted,
+                    candidate: &candidate,
+                    target: ForegroundTarget::Application(APP_IDENTITY),
+                    restores_pointer: false,
+                    verification: json!({"verified": true, "observed": "anything"}),
+                    resolution: None,
+                },
+                |backend| backend.pointer_click((10.0, 10.0)),
+            )
+            .expect("a proved activation dispatches");
+        assert_eq!(verified["foreground"]["restored"], json!(false));
+        assert_eq!(verified["dispatchSuccess"], json!(true));
+        assert_eq!(
+            verified["success"],
+            json!(false),
+            "a verified goal does not excuse a session that was not handed back"
+        );
     }
 
     #[test]
