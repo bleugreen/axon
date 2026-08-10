@@ -13,9 +13,10 @@
 //! provider publishes, and that a provider which never publishes is reported as withholding rather
 //! than as empty — while being asked exactly once, however many times it is captured.
 //!
-//! One test rather than several, because `DBUS_SESSION_BUS_ADDRESS` is process-wide. Every fake
-//! application shares the one bus, and the scenarios run in order against one backend, which is
-//! also what shows the per-application activation memo not leaking between applications.
+//! One test rather than several, because `DBUS_SESSION_BUS_ADDRESS` is process-wide and is handed
+//! to this process at spawn rather than set from inside it. Every fake application shares the one
+//! bus, and the scenarios run in order against one backend, which is also what shows the
+//! per-application activation memo not leaking between applications.
 
 #![cfg(target_os = "linux")]
 
@@ -59,6 +60,14 @@ const WINDOW: &str = "/org/a11y/atspi/accessible/1";
 const INNER: &str = "/org/a11y/atspi/accessible/2";
 const CONTENT: &str = "/org/a11y/atspi/accessible/3";
 
+/// Set on the child this binary re-executes, and the only thing distinguishing the two runs.
+const INNER_RUN: &str = "AXON_ATSPI_HERMETIC_BUS";
+
+/// The one test, named twice: once by `#[test]` and once for the filter the inner run is launched
+/// with. A mismatch is loud rather than silent, because a filter that matches nothing exits zero
+/// and the outer run would pass having tested nothing.
+const TEST: &str = "a_withholding_provider_is_woken_at_its_root_waited_for_and_asked_once";
+
 const WINDOW_NAME: &str = "Withholding Window";
 const INNER_NAME: &str = "Tool Bar";
 const CONTENT_NAME: &str = "Published Content";
@@ -66,6 +75,20 @@ const CONTENT_NAME: &str = "Published Content";
 #[test]
 #[ignore = "requires dbus-daemon; run with `cargo test -p axon-linux -- --ignored`"]
 fn a_withholding_provider_is_woken_at_its_root_waited_for_and_asked_once() {
+    // Two runs of this one function. The outer run owns the private bus and re-executes this binary
+    // against it; the inner run is the test.
+    //
+    // The split is what keeps the arrangement sound. `DBUS_SESSION_BUS_ADDRESS` has to be in the
+    // environment before anything in the process connects to a bus, and a process cannot safely put
+    // it there for itself: `std::env::set_var` is unsound while any other thread might touch the
+    // environment, and libtest runs this body on a worker thread with its own harness thread alive
+    // beside it. Handing the variable to a child at spawn time is the same arrangement without the
+    // unsafety, and it leaves the backend discovering the bus exactly the way it does in production
+    // rather than through a seam that exists only for a test.
+    if std::env::var_os(INNER_RUN).is_none() {
+        return supervise_an_inner_run();
+    }
+
     let desktop = Desktop::start();
     let mut backend =
         LinuxBackend::start().expect("the backend reaches the fake accessibility bus");
@@ -168,6 +191,25 @@ fn a_withholding_provider_is_woken_at_its_root_waited_for_and_asked_once() {
 
     // Waking one application says nothing about another, and the memo is keyed to say so.
     assert_eq!(desktop.provider(DEEP).attributes_asked(), vec![ROOT]);
+}
+
+/// Starts the private bus and runs this same binary against it, with the address in its environment
+/// from the moment it starts.
+///
+/// Its output is inherited rather than captured, so a failing assertion inside the inner run reads
+/// as an ordinary test failure rather than as a child process that exited non-zero.
+fn supervise_an_inner_run() {
+    let bus = SessionBus::start();
+    let status = Command::new(std::env::current_exe().expect("this test binary's own path"))
+        .args([TEST, "--exact", "--ignored", "--nocapture"])
+        .env(INNER_RUN, "1")
+        .env("DBUS_SESSION_BUS_ADDRESS", &bus.address)
+        .status()
+        .expect("this test binary re-executes");
+    assert!(
+        status.success(),
+        "the run against the private bus failed; its output is above"
+    );
 }
 
 /// The application root of a captured snapshot: AT-SPI's application object, whose children are the
@@ -366,32 +408,26 @@ impl A11yStatus {
     }
 }
 
-/// The whole fake accessibility desktop, alive for as long as it is held.
+/// The whole fake accessibility desktop, alive for as long as it is held: every application on the
+/// bus this process was handed, and nothing else.
 struct Desktop {
     providers: HashMap<&'static str, Arc<Provider>>,
     /// Held open for the life of the test: dropping a connection takes its objects off the bus.
     connections: Vec<zbus::Connection>,
     /// Every connection above serves from this runtime's threads, so it outlives them.
     runtime: tokio::runtime::Runtime,
-    /// Stopped last, once nothing is talking to it.
-    _bus: SessionBus,
 }
 
 impl Desktop {
     fn start() -> Self {
-        let bus = SessionBus::start();
-        // SAFETY: the only thread in this process is the one running this test, and nothing has
-        // read the environment yet -- the bus connections below and the backend under test are both
-        // created after this point. The variable is process-wide, which is why this test binary
-        // holds exactly one test.
-        unsafe { std::env::set_var("DBUS_SESSION_BUS_ADDRESS", &bus.address) };
+        let address = std::env::var("DBUS_SESSION_BUS_ADDRESS")
+            .expect("the outer run handed this process the address of its private bus");
 
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .enable_all()
             .build()
             .expect("a runtime for the fake providers");
 
-        let address = bus.address.clone();
         let (providers, connections) = runtime.block_on(async move {
             let mut providers = HashMap::new();
             let mut connections = Vec::new();
@@ -419,7 +455,6 @@ impl Desktop {
             providers,
             connections,
             runtime,
-            _bus: bus,
         }
     }
 
@@ -565,7 +600,8 @@ async fn registry(address: &str, applications: Vec<ObjectRefOwned>) -> zbus::Con
         .expect("the registry connects to the fake bus")
 }
 
-/// A private session bus with nothing on it but what this test puts there.
+/// A private session bus with nothing on it but what this test puts there. Owned by the outer run,
+/// which starts it before the process that uses it exists.
 ///
 /// Its own configuration rather than the host's `session.conf`, so that no service activation
 /// directory, and nothing the desktop happens to have installed, can join the conversation.
