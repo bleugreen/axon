@@ -115,11 +115,39 @@ no more.
 | action | offered for | measured |
 | --- | --- | --- |
 | `click` | `Chromium`, any version | Chromium 108, 124 and 150, both lanes |
-| `keyboard` | `gtk` 3.24.x, `Qt` 6.11.x, `Chromium` any version | GTK 3.24.51, WebKitGTK 2.50.4 (which reports `gtk` 3.24.51), Qt 6.11.1, Chromium 108/124/150, both lanes |
+| `keyboard` | `gtk` 3.24.x, `Qt` 6.11.x | GTK 3.24.51, WebKitGTK 2.50.4 (which reports `gtk` 3.24.51), Qt 6.11.1, both lanes |
 
 Every row in both fixtures has both of its controls reacting, so every verdict above is a statement
 about the toolkit. A column whose control fails is rendered as carrying no verdict, rather than as a
 negative the harness never earned.
+
+### The keyboard phase is not independent of the click phase, and Chromium's row shows it
+
+One row this harness records as accepted is **not** offered, and the reason is a limitation of the
+harness rather than a judgement about the toolkit. `measure()` runs `_background_click` and then
+`_background_text` against the same window. `_background_preconditions` re-establishes and re-proves
+the background before each phase — it re-takes the decoy's focus and re-parks the pointer — but it
+cannot undo what the click already did inside the application. So for any toolkit whose click is
+accepted, the keyboard phase runs on a window that was just clicked.
+
+For Chromium that difference is the whole result. Measured against a single Electron 43 window,
+raised but never focused, with the focus held by a decoy and the pointer parked clear:
+
+| sent | acted on |
+| --- | --- |
+| keystrokes only | nothing |
+| a click only | the click, reported `isTrusted` |
+| a click, then keystrokes | both |
+
+Chromium routes background key events to a window only once a background click has landed in it. A
+window that has not been clicked drops every delivered key event in silence, which from the sending
+side is indistinguishable from delivery. `rust/axon-linux/src/pixel.rs` therefore refuses the
+Chromium keyboard rung and offers only the click. AXN-102 tracks measuring each phase against a
+target that has received nothing else, which is what would let that entry be reconsidered.
+
+GTK 3 is unaffected — its click is refused, so its keyboard row was already measured on an unclicked
+window — and Qt 6, whose click is accepted, was confirmed separately to type into a window that had
+received nothing before it.
 
 Everything else refuses `backgroundPixelUnsupported` naming the toolkit that refused. That includes
 two deliberate exclusions and one structural one:
