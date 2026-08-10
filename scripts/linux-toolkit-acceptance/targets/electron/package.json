@@ -1,0 +1,6 @@
+{
+  "name": "axon-harness-electron-target",
+  "private": true,
+  "version": "0.0.0",
+  "main": "main.js"
+}

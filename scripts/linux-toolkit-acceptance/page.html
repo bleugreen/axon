@@ -1,0 +1,47 @@
+<!doctype html>
+<!-- The page every web-engine target loads. It reports its own element rectangles, because only the
+     page knows where they ended up, and reports every event it receives along with isTrusted, which
+     is how a Chromium-family engine says it saw a synthetic event and decided to ignore it. -->
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Axon harness</title>
+    <style>
+      body { margin: 0; font: 16px sans-serif; background: #fff; }
+      #entry { position: absolute; left: 40px; top: 40px; width: 300px; height: 40px; font-size: 16px; }
+      #button { position: absolute; left: 40px; top: 160px; width: 300px; height: 120px; font-size: 18px; }
+    </style>
+  </head>
+  <body>
+    <input id="entry" />
+    <button id="button">Target Button</button>
+    <script>
+      const endpoint = new URL("/report", location.origin);
+      const send = (payload) =>
+        fetch(endpoint, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+          keepalive: true,
+        }).catch(() => {});
+      const rect = (element) => {
+        const box = element.getBoundingClientRect();
+        return [Math.round(box.x), Math.round(box.y), Math.round(box.width), Math.round(box.height)];
+      };
+      const button = document.getElementById("button");
+      const entry = document.getElementById("entry");
+      let clicks = 0;
+      button.addEventListener("click", (event) => {
+        clicks += 1;
+        send({ kind: "click", widget: "button", count: clicks, isTrusted: event.isTrusted });
+      });
+      entry.addEventListener("input", (event) => {
+        send({ kind: "text", widget: "entry", value: event.target.value });
+      });
+      window.addEventListener("load", () => {
+        entry.focus();
+        send({ kind: "page", widgets: { button: rect(button), entry: rect(entry) } });
+      });
+    </script>
+  </body>
+</html>
