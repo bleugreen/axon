@@ -1,0 +1,107 @@
+{
+  "schemaVersion": "health-v1",
+  "version": "0.1.7",
+  "platform": "linux",
+  "daemon": {
+    "running": true,
+    "ready": true,
+    "endpoint": "/run/user/1000/axon-v1.sock",
+    "processId": 2317
+  },
+  "registration": {
+    "registered": true,
+    "mechanism": "systemdUser",
+    "path": "/opt/axon/0.1.7/axon-linux"
+  },
+  "session": {
+    "interactive": true,
+    "graphical": true,
+    "accessibilityEnabled": false,
+    "reason": "accessibility-disabled",
+    "detail": "wayland; this session reports accessibility disabled (org.a11y.Status.IsEnabled is false), so applications that read it at startup — Chromium, Electron, and Chromium-backed webviews — are not on the bus at all"
+  },
+  "permissions": [
+    {
+      "name": "accessibilityBus",
+      "granted": true
+    }
+  ],
+  "capabilities": [
+    {
+      "capability": "enumerate",
+      "usable": true
+    },
+    {
+      "capability": "capture",
+      "usable": true
+    },
+    {
+      "capability": "retainedHandles",
+      "usable": true
+    },
+    {
+      "capability": "observeChanges",
+      "usable": false,
+      "reason": "not-implemented",
+      "restriction": "AT-SPI event observation is not implemented"
+    },
+    {
+      "capability": "invoke",
+      "usable": true
+    },
+    {
+      "capability": "readValue",
+      "usable": true
+    },
+    {
+      "capability": "setValue",
+      "usable": true
+    },
+    {
+      "capability": "focus",
+      "usable": true
+    },
+    {
+      "capability": "scroll",
+      "usable": false,
+      "reason": "not-implemented",
+      "restriction": "AT-SPI has no portable delta-scroll operation"
+    },
+    {
+      "capability": "pointerInput",
+      "usable": false,
+      "reason": "wayland-restricted",
+      "restriction": "Wayland does not permit unrestricted synthetic input from an ordinary client"
+    },
+    {
+      "capability": "keyboardInput",
+      "usable": false,
+      "reason": "wayland-restricted",
+      "restriction": "Wayland does not permit unrestricted synthetic input from an ordinary client"
+    },
+    {
+      "capability": "screenshot",
+      "usable": false,
+      "reason": "portal-authorization-required",
+      "restriction": "a desktop portal authorization flow is required"
+    },
+    {
+      "capability": "hitTest",
+      "usable": false,
+      "reason": "not-implemented",
+      "restriction": "AT-SPI point lookup is not implemented"
+    },
+    {
+      "capability": "serializeHistory",
+      "usable": false,
+      "reason": "not-implemented",
+      "restriction": "live history serialization is not implemented"
+    },
+    {
+      "capability": "observeGlobalInput",
+      "usable": false,
+      "reason": "not-implemented",
+      "restriction": "global input observation is not implemented"
+    }
+  ]
+}
