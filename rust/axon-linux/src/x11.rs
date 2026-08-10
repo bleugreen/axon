@@ -218,6 +218,118 @@ impl X11Session {
         Ok(true)
     }
 
+    /// Every managed top-level window a process owns.
+    ///
+    /// `_NET_CLIENT_LIST` is the window manager's own list of what it manages, so this excludes
+    /// the tooltips, menus and override-redirect surfaces a process also owns. That is what makes
+    /// it the right list to bind a target against: those are not windows a caller ever meant.
+    pub fn windows_for_pid(&self, pid: u32) -> Result<Vec<Window>, BackendError> {
+        let mut owned = Vec::new();
+        for window in self.property(self.root, self.atoms._NET_CLIENT_LIST, AtomEnum::WINDOW)? {
+            if self.window_pid(window)? == Some(pid) {
+                owned.push(window);
+            }
+        }
+        Ok(owned)
+    }
+
+    /// A window's origin on screen and its size.
+    pub fn window_geometry(&self, window: Window) -> Result<WindowGeometry, BackendError> {
+        let size = self
+            .connection
+            .get_geometry(window)
+            .map_err(|error| operation("read a window's geometry", error))?
+            .reply()
+            .map_err(|error| operation("read a window's geometry", error))?;
+        // A window's own x and y are relative to its parent, which under a reparenting window
+        // manager is a frame rather than the root. Translating (0, 0) is what turns that into the
+        // screen position a resolved coordinate has to be converted against.
+        let origin = self.translate(window, self.root, (0, 0))?;
+        Ok(WindowGeometry {
+            origin,
+            size: (size.width, size.height),
+        })
+    }
+
+    /// A point in one window's coordinates expressed in another's.
+    pub fn translate(
+        &self,
+        from: Window,
+        to: Window,
+        (x, y): (i16, i16),
+    ) -> Result<(i16, i16), BackendError> {
+        let reply = self
+            .connection
+            .translate_coordinates(from, to, x, y)
+            .map_err(|error| operation("translate window coordinates", error))?
+            .reply()
+            .map_err(|error| operation("translate window coordinates", error))?;
+        Ok((reply.dst_x, reply.dst_y))
+    }
+
+    /// The process's managed top-level window that owns a screen point, if one does.
+    ///
+    /// Both halves of this are load-bearing. Reaching the window by descending from the root is
+    /// what makes it the window that *owns* the point rather than one that merely surrounds it: a
+    /// target covered by another application's window at that point is not returned, which is the
+    /// occlusion check this backend otherwise has no hit test for. Requiring the window the
+    /// descent lands in to be one of the resolved process's own managed top-levels is the other
+    /// half, and it is what keeps the target bound to the application the caller resolved instead
+    /// of inferred from a bare screen point — which the contract forbids outright.
+    ///
+    /// The climb back up exists because a reparenting window manager wraps the client window in a
+    /// frame, and toolkits put their own child windows inside it; the descent ends at a leaf, and
+    /// the client window is somewhere between that leaf and the root.
+    pub fn managed_window_at(
+        &self,
+        pid: u32,
+        point: (i16, i16),
+    ) -> Result<Option<Window>, BackendError> {
+        let owned = self.windows_for_pid(pid)?;
+        if owned.is_empty() {
+            return Ok(None);
+        }
+        let mut window = self.window_under(point)?;
+        for _ in 0..MAX_WINDOW_TREE_STEPS {
+            if owned.contains(&window) {
+                return Ok(Some(window));
+            }
+            match self.parent_of(window)? {
+                Some(parent) if parent != self.root && parent != x11rb::NONE => window = parent,
+                _ => return Ok(None),
+            }
+        }
+        Ok(None)
+    }
+
+    /// The deepest window at a screen point: where a real pointer click would land.
+    fn window_under(&self, point: (i16, i16)) -> Result<Window, BackendError> {
+        let mut window = self.root;
+        for _ in 0..MAX_WINDOW_TREE_STEPS {
+            let reply = self
+                .connection
+                .translate_coordinates(self.root, window, point.0, point.1)
+                .map_err(|error| operation("find the window under a point", error))?
+                .reply()
+                .map_err(|error| operation("find the window under a point", error))?;
+            if reply.child == x11rb::NONE {
+                return Ok(window);
+            }
+            window = reply.child;
+        }
+        Ok(window)
+    }
+
+    fn parent_of(&self, window: Window) -> Result<Option<Window>, BackendError> {
+        let tree = self
+            .connection
+            .query_tree(window)
+            .map_err(|error| operation("read the window tree", error))?
+            .reply()
+            .map_err(|error| operation("read the window tree", error))?;
+        Ok((tree.parent != x11rb::NONE).then_some(tree.parent))
+    }
+
     pub fn pointer_location(&self) -> Result<(f64, f64), BackendError> {
         let pointer = self
             .connection
