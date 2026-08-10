@@ -295,33 +295,136 @@ mod tests {
         }
     }
 
+    fn variant(action: PixelAction, name: &str, version: &str) -> Option<SendVariant> {
+        accepts(action, &toolkit(name, version))
+            .ok()
+            .map(|acceptance| acceptance.variant)
+    }
+
     #[test]
     fn the_table_offers_exactly_what_the_fixtures_measured() {
         // Chromium: both actions, targeted, at any version, because its signature carries none.
         for version in ["1.0", "999.0"] {
             assert_eq!(
-                accepts(PixelAction::Click, &toolkit("Chromium", version)),
-                Ok(SendVariant::Targeted)
+                variant(PixelAction::Click, "Chromium", version),
+                Some(SendVariant::Targeted)
             );
             assert_eq!(
-                accepts(PixelAction::Keyboard, &toolkit("Chromium", version)),
-                Ok(SendVariant::Targeted)
+                variant(PixelAction::Keyboard, "Chromium", version),
+                Some(SendVariant::Targeted)
             );
         }
         // GTK 3 types but does not click, and types only through the owner variant. WebKitGTK
         // reports this same signature, which is how it inherits the entry.
         assert_eq!(
-            accepts(PixelAction::Keyboard, &toolkit("gtk", "3.24.51")),
-            Ok(SendVariant::Owner)
+            variant(PixelAction::Keyboard, "gtk", "3.24.51"),
+            Some(SendVariant::Owner)
         );
-        assert!(accepts(PixelAction::Click, &toolkit("gtk", "3.24.51")).is_err());
+        assert_eq!(variant(PixelAction::Click, "gtk", "3.24.51"), None);
         // Qt types through the targeted variant; its click acceptance asks to be activated and is
         // therefore not a background delivery.
         assert_eq!(
-            accepts(PixelAction::Keyboard, &toolkit("Qt", "6.11.1")),
-            Ok(SendVariant::Targeted)
+            variant(PixelAction::Keyboard, "Qt", "6.11.1"),
+            Some(SendVariant::Targeted)
         );
-        assert!(accepts(PixelAction::Click, &toolkit("Qt", "6.11.1")).is_err());
+        assert_eq!(variant(PixelAction::Click, "Qt", "6.11.1"), None);
+    }
+
+    /// The two committed measurements, by the path each entry cites.
+    const FIXTURES: [(&str, &str); 2] = [
+        (
+            "RESULTS.md",
+            include_str!("../../../scripts/linux-toolkit-acceptance/results.json"),
+        ),
+        (
+            "RESULTS-live-x11.md",
+            include_str!("../../../scripts/linux-toolkit-acceptance/results-live-x11.json"),
+        ),
+    ];
+
+    /// Every acceptance this table grants, held against the fixtures it cites — on both lanes.
+    ///
+    /// The table is prose and constants, and the measurement is JSON in another directory; nothing
+    /// but this test stops the two from drifting. A re-measurement that flips a row, changes the
+    /// variant a toolkit honours, or renames a toolkit's signature would otherwise leave the table
+    /// authorizing background input into a window on the strength of evidence that no longer says
+    /// so. Which is the one failure mode an evidence-keyed allowlist cannot tolerate.
+    ///
+    /// Deliberately one-directional. It asserts the table never claims more than was measured, and
+    /// says nothing about the reverse, because two rows the harness measured as accepting are
+    /// refused on judgement rather than on evidence: Qt's click asks to be activated, and GTK's
+    /// click needs the real cursor already inside the target. Those arguments live in the table's
+    /// own `Refused` reasons, where a reader can disagree with them.
+    #[test]
+    fn no_entry_claims_more_than_both_fixtures_measured() {
+        for (lane, fixture) in FIXTURES {
+            let measured: serde_json::Value =
+                serde_json::from_str(fixture).expect("a committed fixture parses");
+            let rows = measured["results"]
+                .as_array()
+                .expect("a fixture is a list of rows");
+            let mut checked = 0;
+            for row in rows {
+                let (Some(name), Some(version)) = (
+                    row["atspiToolkit"]["name"].as_str(),
+                    row["atspiToolkit"]["version"].as_str(),
+                ) else {
+                    // Firefox publishes no AT-SPI application, so it has no signature to key on.
+                    continue;
+                };
+                let target = row["target"].as_str().unwrap_or("?");
+                for (action, phase, control) in [
+                    (PixelAction::Click, "click", "pointerClick"),
+                    (PixelAction::Keyboard, "text", "focusedText"),
+                ] {
+                    let Some(offered) = variant(action, name, version) else {
+                        continue;
+                    };
+                    checked += 1;
+                    let phase = &row["background"][phase];
+                    assert_eq!(
+                        phase["accepted"],
+                        serde_json::json!(true),
+                        "{lane}: the table offers {name} {version} for {target}, and this lane \
+                         did not measure that acceptance"
+                    );
+                    assert_eq!(
+                        phase["variant"].as_str(),
+                        Some(offered.key()),
+                        "{lane}: the table sends {target} the {} variant, and this lane measured \
+                         a different one",
+                        offered.key()
+                    );
+                    // A row whose control failed carries no verdict at all: a background refusal
+                    // there is a statement about the harness, and an acceptance is luck.
+                    assert_eq!(
+                        row["controls"][control],
+                        serde_json::json!(true),
+                        "{lane}: {target}'s {control} control did not react, so this row cannot \
+                         support an entry"
+                    );
+                }
+                // A toolkit offered any rung needs a coordinate source, and GTK 4 is the reason
+                // that is not automatic. The keyboard path converts no coordinates, but the same
+                // extents are what a `look` at that application reports, so an entry offered for a
+                // target with unusable geometry would be aiming a caller at rectangles that lie.
+                if variant(PixelAction::Click, name, version).is_some()
+                    || variant(PixelAction::Keyboard, name, version).is_some()
+                {
+                    assert_eq!(
+                        row["geometry"]["extentsUsable"],
+                        serde_json::json!(true),
+                        "{lane}: {target} is offered a rung and its AT-SPI extents were measured \
+                         unusable"
+                    );
+                }
+            }
+            assert!(
+                checked >= 4,
+                "{lane}: the fixture matched almost none of the table, which means the signatures \
+                 no longer line up rather than that the table is small"
+            );
+        }
     }
 
     #[test]
