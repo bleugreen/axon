@@ -548,7 +548,11 @@ struct SessionBus {
 
 impl SessionBus {
     fn start() -> Self {
-        let directory = std::env::temp_dir().join(format!("axon-atspi-{}", std::process::id()));
+        // `/tmp` rather than `std::env::temp_dir()`, because the address here becomes a Unix socket
+        // path and those are capped near 108 bytes by `sockaddr_un`. A test runner's `TMPDIR` is
+        // routinely deeper than that leaves room for, and `dbus-daemon` answers by refusing to
+        // start at all.
+        let directory = PathBuf::from("/tmp").join(format!("axon-atspi-{}", std::process::id()));
         std::fs::create_dir_all(&directory).expect("a directory for the bus socket");
         let config = directory.join("bus.conf");
         std::fs::write(&config, configuration(&directory)).expect("the bus configuration writes");
@@ -592,7 +596,7 @@ fn configuration(directory: &Path) -> String {
  "http://www.freedesktop.org/standards/dbus/1.0/busconfig.dtd">
 <busconfig>
   <type>session</type>
-  <listen>unix:tmpdir={directory}</listen>
+  <listen>unix:dir={directory}</listen>
   <policy context="default">
     <allow send_destination="*"/>
     <allow own="*"/>
