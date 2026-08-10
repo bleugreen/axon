@@ -38,6 +38,10 @@ let package = Package(
         .executableTarget(
             name: "AxonReorderFixtureApp"
         ),
+        .executableTarget(
+            name: "SemanticNameStudy",
+            dependencies: ["AxonCore"]
+        ),
         .testTarget(
             name: "AxonCoreTests",
             dependencies: ["AxonCore"]

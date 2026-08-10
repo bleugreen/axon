@@ -1,0 +1,26 @@
+{
+  "id": "fixture",
+  "windows": [{
+    "index": 0, "role": "AXWindow", "title": "Notes", "identifier": "_NS:341",
+    "children": [{
+      "index": 1, "role": "AXMenuBar", "children": [{
+        "index": 2, "role": "AXMenuItem", "title": "File", "children": [{
+          "index": 3, "role": "AXMenuItem", "title": "New Note"
+        }]
+      }]
+    }, {
+      "index": 4, "role": "AXScrollArea", "children": [{
+        "index": 5, "role": "AXGroup", "title": "Folders", "children": [{
+          "index": 6, "role": "AXButton", "title": "Add"
+        }]
+      }]
+    }, {
+      "index": 7, "role": "AXGroup", "title": "Editor", "children": [
+        {"index": 8, "role": "AXButton", "title": "Done"},
+        {"index": 9, "role": "AXStaticText", "title": "Done"},
+        {"index": 10, "role": "AXButton", "title": "Share"},
+        {"index": 11, "role": "AXButton", "title": "Share"}
+      ]
+    }]
+  }]
+}
