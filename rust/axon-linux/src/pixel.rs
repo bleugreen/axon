@@ -499,11 +499,8 @@ mod tests {
         // The failure mode this refusal exists to stop is silent: the events are delivered, the
         // server accepts them, the invariants all hold, and the application does nothing. A
         // caller who is told "unsupported" can escalate; one who is told "delivered" cannot.
-        let refusal = accepts(
-            PixelAction::Keyboard,
-            &toolkit("Chromium", "1.0"),
-        )
-        .expect_err("Chromium keystrokes need a click to have landed first");
+        let refusal = accepts(PixelAction::Keyboard, &toolkit("Chromium", "1.0"))
+            .expect_err("Chromium keystrokes need a click to have landed first");
         assert!(refusal.contains("Chromium 1.0"), "{refusal}");
         assert!(refusal.contains("click"), "{refusal}");
         assert!(refusal.contains("silence"), "{refusal}");
