@@ -60,12 +60,13 @@ const WINDOW: &str = "/org/a11y/atspi/accessible/1";
 const INNER: &str = "/org/a11y/atspi/accessible/2";
 const CONTENT: &str = "/org/a11y/atspi/accessible/3";
 
-/// Set on the child this binary re-executes, and the only thing distinguishing the two runs.
+/// Set on the child this binary re-executes: the only thing distinguishing the two runs, and the
+/// path the inner run touches on its way out to prove it ran.
 const INNER_RUN: &str = "AXON_ATSPI_HERMETIC_BUS";
 
-/// The one test, named twice: once by `#[test]` and once for the filter the inner run is launched
-/// with. A mismatch is loud rather than silent, because a filter that matches nothing exits zero
-/// and the outer run would pass having tested nothing.
+/// The one test, named twice: once by `#[test]` and once as the filter the inner run is launched
+/// with. The two are checked against each other at runtime rather than trusted, because a filter
+/// matching nothing is a passing libtest run.
 const TEST: &str = "a_withholding_provider_is_woken_at_its_root_waited_for_and_asked_once";
 
 const WINDOW_NAME: &str = "Withholding Window";
@@ -191,6 +192,9 @@ fn a_withholding_provider_is_woken_at_its_root_waited_for_and_asked_once() {
 
     // Waking one application says nothing about another, and the memo is keyed to say so.
     assert_eq!(desktop.provider(DEEP).attributes_asked(), vec![ROOT]);
+
+    let proof = std::env::var_os(INNER_RUN).expect("the inner run was told where to leave proof");
+    std::fs::write(proof, "").expect("the proof that this body ran writes");
 }
 
 /// Starts the private bus and runs this same binary against it, with the address in its environment
@@ -200,15 +204,22 @@ fn a_withholding_provider_is_woken_at_its_root_waited_for_and_asked_once() {
 /// as an ordinary test failure rather than as a child process that exited non-zero.
 fn supervise_an_inner_run() {
     let bus = SessionBus::start();
+    let ran = bus.directory.join("inner-run-completed");
     let status = Command::new(std::env::current_exe().expect("this test binary's own path"))
         .args([TEST, "--exact", "--ignored", "--nocapture"])
-        .env(INNER_RUN, "1")
+        .env(INNER_RUN, &ran)
         .env("DBUS_SESSION_BUS_ADDRESS", &bus.address)
         .status()
         .expect("this test binary re-executes");
     assert!(
         status.success(),
         "the run against the private bus failed; its output is above"
+    );
+    assert!(
+        ran.exists(),
+        "the inner run exited successfully without reaching the end of the test body -- a libtest \
+         filter that matches nothing is a pass, so `TEST` has drifted from the name of the test \
+         function and this test has been proving nothing"
     );
 }
 
