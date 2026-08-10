@@ -268,10 +268,11 @@ pub fn accepts(action: PixelAction, toolkit: &Toolkit) -> Result<Acceptance, Str
              XSendEvent delivery"
         ));
     };
-    match action {
+    let measured = match action {
         PixelAction::Click => entry.click,
         PixelAction::Keyboard => entry.keyboard,
-    } {
+    };
+    match measured {
         Measured::Accepted(variant) => Ok(Acceptance {
             variant,
             evidence: entry.evidence,
