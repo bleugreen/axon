@@ -41,10 +41,15 @@
       entry.addEventListener("input", (event) => {
         send({ kind: "text", widget: "entry", value: event.target.value });
       });
-      for (const type of ["mousedown", "keydown"]) {
+      // Named as the native targets name them, so "did this reach the toolkit at all" is one
+      // question across every target rather than one question per engine.
+      for (const [type, name] of [
+        ["mousedown", "button-press"],
+        ["keydown", "key-press"],
+      ]) {
         window.addEventListener(
           type,
-          (event) => send({ kind: "raw", event: type, isTrusted: event.isTrusted }),
+          (event) => send({ kind: "raw", event: name, isTrusted: event.isTrusted }),
           true,
         );
       }

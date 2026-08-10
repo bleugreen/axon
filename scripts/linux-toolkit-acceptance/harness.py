@@ -476,20 +476,19 @@ def measure(spec: Spec, session: Session, reports: Reports, decoy, port: int) ->
             result["detail"] = "the pointer would not park clear of the target window"
             return result
 
-        result["background"] = {
-            "click": _background_click(session, reports, window, point, root_point),
-            "text": _background_text(session, reports, window),
-        }
-        result["invariants"] = {
-            "pointerUnchanged": list(session.pointer()) == before["pointer"],
-            "focusUnchanged": session.focus() == before["focus"],
-            "pointerAfter": list(session.pointer()),
-        }
+        click = _background_click(session, reports, window, point, root_point)
+        click["invariants"] = _invariants(session, before)
+        text = _background_text(session, reports, window)
+        text["invariants"] = _invariants(session, before)
+        result["background"] = {"click": click, "text": text}
+        result["invariants"] = _invariants(session, before)
 
         # Deliberately after the invariants: this one moves the pointer.
         result["pointerOverTarget"] = _pointer_over(session, reports, window, point, root_point)
 
-        result["geometry"] = compare_geometry(widgets, read_atspi(pid), origin)
+        reading = read_atspi(pid)
+        result["atspiToolkit"] = reading.get("toolkit")
+        result["geometry"] = compare_geometry(widgets, reading, origin)
 
         # Controls last: both of them move the session's pointer or focus, so they would invalidate
         # the background measurement if they ran before it.
@@ -595,6 +594,23 @@ def _pointer_over(session: Session, reports: Reports, window, point, root_point)
         "reachedToolkit": _raw(reports, "button-press"),
         "pointerAt": list(root_point),
         "focusUnchanged": session.focus() != window.id,
+    }
+
+
+def _invariants(session: Session, before: dict) -> dict:
+    """The two things the contract requires a pixel-rung dispatch to leave alone.
+
+    Read after each phase rather than once at the end: a mechanism that delivers a click and takes
+    the session focus while doing it has failed on the click, and a single reading taken after every
+    phase cannot say which phase moved what.
+    """
+    pointer = list(session.pointer())
+    focus = session.focus()
+    return {
+        "pointerUnchanged": pointer == before["pointer"],
+        "focusUnchanged": focus == before["focus"],
+        "pointerAt": pointer,
+        "focusWindow": focus,
     }
 
 

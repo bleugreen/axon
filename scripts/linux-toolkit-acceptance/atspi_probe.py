@@ -91,6 +91,16 @@ def main() -> int:
             continue
         if pid != arguments.pid:
             continue
+        # The toolkit as the application itself declares it over the accessibility bus. This is the
+        # key any acceptance table has to be written against: it is the application reporting what it
+        # is built on, not a guess read off WM_CLASS or a list of loaded libraries.
+        try:
+            toolkit = {
+                "name": application.get_toolkit_name(),
+                "version": application.get_toolkit_version(),
+            }
+        except Exception:
+            toolkit = None
         nodes: list = []
         walk(application, 0, nodes)
         frames = [node for node in nodes if node["role"] in ("frame", "window")]
@@ -99,6 +109,7 @@ def main() -> int:
                 {
                     "found": True,
                     "application": application.get_name(),
+                    "toolkit": toolkit,
                     "frame": frames[0] if frames else None,
                     "widgets": [node for node in nodes if node.get("widget")],
                     "nodeCount": len(nodes),
