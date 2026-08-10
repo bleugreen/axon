@@ -194,7 +194,7 @@ impl X11Session {
     /// Returns whether a request was sent: `false` means the process has no managed top-level
     /// window to raise. Even `true` is not proof, which is why the caller reads the foreground back.
     pub fn activate_pid(&self, pid: u32) -> Result<bool, BackendError> {
-        let Some(window) = self.window_for_pid(pid)? else {
+        let Some(window) = self.windows_for_pid(pid)?.first().copied() else {
             return Ok(false);
         };
         // Source indication 2 is "pager": an explicit request from a tool acting for the user,
@@ -376,22 +376,26 @@ impl X11Session {
     /// first half typed into the user's window while the call reports a failure, and no caller can
     /// tell that apart from nothing having happened at all.
     pub fn keyboard(&self, intent: KeyboardIntent<'_>) -> Result<(), BackendError> {
-        let mapping = self.keyboard_mapping()?;
-        let strokes = match intent {
-            KeyboardIntent::Text(text) => keys::text_keysyms(text)
-                .into_iter()
-                .map(|keysym| mapping.stroke(keysym, &[]))
-                .collect::<Result<Vec<_>, _>>()?,
-            KeyboardIntent::Key(spec) => {
-                let chord = keys::parse_chord(spec)
-                    .map_err(|error| capability(Capability::KeyboardInput, &error))?;
-                vec![mapping.stroke(chord.key, &chord.modifiers)?]
-            }
-        };
-        for stroke in &strokes {
+        for stroke in &self.strokes(intent)? {
             self.post(stroke)?;
         }
         self.flush("post keyboard input")
+    }
+
+    /// Resolves an entire intent against the live layout, before anything is posted or sent.
+    fn strokes(&self, intent: KeyboardIntent<'_>) -> Result<Vec<Stroke>, BackendError> {
+        let mapping = self.keyboard_mapping()?;
+        match intent {
+            KeyboardIntent::Text(text) => keys::text_keysyms(text)
+                .into_iter()
+                .map(|keysym| mapping.stroke(keysym, &[]))
+                .collect(),
+            KeyboardIntent::Key(spec) => {
+                let chord = keys::parse_chord(spec)
+                    .map_err(|error| capability(Capability::KeyboardInput, &error))?;
+                Ok(vec![mapping.stroke(chord.key, &chord.modifiers)?])
+            }
+        }
     }
 
     /// Presses one key with its modifiers held, then releases everything in reverse.
@@ -455,14 +459,6 @@ impl X11Session {
             .copied())
     }
 
-    fn window_for_pid(&self, pid: u32) -> Result<Option<Window>, BackendError> {
-        for window in self.property(self.root, self.atoms._NET_CLIENT_LIST, AtomEnum::WINDOW)? {
-            if self.window_pid(window)? == Some(pid) {
-                return Ok(Some(window));
-            }
-        }
-        Ok(None)
-    }
 
     fn property(
         &self,
