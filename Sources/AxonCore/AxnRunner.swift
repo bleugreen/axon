@@ -238,10 +238,58 @@ public struct AxnRunner {
         _ axn: Axn,
         callerArgValues: [String: JSONValue]
     ) throws -> PreparedAxnRun {
+        try validateReplayContract(axn)
         let resolved = try AxnArgumentResolver(sourceResolvers: parameterSourceResolvers)
             .resolve(axn.args, callerArgValues: callerArgValues)
         let substituted = try substituteParameters(in: axn.blocks, resolved: resolved)
         return PreparedAxnRun(axn: axn, actions: substituted)
+    }
+
+    private func validateReplayContract(_ axn: Axn) throws {
+        guard axn.version == 2 else {
+            let obsolete = axn.blocks.enumerated().compactMap { index, block -> (Int, JSONValue)? in
+                guard case let .action(action) = block else { return nil }
+                for key in ["target", "from", "to"] {
+                    if let target = action.fields[key] { return (index, target) }
+                }
+                return nil
+            }.first
+            let suffix = obsolete.map { "; actions[\($0.0)] obsolete target \(renderTarget($0.1))" } ?? ""
+            throw AxnRunError.invalidParams(
+                ".axn version \(axn.version) is not replayable; version 1 targets are obsolete and must be re-recorded or edited as version 2\(suffix)"
+            )
+        }
+
+        for (index, block) in axn.blocks.enumerated() {
+            guard case let .action(action) = block else { continue }
+            for key in ["target", "from", "to"] {
+                guard let target = action.fields[key] else { continue }
+                try validateV2Target(target, path: "actions[\(index)].\(key)")
+            }
+        }
+    }
+
+    private func validateV2Target(_ value: JSONValue, path: String) throws {
+        guard case let .object(target) = value else {
+            throw AxnRunError.invalidParams("\(path) must be a version 2 target object; obsolete target \(renderTarget(value))")
+        }
+        if target["x"] != nil || target["y"] != nil {
+            guard target["x"] != nil, target["y"] != nil else {
+                throw AxnRunError.invalidParams("\(path) point target requires x and y")
+            }
+            return
+        }
+        guard case let .string(app)? = target["app"], !app.isEmpty,
+              case let .string(name)? = target["name"], !name.isEmpty,
+              case .object? = target["locator"]
+        else {
+            throw AxnRunError.invalidParams("\(path) requires non-empty app and name with an attached locator")
+        }
+    }
+
+    private func renderTarget(_ value: JSONValue) -> String {
+        guard let data = try? JSONEncoder().encode(value) else { return String(describing: value) }
+        return String(decoding: data, as: UTF8.self)
     }
 
     private func callerArgValues(in params: [String: JSONValue]) throws -> [String: JSONValue] {

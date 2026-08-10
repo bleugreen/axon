@@ -10,6 +10,31 @@ public enum RecordedUserAction: Equatable, Sendable {
     case performAction(target: JSONValue, action: String)
 }
 
+/// Bridges recorder evidence to the same semantic naming model used by observations.
+/// The recorder does not own a complete serialized snapshot, so callers must supply the
+/// snapshot and the selected node index rather than deriving a second, local name.
+public enum RecordedSemanticTargetBuilder {
+    public static func target(
+        app: String,
+        locator: [String: JSONValue],
+        snapshotJSON: JSONValue,
+        sourceIndex: Int
+    ) -> JSONValue? {
+        guard !app.isEmpty,
+              let element = SemanticNameDeriver.derive(from: snapshotJSON).elements.first(where: {
+                  $0.sourceIndex == sourceIndex
+              })
+        else {
+            return nil
+        }
+        return .object([
+            "app": .string(app),
+            "name": .string(element.name),
+            "locator": .object(locator)
+        ])
+    }
+}
+
 public struct RecordedUserEventGroup: Equatable, Sendable {
     public let action: RecordedUserAction
     public let observed: [JSONValue]
@@ -125,7 +150,7 @@ public struct UserRecordingTranslator {
         }
 
         return .object([
-            "version": .int(1),
+            "version": .int(2),
             "actions": .array(prunedUnrequiredGuardFacts(in: actions, guardFactIDs: guardFactIDs))
         ])
     }
