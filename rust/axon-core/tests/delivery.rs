@@ -259,9 +259,10 @@ fn a_reported_refusal_carries_every_obstacle_the_ladder_walked_past() {
     let obstacle = axon_core::DeliveryObstacle {
         rung: DeliveryRung::Pixel,
         reason: DeliveryRefusalReason::BackgroundPixelUnsupported,
-        message: "the target application reports AT-SPI toolkit gtk 3.24.51, which does not accept \
+        message:
+            "the target application reports AT-SPI toolkit gtk 3.24.51, which does not accept \
                   a click in the background"
-            .into(),
+                .into(),
     };
 
     // The policy boundary outranks the capability gap below it, and the gap still travels.

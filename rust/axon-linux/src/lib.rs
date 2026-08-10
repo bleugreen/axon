@@ -2379,7 +2379,10 @@ actions:
             // Byte for byte the acceptance table's own sentence, naming the toolkit and version.
             assert_eq!(obstacle["message"], json!(measured));
             assert!(
-                obstacle["message"].as_str().unwrap().contains("gtk 3.24.51"),
+                obstacle["message"]
+                    .as_str()
+                    .unwrap()
+                    .contains("gtk 3.24.51"),
                 "{}",
                 obstacle["message"]
             );
