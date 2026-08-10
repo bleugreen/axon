@@ -244,6 +244,127 @@ fn planner_reports_the_policy_boundary_ahead_of_a_lower_capability_gap() {
 }
 
 #[test]
+fn a_reported_refusal_carries_every_obstacle_the_ladder_walked_past() {
+    // The pixel rung's obstacle is the product of the platform's own evidence work — the toolkit
+    // and version that declined — and it is the only thing that answers "would the quiet rung ever
+    // work against this target". Whichever reason wins the ranking, that sentence has to survive.
+    let toolkit_refused = DeliveryCandidate::unavailable(
+        DeliveryRung::Pixel,
+        DeliveryCapability::BackgroundPixelInput,
+        "XSendEvent",
+        DeliveryRefusalReason::BackgroundPixelUnsupported,
+        "the target application reports AT-SPI toolkit gtk 3.24.51, which does not accept a click \
+         in the background",
+    );
+    let obstacle = axon_core::DeliveryObstacle {
+        rung: DeliveryRung::Pixel,
+        reason: DeliveryRefusalReason::BackgroundPixelUnsupported,
+        message:
+            "the target application reports AT-SPI toolkit gtk 3.24.51, which does not accept \
+                  a click in the background"
+                .into(),
+    };
+
+    // The policy boundary outranks the capability gap below it, and the gap still travels.
+    let DeliverySelection::Refusal(policy_bound) = select_delivery(
+        &[toolkit_refused.clone(), foreground()],
+        DeliveryPolicy::BackgroundOnly,
+        None,
+    ) else {
+        panic!("expected a refusal when the pixel rung is out and the policy forbids foreground")
+    };
+    assert_eq!(
+        policy_bound.reason,
+        DeliveryRefusalReason::ForegroundNotPermitted
+    );
+    assert_eq!(policy_bound.also_refused, vec![obstacle.clone()]);
+
+    // Same ladder on a backend with no foreground mechanism at all: a different winning reason,
+    // the same evidence underneath it.
+    let no_global_input = DeliveryCandidate::unavailable(
+        DeliveryRung::Foreground,
+        DeliveryCapability::GlobalInput,
+        "XTest",
+        DeliveryRefusalReason::NoDeliveryCandidate,
+        "this session exposes no global input device",
+    );
+    let DeliverySelection::Refusal(no_mechanism) = select_delivery(
+        &[toolkit_refused, no_global_input],
+        DeliveryPolicy::ForegroundPermitted,
+        None,
+    ) else {
+        panic!("expected a refusal when neither rung exists")
+    };
+    assert_eq!(
+        no_mechanism.reason,
+        DeliveryRefusalReason::NoDeliveryCandidate
+    );
+    assert_eq!(no_mechanism.also_refused, vec![obstacle]);
+
+    // The reported refusal is never also listed as one of the ones walked past.
+    for refusal in [policy_bound, no_mechanism] {
+        assert!(
+            !refusal
+                .also_refused
+                .iter()
+                .any(|other| other.message == refusal.message),
+            "the winning refusal must not be duplicated in alsoRefused"
+        );
+    }
+}
+
+#[test]
+fn a_refusal_with_nothing_below_it_reports_no_obstacles() {
+    let DeliverySelection::Refusal(empty_ladder) =
+        select_delivery(&[], DeliveryPolicy::ForegroundPermitted, None)
+    else {
+        panic!("an action with no mechanism cannot be delivered")
+    };
+    assert!(empty_ladder.also_refused.is_empty());
+
+    let DeliverySelection::Refusal(only_rung) = select_delivery(
+        &[foreground()],
+        DeliveryPolicy::BackgroundOnly,
+        Some(DeliveryRung::Pixel),
+    ) else {
+        panic!("the foreground rung is refused under backgroundOnly")
+    };
+    assert!(only_rung.also_refused.is_empty());
+}
+
+#[test]
+fn an_obstacle_reaches_the_caller_through_the_refusal_result_envelope() {
+    let DeliverySelection::Refusal(refusal) = select_delivery(
+        &[
+            DeliveryCandidate::unavailable(
+                DeliveryRung::Pixel,
+                DeliveryCapability::BackgroundPixelInput,
+                "HWND client message",
+                DeliveryRefusalReason::BackgroundPixelUnsupported,
+                "window class Widget has no probe-verified client-coordinate message path",
+            ),
+            foreground(),
+        ],
+        DeliveryPolicy::BackgroundOnly,
+        None,
+    ) else {
+        panic!("expected a refusal")
+    };
+
+    let result = DeliveryOutcome::refusal_result(DeliveryPolicy::BackgroundOnly, refusal);
+
+    // The top-level message stays the winning reason's: it is what this caller can act on.
+    assert_eq!(result["refusal"]["reason"], json!("foregroundNotPermitted"));
+    let also = &result["refusal"]["alsoRefused"];
+    assert_eq!(also[0]["rung"], json!("pixel"));
+    assert_eq!(also[0]["reason"], json!("backgroundPixelUnsupported"));
+    assert_eq!(
+        also[0]["message"],
+        json!("window class Widget has no probe-verified client-coordinate message path")
+    );
+}
+
+#[test]
 fn planner_never_offers_an_opt_in_to_a_mechanism_the_runtime_does_not_have() {
     // Reporting foregroundNotPermitted here would tell the caller to opt in to global input this
     // backend cannot produce, sending them after a permission that changes nothing.

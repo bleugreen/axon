@@ -92,6 +92,75 @@ private let foreground = DeliveryCandidate(rung: .foreground, capability: .globa
     #expect(permitted.message == "no process to bind to")
 }
 
+@Test func aReportedRefusalCarriesEveryObstacleTheLadderWalkedPast() {
+    // The pixel rung's obstacle is the only thing that answers "would the quiet rung ever work
+    // against this target". Whichever reason wins the ranking, that sentence has to survive.
+    let unbound = DeliveryCandidate(
+        rung: .pixel,
+        capability: .backgroundPixelInput,
+        strategy: "CGEventToPid",
+        unavailable: .backgroundPixelUnsupported,
+        unavailableMessage: "the click names a bare screen point with no application behind it"
+    )
+    let obstacle = DeliveryObstacle(
+        rung: .pixel,
+        reason: .backgroundPixelUnsupported,
+        message: "the click names a bare screen point with no application behind it"
+    )
+
+    // The policy boundary outranks the capability gap below it, and the gap still travels.
+    guard case let .refusal(policyBound) = DeliveryPlanner.select(
+        from: [unbound, foreground],
+        policy: .backgroundOnly
+    ) else {
+        Issue.record("Expected a refusal when the pixel rung is out and the policy forbids foreground")
+        return
+    }
+    #expect(policyBound.reason == .foregroundNotPermitted)
+    #expect(policyBound.alsoRefused == [obstacle])
+    #expect(policyBound.jsonValue["alsoRefused"] == .array([obstacle.jsonValue]))
+
+    // Same ladder with no global input at all: a different winning reason, the same evidence
+    // underneath it.
+    let noGlobalInput = DeliveryCandidate(
+        rung: .foreground,
+        capability: .globalInput,
+        strategy: "CGEvent",
+        unavailable: .noDeliveryCandidate,
+        unavailableMessage: "this session exposes no global input device"
+    )
+    guard case let .refusal(noMechanism) = DeliveryPlanner.select(
+        from: [unbound, noGlobalInput],
+        policy: .foregroundPermitted
+    ) else {
+        Issue.record("Expected a refusal when neither rung exists")
+        return
+    }
+    #expect(noMechanism.reason == .noDeliveryCandidate)
+    #expect(noMechanism.alsoRefused == [obstacle])
+
+    // The reported refusal is never also listed as one of the ones walked past.
+    for refusal in [policyBound, noMechanism] {
+        #expect(refusal.alsoRefused.contains { $0.message == refusal.message } == false)
+    }
+}
+
+@Test func aRefusalWithNothingBelowItReportsNoObstacles() {
+    guard case let .refusal(emptyLadder) = DeliveryPlanner.select(from: [], policy: .foregroundPermitted),
+          case let .refusal(onlyRung) = DeliveryPlanner.select(
+              from: [foreground],
+              policy: .backgroundOnly,
+              after: .pixel
+          )
+    else {
+        Issue.record("Both ladders end in a refusal")
+        return
+    }
+    #expect(emptyLadder.alsoRefused.isEmpty)
+    #expect(onlyRung.alsoRefused.isEmpty)
+    #expect(emptyLadder.jsonValue["alsoRefused"] == .array([]))
+}
+
 @Test func plannerNeverOffersAnOptInToAMechanismTheRuntimeDoesNotHave() {
     // Reporting foregroundNotPermitted here would tell the caller to opt in to global input this
     // backend cannot produce, sending them after a permission that changes nothing.

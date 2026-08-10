@@ -176,7 +176,8 @@ Every action result carries four stable top-level fields alongside `success`,
 | `refusal` | Present when the backend declined a rung, otherwise `null`. |
 
 A refusal carries a stable `reason`, the `requiredRung` it would have needed, the
-responsible `capability` when one is to blame, and a diagnostic `message`:
+responsible `capability` when one is to blame, a diagnostic `message`, and
+`alsoRefused`:
 
 | reason | meaning |
 | --- | --- |
@@ -186,6 +187,23 @@ responsible `capability` when one is to blame, and a diagnostic `message`:
 | `clipboardForbidden` | A clipboard-backed candidate was offered. Always refused. |
 | `activationNotProved` | Foreground escalation could not prove the target became frontmost, so nothing was posted. |
 | `noDeliveryCandidate` | This rung's mechanism does not exist on this backend. |
+
+`alsoRefused` is every other rung the ladder walked past on the way to the one it
+reports, in ladder order, each entry naming its `rung`, its own `reason`, and its
+own `message`. It is always present, and empty when there was nothing else to
+report, so a caller never has to tell a missing field from an empty one.
+
+The reported `reason` is a ranking decision and the ranking stands: among rungs
+that would otherwise work, the policy boundary is the most actionable thing a
+caller can be told, so it outranks any capability gap below it. The obstacles
+below are ranked against nothing, and they are where the platform-specific
+evidence lives — the toolkit and version an AT-SPI target reports, the window
+class with no probe-verified message path. Those are the sentences that answer
+whether the quiet rung could ever carry this target, which is a different
+question from what this caller should do next, so the winning reason keeps its
+place and the rest travel beside it rather than being overwritten by it. A
+selected rung reports no obstacles: a ladder that found a mechanism is describing
+what happened, not why nothing could.
 
 A refusal is always decided before the mechanism it names produces any native
 side effect. A result whose `delivery` is `null` therefore dispatched nothing at

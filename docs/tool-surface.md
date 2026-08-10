@@ -182,7 +182,7 @@ under `backgroundOnly` it is refused rather than delivered globally.
 A refusal is an action result, not a transport error: the request was well
 formed and the target resolved, and the daemon declined. It carries a stable
 `reason`, the `requiredRung` it would have needed, the responsible `capability`,
-and a diagnostic `message`. A refusal is always decided before the mechanism it
+a diagnostic `message`, and `alsoRefused`. A refusal is always decided before the mechanism it
 names produces any native side effect, so a result whose `delivery` is null
 dispatched nothing at all. A result that names a rung *and* carries a refusal ran
 that rung and was only declined the escalation above it, and it keeps whatever
@@ -197,6 +197,16 @@ failures remain JSON-RPC errors.
 | `clipboardForbidden` | A clipboard-backed candidate was offered; Axon never uses the pasteboard |
 | `activationNotProved` | Foreground escalation could not prove the target became frontmost, so nothing was posted |
 | `noDeliveryCandidate` | The action has no delivery mechanism at all on this backend |
+
+`alsoRefused` lists every other rung the ladder walked past, in ladder order,
+each with its own `rung`, `reason`, and `message`. The reported `reason` is the
+most actionable one — being told to opt in beats being told about a capability
+gap you cannot act on — but it is not the only useful one. A click refused as
+`foregroundNotPermitted` whose `alsoRefused` names a raw screen point with no
+application behind it is telling you the quiet rung would work from a handle; one
+whose entry names a toolkit that does not act on background clicks is telling you
+it never will for this target. The array is always present, and empty when the
+ladder walked past nothing.
 
 Foreground escalation is transactional. Axon captures the prior frontmost
 application, activates the target and proves it is frontmost, dispatches exactly

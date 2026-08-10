@@ -92,6 +92,40 @@ public enum DeliveryRefusalReason: String, Codable, Equatable, Sendable, CaseIte
     case noDeliveryCandidate
 }
 
+/// A rung the ladder walked past, and the obstacle that stopped it there.
+///
+/// Which refusal is *reported* is a ranking decision, and the ranking is right: among rungs that
+/// would otherwise work, the policy boundary is the most actionable thing a caller can be told. The
+/// obstacles below it are ranked against nothing, and they are where the platform-specific evidence
+/// lives — the process a background click could not be bound to, the toolkit that declined. A
+/// caller told only `foregroundNotPermitted` learns to opt in and learns nothing about whether the
+/// quiet rung would ever work against this target, which is a different piece of advice. So the
+/// winning reason keeps its place and every other obstacle rides along beside it.
+public struct DeliveryObstacle: Codable, Equatable, Sendable {
+    public let rung: DeliveryRung
+    public let reason: DeliveryRefusalReason
+    public let message: String
+
+    public init(rung: DeliveryRung, reason: DeliveryRefusalReason, message: String) {
+        self.rung = rung
+        self.reason = reason
+        self.message = message
+    }
+
+    /// The obstacle a refusal becomes once a later rung supersedes it as the reported one.
+    public init(_ refusal: DeliveryRefusal) {
+        self.init(rung: refusal.requiredRung, reason: refusal.reason, message: refusal.message)
+    }
+
+    public var jsonValue: JSONValue {
+        .object([
+            "rung": .string(rung.rawValue),
+            "reason": .string(reason.rawValue),
+            "message": .string(message)
+        ])
+    }
+}
+
 /// A refusal is an action result, not a transport error: the request was well formed and the target
 /// resolved, and the daemon declined to act.
 public struct DeliveryRefusal: Codable, Equatable, Sendable {
@@ -101,17 +135,36 @@ public struct DeliveryRefusal: Codable, Equatable, Sendable {
     /// The mechanism class that was missing or forbidden, when one is responsible.
     public let capability: DeliveryCapability?
     public let message: String
+    /// Every other rung the ladder walked past, in ladder order, each carrying its own obstacle.
+    /// Empty for a refusal no ladder walk produced, such as one raised by a foreground transaction
+    /// that had already been selected.
+    public let alsoRefused: [DeliveryObstacle]
 
     public init(
         reason: DeliveryRefusalReason,
         requiredRung: DeliveryRung,
         capability: DeliveryCapability? = nil,
-        message: String
+        message: String,
+        alsoRefused: [DeliveryObstacle] = []
     ) {
         self.reason = reason
         self.requiredRung = requiredRung
         self.capability = capability
         self.message = message
+        self.alsoRefused = alsoRefused
+    }
+
+    /// Attaches the obstacles a ladder walk collected. File-private on purpose: the planner is the
+    /// only thing that walks a ladder, so it is the only thing that can honestly say what was
+    /// walked past.
+    fileprivate func alsoRefusing(_ obstacles: [DeliveryObstacle]) -> DeliveryRefusal {
+        DeliveryRefusal(
+            reason: reason,
+            requiredRung: requiredRung,
+            capability: capability,
+            message: message,
+            alsoRefused: obstacles
+        )
     }
 
     public var jsonValue: JSONValue {
@@ -119,7 +172,8 @@ public struct DeliveryRefusal: Codable, Equatable, Sendable {
             "reason": .string(reason.rawValue),
             "requiredRung": .string(requiredRung.rawValue),
             "capability": capability.map { .string($0.rawValue) } ?? .null,
-            "message": .string(message)
+            "message": .string(message),
+            "alsoRefused": .array(alsoRefused.map(\.jsonValue))
         ])
     }
 }
@@ -226,45 +280,57 @@ public enum DeliveryPlanner {
         after: DeliveryRung? = nil
     ) -> DeliverySelection {
         var blocked: DeliveryRefusal?
+        // Every candidate the walk passed over, in ladder order. The newest block is the one that
+        // gets reported; the one it supersedes is demoted to an obstacle rather than dropped.
+        var walkedPast: [DeliveryObstacle] = []
+        func block(_ refusal: DeliveryRefusal) {
+            if let previous = blocked {
+                walkedPast.append(DeliveryObstacle(previous))
+            }
+            blocked = refusal
+        }
         for candidate in candidates.sorted(by: { $0.rung.order < $1.rung.order }) {
             if let after, candidate.rung.order <= after.order {
                 continue
             }
             if candidate.capability.isForbidden {
-                blocked = DeliveryRefusal(
+                block(DeliveryRefusal(
                     reason: .clipboardForbidden,
                     requiredRung: candidate.rung,
                     capability: candidate.capability,
                     message: "\(candidate.strategy) would deliver through the \(candidate.capability.rawValue) capability, which Axon never uses"
-                )
+                ))
                 continue
             }
             // A rung the runtime cannot offer is reported as missing whatever the policy says:
             // telling a caller to opt in to a mechanism that does not exist would be a lie.
             if let unavailable = candidate.unavailable {
-                blocked = DeliveryRefusal(
+                block(DeliveryRefusal(
                     reason: unavailable,
                     requiredRung: candidate.rung,
                     capability: candidate.capability,
                     message: candidate.unavailableMessage
                         ?? "\(candidate.strategy) is unavailable for this target"
-                )
+                ))
                 continue
             }
             if candidate.rung.requiresForegroundOptIn, !policy.permitsForeground {
                 // Among rungs that would otherwise work, the policy boundary is the most actionable
-                // thing a caller can be told, so it outranks any capability gap below it.
-                blocked = DeliveryRefusal(
+                // thing a caller can be told, so it outranks any capability gap below it. What the
+                // gaps below still have to say travels in `alsoRefused` rather than being dropped.
+                block(DeliveryRefusal(
                     reason: .foregroundNotPermitted,
                     requiredRung: candidate.rung,
                     capability: candidate.capability,
                     message: "\(candidate.strategy) requires foreground delivery; this action ran under \(policy.rawValue)"
-                )
+                ))
                 continue
             }
             return .candidate(candidate)
         }
-        return .refusal(blocked ?? DeliveryRefusal(
+        // Nothing declined an action with no blocked rung; it simply has no mechanism, so there is
+        // no obstacle to report beyond the absence itself.
+        return .refusal(blocked?.alsoRefusing(walkedPast) ?? DeliveryRefusal(
             reason: .noDeliveryCandidate,
             requiredRung: after.map { $0 == .semantic ? .pixel : .foreground } ?? .semantic,
             capability: nil,

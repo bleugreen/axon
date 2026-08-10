@@ -1,5 +1,5 @@
 {
-  "comment": "Canonical action-result shapes for the delivery contract. Every case fixes the four stable top-level fields; backends add their own strategy, message, and detail keys around them.",
+  "comment": "Canonical action-result shapes for the delivery contract. Every case fixes the four stable top-level fields; backends add their own strategy, message, and detail keys around them. A refusal always carries alsoRefused, empty when the ladder walked past nothing else, so a caller never has to distinguish a missing field from an empty one.",
   "cases": [
     {
       "name": "semantic action verified by the accessibility layer",
@@ -24,7 +24,8 @@
         "reason": "foregroundNotPermitted",
         "requiredRung": "foreground",
         "capability": "globalInput",
-        "message": "SendInput requires foreground delivery; this action ran under backgroundOnly"
+        "message": "SendInput requires foreground delivery; this action ran under backgroundOnly",
+        "alsoRefused": []
       }
     },
     {
@@ -36,7 +37,27 @@
         "reason": "backgroundPixelUnsupported",
         "requiredRung": "pixel",
         "capability": "backgroundPixelInput",
-        "message": "the compositor cannot bind background input to the target window"
+        "message": "the compositor cannot bind background input to the target window",
+        "alsoRefused": []
+      }
+    },
+    {
+      "name": "policy refusal that still carries the pixel rung's own obstacle",
+      "deliveryPolicy": "backgroundOnly",
+      "delivery": null,
+      "dispatchSuccess": false,
+      "refusal": {
+        "reason": "foregroundNotPermitted",
+        "requiredRung": "foreground",
+        "capability": "globalInput",
+        "message": "XTest pointer requires foreground delivery; this action ran under backgroundOnly",
+        "alsoRefused": [
+          {
+            "rung": "pixel",
+            "reason": "backgroundPixelUnsupported",
+            "message": "the target application reports AT-SPI toolkit gtk 3.24.51, which does not accept a click in the background: GTK 3 does not act on a background click at all"
+          }
+        ]
       }
     },
     {
@@ -48,7 +69,8 @@
         "reason": "noDeliveryCandidate",
         "requiredRung": "semantic",
         "capability": null,
-        "message": "No delivery mechanism remains for this action"
+        "message": "No delivery mechanism remains for this action",
+        "alsoRefused": []
       }
     },
     {

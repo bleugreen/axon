@@ -1,3 +1,4 @@
+import CoreGraphics
 import Foundation
 import Testing
 @testable import AxonCore
@@ -127,6 +128,38 @@ private let mutatingRequests: [(method: String, params: [String: JSONValue])] = 
     #expect(action?["refusal"]?["reason"] == .string("backgroundPixelUnsupported"))
     #expect(action?["refusal"]?["requiredRung"] == .string("pixel"))
     #expect(action?["refusal"]?["capability"] == .string("backgroundPixelInput"))
+}
+
+@Test func aPixelRungsOwnObstacleReachesTheCallerThroughTheSocketEnvelope() {
+    // The whole path, from the real macOS ladder to what a caller reads. A bare screen point has
+    // no application to bind background input to, so the pixel rung is out and the policy boundary
+    // above it is what gets reported. This is the sentence that used to be overwritten by that
+    // report: the only one saying whether the quiet rung could ever carry this target.
+    var posted: [CGEventType] = []
+    let executor = AXPrimitiveActionExecutor(
+        elementStore: AXElementStore(),
+        overlay: nil,
+        postEvent: { posted.append($0.type) },
+        postEventToProcess: { event, _ in posted.append(event.type) },
+        sleepMilliseconds: { _ in },
+        frontmostApp: { ForegroundApp(processIdentifier: 7, name: "Prior", bundleIdentifier: "com.example.prior") },
+        pointerLocation: { .zero }
+    )
+    let router = CommandRouter(actions: executor.handlers())
+
+    let response = router.handle(JSONRPCRequest(
+        id: .string("click-point"),
+        method: "click",
+        params: .object(["target": .object(["point": .object(["x": .int(10), "y": .int(20)])])])
+    ))
+
+    let refusal = response.result?["action"]?["refusal"]
+    #expect(refusal?["reason"] == .string("foregroundNotPermitted"))
+    let obstacle = refusal?["alsoRefused"]?[0]
+    #expect(obstacle?["rung"] == .string("pixel"))
+    #expect(obstacle?["reason"] == .string("backgroundPixelUnsupported"))
+    #expect(obstacle?["message"]?.stringValue?.contains("raw screen point carries no application") == true)
+    #expect(posted.isEmpty)
 }
 
 @Test func refusalsSurviveAnAxnRunTraceAsFailuresWithoutChangingTheBatchWrapper() throws {
