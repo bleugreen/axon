@@ -725,7 +725,7 @@ Test-Scenario 'park: a daemon slower than the shutdown request is a slow park, n
     # reports anything slower as a failure; on a runner that had just finished a cargo build, that
     # wait expired, the stage called the run red, and the process exited moments later. The lane's
     # verdict here is the process, not the exit code.
-    $script:Machine.LateExitReads = 3
+    $script:Machine.LateExitAfterRequests = 1
     $result = Invoke-StageUnderTest -Name 'park'
     Check 'the stage succeeds' (-not $result.Failed) $result.Error
     Check 'it asked once and then waited' ((Get-Count "axon shutdown [$ProbeExecutable]") -eq 1) "asked $(Get-Count "axon shutdown [$ProbeExecutable]") time(s)"
@@ -736,13 +736,30 @@ Test-Scenario 'park: a daemon slower than the shutdown request is a slow park, n
     Check 'the restore still knows what is owed' ($script:Machine.ParkState.daemonWasRunning -eq $true)
 }
 
+Test-Scenario 'park: a request that finds no pipe is not the process this stage is waiting for' {
+    # The same teardown, taking longer than one of this lane's own windows. The second request finds
+    # the pipe already gone -- it went when the first was acknowledged -- and the real command reports
+    # that as success. Believing it would return with the process still running and hand the probe a
+    # machine where the daemon this stage set out to stop is still tearing down, which is the race
+    # `shutdown`'s own wait exists to prevent.
+    $script:Machine.LateExitAfterRequests = 2
+    $result = Invoke-StageUnderTest -Name 'park'
+    Check 'the stage succeeds' (-not $result.Failed) $result.Error
+    Check 'it asked twice' ((Get-Count "axon shutdown [$ProbeExecutable]") -eq 2) "asked $(Get-Count "axon shutdown [$ProbeExecutable]") time(s)"
+    Check 'it did not take the second request for an answer about the process' (Test-Said 'found no daemon left to stop')
+    Check 'it waited for the process instead' (Test-Said 'later than the request itself waited')
+    Check 'the process really is gone' (@($script:Machine.Processes | Where-Object { $_.ProcessId -eq $DesktopPid }).Count -eq 0)
+    Check 'the pipe is free' ($script:Machine.Health.daemon.running -eq $false)
+    Check 'it killed nothing' (-not (Test-Did 'stop-process'))
+}
+
 Test-Scenario 'park: a daemon whose health document names no process id is waited for through the pipe' {
     # A desktop running an old enough release reports a daemon that is up with no process id at all,
-    # and the restore tolerates the same gap. With no process to watch, the health round trip is the
-    # only thing that can say the daemon went, so that is what the wait polls -- one read of it is
-    # spent before the stop, which is why the count here outlasts the request.
+    # and the restore tolerates the same gap. With no process to watch, the pipe is the only thing
+    # that can say anything at all, so the wait polls the health round trip and accepts what it can
+    # know: that nothing is answering.
     $script:Machine.Health.daemon.processId = $null
-    $script:Machine.LateExitReads = 3
+    $script:Machine.LateExitAfterRequests = 1
     $result = Invoke-StageUnderTest -Name 'park'
     Check 'the stage succeeds' (-not $result.Failed) $result.Error
     Check 'it asked once and then waited' ((Get-Count "axon shutdown [$ProbeExecutable]") -eq 1) "asked $(Get-Count "axon shutdown [$ProbeExecutable]") time(s)"
@@ -767,20 +784,25 @@ Test-Scenario 'park: a daemon that never exits fails the stage, having already r
 }
 
 Test-Scenario 'park: a daemon still answering after the stop is named rather than killed' {
-    # `shutdown` reports success while something else keeps the pipe -- the case where a probe would
-    # otherwise gather every assertion from a daemon nobody built.
+    # This desktop's daemon stops exactly as asked, and something else has the pipe: a probe orphan
+    # from an earlier run, still starting while the stop was requested, binding it the moment the
+    # desktop's daemon lets go. The stop has nothing left to do, so what catches this is the
+    # assertion that nothing is answering -- without it a probe would gather every assertion from a
+    # daemon nobody built.
     $original = Get-Item function:Invoke-Axon
     function Invoke-Axon {
         param([string] $Executable, [string[]] $Arguments)
+        $result = & $original -Executable $Executable -Arguments $Arguments
         if (($Arguments -join ' ') -eq 'shutdown') {
-            $script:Machine.Log.Add('axon shutdown')
-            return [pscustomobject]@{ ExitCode = 0; Output = 'stopped' }
+            Add-FakeProcess -ProcessId 7777 -ExecutablePath $ProbeExecutable
+            $script:Machine.Health = New-FakeHealth -ProcessId 7777
         }
-        & $original -Executable $Executable -Arguments $Arguments
+        $result
     }
     $result = Invoke-StageUnderTest -Name 'park'
     Check 'the stage fails' $result.Failed
-    Check 'it names the pid holding the pipe' ($result.Error -match "still served by pid $DesktopPid") $result.Error
+    Check "this desktop's own daemon did stop" (@($script:Machine.Processes | Where-Object { $_.ProcessId -eq $DesktopPid }).Count -eq 0)
+    Check 'it names the pid holding the pipe' ($result.Error -match 'still served by pid 7777') $result.Error
     Check 'it killed nothing' (-not (Test-Did 'stop-process'))
 }
 
