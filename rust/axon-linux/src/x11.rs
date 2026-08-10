@@ -99,6 +99,12 @@ impl X11Session {
             root,
             atoms,
             under_wayland: std::env::var_os("WAYLAND_DISPLAY").is_some(),
+            event_clock: AtomicU32::new(
+                SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .map(|since| since.as_millis() as u32)
+                    .unwrap_or(1),
+            ),
         })
     }
 
@@ -130,6 +136,37 @@ impl X11Session {
         [self.atoms._NET_ACTIVE_WINDOW, self.atoms._NET_WM_PID]
             .iter()
             .all(|required| supported.contains(required))
+    }
+
+    /// The window EWMH reports as active, read plainly.
+    ///
+    /// Distinct from [`Self::active_window_pid`], which interprets an absent answer against the
+    /// session type. The pixel rung only compares this reading before a dispatch with the same
+    /// reading after it, and for that an empty session is as unchanged as a busy one.
+    pub fn active_window(&self) -> Result<Option<Window>, BackendError> {
+        Ok(self
+            .property(self.root, self.atoms._NET_ACTIVE_WINDOW, AtomEnum::WINDOW)?
+            .first()
+            .copied()
+            .filter(|window| *window != x11rb::NONE))
+    }
+
+    /// The window holding the X input focus.
+    ///
+    /// Read alongside the active window rather than instead of it, because they are different
+    /// facts and the harness caught a toolkit moving one of them. Qt acts on a background click
+    /// and asks to be activated while doing so: on a session with no window manager that moved the
+    /// input focus while `_NET_ACTIVE_WINDOW` — which only a manager maintains — stayed where it
+    /// was. A dispatch proved against the active window alone would have reported that as
+    /// background delivery.
+    pub fn input_focus(&self) -> Result<Window, BackendError> {
+        Ok(self
+            .connection
+            .get_input_focus()
+            .map_err(|error| operation("read the input focus", error))?
+            .reply()
+            .map_err(|error| operation("read the input focus", error))?
+            .focus)
     }
 
     /// The process id of whatever holds the X11 foreground.
