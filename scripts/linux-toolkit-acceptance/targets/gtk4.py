@@ -1,0 +1,81 @@
+#!/usr/bin/env python3
+"""GTK 4 target: the same window, on the toolkit whose AT-SPI extents are under suspicion."""
+
+import os
+import sys
+
+import gi
+
+gi.require_version("Gtk", "4.0")
+gi.require_version("GdkX11", "4.0")
+from gi.repository import GdkX11, GLib, Gtk  # noqa: E402
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from report import report  # noqa: E402
+
+
+class Target:
+    def __init__(self, application) -> None:
+        self.clicks = 0
+        self.window = Gtk.ApplicationWindow(application=application, title="Axon harness GTK4")
+        self.window.set_default_size(480, 320)
+
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=24)
+        box.set_margin_top(24)
+        box.set_margin_start(24)
+        box.set_margin_end(24)
+        self.entry = Gtk.Entry()
+        self.button = Gtk.Button(label="Target Button")
+        self.button.set_size_request(200, 80)
+        self.button.connect("clicked", self.on_click)
+        self.entry.connect("changed", self.on_text)
+        box.append(self.entry)
+        box.append(self.button)
+        self.window.set_child(box)
+        self.window.present()
+        self.entry.grab_focus()
+        GLib.timeout_add(600, self.announce)
+
+    def rectangle(self, widget):
+        found, bounds = widget.compute_bounds(self.window)
+        if not found:
+            return None
+        return [
+            int(bounds.get_x()),
+            int(bounds.get_y()),
+            int(bounds.get_width()),
+            int(bounds.get_height()),
+        ]
+
+    def announce(self) -> bool:
+        surface = self.window.get_surface()
+        report(
+            {
+                "kind": "ready",
+                "pid": os.getpid(),
+                "xid": GdkX11.X11Surface.get_xid(surface) if surface else None,
+                "signature": "GTK %d.%d.%d"
+                % (Gtk.get_major_version(), Gtk.get_minor_version(), Gtk.get_micro_version()),
+                "widgets": {
+                    name: rectangle
+                    for name, rectangle in (
+                        ("button", self.rectangle(self.button)),
+                        ("entry", self.rectangle(self.entry)),
+                    )
+                    if rectangle
+                },
+            }
+        )
+        return False
+
+    def on_click(self, _button) -> None:
+        self.clicks += 1
+        report({"kind": "click", "widget": "button", "count": self.clicks})
+
+    def on_text(self, entry) -> None:
+        report({"kind": "text", "widget": "entry", "value": entry.get_text()})
+
+
+application = Gtk.Application(application_id="dev.axon.harness.gtk4")
+application.connect("activate", lambda app: Target(app))
+application.run([])
