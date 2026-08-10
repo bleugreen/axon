@@ -43,12 +43,25 @@ const EXCLUDED: &[(&str, &str)] = &[
     ("permit", "PermissionPrompt"),
 ];
 
-/// X11 target-window input and the Wayland portals are not wired into this backend yet, so there
-/// is no mechanism here that can be honestly classified as the pixel rung. Relabelling XTest or a
-/// virtual global device as `pixel` would make the contract's central promise false, so the rung
-/// is reported as unsupported until a verified target-bound path exists.
-const NO_BACKGROUND_PIXEL: &str = "this Linux backend has no verified target-window input path; \
-     X11 window-targeted delivery and Wayland portal delivery are not implemented";
+/// What the pixel rung reports as its mechanism: events sent to one window this backend resolved,
+/// under the delivery variant the acceptance table names for that window's toolkit.
+const PIXEL_MECHANISM: &str = "X11 window-targeted XSendEvent";
+
+/// Why `drag` has no pixel rung, and will not get one in this shape.
+///
+/// A drag holds a button down across a whole gesture. Nothing in the acceptance table covers that:
+/// the harness measured a press immediately followed by a release, and a toolkit that acts on one
+/// says nothing about what it does with a button left held by a window it cannot see move.
+const NO_DRAG_PIXEL: &str = "a drag holds a button down across a whole gesture, and the measured \
+     toolkit acceptance covers only a press and release delivered together";
+
+/// Why a `keyboard` request that names no application cannot travel the pixel rung.
+const NO_KEYBOARD_TARGET: &str = "keyboard input naming no application is addressed at whatever \
+     holds the foreground, so there is no target window to bind it to";
+
+/// Why a resolved target with no owning application cannot travel the pixel rung either.
+const NO_RESOLVED_APPLICATION: &str = "the resolved target's owning application could not be \
+     identified, so no window can be bound to it and nothing can be revalidated before dispatch";
 
 /// Why the foreground rung is withheld rather than merely gated behind the opt-in.
 ///
