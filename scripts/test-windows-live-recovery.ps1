@@ -680,7 +680,7 @@ Test-Scenario 'park: a running desktop daemon is recorded, then stopped' {
     Check 'it says so' (Test-Said 'no daemon is answering')
     # A request that reports success is the whole stop, and nothing waits on anything. The scenarios
     # below are what happens when one does not, and this is what says they are the exception.
-    Check 'it says the request itself did the stopping' (Test-Said "this desktop's daemon was stopped")
+    Check 'it says the request itself did the stopping' (Test-Said "this desktop's daemon is stopped")
     Check 'it waited on nothing' (-not (Test-Said 'later than the request itself waited'))
 }
 

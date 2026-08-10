@@ -441,7 +441,7 @@ function Stop-DesktopDaemon {
     foreach ($attempt in 1..$ParkStopAttempts) {
         $shutdown = Invoke-Axon -Executable $ProbeExecutable -Arguments @('shutdown')
         if ($shutdown.ExitCode -eq 0) {
-            Write-Note "this desktop's daemon was stopped: $($shutdown.Output)"
+            Write-Note "this desktop's daemon is stopped: $($shutdown.Output)"
             return
         }
         $lastFailure = $shutdown.Output
@@ -450,7 +450,7 @@ function Stop-DesktopDaemon {
         $waited = [System.Diagnostics.Stopwatch]::StartNew()
         while ($waited.Elapsed.TotalSeconds -lt $ParkStopTimeoutSeconds) {
             if (Test-DesktopDaemonHasStopped -Candidates $Candidates -ProcessId $ProcessId) {
-                Write-Note "this desktop's daemon exited $([Math]::Round($timer.Elapsed.TotalSeconds, 2)) seconds after it was asked to, later than the request itself waited"
+                Write-Note "this desktop's daemon stopped $([Math]::Round($timer.Elapsed.TotalSeconds, 2)) seconds after it was asked to, later than the request itself waited"
                 return
             }
             Wait-Tick
