@@ -1,5 +1,10 @@
 use crate::lifecycle::ACCESSIBILITY_DISABLED;
-use crate::{PointerTargetVerifier, x11::X11Session};
+use crate::{
+    BackgroundPixelInput, PixelAim, PixelDispatch, PixelDispatchError, PixelPlan, PixelTarget,
+    PointerTargetVerifier,
+    pixel::{self, PixelAction},
+    x11::{X11Session, coordinate},
+};
 use atspi::{
     CoordType, ObjectRefOwned,
     proxy::{
@@ -16,7 +21,7 @@ use atspi::{
 };
 use axon_core::{
     AppQuery, Application, BackendError, Capability, CapabilityInfo, KeyboardIntent, Node,
-    Observation, PlatformBackend, RecordedCall, Screenshot, Snapshot, SnapshotHandle, Window,
+    Observation, PlatformBackend, Rect, RecordedCall, Screenshot, Snapshot, SnapshotHandle, Window,
 };
 use std::{
     collections::{HashMap, HashSet},
@@ -94,7 +99,36 @@ enum Command {
     Read(SnapshotHandle, Reply<Option<String>>),
     Set(SnapshotHandle, String, Reply<()>),
     Focus(SnapshotHandle, Reply<()>),
+    Toolkit(String, Reply<Option<pixel::Toolkit>>),
+    Extents(SnapshotHandle, Reply<Option<Rect>>),
 }
+
+/// The operation name a handle that can no longer be resolved fails under.
+///
+/// Named once because two callers depend on telling it apart from every other failure: a retained
+/// reference that has gone is a stale target, which must abort a dispatch before anything is sent,
+/// while a bus that timed out is an operational failure that says nothing about the target.
+pub(crate) const RESOLVE_HANDLE: &str = "resolve handle";
+
+/// Why an application with no declared toolkit gets no target-bound rung.
+const NO_TOOLKIT_SIGNATURE: &str = "the target application publishes no AT-SPI application object \
+     to declare a toolkit, so there is no measured signature to decide whether it acts on \
+     window-targeted delivery";
+
+/// How long the background invariants are given to catch a toolkit that reacts by activating
+/// itself or moving the pointer.
+///
+/// This backend has no completion boundary to read them across, and that is a real difference from
+/// the Windows rung rather than an oversight. `XSendEvent` hands the events to the X server, and a
+/// round trip proves the *server* processed the request; when the target's own main loop dequeues
+/// them is not observable from here. So the readings after a dispatch are taken after a bounded
+/// pause instead, long enough for an idle toolkit to dequeue and handle an event and short enough
+/// that no dispatch waits on it noticeably.
+///
+/// It is a backstop and not the defence. The defence is the acceptance table: a toolkit measured
+/// to act on these events while requesting activation is refused outright rather than delivered to
+/// and watched, which is exactly why Qt's click is absent from it.
+const PIXEL_SETTLE: Duration = Duration::from_millis(150);
 
 /// An AT-SPI application paired with the process that owns it.
 ///
