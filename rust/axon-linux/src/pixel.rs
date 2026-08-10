@@ -130,7 +130,8 @@ enum Measured {
     Accepted(SendVariant),
     /// The toolkit was measured and the rung is still refused, for the reason given. Carried as
     /// prose rather than as a bare absence because "unsupported" tells a caller nothing they can
-    /// act on, and because two of these are judgement calls a reader deserves to see argued.
+    /// act on, and because each of these is an argument a reader deserves to see made rather than
+    /// a row that quietly went missing.
     Refused(&'static str),
 }
 
