@@ -52,4 +52,14 @@ public enum AxonEnvironment {
     ) -> Bool {
         environment[launchdManagedKey] == "1"
     }
+
+    /// Whether this process must arrange its own replacement after an in-app update.
+    ///
+    /// A launchd-managed daemon already has `KeepAlive`; launching the app independently as well
+    /// races that supervisor and can leave a second menu-bar process contending for the socket.
+    public static func requiresIndependentRelaunch(
+        _ environment: [String: String] = ProcessInfo.processInfo.environment
+    ) -> Bool {
+        !isLaunchdManaged(environment)
+    }
 }
