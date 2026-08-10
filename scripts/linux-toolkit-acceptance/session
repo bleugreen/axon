@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+# Runs inside the harness's private session bus and brings the accessibility bus up by hand.
+#
+# D-Bus activation of org.a11y.Bus does not work here: the service file delegates to
+# `at-spi-dbus-bus.service`, and a session bus started by `dbus-run-session` has no systemd user
+# instance behind it, so activation fails with a permission error rather than starting anything.
+# Launching the bus explicitly is what a headless session has to do, and it is what CI images do.
+set -euo pipefail
+
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+launcher=/usr/libexec/at-spi-bus-launcher
+registry=/usr/libexec/at-spi2-registryd
+
+if [[ -x "$launcher" ]]; then
+  "$launcher" --launch-immediately &
+  launcher_pid=$!
+  trap 'kill "$launcher_pid" 2>/dev/null || true' EXIT
+  # The registry is what publishes the desktop the probe reads; the launcher only provides the bus.
+  for _ in $(seq 1 50); do
+    if gdbus call --session --dest org.a11y.Bus --object-path /org/a11y/bus \
+      --method org.a11y.Bus.GetAddress >/dev/null 2>&1; then
+      break
+    fi
+    sleep 0.1
+  done
+  if [[ -x "$registry" ]]; then
+    "$registry" --use-gnome-session=no >/dev/null 2>&1 &
+  fi
+  sleep 1
+else
+  echo "warning: at-spi-bus-launcher is missing; the AT-SPI half will report nothing" >&2
+fi
+
+exec python3 "$here/harness.py" "$@"

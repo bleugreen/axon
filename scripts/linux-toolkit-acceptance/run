@@ -32,13 +32,16 @@ export NO_AT_BRIDGE=0
 if [[ "$use_current" == "1" ]]; then
   : "${DISPLAY:?--current-display needs DISPLAY set}"
   export AXON_HARNESS_SESSION="${XDG_SESSION_TYPE:-unknown} session on $DISPLAY"
+  # A real session already has an accessibility bus, so the harness is run directly.
   exec python3 "$here/harness.py" "${args[@]+"${args[@]}"}"
 fi
 
 command -v Xvfb >/dev/null || { echo "Xvfb is required for a hermetic run" >&2; exit 1; }
 command -v dbus-run-session >/dev/null || { echo "dbus-run-session is required" >&2; exit 1; }
 
-Xvfb "$display_number" -screen 0 1600x1200x24 -nolisten tcp &
+# Xvfb reports every keysym its default keymap cannot resolve, which is hundreds of lines of
+# noise around the measurement it is hosting.
+Xvfb "$display_number" -screen 0 1600x1200x24 -nolisten tcp >/dev/null 2>&1 &
 xvfb_pid=$!
 trap 'kill "$xvfb_pid" 2>/dev/null || true' EXIT
 
@@ -62,4 +65,4 @@ export AXON_HARNESS_SESSION="hermetic Xvfb on $display_number"
 
 # dbus-run-session gives the targets and the accessibility bus one session bus to meet on. Without
 # it every target would start its own and AT-SPI would have nothing to read.
-exec dbus-run-session -- python3 "$here/harness.py" "${args[@]+"${args[@]}"}"
+exec dbus-run-session -- "$here/session" "${args[@]+"${args[@]}"}"
