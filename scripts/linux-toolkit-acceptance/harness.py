@@ -324,3 +324,245 @@ class Session:
             self.display.sync()
             time.sleep(0.02)
         return True
+
+
+# -- geometry ---------------------------------------------------------------------------------
+
+
+def read_atspi(pid: int) -> dict:
+    """What AT-SPI says about this process's window and widgets.
+
+    Run out of process on purpose: a stuck accessibility bus should cost this one reading, not the
+    whole measurement.
+    """
+    try:
+        completed = subprocess.run(
+            [sys.executable, str(HERE / "atspi_probe.py"), "--pid", str(pid)],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    except subprocess.TimeoutExpired:
+        return {"error": "the AT-SPI probe did not answer within 30s"}
+    if completed.returncode != 0:
+        return {"error": completed.stderr.strip()[-400:] or "the AT-SPI probe failed"}
+    try:
+        return json.loads(completed.stdout)
+    except ValueError:
+        return {"error": "the AT-SPI probe did not produce JSON"}
+
+
+def compare_geometry(truth: dict, atspi: dict, origin: tuple[int, int]) -> dict:
+    """Whether AT-SPI extents agree with the toolkit's own idea of where its widgets are.
+
+    The target reports rectangles in its window's coordinates, which is ground truth from inside the
+    toolkit. Adding the window's origin gives the screen rectangle a pixel rung would have to hit.
+    AT-SPI reports the same widgets in screen coordinates. Where the two disagree, AT-SPI extents
+    cannot be the coordinate source for a pixel rung on that toolkit.
+    """
+    comparison: dict = {"origin": list(origin), "widgets": {}}
+    nodes = {node.get("widget"): node for node in atspi.get("widgets", []) if node.get("widget")}
+    if atspi.get("error"):
+        comparison["error"] = atspi["error"]
+    usable = None
+    for widget, rect in sorted(truth.items()):
+        expected = [rect[0] + origin[0], rect[1] + origin[1], rect[2], rect[3]]
+        node = nodes.get(widget)
+        measured = node.get("extents") if node else None
+        entry: dict = {"expected": expected, "atspi": measured}
+        if measured is None:
+            entry["agrees"] = None
+        else:
+            # A few pixels of disagreement is toolkit padding, not a broken coordinate source.
+            entry["offsetBy"] = [measured[0] - expected[0], measured[1] - expected[1]]
+            entry["agrees"] = abs(entry["offsetBy"][0]) <= 4 and abs(entry["offsetBy"][1]) <= 4
+            usable = entry["agrees"] if usable is None else (usable and entry["agrees"])
+        comparison["widgets"][widget] = entry
+    comparison["extentsUsable"] = usable
+    return comparison
+
+
+# -- one target -------------------------------------------------------------------------------
+
+
+VARIANTS = ("targeted", "owner", "child")
+
+
+def measure(spec: Spec, session: Session, reports: Reports, decoy, port: int) -> dict:
+    result: dict = {"target": spec.name}
+    if spec.unavailable:
+        result["status"] = "unavailable"
+        result["detail"] = spec.unavailable
+        return result
+
+    reports.clear()
+    environment = dict(os.environ)
+    environment.update(spec.env)
+    environment["AXON_HARNESS_REPORT"] = f"http://127.0.0.1:{port}/report"
+    environment["AXON_HARNESS_PAGE"] = f"http://127.0.0.1:{port}/page.html"
+
+    process = subprocess.Popen(
+        spec.argv,
+        env=environment,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        start_new_session=True,
+    )
+    try:
+        ready = reports.wait_for("ready", READY_TIMEOUT)
+        if ready is None:
+            result["status"] = "failed"
+            result["detail"] = "the target never reported itself ready"
+            result["output"] = _drain(process)
+            return result
+
+        pid = int(ready.get("pid") or process.pid)
+        result["signature"] = ready.get("signature", spec.name)
+        widgets = _widget_rectangles(ready, reports)
+        if not widgets:
+            result["status"] = "failed"
+            result["detail"] = "the target reported no widget geometry to aim at"
+            return result
+
+        window = session.toplevel_for_pid(pid, timeout=15)
+        if window is None:
+            result["status"] = "failed"
+            result["detail"] = f"no viewable toplevel window found for pid {pid}"
+            return result
+        result["window"] = {"xid": window.id, "reportedXid": ready.get("xid")}
+
+        # The decoy holds the focus and the pointer is parked in the far corner, so the target is in
+        # the background under both meanings of the word for the whole background phase.
+        session.take_focus(decoy)
+        session.warp(2, 2)
+        time.sleep(0.2)
+        before = {"pointer": list(session.pointer()), "focus": session.focus()}
+        result["before"] = before
+        if before["focus"] == window.id:
+            result["status"] = "failed"
+            result["detail"] = "the target held the focus, so nothing measured here is a background"
+            return result
+
+        origin = session.origin(window)
+        button = widgets["button"]
+        point = (button[0] + button[2] // 2, button[1] + button[3] // 2)
+        root_point = (origin[0] + point[0], origin[1] + point[1])
+
+        result["background"] = {
+            "click": _background_click(session, reports, window, point, root_point),
+            "text": _background_text(session, reports, window),
+        }
+        result["invariants"] = {
+            "pointerUnchanged": list(session.pointer()) == before["pointer"],
+            "focusUnchanged": session.focus() == before["focus"],
+            "pointerAfter": list(session.pointer()),
+        }
+
+        result["geometry"] = compare_geometry(widgets, read_atspi(pid), origin)
+
+        # Controls last: both of them move the session's pointer or focus, so they would invalidate
+        # the background measurement if they ran before it.
+        result["controls"] = _controls(session, reports, window, root_point)
+        result["status"] = "measured"
+        return result
+    finally:
+        _stop(process)
+
+
+def _widget_rectangles(ready: dict, reports: Reports) -> dict:
+    """Widget rectangles in the toplevel's coordinates.
+
+    A native target measures its own widgets. A web target reports the offset of its content area and
+    the page reports the elements, because only the page knows where they ended up.
+    """
+    if ready.get("widgets"):
+        return {name: list(map(int, rect)) for name, rect in ready["widgets"].items()}
+    page = reports.wait_for("page", REACTION_TIMEOUT * 4)
+    if not page or not page.get("widgets"):
+        return {}
+    offset = ready.get("viewportOffset") or [0, 0]
+    return {
+        name: [rect[0] + offset[0], rect[1] + offset[1], rect[2], rect[3]]
+        for name, rect in page["widgets"].items()
+    }
+
+
+def _background_click(session: Session, reports: Reports, window, point, root_point) -> dict:
+    for variant in VARIANTS:
+        destination = window
+        if variant == "child":
+            child = session.child_at(window, point[0], point[1])
+            if child is None:
+                continue
+            destination = child
+        session.send_click(destination, point, root_point, variant)
+        reaction = reports.wait_for("click", REACTION_TIMEOUT)
+        if reaction:
+            return {
+                "accepted": True,
+                "variant": variant,
+                "at": list(root_point),
+                "reaction": reaction,
+            }
+    return {
+        "accepted": False,
+        "variant": None,
+        "at": list(root_point),
+        "triedVariants": list(VARIANTS),
+    }
+
+
+def _background_text(session: Session, reports: Reports, window) -> dict:
+    for variant in ("targeted", "owner"):
+        if not session.send_text(window, TYPED_TEXT, variant):
+            return {
+                "accepted": False,
+                "variant": None,
+                "error": "this layout cannot type the probe text",
+            }
+        reaction = reports.wait_for("text", REACTION_TIMEOUT)
+        if reaction:
+            return {"accepted": True, "variant": variant, "reaction": reaction}
+    return {"accepted": False, "variant": None, "triedVariants": ["targeted", "owner"]}
+
+
+def _controls(session: Session, reports: Reports, window, root_point) -> dict:
+    """Proof that the harness aimed at a real widget, and that the text field is reachable.
+
+    A background refusal only means something if these pass. If the click control fails, the
+    coordinates were wrong and the background result says nothing about the toolkit.
+    """
+    reports.clear()
+    session.xtest_click(root_point)
+    pointer_click = reports.wait_for("click", REACTION_TIMEOUT) is not None
+
+    reports.clear()
+    session.take_focus(window)
+    time.sleep(0.3)
+    session.xtest_text(TYPED_TEXT)
+    focused_text = reports.wait_for("text", REACTION_TIMEOUT) is not None
+    return {"pointerClick": pointer_click, "focusedText": focused_text}
+
+
+def _drain(process: subprocess.Popen) -> str:
+    try:
+        return (process.stdout.read() if process.stdout else "")[-2000:]
+    except Exception:
+        return ""
+
+
+def _stop(process: subprocess.Popen) -> None:
+    if process.poll() is not None:
+        return
+    try:
+        os.killpg(os.getpgid(process.pid), 15)
+    except Exception:
+        process.terminate()
+    try:
+        process.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        try:
+            os.killpg(os.getpgid(process.pid), 9)
+        except Exception:
+            process.kill()
