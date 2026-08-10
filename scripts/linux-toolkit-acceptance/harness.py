@@ -489,6 +489,7 @@ def _widget_rectangles(ready: dict, reports: Reports) -> dict:
 
 
 def _background_click(session: Session, reports: Reports, window, point, root_point) -> dict:
+    arrivals: dict = {}
     for variant in VARIANTS:
         destination = window
         if variant == "child":
@@ -496,25 +497,31 @@ def _background_click(session: Session, reports: Reports, window, point, root_po
             if child is None:
                 continue
             destination = child
+        reports.clear()
         session.send_click(destination, point, root_point, variant)
         reaction = reports.wait_for("click", REACTION_TIMEOUT)
+        arrivals[variant] = _raw(reports, "button-press")
         if reaction:
             return {
                 "accepted": True,
                 "variant": variant,
                 "at": list(root_point),
                 "reaction": reaction,
+                "reachedToolkit": arrivals,
             }
     return {
         "accepted": False,
         "variant": None,
         "at": list(root_point),
         "triedVariants": list(VARIANTS),
+        "reachedToolkit": arrivals,
     }
 
 
 def _background_text(session: Session, reports: Reports, window) -> dict:
+    arrivals: dict = {}
     for variant in ("targeted", "owner"):
+        reports.clear()
         if not session.send_text(window, TYPED_TEXT, variant):
             return {
                 "accepted": False,
@@ -522,9 +529,29 @@ def _background_text(session: Session, reports: Reports, window) -> dict:
                 "error": "this layout cannot type the probe text",
             }
         reaction = reports.wait_for("text", REACTION_TIMEOUT)
+        arrivals[variant] = _raw(reports, "key-press")
         if reaction:
-            return {"accepted": True, "variant": variant, "reaction": reaction}
-    return {"accepted": False, "variant": None, "triedVariants": ["targeted", "owner"]}
+            return {
+                "accepted": True,
+                "variant": variant,
+                "reaction": reaction,
+                "reachedToolkit": arrivals,
+            }
+    return {
+        "accepted": False,
+        "variant": None,
+        "triedVariants": ["targeted", "owner"],
+        "reachedToolkit": arrivals,
+    }
+
+
+def _raw(reports: Reports, event: str) -> int:
+    """How many raw arrivals of this kind the target reported.
+
+    This is the difference between a toolkit that never received the event and one that received it
+    and declined to act. Only the second is a statement about `send_event`.
+    """
+    return sum(1 for item in reports.of_kind("raw") if item.get("event") == event)
 
 
 def _controls(session: Session, reports: Reports, window, root_point) -> dict:
