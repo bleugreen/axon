@@ -137,6 +137,23 @@ class Session:
         window = self.display.get_input_focus().focus
         return window if isinstance(window, int) else window.id
 
+    def park_away_from(self, origin: tuple, size: tuple) -> tuple:
+        """Puts the pointer somewhere provably outside a window's rectangle, and says where.
+
+        Below and to the right of the window when the screen allows it, because a window an X server
+        places at the origin covers the corner a naive "park it at 0, 0" would choose.
+        """
+        width = self.screen.width_in_pixels
+        height = self.screen.height_in_pixels
+        below = origin[1] + size[1] + 40
+        right = origin[0] + size[0] + 40
+        if below < height:
+            point = (min(right, width - 1), height - 1)
+        else:
+            point = (width - 1, max(0, origin[1] - 40))
+        self.warp(*point)
+        return point
+
     def warp(self, x: int, y: int) -> None:
         self.root.warp_pointer(x, y)
         self.display.sync()
@@ -432,22 +449,32 @@ def measure(spec: Spec, session: Session, reports: Reports, decoy, port: int) ->
             return result
         result["window"] = {"xid": window.id, "reportedXid": ready.get("xid")}
 
-        # The decoy holds the focus and the pointer is parked in the far corner, so the target is in
-        # the background under both meanings of the word for the whole background phase.
+        origin = session.origin(window)
+        geometry = window.get_geometry()
+        button = widgets["button"]
+        point = (button[0] + button[2] // 2, button[1] + button[3] // 2)
+        root_point = (origin[0] + point[0], origin[1] + point[1])
+
+        # The decoy holds the focus and the pointer is parked outside the target's rectangle, so the
+        # target is in the background under both meanings of the word for the whole background phase.
+        #
+        # Parking it *outside* is load-bearing rather than tidy. GTK only acts on a synthetic button
+        # event when the real cursor is already inside the target window, so a pointer left over the
+        # target turns this into a measurement of something the pixel rung may not do.
         session.take_focus(decoy)
-        session.warp(2, 2)
+        parked = session.park_away_from(origin, (geometry.width, geometry.height))
         time.sleep(0.2)
         before = {"pointer": list(session.pointer()), "focus": session.focus()}
+        before["pointerOverTarget"] = False
         result["before"] = before
         if before["focus"] == window.id:
             result["status"] = "failed"
             result["detail"] = "the target held the focus, so nothing measured here is a background"
             return result
-
-        origin = session.origin(window)
-        button = widgets["button"]
-        point = (button[0] + button[2] // 2, button[1] + button[3] // 2)
-        root_point = (origin[0] + point[0], origin[1] + point[1])
+        if list(parked) != before["pointer"]:
+            result["status"] = "failed"
+            result["detail"] = "the pointer would not park clear of the target window"
+            return result
 
         result["background"] = {
             "click": _background_click(session, reports, window, point, root_point),
@@ -458,6 +485,9 @@ def measure(spec: Spec, session: Session, reports: Reports, decoy, port: int) ->
             "focusUnchanged": session.focus() == before["focus"],
             "pointerAfter": list(session.pointer()),
         }
+
+        # Deliberately after the invariants: this one moves the pointer.
+        result["pointerOverTarget"] = _pointer_over(session, reports, window, point, root_point)
 
         result["geometry"] = compare_geometry(widgets, read_atspi(pid), origin)
 
@@ -542,6 +572,29 @@ def _background_text(session: Session, reports: Reports, window) -> dict:
         "variant": None,
         "triedVariants": ["targeted", "owner"],
         "reachedToolkit": arrivals,
+    }
+
+
+def _pointer_over(session: Session, reports: Reports, window, point, root_point) -> dict:
+    """Whether the same synthetic click is honoured with the real cursor already over the target.
+
+    This is not a contract-legal delivery, and it is not offered as one: arranging it means moving
+    the user's pointer, which is the foreground rung by definition. It is measured because it is the
+    whole difference between "this toolkit rejects send_event" and "this toolkit accepts send_event
+    only where the pixel rung may not go". Without it, the next person to try XSendEvent by hand,
+    with a cursor that happens to be sitting over the window, concludes the rung was available all
+    along.
+    """
+    reports.clear()
+    session.warp(*root_point)
+    time.sleep(0.3)
+    session.send_click(window, point, root_point, "owner")
+    reaction = reports.wait_for("click", REACTION_TIMEOUT)
+    return {
+        "accepted": reaction is not None,
+        "reachedToolkit": _raw(reports, "button-press"),
+        "pointerAt": list(root_point),
+        "focusUnchanged": session.focus() != window.id,
     }
 
 
