@@ -234,12 +234,17 @@ pub fn capabilities(reported: &[CapabilityInfo], env: &SessionEnvironment) -> Ve
 }
 
 /// The daemon's own answer to a `health` request.
+///
+/// The two accessibility facts are separate questions and neither implies the other.
+/// `accessibility_bus` is whether this daemon reached the AT-SPI bus at all;
+/// `accessibility_enabled` is whether the session told the applications on it to publish.
 pub fn daemon_report(
     endpoint: String,
     process_id: u32,
     reported: &[CapabilityInfo],
     env: &SessionEnvironment,
     accessibility_bus: bool,
+    accessibility_enabled: Option<bool>,
 ) -> DaemonReport {
     DaemonReport {
         version: env!("CARGO_PKG_VERSION").into(),
@@ -249,7 +254,7 @@ pub fn daemon_report(
         ready: true,
         process_id,
         endpoint,
-        session: session_health(env),
+        session: session_health(env, accessibility_enabled),
         permissions: vec![if accessibility_bus {
             PermissionState::granted(ACCESSIBILITY_BUS)
         } else {
@@ -275,7 +280,7 @@ pub fn incompatible(
         HealthPlatform::Linux,
         endpoint,
         registration,
-        session_health(env),
+        session_health(env, None),
         detail,
     )
 }
@@ -291,7 +296,10 @@ pub fn not_running(
     env: &SessionEnvironment,
     detail: Option<String>,
 ) -> HealthReport {
-    let session = session_health(env);
+    // No daemon answered, so nothing held the session bus connection that could have read the
+    // accessibility switch. Saying nothing about it is the honest answer, and the schema spells
+    // an absent `accessibilityEnabled` as exactly that.
+    let session = session_health(env, None);
     let permission = if session.graphical {
         PermissionState::ungranted(ACCESSIBILITY_BUS, reason::DAEMON_NOT_RUNNING, None)
     } else {
