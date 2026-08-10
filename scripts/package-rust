@@ -116,7 +116,6 @@ if [[ "$DO_STAGE" == 1 ]]; then
     cp rust/axon-linux/systemd/axon.service.in "$STAGING/systemd/axon.service.in"
   fi
 
-  mkdir -p "$DIST_DIR"
   stage_identity > "$STAMP"
   printf 'staged: %s\n' "$STAGING"
 fi

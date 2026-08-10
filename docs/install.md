@@ -111,8 +111,13 @@ scripts/package-rust axon-win --archive-only
 ```
 
 A signature applied after archiving would not be inside the archive, and one applied after
-checksumming would leave the checksum describing bytes that no longer exist. Archiving refuses to
-run against a staging directory that was never built, so a stale directory cannot become a release.
+checksumming would leave the checksum describing bytes that no longer exist.
+
+Because the staging directory is named for the version alone, one left behind by a different
+commit is indistinguishable by name from the build you meant to publish. Staging therefore records
+what it built beside the directory, and archiving refuses a staging directory it does not recognize
+rather than publishing another revision's bytes under this version. A dirty worktree is recorded as
+dirty and cannot be identified more precisely than that, so restage after editing.
 
 ### Windows code signing
 

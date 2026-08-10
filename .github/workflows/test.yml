@@ -247,6 +247,17 @@ jobs:
           test -x "dist/$NAME/axon-linux"
           test ! -e "dist/$NAME.tar.gz"
 
+          # A staging directory left behind by a different revision carries the same version in its
+          # name, so only the recorded provenance distinguishes it from this build's.
+          STAMP="dist/.$NAME.stage"
+          KEPT="$(cat "$STAMP")"
+          echo "axon-linux $VERSION 0000000000000000000000000000000000000000" > "$STAMP"
+          if ./scripts/package-rust axon-linux --archive-only > /dev/null 2>&1; then
+            echo "::error::--archive-only archived a staging directory built from another revision"
+            exit 1
+          fi
+          echo "$KEPT" > "$STAMP"
+
           # Stand in for the signing step, which rewrites the staged binary between the phases.
           printf 'signature' >> "dist/$NAME/axon-linux"
           ./scripts/package-rust axon-linux --archive-only > /dev/null
