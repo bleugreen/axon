@@ -345,7 +345,8 @@ impl<B: PointerTargetVerifier + BackgroundPixelInput> Router<B> {
                 {
                     return Err(rpc_error(
                         -32003,
-                        "click target moved, is covered, or no longer matches the resolved element",
+                        "click target moved, was destroyed, or no longer matches the resolved \
+                         element",
                     ));
                 }
                 let Some(application) = self.resolved_application() else {
@@ -1054,6 +1055,15 @@ mod tests {
         /// Applications that refuse to come forward, so activation cannot be proved.
         refuses_activation: Rc<RefCell<Vec<String>>>,
         activations: Rc<RefCell<Vec<String>>>,
+        /// What the planner answers for any target. Unavailable by default, which is the state
+        /// every case that is not about the pixel rung wants.
+        click_plan: Rc<RefCell<Result<PixelPlan, BackendError>>>,
+        keyboard_plan: Rc<RefCell<Result<PixelPlan, BackendError>>>,
+        pixel_result: Rc<RefCell<Result<PixelDispatch, PixelDispatchError>>>,
+        /// What was asked to be planned, and what was actually delivered. Recorded so a test can
+        /// prove the identity the router bound with, and that a refusal sent nothing.
+        planned: Rc<RefCell<Vec<(String, Option<SnapshotHandle>, Option<(f64, f64)>)>>>,
+        pixel_dispatches: Rc<RefCell<Vec<PixelTarget>>>,
     }
     impl PointerTargetVerifier for FakeBackend {
         fn verify_pointer_target(
@@ -1063,6 +1073,44 @@ mod tests {
         ) -> Result<bool, BackendError> {
             self.verified_handles.borrow_mut().push(handle.clone());
             Ok(self.pointer_target_matches)
+        }
+    }
+    impl BackgroundPixelInput for FakeBackend {
+        fn plan_pixel_click(
+            &mut self,
+            application: &str,
+            handle: &SnapshotHandle,
+            point: (f64, f64),
+        ) -> Result<PixelPlan, BackendError> {
+            self.planned
+                .borrow_mut()
+                .push((application.into(), Some(handle.clone()), Some(point)));
+            self.click_plan.borrow().clone()
+        }
+        fn plan_pixel_keyboard(&mut self, application: &str) -> Result<PixelPlan, BackendError> {
+            self.planned.borrow_mut().push((application.into(), None, None));
+            self.keyboard_plan.borrow().clone()
+        }
+        fn dispatch_pixel_click(
+            &mut self,
+            target: &PixelTarget,
+        ) -> Result<PixelDispatch, PixelDispatchError> {
+            let outcome = self.pixel_result.borrow().clone();
+            if outcome.is_ok() {
+                self.pixel_dispatches.borrow_mut().push(target.clone());
+            }
+            outcome
+        }
+        fn dispatch_pixel_keyboard(
+            &mut self,
+            target: &PixelTarget,
+            _: KeyboardIntent<'_>,
+        ) -> Result<PixelDispatch, PixelDispatchError> {
+            let outcome = self.pixel_result.borrow().clone();
+            if outcome.is_ok() {
+                self.pixel_dispatches.borrow_mut().push(target.clone());
+            }
+            outcome
         }
     }
     impl PlatformBackend for FakeBackend {
@@ -1251,6 +1299,43 @@ mod tests {
             frontmost: Rc::new(RefCell::new(Some("Prior".into()))),
             refuses_activation: Rc::new(RefCell::new(vec![])),
             activations: Rc::new(RefCell::new(vec![])),
+            click_plan: Rc::new(RefCell::new(Ok(PixelPlan::unavailable(
+                "this fake backend was given no click plan for this target",
+            )))),
+            keyboard_plan: Rc::new(RefCell::new(Ok(PixelPlan::unavailable(
+                "this fake backend was given no keyboard plan for this application",
+            )))),
+            pixel_result: Rc::new(RefCell::new(Ok(PixelDispatch {
+                complete: true,
+                partial: None,
+                frontmost_unchanged: true,
+                input_focus_unchanged: true,
+                pointer_unchanged: true,
+            }))),
+            planned: Rc::new(RefCell::new(vec![])),
+            pixel_dispatches: Rc::new(RefCell::new(vec![])),
+        }
+    }
+
+    /// A bound plan, standing in for what the real backend builds from a Chromium window.
+    fn pixel_target(aimed: bool) -> PixelTarget {
+        PixelTarget {
+            application: APP_IDENTITY.into(),
+            process_identifier: 4242,
+            window: 0x0060_0003,
+            window_origin: (100.0, 80.0),
+            window_size: (480.0, 320.0),
+            toolkit: pixel::Toolkit {
+                name: "Chromium".into(),
+                version: "1.0".into(),
+            },
+            variant: pixel::SendVariant::Targeted,
+            measured_by: "a fixture citation",
+            aim: aimed.then(|| PixelAim {
+                handle: SnapshotHandle("snapshot:1".into()),
+                screen_point: (110.0, 90.0),
+                window_point: (10.0, 10.0),
+            }),
         }
     }
     fn request(method: &str, params: Value) -> JsonRpcRequest {
