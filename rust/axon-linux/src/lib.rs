@@ -594,8 +594,24 @@ impl<B: PointerTargetVerifier + BackgroundPixelInput> Router<B> {
             Err(PixelDispatchError::Stale(reason)) => return Err(rpc_error(-32003, reason)),
             Err(PixelDispatchError::Backend(error)) => return Err(backend_error(error)),
         };
+        // Goal success, kept separate from mechanism acceptance because at this rung the gap
+        // between them is the whole problem. A completed send proves the events reached the
+        // target's connection; every one of them carries `send_event`, and a toolkit that drops
+        // them does so in silence that nothing on this side can distinguish from delivery. So
+        // `success` waits on a readback or a declared `expects` postcondition, exactly as the
+        // contract requires, and neither `click` nor `keyboard` has one — which is why a clean
+        // delivery here reports `dispatchSuccess: true` alongside `success: false`.
+        //
+        // Promoting delivery to success would make the acceptance table's own defence hollow: a
+        // future Chromium that began filtering these events would produce an accepted send, intact
+        // invariants, and a report that the caller's click had worked.
+        let verified = verification
+            .get("verified")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
         // This rung is defined by what it does not do. A dispatch that changed the foreground or
-        // moved the real pointer was not background delivery, whatever it managed to deliver.
+        // moved the real pointer was not background delivery, whatever it managed to deliver, so
+        // these gate success as well as being reported.
         let mut problems = Vec::new();
         if let Some(partial) = &dispatch.partial {
             problems.push(partial.clone());
@@ -610,7 +626,7 @@ impl<B: PointerTargetVerifier + BackgroundPixelInput> Router<B> {
             problems.push("the real pointer moved across the dispatch".to_string());
         }
         let mut result = json!({
-            "success": dispatch.complete && problems.is_empty(),
+            "success": verified && dispatch.complete && problems.is_empty(),
             "dispatch": {"success": dispatch.complete, "mechanism": candidate.mechanism},
             "verification": verification,
             "backgroundDelivery": {
