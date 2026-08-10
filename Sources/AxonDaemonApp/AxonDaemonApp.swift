@@ -227,7 +227,9 @@ final class AxonDaemonAppDelegate: NSObject, NSApplicationDelegate, @unchecked S
     private func finishUpgrade(outcome: Result<Void, Error>, update: ReleaseUpdate) {
         switch outcome {
         case .success:
-            spawnRelaunchHelper()
+            if AxonEnvironment.requiresIndependentRelaunch() {
+                spawnRelaunchHelper()
+            }
             NSApp.terminate(nil)
         case let .failure(error):
             updateMenuState = .available(update)

@@ -324,6 +324,15 @@ private func makeReleaseBundle(
     #expect(!AxonEnvironment.isLaunchdManaged([:]))
 }
 
+@Test func updateRelaunchDefersToLaunchdWhenDaemonIsSupervised() {
+    let managedEnvironment = [AxonEnvironment.launchdManagedKey: "1"]
+
+    // KeepAlive replaces a managed daemon. Scheduling an independent app launch as well races that
+    // replacement and leaves whichever process loses the socket lock alive as a broken menu item.
+    #expect(!AxonEnvironment.requiresIndependentRelaunch(managedEnvironment))
+    #expect(AxonEnvironment.requiresIndependentRelaunch([:]))
+}
+
 @Test func launchAgentConfigurationBuildsDaemonPlist() throws {
     let configuration = LaunchAgentConfiguration(
         label: "dev.axon.test",
