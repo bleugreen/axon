@@ -1,0 +1,23 @@
+#!/usr/bin/env bash
+# Electron is not packaged by any distribution this harness runs on, and it is what stands in for the
+# whole Chromium family. Because Chromium's AT-SPI signature does not distinguish one engine from
+# another, more than one generation has to be measured before an entry keyed on that signature can
+# claim anything about the family — so this installs each requested version as its own runtime.
+#
+#   install-electron            # the current release, into targets/electron/node_modules
+#   install-electron 30 22      # additional majors, into targets/electron/runtime-<major>
+#
+# The runtimes are gitignored: the measurement is committed, the 200MB downloads are not.
+set -euo pipefail
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$here/targets/electron"
+
+if [[ $# -eq 0 ]]; then
+  npm install --no-audit --no-fund electron@latest
+  exit 0
+fi
+
+for major in "$@"; do
+  mkdir -p "runtime-$major"
+  npm install --no-audit --no-fund --prefix "runtime-$major" "electron@$major"
+done

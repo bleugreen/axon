@@ -1,0 +1,95 @@
+#!/usr/bin/env python3
+"""GTK 3 target: one text field, one button, and an honest account of what arrives."""
+
+import os
+import sys
+
+import gi
+
+gi.require_version("Gtk", "3.0")
+gi.require_version("Gdk", "3.0")
+gi.require_version("GdkX11", "3.0")
+from gi.repository import Gdk, GdkX11, GLib, Gtk  # noqa: E402
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from report import report  # noqa: E402
+
+
+class Target:
+    def __init__(self) -> None:
+        self.clicks = 0
+        self.window = Gtk.Window(title="Axon harness GTK3")
+        self.window.set_default_size(480, 320)
+        self.window.connect("destroy", Gtk.main_quit)
+
+        box = Gtk.Box(orientation=Gtk.Orientation.VERTICAL, spacing=24)
+        box.set_border_width(24)
+        self.entry = Gtk.Entry()
+        self.button = Gtk.Button(label="Target Button")
+        self.button.set_size_request(200, 80)
+        # The button must not take widget focus: a click landing on it would otherwise move focus
+        # off the text field and turn the keyboard phases into a measurement of the button.
+        self.button.set_can_focus(False)
+        self.button.connect("clicked", self.on_click)
+        self.entry.connect("changed", self.on_text)
+        box.pack_start(self.entry, False, False, 0)
+        box.pack_start(self.button, False, False, 0)
+        self.window.add(box)
+        # Raw arrival is reported separately from the effect. "The toolkit never saw the event" and
+        # "the toolkit saw it and declined to act" are different answers about a delivery mechanism,
+        # and a harness that only watches the effect cannot tell them apart.
+        #
+        # Watched on the widgets as well as the toplevel: GTK 3 widgets own client-side GDK windows,
+        # and GDK retargets an event that arrives on the toplevel to the innermost one containing the
+        # point. A probe on the toplevel alone therefore misses exactly the events that were routed
+        # correctly.
+        for widget, mask in (
+            (self.window, Gdk.EventMask.BUTTON_PRESS_MASK | Gdk.EventMask.KEY_PRESS_MASK),
+            (self.button, Gdk.EventMask.BUTTON_PRESS_MASK),
+            (self.entry, Gdk.EventMask.KEY_PRESS_MASK),
+        ):
+            widget.add_events(mask)
+            widget.connect("button-press-event", self.on_raw, "button-press")
+            widget.connect("key-press-event", self.on_raw, "key-press")
+        self.window.show_all()
+        self.entry.grab_focus()
+        GLib.timeout_add(400, self.announce)
+
+    def rectangle(self, widget) -> list:
+        allocation = widget.get_allocation()
+        translated = widget.translate_coordinates(self.window, 0, 0)
+        x, y = (translated[-2], translated[-1]) if translated else (allocation.x, allocation.y)
+        return [x, y, allocation.width, allocation.height]
+
+    def announce(self) -> bool:
+        report(
+            {
+                "kind": "ready",
+                "pid": os.getpid(),
+                "xid": GdkX11.X11Window.get_xid(self.window.get_window()),
+                "signature": "GTK %d.%d.%d"
+                % (Gtk.get_major_version(), Gtk.get_minor_version(), Gtk.get_micro_version()),
+                "widgets": {
+                    "button": self.rectangle(self.button),
+                    "entry": self.rectangle(self.entry),
+                },
+            }
+        )
+        return False
+
+    def on_raw(self, _widget, event, what: str) -> bool:
+        report(
+            {"kind": "raw", "event": what, "sendEvent": bool(getattr(event, "send_event", False))}
+        )
+        return False
+
+    def on_click(self, _button) -> None:
+        self.clicks += 1
+        report({"kind": "click", "widget": "button", "count": self.clicks})
+
+    def on_text(self, entry) -> None:
+        report({"kind": "text", "widget": "entry", "value": entry.get_text()})
+
+
+Target()
+Gtk.main()

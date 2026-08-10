@@ -318,6 +318,16 @@ the correct sizes but `(0, 0)` for nearly every descendant. AT-SPI Component
 geometry therefore cannot yet be assumed to provide usable screen positions
 for pointer targeting on this stack.
 
+> **Settled 2026-08-10.** This is a toolkit fact, not a compositor one, and it is
+> now measured against ground truth rather than inferred from one application.
+> `scripts/linux-toolkit-acceptance/` has each target report its own widget
+> rectangles from inside the toolkit and compares them with what AT-SPI publishes
+> for the same widgets. On X11, GTK 3, Qt 6, WebKitGTK and Chromium agree with
+> AT-SPI to the pixel; GTK 4 reports correct sizes at `(0, 0)` origins, exactly as
+> recorded here. A GTK 4 target therefore has no usable AT-SPI coordinate source
+> for pointer targeting under either session type, and needs a different position
+> source if it is ever to have one.
+
 ## Action dispatch and independent verification
 
 The locator `role=button, name contains=1` resolved Calculator's `1` button.

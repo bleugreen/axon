@@ -1,0 +1,68 @@
+#!/usr/bin/env bash
+# Entry point for the toolkit acceptance measurement.
+#
+# By default this is hermetic: it brings up its own X server, its own session bus, and its own
+# accessibility bus, so a run means the same thing on a developer's machine and in CI. `--current-
+# display` measures a real desktop session instead, which is how a result gets confirmed against a
+# session that has a window manager and a compositor in it.
+set -euo pipefail
+
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+display_number="${AXON_HARNESS_DISPLAY:-:99}"
+use_current=0
+args=()
+
+for argument in "$@"; do
+  case "$argument" in
+    --current-display) use_current=1 ;;
+    *) args+=("$argument") ;;
+  esac
+done
+
+# Accessibility is not on by default for every toolkit, and the AT-SPI half of the measurement is
+# half the point. Each of these is the documented switch for its toolkit.
+export GTK_MODULES="${GTK_MODULES:-gail:atk-bridge}"
+export GTK_A11Y="${GTK_A11Y:-atspi}"
+export QT_ACCESSIBILITY=1
+export QT_LINUX_ACCESSIBILITY_ALWAYS_ON=1
+export GDK_BACKEND=x11
+export QT_QPA_PLATFORM=xcb
+export NO_AT_BRIDGE=0
+
+if [[ "$use_current" == "1" ]]; then
+  : "${DISPLAY:?--current-display needs DISPLAY set}"
+  export AXON_HARNESS_SESSION="${XDG_SESSION_TYPE:-unknown} session on $DISPLAY"
+  # A real session already has an accessibility bus, so the harness is run directly.
+  exec python3 "$here/harness.py" "${args[@]+"${args[@]}"}"
+fi
+
+command -v Xvfb >/dev/null || { echo "Xvfb is required for a hermetic run" >&2; exit 1; }
+command -v dbus-run-session >/dev/null || { echo "dbus-run-session is required" >&2; exit 1; }
+
+# Xvfb reports every keysym its default keymap cannot resolve, which is hundreds of lines of
+# noise around the measurement it is hosting.
+Xvfb "$display_number" -screen 0 1600x1200x24 -nolisten tcp >/dev/null 2>&1 &
+xvfb_pid=$!
+trap 'kill "$xvfb_pid" 2>/dev/null || true' EXIT
+
+export DISPLAY="$display_number"
+# Waited for with python-xlib rather than xdpyinfo: the harness already depends on the former, and
+# depending on x11-utils as well would be one more package for a CI image to be missing.
+python3 - <<'PY'
+import sys, time
+from Xlib import display
+
+for _ in range(100):
+    try:
+        display.Display().close()
+        sys.exit(0)
+    except Exception:
+        time.sleep(0.1)
+sys.exit("the X server never accepted a connection")
+PY
+
+export AXON_HARNESS_SESSION="hermetic Xvfb on $display_number"
+
+# dbus-run-session gives the targets and the accessibility bus one session bus to meet on. Without
+# it every target would start its own and AT-SPI would have nothing to read.
+exec dbus-run-session -- "$here/session" "${args[@]+"${args[@]}"}"

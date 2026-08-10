@@ -235,7 +235,61 @@ available, and a backend must not claim it before a live probe passes.
 | --- | --- | --- | --- |
 | macOS | `AXPress`, `AXValue`, `AXScrollToVisible` | `CGEventPostToPid` against the target process, invariants proved after dispatch | Global `CGEvent`, transactional activate/dispatch/restore |
 | Windows | UIA `InvokePattern`, `ValuePattern`, `ScrollItemPattern`, none of which call `SetFocus` | Client-coordinate window messages to a leaf HWND bound through UIA ancestry, for window classes a live probe has verified; every other class refuses `backgroundPixelUnsupported` by name | Withheld; `SendInput`, activation, proof, and pointer hand-back all work, but Windows refuses to return the foreground to the application it was taken from |
-| Linux | AT-SPI `Action.DoAction`, `EditableText.SetTextContents`, `Component.ScrollTo`, none of which take focus | Not implemented; refuses `backgroundPixelUnsupported` | `XTest` on an X11 session with an EWMH-capable window manager, transactional activate/dispatch/restore; withheld on every other session |
+| Linux | AT-SPI `Action.DoAction`, `EditableText.SetTextContents`, `Component.ScrollTo`, none of which take focus | Measured but not yet implemented; refuses `backgroundPixelUnsupported`. `XSendEvent` against a verified target window is the only candidate mechanism, and which toolkits honour it is measured rather than assumed | `XTest` on an X11 session with an EWMH-capable window manager, transactional activate/dispatch/restore; withheld on every other session |
+
+On Linux the pixel rung's availability is a fact about the target's toolkit, and
+that fact is measured. `XSendEvent` against a window the backend resolved is the
+only X11 mechanism with the rung's shape — XTest and virtual pointers are global
+devices however narrowly aimed, and on Wayland libei has no window parameter at
+all, which is why the `wayland` refusal is permanent. But every event
+`XSendEvent` delivers carries `send_event`, the X server reports success as soon
+as it accepts the request, and a toolkit is free to drop what arrives. Nothing on
+the sending side can tell acceptance from silence, and no runtime pre-flight
+exists: a probe that produces no observable effect proves nothing, and one that
+produces an effect has already mutated the target.
+
+`scripts/linux-toolkit-acceptance/` is therefore where that fact comes from. It
+opens a window per toolkit, holds the focus in a decoy, parks the real pointer
+clear of the target, delivers window-targeted events, and reads back whether the
+target acted — with two controls, a real-pointer click and a focused keystroke,
+without which a silent target cannot be told from a misaimed harness. Its first
+run measured GTK 3, GTK 4, Qt 6, WebKitGTK, Electron and Firefox in a hermetic
+Xvfb lane and again on a live X11 session, and the two lanes agree.
+
+What it found is that the rung is real and narrow. Chromium acts on a background
+click with the frontmost application and the real pointer provably unchanged, on
+every engine generation measured. GTK 3, WebKitGTK, Qt, Firefox and Chromium act
+on background keystrokes under the same conditions. GTK 4 receives neither. Qt
+also acts on a click, but requests activation while doing so — the focus moved on
+the lane with no window manager and was held only by focus-stealing prevention on
+the live one, and an acceptance that survives only while a window manager declines
+to honour the application is not a background delivery. Separately, a synthetic
+click is honoured by GTK only while the real cursor is already inside the target
+window — the reason hand experiments conclude otherwise — and arranging that is
+the foreground rung by definition.
+
+A backend may therefore offer the pixel candidate only for a toolkit the harness
+measured as accepting, keyed on the AT-SPI toolkit name and version the
+application declares about itself. Inferring acceptance from `WM_CLASS` or from
+loaded libraries is a guess wearing a probe's clothes. Everything else refuses
+`backgroundPixelUnsupported` naming the toolkit that refused, including a version
+series nobody measured.
+
+That key is only as precise as the toolkit chooses to be, and one entry is
+coarser than the rest. Chromium reports itself as toolkit `Chromium` version
+`1.0` — a constant carrying neither the engine version nor the application — so
+an entry keyed on it authorizes the whole family and no narrower key exists to
+move to. It is therefore held to a higher evidentiary bar: measured across three
+engine generations rather than one, with the obligation to re-measure when the
+family releases, because a Chromium that began filtering these events would be
+undetectable by signature.
+
+The same run also settles the rung's coordinate source. Each target reports its
+own widget rectangles from inside the toolkit, and all four components are
+compared against what AT-SPI publishes: GTK 3, Qt, WebKitGTK and Chromium agree,
+exactly in every case but one, which sits four pixels out in x on both lanes.
+GTK 4 reports the correct sizes at `(0, 0)` origins, so a GTK 4 target has no
+usable coordinate source whatever the delivery mechanism does.
 
 The foreground rung is not merely "global input". It is global input that hands
 back what it borrowed, and a backend that cannot do that must not offer the rung

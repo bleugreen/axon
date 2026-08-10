@@ -45,7 +45,7 @@ in the [delivery matrix](#delivery-matrix) below.
 | --- | --- | --- | --- | --- | --- | --- |
 | macOS 14+ (Aqua) | **Supported** — live loop verifies `invoke` (`AXPress`) against Calculator's display | **Experimental** — `CGEventPostToPid` pixel and the CGEvent foreground transaction are unit-verified only | **Experimental** — same evidence state as pointer | **Experimental** — ScreenCaptureKit, gated on the Screen Recording grant; no live capture probe | **Experimental** for pointer dispatch — AX frames and space conversion are unit-verified; the verified semantic path needs none | Accessibility grant (live-verified); Screen Recording grant for screenshots; LaunchAgent |
 | Windows 10+ (UIA) | **Supported with limits** — `InvokePattern` only; the live loop verifies capture, dispatch evidence is dated probes | **Supported with limits** — window-message pixel rung for probe-allowlisted classes (`Button` only); the foreground rung is **refused** (hand-back unproven) | **Refused** — no target-bound rung exists and the foreground rung is withheld | **Experimental** — Graphics Capture and OCR are implemented but absent from the live loop | **Supported with limits** — physical pixels with DPI reconciliation reported as evidence; probe-earned at 100% scaling only | interactive-session scheduled task (live-verified); elevation parity or UIAccess for elevated targets; built-in MSAA activation for WebView2 |
-| Linux X11 (EWMH window manager) | **Supported** — the session-independent AT-SPI path the Linux live loop verifies | **Supported with limits** — XTest foreground transaction verified hermetically under Xvfb each PR; no pixel rung (**refused**); no full-desktop X11 lane | **Supported with limits** — XTest; keysyms must exist in the active layout | **Not implemented** — refused with `portal-authorization-required` | **Experimental** — AT-SPI screen extents are expected valid under X11; no live geometry check | systemd user unit; AT-SPI enabled; an EWMH manager publishing `_NET_ACTIVE_WINDOW` and `_NET_WM_PID`; the XTEST extension |
+| Linux X11 (EWMH window manager) | **Supported** — the session-independent AT-SPI path the Linux live loop verifies | **Supported with limits** — XTest foreground transaction verified hermetically under Xvfb each PR; no pixel rung (**refused**), now measured rather than assumed: only Chromium accepts a background click | **Supported with limits** — XTest; keysyms must exist in the active layout. A background pixel rung is measured as possible for GTK 3, Qt 6 and Chromium and not yet implemented | **Not implemented** — refused with `portal-authorization-required` | **Supported with limits** — all four rectangle components measured against toolkit ground truth: GTK 3, Qt, WebKitGTK and Chromium agree within four pixels; GTK 4 reports correct sizes at `(0, 0)` origins and is unusable | systemd user unit; AT-SPI enabled; an EWMH manager publishing `_NET_ACTIVE_WINDOW` and `_NET_WM_PID`; the XTEST extension |
 | Linux GNOME/Mutter (Wayland) | **Supported** — live loop: capture, resolve, invoke, and verified readback on GNOME Calculator | **Refused (verified)** — the live loop asserts `noDeliveryCandidate` naming Wayland at both policies | **Refused (verified)** — same check | **Not implemented** — portal path designed, unattended authorization unproven | **Supported with limits** — compositor-reported extents; GTK4 descendants report (0,0) origins and are unusable for pointer targeting | AT-SPI bus with accessibility enabled; systemd user unit bound to `graphical-session.target` |
 | Linux KWin (Wayland) | **Experimental** | **Refused (expected)** — Wayland classification is verified under Mutter, not KWin | **Refused (expected)** | **Not implemented** | **Experimental** | same as GNOME/Mutter; no KWin runner exists |
 | Linux Sway / wlroots (Wayland) | **Experimental** | **Refused (expected)** | **Refused (expected)** | **Not implemented** | **Experimental** | same as GNOME/Mutter; no wlroots runner exists |
@@ -63,6 +63,7 @@ These are the only sources that promote or sustain a **Supported** cell.
 | Hermetic X11 foreground test | `.github/workflows/test.yml` Linux job; `rust/axon-linux/tests/x11_foreground.rs` | the X11 activate/prove/dispatch/restore conversation against a real X server with a miniature EWMH window manager | every pull request |
 | Hermetic AT-SPI activation test | `.github/workflows/test.yml` Linux job; `rust/axon-linux/tests/atspi_activation.rs` | that the attributes call is issued against the application root and only once per application, that the bounded wait ends when a withholding provider publishes rather than when the bound expires, and that a provider which never publishes is reported as withheld rather than as empty — against a private session bus and a provider built to withhold the way Chromium does; and, on a second private bus, that the session's accessibility switch is read live rather than remembered and reaches health-v1 as a degraded session | every pull request |
 | Windows session-1 probes | `axon-win probe value`, `events`, `timeout`, `pixel-click`, `foreground`; findings recorded in this document | value set and readback, event delivery, provider timeouts, the pixel-click allowlist entry, the foreground hand-back finding | manual; re-run and re-date when the area changes |
+| Linux toolkit acceptance harness | `scripts/linux-toolkit-acceptance/`; results in `RESULTS.md` and `RESULTS-live-x11.md` | which toolkits act on background `XSendEvent` delivery with the session focus and real pointer unchanged, and whether AT-SPI extents match the toolkit's own rectangles; each row backed by a real-pointer and a focused-keystroke control, each phase re-proving the background before it sends | manual (2026-08-10, hermetic Xvfb and a live X11 session, GTK 3/4, Qt 6, WebKitGTK, Firefox, Chromium 108/124/150); re-run and re-date on toolkit releases |
 | Linux Chromium activation probe | recorded in [Linux backend](#linux-backend) | that Chromium-family trees are gated by `org.a11y.Status.IsEnabled` and by an attributes or relations call, and not by AT-SPI listener registration; the daemon's before-and-after capture of Chrome. What only real browsers can show — the daemon's own half of the mechanism is gated per pull request by the hermetic AT-SPI test above | manual (2026-08-08); re-run and re-date when the area changes |
 | Platform spikes | `rust/SPIKE-FINDINGS.md` | session topology, WebView2 and WebKitGTK activation and traversal, the Mutter geometry caveat, verified invoke dispatch | dated snapshots (2026-08-02 through 2026-08-04) |
 
@@ -578,6 +579,30 @@ On Linux, neither X11 window-targeted delivery nor a Wayland portal path is
 implemented, so it refuses with `backgroundPixelUnsupported` naming what is
 missing. Relabelling `SendInput` or `XTest` as `pixel` would make the contract's
 central promise false.
+
+What that refusal now rests on is a measurement rather than an assumption.
+`scripts/linux-toolkit-acceptance/` delivers window-targeted `XSendEvent` input
+to a background window per toolkit and reads back whether the target acted, with
+a real-pointer click and a focused keystroke as controls so that a silent target
+cannot be confused with a misaimed harness. Measured on Fedora 43 in a hermetic
+Xvfb lane and again on a live Xfce X11 session: only Chromium acts on a
+background click with the focus and pointer unchanged, on all three engine
+generations measured; GTK 3, WebKitGTK, Qt, Firefox and Chromium act on
+background keystrokes under the same conditions; GTK 4 receives neither. Qt also
+acts on a click while requesting activation, which the two lanes disagree about
+precisely because the live lane's window manager refused the request — an
+acceptance that depends on that refusal is not a background delivery. GTK
+additionally honours a synthetic click only while the real cursor is already
+inside the target window, which is why the mechanism looks available when tried
+by hand.
+
+That makes the Linux rung the same shape as the Windows one: offered only for a
+toolkit a probe has verified, keyed here on the AT-SPI toolkit name and version
+the application declares about itself rather than on a window class. One entry is
+coarser than that implies — Chromium reports a constant `1.0` as its version, so
+an entry authorizes the family — which is why it carries three generations of
+evidence and an obligation to re-measure on release. Implementing the rung is
+tracked separately; the refusal stands until it is.
 
 `keyboard` has no pixel rung on Windows and will not grow one in this shape. The
 rung is target-bound input derived from verified window geometry; `keyboard`
