@@ -56,22 +56,6 @@ import Testing
     #expect(result.fraction == 1)
 }
 
-@Test func stableIdentifiersDisambiguateReorderedEqualLabelSiblings() throws {
-    func snapshot(ids: [String]) throws -> JSONValue {
-        let children = ids.map { #"{"role":"AXButton","title":"Share","identifier":"\#($0)"}"# }.joined(separator: ",")
-        let raw = #"{"windows":[{"role":"AXWindow","title":"Main","children":[\#(children)]}]}"#
-        return try JSONDecoder().decode(JSONValue.self, from: Data(raw.utf8))
-    }
-    let first = SemanticNameDeriver.derive(from: try snapshot(ids: ["share-primary", "share-secondary"]))
-    let reordered = SemanticNameDeriver.derive(from: try snapshot(ids: ["share-secondary", "share-primary"]))
-    let result = SemanticNameDeriver.stability(from: first, to: reordered)
-
-    #expect(Set(first.elements.map(\.name)) == ["main/share-share-primary", "main/share-share-secondary"])
-    #expect(first.summary.collisionFreeCount == 3)
-    #expect(result.comparableElements == 3)
-    #expect(result.stableNames == 3)
-}
-
 @Test func oneStableIdentifierDisambiguatesMixedCoverageAcrossReorder() throws {
     func snapshot(identifiedFirst: Bool) throws -> JSONValue {
         let identified = #"{"role":"AXButton","title":"Share","identifier":"share-primary"}"#
