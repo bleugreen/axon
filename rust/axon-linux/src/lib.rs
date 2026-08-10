@@ -884,7 +884,7 @@ impl<B: PointerTargetVerifier + BackgroundPixelInput> Router<B> {
     }
 }
 
-impl<B: PointerTargetVerifier> ToolDispatcher for Router<B> {
+impl<B: PointerTargetVerifier + BackgroundPixelInput> ToolDispatcher for Router<B> {
     fn dispatch(&mut self, tool: &str, params: &Map<String, Value>) -> DispatchOutcome {
         match self.dispatch_tool(tool, params) {
             Ok(result) => DispatchOutcome {
