@@ -1,5 +1,5 @@
 {
-  "measuredAt": "2026-08-10T01:28:48-0400",
+  "measuredAt": "2026-08-10T01:43:11-0400",
   "session": "hermetic Xvfb on :99",
   "display": ":99",
   "xServer": "The X.Org Foundation release 12101021",
@@ -814,7 +814,7 @@
             "agrees": null
           }
         },
-        "error": "no AT-SPI application for pid 2860596",
+        "error": "no AT-SPI application for pid 2955781",
         "extentsUsable": null
       },
       "controls": {
