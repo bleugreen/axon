@@ -420,17 +420,17 @@ function Test-DesktopDaemonHasStopped {
 function Stop-DesktopDaemon {
     <# Asks this desktop's daemon to stop, and keeps asking for as long as it keeps running.
 
-    The request is still never tolerated: a `shutdown` that does not report success is never taken as
-    a stop. It is taken as a question about what that daemon is doing, and the answer is the process
-    itself rather than the exit code -- because the exit code reports on a ten-second wait, and a
+    An exit code is not the verdict here, in either direction, so the process is asked after every
+    request. A request that reports failure need not mean the daemon is still there: `shutdown` waits
+    ten seconds for the process it asked to stop and reports anything slower as a failure, and a
     desktop that has just finished a cargo build can take longer than that to tear down a UI
-    Automation apartment without anything being wrong with it.
+    Automation apartment without anything being wrong with it. Such a request opens a wait rather
+    than ending the stage.
 
-    So a failed request opens a wait rather than ending the stage, and the only thing that ends that
-    wait is the daemon being gone. Not a later request reporting success: the pipe goes when the
-    daemon acknowledges the request and the process goes when it has finished tearing down, so once
-    one request has been acknowledged every request after it finds no pipe and says so -- `no daemon
-    was running` is a fact about the pipe, and treating it as one about the process is exactly the
+    And a request that reports success need not mean the daemon is gone. The pipe goes when a daemon
+    acknowledges the request, and the process goes when it has finished tearing down, so once one
+    request has been acknowledged every request after it finds no pipe and says exactly that --
+    `no daemon was running` is a fact about the pipe, and treating it as one about the process is the
     race the command's own wait exists to prevent.
 
     What fails is a daemon that is still running after every request in the budget, which is a stuck
