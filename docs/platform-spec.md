@@ -235,7 +235,7 @@ available, and a backend must not claim it before a live probe passes.
 | --- | --- | --- | --- |
 | macOS | `AXPress`, `AXValue`, `AXScrollToVisible` | `CGEventPostToPid` against the target process, invariants proved after dispatch | Global `CGEvent`, transactional activate/dispatch/restore |
 | Windows | UIA `InvokePattern`, `ValuePattern`, `ScrollItemPattern`, none of which call `SetFocus` | Client-coordinate window messages to a leaf HWND bound through UIA ancestry, for window classes a live probe has verified; every other class refuses `backgroundPixelUnsupported` by name | Withheld; `SendInput`, activation, proof, and pointer hand-back all work, but Windows refuses to return the foreground to the application it was taken from |
-| Linux | AT-SPI `Action.DoAction`, `EditableText.SetTextContents`, `Component.ScrollTo`, none of which take focus | Measured but not yet implemented; refuses `backgroundPixelUnsupported`. `XSendEvent` against a verified target window is the only candidate mechanism, and which toolkits honour it is measured rather than assumed | `XTest` on an X11 session with an EWMH-capable window manager, transactional activate/dispatch/restore; withheld on every other session |
+| Linux | AT-SPI `Action.DoAction`, `EditableText.SetTextContents`, `Component.ScrollTo`, none of which take focus | `XSendEvent` to a window resolved from the target's own AT-SPI application, for toolkits a committed measurement recorded as acting on it: Chromium clicks, GTK 3 and Qt 6 keystrokes. Every other toolkit, and every version series nobody measured, refuses `backgroundPixelUnsupported` by name | `XTest` on an X11 session with an EWMH-capable window manager, transactional activate/dispatch/restore; withheld on every other session |
 
 On Linux the pixel rung's availability is a fact about the target's toolkit, and
 that fact is measured. `XSendEvent` against a window the backend resolved is the
@@ -258,15 +258,24 @@ Xvfb lane and again on a live X11 session, and the two lanes agree.
 
 What it found is that the rung is real and narrow. Chromium acts on a background
 click with the frontmost application and the real pointer provably unchanged, on
-every engine generation measured. GTK 3, WebKitGTK, Qt, Firefox and Chromium act
-on background keystrokes under the same conditions. GTK 4 receives neither. Qt
-also acts on a click, but requests activation while doing so — the focus moved on
-the lane with no window manager and was held only by focus-stealing prevention on
-the live one, and an acceptance that survives only while a window manager declines
-to honour the application is not a background delivery. Separately, a synthetic
-click is honoured by GTK only while the real cursor is already inside the target
-window — the reason hand experiments conclude otherwise — and arranging that is
-the foreground rung by definition.
+every engine generation measured. GTK 3, WebKitGTK and Qt act on background
+keystrokes under the same conditions. GTK 4 receives neither. Qt also acts on a
+click, but requests activation while doing so — the focus moved on the lane with
+no window manager and was held only by focus-stealing prevention on the live one,
+and an acceptance that survives only while a window manager declines to honour the
+application is not a background delivery. Separately, a synthetic click is
+honoured by GTK only while the real cursor is already inside the target window —
+the reason hand experiments conclude otherwise — and arranging that is the
+foreground rung by definition.
+
+Chromium's keystrokes are the one row the harness records as accepted that is not
+offered. Chromium routes background key events to a window only after a background
+click has landed in it, and the harness measures its keyboard phase after its
+click phase on the same window, so the row records that state rather than an
+independent acceptance. Delivered to a window that has not been clicked, every key
+event is dropped in silence — which from the sending side is indistinguishable
+from delivery, and is exactly the shape of failure this whole apparatus exists to
+refuse. The entry is withheld until the phases are measured independently.
 
 A backend may therefore offer the pixel candidate only for a toolkit the harness
 measured as accepting, keyed on the AT-SPI toolkit name and version the
@@ -274,6 +283,27 @@ application declares about itself. Inferring acceptance from `WM_CLASS` or from
 loaded libraries is a guess wearing a probe's clothes. Everything else refuses
 `backgroundPixelUnsupported` naming the toolkit that refused, including a version
 series nobody measured.
+
+The delivery variant is measured per toolkit and is not a detail. An event sent
+with the mask matching it reaches whichever clients selected that event on the
+destination window; an event sent with an empty mask reaches the client that
+created the window whatever it selected. GTK 3 acts only on the second, Chromium
+and Qt only on the first, and sending a toolkit the other one arrives as silence.
+
+Binding a target is the other half. The pointer path resolves the window by
+descending from the root to the window that owns the resolved element's point and
+requiring it to be one of the target process's own managed top-level windows,
+which settles ownership and occlusion in one question — that descent is the only
+hit test this backend has, since AT-SPI offers no portable point-to-element
+lookup. The keyboard path has no point to descend from, so it binds only while the
+application has exactly one managed top-level window and refuses the ambiguity
+otherwise. Both revalidate immediately before dispatch: the application still runs
+as the process the plan bound, the window is still the one that owns the point,
+its origin and size are unchanged, and the element still reports extents covering
+the point. Afterwards the frontmost window, the X input focus and the real pointer
+are all read back — the input focus separately from the frontmost window, because
+they are different facts and Qt's click moved one of them while the other stood
+still.
 
 That key is only as precise as the toolkit chooses to be, and one entry is
 coarser than the rest. Chromium reports itself as toolkit `Chromium` version
