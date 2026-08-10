@@ -251,8 +251,18 @@ impl X11Session {
         })
     }
 
+    /// A screen point in a window's own coordinates: the conversion through resolved geometry
+    /// that a window-targeted event's coordinates have to be expressed in.
+    pub fn window_point(
+        &self,
+        window: Window,
+        screen: (i16, i16),
+    ) -> Result<(i16, i16), BackendError> {
+        self.translate(self.root, window, screen)
+    }
+
     /// A point in one window's coordinates expressed in another's.
-    pub fn translate(
+    fn translate(
         &self,
         from: Window,
         to: Window,
@@ -757,6 +767,6 @@ impl KeyboardMapping {
 
 /// Screen coordinates cross the wire as 16-bit signed values, so a point outside that range is
 /// clamped rather than wrapped into a different part of the screen.
-fn coordinate(value: f64) -> i16 {
+pub(crate) fn coordinate(value: f64) -> i16 {
     value.round().clamp(i16::MIN as f64, i16::MAX as f64) as i16
 }
