@@ -271,7 +271,7 @@ impl TestClient {
         let client_list = atom("_NET_CLIENT_LIST");
         let window_pid = atom("_NET_WM_PID");
 
-        let mut window = |geometry: Geometry, mask: EventMask| {
+        let window = |geometry: Geometry, mask: EventMask| {
             let window = connection.generate_id().expect("a window id");
             connection
                 .create_window(
