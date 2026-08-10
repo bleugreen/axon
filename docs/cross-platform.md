@@ -63,7 +63,9 @@ These are the only sources that promote or sustain a **Supported** cell.
 | Hermetic X11 foreground test | `.github/workflows/test.yml` Linux job; `rust/axon-linux/tests/x11_foreground.rs` | the X11 activate/prove/dispatch/restore conversation against a real X server with a miniature EWMH window manager | every pull request |
 | Hermetic AT-SPI activation test | `.github/workflows/test.yml` Linux job; `rust/axon-linux/tests/atspi_activation.rs` | that the attributes call is issued against the application root and only once per application, that the bounded wait ends when a withholding provider publishes rather than when the bound expires, and that a provider which never publishes is reported as withheld rather than as empty — against a private session bus and a provider built to withhold the way Chromium does; and, on a second private bus, that the session's accessibility switch is read live rather than remembered and reaches health-v1 as a degraded session | every pull request |
 | Windows session-1 probes | `axon-win probe value`, `events`, `timeout`, `pixel-click`, `foreground`; findings recorded in this document | value set and readback, event delivery, provider timeouts, the pixel-click allowlist entry, the foreground hand-back finding | manual; re-run and re-date when the area changes |
-| Linux toolkit acceptance harness | `scripts/linux-toolkit-acceptance/`; results in `RESULTS.md` and `RESULTS-live-x11.md` | which toolkits act on background `XSendEvent` delivery with the session focus and real pointer unchanged, and whether AT-SPI extents match the toolkit's own rectangles; each row backed by a real-pointer and a focused-keystroke control, each phase re-proving the background before it sends | manual (2026-08-10, hermetic Xvfb and a live X11 session, GTK 3/4, Qt 6, WebKitGTK, Firefox, Chromium 108/124/150); re-run and re-date on toolkit releases |
+| Hermetic X11 pixel test | `.github/workflows/test.yml` Linux job; `rust/axon-linux/tests/x11_pixel.rs` | against a real X server: that the two delivery variants route as the acceptance table assumes — a targeted event reaching only a client that selected it, an owner event reaching the creating client regardless — that a window is bound to the process that owns it and refused when covered at the point, that screen coordinates convert through the window's own geometry, that a chord's modifier state survives the wire, and that none of it moves the real pointer or the X input focus | every pull request |
+| Linux toolkit acceptance harness | `scripts/linux-toolkit-acceptance/`; results in `RESULTS.md` and `RESULTS-live-x11.md` | which toolkits act on background `XSendEvent` delivery with the session focus and real pointer unchanged, and whether AT-SPI extents match the toolkit's own rectangles; each row backed by a real-pointer and a focused-keystroke control, each phase re-proving the background before it sends. Its keyboard phase runs after its click phase on the same window, so a keyboard row for a toolkit whose click is accepted is not independent — see the Chromium gap above | manual (2026-08-10, hermetic Xvfb and a live X11 session, GTK 3/4, Qt 6, WebKitGTK, Firefox, Chromium 108/124/150); re-run and re-date on toolkit releases |
+| Linux pixel rung bench verification | fedora bench, live Xfce X11 session, recorded in this document | that the implemented rung delivers end to end through the daemon: an Electron 43 (Chromium 150) page reported a click as `isTrusted`, and GTK 3 and Qt 6 typed delivered text into an unfocused window, each with the frontmost window, the X input focus and the real pointer unchanged either side; and that Chromium keystrokes with no prior click are silently dropped | manual (2026-08-10); re-run and re-date when the area changes |
 | Linux Chromium activation probe | recorded in [Linux backend](#linux-backend) | that Chromium-family trees are gated by `org.a11y.Status.IsEnabled` and by an attributes or relations call, and not by AT-SPI listener registration; the daemon's before-and-after capture of Chrome. What only real browsers can show — the daemon's own half of the mechanism is gated per pull request by the hermetic AT-SPI test above | manual (2026-08-08); re-run and re-date when the area changes |
 | Platform spikes | `rust/SPIKE-FINDINGS.md` | session topology, WebView2 and WebKitGTK activation and traversal, the Mutter geometry caveat, verified invoke dispatch | dated snapshots (2026-08-02 through 2026-08-04) |
 
@@ -134,6 +136,19 @@ should be discoverable here first.
 
 - `scroll` on Linux (every environment): refused — AT-SPI has no portable
   delta-scroll operation.
+- Chromium keystrokes at the Linux pixel rung: refused. Chromium routes
+  background key events to a window only once a background click has landed in
+  it, and the acceptance harness measures its keyboard phase after its click
+  phase on the same window, so the fixture's row for the family records that
+  state rather than an independent acceptance. Measuring the phases against
+  targets that received nothing else is AXN-102; the entry stays refused until
+  then, because the alternative is reporting a successful dispatch for
+  keystrokes that reliably do nothing.
+- Multi-window applications at the Linux keyboard pixel rung: refused. A
+  keyboard request names an application and no element, so the binding is
+  unambiguous only while that application has exactly one managed top-level
+  window; with more, nothing here can choose between them on the caller's
+  behalf, and it says so rather than guessing.
 - `drag` on Windows and Linux: not implemented. A drag holds a button across
   the whole gesture and needs its own account of a press held across a failed
   restoration.
