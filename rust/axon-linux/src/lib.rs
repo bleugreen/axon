@@ -12,6 +12,9 @@ use serde_json::{Map, Value, json};
 
 pub mod keys;
 pub mod lifecycle;
+/// The measured table of which toolkits act on background, window-targeted input. Pure, and public
+/// so its entries can be read next to the fixtures they cite.
+pub mod pixel;
 /// The daemon's local socket transport, in the library so its resilience to hostile clients is
 /// testable without a desktop or an AT-SPI bus.
 #[cfg(unix)]
