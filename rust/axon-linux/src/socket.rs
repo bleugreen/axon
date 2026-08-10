@@ -280,6 +280,9 @@ fn dispatch(
                 reported,
                 &SessionEnvironment::from_env(),
                 true,
+                // Asked per request rather than captured with the capability list beside it: the
+                // capability list describes this build, and this describes the session right now.
+                router.backend().accessibility_enabled(),
             );
             (
                 serde_json::to_value(JsonRpcResponse::success(

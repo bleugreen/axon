@@ -120,7 +120,7 @@ mod lifecycle {
         // Without a desktop the unit is enabled but deliberately not started. `--now` would start
         // it anyway, contradicting the unit's own binding to graphical-session.target and leaving
         // a daemon running where it has no desktop to automate.
-        let session = session_health(&SessionEnvironment::from_env());
+        let session = session_health(&SessionEnvironment::from_env(), None);
         if !session.graphical {
             systemctl(&["enable", UNIT_NAME])?;
             println!("registered {UNIT_NAME} -> {executable}");
@@ -169,7 +169,7 @@ mod lifecycle {
         systemctl(&["restart", UNIT_NAME])?;
         println!("restarted {UNIT_NAME} -> {path}");
 
-        let session = session_health(&SessionEnvironment::from_env());
+        let session = session_health(&SessionEnvironment::from_env(), None);
         if !session.graphical {
             println!(
                 "daemon not started: {}; it will start with the graphical session",
