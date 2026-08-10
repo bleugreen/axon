@@ -776,9 +776,10 @@ the macOS lane called `shutdown` on an installed binary that had no such
 subcommand, and `|| true` meant nothing ever reported it. And it must not be
 tolerated: `axon shutdown` and `systemctl stop` exit non-zero while anything is
 still answering, which is exactly what makes their success the endpoint-is-free
-guarantee the probes rest on. A request that fails is a different question, and
-not one the exit code answers on its own — the Windows park works it out from
-the process, described with the rest of that lane's patience below.
+guarantee the probes rest on. What a request that fails means, and what one
+means that succeeds after another has already been acknowledged, are different
+questions that the exit code does not answer on its own — the Windows park works
+both out from the process, described with the rest of that lane's patience below.
 
 A stop also incurs a debt, and a final `if: always()` step pays it. `axon
 shutdown` is not a pause — it boots the LaunchAgent out precisely so `KeepAlive`
@@ -883,11 +884,19 @@ cargo build, the stage failed the lane, and the process exited seconds later
 while the `if: always()` restore was already putting the desktop back — a red run
 over a healthy desktop. A failed request therefore opens a wait rather than
 ending the stage: the park polls the process the health document named, and asks
-again up to three times, roughly ninety seconds in all. A later request that
-finds nothing left to stop ends the wait the same way a process disappearing
-does, and a daemon whose document names no process id at all is waited for
-through the health round trip instead, which is the same tolerance the restore
-extends to an old enough release. What has not changed is what a stop that never
+again up to three times, roughly ninety seconds in all.
+
+What it must not do is believe a later request that reports success. The pipe
+goes when a daemon acknowledges the request and the process goes when it has
+finished tearing down, so once one request has been acknowledged every request
+after it finds no pipe at all and reports exactly that. `no daemon was running`
+is a true statement about the pipe that says nothing about the process, and
+taking it for one would hand the probe a machine where the daemon this stage set
+out to stop is still there — which is the race the command's own wait exists to
+prevent, recreated by the lane that was supposed to be patient about it. So the
+process is the verdict every time round the loop, and a daemon whose document
+names no process id at all is waited for through the health round trip instead,
+which is the same tolerance the restore extends to an old enough release. What has not changed is what a stop that never
 takes costs: a daemon still running when the budget is gone fails the stage as
 loudly as it did before there was one, and it is named rather than killed,
 because a daemon this lane kills is a daemon it cannot put back. The debt is
