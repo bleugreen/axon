@@ -251,11 +251,20 @@ public enum SemanticNameDeriver {
         }
 
         groups = Dictionary(grouping: candidates.indices, by: { candidates[$0].segments.joined(separator: "/") })
-        for indices in groups.values where indices.count > 1 {
-            let roles = Set(indices.map { candidates[$0].role })
-            if roles.count > 1 {
-                for index in indices {
-                    candidates[index].segments[candidates[index].segments.count - 1] += "-\(candidates[index].role)"
+        for (_, indices) in groups.sorted(by: { $0.key < $1.key }) where indices.count > 1 {
+            let roleCounts = Dictionary(grouping: indices.map { candidates[$0].role }, by: { $0 }).mapValues(\.count)
+            if roleCounts.count > 1 {
+                for index in indices where roleCounts[candidates[index].role] == 1 {
+                    let role = candidates[index].role
+                    let leaf = candidates[index].segments[candidates[index].segments.count - 1]
+                    var suffix = role
+                    var attempt = 0
+                    while occupiedNames.contains((candidates[index].segments.dropLast() + ["\(leaf)-\(suffix)"]).joined(separator: "/")) {
+                        attempt += 1
+                        suffix = attempt == 1 ? "\(role)-role" : "\(role)-role-\(attempt)"
+                    }
+                    candidates[index].segments[candidates[index].segments.count - 1] = "\(leaf)-\(suffix)"
+                    occupiedNames.insert(candidates[index].segments.joined(separator: "/"))
                     candidates[index].disambiguation = "role"
                 }
             }

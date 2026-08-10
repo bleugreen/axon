@@ -78,3 +78,26 @@ import Testing
     #expect(result.comparableElements == 4)
     #expect(result.stableNames == 4)
 }
+
+@Test func roleDisambiguationPreservesExistingVisibleNameAcrossReorder() throws {
+    func snapshot(semanticPairFirst: Bool) throws -> JSONValue {
+        let button = #"{"role":"AXButton","title":"Done"}"#
+        let text = #"{"role":"AXStaticText","title":"Done"}"#
+        let visibleCollision = #"{"role":"AXButton","title":"Done button"}"#
+        let children = semanticPairFirst
+            ? "\(button),\(text),\(visibleCollision)"
+            : "\(visibleCollision),\(text),\(button)"
+        let raw = #"{"windows":[{"role":"AXWindow","title":"Main","children":[\#(children)]}]}"#
+        return try JSONDecoder().decode(JSONValue.self, from: Data(raw.utf8))
+    }
+    let first = SemanticNameDeriver.derive(from: try snapshot(semanticPairFirst: true))
+    let reordered = SemanticNameDeriver.derive(from: try snapshot(semanticPairFirst: false))
+    let result = SemanticNameDeriver.stability(from: first, to: reordered)
+
+    #expect(Set(first.elements.map(\.name)) == [
+        "main", "main/done-button-role", "main/done-text", "main/done-button"
+    ])
+    #expect(first.summary.collisionFreeCount == 4)
+    #expect(result.comparableElements == 4)
+    #expect(result.stableNames == 4)
+}
