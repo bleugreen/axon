@@ -13,10 +13,16 @@
 //! provider publishes, and that a provider which never publishes is reported as withholding rather
 //! than as empty — while being asked exactly once, however many times it is captured.
 //!
-//! One test rather than several, because `DBUS_SESSION_BUS_ADDRESS` is process-wide and is handed
-//! to this process at spawn rather than set from inside it. Every fake application shares the one
-//! bus, and the scenarios run in order against one backend, which is also what shows the
-//! per-application activation memo not leaking between applications.
+//! The second test is about the session rather than about one application. Chromium's first gate,
+//! `org.a11y.Status.IsEnabled`, decides whether those applications are on the bus at all, and the
+//! daemon publishes it in health-v1. Only a bus can show what matters about that reading: that it
+//! is taken when it is asked for, so a session which switches accessibility off under a running
+//! daemon is described as it is now rather than as it was at startup.
+//!
+//! Each test owns a private bus and an inner run of its own, because `DBUS_SESSION_BUS_ADDRESS` is
+//! process-wide and is handed to a process at spawn rather than set from inside it. Within a test
+//! every fake application shares the one bus and the scenarios run in order against one backend,
+//! which is also what shows the per-application activation memo not leaking between applications.
 
 #![cfg(target_os = "linux")]
 
@@ -64,10 +70,11 @@ const CONTENT: &str = "/org/a11y/atspi/accessible/3";
 /// path the inner run touches on its way out to prove it ran.
 const INNER_RUN: &str = "AXON_ATSPI_HERMETIC_BUS";
 
-/// The one test, named twice: once by `#[test]` and once as the filter the inner run is launched
+/// The tests, each named twice: once by `#[test]` and once as the filter its inner run is launched
 /// with. The two are checked against each other at runtime rather than trusted, because a filter
 /// matching nothing is a passing libtest run.
-const TEST: &str = "a_withholding_provider_is_woken_at_its_root_waited_for_and_asked_once";
+const ACTIVATION: &str = "a_withholding_provider_is_woken_at_its_root_waited_for_and_asked_once";
+const ACCESSIBILITY: &str = "a_session_that_switches_accessibility_off_reports_it_in_health";
 
 const WINDOW_NAME: &str = "Withholding Window";
 const INNER_NAME: &str = "Tool Bar";
@@ -87,7 +94,7 @@ fn a_withholding_provider_is_woken_at_its_root_waited_for_and_asked_once() {
     // unsafety, and it leaves the backend discovering the bus exactly the way it does in production
     // rather than through a seam that exists only for a test.
     if std::env::var_os(INNER_RUN).is_none() {
-        return supervise_an_inner_run();
+        return supervise_an_inner_run(ACTIVATION);
     }
 
     let desktop = Desktop::start();
@@ -193,6 +200,88 @@ fn a_withholding_provider_is_woken_at_its_root_waited_for_and_asked_once() {
     // Waking one application says nothing about another, and the memo is keyed to say so.
     assert_eq!(desktop.provider(DEEP).attributes_asked(), vec![ROOT]);
 
+    leave_proof_of_the_inner_run();
+}
+
+/// The session gate, from the bus it lives on to the document that publishes it.
+///
+/// `org.a11y.Status.IsEnabled` is a property of the running session, not a fact about this build,
+/// and a daemon that answered from a value it read once at startup would describe a desktop that
+/// no longer exists. The other half is what the document makes of it: a session answering false is
+/// interactive, graphical, and degraded all at once, and reporting only the two booleans would
+/// publish it as healthy while every Chromium-family application on it is missing from the bus.
+#[test]
+#[ignore = "requires dbus-daemon; run with `cargo test -p axon-linux -- --ignored`"]
+fn a_session_that_switches_accessibility_off_reports_it_in_health() {
+    if std::env::var_os(INNER_RUN).is_none() {
+        return supervise_an_inner_run(ACCESSIBILITY);
+    }
+
+    let desktop = Desktop::start();
+    let backend = LinuxBackend::start().expect("the backend reaches the fake accessibility bus");
+
+    assert_eq!(
+        backend.accessibility_enabled(),
+        Some(true),
+        "a session with accessibility switched on is read as such from its own bus"
+    );
+
+    desktop.switch_accessibility_off();
+
+    assert_eq!(
+        backend.accessibility_enabled(),
+        Some(false),
+        "the switch is read at the moment it is asked for rather than remembered from startup"
+    );
+
+    let report = daemon_report(
+        "/run/user/1000/axon-v1.sock".into(),
+        std::process::id(),
+        &[],
+        &wayland_session(),
+        true,
+        backend.accessibility_enabled(),
+    );
+
+    assert!(
+        report.session.interactive && report.session.graphical,
+        "the desktop is up and the bus answers; what is missing is every application that reads \
+         the switch"
+    );
+    assert_eq!(report.session.accessibility_enabled, Some(false));
+    assert_eq!(
+        report.session.reason.as_deref(),
+        Some(reason::ACCESSIBILITY_DISABLED),
+        "a consumer branching on the reason sees the degradation the booleans cannot carry"
+    );
+    let detail = report
+        .session
+        .detail
+        .expect("a disabled session explains itself to a person as well");
+    assert!(
+        detail.contains("org.a11y.Status.IsEnabled") && detail.contains("Chromium"),
+        "the detail names the property and what it hides: {detail}"
+    );
+
+    leave_proof_of_the_inner_run();
+}
+
+/// The session environment a graphical Wayland desktop presents, with this test's own private bus
+/// as the session bus. Built rather than read from the environment, so that whatever desktop state
+/// the host running this test happens to have cannot decide what the health document says.
+fn wayland_session() -> SessionEnvironment {
+    SessionEnvironment {
+        runtime_dir: Some("/run/user/1000".into()),
+        session_type: Some("wayland".into()),
+        wayland_display: Some("wayland-0".into()),
+        x11_display: None,
+        session_bus: std::env::var("DBUS_SESSION_BUS_ADDRESS").ok(),
+    }
+}
+
+/// Records that an inner run reached the end of its body, which is what its supervisor checks: a
+/// libtest filter that matches nothing exits successfully having run nothing.
+fn leave_proof_of_the_inner_run() {
     let proof = std::env::var_os(INNER_RUN).expect("the inner run was told where to leave proof");
     std::fs::write(proof, "").expect("the proof that this body ran writes");
 }
