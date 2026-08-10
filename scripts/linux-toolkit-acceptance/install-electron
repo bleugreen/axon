@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+# Electron is not packaged by any distribution this harness runs on, and it is the one target that
+# stands in for the whole Chromium family. This fetches it into the target directory, which is
+# gitignored: the measurement is committed, the 200MB runtime is not.
+set -euo pipefail
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+cd "$here/targets/electron"
+npm install --no-audit --no-fund electron@latest
