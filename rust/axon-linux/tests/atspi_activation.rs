@@ -67,7 +67,8 @@ const CONTENT_NAME: &str = "Published Content";
 #[ignore = "requires dbus-daemon; run with `cargo test -p axon-linux -- --ignored`"]
 fn a_withholding_provider_is_woken_at_its_root_waited_for_and_asked_once() {
     let desktop = Desktop::start();
-    let mut backend = LinuxBackend::start().expect("the backend reaches the fake accessibility bus");
+    let mut backend =
+        LinuxBackend::start().expect("the backend reaches the fake accessibility bus");
 
     // The shape the 2026-08-08 probe measured: a window claiming a child it has not built, which
     // arrives shortly after the application root is asked for its attributes.
@@ -155,7 +156,10 @@ fn a_withholding_provider_is_woken_at_its_root_waited_for_and_asked_once() {
         "an application that never publishes must not tax every later look with the bound; \
          took {took:?}"
     );
-    let window = only_child(&again, "the application root of a silent provider, captured again");
+    let window = only_child(
+        &again,
+        "the application root of a silent provider, captured again",
+    );
     assert_eq!(
         window.truncation_reason.as_deref(),
         Some(CHILD_NOT_PUBLISHED),
@@ -458,25 +462,50 @@ async fn application(
     let provider = Arc::new(Provider::new(on_attributes));
     let tree = match withholds {
         Withholds::AtWindow => vec![
-            (ROOT, "application", name, Children::Always(vec![reference(WINDOW)])),
+            (
+                ROOT,
+                "application",
+                name,
+                Children::Always(vec![reference(WINDOW)]),
+            ),
             (
                 WINDOW,
                 "frame",
                 WINDOW_NAME,
                 Children::Withheld(vec![reference(CONTENT)]),
             ),
-            (CONTENT, "document web", CONTENT_NAME, Children::Always(vec![])),
+            (
+                CONTENT,
+                "document web",
+                CONTENT_NAME,
+                Children::Always(vec![]),
+            ),
         ],
         Withholds::BelowWindow => vec![
-            (ROOT, "application", name, Children::Always(vec![reference(WINDOW)])),
-            (WINDOW, "frame", WINDOW_NAME, Children::Always(vec![reference(INNER)])),
+            (
+                ROOT,
+                "application",
+                name,
+                Children::Always(vec![reference(WINDOW)]),
+            ),
+            (
+                WINDOW,
+                "frame",
+                WINDOW_NAME,
+                Children::Always(vec![reference(INNER)]),
+            ),
             (
                 INNER,
                 "tool bar",
                 INNER_NAME,
                 Children::Withheld(vec![reference(CONTENT)]),
             ),
-            (CONTENT, "document web", CONTENT_NAME, Children::Always(vec![])),
+            (
+                CONTENT,
+                "document web",
+                CONTENT_NAME,
+                Children::Always(vec![]),
+            ),
         ],
     };
     for (path, role, name, children) in tree {
