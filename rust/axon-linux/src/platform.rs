@@ -1,3 +1,4 @@
+use crate::lifecycle::ACCESSIBILITY_DISABLED;
 use crate::{PointerTargetVerifier, x11::X11Session};
 use atspi::{
     CoordType, ObjectRefOwned,
@@ -13,7 +14,6 @@ use atspi::{
         proxy::CacheProperties,
     },
 };
-use crate::lifecycle::ACCESSIBILITY_DISABLED;
 use axon_core::{
     AppQuery, Application, BackendError, Capability, CapabilityInfo, KeyboardIntent, Node,
     Observation, PlatformBackend, RecordedCall, Screenshot, Snapshot, SnapshotHandle, Window,
