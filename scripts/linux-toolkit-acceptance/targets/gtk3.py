@@ -35,9 +35,19 @@ class Target:
         # Raw arrival is reported separately from the effect. "The toolkit never saw the event" and
         # "the toolkit saw it and declined to act" are different answers about a delivery mechanism,
         # and a harness that only watches the effect cannot tell them apart.
-        self.window.add_events(Gdk.EventMask.BUTTON_PRESS_MASK | Gdk.EventMask.KEY_PRESS_MASK)
-        self.window.connect("button-press-event", self.on_raw, "button-press")
-        self.window.connect("key-press-event", self.on_raw, "key-press")
+        #
+        # Watched on the widgets as well as the toplevel: GTK 3 widgets own client-side GDK windows,
+        # and GDK retargets an event that arrives on the toplevel to the innermost one containing the
+        # point. A probe on the toplevel alone therefore misses exactly the events that were routed
+        # correctly.
+        for widget, mask in (
+            (self.window, Gdk.EventMask.BUTTON_PRESS_MASK | Gdk.EventMask.KEY_PRESS_MASK),
+            (self.button, Gdk.EventMask.BUTTON_PRESS_MASK),
+            (self.entry, Gdk.EventMask.KEY_PRESS_MASK),
+        ):
+            widget.add_events(mask)
+            widget.connect("button-press-event", self.on_raw, "button-press")
+            widget.connect("key-press-event", self.on_raw, "key-press")
         self.window.show_all()
         self.entry.grab_focus()
         GLib.timeout_add(400, self.announce)
