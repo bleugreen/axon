@@ -23,6 +23,10 @@ public struct SemanticNameSummary: Codable, Equatable, Sendable {
         guard eligibleElementCount > 0 else { return 1 }
         return Double(collisionFreeCount) / Double(eligibleElementCount)
     }
+
+    private static func appendDistinct(_ segment: String, to lineage: [String]) -> [String] {
+        lineage.last == segment ? lineage : lineage + [segment]
+    }
 }
 
 public struct SemanticNameStudy: Codable, Equatable, Sendable {
@@ -113,6 +117,7 @@ public enum SemanticNameDeriver {
                 ambiguous += before.count
                 continue
             }
+            comparable += 1
             guard let after = secondGroups[key] else {
                 missing += 1
                 continue
@@ -121,7 +126,6 @@ public enum SemanticNameDeriver {
                 ambiguous += 1
                 continue
             }
-            comparable += 1
             if before[0].name == after[0].name { stable += 1 }
         }
         return SemanticNameStability(
@@ -171,7 +175,7 @@ public enum SemanticNameDeriver {
         let labelSegment = rawLabel.flatMap { slug($0, maximumLength: maximumSegmentLength) }
         let landmark = anonymousLandmark(role: role)
         let lineageSegment = labelSegment ?? landmark
-        let nextLineage = lineageSegment.map { semanticLineage + [$0] } ?? semanticLineage
+        let nextLineage = lineageSegment.map { appendDistinct($0, to: semanticLineage) } ?? semanticLineage
 
         if let rawLabel, let leaf = labelSegment, !isAnonymousStructural(role: role) {
             let lineage = semanticLineage + [leaf]
@@ -239,6 +243,10 @@ public enum SemanticNameDeriver {
             result = ["menu"] + Array(lineage.suffix(2))
         }
         return result
+    }
+
+    private static func appendDistinct(_ segment: String, to lineage: [String]) -> [String] {
+        lineage.last == segment ? lineage : lineage + [segment]
     }
 
     private static func study(from elements: [SemanticElementName]) -> SemanticNameStudy {
