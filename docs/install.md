@@ -91,6 +91,54 @@ make package-app
 
 When `AXON_NOTARY_PROFILE` is set, the packager submits the zip to Apple, staples the accepted ticket to both apps, and recreates the zip.
 
+### The Rust daemons
+
+The Windows and Linux daemons build natively on their own hosts:
+
+```sh
+make package-win      # on Windows
+make package-linux    # on Linux
+```
+
+Packaging has two phases, and `scripts/package-rust` runs both unless told otherwise. Staging
+builds the binary and lays out the directory that becomes the archive; archiving compresses that
+directory and writes the `.sha256`. They are separable so that code signing can run in between:
+
+```sh
+scripts/package-rust axon-win --stage-only
+# sign dist/axon-win-<version>-windows-x86_64/axon-win.exe here
+scripts/package-rust axon-win --archive-only
+```
+
+A signature applied after archiving would not be inside the archive, and one applied after
+checksumming would leave the checksum describing bytes that no longer exist. Archiving refuses to
+run against a staging directory that was never built, so a stale directory cannot become a release.
+
+### Windows code signing
+
+Releases sign `axon-win.exe` with [Azure Artifact
+Signing](https://learn.microsoft.com/azure/artifact-signing/) (formerly Trusted Signing). The
+release workflow's Windows job does this in the seam above, then verifies the signature from inside
+the published archive and fails the release if it is not valid and timestamped. See
+[Embedding Axon](embedding.md#signed-release-binaries) for why an unsigned Windows daemon is a
+functional problem rather than a cosmetic one.
+
+The job authenticates with a GitHub OIDC federated credential, so no signing secret is stored in
+the repository. The credential's subject is scoped to the `release` GitHub environment, which is
+why the job declares `environment: release` — renaming or removing that environment revokes the
+job's ability to sign. The configuration it reads:
+
+| Name | Kind | Purpose |
+| --- | --- | --- |
+| `AZURE_TENANT_ID`, `AZURE_CLIENT_ID`, `AZURE_SUBSCRIPTION_ID` | secrets | the Entra app registration that holds the Certificate Profile Signer role |
+| `AZURE_SIGNING_ENDPOINT`, `AZURE_SIGNING_ACCOUNT`, `AZURE_SIGNING_PROFILE` | variables | which signing account and certificate profile to sign with |
+| `AXON_WIN_SIGNING` | variable | signing runs only when this is `enabled` |
+
+`AXON_WIN_SIGNING` is a temporary gate, not a supported mode. It exists because the certificate
+profile cannot be created until Azure finishes validating the publishing organization's identity,
+and an ungated signing step would fail every release until then. Once a signed release has shipped,
+delete the variable and the conditions that read it.
+
 ## Homebrew Cask
 
 The intended tap command is:
