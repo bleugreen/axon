@@ -398,6 +398,177 @@ impl X11Session {
         }
     }
 
+    /// A primary-button press and release delivered to one window with `XSendEvent`.
+    ///
+    /// This is the pixel rung's pointer mechanism, and it is a different thing from [`Self::click`]
+    /// rather than a narrower one. Nothing here touches the global pointer device: the events name
+    /// a window and carry the coordinates the caller resolved, the real cursor stays wherever the
+    /// user left it, and the session focus is never asked to move.
+    ///
+    /// Every event this sends is flagged `send_event`, and a toolkit is free to drop it. The X
+    /// server reports success as soon as it accepts the request, so a clean return here means the
+    /// events were delivered to the target's connection and never means the target acted on them.
+    /// Which toolkits do act is the measured fact in [`crate::pixel`], and this must not be called
+    /// for a toolkit that table has not cleared.
+    pub fn send_click(
+        &self,
+        window: Window,
+        window_point: (i16, i16),
+        screen_point: (i16, i16),
+        variant: SendVariant,
+    ) -> Result<(), BackendError> {
+        // A release carries the button already held, exactly as the server would report it: the
+        // `state` field describes the modifier and button state immediately before the event.
+        for (kind, state) in [
+            (BUTTON_PRESS_EVENT, KeyButMask::default()),
+            (BUTTON_RELEASE_EVENT, KeyButMask::BUTTON1),
+        ] {
+            let event = ButtonPressEvent {
+                response_type: kind,
+                detail: 1,
+                sequence: 0,
+                time: self.tick(),
+                root: self.root,
+                event: window,
+                child: x11rb::NONE,
+                root_x: screen_point.0,
+                root_y: screen_point.1,
+                event_x: window_point.0,
+                event_y: window_point.1,
+                state,
+                same_screen: true,
+            };
+            self.send(window, mask_for(kind, variant), event, "send a click to a window")?;
+        }
+        self.flush("send a click to a window")
+    }
+
+    /// Literal text or one chord delivered to one window with `XSendEvent`.
+    ///
+    /// Resolved against the live layout in full before anything is sent, for the same reason
+    /// [`Self::keyboard`] is: an unmappable character halfway through a string would otherwise
+    /// leave the first half typed into the target while the call reported a failure.
+    ///
+    /// The delivery is otherwise the pointer path's twin, including what it does not prove. See
+    /// [`Self::send_click`].
+    pub fn send_keyboard(
+        &self,
+        window: Window,
+        intent: KeyboardIntent<'_>,
+        variant: SendVariant,
+    ) -> Result<(), BackendError> {
+        let strokes = self.strokes(intent)?;
+        let modifiers = self.modifier_mapping()?;
+        for stroke in &strokes {
+            self.send_stroke(window, stroke, &modifiers, variant)?;
+        }
+        self.flush("send keyboard input to a window")
+    }
+
+    /// Sends one keystroke as the server itself would report it: each modifier pressed, the key
+    /// pressed and released, then the modifiers released in reverse.
+    ///
+    /// The `state` field is what makes this a keystroke rather than a bare keycode. `XSendEvent`
+    /// does not change the server's own modifier state, so a toolkit has nothing but `state` to
+    /// read the held modifiers from — and a chord sent without it arrives as the unmodified key,
+    /// which is a different keystroke than the caller asked for rather than a failure to deliver.
+    /// Capital letters run through the same path, because a shifted character is a Shift chord.
+    ///
+    /// X reports the state as it was immediately *before* each event, which is why a modifier's
+    /// own press carries the state without it and its release carries the state with it.
+    fn send_stroke(
+        &self,
+        window: Window,
+        stroke: &Stroke,
+        modifiers: &ModifierMapping,
+        variant: SendVariant,
+    ) -> Result<(), BackendError> {
+        let mut state = 0u16;
+        for code in &stroke.held {
+            self.send_key(window, KEY_PRESS_EVENT, *code, state, variant)?;
+            state |= modifiers.mask_of(*code);
+        }
+        self.send_key(window, KEY_PRESS_EVENT, stroke.key, state, variant)?;
+        self.send_key(window, KEY_RELEASE_EVENT, stroke.key, state, variant)?;
+        for code in stroke.held.iter().rev() {
+            self.send_key(window, KEY_RELEASE_EVENT, *code, state, variant)?;
+            state &= !modifiers.mask_of(*code);
+        }
+        Ok(())
+    }
+
+    fn send_key(
+        &self,
+        window: Window,
+        kind: u8,
+        keycode: u8,
+        state: u16,
+        variant: SendVariant,
+    ) -> Result<(), BackendError> {
+        let event = KeyPressEvent {
+            response_type: kind,
+            detail: keycode,
+            sequence: 0,
+            time: self.tick(),
+            root: self.root,
+            event: window,
+            child: x11rb::NONE,
+            // A key event's coordinates say where the pointer was, and this delivery deliberately
+            // did not touch it. Zero is what the harness sent and what every accepting toolkit was
+            // measured against; a real coordinate here would describe a pointer that never moved.
+            root_x: 0,
+            root_y: 0,
+            event_x: 0,
+            event_y: 0,
+            state: state.into(),
+            same_screen: true,
+        };
+        self.send(
+            window,
+            mask_for(kind, variant),
+            event,
+            "send keyboard input to a window",
+        )
+    }
+
+    fn send<E>(
+        &self,
+        window: Window,
+        mask: EventMask,
+        event: E,
+        what: &str,
+    ) -> Result<(), BackendError>
+    where
+        E: Into<[u8; 32]>,
+    {
+        // `propagate` false, always: an event the target's own window does not want must not climb
+        // its ancestry looking for someone who does. The rung is bound to one window or it is not
+        // bound at all.
+        self.connection
+            .send_event(false, window, mask, event)
+            .map_err(|error| operation(what, error))?;
+        Ok(())
+    }
+
+    /// Which modifier bit each keycode carries, as the server currently reports it.
+    fn modifier_mapping(&self) -> Result<ModifierMapping, BackendError> {
+        let reply = self
+            .connection
+            .get_modifier_mapping()
+            .map_err(|error| operation("read the modifier mapping", error))?
+            .reply()
+            .map_err(|error| operation("read the modifier mapping", error))?;
+        Ok(ModifierMapping {
+            per_modifier: reply.keycodes_per_modifier.into(),
+            keycodes: reply.keycodes,
+        })
+    }
+
+    /// The next timestamp for a sent event, strictly later than the last one.
+    fn tick(&self) -> u32 {
+        self.event_clock.fetch_add(10, Ordering::Relaxed) + 10
+    }
+
     /// Presses one key with its modifiers held, then releases everything in reverse.
     fn post(&self, stroke: &Stroke) -> Result<(), BackendError> {
         for code in &stroke.held {
