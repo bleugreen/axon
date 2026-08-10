@@ -13,6 +13,19 @@ use axon_core::{
 /// The AT-SPI accessibility bus, which is the one gate Linux applies to automation.
 pub const ACCESSIBILITY_BUS: &str = "accessibilityBus";
 
+/// What a session with `org.a11y.Status.IsEnabled` false is, said once.
+///
+/// Chromium and its embedders read that property at process start and never join the accessibility
+/// bus while it is false. On such a session those applications are not thin — they are absent,
+/// which is indistinguishable from a misspelled name unless the caller is told. The same sentence
+/// serves both places a caller can meet the fact: the health document's session detail, and the
+/// capture refusal that names it for someone who has already asked for an application. It lives
+/// here rather than in the backend because this module compiles on every host, and because one
+/// sentence in two voices is how the two surfaces drift apart.
+pub const ACCESSIBILITY_DISABLED: &str = "this session reports accessibility disabled \
+     (org.a11y.Status.IsEnabled is false), so applications that read it at startup — Chromium, \
+     Electron, and Chromium-backed webviews — are not on the bus at all";
+
 pub const UNIT_NAME: &str = "axon.service";
 const UNIT_TEMPLATE: &str = include_str!("../systemd/axon.service.in");
 const EXEC_PLACEHOLDER: &str = "@EXEC@";
@@ -127,7 +140,23 @@ impl SessionEnvironment {
 /// A host can have a user manager and a session bus and still sit at the greeter with no desktop,
 /// which is the state that must report honestly rather than claim readiness. Each condition is
 /// therefore checked separately instead of collapsing into one "is it working" guess.
-pub fn session_health(env: &SessionEnvironment) -> SessionHealth {
+///
+/// `accessibility_enabled` is `org.a11y.Status.IsEnabled` as the daemon read it, and `None` where
+/// nobody asked: the property lives on the session bus, so only a running daemon holding that
+/// connection can answer it, and a CLI reporting on a daemon that never came up says nothing about
+/// it rather than guessing. It is the one fact here that is not an environment variable, which is
+/// why it arrives as an argument instead of being read from `env`.
+pub fn session_health(
+    env: &SessionEnvironment,
+    accessibility_enabled: Option<bool>,
+) -> SessionHealth {
+    SessionHealth {
+        accessibility_enabled,
+        ..classify(env, accessibility_enabled)
+    }
+}
+
+fn classify(env: &SessionEnvironment, accessibility_enabled: Option<bool>) -> SessionHealth {
     if env.runtime_dir.is_none() {
         return SessionHealth::degraded(
             false,
@@ -155,13 +184,26 @@ pub fn session_health(env: &SessionEnvironment) -> SessionHealth {
             Some("DBUS_SESSION_BUS_ADDRESS is unset, so AT-SPI cannot be reached".into()),
         );
     }
-    SessionHealth::usable(Some(env.session_type.clone().unwrap_or_else(|| {
+    let session_type = env.session_type.clone().unwrap_or_else(|| {
         if env.is_wayland() {
             "wayland".into()
         } else {
             "x11".into()
         }
-    })))
+    });
+    if accessibility_enabled == Some(false) {
+        // Interactive and graphical, and degraded anyway: the desktop is up and the AT-SPI bus is
+        // reachable, while every Chromium-family application on it is missing from that bus. A
+        // consumer that only reads the two booleans sees a healthy session, which is why this is
+        // also a reason rather than only a field.
+        return SessionHealth::degraded(
+            true,
+            true,
+            reason::ACCESSIBILITY_DISABLED,
+            Some(format!("{session_type}; {ACCESSIBILITY_DISABLED}")),
+        );
+    }
+    SessionHealth::usable(Some(session_type))
 }
 
 /// Overlays the runtime restrictions the backend's static capability list cannot know about.
