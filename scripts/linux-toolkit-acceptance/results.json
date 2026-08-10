@@ -1,5 +1,5 @@
 {
-  "measuredAt": "2026-08-10T01:43:11-0400",
+  "measuredAt": "2026-08-10T01:50:27-0400",
   "session": "hermetic Xvfb on :99",
   "display": ":99",
   "xServer": "The X.Org Foundation release 12101021",
@@ -36,6 +36,14 @@
             "targeted": 0,
             "owner": 0
           },
+          "before": {
+            "pointer": [
+              520,
+              1199
+            ],
+            "focus": 4194304,
+            "pointerOverTarget": false
+          },
           "invariants": {
             "pointerUnchanged": true,
             "focusUnchanged": true,
@@ -57,6 +65,14 @@
           "reachedToolkit": {
             "targeted": 0,
             "owner": 8
+          },
+          "before": {
+            "pointer": [
+              520,
+              1199
+            ],
+            "focus": 4194304,
+            "pointerOverTarget": false
           },
           "invariants": {
             "pointerUnchanged": true,
@@ -178,6 +194,14 @@
             "targeted": 0,
             "owner": 0
           },
+          "before": {
+            "pointer": [
+              520,
+              1199
+            ],
+            "focus": 4194304,
+            "pointerOverTarget": false
+          },
           "invariants": {
             "pointerUnchanged": true,
             "focusUnchanged": true,
@@ -198,6 +222,14 @@
           "reachedToolkit": {
             "targeted": 0,
             "owner": 0
+          },
+          "before": {
+            "pointer": [
+              520,
+              1199
+            ],
+            "focus": 4194304,
+            "pointerOverTarget": false
           },
           "invariants": {
             "pointerUnchanged": true,
@@ -318,6 +350,14 @@
           "reachedToolkit": {
             "targeted": 2
           },
+          "before": {
+            "pointer": [
+              520,
+              1199
+            ],
+            "focus": 4194304,
+            "pointerOverTarget": false
+          },
           "invariants": {
             "pointerUnchanged": true,
             "focusUnchanged": false,
@@ -339,26 +379,34 @@
           "reachedToolkit": {
             "targeted": 8
           },
+          "before": {
+            "pointer": [
+              520,
+              1199
+            ],
+            "focus": 4194304,
+            "pointerOverTarget": false
+          },
           "invariants": {
             "pointerUnchanged": true,
-            "focusUnchanged": false,
+            "focusUnchanged": true,
             "pointerAt": [
               520,
               1199
             ],
-            "focusWindow": 6291463
+            "focusWindow": 4194304
           }
         }
       },
       "targetIsTopmostAtPoint": true,
       "invariants": {
         "pointerUnchanged": true,
-        "focusUnchanged": false,
+        "focusUnchanged": true,
         "pointerAt": [
           520,
           1199
         ],
-        "focusWindow": 6291463
+        "focusWindow": 4194304
       },
       "pointerOverTarget": {
         "accepted": true,
@@ -459,6 +507,14 @@
             "targeted": 0,
             "owner": 0
           },
+          "before": {
+            "pointer": [
+              520,
+              1199
+            ],
+            "focus": 4194304,
+            "pointerOverTarget": false
+          },
           "invariants": {
             "pointerUnchanged": true,
             "focusUnchanged": true,
@@ -480,6 +536,14 @@
           "reachedToolkit": {
             "targeted": 0,
             "owner": 4
+          },
+          "before": {
+            "pointer": [
+              520,
+              1199
+            ],
+            "focus": 4194304,
+            "pointerOverTarget": false
           },
           "invariants": {
             "pointerUnchanged": true,
@@ -592,6 +656,14 @@
           "reachedToolkit": {
             "targeted": 1
           },
+          "before": {
+            "pointer": [
+              1084,
+              1199
+            ],
+            "focus": 4194304,
+            "pointerOverTarget": false
+          },
           "invariants": {
             "pointerUnchanged": true,
             "focusUnchanged": true,
@@ -608,10 +680,18 @@
           "reaction": {
             "kind": "text",
             "widget": "entry",
-            "value": "axon"
+            "value": "a"
           },
           "reachedToolkit": {
-            "targeted": 4
+            "targeted": 3
+          },
+          "before": {
+            "pointer": [
+              1084,
+              1199
+            ],
+            "focus": 4194304,
+            "pointerOverTarget": false
           },
           "invariants": {
             "pointerUnchanged": true,
@@ -702,6 +782,320 @@
       "status": "measured"
     },
     {
+      "target": "electron-22",
+      "signature": "Electron 22.3.27 (Chromium 108.0.5359.215)",
+      "window": {
+        "xid": 6291458,
+        "reportedXid": null
+      },
+      "before": {
+        "pointer": [
+          1080,
+          1199
+        ],
+        "focus": 4194304,
+        "pointerOverTarget": false
+      },
+      "background": {
+        "click": {
+          "accepted": true,
+          "variant": "targeted",
+          "at": [
+            750,
+            640
+          ],
+          "reaction": {
+            "kind": "click",
+            "widget": "button",
+            "count": 1,
+            "isTrusted": true
+          },
+          "reachedToolkit": {
+            "targeted": 1
+          },
+          "before": {
+            "pointer": [
+              1080,
+              1199
+            ],
+            "focus": 4194304,
+            "pointerOverTarget": false
+          },
+          "invariants": {
+            "pointerUnchanged": true,
+            "focusUnchanged": true,
+            "pointerAt": [
+              1080,
+              1199
+            ],
+            "focusWindow": 4194304
+          }
+        },
+        "text": {
+          "accepted": true,
+          "variant": "targeted",
+          "reaction": {
+            "kind": "text",
+            "widget": "entry",
+            "value": "axon"
+          },
+          "reachedToolkit": {
+            "targeted": 4
+          },
+          "before": {
+            "pointer": [
+              1080,
+              1199
+            ],
+            "focus": 4194304,
+            "pointerOverTarget": false
+          },
+          "invariants": {
+            "pointerUnchanged": true,
+            "focusUnchanged": true,
+            "pointerAt": [
+              1080,
+              1199
+            ],
+            "focusWindow": 4194304
+          }
+        }
+      },
+      "targetIsTopmostAtPoint": true,
+      "invariants": {
+        "pointerUnchanged": true,
+        "focusUnchanged": true,
+        "pointerAt": [
+          1080,
+          1199
+        ],
+        "focusWindow": 4194304
+      },
+      "pointerOverTarget": {
+        "accepted": true,
+        "reachedToolkit": 1,
+        "pointerAt": [
+          750,
+          640
+        ],
+        "focusUnchanged": true
+      },
+      "atspiToolkit": {
+        "name": "Chromium",
+        "version": "1.0"
+      },
+      "geometry": {
+        "origin": [
+          560,
+          420
+        ],
+        "widgets": {
+          "button": {
+            "expected": [
+              600,
+              580,
+              300,
+              120
+            ],
+            "atspi": [
+              600,
+              580,
+              300,
+              120
+            ],
+            "offsetBy": [
+              0,
+              0
+            ],
+            "agrees": true
+          },
+          "entry": {
+            "expected": [
+              600,
+              460,
+              308,
+              46
+            ],
+            "atspi": [
+              600,
+              460,
+              308,
+              46
+            ],
+            "offsetBy": [
+              0,
+              0
+            ],
+            "agrees": true
+          }
+        },
+        "extentsUsable": true
+      },
+      "controls": {
+        "pointerClick": true,
+        "focusedText": true,
+        "focusAcquired": true
+      },
+      "status": "measured"
+    },
+    {
+      "target": "electron-30",
+      "signature": "Electron 30.5.1 (Chromium 124.0.6367.243)",
+      "window": {
+        "xid": 6291459,
+        "reportedXid": null
+      },
+      "before": {
+        "pointer": [
+          1080,
+          1199
+        ],
+        "focus": 4194304,
+        "pointerOverTarget": false
+      },
+      "background": {
+        "click": {
+          "accepted": true,
+          "variant": "targeted",
+          "at": [
+            750,
+            640
+          ],
+          "reaction": {
+            "kind": "click",
+            "widget": "button",
+            "count": 1,
+            "isTrusted": true
+          },
+          "reachedToolkit": {
+            "targeted": 1
+          },
+          "before": {
+            "pointer": [
+              1080,
+              1199
+            ],
+            "focus": 4194304,
+            "pointerOverTarget": false
+          },
+          "invariants": {
+            "pointerUnchanged": true,
+            "focusUnchanged": true,
+            "pointerAt": [
+              1080,
+              1199
+            ],
+            "focusWindow": 4194304
+          }
+        },
+        "text": {
+          "accepted": true,
+          "variant": "targeted",
+          "reaction": {
+            "kind": "text",
+            "widget": "entry",
+            "value": "axon"
+          },
+          "reachedToolkit": {
+            "targeted": 4
+          },
+          "before": {
+            "pointer": [
+              1080,
+              1199
+            ],
+            "focus": 4194304,
+            "pointerOverTarget": false
+          },
+          "invariants": {
+            "pointerUnchanged": true,
+            "focusUnchanged": true,
+            "pointerAt": [
+              1080,
+              1199
+            ],
+            "focusWindow": 4194304
+          }
+        }
+      },
+      "targetIsTopmostAtPoint": true,
+      "invariants": {
+        "pointerUnchanged": true,
+        "focusUnchanged": true,
+        "pointerAt": [
+          1080,
+          1199
+        ],
+        "focusWindow": 4194304
+      },
+      "pointerOverTarget": {
+        "accepted": true,
+        "reachedToolkit": 1,
+        "pointerAt": [
+          750,
+          640
+        ],
+        "focusUnchanged": true
+      },
+      "atspiToolkit": {
+        "name": "Chromium",
+        "version": "1.0"
+      },
+      "geometry": {
+        "origin": [
+          560,
+          420
+        ],
+        "widgets": {
+          "button": {
+            "expected": [
+              600,
+              580,
+              300,
+              120
+            ],
+            "atspi": [
+              600,
+              580,
+              300,
+              120
+            ],
+            "offsetBy": [
+              0,
+              0
+            ],
+            "agrees": true
+          },
+          "entry": {
+            "expected": [
+              600,
+              460,
+              308,
+              46
+            ],
+            "atspi": [
+              600,
+              460,
+              308,
+              46
+            ],
+            "offsetBy": [
+              0,
+              0
+            ],
+            "agrees": true
+          }
+        },
+        "extentsUsable": true
+      },
+      "controls": {
+        "pointerClick": true,
+        "focusedText": true,
+        "focusAcquired": true
+      },
+      "status": "measured"
+    },
+    {
       "target": "firefox",
       "signature": "Mozilla Firefox 147.0.1",
       "window": {
@@ -734,6 +1128,14 @@
             "owner": 0,
             "child": 0
           },
+          "before": {
+            "pointer": [
+              1320,
+              1199
+            ],
+            "focus": 4194304,
+            "pointerOverTarget": false
+          },
           "invariants": {
             "pointerUnchanged": true,
             "focusUnchanged": true,
@@ -755,6 +1157,14 @@
           "reachedToolkit": {
             "targeted": 0,
             "owner": 4
+          },
+          "before": {
+            "pointer": [
+              1320,
+              1199
+            ],
+            "focus": 4194304,
+            "pointerOverTarget": false
           },
           "invariants": {
             "pointerUnchanged": true,
@@ -814,7 +1224,7 @@
             "agrees": null
           }
         },
-        "error": "no AT-SPI application for pid 2955781",
+        "error": "no AT-SPI application for pid 3058561",
         "extentsUsable": null
       },
       "controls": {

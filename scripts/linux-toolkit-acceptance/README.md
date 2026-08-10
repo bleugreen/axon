@@ -61,29 +61,34 @@ back through AT-SPI. Comparing them says whether AT-SPI `Component` extents are 
 coordinate source a pixel rung would need — the concrete form of the GTK 4 `(0, 0)` origins recorded
 in `rust/SPIKE-FINDINGS.md`.
 
-## What the first run measured, and what it decided
+## What was measured, and what it decided
 
 Measured 2026-08-10 on Fedora 43 (X.Org 21.1) against GTK 3.24.51, GTK 4.20.3, Qt 6.11, WebKitGTK
-2.50.4, Electron 43 (Chromium 150) and Firefox 147 — once in the hermetic Xvfb lane
-([`RESULTS.md`](RESULTS.md)) and again on a live Xfce X11 session
-([`RESULTS-live-x11.md`](RESULTS-live-x11.md)). Both lanes agree on every row.
+2.50.4, Firefox 147, and three Electron majors spanning Chromium 108, 124 and 150 — once in the
+hermetic Xvfb lane ([`RESULTS.md`](RESULTS.md)) and again on a live Xfce X11 session
+([`RESULTS-live-x11.md`](RESULTS-live-x11.md)).
 
-**Pointer input is refused nearly everywhere.** GTK 3, GTK 4, WebKitGTK and Firefox never receive a
-window-targeted synthetic button event at all. Qt receives one and acts on it, but asks to be
-activated while doing so — on the lane with no window manager the session focus moved to the Qt
-window, and on the live lane only the window manager's focus-stealing prevention stopped it. An
-acceptance that depends on a window manager declining to honour the application is not one a pixel
-rung may be built on. Chromium is the single exception: it acts on the click with the focus and the
-real pointer provably unchanged, and reports the event to the page as `isTrusted`.
+**Chromium accepts both.** Every measured engine generation acted on a background click and on
+background keystrokes with the session focus and the real pointer provably unchanged, and reported
+the click to the page as `isTrusted`. Three generations across roughly three years behave
+identically.
 
-**Keyboard input is accepted more widely.** GTK 3 (and therefore WebKitGTK), Firefox and Chromium all
-typed the delivered text into their focused field while the window did not hold the X input focus,
-the session focus did not move, and the pointer did not move. GTK 4 never receives the event.
+**Keyboard delivery is accepted more widely than pointer delivery.** GTK 3 (and therefore
+WebKitGTK), Qt 6, Firefox and Chromium all typed the delivered text into their focused field while
+the window did not hold the X input focus, without the session focus or the pointer moving. GTK 4
+receives neither kind of event at all.
+
+**Qt accepts a click but asks to be activated while doing so.** On the lane with no window manager
+the X input focus moved to the Qt window; on the live lane only xfwm4's focus-stealing prevention
+stopped it. The two lanes disagreeing is the finding: an acceptance that holds only while a window
+manager declines to honour the application is not a background delivery. Qt's *keyboard* acceptance
+is unaffected — it requests activation on the click and not on the keystroke, which is visible now
+that each phase re-establishes and re-proves the background before it sends anything.
 
 **A synthetic click is honoured by GTK only when the real cursor is already inside the target
 window.** The boundary is the window's own edge: at (479, 319) of a 480x320 window the click lands,
 at (481, 319) nothing arrives. This is why a hand experiment concludes that `XSendEvent` works — the
-experimenter's cursor is over the window they are testing. Arranging that condition means moving the
+experimenter's cursor is over the window being tested. Arranging that condition means moving the
 user's pointer, which is the foreground rung by definition, so the harness parks the pointer clear of
 the target and measures the condition separately as `pointerOverTarget`.
 
@@ -94,22 +99,47 @@ a toolkit fact rather than a compositor one. Firefox publishes no AT-SPI applica
 
 ### The decision
 
-The pixel rung is real on Linux, and it is narrow. It should be offered only where this table says
-the toolkit accepts, keyed on the AT-SPI toolkit name and version — what the application declares
-about itself over the accessibility bus, which is the same fact a backend can read at dispatch time,
-and not an inference from `WM_CLASS` or from loaded libraries:
+Offer the pixel candidate only where the toolkit was measured to accept, keyed on the AT-SPI toolkit
+name and version the application declares about itself. That is a fact a backend reads at dispatch
+time rather than an inference from `WM_CLASS` or from loaded libraries — but it is only as precise as
+the toolkit chooses to be, and the table below claims exactly as much as the signature can carry and
+no more.
 
-| action | offered for | refused for |
+| action | offered for | measured |
 | --- | --- | --- |
-| `click` | `Chromium` | everything else, `backgroundPixelUnsupported` naming the toolkit |
-| `keyboard` | `gtk` 3.x, `Chromium` | everything else, likewise |
+| `click` | `Chromium`, any version | Chromium 108, 124 and 150, both lanes |
+| `keyboard` | `gtk` 3.24.x, `Qt` 6.11.x, `Chromium` any version | GTK 3.24.51, WebKitGTK 2.50.4 (which reports `gtk` 3.24.51), Qt 6.11.1, Chromium 108/124/150, both lanes |
 
-Firefox is excluded despite accepting keys: it publishes no AT-SPI application, so the backend cannot
-identify the target, convert coordinates through resolved geometry, or revalidate before dispatch —
-every precondition the contract puts on the rung fails before delivery is even reached.
+Everything else refuses `backgroundPixelUnsupported` naming the toolkit that refused. That includes
+two deliberate exclusions and one structural one:
 
-This harness is the evidence that table is written against, and it is the Linux counterpart of the
+- **GTK 4** is excluded twice over: it receives neither event, and its extents give a pixel rung no
+  usable coordinate source even if it did.
+- **Firefox** is excluded despite accepting keystrokes. It publishes no AT-SPI application, so the
+  backend cannot identify the target, convert coordinates through resolved geometry, or revalidate
+  before dispatch — every precondition the contract puts on the rung fails before delivery is
+  reached.
+- **A version series that was not measured refuses**, naming what was measured. Entries name the
+  series (`3.24.x`, `6.11.x`), not a patch level, because that is the granularity a toolkit's own
+  version string supports.
+
+### The Chromium entry is family-wide, because its signature is
+
+Chromium reports itself over AT-SPI as toolkit `Chromium` version `1.0` — a constant, carrying
+neither the engine version nor the application. No dispatch-time signature distinguishes one
+Chromium application from another, so an entry keyed on it necessarily authorizes the whole family:
+every Electron application, every Chromium-based browser, and every future engine release.
+
+That is a real widening beyond what any single measurement proves, and it is why the entry is
+supported by three engine generations rather than one, and why the harness measures each installed
+Electron runtime as its own row. It also means a future Chromium that starts filtering these events
+would be undetectable by signature. The only defence is re-running this harness when the family
+releases, which is the maintenance obligation the entry carries. A reviewer who does not accept that
+trade should refuse the `click` rung outright rather than narrow the key, because there is no
+narrower key to move to.
+
+This harness is the evidence the table is written against, and it is the Linux counterpart of the
 Windows window-class allowlist earned by `axon-win probe pixel-click`. It is run and re-dated when
-the area changes rather than wired into the pull-request gate, because it needs five toolkits and a
-browser runtime installed and its answer changes on toolkit releases, not on this repository's
-commits.
+the area changes rather than wired into the pull-request gate, because it needs five toolkits and
+three browser runtimes installed and its answer changes on toolkit releases, not on this
+repository's commits.
