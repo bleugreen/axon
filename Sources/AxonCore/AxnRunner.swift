@@ -523,10 +523,19 @@ public struct AxnRunner {
         method: String,
         secretTaintedFields: Set<String>
     ) -> JSONRPCResponse {
+        var dispatchObject = object
+        for key in ["target", "from", "to"] {
+            guard case var .object(target)? = dispatchObject[key],
+                  case .string? = target["app"], case .string? = target["name"] else { continue }
+            // Attached locators are replay evidence. Ordinary tool dispatch consumes only the
+            // canonical semantic identity after v2 preflight has validated the evidence.
+            target.removeValue(forKey: "locator")
+            dispatchObject[key] = .object(target)
+        }
         let request = JSONRPCRequest(
             id: .string("run.\(index).\(tool)"),
             method: method,
-            params: .object(object)
+            params: .object(dispatchObject)
         )
         let response = commandHandler(request)
         if let actionRecorder {

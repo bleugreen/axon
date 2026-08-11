@@ -406,6 +406,12 @@ public extension JSONValue {
         }
         if !includeDebugHandles, case var .object(focus)? = root["focus"] {
             focus.removeValue(forKey: "handle")
+            focus.removeValue(forKey: "target")
+            if case var .object(element)? = focus["element"] {
+                element.removeValue(forKey: "handle")
+                element.removeValue(forKey: "index")
+                focus["element"] = .object(element)
+            }
             root["focus"] = .object(focus)
         }
         return .object(root)

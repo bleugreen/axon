@@ -128,9 +128,9 @@ public enum ToolSurfaceSpec {
                 ToolParameterSpec("offset", .integer, default: .int(0), description: "Zero-based child offset for a semantic target. Defaults to 0."),
                 ToolParameterSpec("limit", .integer, description: "Maximum children for a semantic target. Defaults to Axon's sibling page size."),
                 ToolParameterSpec("direct", .boolean, default: .bool(false), description: "For semantic targets, return only direct children without recursively capturing descendants."),
-                ToolParameterSpec("childDepth", .integer, description: "Initial child depth for app observations. Use 0 to retain top-level windows only and page children by handle."),
+                ToolParameterSpec("childDepth", .integer, description: "Initial child depth for app observations. Use 0 to retain top-level windows only and page children by semantic target."),
                 ToolParameterSpec("depth", .integer, description: "Maximum tree depth to display for app observations, with windows at depth 0."),
-                ToolParameterSpec("all", .boolean, description: "For no-target app lists, include all running processes. For direct handle child requests, include all direct children."),
+                ToolParameterSpec("all", .boolean, description: "For no-target app lists, include all running processes. For direct semantic child requests, include all direct children."),
                 ToolParameterSpec("format", .string, description: "Defaults to observation. Use debug only when diagnosing Axon internals."),
                 ToolParameterSpec("frames", .boolean, default: .bool(false), description: "Include frames in observation output. Defaults to false.")
             ],
@@ -158,9 +158,9 @@ public enum ToolSurfaceSpec {
         ),
         ToolSpec(
             name: "wait_for_value",
-            description: "Poll readable AX state from a resolved locator until a contains, equals, or regex predicate holds, or a bounded timeout reports the last observed state.",
+            description: "Poll readable accessibility state from an app-scoped semantic name until a contains, equals, or regex predicate holds, or a bounded timeout reports the last observed state.",
             params: [
-                ToolParameterSpec("target", .target(.locator), required: true, description: "Locator target object with app and locator fields."),
+                ToolParameterSpec("target", .target(.element), required: true, description: "App-scoped semantic name target returned by look."),
                 ToolParameterSpec("contains", .string, description: "Succeed when any readable field contains this text."),
                 ToolParameterSpec("equals", .string, description: "Succeed when any readable field exactly equals this text."),
                 ToolParameterSpec("matches", .string, description: "Succeed when any readable field matches this regular expression."),
