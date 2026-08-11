@@ -982,19 +982,6 @@ impl<
     }
 }
 
-fn flattened(snapshot: &Snapshot) -> impl Iterator<Item = &axon_core::Node> {
-    fn add<'a>(node: &'a axon_core::Node, out: &mut Vec<&'a axon_core::Node>) {
-        out.push(node);
-        for child in &node.children {
-            add(child, out);
-        }
-    }
-    let mut out = Vec::new();
-    for window in &snapshot.app.windows {
-        add(&window.root, &mut out);
-    }
-    out.into_iter()
-}
 fn app_query(params: &Map<String, Value>) -> AppQuery {
     AppQuery {
         name: params.get("app").and_then(Value::as_str).map(str::to_owned),
@@ -1069,7 +1056,7 @@ mod tests {
 
     #[test]
     fn rust_facade_keeps_app_inside_structured_result() {
-        let app = Application {
+        let app = axon_core::Application {
             name: "Calculator".into(),
             identifier: Some("42".into()),
             windows: Vec::new(),

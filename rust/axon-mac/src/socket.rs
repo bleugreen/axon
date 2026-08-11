@@ -21,7 +21,7 @@ pub fn path() -> io::Result<PathBuf> {
     let value = std::env::var_os(SOCKET_ENV)
         .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, format!("{SOCKET_ENV} must name an isolated socket")))?;
     let path = PathBuf::from(value);
-    if path == PathBuf::from("/tmp/axon.sock") {
+    if path == std::path::Path::new("/tmp/axon.sock") {
         return Err(io::Error::new(io::ErrorKind::PermissionDenied, "the installed daemon socket is forbidden"));
     }
     Ok(path)
