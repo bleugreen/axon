@@ -596,6 +596,12 @@ impl<
                 let (handle, resolution) = self.resolve(params)?;
                 let dx = params.get("deltaX").and_then(Value::as_f64).unwrap_or(0.0);
                 let dy = params.get("deltaY").and_then(Value::as_f64).unwrap_or(0.0);
+                if dx != 0.0 || dy != 0.0 {
+                    return Err(rpc_error(
+                        -32004,
+                        "directional or amount scrolling has no semantic AX implementation in v1",
+                    ));
+                }
                 self.backend
                     .scroll(&handle, (dx, dy))
                     .map_err(backend_error)?;
@@ -782,6 +788,14 @@ impl<
     }
 
     fn look(&mut self, params: &Map<String, Value>) -> Result<Value, JsonRpcError> {
+        if params.get("screenshot").and_then(Value::as_bool) == Some(true)
+            || params.get("screenText").and_then(Value::as_bool) == Some(true)
+        {
+            return Err(rpc_error(
+                -32004,
+                "screenshot and screenText observations are unavailable in axon-mac v1",
+            ));
+        }
         if params.get("app").is_none() {
             return serde_json::to_value(
                 self.backend

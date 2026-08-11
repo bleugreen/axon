@@ -209,7 +209,7 @@ impl MacBackend {
 
 impl PlatformBackend for MacBackend {
     fn capabilities(&self) -> Result<Vec<CapabilityInfo>, BackendError> {
-        let supported = [Capability::Enumerate, Capability::Capture, Capability::RetainedHandles, Capability::Invoke, Capability::ReadValue, Capability::SetValue, Capability::Focus, Capability::Scroll, Capability::KeyboardInput];
+        let supported = [Capability::Enumerate, Capability::Capture, Capability::RetainedHandles, Capability::Invoke, Capability::ReadValue, Capability::SetValue, Capability::Focus, Capability::Scroll];
         Ok(Capability::ALL.into_iter().map(|capability| {
             let usable = supported.contains(&capability) && self.accessibility_enabled();
             CapabilityInfo { capability, usable, restriction: (!usable).then(|| if supported.contains(&capability) { "Accessibility permission is not granted".into() } else { "excluded from axon-mac v1".into() }) }
@@ -306,6 +306,8 @@ mod tests {
     #[test]
     fn all_capabilities_are_reported() {
         let backend = MacBackend::new().unwrap();
-        assert_eq!(backend.capabilities().unwrap().len(), Capability::ALL.len());
+        let capabilities = backend.capabilities().unwrap();
+        assert_eq!(capabilities.len(), Capability::ALL.len());
+        assert!(!capabilities.iter().find(|info| info.capability == Capability::KeyboardInput).unwrap().usable);
     }
 }
