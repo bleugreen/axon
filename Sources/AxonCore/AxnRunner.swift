@@ -283,8 +283,9 @@ public struct AxnRunner {
         guard case let .object(target) = value else {
             throw AxnRunError.invalidParams("\(path) must be a version 2 target object; obsolete target \(renderTarget(value))")
         }
-        if target["x"] != nil || target["y"] != nil {
-            guard target["x"] != nil, target["y"] != nil else {
+        let point = target["point"]?.objectValue ?? target
+        if target["point"] != nil || point["x"] != nil || point["y"] != nil {
+            guard point["x"] != nil, point["y"] != nil else {
                 throw AxnRunError.invalidParams("\(path) point target requires x and y")
             }
             return
