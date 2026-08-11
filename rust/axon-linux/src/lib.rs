@@ -1,12 +1,12 @@
 //! Linux AT-SPI backend and v1 JSON-RPC tool router.
 
 use axon_core::{
-    AppQuery, AxnCodec, AxnRunner, Capability, DeliveryCandidate,
-    DeliveryCapability, DeliveryOutcome, DeliveryPolicy, DeliveryRefusal, DeliveryRefusalReason,
-    DeliveryRung, DeliverySelection, DispatchOutcome, ExpectedFact, ForegroundTarget, JsonRpcError,
-    JsonRpcId, JsonRpcRequest, JsonRpcResponse, KeyboardIntent, PlatformBackend, Resolution,
-    RunEnvelope, RunOptions, Snapshot,
-    SnapshotHandle, ToolDispatcher, dispatch_in_foreground, goal_success, select_delivery,
+    AppQuery, AxnCodec, AxnRunner, Capability, DeliveryCandidate, DeliveryCapability,
+    DeliveryOutcome, DeliveryPolicy, DeliveryRefusal, DeliveryRefusalReason, DeliveryRung,
+    DeliverySelection, DispatchOutcome, ExpectedFact, ForegroundTarget, JsonRpcError, JsonRpcId,
+    JsonRpcRequest, JsonRpcResponse, KeyboardIntent, PlatformBackend, Resolution, RunEnvelope,
+    RunOptions, Snapshot, SnapshotHandle, ToolDispatcher, dispatch_in_foreground, goal_success,
+    select_delivery,
 };
 use serde_json::{Map, Value, json};
 
@@ -785,11 +785,12 @@ impl<B: PointerTargetVerifier + BackgroundPixelInput> Router<B> {
         &mut self,
         params: &Map<String, Value>,
     ) -> Result<(SnapshotHandle, axon_core::Resolution), JsonRpcError> {
-        let target: axon_core::WireElementTarget = serde_json::from_value(
-            params.get("target").cloned().unwrap_or(Value::Null),
-        )
-        .map_err(|_| rpc_error(-32602, "element target must be an {app, name} object"))?;
-        let target = target.validate().map_err(|error| rpc_error(-32602, error.to_string()))?;
+        let target: axon_core::WireElementTarget =
+            serde_json::from_value(params.get("target").cloned().unwrap_or(Value::Null))
+                .map_err(|_| rpc_error(-32602, "element target must be an {app, name} object"))?;
+        let target = target
+            .validate()
+            .map_err(|error| rpc_error(-32602, error.to_string()))?;
         Err(rpc_error(
             -32004,
             format!(

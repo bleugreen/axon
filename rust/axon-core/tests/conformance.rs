@@ -21,19 +21,37 @@ fn wire_element_targets_are_strictly_app_scoped_semantic_names() {
     assert!(target.validate().is_ok());
 
     assert!(serde_json::from_value::<WireElementTarget>(json!("s1:12")).is_err());
-    assert!(serde_json::from_value::<WireElementTarget>(json!({
-        "app": "Calculator",
-        "locator": {"role": "Button", "title": "7"}
-    }))
-    .is_err());
-    assert!(serde_json::from_value::<WireElementTarget>(json!({
-        "app": "Calculator",
-        "name": "keypad/seven",
-        "locator": {"role": "Button"}
-    }))
-    .is_err());
-    assert!(WireElementTarget { app: " ".into(), name: "seven".into() }.validate().is_err());
-    assert!(WireElementTarget { app: "Calculator".into(), name: " ".into() }.validate().is_err());
+    assert!(
+        serde_json::from_value::<WireElementTarget>(json!({
+            "app": "Calculator",
+            "locator": {"role": "Button", "title": "7"}
+        }))
+        .is_err()
+    );
+    assert!(
+        serde_json::from_value::<WireElementTarget>(json!({
+            "app": "Calculator",
+            "name": "keypad/seven",
+            "locator": {"role": "Button"}
+        }))
+        .is_err()
+    );
+    assert!(
+        WireElementTarget {
+            app: " ".into(),
+            name: "seven".into()
+        }
+        .validate()
+        .is_err()
+    );
+    assert!(
+        WireElementTarget {
+            app: "Calculator".into(),
+            name: " ".into()
+        }
+        .validate()
+        .is_err()
+    );
 }
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
