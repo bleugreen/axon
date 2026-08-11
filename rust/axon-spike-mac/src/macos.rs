@@ -31,7 +31,7 @@ unsafe extern "C" {
         buffer: *mut c_char,
         size: isize,
         encoding: u32,
-    ) -> bool;
+    ) -> u8;
     fn CFGetTypeID(value: CFTypeRef) -> usize;
     fn CFStringGetTypeID() -> usize;
     fn CFArrayGetTypeID() -> usize;
@@ -81,14 +81,15 @@ fn string_value(value: CFTypeRef) -> Option<String> {
         return None;
     }
     let mut buffer = vec![0u8; 16_384];
-    if !unsafe {
+    if unsafe {
         CFStringGetCString(
             value,
             buffer.as_mut_ptr().cast(),
             buffer.len() as isize,
             UTF8,
         )
-    } {
+    } == 0
+    {
         return None;
     }
     let end = buffer.iter().position(|byte| *byte == 0)?;
@@ -137,14 +138,14 @@ fn capture(root: AXUIElementRef, options: &Options) -> Vec<Node> {
             continue;
         }
         let element = nodes.last().unwrap().element.0;
-        if let Some(children) = attribute(element, "AXChildren") {
-            if unsafe { CFGetTypeID(children.0) } == unsafe { CFArrayGetTypeID() } {
-                let count = unsafe { CFArrayGetCount(children.0) };
-                for index in (0..count).rev() {
-                    let child = unsafe { CFArrayGetValueAtIndex(children.0, index) };
-                    if !child.is_null() {
-                        stack.push((Owned(unsafe { CFRetain(child) }), depth + 1));
-                    }
+        if let Some(children) = attribute(element, "AXChildren")
+            && unsafe { CFGetTypeID(children.0) } == unsafe { CFArrayGetTypeID() }
+        {
+            let count = unsafe { CFArrayGetCount(children.0) };
+            for index in (0..count).rev() {
+                let child = unsafe { CFArrayGetValueAtIndex(children.0, index) };
+                if !child.is_null() {
+                    stack.push((Owned(unsafe { CFRetain(child) }), depth + 1));
                 }
             }
         }
@@ -185,9 +186,20 @@ pub fn run(options: &Options) -> Result<(), String> {
 
     let expected_before = options.expect_before.as_deref().unwrap();
     let expected_after = options.expect_after.as_deref().unwrap();
-    if !before.iter().any(|node| node.value == expected_before) {
+    let mut observations = before
+        .iter()
+        .filter(|node| node.value == expected_before);
+    let observation = observations.next().ok_or_else(|| {
+        format!("expected before value {expected_before:?} not found")
+    })?;
+    if observations.next().is_some() {
         return Err(format!(
-            "expected before value {expected_before:?} not found"
+            "expected before value {expected_before:?} is ambiguous"
+        ));
+    }
+    if before.iter().any(|node| node.value == expected_after) {
+        return Err(format!(
+            "expected after value {expected_after:?} was already present before dispatch"
         ));
     }
     let role = options.role.as_deref().unwrap();
@@ -205,20 +217,22 @@ pub fn run(options: &Options) -> Result<(), String> {
         return Err(format!("AXPress failed with AXError {error}"));
     }
     std::thread::sleep(Duration::from_millis(500));
-    let after = capture(root.0, options);
-    let verified = after.iter().any(|node| node.value == expected_after);
+    let observed_after = text_attribute(observation.element.0, "AXValue");
+    let verified = observed_after == expected_after;
     println!(
         "action=AXPress target_role={:?} target_name={:?} dispatch_error={} observed_before={:?} observed_after={:?} verified={} action_and_wait_ms={:.3}",
         target.role,
         target.name,
         error,
         expected_before,
-        expected_after,
+        observed_after,
         verified,
         action_started.elapsed().as_secs_f64() * 1000.0
     );
     if !verified {
-        return Err(format!("expected after value {expected_after:?} not found"));
+        return Err(format!(
+            "same observation changed to {observed_after:?}, expected {expected_after:?}"
+        ));
     }
     Ok(())
 }
