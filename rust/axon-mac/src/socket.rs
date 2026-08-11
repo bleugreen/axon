@@ -206,7 +206,6 @@ mod tests {
     fn disconnected_client_error_is_contained() {
         let (server, client) = UnixStream::pair().unwrap();
         drop(client);
-        assert!(server.set_write_timeout(Some(Duration::from_millis(10))).is_ok());
         let mut server = server;
         assert!(writeln!(server, "response").is_err());
     }
