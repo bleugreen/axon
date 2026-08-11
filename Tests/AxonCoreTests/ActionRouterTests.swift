@@ -672,25 +672,35 @@ private func stabilitySnapshot(id: String, title: String) -> AppSnapshot {
     ))
 
     #expect(response.error?.code == -32602)
-    #expect(response.error?.message == "Snapshot is not retained: missing")
+    #expect(response.error?.message == "target no longer accepts snapshot handles; use {app,name} from look")
 }
 
 @Test func invokeRequestPassesActionName() {
+    let registry = SemanticNameRegistry()
+    registry.registerReplayEvidence(app: "Example", name: "menu", locator: AXLocator(role: "AXButton"))
     let router = CommandRouter(
+        resolveLocator: { _, _, _ in
+            LocatorResolution(
+                status: .unique, snapshotID: SnapshotID("snap"),
+                best: LocatorCandidate(index: 2, handle: SnapshotHandle(snapshotID: SnapshotID("snap"), nodeIndex: 2), role: "AXButton", title: "Menu", score: 1_000, reasons: []),
+                candidates: []
+            )
+        },
         actions: PrimitiveActionHandlers(
             invoke: { target, action, _ in
                 #expect(target == "snap:2")
                 #expect(action == "AXShowMenu")
                 return PrimitiveActionResult(action: action, target: target, strategy: "AXAction", success: true)
             }
-        )
+        ),
+        semanticNameRegistry: registry
     )
 
     let response = router.handle(JSONRPCRequest(
         id: .string("action-1"),
         method: "invoke",
         params: .object([
-            "target": .string("snap:2"),
+            "target": .object(["app": .string("Example"), "name": .string("menu")]),
             "name": .string("AXShowMenu")
         ])
     ))
@@ -823,7 +833,9 @@ private func stabilitySnapshot(id: String, title: String) -> AppSnapshot {
     #expect(response.result?["action"]?["action"] == .string("scroll"))
 }
 
-@Test func scrollRequestResolvesLocatorTarget() {
+@Test func scrollRequestResolvesSemanticTarget() {
+    let registry = SemanticNameRegistry()
+    registry.registerReplayEvidence(app: "com.example.App", name: "list", locator: AXLocator(role: "AXButton", title: .exact("List")))
     let router = CommandRouter(
         resolveLocator: { app, locator, scrollToVisible in
             #expect(app == "com.example.App")
@@ -849,7 +861,8 @@ private func stabilitySnapshot(id: String, title: String) -> AppSnapshot {
                 #expect(target == .handle("live-locator:2"))
                 return PrimitiveActionResult(action: "scroll", target: "live-locator:2", strategy: "AXScrollToVisible", success: true)
             }
-        )
+        ),
+        semanticNameRegistry: registry
     )
 
     let response = router.handle(JSONRPCRequest(
@@ -858,10 +871,7 @@ private func stabilitySnapshot(id: String, title: String) -> AppSnapshot {
         params: .object([
             "target": .object([
                 "app": .string("com.example.App"),
-                "locator": .object([
-                    "role": .string("AXButton"),
-                    "title": .string("List")
-                ])
+                "name": .string("list")
             ]),
             "deltaY": .int(-120)
         ])
