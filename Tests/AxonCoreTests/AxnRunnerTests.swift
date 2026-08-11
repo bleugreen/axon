@@ -227,6 +227,7 @@ import Testing
                 "tool": .string("wait_for_value"),
                 "target": .object([
                     "app": .string("Firefox"),
+                    "name": .string("address-field"),
                     "locator": .object(["role": .string("AXComboBox")])
                 ]),
                 "contains": .string("example.com")
