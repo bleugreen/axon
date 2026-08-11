@@ -37,8 +37,8 @@ public struct AxnRunner {
         changePollIntervalMs: Int = 100,
         changeTimeoutMs: Int = 5_000,
         parameterSourceResolvers: [String: ParameterSourceResolver] = AxnRunner.defaultParameterSourceResolvers(),
-        actionRecorder: ActionRecorder? = nil,
         replayTargetRegistrar: ReplayTargetRegistrar? = nil,
+        actionRecorder: ActionRecorder? = nil,
         activeSecretRedactorProvider: @escaping ActiveSecretRedactorProvider = { ActiveSecretRedactor() }
     ) {
         self.commandHandler = commandHandler
