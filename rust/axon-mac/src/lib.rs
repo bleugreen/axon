@@ -498,38 +498,38 @@ impl<
                 Ok(json!({"handle": handle, "resolution": resolution}))
             }
             "click" => {
-                if let Some(location) = params
+                if params
                     .get("target")
                     .and_then(|target| target.get("location"))
                     .or_else(|| params.get("location"))
+                    .is_some()
                 {
-                    let location = location.clone();
-                    return self.click_text_location(&location, policy);
+                    return Err(rpc_error(
+                        -32004,
+                        "screen-text click requires the unimplemented pixel rung",
+                    ));
                 }
-                // The target is resolved first, so an absent, malformed, or stale target is a
-                // JSON-RPC error. A refusal means the request was well formed and the target
-                // resolved, and the daemon declined to act; the two must not be confused.
                 let (handle, resolution) = self.resolve(params)?;
-                let point = self.node_center(&handle)?;
-                self.deliver_click(
+                self.backend
+                    .invoke(&handle, "AXPress")
+                    .map_err(backend_error)?;
+                Ok(delivered(
+                    json!({"dispatch":{"success":true,"mechanism":"AXPress"},"verification":{"verified":false,"reason":"click has no declared postcondition"},"resolution":resolution}),
                     policy,
-                    ClickTarget::Element(handle),
-                    point,
-                    json!(resolution),
-                )
+                    DeliveryRung::Semantic,
+                ))
             }
             "type" => {
                 let (handle, resolution) = self.resolve(params)?;
                 let value =
                     required_str(params, "value").or_else(|_| required_str(params, "text"))?;
-                // UIA ValuePattern does not require focus, and calling SetFocus would make this a
-                // foreground action wearing a semantic name.
+                // AXValue is target-bound and does not require global keyboard input.
                 self.backend
                     .set_value(&handle, value)
                     .map_err(backend_error)?;
                 let observed = self.backend.read_value(&handle).map_err(backend_error)?;
                 Ok(delivered(
-                    json!({"dispatch":{"success":true,"mechanism":"UIA ValuePattern"},"verification":{"verified":observed.as_deref()==Some(value),"observed":observed},"resolution":resolution}),
+                    json!({"dispatch":{"success":true,"mechanism":"AXValue"},"verification":{"verified":observed.as_deref()==Some(value),"observed":observed},"resolution":resolution}),
                     policy,
                     DeliveryRung::Semantic,
                 ))
@@ -588,13 +588,12 @@ impl<
             }
             "invoke" => {
                 let (handle, resolution) = self.resolve(params)?;
-                // UIA exposes InvokePattern, not an arbitrary named-action vocabulary, so this
-                // backend performs Invoke and says so rather than claiming a name it cannot honour.
+                let action = params.get("action").and_then(Value::as_str).unwrap_or("AXPress");
                 self.backend
-                    .invoke(&handle, "Invoke")
+                    .invoke(&handle, action)
                     .map_err(backend_error)?;
                 Ok(delivered(
-                    json!({"dispatch":{"success":true,"mechanism":"UIA InvokePattern"},"verification":{"verified":false,"reason":"invoke has no declared postcondition"},"resolution":resolution}),
+                    json!({"dispatch":{"success":true,"mechanism":"AX action"},"verification":{"verified":false,"reason":"invoke has no declared postcondition"},"resolution":resolution}),
                     policy,
                     DeliveryRung::Semantic,
                 ))
@@ -607,7 +606,7 @@ impl<
                     .scroll(&handle, (dx, dy))
                     .map_err(backend_error)?;
                 Ok(delivered(
-                    json!({"dispatch":{"success":true,"mechanism":"UIA ScrollItemPattern"},"verification":{"verified":false,"reason":"scroll has no declared postcondition"},"resolution":resolution}),
+                    json!({"dispatch":{"success":true,"mechanism":"AXScrollToVisible"},"verification":{"verified":false,"reason":"scroll has no declared postcondition"},"resolution":resolution}),
                     policy,
                     DeliveryRung::Semantic,
                 ))

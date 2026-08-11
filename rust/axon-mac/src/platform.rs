@@ -48,8 +48,6 @@ unsafe extern "C" {
     fn CFGetTypeID(value: CFTypeRef) -> usize;
     fn CFStringGetTypeID() -> usize;
     fn CFArrayGetTypeID() -> usize;
-    fn CFBooleanGetTypeID() -> usize;
-    fn CFBooleanGetValue(value: CFTypeRef) -> bool;
     fn CFArrayGetCount(array: CFArrayRef) -> isize;
     fn CFArrayGetValueAtIndex(array: CFArrayRef, index: isize) -> *const c_void;
     fn CFRetain(value: CFTypeRef) -> CFTypeRef;
@@ -92,11 +90,6 @@ fn string_value(value: CFTypeRef) -> Option<String> {
 }
 fn text_attribute(element: AXUIElementRef, name: &str) -> Option<String> {
     attribute(element, name).and_then(|v| string_value(v.0))
-}
-fn bool_attribute(element: AXUIElementRef, name: &str) -> bool {
-    attribute(element, name).is_some_and(|v| {
-        unsafe { CFGetTypeID(v.0) == CFBooleanGetTypeID() && CFBooleanGetValue(v.0) }
-    })
 }
 fn frame(element: AXUIElementRef) -> Option<Rect> {
     let position = attribute(element, "AXPosition")?;
