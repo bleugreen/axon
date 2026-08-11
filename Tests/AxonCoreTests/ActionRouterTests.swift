@@ -179,8 +179,7 @@ private func stabilitySnapshot(id: String, title: String) -> AppSnapshot {
                     details: ["point": point.jsonValue]
                 )
             }
-        ),
-        semanticNameRegistry: registry
+        )
     )
 
     let response = router.handle(JSONRPCRequest(

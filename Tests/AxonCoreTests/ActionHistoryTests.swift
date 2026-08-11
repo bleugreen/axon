@@ -683,7 +683,11 @@ private let historySemanticRegistry: SemanticNameRegistry = {
     SemanticNameRegistry()
 }()
 
-private let historyResolveLocator: CommandRouter.LocatorResolutionProvider = { _, locator, _ in
+private func historyResolveLocator(
+    app _: String,
+    locator: AXLocator,
+    scrollToVisible _: Bool
+) throws -> LocatorResolution {
     let snapshotID = SnapshotID("history-semantic")
     return LocatorResolution(
         status: .unique,
