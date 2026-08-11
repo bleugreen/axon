@@ -1113,3 +1113,9 @@ ad-hoc-signs only the binary inside that stable bundle; it never installs a
 daemon or edits TCC. `scripts/probe-macos-rust-bench` starts that binary on a
 unique isolated socket and performs a trivial Calculator AX read, which future
 builders run before asking for another Accessibility grant.
+
+macOS application enumeration filters process paths to app-bundle main
+executables and excludes nested XPC services. XPC helpers can inherit their
+host application's AX title (Calculator's ThemeWidget service does), so AXTitle
+alone is not an application identity and would make strict app lookup falsely
+ambiguous.

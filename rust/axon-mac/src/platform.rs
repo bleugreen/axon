@@ -53,7 +53,10 @@ unsafe extern "C" {
     fn CFRetain(value: CFTypeRef) -> CFTypeRef;
     fn CFRelease(value: CFTypeRef);
 }
-unsafe extern "C" { fn proc_listallpids(buffer: *mut c_void, buffersize: i32) -> i32; }
+unsafe extern "C" {
+    fn proc_listallpids(buffer: *mut c_void, buffersize: i32) -> i32;
+    fn proc_pidpath(pid: i32, buffer: *mut c_void, buffersize: u32) -> i32;
+}
 
 #[derive(Debug)]
 struct Owned(CFTypeRef);
@@ -180,6 +183,15 @@ impl MacBackend {
         };
         pids.truncate(returned.max(0) as usize);
         pids.into_iter().filter_map(|pid| {
+            let mut path = vec![0u8; 4096];
+            let length = unsafe { proc_pidpath(pid, path.as_mut_ptr().cast(), path.len() as u32) };
+            if length <= 0 {
+                return None;
+            }
+            let path = String::from_utf8_lossy(&path[..length as usize]);
+            if !path.contains(".app/Contents/MacOS/") || path.contains(".xpc/Contents/MacOS/") {
+                return None;
+            }
             let root = unsafe { AXUIElementCreateApplication(pid) };
             if root.is_null() { return None; }
             let root = Owned(root);
