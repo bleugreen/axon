@@ -310,8 +310,7 @@ private func stabilitySnapshot(id: String, title: String) -> AppSnapshot {
         semanticNameRegistry: registry,
         readableAXState: { _ in ReadableAXState(fields: ["value": "about:blank"]) },
         now: { Date(timeIntervalSince1970: Double(nowMs) / 1_000) },
-        sleepMilliseconds: { nowMs += $0 },
-        semanticNameRegistry: registry
+        sleepMilliseconds: { nowMs += $0 }
     )
 
     let response = router.handle(JSONRPCRequest(
@@ -353,8 +352,7 @@ private func stabilitySnapshot(id: String, title: String) -> AppSnapshot {
             return ReadableAXState(fields: [:])
         },
         now: { Date(timeIntervalSince1970: Double(nowMs) / 1_000) },
-        sleepMilliseconds: { nowMs += $0 },
-        semanticNameRegistry: registry
+        sleepMilliseconds: { nowMs += $0 }
     )
 
     let response = router.handle(JSONRPCRequest(
