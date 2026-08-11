@@ -1,4 +1,4 @@
-//! macOS UI Automation backend and v1 JSON-RPC tool router.
+//! macOS Accessibility backend and v1 JSON-RPC tool router.
 
 use axon_core::{
     AppQuery, AxnCodec, AxnRunner, Capability, DeliveryCandidate, DeliveryCapability,
@@ -28,9 +28,8 @@ const EXCLUDED: &[(&str, &str)] = &[
     ("permit", "PermissionPrompt"),
 ];
 
-/// What the pixel rung reports as its mechanism: window messages carrying client coordinates,
-/// posted to one leaf window resolved through verified UIA ancestry.
-const PIXEL_MECHANISM: &str = "HWND client-coordinate message";
+/// Pixel delivery is withheld in v1; this mechanism label makes that absence explicit.
+const PIXEL_MECHANISM: &str = "unimplemented macOS target-bound input";
 
 /// Why `keyboard` has no pixel rung, and never will in this shape.
 ///
@@ -49,9 +48,8 @@ const NO_RECOGNIZED_TEXT_GEOMETRY: &str = "this text location resolved from reco
 ///
 /// Specific because the specifics are what a caller can act on, and what tells the next person
 /// which part of the transaction still needs work.
-const NO_FOREGROUND_TRANSACTION: &str = "this macOS backend can activate an application and \
-     prove it came forward, but macOS refuses to return the foreground to the application it was \
-     taken from, so global input here cannot hand the session back";
+const NO_FOREGROUND_TRANSACTION: &str = "axon-mac v1 does not implement the transactional \
+     activate, global-dispatch, and restore sequence required by the foreground rung";
 
 pub struct Router<B> {
     backend: B,
