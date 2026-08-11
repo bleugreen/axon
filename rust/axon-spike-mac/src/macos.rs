@@ -186,12 +186,10 @@ pub fn run(options: &Options) -> Result<(), String> {
 
     let expected_before = options.expect_before.as_deref().unwrap();
     let expected_after = options.expect_after.as_deref().unwrap();
-    let mut observations = before
-        .iter()
-        .filter(|node| node.value == expected_before);
-    let observation = observations.next().ok_or_else(|| {
-        format!("expected before value {expected_before:?} not found")
-    })?;
+    let mut observations = before.iter().filter(|node| node.value == expected_before);
+    let observation = observations
+        .next()
+        .ok_or_else(|| format!("expected before value {expected_before:?} not found"))?;
     if observations.next().is_some() {
         return Err(format!(
             "expected before value {expected_before:?} is ambiguous"
