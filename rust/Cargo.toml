@@ -1,5 +1,5 @@
 [workspace]
-members = ["axon-core", "axon-win", "axon-linux", "axon-spike-win", "axon-spike-linux", "axon-spike-mac", "uia-binding-eval"]
+members = ["axon-core", "axon-win", "axon-linux", "axon-spike-win", "axon-spike-linux", "axon-mac", "axon-spike-mac", "uia-binding-eval"]
 resolver = "2"
 
 # The product version, kept in step with the repository-root VERSION file by

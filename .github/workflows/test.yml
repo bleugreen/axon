@@ -93,6 +93,23 @@ jobs:
           ACTUAL="$(dist/Axon.app/Contents/Resources/bin/axon version)"
           [[ "$ACTUAL" == "$VERSION" ]]
 
+  rust-macos:
+    name: Rust macOS
+    runs-on: macos-14
+    steps:
+      - name: Check out Axon
+        uses: actions/checkout@v4
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - name: Run axon-mac tests
+        working-directory: rust
+        run: cargo test -p axon-mac
+      - name: Lint axon-mac
+        working-directory: rust
+        run: cargo clippy -p axon-mac --all-targets -- -D warnings
+
   rust-core:
     name: Rust core
     # Hosted on purpose. axon-core is platform-neutral and pure -- no dbus, no X11, no desktop --

@@ -1,0 +1,20 @@
+#!/bin/bash
+set -euo pipefail
+BUNDLE="${AXON_MAC_BENCH_BUNDLE:-$HOME/AxonBench/AxonMacDev.app}"
+SOCKET="${AXON_MAC_BENCH_SOCKET:-$TMPDIR/axon-mac-bench-$$.sock}"
+EXECUTABLE="$BUNDLE/Contents/MacOS/axon-mac"
+cleanup() { if [[ -n "${PID:-}" ]]; then kill "$PID" 2>/dev/null || true; fi; rm -f "$SOCKET"; }
+trap cleanup EXIT
+AXON_MAC_SOCKET="$SOCKET" "$EXECUTABLE" serve &
+PID=$!
+for _ in {1..100}; do [[ -S "$SOCKET" ]] && break; sleep 0.05; done
+python3 - "$SOCKET" <<'PY'
+import json, socket, sys
+request={"jsonrpc":"2.0","id":1,"method":"look","params":{"app":"Calculator"}}
+client=socket.socket(socket.AF_UNIX)
+client.connect(sys.argv[1])
+client.sendall((json.dumps(request)+"\n").encode())
+response=json.loads(client.makefile().readline())
+print(json.dumps(response, indent=2))
+if "error" in response: raise SystemExit(1)
+PY
