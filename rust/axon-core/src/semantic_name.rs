@@ -17,6 +17,19 @@ pub struct SemanticElementName {
     pub resolution: SemanticNameResolution, pub identity_key: String,
 }
 
+pub fn render_semantic_names(snapshot: &Snapshot, names: &[SemanticElementName]) -> Snapshot {
+    let by_index: HashMap<_, _> = names.iter().map(|name| (name.source_index, name.name.clone())).collect();
+    let mut rendered = snapshot.clone();
+    let mut index = 0;
+    fn render(node: &mut crate::Node, index: &mut usize, names: &HashMap<usize, String>) {
+        if let Some(name) = names.get(index) { node.name = Some(name.clone()); }
+        *index += 1;
+        for child in &mut node.children { render(child, index, names); }
+    }
+    for window in &mut rendered.app.windows { render(&mut window.root, &mut index, &by_index); }
+    rendered
+}
+
 #[derive(Clone)]
 struct Draft { index: usize, role: String, label: String, identifier: Option<String>, lineage: Vec<String>, human: Vec<bool>, segments: Vec<String>, collision_free: bool, disambiguation: Option<String>, candidate_label: Option<String> }
 
