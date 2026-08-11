@@ -833,7 +833,7 @@ impl<B: PointerTargetVerifier + BackgroundPixelInput> Router<B> {
         let target = target
             .validate()
             .map_err(|error| rpc_error(-32602, error.to_string()))?;
-        let live = self.backend.capture(&AppQuery { name: Some(target.app.clone()), identifier: Some(target.app.clone()) }).map_err(backend_error)?;
+        let live = self.backend.capture(&AppQuery { name: Some(target.app.clone()), identifier: None }).map_err(backend_error)?;
         let lookup = self.semantic_names.resolve(&target, &live);
         self.snapshot = Some(live);
         match lookup {

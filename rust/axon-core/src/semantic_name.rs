@@ -98,3 +98,30 @@ fn exact(v:Option<&str>)->Option<TextMatcher>{meaningful(v).map(|value|TextMatch
 fn scope(n:&crate::Node)->AncestorLocator{AncestorLocator{role:Some(n.role.clone()),subrole:n.subrole.clone(),identifier:exact(n.identifier.as_deref()),title:exact(n.title.as_deref()),label:exact(n.label.as_deref())}}
 fn locator(n:&crate::Node,a:&[crate::Node],window:Option<&str>)->Locator{Locator{role:Some(n.role.clone()),subrole:n.subrole.clone(),title:exact(n.title.as_deref()),label:exact(n.label.as_deref()),value:exact(n.value.as_deref()),description:exact(n.description.as_deref()),identifier:exact(n.identifier.as_deref()).filter(|_|n.identifier.as_deref().is_some_and(|v|!generated(v))),actions:n.actions.clone(),ancestors:a.iter().rev().take(2).rev().map(scope).collect(),window:window.map(|v|AncestorLocator{title:exact(Some(v)),..Default::default()}),nearby_text:vec![],frame:n.frame}}
 fn walk_context(n:&crate::Node,a:&[crate::Node],w:Option<&str>,out:&mut Vec<(crate::Node,Vec<crate::Node>,Option<String>)>){out.push((n.clone(),a.to_vec(),w.map(str::to_owned)));let mut next=a.to_vec();next.push(n.clone());for c in &n.children{walk_context(c,&next,w,out)}}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{Application, Node, SnapshotId, Window};
+
+    fn snapshot(id: &str, children: Vec<Node>) -> Snapshot {
+        Snapshot { id: SnapshotId(id.into()), app: Application { name: "App".into(), identifier: Some("com.example.App".into()), windows: vec![Window { title: Some("Main".into()), root: Node { role: "window".into(), title: Some("Main".into()), children, ..empty_node() } }] } }
+    }
+    fn empty_node() -> Node { Node { role:String::new(),subrole:None,name:None,title:None,label:None,value:None,description:None,identifier:None,actions:vec![],frame:None,editable:false,children:vec![],child_count:None,truncation_reason:None } }
+    fn button(title:&str,id:Option<&str>)->Node { Node { role:"button".into(),title:Some(title.into()),identifier:id.map(str::to_owned),actions:vec!["invoke".into()],..empty_node() } }
+
+    #[test]
+    fn registry_resolves_recorded_facts_against_a_fresh_capture() {
+        let mut registry=SemanticNameRegistry::default();
+        let observed=snapshot("old",vec![button("Save",Some("save"))]);
+        let name=registry.register(&observed).into_iter().find(|n|n.label=="Save").unwrap().name;
+        let live=snapshot("new",vec![button("Other",None),button("Save",Some("save"))]);
+        match registry.resolve(&WireElementTarget{app:"com.example.App".into(),name},&live){SemanticLookup::Unique{handle,..}=>assert_eq!(handle,live.handle(2)),_=>panic!("recorded name did not resolve live")}
+    }
+
+    #[test]
+    fn ambiguous_names_return_handle_free_candidate_summaries() {
+        let mut registry=SemanticNameRegistry::default();let observed=snapshot("old",vec![button("Share",None),button("Share",None)]);let name=registry.register(&observed).into_iter().find(|n|n.label=="Share").unwrap().name;
+        match registry.resolve(&WireElementTarget{app:"App".into(),name},&observed){SemanticLookup::Ambiguous{candidates,..}=>{assert_eq!(candidates.len(),2);let json=serde_json::to_string(&candidates).unwrap();assert!(!json.contains("handle"));},_=>panic!("duplicate name was not ambiguous")}
+    }
+}
