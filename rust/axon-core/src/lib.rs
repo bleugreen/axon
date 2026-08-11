@@ -7,6 +7,7 @@ pub mod health;
 pub mod lifecycle;
 pub mod locator;
 pub mod rpc;
+pub mod semantic_name;
 pub mod snapshot;
 pub mod text;
 
@@ -17,5 +18,6 @@ pub use health::*;
 pub use lifecycle::*;
 pub use locator::*;
 pub use rpc::*;
+pub use semantic_name::*;
 pub use snapshot::*;
 pub use text::*;
