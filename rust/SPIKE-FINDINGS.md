@@ -558,3 +558,23 @@ The unimplemented convergence surface remains feasible through direct system API
 The LaunchAgent registration was never changed and no daemon install command was run. The installed app main executable was never invoked with CLI arguments. At the end of measurement, `axon health` reported version 0.2.3, `ready=true`, graphical and interactive session true, Accessibility and Screen Recording granted, and every advertised capability usable, including `observeChanges`, `observeGlobalInput`, and `serializeHistory`. `axon doctor` reported `Accessibility: trusted`.
 
 The requested literal check, `axon status --json`, did **not** produce JSON on installed 0.2.3; it printed `Axon.app: running`, `Socket: /tmp/axon.sock`, and `Accessibility: unknown`. The machine is healthy according to the daemon's machine-readable `health` response, but the status command's ignored `--json` flag and unknown permission display are a separate CLI defect and must not be reported as passing.
+
+
+### Cleanup verification, 2026-08-10 20:42 EDT
+
+Scoped `tccutil reset Accessibility <client>` removed the bundle-keyed Terminal row and found no spike-bundle row, but neither the bundle-like name nor the exact path could remove the path-keyed `/usr/libexec/sshd-keygen-wrapper` row. **`tccutil reset` cannot address this `client_type=1` row on this machine.** With explicit authorization, the database was backed up first to:
+
+    /Library/Application Support/com.apple.TCC/TCC.db.axn109-20260810-2042.bak
+
+An exact pre-delete query matched one row and only one row:
+
+    service=kTCCServiceAccessibility
+    client=/usr/libexec/sshd-keygen-wrapper
+    client_type=1 auth_value=2 auth_reason=4 auth_version=1
+    csreq=FADE0C000000003C0000000100000006000000020000001D636F6D2E6170706C652E737368642D6B657967656E2D7772617070657200000000000003
+    policy_id=NULL indirect_object_identifier_type=0
+    indirect_object_identifier=UNUSED indirect_object_code_identity=NULL
+    flags=0 last_modified=1786408390 pid=NULL pid_version=NULL
+    boot_uuid=UNUSED last_reminded=1786408390
+
+The delete used the identical two-column predicate, `tccd` was restarted, and the post-delete count was zero. Three pre/post fingerprints over every `com.bleugreen.axon%` row were byte-identical (`pre=3 post=3 byte_identical=true`). The Terminal, sshd-keygen-wrapper, and spike-bundle Accessibility rows are all absent. All throwaway bundles and output files were removed. The dated TCC backup remains intentionally for rollback. After cleanup, `axon health` again reported `ready=true`, both permissions granted, and all 15 capabilities usable. `axon status --json` still exhibited the separate non-JSON / `Accessibility: unknown` defect described above.
