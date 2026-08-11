@@ -1950,7 +1950,10 @@ mod tests {
         router.snapshot = Some(router.backend.snapshot.clone());
 
         let refused = router
-            .request(request("click", json!({"target": {"location": {"app": "App", "text": "root"}}})))
+            .request(request(
+                "click",
+                json!({"target": {"location": {"app": "App", "text": "root"}}}),
+            ))
             .unwrap();
         let result = action_result(&refused);
         assert_eq!(result["success"], json!(false));
@@ -2103,10 +2106,9 @@ actions:
         assert_eq!(batch["success"], json!(false));
         assert_eq!(batch["trace"].as_array().unwrap().len(), 1);
         assert!(
-            batch["trace"][0]["error"]
-                .as_str()
-                .unwrap()
-                .contains("live semantic-name resolution is not implemented by the Windows provider")
+            batch["trace"][0]["error"].as_str().unwrap().contains(
+                "live semantic-name resolution is not implemented by the Windows provider"
+            )
         );
         assert_eq!(*clicks.borrow(), 0);
         assert_eq!(*focuses.borrow(), 0);
@@ -2145,7 +2147,7 @@ actions:
             // The whole point of the rung: the default policy, which forbids activation and global
             // input, now carries a click all the way to the target.
             let backend = backend(vec![], None);
-                bound(&backend);
+            bound(&backend);
             let clicks = backend.clicks.clone();
             let activations = backend.activations.clone();
             let dispatches = backend.pixel_dispatches.clone();
@@ -2153,7 +2155,10 @@ actions:
             router.snapshot = Some(router.backend.snapshot.clone());
 
             let response = router
-                .request(request("click", json!({"target": {"location": {"app": "App", "text": "root"}}})))
+                .request(request(
+                    "click",
+                    json!({"target": {"location": {"app": "App", "text": "root"}}}),
+                ))
                 .unwrap();
 
             let result = action_result(&response);
@@ -2188,13 +2193,16 @@ actions:
             // behaved differently in a context nobody probed, would otherwise produce an accepted
             // post, intact invariants, and a report that the caller's click had worked.
             let backend = backend(vec![], None);
-                bound(&backend);
+            bound(&backend);
             let dispatches = backend.pixel_dispatches.clone();
             let mut router = Router::new(backend);
             router.snapshot = Some(router.backend.snapshot.clone());
 
             let response = router
-                .request(request("click", json!({"target": {"location": {"app": "App", "text": "root"}}})))
+                .request(request(
+                    "click",
+                    json!({"target": {"location": {"app": "App", "text": "root"}}}),
+                ))
                 .unwrap();
 
             let result = action_result(&response);
@@ -2220,12 +2228,15 @@ actions:
             // `success` that is simply hardwired false. A postcondition that verified promotes the
             // action, and the rung's own invariants still gate it.
             let backend = backend(vec![], None);
-                bound(&backend);
+            bound(&backend);
             let mut router = Router::new(backend);
             router.snapshot = Some(router.backend.snapshot.clone());
 
             let response = router
-                .request(request("click", json!({"target": {"location": {"app": "App", "text": "root"}}})))
+                .request(request(
+                    "click",
+                    json!({"target": {"location": {"app": "App", "text": "root"}}}),
+                ))
                 .unwrap();
             let delivered = action_result(&response).clone();
 
@@ -2253,12 +2264,15 @@ actions:
             // A dispatch into the wrong window is only diagnosable afterwards if both the window and
             // the arithmetic that chose the point are on the wire.
             let backend = backend(vec![], None);
-                bound(&backend);
+            bound(&backend);
             let mut router = Router::new(backend);
             router.snapshot = Some(router.backend.snapshot.clone());
 
             let response = router
-                .request(request("click", json!({"target": {"location": {"app": "App", "text": "root"}}})))
+                .request(request(
+                    "click",
+                    json!({"target": {"location": {"app": "App", "text": "root"}}}),
+                ))
                 .unwrap();
 
             let result = action_result(&response);
@@ -2333,13 +2347,16 @@ actions:
         #[test]
         fn an_unavailable_plan_under_the_default_policy_dispatches_nothing() {
             let backend = backend(vec![], None);
-                let clicks = backend.clicks.clone();
+            let clicks = backend.clicks.clone();
             let dispatches = backend.pixel_dispatches.clone();
             let mut router = Router::new(backend);
             router.snapshot = Some(router.backend.snapshot.clone());
 
             let response = router
-                .request(request("click", json!({"target": {"location": {"app": "App", "text": "root"}}})))
+                .request(request(
+                    "click",
+                    json!({"target": {"location": {"app": "App", "text": "root"}}}),
+                ))
                 .unwrap();
 
             let result = action_result(&response);
@@ -2358,7 +2375,7 @@ actions:
             // boundary above it is the reported reason. Both have to arrive: one says what to do
             // next, the other says whether the quiet rung would ever carry this target at all.
             let backend = backend(vec![], None);
-                *backend.pixel_plan.borrow_mut() = PixelPlan::unavailable(
+            *backend.pixel_plan.borrow_mut() = PixelPlan::unavailable(
                 "window class Widget has no probe-verified client-coordinate message path",
             );
             let clicks = backend.clicks.clone();
@@ -2367,7 +2384,10 @@ actions:
             router.snapshot = Some(router.backend.snapshot.clone());
 
             let response = router
-                .request(request("click", json!({"target": {"location": {"app": "App", "text": "root"}}})))
+                .request(request(
+                    "click",
+                    json!({"target": {"location": {"app": "App", "text": "root"}}}),
+                ))
                 .unwrap();
 
             let result = action_result(&response);
@@ -2386,7 +2406,7 @@ actions:
         #[test]
         fn an_unavailable_plan_escalates_to_the_foreground_when_permitted() {
             let backend = backend(vec![], None);
-                let clicks = backend.clicks.clone();
+            let clicks = backend.clicks.clone();
             let dispatches = backend.pixel_dispatches.clone();
             let mut router = Router::new(backend);
             router.snapshot = Some(router.backend.snapshot.clone());
@@ -2410,7 +2430,7 @@ actions:
             // An elevated target is the case. Answering it with foregroundNotPermitted would send the
             // caller after an opt-in that buys a dispatch UIPI discards.
             let backend = backend(vec![], None);
-                *backend.pixel_plan.borrow_mut() = PixelPlan::blocked(
+            *backend.pixel_plan.borrow_mut() = PixelPlan::blocked(
                 "the target window runs at a higher integrity level than the daemon; UIPI discards \
              posted input",
             );
@@ -2454,7 +2474,7 @@ actions:
                 "the receiving window moved between planning and dispatch",
             ] {
                 let backend = backend(vec![], None);
-                        bound(&backend);
+                bound(&backend);
                 *backend.pixel_result.borrow_mut() =
                     Err(PixelDispatchError::Stale(reason.to_string()));
                 let clicks = backend.clicks.clone();
@@ -2464,7 +2484,10 @@ actions:
                 router.snapshot = Some(router.backend.snapshot.clone());
 
                 let response = router
-                    .request(request("click", json!({"target": {"location": {"app": "App", "text": "root"}}})))
+                    .request(request(
+                        "click",
+                        json!({"target": {"location": {"app": "App", "text": "root"}}}),
+                    ))
                     .unwrap();
 
                 // A target that changed under the request is stale, not refused: the request was
@@ -2485,7 +2508,7 @@ actions:
             // Half a sequence may have left the target believing the button is held. A second attempt
             // at another rung would compound that rather than recover from it.
             let backend = backend(vec![], None);
-                bound(&backend);
+            bound(&backend);
             *backend.pixel_result.borrow_mut() = Ok(PixelDispatch {
             complete: false,
             partial: Some("the button-up message was refused twice; the target may still consider the left button held".into()),
@@ -2530,7 +2553,7 @@ actions:
                 (true, false, "real pointer moved"),
             ] {
                 let backend = backend(vec![], None);
-                        bound(&backend);
+                bound(&backend);
                 *backend.pixel_result.borrow_mut() = Ok(PixelDispatch {
                     complete: true,
                     partial: None,
@@ -2541,7 +2564,10 @@ actions:
                 router.snapshot = Some(router.backend.snapshot.clone());
 
                 let response = router
-                    .request(request("click", json!({"target": {"location": {"app": "App", "text": "root"}}})))
+                    .request(request(
+                        "click",
+                        json!({"target": {"location": {"app": "App", "text": "root"}}}),
+                    ))
                     .unwrap();
 
                 let result = action_result(&response);

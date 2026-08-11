@@ -4,7 +4,8 @@ use axon_core::{
     AppQuery, AxnCodec, AxnRunner, Capability, DeliveryCandidate, DeliveryCapability,
     DeliveryOutcome, DeliveryPolicy, DeliveryRefusal, DeliveryRefusalReason, DeliveryRung,
     DeliverySelection, DispatchOutcome, ExpectedFact, ForegroundTarget, JsonRpcError, JsonRpcId,
-    JsonRpcRequest, JsonRpcResponse, KeyboardIntent, PlatformBackend, Resolution, RunEnvelope, RunOptions, Snapshot, SnapshotHandle, ToolDispatcher, dispatch_in_foreground, goal_success,
+    JsonRpcRequest, JsonRpcResponse, KeyboardIntent, PlatformBackend, Resolution, RunEnvelope,
+    RunOptions, Snapshot, SnapshotHandle, ToolDispatcher, dispatch_in_foreground, goal_success,
     select_delivery,
 };
 use serde_json::{Map, Value, json};
@@ -461,13 +462,11 @@ impl<B: PointerTargetVerifier + BackgroundPixelInput> Router<B> {
             }
             None => PixelPlan::unavailable(NO_RESOLVED_APPLICATION),
         };
-        let ladder =
-            self.global_input_ladder(Capability::PointerInput, "XTest pointer", &plan);
+        let ladder = self.global_input_ladder(Capability::PointerInput, "XTest pointer", &plan);
         let Some(candidate) = self.selected(&ladder, policy) else {
             return Ok(self.refusal(&ladder, policy));
         };
-        let verification =
-            json!({"verified":false,"reason":"click has no declared postcondition"});
+        let verification = json!({"verified":false,"reason":"click has no declared postcondition"});
         if candidate.rung == DeliveryRung::Pixel {
             let PixelPlan::Bound(target) = plan else {
                 unreachable!("the pixel rung is only offered for a bound plan")
@@ -1972,9 +1971,18 @@ mod tests {
         let mut router = Router::new(backend);
 
         for (method, params) in [
-            ("invoke", json!({"target": {"app": "App", "name": "Button"}, "name": "Invoke"})),
-            ("type", json!({"target": {"app": "App", "name": "Field"}, "value": "after"})),
-            ("scroll", json!({"target": {"app": "App", "name": "List"}, "deltaY": -120.0})),
+            (
+                "invoke",
+                json!({"target": {"app": "App", "name": "Button"}, "name": "Invoke"}),
+            ),
+            (
+                "type",
+                json!({"target": {"app": "App", "name": "Field"}, "value": "after"}),
+            ),
+            (
+                "scroll",
+                json!({"target": {"app": "App", "name": "List"}, "deltaY": -120.0}),
+            ),
         ] {
             let response = router.request(request(method, params)).unwrap();
             let JsonRpcResponse::Failure(failure) = response else {
@@ -1982,7 +1990,10 @@ mod tests {
             };
             assert_eq!(failure.error.code, -32004, "{method}");
             assert!(
-                failure.error.message.contains("live semantic-name resolution"),
+                failure
+                    .error
+                    .message
+                    .contains("live semantic-name resolution"),
                 "{method}: {}",
                 failure.error.message
             );
