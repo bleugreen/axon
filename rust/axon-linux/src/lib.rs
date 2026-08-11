@@ -805,7 +805,7 @@ impl<B: PointerTargetVerifier + BackgroundPixelInput> Router<B> {
                 .ok_or_else(|| rpc_error(-32002, "no active snapshot; call look first"))?;
             let handle = snapshot.handle(0);
             let node = self.node(&handle)?;
-            let candidate = Candidate {
+            let candidate = axon_core::Candidate {
                 index: 0,
                 handle: handle.clone(),
                 role: node.role.clone(),
@@ -817,9 +817,9 @@ impl<B: PointerTargetVerifier + BackgroundPixelInput> Router<B> {
             return Ok((
                 handle,
                 Resolution {
-                    status: ResolutionStatus::Unique,
+                    status: axon_core::ResolutionStatus::Unique,
                     snapshot_id: snapshot.id.clone(),
-                    confidence: Confidence::High,
+                    confidence: axon_core::Confidence::High,
                     best: Some(candidate.clone()),
                     candidates: vec![candidate],
                 },
