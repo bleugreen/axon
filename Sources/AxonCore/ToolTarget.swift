@@ -1,17 +1,14 @@
 import Foundation
 
 public enum ToolTarget: Equatable, Sendable {
-    case handle(String)
-    case locator(app: String, locator: AXLocator)
+    case semanticName(app: String, name: String)
     case point(ActionPoint)
     case textLocation(TextLocationTarget)
 
     public var kind: ToolTargetKind {
         switch self {
-        case .handle:
-            return .handle
-        case .locator:
-            return .locator
+        case .semanticName:
+            return .semanticName
         case .point:
             return .point
         case .textLocation:
@@ -20,12 +17,11 @@ public enum ToolTarget: Equatable, Sendable {
     }
 
     public init(jsonValue: JSONValue, acceptedKinds: ToolTargetKindSet = .pointer, fieldName: String = "target") throws {
-        if case let .string(handle) = jsonValue {
-            guard acceptedKinds.contains(.handle) else {
-                throw JSONRPCError.invalidParams("\(fieldName) does not accept handle targets; accepted target kinds: \(acceptedKinds.description)")
+        if case let .string(value) = jsonValue {
+            if (try? SnapshotHandle(value)) != nil {
+                throw JSONRPCError.invalidParams("\(fieldName) no longer accepts snapshot handles; use {app,name} from look")
             }
-            self = .handle(handle)
-            return
+            throw JSONRPCError.invalidParams("\(fieldName) semantic targets must be {app,name}")
         }
 
         guard case let .object(object) = jsonValue else {
@@ -48,17 +44,24 @@ public enum ToolTarget: Equatable, Sendable {
             return
         }
 
-        if object["app"] != nil || object["locator"] != nil {
-            guard acceptedKinds.contains(.locator) else {
-                throw JSONRPCError.invalidParams("\(fieldName) does not accept locator targets; accepted target kinds: \(acceptedKinds.description)")
+        if object["locator"] != nil, object["name"] == nil {
+            throw JSONRPCError.invalidParams("\(fieldName) no longer accepts standalone locators; use {app,name} from look")
+        }
+
+        if object["app"] != nil || object["name"] != nil {
+            guard acceptedKinds.contains(.semanticName) else {
+                throw JSONRPCError.invalidParams("\(fieldName) does not accept semantic name targets; accepted target kinds: \(acceptedKinds.description)")
             }
             guard case let .string(app) = object["app"], !app.isEmpty else {
-                throw JSONRPCError.invalidParams("Locator target must include string app")
+                throw JSONRPCError.invalidParams("Semantic target must include non-empty string app")
             }
-            guard let locatorValue = object["locator"] else {
-                throw JSONRPCError.invalidParams("Locator target must include locator")
+            guard case let .string(name) = object["name"], !name.isEmpty else {
+                throw JSONRPCError.invalidParams("Semantic target must include non-empty string name")
             }
-            self = .locator(app: app, locator: try AXLocator(jsonValue: locatorValue))
+            if object["locator"] != nil {
+                throw JSONRPCError.invalidParams("Ordinary tool targets do not accept locator evidence; attached locators are reserved for v2 replay")
+            }
+            self = .semanticName(app: app, name: name)
             return
         }
 

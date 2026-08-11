@@ -1,19 +1,16 @@
 import Foundation
 
 public enum ToolTargetKind: String, CaseIterable, Sendable {
-    case handle
-    case locator
+    case semanticName
     case point
     case textLocation
 
     public var schemaDescription: String {
         switch self {
-        case .handle:
-            return "Snapshot handle like s12:19."
-        case .locator:
-            return "Locator target object with app and locator fields. Locator may use label, title, value, description, identifier, actions, and ancestors."
+        case .semanticName:
+            return "Semantic element target object with required app and name fields. Run look first to observe canonical names."
         case .point:
-            return "Point target object: { point: { x, y, coordinateSpace } } or { x, y, coordinateSpace }. coordinateSpace is screen, window, or screenshot; window and screenshot points require app when no top-level app is provided. Legacy { x, y } still resolves as screen coordinates for compatibility. Raw points dispatch without element identity or occlusion verification; use a handle or locator when fail-closed target validation is required."
+            return "Point target object: { point: { x, y, coordinateSpace } } or { x, y, coordinateSpace }. coordinateSpace is screen, window, or screenshot; window and screenshot points require app when no top-level app is provided. Raw points dispatch without element identity or occlusion verification; use a semantic name when fail-closed target validation is required."
         case .textLocation:
             return "Text location target object: { location: { app, text, source? } }. Resolves visible text to a click/drag/scroll point using AX text or screenshot OCR without callers providing coordinates."
         }
@@ -27,12 +24,11 @@ public struct ToolTargetKindSet: OptionSet, Sendable {
         self.rawValue = rawValue
     }
 
-    public static let handle = ToolTargetKindSet(rawValue: 1 << 0)
-    public static let locator = ToolTargetKindSet(rawValue: 1 << 1)
+    public static let semanticName = ToolTargetKindSet(rawValue: 1 << 0)
     public static let point = ToolTargetKindSet(rawValue: 1 << 2)
     public static let textLocation = ToolTargetKindSet(rawValue: 1 << 3)
-    public static let element: ToolTargetKindSet = [.handle, .locator]
-    public static let pointer: ToolTargetKindSet = [.handle, .locator, .point, .textLocation]
+    public static let element: ToolTargetKindSet = [.semanticName]
+    public static let pointer: ToolTargetKindSet = [.semanticName, .point, .textLocation]
 
     public var orderedKinds: [ToolTargetKind] {
         ToolTargetKind.allCases.filter { contains($0) }
@@ -40,10 +36,8 @@ public struct ToolTargetKindSet: OptionSet, Sendable {
 
     public func contains(_ kind: ToolTargetKind) -> Bool {
         switch kind {
-        case .handle:
-            return contains(ToolTargetKindSet.handle)
-        case .locator:
-            return contains(ToolTargetKindSet.locator)
+        case .semanticName:
+            return contains(ToolTargetKindSet.semanticName)
         case .point:
             return contains(ToolTargetKindSet.point)
         case .textLocation:
@@ -399,9 +393,7 @@ public enum ToolSurfaceSchema {
             return .object([
                 "anyOf": .array(kinds.orderedKinds.map { kind in
                     switch kind {
-                    case .handle:
-                        return scalarSchema(type: "string", description: kind.schemaDescription)
-                    case .locator, .point, .textLocation:
+                    case .semanticName, .point, .textLocation:
                         return .object([
                             "type": .string("object"),
                             "description": .string(kind.schemaDescription),

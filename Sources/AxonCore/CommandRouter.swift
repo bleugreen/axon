@@ -1,3 +1,4 @@
+        self.semanticNameRegistry = semanticNameRegistry
 import ApplicationServices
 import Foundation
 
@@ -15,6 +16,7 @@ public struct CommandRouterServices {
     public let requestAccessibility: () -> Bool
     public let actions: PrimitiveActionHandlers
     public let elementStore: AXElementStore
+    public let semanticNameRegistry: SemanticNameRegistry
     public let changeObserver: AppChangeObserving
     public let history: ActionHistoryStore
     public let recognizeText: TextRecognitionHandler
@@ -45,6 +47,7 @@ public struct CommandRouterServices {
         requestAccessibility: @escaping () -> Bool = AccessibilityPermission.requestTrustPrompt,
         actions: PrimitiveActionHandlers? = nil,
         elementStore: AXElementStore = AXElementStore(),
+        semanticNameRegistry: SemanticNameRegistry = SemanticNameRegistry(),
         changeObserver: AppChangeObserving = AXAppChangeObserverRegistry(),
         history: ActionHistoryStore = .shared,
         recognizeText: @escaping TextRecognitionHandler = VisionTextRecognizer.recognizeText(in:),
@@ -83,6 +86,12 @@ public struct CommandRouterServices {
                 screenshot: screenshot,
                 childDepth: childDepth
             )
+        } catch let failure as SemanticResolutionFailure {
+            return JSONRPCResponse(id: id, error: JSONRPCError(
+                code: -32602,
+                message: "Semantic target did not resolve uniquely: \(failure.status)",
+                data: .object(["targetResolution": failure.jsonValue(activeSecretRedactor: activeSecretRedactor())])
+            ))
         }
         self.resolveLocator = resolveLocator ?? { app, locator, scrollToVisible in
             try liveLocatorResolver.resolve(app: app, locator: locator, scrollToVisible: scrollToVisible)
@@ -124,6 +133,37 @@ public struct CommandRouterServices {
         DispatchQueue.global().asyncAfter(deadline: .now() + 0.15) {
             exit(0)
         }
+    }
+}
+
+private struct SemanticResolutionFailure: Error {
+    let status: String
+    let query: SemanticTargetQuery
+    let candidates: [SemanticNameRecord]
+
+    func jsonValue(activeSecretRedactor: ActiveSecretRedactor) -> JSONValue {
+        .object([
+            "status": .string(status),
+            "confidence": .string("none"),
+            "query": .object(["app": .string(query.app), "name": .string(query.name)]),
+            "candidates": .array(candidates.map { record in
+                .object([
+                    "role": .string(record.role),
+                    "label": .string(activeSecretRedactor.redaction(for: record.label)?.value ?? record.label),
+                    "name": .string(record.query.name),
+                    "locator": redactSemanticLocator(record.locator.jsonValue, using: activeSecretRedactor)
+                ])
+            })
+        ])
+    }
+}
+
+private func redactSemanticLocator(_ value: JSONValue, using redactor: ActiveSecretRedactor) -> JSONValue {
+    switch value {
+    case let .string(string): return .string(redactor.redaction(for: string)?.value ?? string)
+    case let .array(values): return .array(values.map { redactSemanticLocator($0, using: redactor) })
+    case let .object(object): return .object(object.mapValues { redactSemanticLocator($0, using: redactor) })
+    default: return value
     }
 }
 
@@ -490,6 +530,7 @@ private struct PerceptionCommandHandler {
             let childDepth = try decoder.int("childDepth")
             let snapshot = try services.captureSnapshotWithChildDepth(target, screenshot || screenText, childDepth)
             services.elementStore.store(summary: observedSummary(for: snapshot))
+            services.semanticNameRegistry.register(snapshot: snapshot)
             var snapshotJSON = snapshot.jsonValue(
                 includeTree: includeTree,
                 activeSecretRedactor: activeSecretRedactor
@@ -740,7 +781,7 @@ private struct PrimitiveActionCommandHandler {
                         services.actions.clickPoint(resolution.point, policy),
                         resolution: resolution
                     )
-                case .handle, .locator:
+                case .semanticName:
                     let resolved = try resolveElementTarget(target)
                     observations?.begin(tool: "click", handle: resolved.handle)
                     return observed(withTargetResolution(
@@ -853,18 +894,28 @@ private struct PrimitiveActionCommandHandler {
 
     private func resolveElementTarget(_ target: ToolTarget) throws -> ResolvedElementTarget {
         switch target {
-        case let .handle(handle):
-            return ResolvedElementTarget(handle: handle, resolution: nil)
-        case let .locator(app, locator):
-            let resolution = try services.resolveLocator(app, locator, true)
+        case let .semanticName(app, name):
+            let query = SemanticTargetQuery(app: app, name: name)
+            let record: SemanticNameRecord
+            switch services.semanticNameRegistry.lookup(app: app, name: name) {
+            case let .unique(found): record = found
+            case .missing: throw SemanticResolutionFailure(status: "missing", query: query, candidates: [])
+            case let .ambiguous(_, candidates):
+                throw SemanticResolutionFailure(status: "ambiguous", query: query, candidates: candidates)
+            }
+            if let retained = record.retainedHandle,
+               (try? services.elementStore.element(for: retained)) != nil {
+                return ResolvedElementTarget(handle: retained.rawValue, resolution: nil)
+            }
+            let resolution = try services.resolveLocator(app, record.locator, true)
             guard resolution.status == .unique, let handle = resolution.best?.handle else {
                 throw LocatorResolutionFailure(resolution: resolution)
             }
             return ResolvedElementTarget(handle: handle.rawValue, resolution: resolution)
         case .point:
-            throw JSONRPCError.invalidParams("target does not accept point targets; accepted target kinds: handle, locator")
+            throw JSONRPCError.invalidParams("target does not accept point targets; accepted target kind: semanticName")
         case .textLocation:
-            throw JSONRPCError.invalidParams("target does not accept textLocation targets; accepted target kinds: handle, locator")
+            throw JSONRPCError.invalidParams("target does not accept textLocation targets; accepted target kind: semanticName")
         }
     }
 
@@ -893,10 +944,8 @@ private struct PrimitiveActionCommandHandler {
         fieldName: String = "target"
     ) throws -> ResolvedPointerTarget {
         switch target {
-        case let .handle(handle):
-            return ResolvedPointerTarget(target: .handle(handle), locationResolution: nil, targetResolution: nil)
-        case let .locator(app, locator):
-            let resolved = try resolveElementTarget(.locator(app: app, locator: locator))
+        case let .semanticName(app, name):
+            let resolved = try resolveElementTarget(.semanticName(app: app, name: name))
             return ResolvedPointerTarget(
                 target: .handle(resolved.handle),
                 locationResolution: nil,

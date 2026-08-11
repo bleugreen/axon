@@ -29,7 +29,7 @@ public struct MCPRouter {
                     "name": .string("axon"),
                     "version": .string(AxonVersion.current)
                 ]),
-                "instructions": .string("Use plain Axon tool names. Targets may be snapshot handles or locator objects.")
+                "instructions": .string("Use plain Axon tool names. Element targets use app-scoped semantic names returned by look.")
             ])
         case "ping":
             return JSONRPCResponse(id: request.id, result: [:])
