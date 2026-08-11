@@ -220,7 +220,7 @@ import Testing
                 "actions": .array([
                     .object([
                         "tool": .string("click"),
-                        "target": .string("s1:2")
+                        "target": .object(["app": .string("Example"), "name": .string("primary-button")])
                     ])
                 ]),
                 "argValues": .object([
@@ -241,7 +241,7 @@ import Testing
                 "actions": .array([
                     .object([
                         "tool": .string("click"),
-                        "target": .string("s1:2")
+                        "target": .object(["app": .string("Example"), "name": .string("primary-button")])
                     ])
                 ]),
                 "argValues": .object([

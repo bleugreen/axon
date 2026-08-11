@@ -3,19 +3,35 @@ import Testing
 @testable import AxonCore
 
 @Test func clickRequestReturnsActionResult() {
+    let registry = SemanticNameRegistry()
+    registry.registerReplayEvidence(
+        app: "Example",
+        name: "primary-button",
+        locator: AXLocator(role: "AXButton", title: .exact("Primary"))
+    )
     let router = CommandRouter(
+        resolveLocator: { _, _, _ in
+            let snapshotID = SnapshotID("snap")
+            return LocatorResolution(
+                status: .unique,
+                snapshotID: snapshotID,
+                best: LocatorCandidate(index: 1, handle: SnapshotHandle(snapshotID: snapshotID, nodeIndex: 1), role: "AXButton", title: "Primary", score: 1_000, reasons: []),
+                candidates: []
+            )
+        },
         actions: PrimitiveActionHandlers(
             click: { target, _ in
                 #expect(target == "snap:1")
                 return PrimitiveActionResult(action: "click", target: target, strategy: "AXPress", success: true)
             }
-        )
+        ),
+        semanticNameRegistry: registry
     )
 
     let response = router.handle(JSONRPCRequest(
         id: .string("click-1"),
         method: "click",
-        params: .object(["target": .string("snap:1")])
+        params: .object(["target": .object(["app": .string("Example"), "name": .string("primary-button")])])
     ))
 
     #expect(response.error == nil)
@@ -163,7 +179,8 @@ private func stabilitySnapshot(id: String, title: String) -> AppSnapshot {
                     details: ["point": point.jsonValue]
                 )
             }
-        )
+        ),
+        semanticNameRegistry: registry
     )
 
     let response = router.handle(JSONRPCRequest(
@@ -339,7 +356,13 @@ private func stabilitySnapshot(id: String, title: String) -> AppSnapshot {
     #expect(response.result?["wait"]?["resolution"]?["status"] == .string("missing"))
 }
 
-@Test func clickRequestAcceptsLocatorTarget() {
+@Test func clickRequestAcceptsSemanticNameTarget() {
+    let registry = SemanticNameRegistry()
+    registry.registerReplayEvidence(
+        app: "com.example.App",
+        name: "new-button",
+        locator: AXLocator(role: "AXButton", title: .exact("NEW"))
+    )
     let router = CommandRouter(
         resolveLocator: { app, locator, scrollToVisible in
             #expect(app == "com.example.App")
@@ -367,10 +390,7 @@ private func stabilitySnapshot(id: String, title: String) -> AppSnapshot {
         params: .object([
             "target": .object([
                 "app": .string("com.example.App"),
-                "locator": .object([
-                    "role": .string("AXButton"),
-                    "title": .object(["exact": .string("NEW")])
-                ])
+                "name": .string("new-button")
             ])
         ])
     ))
