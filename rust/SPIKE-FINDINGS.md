@@ -508,3 +508,53 @@ by a live connection, since the launcher watches the sender's name), and
 `org.a11y.atspi.Accessible.GetAttributes` while walking
 `/org/a11y/atspi/accessible/root`. Re-date the claim in
 `docs/cross-platform.md` when the backend area or the browser generation changes.
+
+
+# macOS ApplicationServices spike findings, 2026-08-10
+
+Tested on `bglab-mac` against Calculator on macOS from the SSH-originated Cairn executor session. The probe is `rust/axon-spike-mac`; it links ApplicationServices and CoreFoundation directly and declares only the AX and Core Foundation C functions it uses. It has no wrapper-crate or Objective-C dependency and does not implement `PlatformBackend`.
+
+## Verdicts
+
+1. **AX capture from Rust: viable.** A direct `AXUIElementCreateApplication` / `AXUIElementCopyAttributeValue` walk captured Calculator's real semantic tree. The bounded full application walk returned 201 nodes in 136.109 ms. It included the application, the 35-node window subtree, and 165 menu-bar descendants. The installed 0.2.3 Swift daemon's adjacent `look Calculator --json` returned exactly the same 35-node window subtree; it deliberately starts at `AXWindows` and omits the application and menu bar. Roles, hierarchy, names, and the displayed `AXStaticText` value `U+200E + "0"` agreed, including all 20 keypad buttons, toolbar controls, and window controls. A subsequent full Rust capture took 105.326 ms. These are correctness measurements from an unoptimized sequential walker, not a production latency target.
+2. **One real action from Rust: viable and independently verified.** The probe resolved `role=AXButton, name contains=1`, called `AXUIElementPerformAction(..., "AXPress")`, and received `kAXErrorSuccess` (0). A recapture after 500 ms observed Calculator's display change from `U+200E + "0"` to `U+200E + "1"`. The probe reported `verified=true`; dispatch plus wait plus recapture took 594.128 ms. It exits unsuccessfully if the expected before value, target, dispatch success, or expected after value is absent.
+3. **TCC grant carry for a Rust main executable: mechanically supported, but the Developer ID case remains unproven in this session.** The installed app has bundle identifier `com.bleugreen.axon`, Team ID `JBS95V8M7P`, and the stable Developer ID designated requirement recorded below. Its existing bundle-keyed Accessibility and Screen Recording rows remain `client_type=0, auth_value=2`, and `axon health` reports both granted. A Rust build could not be signed to that requirement over SSH: the identity was visible, but `codesign` failed with `errSecInternalComponent`, re-confirming AXN-39 and AXN-93. Therefore this spike does **not** claim that a newly built Rust main executable carried the real grants. The residual is one release/CI measurement: sign a bundle whose unchanged identity is `com.bleugreen.axon` and whose Rust binary is `CFBundleExecutable`, verify it satisfies the requirement below, launch it from a new path, and confirm both preflights are granted with zero TCC-row change.
+
+    designated => identifier "com.bleugreen.axon" and anchor apple generic
+      and Developer ID intermediate and Developer ID Application leaf
+      and certificate leaf[subject.OU] = JBS95V8M7P
+
+Direct bindings are the recommendation. The exercised surface is small, the ownership rules are visible, and no wrapper demonstrated compensating value. One bug found while hardening the spike is worth carrying forward: values returned from AX arrays are borrowed. Queued elements and retained action targets must be `CFRetain`ed before the source array is released. Failed attribute calls must also not construct an owning wrapper around null.
+
+## TCC measurements and session attribution
+
+The first direct run of the ad-hoc `com.bleugreen.axon.spike109` bundle was denied: it returned only a blank application placeholder, one node in 20.948 ms. After desktop approvals during the session, the same unchanged executable captured 201 nodes. The system database explains why, and prevents a false bundle-carry conclusion: **no `com.bleugreen.axon.spike109` row was created**. Instead, TCC attributed the SSH-originated execution to responsible command hosts.
+
+The rows relevant to Axon after the measurement were:
+
+    kTCCServiceAccessibility|com.bleugreen.axon|0|2|csreq 160 bytes
+    kTCCServiceAccessibility|com.bleugreen.axon.issue93|0|0|csreq 40 bytes
+    kTCCServiceScreenCapture|com.bleugreen.axon|0|2|csreq 160 bytes
+
+That filtered set was unchanged at three rows: the spike added zero `com.bleugreen.axon*` rows and zero Screen Recording rows. The broader recent Accessibility query showed two approvals made during this session:
+
+    kTCCServiceAccessibility|com.apple.Terminal|0|2|csreq 48 bytes
+    kTCCServiceAccessibility|/usr/libexec/sshd-keygen-wrapper|1|2|csreq 60 bytes
+
+Those two rows are granted strays, not denied strays and not part of Axon's intended identity. They are removable with the minus button in System Settings. The pre-existing AXN-93 rows remained, including `com.bleugreen.axon.issue93|0|0` and the path-keyed issue-93 helper row. Test artifacts were `/private/tmp/AxonSpike109.app`, `/private/tmp/AxonSpike109-devid.app`, and `/private/tmp/axon-spike109-*.txt`.
+
+This result sharpens the TCC acceptance rule: merely placing a Rust executable at a bundle's main-executable path is insufficient evidence. The process must be attributed to that bundle and satisfy the existing row's code-signing requirement. An ad-hoc signature has a cdhash designated requirement and cannot model Developer ID upgrade carry.
+
+## Extended capability feasibility
+
+The unimplemented convergence surface remains feasible through direct system APIs, but was not exercised here:
+
+- `observeChanges`: `AXObserverCreate`, notification registration, and a CFRunLoop source; production work must make callback lifetime, run-loop ownership, and stale-element handling explicit.
+- `observeGlobalInput`: `CGEventTapCreate` plus a run-loop source; this remains subject to Input Monitoring/TCC behavior and tap-disable recovery.
+- `serializeHistory`: feasible in Rust once the observer and global-input event streams feed the core's history model; serialization itself is an Axon concern rather than a separate macOS provider API.
+
+## Machine health and cleanup note
+
+The LaunchAgent registration was never changed and no daemon install command was run. The installed app main executable was never invoked with CLI arguments. At the end of measurement, `axon health` reported version 0.2.3, `ready=true`, graphical and interactive session true, Accessibility and Screen Recording granted, and every advertised capability usable, including `observeChanges`, `observeGlobalInput`, and `serializeHistory`. `axon doctor` reported `Accessibility: trusted`.
+
+The requested literal check, `axon status --json`, did **not** produce JSON on installed 0.2.3; it printed `Axon.app: running`, `Socket: /tmp/axon.sock`, and `Accessibility: unknown`. The machine is healthy according to the daemon's machine-readable `health` response, but the status command's ignored `--json` flag and unknown permission display are a separate CLI defect and must not be reported as passing.
