@@ -239,6 +239,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "axon-spike-mac"
+version = "0.1.0"
+
+[[package]]
 name = "axon-spike-win"
 version = "0.1.0"
 dependencies = [
