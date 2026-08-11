@@ -151,7 +151,7 @@ public final class ActionHistoryStore: @unchecked Sendable {
             return object
         }
         let script = try AxnDocumentCodec.yamlString(from: .object([
-            "version": .int(1),
+            "version": .int(2),
             "actions": .array(actions.map(JSONValue.object))
         ]))
         return ActionHistoryExport(script: script, actionCount: actions.count, recordCount: records.count)
@@ -218,9 +218,9 @@ public final class ActionHistoryStore: @unchecked Sendable {
         }
 
         if let observation = record.observation {
-            replaceHandleTarget("target", in: &object, with: observation.targetBefore)
-            replaceHandleTarget("from", in: &object, with: observation.fromBefore)
-            replaceHandleTarget("to", in: &object, with: observation.toBefore)
+            attachReplayEvidence("target", in: &object, from: observation.targetBefore)
+            attachReplayEvidence("from", in: &object, from: observation.fromBefore)
+            attachReplayEvidence("to", in: &object, from: observation.toBefore)
 
             let facts = DerivedPostconditionCompiler().facts(for: DerivedPostconditionCompiler.Input(
                 actionID: actionID,
@@ -233,41 +233,36 @@ public final class ActionHistoryStore: @unchecked Sendable {
             }
         }
 
-        let warnings = ephemeralTargetWarnings(in: object)
-        if !warnings.isEmpty {
-            object["warnings"] = .array(warnings.map(JSONValue.string))
+        // A v2 file must never preserve a session-pinned handle. Public actions no longer accept
+        // handles, but keeping this boundary check prevents manually constructed history records
+        // from producing a file that looks replayable and is not.
+        guard !["target", "from", "to"].contains(where: { key in
+            guard case let .string(value)? = object[key] else { return false }
+            return (try? SnapshotHandle(value)) != nil
+        }) else {
+            return nil
         }
         return object
     }
 
-    /// Swaps a snapshot handle for the durable `{app, locator}` identity read just before the
-    /// action ran. The pre-action read is the right source: it names the element the way it looked
-    /// when it was found, which is the state a replay will be in when it looks for it again.
-    private func replaceHandleTarget(
+    /// Adds the locator evidence reserved for replay to an ordinary `{app,name}` action target.
+    /// The semantic name remains the action's stable identity; the pre-action observation supplies
+    /// the evidence a fresh daemon needs to resolve that identity without a prior `look`.
+    private func attachReplayEvidence(
         _ key: String,
         in object: inout [String: JSONValue],
-        with state: ObservedElementState?
+        from state: ObservedElementState?
     ) {
-        guard case let .string(value)? = object[key],
-              (try? SnapshotHandle(value)) != nil,
+        guard case var .object(target)? = object[key],
+              case .string? = target["app"],
+              case .string? = target["name"],
               let state,
               let locator = state.locator
         else {
             return
         }
-        object[key] = .object(["app": .string(state.app), "locator": .object(locator)])
-    }
-
-    /// Names every step still pinned to a snapshot handle. A handle is not durable identity, so
-    /// such a step cannot replay in a later session, and the file should say so rather than look
-    /// like a workflow that works.
-    private func ephemeralTargetWarnings(in object: [String: JSONValue]) -> [String] {
-        ["target", "from", "to"].compactMap { key in
-            guard case let .string(value)? = object[key], (try? SnapshotHandle(value)) != nil else {
-                return nil
-            }
-            return "\(key) is a snapshot handle (\(value)) with no durable locator; this step will not replay in a later session"
-        }
+        target["locator"] = .object(locator)
+        object[key] = .object(target)
     }
 
     private func toolName(for method: String) -> String? {
