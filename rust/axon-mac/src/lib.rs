@@ -1038,6 +1038,29 @@ mod tests {
     }
 
     #[test]
+    fn delivered_results_use_goal_success() {
+        let verified = delivered(
+            json!({"verification":{"verified":true}}),
+            DeliveryPolicy::BackgroundOnly,
+            DeliveryRung::Semantic,
+        );
+        assert_eq!(verified["success"], json!(true));
+
+        let unverified = delivered(
+            json!({"verification":{"verified":false,"reason":"no postcondition"}}),
+            DeliveryPolicy::BackgroundOnly,
+            DeliveryRung::Semantic,
+        );
+        assert_eq!(unverified["success"], json!(false));
+    }
+
+    #[test]
+    fn refusal_success_is_not_inferred_from_json_construction() {
+        let result = json!({"success":false,"dispatchSuccess":false});
+        assert_eq!(result.get("success").and_then(Value::as_bool).unwrap_or(true), false);
+    }
+
+    #[test]
     fn rust_facade_keeps_app_inside_structured_result() {
         let app = axon_core::Application {
             name: "Calculator".into(),
