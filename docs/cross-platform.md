@@ -1105,3 +1105,11 @@ socket, and `/tmp/axon.sock` is rejected explicitly. This keeps development and
 conformance runs separate from the installed Swift daemon. The Swift daemon,
 LaunchAgent, registration, live macOS workflow, recorder, editor, and extended
 capabilities remain canonical and unchanged until a deliberate cutover.
+
+The durable bglab-mac development identity is packaged by
+`scripts/package-macos-rust-bench` at `~/AxonBench/AxonMacDev.app`, with the
+stable bundle identifier `dev.axon.mac-bench`. The script replaces and
+ad-hoc-signs only the binary inside that stable bundle; it never installs a
+daemon or edits TCC. `scripts/probe-macos-rust-bench` starts that binary on a
+unique isolated socket and performs a trivial Calculator AX read, which future
+builders run before asking for another Accessibility grant.

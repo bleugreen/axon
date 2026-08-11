@@ -1,0 +1,22 @@
+#!/bin/bash
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+BUNDLE="${AXON_MAC_BENCH_BUNDLE:-$HOME/AxonBench/AxonMacDev.app}"
+EXECUTABLE="$BUNDLE/Contents/MacOS/axon-mac"
+cd "$ROOT/rust"
+cargo build -p axon-mac
+mkdir -p "$BUNDLE/Contents/MacOS"
+cat > "$BUNDLE/Contents/Info.plist" <<'PLIST'
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+<key>CFBundleIdentifier</key><string>dev.axon.mac-bench</string>
+<key>CFBundleExecutable</key><string>axon-mac</string>
+<key>CFBundleName</key><string>AxonMacDev</string>
+</dict></plist>
+PLIST
+install -m 755 target/debug/axon-mac "$EXECUTABLE"
+codesign --force --deep --sign - "$BUNDLE"
+echo "$BUNDLE"
+codesign -dr - "$BUNDLE" 2>&1
