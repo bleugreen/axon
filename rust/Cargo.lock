@@ -207,7 +207,7 @@ checksum = "f2032f911046de80f0a198e0901378627c33f59ea0ac00e363d481118bd70a53"
 
 [[package]]
 name = "axon-core"
-version = "0.2.3"
+version = "0.3.0"
 dependencies = [
  "pretty_assertions",
  "serde",
@@ -219,7 +219,7 @@ dependencies = [
 
 [[package]]
 name = "axon-linux"
-version = "0.2.3"
+version = "0.3.0"
 dependencies = [
  "atspi",
  "axon-core",
@@ -232,7 +232,7 @@ dependencies = [
 
 [[package]]
 name = "axon-mac"
-version = "0.2.3"
+version = "0.3.0"
 dependencies = [
  "axon-core",
  "base64",
@@ -261,7 +261,7 @@ dependencies = [
 
 [[package]]
 name = "axon-win"
-version = "0.2.3"
+version = "0.3.0"
 dependencies = [
  "axon-core",
  "base64",
