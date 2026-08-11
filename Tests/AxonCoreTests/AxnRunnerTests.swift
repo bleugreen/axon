@@ -2,6 +2,50 @@ import Foundation
 import Testing
 @testable import AxonCore
 
+@Test func v1ReplayIsRejectedBeforeDryRunAndIncludesObsoleteTarget() {
+    var dispatched = false
+    let runner = AxnRunner { request in
+        dispatched = true
+        return JSONRPCResponse(id: request.id, result: [:])
+    }
+
+    #expect(throws: AxnRunError.self) {
+        try runner.run(params: [
+            "version": .int(1),
+            "dryRun": .bool(true),
+            "actions": .array([.object([
+                "tool": .string("click"),
+                "target": .string("s42:7")
+            ])])
+        ])
+    }
+    do {
+        _ = try runner.run(params: [
+            "version": .int(1),
+            "actions": .array([.object(["tool": .string("click"), "target": .string("s42:7")])])
+        ])
+        Issue.record("v1 replay unexpectedly succeeded")
+    } catch {
+        #expect(String(describing: error).contains("actions[0] obsolete target \"s42:7\""))
+    }
+    #expect(dispatched == false)
+}
+
+@Test func v2ReplayRequiresSemanticTargetWithAttachedLocator() {
+    let runner = AxnRunner { request in JSONRPCResponse(id: request.id, result: [:]) }
+
+    #expect(throws: AxnRunError.self) {
+        try runner.run(params: [
+            "version": .int(2),
+            "dryRun": .bool(true),
+            "actions": .array([.object([
+                "tool": .string("click"),
+                "target": .object(["app": .string("Example"), "name": .string("save")])
+            ])])
+        ])
+    }
+}
+
 @Test func runExecutesToolShapedActionsInOrder() {
     var requests: [JSONRPCRequest] = []
     let executor = AxnRunner { request in

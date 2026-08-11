@@ -2,6 +2,31 @@ import Foundation
 import Testing
 @testable import AxonCore
 
+@Test func axnV2RoundTripPreservesUnknownTargetMetadata() throws {
+    let source = """
+    version: 2
+    owner: local-test
+    actions:
+      - id: a001
+        tool: click
+        target:
+          app: Example
+          name: toolbar/save
+          locator:
+            role: AXButton
+            title: Save
+          vendorHint:
+            generation: 7
+        extensionField: retained
+    """
+
+    let reparsed = try Axn(source: Axn(source: source).yamlString(includeEditorMetadata: false))
+    #expect(reparsed.version == 2)
+    #expect(reparsed.unknownTopLevelFields["owner"] == .string("local-test"))
+    #expect(reparsed.blocks[0].jsonValue["target"]?["vendorHint"]?["generation"] == .int(7))
+    #expect(reparsed.blocks[0].jsonValue["extensionField"] == .string("retained"))
+}
+
 @Test func axnFileParsesEditorMetadataAndBlocks() throws {
     let source = """
     # axon-editor: {"breakpoints":["a001"],"notes":{"a001":"auth fails here"}}
