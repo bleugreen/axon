@@ -106,7 +106,6 @@ impl SemanticNameDeriver {
             })
             .collect()
     }
-
 }
 
 fn meaningful(value: Option<&str>) -> Option<String> {
@@ -468,6 +467,20 @@ impl SemanticNameRegistry {
                     })
                     .collect(),
             };
+        }
+        if latest[0].snapshot_id == live.id {
+            let validation = LocatorResolver::resolve(&latest[0].locator, live);
+            if validation.status == ResolutionStatus::Unique
+                && validation
+                    .best
+                    .as_ref()
+                    .is_some_and(|best| best.handle == latest[0].handle)
+            {
+                return SemanticLookup::Unique {
+                    handle: latest[0].handle.clone(),
+                    resolution: validation,
+                };
+            }
         }
         let result = LocatorResolver::resolve(&latest[0].locator, live);
         if result.status == ResolutionStatus::Unique {
