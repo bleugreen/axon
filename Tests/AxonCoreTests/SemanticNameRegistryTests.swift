@@ -55,3 +55,15 @@ private func registrySnapshot(id: String, pid: Int32, buttonTitle: String, dupli
         screenshot: nil
     )
 }
+
+@Test func normalSemanticObservationOmitsHandlesWhileDebugRetainsThem() throws {
+    let snapshot = registrySnapshot(id: "s1", pid: 10, buttonTitle: "Submit")
+    let study = SemanticNameDeriver.derive(from: snapshot.jsonValue)
+    let normal = snapshot.jsonValue.renderingSemanticNames(study, includeDebugHandles: false)
+    let debug = snapshot.jsonValue.renderingSemanticNames(study, includeDebugHandles: true)
+    let normalText = String(data: try JSONEncoder().encode(normal), encoding: .utf8)!
+    let debugText = String(data: try JSONEncoder().encode(debug), encoding: .utf8)!
+    #expect(normalText.contains("\"name\""))
+    #expect(!normalText.contains("\"handle\""))
+    #expect(debugText.contains("\"handle\""))
+}
