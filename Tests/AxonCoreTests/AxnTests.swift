@@ -30,7 +30,7 @@ import Testing
 @Test func axnFileParsesEditorMetadataAndBlocks() throws {
     let source = """
     # axon-editor: {"breakpoints":["a001"],"notes":{"a001":"auth fails here"}}
-    version: 1
+    version: 2
     args:
       - name: recipient
         type: email
@@ -40,7 +40,7 @@ import Testing
         note: Sign in first
       - id: a001
         tool: type
-        target: s1:2
+        target: { app: Example, name: fixture/s1-2, locator: { role: AXButton, title: Fixture } }
         value: "{{recipient}}"
         custom:
           nested: true
@@ -72,11 +72,11 @@ import Testing
 
 @Test func axnFileAssignsStableIDsToMissingBlocks() throws {
     var axn = try Axn(source: """
-    version: 1
+    version: 2
     actions:
       - note: Explain the setup
       - tool: click
-        target: s1:2
+        target: { app: Example, name: fixture/s1-2, locator: { role: AXButton, title: Fixture } }
       - id: existing
         tool: keyboard
         app: Safari
@@ -91,14 +91,14 @@ import Testing
 @Test func axnFileRoundTripsMetadataNotesAndUnknownFields() throws {
     var axn = try Axn(source: """
     # axon-editor: { breakpoints: [a001], notes: { a001: "auth fails here" }, panel: expanded }
-    version: 1
+    version: 2
     owner: local-test
     actions:
       - id: n001
         note: Prepare account state
       - id: a001
         tool: type
-        target: s1:2
+        target: { app: Example, name: fixture/s1-2, locator: { role: AXButton, title: Fixture } }
         value: Hello
         extra:
           survives: true
@@ -118,12 +118,13 @@ import Testing
 
 @Test func axnFileRoundTripsAdditiveLocatorScoringFields() throws {
     let axn = try Axn(source: """
-    version: 1
+    version: 2
     actions:
       - id: a001
         tool: click
         target:
           app: Example
+          name: fixture/deploy
           locator:
             role: AXButton
             title: Deploy
@@ -159,19 +160,19 @@ import Testing
     owner: local-test
     actions:
       - value: Hello
-        target: s1:2
+        target: { app: Example, name: fixture/s1-2, locator: { role: AXButton, title: Fixture } }
         tool: type
         id: a001
     args:
       - default: Mitch
         type: string
         name: recipient
-    version: 1
+    version: 2
     """)
 
     let rendered = try axn.yamlString(includeEditorMetadata: false)
 
-    guard let version = rendered.range(of: "version: 1")?.lowerBound,
+    guard let version = rendered.range(of: "version: 2")?.lowerBound,
           let args = rendered.range(of: "args:")?.lowerBound,
           let actions = rendered.range(of: "actions:")?.lowerBound,
           let owner = rendered.range(of: "owner: local-test")?.lowerBound,
@@ -200,7 +201,7 @@ import Testing
 
 @Test func axnArgumentResolverUsesModelDeclarations() throws {
     let axn = try Axn(source: """
-    version: 1
+    version: 2
     args:
       - name: recipient
         type: email
@@ -231,7 +232,7 @@ import Testing
 
 @Test func axnArgumentResolverRejectsInvalidModelDeclarations() throws {
     let axn = try Axn(source: """
-    version: 1
+    version: 2
     args:
       - name: api_token
         type: secret
@@ -249,21 +250,21 @@ import Testing
 
 @Test func axnFileInsertsRecordedBlocksBeforeTargetAndRemapsDuplicateIDs() throws {
     var axn = try Axn(source: """
-    version: 1
+    version: 2
     actions:
       - id: a001
         tool: click
-        target: existing
+        target: { app: Example, name: fixture/existing, locator: { role: AXButton, title: Fixture } }
       - id: a002
         tool: click
-        target: after
+        target: { app: Example, name: fixture/after, locator: { role: AXButton, title: Fixture } }
     """)
     let recording = try Axn(source: """
-    version: 1
+    version: 2
     actions:
       - id: a001
         tool: type
-        target: inserted
+        target: { app: Example, name: fixture/inserted, locator: { role: AXButton, title: Fixture } }
         value: Ada
         expects:
           - id: a001.value.0

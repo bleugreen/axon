@@ -62,12 +62,12 @@ import Testing
         "actions": .array([
             .object([
                 "tool": .string("type"),
-                "target": .string("s1:2"),
+                "target": replayFixtureTarget("s1:2"),
                 "value": .string("Mitch")
             ]),
             .object([
                 "tool": .string("click"),
-                "target": .string("s1:3")
+                "target": replayFixtureTarget("s1:3")
             ])
         ])
     ])
@@ -302,7 +302,7 @@ import Testing
             .object([
                 "id": .string("a002"),
                 "tool": .string("click"),
-                "target": .string("never")
+                "target": replayFixtureTarget("never")
             ])
         ])
     ])
@@ -449,7 +449,7 @@ import Testing
             .object([
                 "id": .string("a001"),
                 "tool": .string("click"),
-                "target": .string("s1:2"),
+                "target": replayFixtureTarget("s1:2"),
                 "expects": .array([fact])
             ])
         ])
@@ -538,7 +538,7 @@ import Testing
             .object([
                 "id": .string("a001"),
                 "tool": .string("click"),
-                "target": .string("s1:2"),
+                "target": replayFixtureTarget("s1:2"),
                 "expects": .array([
                     .object([
                         "id": .string("a001.changed.0"),
@@ -656,7 +656,7 @@ import Testing
             .object([
                 "id": .string("a001"),
                 "tool": .string("type"),
-                "target": .string("s1:2"),
+                "target": replayFixtureTarget("s1:2"),
                 "value": .string("Mitch"),
                 "expects": .array([fact])
             ]),
@@ -708,7 +708,7 @@ import Testing
             .object([
                 "id": .string("a001"),
                 "tool": .string("type"),
-                "target": .string("s1:2"),
+                "target": replayFixtureTarget("s1:2"),
                 "value": .string("wikipedia.com"),
                 "expects": .array([fact])
             ]),
@@ -759,7 +759,7 @@ import Testing
             .object([
                 "id": .string("a001"),
                 "tool": .string("type"),
-                "target": .string("s1:2"),
+                "target": replayFixtureTarget("s1:2"),
                 "value": .string("Mitch"),
                 "expects": .array([fact])
             ]),
@@ -788,14 +788,25 @@ import Testing
 
     let batch = try! executor.run(params: [
         "actions": .array([
-            .object(["tool": .string("click"), "target": .string("missing")]),
-            .object(["tool": .string("click"), "target": .string("never")])
+            .object(["tool": .string("click"), "target": replayFixtureTarget("missing")]),
+            .object(["tool": .string("click"), "target": replayFixtureTarget("never")])
         ])
     ])
 
     #expect(batch["success"] == .bool(false))
     #expect(batch["trace"]?.arrayValue?.count == 1)
     #expect(requests.count == 1)
+}
+
+private func replayFixtureTarget(_ legacyID: String) -> JSONValue {
+    .object([
+        "app": .string("Example"),
+        "name": .string("fixture/\(legacyID.replacingOccurrences(of: ":", with: "-"))"),
+        "locator": .object([
+            "role": .string("AXButton"),
+            "title": .string("Fixture")
+        ])
+    ])
 }
 
 private func reorderListFactSnapshot(value: String) -> AppSnapshot {
@@ -920,8 +931,8 @@ private func articleSnapshot(children: [AXNode]) -> AppSnapshot {
     let batch = try! executor.run(params: [
         "continueOnError": .bool(true),
         "actions": .array([
-            .object(["tool": .string("click"), "target": .string("missing")]),
-            .object(["tool": .string("click"), "target": .string("s1:3")])
+            .object(["tool": .string("click"), "target": replayFixtureTarget("missing")]),
+            .object(["tool": .string("click"), "target": replayFixtureTarget("s1:3")])
         ])
     ])
 
@@ -941,7 +952,7 @@ private func articleSnapshot(children: [AXNode]) -> AppSnapshot {
     }
 
     let source = """
-    version: 1
+    version: 2
     dryRun: false
     continueOnError: true
     owner: local-test
@@ -962,7 +973,7 @@ private func articleSnapshot(children: [AXNode]) -> AppSnapshot {
             .object([
                 "id": .string("a002"),
                 "tool": .string("click"),
-                "target": .string("s1:2")
+                "target": replayFixtureTarget("s1:2")
             ])
         ])
     ])
@@ -983,7 +994,7 @@ private func articleSnapshot(children: [AXNode]) -> AppSnapshot {
     }
 
     let source = """
-    version: 1
+    version: 2
     actions:
       - tool: keyboard
         app: Firefox
@@ -1000,7 +1011,7 @@ private func articleSnapshot(children: [AXNode]) -> AppSnapshot {
         "actions": .array([
             .object([
                 "tool": .string("click"),
-                "target": .string("s1:2")
+                "target": replayFixtureTarget("s1:2")
             ])
         ])
     ])
@@ -1019,7 +1030,7 @@ private func articleSnapshot(children: [AXNode]) -> AppSnapshot {
             id: .string("run.1.click"),
             method: "click",
             params: .object([
-                "target": .string("s1:2")
+                "target": replayFixtureTarget("s1:2")
             ])
         )
     ])
@@ -1033,13 +1044,13 @@ private func articleSnapshot(children: [AXNode]) -> AppSnapshot {
     }
 
     let source = """
-    version: 1
+    version: 2
     args:
       - name: recipient
         type: email
     actions:
       - tool: type
-        target: s1:2
+        target: { app: Example, name: fixture/s1-2, locator: { role: AXButton, title: Fixture } }
         value: "Hello {{recipient}}"
     """
     let path = try temporaryAxnFile(source)
@@ -1063,13 +1074,13 @@ private func articleSnapshot(children: [AXNode]) -> AppSnapshot {
     }
 
     let source = """
-    version: 1
+    version: 2
     args:
       - name: recipient
         type: email
     actions:
       - tool: type
-        target: s1:2
+        target: { app: Example, name: fixture/s1-2, locator: { role: AXButton, title: Fixture } }
         value: "{{recipient}}"
     """
     let path = try temporaryAxnFile(source)
@@ -1092,10 +1103,10 @@ private func articleSnapshot(children: [AXNode]) -> AppSnapshot {
     }
 
     let source = """
-    version: 1
+    version: 2
     actions:
       - tool: type
-        target: s1:2
+        target: { app: Example, name: fixture/s1-2, locator: { role: AXButton, title: Fixture } }
         value: "{{recipient}}"
     """
     let path = try temporaryAxnFile(source)
@@ -1118,10 +1129,10 @@ private func articleSnapshot(children: [AXNode]) -> AppSnapshot {
     }
 
     let source = """
-    version: 1
+    version: 2
     actions:
       - tool: type
-        target: s1:2
+        target: { app: Example, name: fixture/s1-2, locator: { role: AXButton, title: Fixture } }
         value: "{{env://HOME}}"
     """
     let path = try temporaryAxnFile(source)
@@ -1152,14 +1163,14 @@ private func articleSnapshot(children: [AXNode]) -> AppSnapshot {
     )
 
     let source = """
-    version: 1
+    version: 2
     args:
       - name: upload_name
         type: string
         source: env://UPLOAD_NAME
     actions:
       - tool: type
-        target: s1:2
+        target: { app: Example, name: fixture/s1-2, locator: { role: AXButton, title: Fixture } }
         value: "{{upload_name}}"
     """
     let path = try temporaryAxnFile(source)
@@ -1184,14 +1195,14 @@ private func articleSnapshot(children: [AXNode]) -> AppSnapshot {
     )
 
     let source = """
-    version: 1
+    version: 2
     args:
       - name: token
         type: string
         source: env://TOKEN
     actions:
       - tool: type
-        target: s1:2
+        target: { app: Example, name: fixture/s1-2, locator: { role: AXButton, title: Fixture } }
         value: "{{token}}"
     """
     let path = try temporaryAxnFile(source)
@@ -1217,13 +1228,13 @@ private func articleSnapshot(children: [AXNode]) -> AppSnapshot {
     }
 
     let source = """
-    version: 1
+    version: 2
     args:
       - name: password
         type: secret
     actions:
       - tool: type
-        target: s1:2
+        target: { app: Example, name: fixture/s1-2, locator: { role: AXButton, title: Fixture } }
         value: "pw={{password}}"
     """
     let path = try temporaryAxnFile(source)
@@ -1251,13 +1262,13 @@ private func articleSnapshot(children: [AXNode]) -> AppSnapshot {
     }
 
     let source = """
-    version: 1
+    version: 2
     args:
       - name: password
         type: secret
     actions:
       - tool: type
-        target: s1:2
+        target: { app: Example, name: fixture/s1-2, locator: { role: AXButton, title: Fixture } }
         value: "{{password}}"
     """
     let path = try temporaryAxnFile(source)
@@ -1279,13 +1290,13 @@ private func articleSnapshot(children: [AXNode]) -> AppSnapshot {
     }
 
     let source = """
-    version: 1
+    version: 2
     args:
       - name: password
         type: secret
     actions:
       - tool: type
-        target: s1:2
+        target: { app: Example, name: fixture/s1-2, locator: { role: AXButton, title: Fixture } }
         value: "{{password}}"
     """
     let path = try temporaryAxnFile(source)
@@ -1308,13 +1319,13 @@ private func articleSnapshot(children: [AXNode]) -> AppSnapshot {
     }
 
     let source = """
-    version: 1
+    version: 2
     args:
       - name: recipient
         type: string
     actions:
       - tool: type
-        target: s1:2
+        target: { app: Example, name: fixture/s1-2, locator: { role: AXButton, title: Fixture } }
         value:
           - "{{recipient}}"
     """
@@ -1347,7 +1358,7 @@ private func articleSnapshot(children: [AXNode]) -> AppSnapshot {
         method: "run",
         params: .object([
             "actions": .array([
-                .object(["tool": .string("click"), "target": .string("s1:2")])
+                .object(["tool": .string("click"), "target": replayFixtureTarget("s1:2")])
             ])
         ])
     ))
@@ -1372,7 +1383,7 @@ private func articleSnapshot(children: [AXNode]) -> AppSnapshot {
         actions: PrimitiveActionHandlers(
             type: { target, value, _ in
                 types.append((target, value))
-                return PrimitiveActionResult(action: "type", target: target, strategy: "test", success: true)
+                return PrimitiveActionResult(action: "type", target: { app: Example, name: fixture/target, locator: { role: AXButton, title: Fixture } }, strategy: "test", success: true)
             }
         )
     )
@@ -1385,7 +1396,7 @@ private func articleSnapshot(children: [AXNode]) -> AppSnapshot {
                 .object([
                     "id": .string("a001"),
                     "tool": .string("type"),
-                    "target": .string("s1:2"),
+                    "target": replayFixtureTarget("s1:2"),
                     "value": .string("Mitch"),
                     "expects": .array([
                         .object([
@@ -1419,11 +1430,11 @@ private func articleSnapshot(children: [AXNode]) -> AppSnapshot {
     let router = CommandRouter(actions: PrimitiveActionHandlers(
         click: { target, _ in
             requests.append("click:\(target)")
-            return PrimitiveActionResult(action: "click", target: target, strategy: "test", success: true)
+            return PrimitiveActionResult(action: "click", target: { app: Example, name: fixture/target, locator: { role: AXButton, title: Fixture } }, strategy: "test", success: true)
         },
         type: { target, value, _ in
             requests.append("type:\(target):\(value)")
-            return PrimitiveActionResult(action: "type", target: target, strategy: "test", success: true)
+            return PrimitiveActionResult(action: "type", target: { app: Example, name: fixture/target, locator: { role: AXButton, title: Fixture } }, strategy: "test", success: true)
         }
     ))
 
@@ -1436,12 +1447,12 @@ private func articleSnapshot(children: [AXNode]) -> AppSnapshot {
                 .object([
                     "id": .string("a001"),
                     "tool": .string("click"),
-                    "target": .string("s1:2")
+                    "target": replayFixtureTarget("s1:2")
                 ]),
                 .object([
                     "id": .string("a002"),
                     "tool": .string("type"),
-                    "target": .string("s1:3"),
+                    "target": replayFixtureTarget("s1:3"),
                     "value": .string("Mitch")
                 ])
             ])
@@ -1476,7 +1487,7 @@ private func articleSnapshot(children: [AXNode]) -> AppSnapshot {
     let router = CommandRouter(actions: PrimitiveActionHandlers(
         click: { target, _ in
             requests.append("click:\(target)")
-            return PrimitiveActionResult(action: "click", target: target, strategy: "test", success: true)
+            return PrimitiveActionResult(action: "click", target: { app: Example, name: fixture/target, locator: { role: AXButton, title: Fixture } }, strategy: "test", success: true)
         }
     ))
 
@@ -1489,7 +1500,7 @@ private func articleSnapshot(children: [AXNode]) -> AppSnapshot {
                 .object([
                     "id": .string("a001"),
                     "tool": .string("click"),
-                    "target": .string("s1:1")
+                    "target": replayFixtureTarget("s1:1")
                 ])
             ])
         ])
@@ -1510,11 +1521,11 @@ private func articleSnapshot(children: [AXNode]) -> AppSnapshot {
     let router = CommandRouter(actions: PrimitiveActionHandlers(
         click: { target, _ in
             requests.append("click:\(target)")
-            return PrimitiveActionResult(action: "click", target: target, strategy: "test", success: true)
+            return PrimitiveActionResult(action: "click", target: { app: Example, name: fixture/target, locator: { role: AXButton, title: Fixture } }, strategy: "test", success: true)
         },
         type: { target, value, _ in
             requests.append("type:\(target):\(value)")
-            return PrimitiveActionResult(action: "type", target: target, strategy: "test", success: true)
+            return PrimitiveActionResult(action: "type", target: { app: Example, name: fixture/target, locator: { role: AXButton, title: Fixture } }, strategy: "test", success: true)
         }
     ))
 
@@ -1526,12 +1537,12 @@ private func articleSnapshot(children: [AXNode]) -> AppSnapshot {
                 .object([
                     "id": .string("a001"),
                     "tool": .string("click"),
-                    "target": .string("s1:1")
+                    "target": replayFixtureTarget("s1:1")
                 ]),
                 .object([
                     "id": .string("a002"),
                     "tool": .string("type"),
-                    "target": .string("s1:2"),
+                    "target": replayFixtureTarget("s1:2"),
                     "value": .string("Ada")
                 ])
             ])
@@ -1565,7 +1576,7 @@ private func articleSnapshot(children: [AXNode]) -> AppSnapshot {
     let router = CommandRouter(actions: PrimitiveActionHandlers(
         click: { target, _ in
             requests.append("click:\(target)")
-            return PrimitiveActionResult(action: "click", target: target, strategy: "test", success: true)
+            return PrimitiveActionResult(action: "click", target: { app: Example, name: fixture/target, locator: { role: AXButton, title: Fixture } }, strategy: "test", success: true)
         }
     ))
 
@@ -1577,12 +1588,12 @@ private func articleSnapshot(children: [AXNode]) -> AppSnapshot {
                 .object([
                     "id": .string("a001"),
                     "tool": .string("click"),
-                    "target": .string("s1:1")
+                    "target": replayFixtureTarget("s1:1")
                 ]),
                 .object([
                     "id": .string("a002"),
                     "tool": .string("click"),
-                    "target": .string("s1:2")
+                    "target": replayFixtureTarget("s1:2")
                 ])
             ])
         ])
@@ -1635,7 +1646,7 @@ private func articleSnapshot(children: [AXNode]) -> AppSnapshot {
                     "id": .string("a001"),
                     "tool": .string("click"),
                     "app": .string("Example"),
-                    "target": .string("s1:1")
+                    "target": replayFixtureTarget("s1:1")
                 ])
             ])
         ])
@@ -1660,7 +1671,7 @@ private func articleSnapshot(children: [AXNode]) -> AppSnapshot {
         },
         actions: PrimitiveActionHandlers(
             click: { target, _ in
-                PrimitiveActionResult(action: "click", target: target, strategy: "test", success: true)
+                PrimitiveActionResult(action: "click", target: { app: Example, name: fixture/target, locator: { role: AXButton, title: Fixture } }, strategy: "test", success: true)
             }
         )
     )
@@ -1674,13 +1685,13 @@ private func articleSnapshot(children: [AXNode]) -> AppSnapshot {
                     "id": .string("a001"),
                     "tool": .string("click"),
                     "app": .string("Example"),
-                    "target": .string("s1:1")
+                    "target": replayFixtureTarget("s1:1")
                 ]),
                 .object([
                     "id": .string("a002"),
                     "tool": .string("click"),
                     "app": .string("Example"),
-                    "target": .string("s1:1")
+                    "target": replayFixtureTarget("s1:1")
                 ])
             ])
         ])
@@ -1709,11 +1720,11 @@ private func articleSnapshot(children: [AXNode]) -> AppSnapshot {
     let router = CommandRouter(actions: PrimitiveActionHandlers(
         click: { target, _ in
             requests.append("click:\(target)")
-            return PrimitiveActionResult(action: "click", target: target, strategy: "test", success: true)
+            return PrimitiveActionResult(action: "click", target: { app: Example, name: fixture/target, locator: { role: AXButton, title: Fixture } }, strategy: "test", success: true)
         },
         type: { target, value, _ in
             requests.append("type:\(target):\(value)")
-            return PrimitiveActionResult(action: "type", target: target, strategy: "test", success: true)
+            return PrimitiveActionResult(action: "type", target: { app: Example, name: fixture/target, locator: { role: AXButton, title: Fixture } }, strategy: "test", success: true)
         }
     ))
 
@@ -1726,18 +1737,18 @@ private func articleSnapshot(children: [AXNode]) -> AppSnapshot {
                 .object([
                     "id": .string("a001"),
                     "tool": .string("click"),
-                    "target": .string("s1:1")
+                    "target": replayFixtureTarget("s1:1")
                 ]),
                 .object([
                     "id": .string("a002"),
                     "tool": .string("type"),
-                    "target": .string("s1:2"),
+                    "target": replayFixtureTarget("s1:2"),
                     "value": .string("Ada")
                 ]),
                 .object([
                     "id": .string("a003"),
                     "tool": .string("click"),
-                    "target": .string("s1:3")
+                    "target": replayFixtureTarget("s1:3")
                 ])
             ])
         ])
@@ -1768,7 +1779,7 @@ private func articleSnapshot(children: [AXNode]) -> AppSnapshot {
         },
         actions: PrimitiveActionHandlers(
             click: { target, _ in
-                PrimitiveActionResult(action: "click", target: target, strategy: "test", success: true)
+                PrimitiveActionResult(action: "click", target: { app: Example, name: fixture/target, locator: { role: AXButton, title: Fixture } }, strategy: "test", success: true)
             }
         )
     )
@@ -1783,13 +1794,13 @@ private func articleSnapshot(children: [AXNode]) -> AppSnapshot {
                     "id": .string("a001"),
                     "tool": .string("click"),
                     "app": .string("Example"),
-                    "target": .string("s1:1")
+                    "target": replayFixtureTarget("s1:1")
                 ]),
                 .object([
                     "id": .string("a002"),
                     "tool": .string("click"),
                     "app": .string("Example"),
-                    "target": .string("s1:1")
+                    "target": replayFixtureTarget("s1:1")
                 ])
             ])
         ])
@@ -1819,11 +1830,11 @@ private func articleSnapshot(children: [AXNode]) -> AppSnapshot {
     let router = CommandRouter(actions: PrimitiveActionHandlers(
         click: { target, _ in
             requests.append("click:\(target)")
-            return PrimitiveActionResult(action: "click", target: target, strategy: "test", success: true)
+            return PrimitiveActionResult(action: "click", target: { app: Example, name: fixture/target, locator: { role: AXButton, title: Fixture } }, strategy: "test", success: true)
         },
         type: { target, value, _ in
             requests.append("type:\(target):\(value)")
-            return PrimitiveActionResult(action: "type", target: target, strategy: "test", success: true)
+            return PrimitiveActionResult(action: "type", target: { app: Example, name: fixture/target, locator: { role: AXButton, title: Fixture } }, strategy: "test", success: true)
         }
     ))
 
@@ -1835,12 +1846,12 @@ private func articleSnapshot(children: [AXNode]) -> AppSnapshot {
                 .object([
                     "id": .string("a001"),
                     "tool": .string("click"),
-                    "target": .string("s1:1")
+                    "target": replayFixtureTarget("s1:1")
                 ]),
                 .object([
                     "id": .string("a002"),
                     "tool": .string("type"),
-                    "target": .string("s1:2"),
+                    "target": replayFixtureTarget("s1:2"),
                     "value": .string("Ada")
                 ])
             ])
@@ -1878,7 +1889,7 @@ private func articleSnapshot(children: [AXNode]) -> AppSnapshot {
                 attempts += 1
                 return PrimitiveActionResult(
                     action: "click",
-                    target: target,
+                    target: { app: Example, name: fixture/target, locator: { role: AXButton, title: Fixture } },
                     strategy: "test",
                     success: attempts > 1,
                     message: attempts > 1 ? nil : "blocked"
@@ -1896,7 +1907,7 @@ private func articleSnapshot(children: [AXNode]) -> AppSnapshot {
                     "id": .string("a001"),
                     "tool": .string("click"),
                     "app": .string("Example"),
-                    "target": .string("s1:1")
+                    "target": replayFixtureTarget("s1:1")
                 ])
             ])
         ])
@@ -1938,13 +1949,13 @@ private func articleSnapshot(children: [AXNode]) -> AppSnapshot {
     }
 
     let source = """
-    version: 1
+    version: 2
     actions:
       - id: n001
         note: Prepare the app state
       - id: a001
         tool: type
-        target: s1:2
+        target: { app: Example, name: fixture/s1-2, locator: { role: AXButton, title: Fixture } }
         value: Hello
     """
     let path = try temporaryAxnFile(source)
@@ -2012,13 +2023,13 @@ private func temporaryAxnFile(_ source: String) throws -> String {
     }
 
     let source = """
-    version: 1
+    version: 2
     args:
       - name: report_date
         type: date
     actions:
       - tool: type
-        target: s1:2
+        target: { app: Example, name: fixture/s1-2, locator: { role: AXButton, title: Fixture } }
         value: "{{report_date}}"
     """
     let path = try temporaryAxnFile(source)
@@ -2053,16 +2064,16 @@ private func temporaryAxnFile(_ source: String) throws -> String {
     }
 
     let source = """
-    version: 1
+    version: 2
     args:
       - name: password
         type: secret
     actions:
       - tool: type
-        target: s1:2
+        target: { app: Example, name: fixture/s1-2, locator: { role: AXButton, title: Fixture } }
         value: "{{password}}"
       - tool: click
-        target: s1:3
+        target: { app: Example, name: fixture/s1-3, locator: { role: AXButton, title: Fixture } }
     """
     let path = try temporaryAxnFile(source)
     defer { try? FileManager.default.removeItem(atPath: path) }
@@ -2095,13 +2106,13 @@ private func temporaryAxnFile(_ source: String) throws -> String {
     }
 
     let source = """
-    version: 1
+    version: 2
     args:
       - name: password
         type: secret
     actions:
       - tool: click
-        target: s1:1
+        target: { app: Example, name: fixture/s1-1, locator: { role: AXButton, title: Fixture } }
     """
     let path = try temporaryAxnFile(source)
     defer { try? FileManager.default.removeItem(atPath: path) }
@@ -2111,7 +2122,7 @@ private func temporaryAxnFile(_ source: String) throws -> String {
         "actions": .array([
             .object([
                 "tool": .string("type"),
-                "target": .string("s1:2"),
+                "target": replayFixtureTarget("s1:2"),
                 "value": .string("pw={{password}}")
             ])
         ]),
@@ -2154,7 +2165,7 @@ private func temporaryAxnFile(_ source: String) throws -> String {
                     "id": .string("a001"),
                     "tool": .string("click"),
                     "app": .string("Example"),
-                    "target": .string("s1:1")
+                    "target": replayFixtureTarget("s1:1")
                 ])
             ])
         ])
@@ -2186,7 +2197,7 @@ private func axnActiveCredentialFilter(values: [String]) throws -> ActiveCredent
     let sourceURL = directory.appendingPathComponent("source.axn")
     let healedURL = directory.appendingPathComponent("healed.axn")
     let source = """
-    version: 1
+    version: 2
     actions:
       - id: a001
         tool: click
@@ -2277,7 +2288,7 @@ private func axnActiveCredentialFilter(values: [String]) throws -> ActiveCredent
         .appendingPathComponent(UUID().uuidString)
         .appendingPathExtension("axn")
     let source = """
-    version: 1
+    version: 2
     actions:
       - tool: click
         target:
