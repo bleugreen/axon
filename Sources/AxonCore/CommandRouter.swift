@@ -140,12 +140,18 @@ private struct SemanticResolutionFailure: Error {
             "status": .string(status),
             "confidence": .string("none"),
             "query": .object(["app": .string(query.app), "name": .string(query.name)]),
+            "path": .string("semanticRegistry"),
+            "context": .string("recordedObservation"),
             "candidates": .array(candidates.map { record in
-                .object([
+                let locator = redactSemanticLocator(record.locator.jsonValue, using: activeSecretRedactor)
+                return .object([
                     "role": .string(record.role),
                     "label": .string(activeSecretRedactor.redaction(for: record.label)?.value ?? record.label),
                     "name": .string(record.query.name),
-                    "locator": redactSemanticLocator(record.locator.jsonValue, using: activeSecretRedactor)
+                    "score": .int(0),
+                    "reasons": .array([.string("semantic name is shared by indistinguishable observed elements")]),
+                    "evidence": .array([]),
+                    "recordedLocator": locator
                 ])
             })
         ])
