@@ -995,7 +995,7 @@ fn flattened(snapshot: &Snapshot) -> impl Iterator<Item = &axon_core::Node> {
         }
     }
     let mut out = Vec::new();
-    for window in &snapshot.app.macos {
+    for window in &snapshot.app.windows {
         add(&window.root, &mut out);
     }
     out.into_iter()
@@ -1183,7 +1183,7 @@ mod tests {
             Ok(vec![Application {
                 name: self.snapshot.app.name.clone(),
                 identifier: self.snapshot.app.identifier.clone(),
-                macos: vec![],
+                windows: vec![],
             }])
         }
         /// Resolved through this backend's own enumeration rather than echoed back, so a request
@@ -1310,7 +1310,7 @@ mod tests {
             snapshot: Snapshot::new(Application {
                 name: "App".into(),
                 identifier: None,
-                macos: vec![Window { title: None, root }],
+                windows: vec![Window { title: None, root }],
             }),
             pointer_target_matches: true,
             verified_handles: Rc::new(RefCell::new(vec![])),

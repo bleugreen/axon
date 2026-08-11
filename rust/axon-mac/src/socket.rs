@@ -4,7 +4,6 @@ use axon_core::{
     CapabilityInfo, CapabilityState, DaemonReport, HealthPlatform, JsonRpcId, JsonRpcRequest,
     JsonRpcResponse, PermissionState, PlatformBackend, SessionHealth, health::reason,
 };
-use axon_core::rpc::JsonRpcError;
 use crate::{MacBackend, Router, parse_request};
 use serde_json::{Value, json};
 use std::{

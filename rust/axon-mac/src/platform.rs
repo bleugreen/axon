@@ -280,7 +280,7 @@ impl VisualObservationProvider for MacBackend {
     }
 }
 impl axon_core::TextRecognitionProvider for MacBackend {
-    fn recognize_text(&mut self, _: &Screenshot) -> Result<Vec<axon_core::RecognizedText>, BackendError> {
+    fn recognize_text(&mut self, _: &AppQuery) -> Result<Vec<axon_core::RecognizedText>, BackendError> {
         Err(cap(Capability::Screenshot, "screen text excluded from v1"))
     }
 }
@@ -289,7 +289,7 @@ impl PointerTargetVerifier for MacBackend {
 }
 impl BackgroundPixelPointer for MacBackend {
     fn plan_pixel_click(&mut self, _: &SnapshotHandle, _: (f64, f64)) -> Result<PixelPlan, BackendError> {
-        Ok(PixelPlan::Unsupported("pixel delivery is not implemented in axon-mac v1".into()))
+        Ok(PixelPlan::unavailable("pixel delivery is not implemented in axon-mac v1"))
     }
     fn dispatch_pixel_click(&mut self, _: &PixelTarget) -> Result<PixelDispatch, PixelDispatchError> {
         Err(PixelDispatchError::Backend(cap(Capability::PointerInput, "pixel delivery is not implemented in axon-mac v1")))
