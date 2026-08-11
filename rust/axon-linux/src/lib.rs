@@ -1,11 +1,10 @@
 //! Linux AT-SPI backend and v1 JSON-RPC tool router.
 
 use axon_core::{
-    AppQuery, AxnCodec, Candidate, Confidence, AxnRunner, Capability, DeliveryCandidate, DeliveryCapability,
+    AppQuery, AxnCodec, AxnRunner, Capability, DeliveryCandidate, DeliveryCapability,
     DeliveryOutcome, DeliveryPolicy, DeliveryRefusal, DeliveryRefusalReason, DeliveryRung,
     DeliverySelection, DispatchOutcome, ExpectedFact, ForegroundTarget, JsonRpcError, JsonRpcId,
-    JsonRpcRequest, JsonRpcResponse, KeyboardIntent, PlatformBackend, Resolution, RunEnvelope,
-    ResolutionStatus, RunOptions, Snapshot, SnapshotHandle, ToolDispatcher, dispatch_in_foreground, goal_success,
+    JsonRpcRequest, JsonRpcResponse, KeyboardIntent, PlatformBackend, Resolution, RunEnvelope, RunOptions, Snapshot, SnapshotHandle, ToolDispatcher, dispatch_in_foreground, goal_success,
     select_delivery,
 };
 use serde_json::{Map, Value, json};
@@ -1374,7 +1373,7 @@ mod tests {
     #[test]
     fn click_refuses_without_a_backend_call_and_names_the_missing_mechanism() {
         let backend = backend(vec![], None);
-        let handle = backend.snapshot.handle(0);
+        let _handle = backend.snapshot.handle(0);
         let clicks = backend.clicks.clone();
         let mut router = Router::new(backend);
         router.snapshot = Some(router.backend.snapshot.clone());
@@ -1425,7 +1424,7 @@ mod tests {
         // `delivery: "foreground"` would claim a guarantee the backend does not keep.
         let mut backend = backend(vec![], None);
         backend.pointer_capability_usable = true;
-        let handle = backend.snapshot.handle(0);
+        let _handle = backend.snapshot.handle(0);
         let clicks = backend.clicks.clone();
         let mut router = Router::new(backend);
         router.snapshot = Some(router.backend.snapshot.clone());
@@ -1459,7 +1458,7 @@ mod tests {
     #[test]
     fn a_transactional_backend_makes_the_foreground_rung_an_opt_in() {
         let backend = transactional_backend();
-        let handle = backend.snapshot.handle(0);
+        let _handle = backend.snapshot.handle(0);
         let clicks = backend.clicks.clone();
         let activations = backend.activations.clone();
         let frontmost = backend.frontmost.clone();
@@ -1517,7 +1516,7 @@ mod tests {
             .refuses_activation
             .borrow_mut()
             .push(APP_IDENTITY.into());
-        let handle = backend.snapshot.handle(0);
+        let _handle = backend.snapshot.handle(0);
         let clicks = backend.clicks.clone();
         let frontmost = backend.frontmost.clone();
         let mut router = Router::new(backend);
@@ -1546,7 +1545,7 @@ mod tests {
     fn a_failed_restoration_keeps_dispatch_evidence_and_fails_overall() {
         let backend = transactional_backend();
         backend.refuses_activation.borrow_mut().push("Prior".into());
-        let handle = backend.snapshot.handle(0);
+        let _handle = backend.snapshot.handle(0);
         let clicks = backend.clicks.clone();
         let mut router = Router::new(backend);
         router.snapshot = Some(router.backend.snapshot.clone());
@@ -1609,7 +1608,7 @@ mod tests {
         // XTest moves the real cursor, so a click that lands but leaves the pointer in the target
         // has taken something from the user it did not give back.
         let backend = transactional_backend();
-        let handle = backend.snapshot.handle(0);
+        let _handle = backend.snapshot.handle(0);
         let pointer = backend.pointer.clone();
         let frontmost = backend.frontmost.clone();
         let mut router = Router::new(backend);
@@ -1648,7 +1647,7 @@ mod tests {
         // still knows nothing about whether the target acted on the events XTest posted. `click`
         // declares no postcondition, so nothing here can say that it did.
         let backend = transactional_backend();
-        let handle = backend.snapshot.handle(0);
+        let _handle = backend.snapshot.handle(0);
         let clicks = backend.clicks.clone();
         let mut router = Router::new(backend);
         router.snapshot = Some(router.backend.snapshot.clone());
@@ -1756,7 +1755,7 @@ mod tests {
         // foreground cannot promise to give it back, so it must not take it in the first place.
         let mut backend = transactional_backend();
         backend.foreground_readable = false;
-        let handle = backend.snapshot.handle(0);
+        let _handle = backend.snapshot.handle(0);
         let clicks = backend.clicks.clone();
         let activations = backend.activations.clone();
         let mut router = Router::new(backend);
@@ -1784,7 +1783,7 @@ mod tests {
     fn a_pointer_that_cannot_be_put_back_fails_the_click_and_keeps_the_evidence() {
         let mut backend = transactional_backend();
         backend.refuses_pointer_move = true;
-        let handle = backend.snapshot.handle(0);
+        let _handle = backend.snapshot.handle(0);
         let clicks = backend.clicks.clone();
         let frontmost = backend.frontmost.clone();
         let mut router = Router::new(backend);
@@ -1995,7 +1994,7 @@ mod tests {
     #[test]
     fn an_unknown_policy_fails_before_resolution_or_dispatch() {
         let backend = backend(vec![], None);
-        let handle = backend.snapshot.handle(0);
+        let _handle = backend.snapshot.handle(0);
         let clicks = backend.clicks.clone();
         let focuses = backend.focuses.clone();
         let mut router = Router::new(backend);
@@ -2147,7 +2146,7 @@ actions:
         #[test]
         fn a_bound_click_takes_the_pixel_rung_under_the_default_policy() {
             let backend = bound_backend(true);
-            let handle = backend.snapshot.handle(0);
+            let _handle = backend.snapshot.handle(0);
             let clicks = backend.clicks.clone();
             let activations = backend.activations.clone();
             let dispatches = backend.pixel_dispatches.clone();
@@ -2180,7 +2179,7 @@ actions:
         #[test]
         fn a_delivered_result_reports_the_window_the_transform_and_the_measurement() {
             let backend = bound_backend(true);
-            let handle = backend.snapshot.handle(0);
+            let _handle = backend.snapshot.handle(0);
             let mut router = router_for(backend);
 
             let response = router
@@ -2223,7 +2222,7 @@ actions:
             // otherwise produce an accepted send, intact invariants, and a report that the
             // caller's click had worked.
             let backend = bound_backend(true);
-            let handle = backend.snapshot.handle(0);
+            let _handle = backend.snapshot.handle(0);
             let dispatches = backend.pixel_dispatches.clone();
             let mut router = router_for(backend);
 
@@ -2254,7 +2253,7 @@ actions:
             // `success` that is simply hardwired false. A postcondition that verified promotes the
             // action, and the rung's own invariants still gate it.
             let backend = bound_backend(true);
-            let handle = backend.snapshot.handle(0);
+            let _handle = backend.snapshot.handle(0);
             let mut router = router_for(backend);
 
             let response = router
@@ -2296,7 +2295,7 @@ actions:
                 input_focus_unchanged: false,
                 pointer_unchanged: true,
             });
-            let handle = backend.snapshot.handle(0);
+            let _handle = backend.snapshot.handle(0);
             let mut router = router_for(backend);
 
             let response = router
@@ -2329,7 +2328,7 @@ actions:
             *backend.pixel_result.borrow_mut() = Err(PixelDispatchError::Stale(
                 "the resolved element no longer covers the point this plan aimed at".into(),
             ));
-            let handle = backend.snapshot.handle(0);
+            let _handle = backend.snapshot.handle(0);
             let clicks = backend.clicks.clone();
             let mut router = router_for(backend);
 
@@ -2417,7 +2416,7 @@ actions:
                  the point the resolved element sits at; it is either off-screen or covered by \
                  another window there",
             ));
-            let handle = backend.snapshot.handle(0);
+            let _handle = backend.snapshot.handle(0);
             let dispatches = backend.pixel_dispatches.clone();
             let mut router = router_for(backend);
 
@@ -2456,7 +2455,7 @@ actions:
                 .expect_err("GTK 3 does not accept a background click");
             let backend = transactional_backend();
             *backend.click_plan.borrow_mut() = Ok(PixelPlan::unavailable(measured.clone()));
-            let handle = backend.snapshot.handle(0);
+            let _handle = backend.snapshot.handle(0);
             let clicks = backend.clicks.clone();
             let dispatches = backend.pixel_dispatches.clone();
             let mut router = router_for(backend);
@@ -2494,7 +2493,7 @@ actions:
                 message: "timed out".into(),
                 diagnostic: None,
             });
-            let handle = backend.snapshot.handle(0);
+            let _handle = backend.snapshot.handle(0);
             let clicks = backend.clicks.clone();
             let mut router = router_for(backend);
 
