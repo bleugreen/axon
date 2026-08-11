@@ -337,7 +337,7 @@ import Testing
         method: "tools/call",
         params: .object([
             "name": .string("look"),
-            "arguments": .object(["target": .string("com.example.App")])
+            "arguments": .object(["app": .string("com.example.App")])
         ])
     ))
 
@@ -346,17 +346,17 @@ import Testing
     #expect(response?.error == nil)
     #expect(snapshot?["format"] == .string("observation"))
     #expect(snapshot?["snapshot"] == .string("mcp-compact"))
-    #expect(snapshot?["tree"]?.stringValue?.contains("mcp-compact:2: button \"Run\" [click]") == true)
+    #expect(snapshot?["tree"]?.stringValue?.contains("main/run: button \"Run\" [click]") == true)
     #expect(snapshot?["indexedNodes"] == nil)
     #expect(snapshot?["windows"] == nil)
     #expect(text?.contains("snapshot: mcp-compact") == true)
-    #expect(text?.contains("mcp-compact:2: button \"Run\" [click]") == true)
+    #expect(text?.contains("main/run: button \"Run\" [click]") == true)
     #expect(text?.contains("snapshot:") == true)
     #expect(text?.contains("snapshot:mcp-compact") == false)
     #expect(text?.contains("Hidden Tab") == false)
 }
 
-@Test func mcpLookDepthKeepsRetainedHandlesAndShowsHiddenChildren() {
+@Test func mcpLookDebugDepthKeepsRetainedHandlesAndShowsHiddenChildren() {
     let commandRouter = CommandRouter(
         captureSnapshot: { app, screenshot in
             #expect(app == "org.mozilla.firefox")
@@ -387,8 +387,10 @@ import Testing
         params: .object([
             "name": .string("look"),
             "arguments": .object([
-                "target": .string("org.mozilla.firefox"),
-                "depth": .int(1)
+                "app": .string("org.mozilla.firefox"),
+                "depth": .int(1),
+                "format": .string("debug"),
+                "tree": .bool(true)
             ])
         ])
     ))
@@ -451,7 +453,7 @@ import Testing
         params: .object([
             "name": .string("look"),
             "arguments": .object([
-                "target": .string("com.example.App"),
+                "app": .string("com.example.App"),
                 "screenText": .bool(true)
             ])
         ])
@@ -511,7 +513,7 @@ import Testing
         params: .object([
             "name": .string("look"),
             "arguments": .object([
-                "target": .string("com.example.App"),
+                "app": .string("com.example.App"),
                 "screenText": .bool(true),
                 "frames": .bool(true)
             ])
@@ -553,7 +555,7 @@ import Testing
         params: .object([
             "name": .string("look"),
             "arguments": .object([
-                "target": .string("com.example.App")
+                "app": .string("com.example.App")
             ])
         ])
     ))
@@ -597,7 +599,7 @@ import Testing
         params: .object([
             "name": .string("look"),
             "arguments": .object([
-                "target": .string("com.example.App")
+                "app": .string("com.example.App")
             ])
         ])
     ))
@@ -653,7 +655,7 @@ import Testing
         params: .object([
             "name": .string("look"),
             "arguments": .object([
-                "target": .string("com.example.App"),
+                "app": .string("com.example.App"),
                 "screenText": .bool(true)
             ])
         ])
@@ -701,7 +703,7 @@ import Testing
         params: .object([
             "name": .string("look"),
             "arguments": .object([
-                "target": .string("com.example.App"),
+                "app": .string("com.example.App"),
                 "screenshot": .bool(true)
             ])
         ])
@@ -762,7 +764,7 @@ import Testing
         params: .object([
             "name": .string("look"),
             "arguments": .object([
-                "target": .string("com.example.App"),
+                "app": .string("com.example.App"),
                 "screenshot": .bool(true),
                 "tree": .bool(false)
             ])
@@ -838,7 +840,7 @@ import Testing
         params: .object([
             "name": .string("look"),
             "arguments": .object([
-                "target": .string("com.example.App"),
+                "app": .string("com.example.App"),
                 "sensitive": .bool(true),
                 "screenshot": .bool(true)
             ])
@@ -889,7 +891,7 @@ import Testing
         params: .object([
             "name": .string("look"),
             "arguments": .object([
-                "target": .string("com.example.App"),
+                "app": .string("com.example.App"),
                 "sensitive": .bool(true),
                 "screenText": .bool(true)
             ])
@@ -925,7 +927,7 @@ import Testing
         params: .object([
             "name": .string("look"),
             "arguments": .object([
-                "target": .string("com.example.App"),
+                "app": .string("com.example.App"),
                 "screenshot": .bool(true),
                 "tree": .bool(false)
             ])
@@ -974,7 +976,7 @@ import Testing
         params: .object([
             "name": .string("look"),
             "arguments": .object([
-                "target": .string("com.example.App"),
+                "app": .string("com.example.App"),
                 "screenshot": .bool(true)
             ])
         ])
@@ -1029,7 +1031,7 @@ private func lookCall(id: String) -> JSONRPCRequest {
         method: "tools/call",
         params: .object([
             "name": .string("look"),
-            "arguments": .object(["target": .string("com.example.App")])
+            "arguments": .object(["app": .string("com.example.App")])
         ])
     )
 }
