@@ -549,7 +549,7 @@ private struct PerceptionCommandHandler {
                 return JSONRPCResponse(id: request.id, result: ["children": rendered])
             }
             let format = try decoder.string("format")
-            let screenshot = try decoder.bool("screenshot") ?? false
+            let screenshot = try decoder.bool("screenshot") ?? true
             let screenText = try decoder.bool("screenText") ?? false
             let includeTree = try decoder.bool("tree") ?? true
             let childDepth = try decoder.int("childDepth")

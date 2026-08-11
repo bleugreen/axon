@@ -29,7 +29,7 @@ invoke(target, name, deliveryPolicy?)
 ```text
 axon permit
 axon refresh-secrets [--json]
-axon look [target] [--since snapshot-id] [--screenshot] [--screen-text] [--frames] [--json] [--details] [--debug] [--no-tree] [--offset n] [--limit n] [--depth n]
+axon look [target] [--since snapshot-id] [--no-screenshot] [--screen-text] [--frames] [--json] [--details] [--debug] [--no-tree] [--offset n] [--limit n] [--depth n]
 axon find <app> '<locator-json>'
 axon wait_for_value '<target-json>' (--contains text | --equals text | --matches regex) [--timeout-ms n] [--interval-ms n]
 axon wait_for_stability <app> [--condition stable|changed] [--stable-ms n] [--timeout-ms n] [--interval-ms n]
@@ -53,8 +53,11 @@ processes, bundle identifiers, or pids are needed.
 `look(target: app)` captures an accessibility snapshot. MCP returns a compact
 agent-facing observation by default; `format: "debug"` returns the raw snapshot.
 The observation tree is a DSL string with app-scoped semantic names, normalized roles, labels,
-actions, and explicit truncation markers. Screenshots are opt-in with
-`screenshot: true`. `screenText: true` OCRs visible text from the screenshot.
+actions, and explicit truncation markers. Full app observations include a window
+screenshot by default; use `screenshot: false` or `--no-screenshot` to omit it.
+`look(since:)` change checks and semantic-target child pages remain imageless by
+default because they refine an observation the caller already has. `screenText: true`
+OCRs visible text from the screenshot.
 App observations also report `focus`. `available` includes the focused element's
 role and label plus its semantic name when that element belongs to the captured
 tree. `none` means the app reported no focused UI element. `inaccessible` means
