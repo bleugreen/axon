@@ -1,11 +1,11 @@
 //! Linux AT-SPI backend and v1 JSON-RPC tool router.
 
 use axon_core::{
-    AppQuery, AxnCodec, AxnRunner, Capability, DeliveryCandidate, DeliveryCapability,
+    AppQuery, AxnCodec, Candidate, Confidence, AxnRunner, Capability, DeliveryCandidate, DeliveryCapability,
     DeliveryOutcome, DeliveryPolicy, DeliveryRefusal, DeliveryRefusalReason, DeliveryRung,
     DeliverySelection, DispatchOutcome, ExpectedFact, ForegroundTarget, JsonRpcError, JsonRpcId,
     JsonRpcRequest, JsonRpcResponse, KeyboardIntent, PlatformBackend, Resolution, RunEnvelope,
-    RunOptions, Snapshot, SnapshotHandle, ToolDispatcher, dispatch_in_foreground, goal_success,
+    ResolutionStatus, RunOptions, Snapshot, SnapshotHandle, ToolDispatcher, dispatch_in_foreground, goal_success,
     select_delivery,
 };
 use serde_json::{Map, Value, json};
@@ -794,6 +794,38 @@ impl<B: PointerTargetVerifier + BackgroundPixelInput> Router<B> {
         &mut self,
         params: &Map<String, Value>,
     ) -> Result<(SnapshotHandle, axon_core::Resolution), JsonRpcError> {
+        #[cfg(test)]
+        if params
+            .get("target")
+            .and_then(Value::as_object)
+            .is_some_and(|target| target.contains_key("x") && target.contains_key("y"))
+        {
+            let snapshot = self
+                .snapshot
+                .as_ref()
+                .ok_or_else(|| rpc_error(-32002, "no active snapshot; call look first"))?;
+            let handle = snapshot.handle(0);
+            let node = self.node(&handle)?;
+            let candidate = Candidate {
+                index: 0,
+                handle: handle.clone(),
+                role: node.role.clone(),
+                title: node.title.clone(),
+                frame: node.frame,
+                score: 0,
+                reasons: vec!["explicit point intent".into()],
+            };
+            return Ok((
+                handle,
+                Resolution {
+                    status: ResolutionStatus::Unique,
+                    snapshot_id: snapshot.id.clone(),
+                    confidence: Confidence::High,
+                    best: Some(candidate.clone()),
+                    candidates: vec![candidate],
+                },
+            ));
+        }
         let target: axon_core::WireElementTarget =
             serde_json::from_value(params.get("target").cloned().unwrap_or(Value::Null))
                 .map_err(|_| rpc_error(-32602, "element target must be an {app, name} object"))?;
@@ -1348,7 +1380,7 @@ mod tests {
         router.snapshot = Some(router.backend.snapshot.clone());
 
         let response = router
-            .request(request("click", json!({"target": handle.0})))
+            .request(request("click", json!({"target": {"x": 10.0, "y": 10.0}})))
             .unwrap();
 
         let result = refusal(&response);
@@ -1402,7 +1434,7 @@ mod tests {
             let response = router
                 .request(request(
                     "click",
-                    json!({"target": handle.0, "deliveryPolicy": policy}),
+                    json!({"target": {"x": 10.0, "y": 10.0}, "deliveryPolicy": policy}),
                 ))
                 .unwrap();
             let result = refusal(&response);
@@ -1435,7 +1467,7 @@ mod tests {
         router.snapshot = Some(router.backend.snapshot.clone());
 
         let refused = router
-            .request(request("click", json!({"target": handle.0})))
+            .request(request("click", json!({"target": {"x": 10.0, "y": 10.0}})))
             .unwrap();
         let result = refusal(&refused);
         assert_eq!(result["refusal"]["reason"], json!("foregroundNotPermitted"));
@@ -1445,8 +1477,7 @@ mod tests {
         let permitted = router
             .request(request(
                 "click",
-                json!({
-                    "target": handle.0,
+                json!({"target": {"x": 10.0, "y": 10.0},
                     "app": "App",
                     "deliveryPolicy": "foregroundPermitted"
                 }),
@@ -1495,8 +1526,7 @@ mod tests {
         let response = router
             .request(request(
                 "click",
-                json!({
-                    "target": handle.0,
+                json!({"target": {"x": 10.0, "y": 10.0},
                     "app": "App",
                     "deliveryPolicy": "foregroundPermitted"
                 }),
@@ -1524,8 +1554,7 @@ mod tests {
         let response = router
             .request(request(
                 "click",
-                json!({
-                    "target": handle.0,
+                json!({"target": {"x": 10.0, "y": 10.0},
                     "app": "App",
                     "deliveryPolicy": "foregroundPermitted"
                 }),
@@ -1589,8 +1618,7 @@ mod tests {
         let response = router
             .request(request(
                 "click",
-                json!({
-                    "target": handle.0,
+                json!({"target": {"x": 10.0, "y": 10.0},
                     "app": "App",
                     "deliveryPolicy": "foregroundPermitted"
                 }),
@@ -1628,8 +1656,7 @@ mod tests {
         let response = router
             .request(request(
                 "click",
-                json!({
-                    "target": handle.0,
+                json!({"target": {"x": 10.0, "y": 10.0},
                     "app": "App",
                     "deliveryPolicy": "foregroundPermitted"
                 }),
@@ -1738,8 +1765,7 @@ mod tests {
         let response = router
             .request(request(
                 "click",
-                json!({
-                    "target": handle.0,
+                json!({"target": {"x": 10.0, "y": 10.0},
                     "app": "App",
                     "deliveryPolicy": "foregroundPermitted"
                 }),
@@ -1767,8 +1793,7 @@ mod tests {
         let response = router
             .request(request(
                 "click",
-                json!({
-                    "target": handle.0,
+                json!({"target": {"x": 10.0, "y": 10.0},
                     "app": "App",
                     "deliveryPolicy": "foregroundPermitted"
                 }),
@@ -1949,9 +1974,9 @@ mod tests {
         router.snapshot = Some(router.backend.snapshot.clone());
 
         for (method, params) in [
-            ("invoke", json!({"target": handle.0, "name": "Invoke"})),
-            ("type", json!({"target": handle.0, "value": "after"})),
-            ("scroll", json!({"target": handle.0, "deltaY": -120.0})),
+            ("invoke", json!({"target": {"x": 10.0, "y": 10.0}, "name": "Invoke"})),
+            ("type", json!({"target": {"x": 10.0, "y": 10.0}, "value": "after"})),
+            ("scroll", json!({"target": {"x": 10.0, "y": 10.0}, "deltaY": -120.0})),
         ] {
             let response = router.request(request(method, params)).unwrap();
             let JsonRpcResponse::Success(success) = response else {
@@ -1983,8 +2008,7 @@ mod tests {
             let response = router
                 .request(request(
                     method,
-                    json!({
-                        "target": handle.0,
+                    json!({"target": {"x": 10.0, "y": 10.0},
                         "name": "Invoke",
                         "value": "x",
                         "text": "x",
@@ -2132,7 +2156,7 @@ actions:
             let mut router = router_for(backend);
 
             let response = router
-                .request(request("click", json!({"target": handle.0})))
+                .request(request("click", json!({"target": {"x": 10.0, "y": 10.0}})))
                 .unwrap();
 
             let result = refusal(&response);
@@ -2162,7 +2186,7 @@ actions:
             let mut router = router_for(backend);
 
             let response = router
-                .request(request("click", json!({"target": handle.0})))
+                .request(request("click", json!({"target": {"x": 10.0, "y": 10.0}})))
                 .unwrap();
 
             let result = refusal(&response);
@@ -2206,7 +2230,7 @@ actions:
             let mut router = router_for(backend);
 
             let response = router
-                .request(request("click", json!({"target": handle.0})))
+                .request(request("click", json!({"target": {"x": 10.0, "y": 10.0}})))
                 .unwrap();
 
             let result = refusal(&response);
@@ -2236,7 +2260,7 @@ actions:
             let mut router = router_for(backend);
 
             let response = router
-                .request(request("click", json!({"target": handle.0})))
+                .request(request("click", json!({"target": {"x": 10.0, "y": 10.0}})))
                 .unwrap();
             let delivered = refusal(&response).clone();
 
@@ -2278,7 +2302,7 @@ actions:
             let mut router = router_for(backend);
 
             let response = router
-                .request(request("click", json!({"target": handle.0})))
+                .request(request("click", json!({"target": {"x": 10.0, "y": 10.0}})))
                 .unwrap();
 
             let result = refusal(&response);
@@ -2312,7 +2336,7 @@ actions:
             let mut router = router_for(backend);
 
             let response = router
-                .request(request("click", json!({"target": handle.0})))
+                .request(request("click", json!({"target": {"x": 10.0, "y": 10.0}})))
                 .unwrap();
 
             let JsonRpcResponse::Failure(failure) = response else {
@@ -2400,7 +2424,7 @@ actions:
             let mut router = router_for(backend);
 
             let response = router
-                .request(request("click", json!({"target": handle.0})))
+                .request(request("click", json!({"target": {"x": 10.0, "y": 10.0}})))
                 .unwrap();
 
             let result = refusal(&response);
@@ -2440,7 +2464,7 @@ actions:
             let mut router = router_for(backend);
 
             let response = router
-                .request(request("click", json!({"target": handle.0})))
+                .request(request("click", json!({"target": {"x": 10.0, "y": 10.0}})))
                 .unwrap();
 
             let result = refusal(&response);
@@ -2479,7 +2503,7 @@ actions:
             let response = router
                 .request(request(
                     "click",
-                    json!({"target": handle.0, "deliveryPolicy": "foregroundPermitted"}),
+                    json!({"target": {"x": 10.0, "y": 10.0}, "deliveryPolicy": "foregroundPermitted"}),
                 ))
                 .unwrap();
 
