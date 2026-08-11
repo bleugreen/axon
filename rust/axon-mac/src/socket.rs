@@ -9,7 +9,7 @@ use serde_json::{Value, json};
 use std::{
     fs::{self, File, OpenOptions},
     io::{self, BufRead, BufReader, Write},
-    os::{fd::AsRawFd, unix::{fs::{FileTypeExt, PermissionsExt}, net::{UnixListener, UnixStream}}},
+    os::{fd::AsRawFd, unix::{fs::{FileTypeExt, MetadataExt, PermissionsExt}, net::{UnixListener, UnixStream}}},
     path::PathBuf,
     time::Duration,
 };
@@ -72,18 +72,47 @@ pub fn serve() -> io::Result<()> {
     let mut router = Router::new(backend);
     let listener = UnixListener::bind(&path)?;
     fs::set_permissions(&path, fs::Permissions::from_mode(0o600))?;
+    let bound = fs::symlink_metadata(&path)?;
     for incoming in listener.incoming() {
-        let mut stream = incoming?;
-        stream.set_read_timeout(Some(REQUEST_TIMEOUT))?;
-        stream.set_write_timeout(Some(REQUEST_TIMEOUT))?;
-        let mut line = String::new();
-        if BufReader::new(stream.try_clone()?).read_line(&mut line)? == 0 { continue; }
-        let (response, stop) = dispatch(line.trim(), &mut router, &reported, trusted, &path);
-        writeln!(stream, "{}", serde_json::to_string(&response).unwrap())?;
-        if stop { break; }
+        let stream = match incoming {
+            Ok(stream) => stream,
+            Err(error) => {
+                eprintln!("axon-mac: accept failed: {error}");
+                continue;
+            }
+        };
+        match answer(stream, &mut router, &reported, trusted, &path) {
+            Ok(true) => break,
+            Ok(false) => {}
+            Err(error) => eprintln!("axon-mac: dropped a client connection: {error}"),
+        }
     }
-    let _ = fs::remove_file(path);
+    if let Ok(current) = fs::symlink_metadata(&path)
+        && current.file_type().is_socket()
+        && current.dev() == bound.dev()
+        && current.ino() == bound.ino()
+    {
+        let _ = fs::remove_file(path);
+    }
     Ok(())
+}
+
+fn answer(
+    mut stream: UnixStream,
+    router: &mut Router<MacBackend>,
+    reported: &[CapabilityInfo],
+    trusted: bool,
+    endpoint: &std::path::Path,
+) -> io::Result<bool> {
+    stream.set_read_timeout(Some(REQUEST_TIMEOUT))?;
+    stream.set_write_timeout(Some(REQUEST_TIMEOUT))?;
+    let mut line = String::new();
+    if BufReader::new(stream.try_clone()?).read_line(&mut line)? == 0 {
+        return Ok(false);
+    }
+    let (response, stop) = dispatch(line.trim(), router, reported, trusted, endpoint);
+    writeln!(stream, "{}", serde_json::to_string(&response).unwrap())?;
+    Ok(stop)
 }
 fn dispatch(line: &str, router: &mut Router<MacBackend>, reported: &[CapabilityInfo], trusted: bool, endpoint: &std::path::Path) -> (Value, bool) {
     let request = match parse_request(line) {
@@ -172,6 +201,14 @@ mod tests {
         fs::write(&path, b"keep").unwrap();
         assert!(!fs::symlink_metadata(&path).unwrap().file_type().is_socket());
         fs::remove_file(path).unwrap();
+    }
+    #[test]
+    fn disconnected_client_error_is_contained() {
+        let (server, client) = UnixStream::pair().unwrap();
+        drop(client);
+        assert!(server.set_write_timeout(Some(Duration::from_millis(10))).is_ok());
+        let mut server = server;
+        assert!(writeln!(server, "response").is_err());
     }
     #[test]
     fn facade_is_exact_v1_surface() {
