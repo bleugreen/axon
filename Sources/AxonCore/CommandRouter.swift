@@ -533,10 +533,11 @@ private struct PerceptionCommandHandler {
                     direct: direct,
                     allDirectChildren: allDirectChildren
                 )
-                return JSONRPCResponse(
-                    id: request.id,
-                    result: ["children": children.jsonValue(activeSecretRedactor: activeSecretRedactor)]
-                )
+                let appIdentity = try services.elementStore.summary(for: children.snapshotID).app
+                let records = services.semanticNameRegistry.register(page: children, app: appIdentity)
+                let rendered = children.jsonValue(activeSecretRedactor: activeSecretRedactor)
+                    .renderingPagedSemanticNames(records, parent: SemanticTargetQuery(app: app, name: name))
+                return JSONRPCResponse(id: request.id, result: ["children": rendered])
             }
             let format = try decoder.string("format")
             let screenshot = try decoder.bool("screenshot") ?? false

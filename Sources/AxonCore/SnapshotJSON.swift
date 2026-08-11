@@ -369,6 +369,25 @@ public extension ObservedAppChange {
 
 
 public extension JSONValue {
+    func renderingPagedSemanticNames(_ records: [SemanticNameRecord], parent: SemanticTargetQuery) -> JSONValue {
+        guard case var .object(root) = self else { return self }
+        let names = Dictionary(uniqueKeysWithValues: records.map { ($0.sourceIndex, $0.query.name) })
+        var nextIndex = records.map(\.sourceIndex).min() ?? 0
+        func render(_ value: JSONValue) -> JSONValue {
+            guard case var .object(node) = value else { return value }
+            if let name = names[nextIndex] { node["name"] = .string(name) }
+            nextIndex += 1
+            node.removeValue(forKey: "handle")
+            node.removeValue(forKey: "index")
+            if case let .array(children)? = node["children"] { node["children"] = .array(children.map(render)) }
+            return .object(node)
+        }
+        if case let .array(children)? = root["children"] { root["children"] = .array(children.map(render)) }
+        root["parent"] = .object(["app": .string(parent.app), "name": .string(parent.name)])
+        root.removeValue(forKey: "baseIndex")
+        return .object(root)
+    }
+
     /// Replaces internal snapshot identity with canonical semantic names for public observations.
     /// Debug observations retain handles for diagnostics, but names remain the primary vocabulary.
     func renderingSemanticNames(_ study: SemanticNameStudy, includeDebugHandles: Bool) -> JSONValue {

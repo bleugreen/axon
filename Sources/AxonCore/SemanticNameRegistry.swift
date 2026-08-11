@@ -80,6 +80,31 @@ public final class SemanticNameRegistry: @unchecked Sendable {
         return records
     }
 
+    @discardableResult
+    public func register(page: AXChildrenPage, app: AppIdentity) -> [SemanticNameRecord] {
+        let snapshot = AppSnapshot(id: page.snapshotID, app: app, windows: page.children, screenshot: nil)
+        let study = SemanticNameDeriver.derive(from: snapshot.jsonValue(includeTree: true))
+        let contexts = Self.nodeContexts(in: snapshot)
+        let records = study.elements.compactMap { element -> SemanticNameRecord? in
+            guard let context = contexts[element.sourceIndex],
+                  let locator = try? AXLocator(jsonValue: .object(RecordedLocatorBuilder.locator(
+                    from: context.node, ancestors: context.ancestors, windowTitle: context.windowTitle
+                  ))) else { return nil }
+            return SemanticNameRecord(
+                query: SemanticTargetQuery(app: app.name, name: element.name), appIdentity: app,
+                snapshotID: page.snapshotID, sourceIndex: page.baseIndex + element.sourceIndex,
+                role: element.role, label: element.label, candidateLabel: element.candidateLabel,
+                locator: locator,
+                retainedHandle: SnapshotHandle(snapshotID: page.snapshotID, nodeIndex: page.baseIndex + element.sourceIndex)
+            )
+        }
+        lock.lock()
+        defer { lock.unlock() }
+        let existing = recordsBySnapshot[page.snapshotID] ?? []
+        recordsBySnapshot[page.snapshotID] = existing + records
+        return records
+    }
+
     public func lookup(app: String, name: String) -> SemanticNameLookup {
         let query = SemanticTargetQuery(app: app, name: name)
         lock.lock()
