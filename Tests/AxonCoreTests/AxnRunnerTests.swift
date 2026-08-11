@@ -254,7 +254,11 @@ import Testing
                 "id": .string("a001"),
                 "label": .string("Click Save"),
                 "tool": .string("click"),
-                "target": .string("s1:2"),
+                "target": .object([
+                    "app": .string("Example"),
+                    "name": .string("dialog/save"),
+                    "locator": .object(["role": .string("AXButton"), "title": .string("Save")])
+                ]),
                 "expects": .array([]),
                 "observed": .array([.object(["kind": .string("raw-event")])]),
                 "warnings": .array([.string("point fallback")])
@@ -264,7 +268,10 @@ import Testing
 
     #expect(batch["success"] == .bool(true))
     #expect(requests.count == 1)
-    #expect(requests[0].params?["target"] == .string("s1:2"))
+    #expect(requests[0].params?["target"] == .object([
+        "app": .string("Example"),
+        "name": .string("dialog/save")
+    ]))
     #expect(requests[0].params?["id"] == nil)
     #expect(requests[0].params?["label"] == nil)
     #expect(requests[0].params?["expects"] == nil)
