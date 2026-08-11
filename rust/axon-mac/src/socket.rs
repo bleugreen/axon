@@ -25,7 +25,7 @@ const LOCK_NB: i32 = 4;
 
 fn acquire_lock(path: &std::path::Path) -> io::Result<File> {
     let lock_path = PathBuf::from(format!("{}.lock", path.display()));
-    let lock = OpenOptions::new().create(true).read(true).write(true).open(lock_path)?;
+    let lock = OpenOptions::new().create(true).truncate(false).read(true).write(true).open(lock_path)?;
     if unsafe { flock(lock.as_raw_fd(), LOCK_EX | LOCK_NB) } != 0 {
         return Err(io::Error::new(io::ErrorKind::AddrInUse, "socket ownership lock is held"));
     }

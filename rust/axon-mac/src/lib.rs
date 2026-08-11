@@ -1057,7 +1057,7 @@ mod tests {
     #[test]
     fn refusal_success_is_not_inferred_from_json_construction() {
         let result = json!({"success":false,"dispatchSuccess":false});
-        assert_eq!(result.get("success").and_then(Value::as_bool).unwrap_or(true), false);
+        assert!(!result.get("success").and_then(Value::as_bool).unwrap_or(true));
     }
 
     #[test]
