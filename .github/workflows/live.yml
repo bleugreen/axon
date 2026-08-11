@@ -462,11 +462,13 @@ jobs:
 
           printf '%s' "$look" | jq -e '.result.structuredContent.app.windows[0].root' >/dev/null
           display_object="$(printf '%s' "$look" | jq -er '[.result.structuredContent.app.windows[].root | .. | objects | select(.role == "text box" and .value? == "0")][0].identifier')"
+          retained_name="$(printf '%s' "$look" | jq -er '[.result.structuredContent.app.windows[].root | .. | objects | select(.role == "push button" and .label? == "1")][0].name')"
+          test -n "$retained_name"
 
-          found="$(printf '%s\n' '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"find","arguments":{"target":{"app":"Calculator","locator":{"label":"1","actions":["Click"]}}}}}' | "$daemon" mcp)"
-          handle="$(printf '%s' "$found" | jq -er '.result.structuredContent.handle')"
-          invoked="$(jq -cn --arg handle "$handle" '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"invoke","arguments":{"target":$handle,"name":"Click"}}}' | "$daemon" mcp)"
-          printf '%s' "$invoked" | jq -e '.result.structuredContent.dispatch.success == true' >/dev/null
+          # The name came from the earlier observation. Resolution captures the live tree again and
+          # scores the recorded locator facts; no second look or public snapshot handle participates.
+          invoked="$(jq -cn --arg name "$retained_name" '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"invoke","arguments":{"target":{"app":"Calculator","name":$name},"name":"Click"}}}' | "$daemon" mcp)"
+          printf '%s' "$invoked" | jq -e '.result.structuredContent.dispatch.success == true and .result.structuredContent.resolution.status == "unique"' >/dev/null
 
           verified=false
           for _ in {1..20}; do

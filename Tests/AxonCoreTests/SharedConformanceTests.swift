@@ -112,3 +112,30 @@ private struct SharedNode: Decodable {
         )
     }
 }
+
+
+private struct SharedSemanticFixture: Decodable {
+    let snapshot: SharedSnapshot
+    let expected: [ExpectedSemanticName]
+}
+private struct ExpectedSemanticName: Decodable {
+    let sourceIndex: Int
+    let name: String
+    let resolution: SemanticNameResolution
+    let candidateLabel: String?
+}
+
+@Test func sharedSemanticNameConformanceFixtures() throws {
+    let fixtureURL = URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent()
+        .appendingPathComponent("../../schema/fixtures/semantic-names.json")
+        .standardizedFileURL
+    let fixture = try JSONDecoder().decode(SharedSemanticFixture.self, from: Data(contentsOf: fixtureURL))
+    let actual = SemanticNameDeriver.derive(from: fixture.snapshot.axSnapshot.jsonValue(includeTree: true))
+    for expected in fixture.expected {
+        let element = try #require(actual.elements.first { $0.sourceIndex == expected.sourceIndex })
+        #expect(element.name == expected.name)
+        #expect(element.resolution == expected.resolution)
+        #expect(element.candidateLabel == expected.candidateLabel)
+    }
+}

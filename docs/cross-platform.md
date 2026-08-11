@@ -241,10 +241,11 @@ diagnostic details may be retained as supplemental information.
 
 At the public Rust boundary, an element target is exactly `{app, name}`. Raw
 snapshot handles and standalone locator objects are rejected before backend work.
-The provider may use a retained handle and native locator evidence internally to
-resolve that name. Until a provider has a live semantic-name registry, it must
-report semantic resolution as unsupported; accepting the old target vocabulary
-as a fallback would create a second, stale public contract.
+The provider uses axon-core's app-scoped semantic-name registry and native locator evidence to
+resolve that name against a fresh capture. Retained handles are private cache hints only;
+locator scoring is the durable fallback after the interface changes. Missing and ambiguous
+names fail closed, and accepting the old target vocabulary as a fallback would create a second,
+stale public contract.
 
 The socket-daemon shape stays aligned with macOS: a long-lived process owns
 native subscriptions, retained element handles, and caches, while short-lived

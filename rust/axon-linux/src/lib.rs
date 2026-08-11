@@ -5,8 +5,8 @@ use axon_core::{
     DeliveryOutcome, DeliveryPolicy, DeliveryRefusal, DeliveryRefusalReason, DeliveryRung,
     DeliverySelection, DispatchOutcome, ExpectedFact, ForegroundTarget, JsonRpcError, JsonRpcId,
     JsonRpcRequest, JsonRpcResponse, KeyboardIntent, PlatformBackend, Resolution, RunEnvelope,
-    RunOptions, Snapshot, SnapshotHandle, ToolDispatcher, dispatch_in_foreground, goal_success,
-    select_delivery,
+    RunOptions, SemanticLookup, SemanticNameRegistry, Snapshot, SnapshotHandle, ToolDispatcher,
+    dispatch_in_foreground, goal_success, select_delivery,
 };
 use serde_json::{Map, Value, json};
 
@@ -76,6 +76,7 @@ const NO_FOREGROUND_TRANSACTION: &str = "this Linux session cannot capture, prov
 pub struct Router<B> {
     backend: B,
     snapshot: Option<Snapshot>,
+    semantic_names: SemanticNameRegistry,
 }
 
 pub trait PointerTargetVerifier: PlatformBackend {
@@ -255,6 +256,7 @@ impl<B: PointerTargetVerifier + BackgroundPixelInput> Router<B> {
         Self {
             backend,
             snapshot: None,
+            semantic_names: SemanticNameRegistry::default(),
         }
     }
     /// The backend this router drives, for the facts a daemon answers outside the tool surface.
@@ -783,7 +785,9 @@ impl<B: PointerTargetVerifier + BackgroundPixelInput> Router<B> {
             .backend
             .capture(&app_query(params))
             .map_err(backend_error)?;
-        let value = serde_json::to_value(&snapshot).map_err(internal_error)?;
+        let names = self.semantic_names.register(&snapshot);
+        let value = serde_json::to_value(axon_core::render_semantic_names(&snapshot, &names))
+            .map_err(internal_error)?;
         self.snapshot = Some(snapshot);
         Ok(value)
     }
@@ -830,13 +834,31 @@ impl<B: PointerTargetVerifier + BackgroundPixelInput> Router<B> {
         let target = target
             .validate()
             .map_err(|error| rpc_error(-32602, error.to_string()))?;
-        Err(rpc_error(
-            -32004,
-            format!(
-                "live semantic-name resolution is not implemented by the Linux provider for {} / {}",
-                target.app, target.name
-            ),
-        ))
+        let live = self
+            .backend
+            .capture(&AppQuery {
+                name: Some(target.app.clone()),
+                identifier: None,
+            })
+            .map_err(backend_error)?;
+        let lookup = self.semantic_names.resolve(&target, &live);
+        self.snapshot = Some(live);
+        match lookup {
+            SemanticLookup::Unique { handle, resolution } => Ok((handle, resolution)),
+            SemanticLookup::Missing { target } => Err(JsonRpcError {
+                code: -32002,
+                message: format!("semantic name not found: {} / {}", target.app, target.name),
+                data: Some(json!({"status":"missing","query":target})),
+            }),
+            SemanticLookup::Ambiguous { target, candidates } => Err(JsonRpcError {
+                code: -32002,
+                message: format!(
+                    "semantic name is ambiguous: {} / {}",
+                    target.app, target.name
+                ),
+                data: Some(json!({"status":"ambiguous","query":target,"candidates":candidates})),
+            }),
+        }
     }
 
     fn node_center(&self, handle: &SnapshotHandle) -> Result<(f64, f64), JsonRpcError> {
@@ -1964,7 +1986,7 @@ mod tests {
     }
 
     #[test]
-    fn semantic_actions_report_unsupported_capability_without_backend_dispatch() {
+    fn unknown_semantic_names_fail_closed_without_backend_dispatch() {
         let backend = backend(vec![], Some("before"));
         let focuses = backend.focuses.clone();
         let value = backend.value.clone();
@@ -1986,16 +2008,16 @@ mod tests {
         ] {
             let response = router.request(request(method, params)).unwrap();
             let JsonRpcResponse::Failure(failure) = response else {
-                panic!("{method} requires unsupported live semantic-name resolution")
+                panic!("{method} must fail for an unknown semantic name")
             };
-            assert_eq!(failure.error.code, -32004, "{method}");
-            assert!(
+            assert_eq!(failure.error.code, -32002, "{method}");
+            assert_eq!(
                 failure
                     .error
-                    .message
-                    .contains("live semantic-name resolution"),
-                "{method}: {}",
-                failure.error.message
+                    .data
+                    .as_ref()
+                    .and_then(|v| v["status"].as_str()),
+                Some("missing")
             );
         }
         assert_eq!(*focuses.borrow(), 0);

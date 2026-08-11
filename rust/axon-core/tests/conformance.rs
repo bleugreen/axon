@@ -255,3 +255,35 @@ fn document_flags_drive_dry_run_without_backend_verification() {
         Some("required fact is unavailable: email.value")
     );
 }
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct SemanticFixture {
+    snapshot: Snapshot,
+    expected: Vec<ExpectedSemanticName>,
+}
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ExpectedSemanticName {
+    source_index: usize,
+    name: String,
+    resolution: SemanticNameResolution,
+    candidate_label: Option<String>,
+}
+
+#[test]
+fn semantic_names_match_the_shared_language_neutral_fixture() {
+    let fixture: SemanticFixture =
+        serde_json::from_str(include_str!("../../../schema/fixtures/semantic-names.json")).unwrap();
+    let actual = SemanticNameDeriver::derive(&fixture.snapshot);
+    assert_eq!(actual.len(), fixture.expected.len());
+    for expected in fixture.expected {
+        let actual = actual
+            .iter()
+            .find(|name| name.source_index == expected.source_index)
+            .unwrap();
+        assert_eq!(actual.name, expected.name);
+        assert_eq!(actual.resolution, expected.resolution);
+        assert_eq!(actual.candidate_label, expected.candidate_label);
+    }
+}
