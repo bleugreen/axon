@@ -592,7 +592,9 @@ import Testing
 
     #expect(batch["success"] == .bool(true))
     #expect(requests.map(\.method) == ["click"])
-    #expect(requests[0].params?["target"] == link)
+    #expect(requests[0].params?["target"] == .object([
+        "app": .string("Example"), "name": .string("main/article")
+    ]))
     #expect(requests[0].params?["resolve"] == nil)
 }
 
@@ -621,7 +623,9 @@ import Testing
 
     #expect(batch["success"] == .bool(true))
     #expect(requests.map(\.method) == ["click"])
-    #expect(requests[0].params?["target"] == link)
+    #expect(requests[0].params?["target"] == .object([
+        "app": .string("Example"), "name": .string("main/article")
+    ]))
     #expect(requests[0].params?["resolve"] == nil)
 }
 
@@ -872,6 +876,7 @@ private func debugPauseSnapshot(id: String, app: String) -> AppSnapshot {
 private func scrollSurfaceTarget() -> JSONValue {
     .object([
         "app": .string("Example"),
+        "name": .string("main/scroll"),
         "locator": .object([
             "role": .string("AXScrollArea")
         ])
@@ -881,6 +886,7 @@ private func scrollSurfaceTarget() -> JSONValue {
 private func articleLinkTarget() -> JSONValue {
     .object([
         "app": .string("Example"),
+        "name": .string("main/article"),
         "locator": .object([
             "role": .string("AXLink"),
             "title": .string("Article")
