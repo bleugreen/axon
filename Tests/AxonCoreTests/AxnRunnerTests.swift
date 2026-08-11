@@ -798,6 +798,13 @@ import Testing
     #expect(requests.count == 1)
 }
 
+private func dispatchedReplayFixtureTarget(_ legacyID: String) -> JSONValue {
+    .object([
+        "app": .string("Example"),
+        "name": .string("fixture/\(legacyID.replacingOccurrences(of: ":", with: "-"))")
+    ])
+}
+
 private func replayFixtureTarget(_ legacyID: String) -> JSONValue {
     .object([
         "app": .string("Example"),
@@ -1030,7 +1037,7 @@ private func articleSnapshot(children: [AXNode]) -> AppSnapshot {
             id: .string("run.1.click"),
             method: "click",
             params: .object([
-                "target": replayFixtureTarget("s1:2")
+                "target": dispatchedReplayFixtureTarget("s1:2")
             ])
         )
     ])
@@ -1383,7 +1390,7 @@ private func articleSnapshot(children: [AXNode]) -> AppSnapshot {
         actions: PrimitiveActionHandlers(
             type: { target, value, _ in
                 types.append((target, value))
-                return PrimitiveActionResult(action: "type", target: { app: Example, name: fixture/target, locator: { role: AXButton, title: Fixture } }, strategy: "test", success: true)
+                return PrimitiveActionResult(action: "type", target: target, strategy: "test", success: true)
             }
         )
     )
@@ -1430,11 +1437,11 @@ private func articleSnapshot(children: [AXNode]) -> AppSnapshot {
     let router = CommandRouter(actions: PrimitiveActionHandlers(
         click: { target, _ in
             requests.append("click:\(target)")
-            return PrimitiveActionResult(action: "click", target: { app: Example, name: fixture/target, locator: { role: AXButton, title: Fixture } }, strategy: "test", success: true)
+            return PrimitiveActionResult(action: "click", target: target, strategy: "test", success: true)
         },
         type: { target, value, _ in
             requests.append("type:\(target):\(value)")
-            return PrimitiveActionResult(action: "type", target: { app: Example, name: fixture/target, locator: { role: AXButton, title: Fixture } }, strategy: "test", success: true)
+            return PrimitiveActionResult(action: "type", target: target, strategy: "test", success: true)
         }
     ))
 
@@ -1487,7 +1494,7 @@ private func articleSnapshot(children: [AXNode]) -> AppSnapshot {
     let router = CommandRouter(actions: PrimitiveActionHandlers(
         click: { target, _ in
             requests.append("click:\(target)")
-            return PrimitiveActionResult(action: "click", target: { app: Example, name: fixture/target, locator: { role: AXButton, title: Fixture } }, strategy: "test", success: true)
+            return PrimitiveActionResult(action: "click", target: target, strategy: "test", success: true)
         }
     ))
 
@@ -1521,11 +1528,11 @@ private func articleSnapshot(children: [AXNode]) -> AppSnapshot {
     let router = CommandRouter(actions: PrimitiveActionHandlers(
         click: { target, _ in
             requests.append("click:\(target)")
-            return PrimitiveActionResult(action: "click", target: { app: Example, name: fixture/target, locator: { role: AXButton, title: Fixture } }, strategy: "test", success: true)
+            return PrimitiveActionResult(action: "click", target: target, strategy: "test", success: true)
         },
         type: { target, value, _ in
             requests.append("type:\(target):\(value)")
-            return PrimitiveActionResult(action: "type", target: { app: Example, name: fixture/target, locator: { role: AXButton, title: Fixture } }, strategy: "test", success: true)
+            return PrimitiveActionResult(action: "type", target: target, strategy: "test", success: true)
         }
     ))
 
@@ -1576,7 +1583,7 @@ private func articleSnapshot(children: [AXNode]) -> AppSnapshot {
     let router = CommandRouter(actions: PrimitiveActionHandlers(
         click: { target, _ in
             requests.append("click:\(target)")
-            return PrimitiveActionResult(action: "click", target: { app: Example, name: fixture/target, locator: { role: AXButton, title: Fixture } }, strategy: "test", success: true)
+            return PrimitiveActionResult(action: "click", target: target, strategy: "test", success: true)
         }
     ))
 
@@ -1671,7 +1678,7 @@ private func articleSnapshot(children: [AXNode]) -> AppSnapshot {
         },
         actions: PrimitiveActionHandlers(
             click: { target, _ in
-                PrimitiveActionResult(action: "click", target: { app: Example, name: fixture/target, locator: { role: AXButton, title: Fixture } }, strategy: "test", success: true)
+                PrimitiveActionResult(action: "click", target: target, strategy: "test", success: true)
             }
         )
     )
@@ -1720,11 +1727,11 @@ private func articleSnapshot(children: [AXNode]) -> AppSnapshot {
     let router = CommandRouter(actions: PrimitiveActionHandlers(
         click: { target, _ in
             requests.append("click:\(target)")
-            return PrimitiveActionResult(action: "click", target: { app: Example, name: fixture/target, locator: { role: AXButton, title: Fixture } }, strategy: "test", success: true)
+            return PrimitiveActionResult(action: "click", target: target, strategy: "test", success: true)
         },
         type: { target, value, _ in
             requests.append("type:\(target):\(value)")
-            return PrimitiveActionResult(action: "type", target: { app: Example, name: fixture/target, locator: { role: AXButton, title: Fixture } }, strategy: "test", success: true)
+            return PrimitiveActionResult(action: "type", target: target, strategy: "test", success: true)
         }
     ))
 
@@ -1779,7 +1786,7 @@ private func articleSnapshot(children: [AXNode]) -> AppSnapshot {
         },
         actions: PrimitiveActionHandlers(
             click: { target, _ in
-                PrimitiveActionResult(action: "click", target: { app: Example, name: fixture/target, locator: { role: AXButton, title: Fixture } }, strategy: "test", success: true)
+                PrimitiveActionResult(action: "click", target: target, strategy: "test", success: true)
             }
         )
     )
@@ -1830,11 +1837,11 @@ private func articleSnapshot(children: [AXNode]) -> AppSnapshot {
     let router = CommandRouter(actions: PrimitiveActionHandlers(
         click: { target, _ in
             requests.append("click:\(target)")
-            return PrimitiveActionResult(action: "click", target: { app: Example, name: fixture/target, locator: { role: AXButton, title: Fixture } }, strategy: "test", success: true)
+            return PrimitiveActionResult(action: "click", target: target, strategy: "test", success: true)
         },
         type: { target, value, _ in
             requests.append("type:\(target):\(value)")
-            return PrimitiveActionResult(action: "type", target: { app: Example, name: fixture/target, locator: { role: AXButton, title: Fixture } }, strategy: "test", success: true)
+            return PrimitiveActionResult(action: "type", target: target, strategy: "test", success: true)
         }
     ))
 
@@ -1889,7 +1896,7 @@ private func articleSnapshot(children: [AXNode]) -> AppSnapshot {
                 attempts += 1
                 return PrimitiveActionResult(
                     action: "click",
-                    target: { app: Example, name: fixture/target, locator: { role: AXButton, title: Fixture } },
+                    target: target,
                     strategy: "test",
                     success: attempts > 1,
                     message: attempts > 1 ? nil : "blocked"
@@ -2088,7 +2095,7 @@ private func temporaryAxnFile(_ source: String) throws -> String {
     #expect(result["trace"]?[0]?["success"] == .bool(false))
     #expect(result["trace"]?[0]?["error"] == .string("<redacted: contains-secret>"))
     #expect(result["trace"]?[1]?["success"] == .bool(true))
-    #expect(result["trace"]?[1]?["result"]?["target"] == .string("s1:3"))
+    #expect(result["trace"]?[1]?["result"]?["target"] == dispatchedReplayFixtureTarget("s1:3"))
     #expect(requests.map(\.method) == ["type", "click"])
     #expect(requests[0].params?["value"] == .string("s3cr3t!"))
 }
@@ -2132,7 +2139,7 @@ private func temporaryAxnFile(_ source: String) throws -> String {
     #expect(result["success"] == .bool(true))
     #expect(requests.map(\.method) == ["click", "type"])
     #expect(requests[1].params?["value"] == .string("pw=s3cr3t!"))
-    #expect(result["trace"]?[0]?["result"]?["echo"]?["target"] == .string("s1:1"))
+    #expect(result["trace"]?[0]?["result"]?["echo"]?["target"] == dispatchedReplayFixtureTarget("s1:1"))
     #expect(result["trace"]?[1]?["result"] == .string("<redacted: contains-secret>"))
 }
 
