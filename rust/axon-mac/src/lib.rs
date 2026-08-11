@@ -873,27 +873,6 @@ impl<
         }
     }
 
-    fn node_center(&self, handle: &SnapshotHandle) -> Result<(f64, f64), JsonRpcError> {
-        let node = self.node(handle)?;
-        let r = node
-            .frame
-            .ok_or_else(|| rpc_error(-32003, "target has no actionable frame"))?;
-        Ok((r.x + r.width / 2.0, r.y + r.height / 2.0))
-    }
-
-    fn node(&self, handle: &SnapshotHandle) -> Result<&axon_core::Node, JsonRpcError> {
-        let snapshot = self
-            .snapshot
-            .as_ref()
-            .ok_or_else(|| rpc_error(-32002, "no active snapshot"))?;
-        let index = snapshot
-            .index_for_handle(handle)
-            .map_err(|e| rpc_error(-32002, e.to_string()))?;
-        flattened(snapshot)
-            .nth(index)
-            .ok_or_else(|| rpc_error(-32002, "handle index is outside snapshot"))
-    }
-
     fn run_axn(&mut self, params: &Map<String, Value>) -> Result<Value, JsonRpcError> {
         let source = required_str(params, "source")?;
         let doc = AxnCodec::parse(source).map_err(|e| rpc_error(-32602, e.to_string()))?;
