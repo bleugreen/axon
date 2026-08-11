@@ -18,6 +18,7 @@ public struct AxnRunner {
     public typealias SnapshotProvider = RecordedFactEvaluator.SnapshotProvider
     public typealias ParameterSourceResolver = (URL) throws -> String?
     public typealias ActiveSecretRedactorProvider = @Sendable () -> ActiveSecretRedactor
+    public typealias ReplayTargetRegistrar = (_ app: String, _ name: String, _ locator: AXLocator) throws -> Void
 
     private static let redactedSecretValue = "<redacted: contains-secret>"
     private let commandHandler: CommandHandler
@@ -28,6 +29,7 @@ public struct AxnRunner {
     private let parameterSourceResolvers: [String: ParameterSourceResolver]
     private let actionRecorder: ActionRecorder?
     private let activeSecretRedactorProvider: ActiveSecretRedactorProvider
+    private let replayTargetRegistrar: ReplayTargetRegistrar?
 
     public init(
         commandHandler: @escaping CommandHandler,
@@ -36,6 +38,7 @@ public struct AxnRunner {
         changeTimeoutMs: Int = 5_000,
         parameterSourceResolvers: [String: ParameterSourceResolver] = AxnRunner.defaultParameterSourceResolvers(),
         actionRecorder: ActionRecorder? = nil,
+        replayTargetRegistrar: ReplayTargetRegistrar? = nil,
         activeSecretRedactorProvider: @escaping ActiveSecretRedactorProvider = { ActiveSecretRedactor() }
     ) {
         self.commandHandler = commandHandler
@@ -45,6 +48,7 @@ public struct AxnRunner {
         self.changeTimeoutMs = max(0, changeTimeoutMs)
         self.parameterSourceResolvers = parameterSourceResolvers
         self.actionRecorder = actionRecorder
+        self.replayTargetRegistrar = replayTargetRegistrar
         self.activeSecretRedactorProvider = activeSecretRedactorProvider
     }
 
@@ -527,8 +531,12 @@ public struct AxnRunner {
         for key in ["target", "from", "to"] {
             guard case var .object(target)? = dispatchObject[key],
                   case .string? = target["app"], case .string? = target["name"] else { continue }
-            // Attached locators are replay evidence. Ordinary tool dispatch consumes only the
-            // canonical semantic identity after v2 preflight has validated the evidence.
+            // Attached locators seed the private semantic registry before ordinary dispatch.
+            if let locatorValue = target["locator"], case let .string(app)? = target["app"],
+               case let .string(name)? = target["name"] {
+                do { try replayTargetRegistrar?(app, name, AXLocator(jsonValue: locatorValue)) }
+                catch { return JSONRPCResponse(id: .string("run.\(index).\(tool)"), error: .invalidParams("Invalid replay locator evidence: \(error)")) }
+            }
             target.removeValue(forKey: "locator")
             dispatchObject[key] = .object(target)
         }

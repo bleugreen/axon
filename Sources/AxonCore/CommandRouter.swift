@@ -1317,6 +1317,9 @@ private struct AxnRunCommandHandler {
                 return commandHandler(childRequest, collector)
             },
             snapshotProvider: services.axnSnapshotProvider,
+            replayTargetRegistrar: { app, name, locator in
+                services.semanticNameRegistry.registerReplayEvidence(app: app, name: name, locator: locator)
+            },
             actionRecorder: { childRequest, childResponse in
                 guard let historySessionID else {
                     return

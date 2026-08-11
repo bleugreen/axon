@@ -400,12 +400,24 @@ public final class UserActionRecorder {
         guard let selection = RecordedTargetSelector.select(from: candidates) else {
             return pointTarget(fallbackPoint, app: app, warning: "AX element hierarchy did not contain a stable replay target; recorded point fallback")
         }
-        return (
-            .object(["app": .string(app.name), "locator": .object(selection.locator)]),
-            [.object(["kind": .string("ax-target"), "role": .string(hitRole), "targetRole": .string(selection.candidate.role)])],
-            selection.warnings,
-            app
-        )
+        do {
+            let snapshot = try AXFullTreeCapturer(elementStore: elementStore).capture(app: app.name, screenshot: false)
+            if let sourceIndex = elementStore.index(of: element, in: snapshot.id),
+               let target = RecordedSemanticTargetBuilder.target(
+                    app: app.name, locator: selection.locator,
+                    snapshotJSON: snapshot.jsonValue(includeTree: true), sourceIndex: sourceIndex
+               ) {
+                return (
+                    target,
+                    [.object(["kind": .string("ax-target"), "role": .string(hitRole), "targetRole": .string(selection.candidate.role)])],
+                    selection.warnings,
+                    app
+                )
+            }
+        } catch {
+            // The point fallback below is explicit because semantic identity could not be captured.
+        }
+        return pointTarget(fallbackPoint, app: app, warning: "Could not derive a canonical semantic name; recorded point fallback")
     }
 
     private func elementCandidates(from element: AXUIElement) -> [RecordedElementCandidate] {

@@ -100,6 +100,12 @@ public final class AXElementStore: @unchecked Sendable {
         return elements[handle.nodeIndex]
     }
 
+    public func index(of element: AXUIElement, in snapshotID: SnapshotID) -> Int? {
+        lock.lock()
+        defer { lock.unlock() }
+        return elementsBySnapshot[snapshotID]?.firstIndex { CFEqual($0, element) }
+    }
+
     public func summary(for snapshotID: SnapshotID) throws -> SnapshotSummary {
         lock.lock()
         defer { lock.unlock() }
