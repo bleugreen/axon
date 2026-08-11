@@ -36,12 +36,12 @@ axon wait_for_stability <app> [--condition stable|changed] [--stable-ms n] [--ti
 axon run <path.axn> [--arg name=value] [--dry-run] [--healed-path file] [--continue-on-error]
 axon save [--session id] [--from call] [--to call] [--path file.axn] [--include-reads]
 
-axon click [--foreground] <handle|target-json>
-axon type [--foreground] <handle> <value>
+axon click [--foreground] <target-json>
+axon type [--foreground] <target-json> <value>
 axon keyboard [--app app] [--foreground] (--text text | --key keystroke)
 axon scroll [--app app] [--target target-json] [--dx n] [--dy n]
 axon drag [--app app] [--duration-ms n] [--foreground] <from-json> <to-json>
-axon invoke <handle> <action-name>
+axon invoke <target-json> <action-name>
 ```
 
 ## Perception
@@ -52,11 +52,11 @@ processes, bundle identifiers, or pids are needed.
 
 `look(target: app)` captures an accessibility snapshot. MCP returns a compact
 agent-facing observation by default; `format: "debug"` returns the raw snapshot.
-The observation tree is a DSL string with retained handles, roles, labels,
+The observation tree is a DSL string with app-scoped semantic names, normalized roles, labels,
 actions, and explicit truncation markers. Screenshots are opt-in with
 `screenshot: true`. `screenText: true` OCRs visible text from the screenshot.
 App observations also report `focus`. `available` includes the focused element's
-role and label plus a retained handle when that element belongs to the captured
+role and label plus its semantic name when that element belongs to the captured
 tree. `none` means the app reported no focused UI element. `inaccessible` means
 the `AXFocusedUIElement` query itself failed and includes the Accessibility error;
 it is never collapsed into `none`.
@@ -82,12 +82,12 @@ with a marker naming what disappeared, such as
 against a non-zero child count. This is how a caller tells "nothing here" from "nothing
 readable here" without dropping to `format: "debug"`.
 
-`look(target: handle)` fetches a retained node's child page. Use the `offset`
+`look(target: {app, name})` fetches a named node's child page. Use the `offset`
 and `limit` fields from the returned continuation to page broad sibling lists.
 `direct: true` returns only direct children, and `all: true` includes every
 direct child. Child pages use the same DSL tree format as app observations.
 `childDepth: 0` on an app observation retains top-level windows without walking
-descendants so callers can page children by handle.
+descendants so callers can page children by semantic name.
 
 `look(since: snapshot)` recaptures the app for a retained snapshot and reports
 whether the coarse app/window surface changed. It uses observer hints when
@@ -115,8 +115,8 @@ Automation consent is separate from Accessibility consent and permission errors
 direct callers to System Settings. Apple Events are bounded by a 15-second
 timeout. These operations never accept script source.
 
-`wait_for_value(target, contains|equals|matches)` repeatedly resolves a locator
-target and reads the unique target's readable AX state until one predicate holds
+`wait_for_value(target, contains|equals|matches)` repeatedly resolves an app-scoped
+semantic name and reads the unique target's readable state until one predicate holds
 or the bounded timeout elapses. It checks readable text fields including
 `AXValue`, `AXTitle`, `AXDescription`, identifier, and help, so browser controls
 whose user-facing label is exposed as `AXDescription` can be waited on honestly.
@@ -223,27 +223,25 @@ modelled as a forbidden delivery capability that the planner refuses on sight.
 
 ## Actions
 
-Targets may be snapshot handles or locator objects:
+Interactive element targets are app-scoped semantic names:
 
 ```yaml
 target:
   app: Safari
-  locator:
-    role: AXButton
-    title: Submit
-    actions:
-      - AXPress
+  name: checkout/submit
 ```
 
-`click` accepts handles, locator targets, point targets, and text locations.
+`click` accepts semantic-name targets, point targets, and text locations.
 `drag` accepts the same pointer target vocabulary for `from` and `to`. Point
 coordinates may explicitly use `screen`, `window`, or `screenshot` coordinate
 spaces; legacy point payloads without `coordinateSpace` remain screen points for
-wire compatibility. Handle- and locator-derived pointer events are hit-tested
+wire compatibility. Semantic-name-derived pointer events are hit-tested
 again immediately before dispatch and fail closed if the intended element moved,
 is occluded, or cannot be resolved. Explicit point targets carry no intended
-element identity, so they dispatch as unverified coordinates; use a handle or
-locator when fail-closed target validation is required.
+element identity, so they dispatch as unverified coordinates; use an app-scoped
+semantic name when fail-closed target validation is required. Raw snapshot handles
+and standalone locator objects are invalid public targets, including handles shown
+by `look(format: "debug")`.
 
 Pointer results separate dispatch from semantic success. A click on an element
 that advertises `AXPress` is a semantic action and proves its own outcome, but a
@@ -256,8 +254,8 @@ exposing the new row order.
 `scroll` chooses between two strategies by the kind of target it was given. A point
 target posts `CGEventScroll` wheel events at that point and never consults the
 accessibility tree, which is what makes surfaces that render their own contents —
-iPhone Mirroring, remote desktops, games, canvas views — scrollable at all. A handle,
-locator, or bare app resolves an offscreen descendant *that advertises*
+iPhone Mirroring, remote desktops, games, canvas views — scrollable at all. A semantic
+name or bare app resolves an offscreen descendant *that advertises*
 `AXScrollToVisible` and presses it. Advertising the action is part of being a candidate
 rather than something checked afterwards: most AppKit list rows expose no scrolling
 action at all, and choosing one on placement alone would commit the scroll to a
@@ -312,14 +310,16 @@ are appended. Caller-supplied `.axn` parameters are passed as `argValues`
 through MCP/socket calls or as repeated CLI `--arg name=value` flags.
 
 ```yaml
-version: 1
+version: 2
 args:
   - name: user_name
     type: string
     default: Mitch
 actions:
   - tool: type
-    target: s1:12
+    target:
+      app: Safari
+      name: account/user-name
     value: "{{user_name}}"
   - tool: keyboard
     app: Safari
@@ -327,7 +327,7 @@ actions:
 ```
 
 Parameter references are substituted inside string `value`, `text`, and `key` fields
-before the first action runs. Supported v1 parameter types are `string`,
+before the first action runs. Supported v2 parameter types are `string`,
 `secret`, `number`, `date`, `email`, and `path`. `env://NAME` and
 `op://vault/item/field` sources can bind declared args; caller args cannot
 override a declared source. Secret-tainted action values are redacted in dry-run

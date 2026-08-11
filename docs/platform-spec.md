@@ -25,21 +25,24 @@ updates shared conformance fixtures. The behavioral descriptions in
 An action target is polymorphic. The canonical decoding rules live in
 [`Sources/AxonCore/ToolTarget.swift`](../Sources/AxonCore/ToolTarget.swift).
 
-- A **snapshot handle** identifies an element retained from a particular
-  observation. It is convenient and precise within that snapshot's lifetime,
-  but is not durable identity and must fail when stale.
-- A **locator object** combines an application identity with semantic criteria.
-  It is the durable target used for replay.
+- An **element target** is exactly `{app, name}`. The name is derived from the
+  normalized observation vocabulary and is resolved within the named application.
+  Snapshot handles are private cache keys and are never accepted on the wire.
+- A recording may attach locator evidence to `{app, name}` for replay. The
+  evidence is subordinate to the name and is invalid as a standalone target.
 - A **point** uses screen, window, or screenshot coordinates. It is an explicit
   escape hatch with no element identity or occlusion guarantee.
 - A **text location** resolves visible text from accessibility data or screenshot
-  text into a pointer location. It is part of the current pointer-target contract
-  even though the three fundamental target mechanisms are handle, locator, and
-  point.
+  text into a pointer location. It represents explicit visual intent rather than
+  a competing element identity.
 
 Tools accept only the target kinds declared by the machine-readable surface.
-Semantic targets must be re-resolved and, for pointer dispatch, hit-tested
+Semantic names must be re-resolved and, for pointer dispatch, hit-tested
 immediately before dispatch. Raw points remain explicitly unverified.
+
+Child paging uses the same `{app, name}` target as actions. Snapshot IDs remain
+valid only as observation tokens for `since`; debug output may reveal internal
+handles, but their appearance does not make them actionable.
 
 ## Shared locator grammar
 
@@ -86,11 +89,14 @@ shape, not necessarily as an artifact containing native terms.
 
 ## Resolution and honest results
 
-Locator resolution returns exactly one status: `unique`, `ambiguous`, or
+Semantic-name resolution returns exactly one status: `unique`, `ambiguous`, or
 `missing`. It also returns a named confidence level: `none`, `low`, `medium`, or
 `high`. Ambiguous and missing resolutions do not dispatch an action. Candidate
 summaries and reasons should make the outcome diagnosable; a backend must not
-silently pick the first native element returned by its API.
+silently pick the first native element returned by its API. Ambiguity responses
+carry the `{app, name}` query and candidate semantic names, normalized roles,
+human labels, scores, reasons, and recorded locator evidence; public candidate
+summaries never expose internal handles.
 
 Candidates are ranked by semantic score before the frame tie-breaker. The frame
 tie-breaker occupies only the sub-semantic part of the score and therefore cannot
@@ -397,8 +403,9 @@ All implementations read and write the versioned, human-editable format defined
 in [`axn.md`](axn.md): arguments, ordered primitive actions, late-bound values,
 `requires`, `expects`, execution flags, and trace semantics are shared.
 
-The format is cross-platform; recordings are not. `.axn` files contain native
-application identities, native locator vocabulary, and assumptions about a
+The format is cross-platform; recordings are not. Version 2 `.axn` files address
+elements by `{app, name}` and may retain native locator evidence for replay.
+They contain native application identities, native locator vocabulary, and assumptions about a
 particular interface. A recording against Finder on macOS was never expected to
 replay against Explorer on Windows. Cross-platform workflows may be authored as
 separate platform artifacts while still using the same parser, runner, and
@@ -409,8 +416,8 @@ result contract.
 Every backend must make unavailable or restricted operations discoverable before
 a client relies on them. Capability reporting distinguishes at least:
 
-1. **Observe:** application/window enumeration, accessibility capture, retained
-   handles, and change observation.
+1. **Observe:** application/window enumeration, accessibility capture, internal
+   retained-element caches, semantic naming, and change observation.
 2. **Semantic actions:** invoke/action dispatch, readable and settable values,
    focus, and scrolling.
 3. **Pointer and keyboard fallback:** synthetic pointer/keyboard input,
@@ -443,7 +450,7 @@ but Wayland's global-input restriction alone does not imply that limitation.
 ## Conformance
 
 The shared contract will be encoded as implementation-neutral fixtures covering
-tool schemas, target decoding, locator filtering/scoring outcomes, result
+tool schemas, strict `{app, name}` target decoding, locator filtering/scoring outcomes, result
 envelopes, `.axn` parsing and traces, capability failures, and honest action
 results. Both the Swift and Rust implementations must run those fixtures in
 addition to backend-specific integration tests.

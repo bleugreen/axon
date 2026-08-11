@@ -1,4 +1,3 @@
-        self.semanticNameRegistry = semanticNameRegistry
 import ApplicationServices
 import Foundation
 
@@ -69,6 +68,7 @@ public struct CommandRouterServices {
         let liveLocatorResolver = AXLiveLocatorResolver(elementStore: elementStore)
 
         self.listApps = listApps
+        self.semanticNameRegistry = semanticNameRegistry
         self.listAllApps = listAllApps
         self.captureSnapshot = defaultCaptureSnapshot
         self.captureSnapshotWithChildDepth = captureSnapshotWithChildDepth ?? { app, screenshot, childDepth in
@@ -86,12 +86,6 @@ public struct CommandRouterServices {
                 screenshot: screenshot,
                 childDepth: childDepth
             )
-        } catch let failure as SemanticResolutionFailure {
-            return JSONRPCResponse(id: id, error: JSONRPCError(
-                code: -32602,
-                message: "Semantic target did not resolve uniquely: \(failure.status)",
-                data: .object(["targetResolution": failure.jsonValue(activeSecretRedactor: activeSecretRedactor())])
-            ))
         }
         self.resolveLocator = resolveLocator ?? { app, locator, scrollToVisible in
             try liveLocatorResolver.resolve(app: app, locator: locator, scrollToVisible: scrollToVisible)
@@ -610,7 +604,15 @@ private struct PerceptionCommandHandler {
 
         while true {
             let elapsedMs = max(0, Int((services.now().timeIntervalSince(startedAt) * 1_000).rounded()))
-            let resolution = try services.resolveLocator(request.app, request.locator, false)
+            let record: SemanticNameRecord
+            switch services.semanticNameRegistry.lookup(app: request.app, name: request.name) {
+            case let .unique(found): record = found
+            case .missing:
+                throw SemanticResolutionFailure(status: "missing", query: SemanticTargetQuery(app: request.app, name: request.name), candidates: [])
+            case let .ambiguous(query, candidates):
+                throw SemanticResolutionFailure(status: "ambiguous", query: query, candidates: candidates)
+            }
+            let resolution = try services.resolveLocator(request.app, record.locator, false)
             lastResolution = resolution
             if resolution.status == .unique, let handle = resolution.best?.handle {
                 let state = try services.readableAXState(handle)
@@ -1144,6 +1146,12 @@ private struct PrimitiveActionCommandHandler {
                     data: .object(["targetResolution": compactTargetResolution(failure.resolution)])
                 )
             )
+        } catch let failure as SemanticResolutionFailure {
+            return JSONRPCResponse(id: id, error: JSONRPCError(
+                code: -32602,
+                message: "Semantic target did not resolve uniquely: \(failure.status)",
+                data: .object(["targetResolution": failure.jsonValue(activeSecretRedactor: activeSecretRedactor())])
+            ))
         } catch let error as JSONRPCError {
             return JSONRPCResponse(id: id, error: error)
         } catch let error as AXElementStoreError {
@@ -1432,18 +1440,18 @@ private struct WaitForValueRequest {
     static let minIntervalMs = 10
 
     let app: String
-    let locator: AXLocator
+    let name: String
     let predicate: WaitValuePredicate
     let timeoutMs: Int
     let intervalMs: Int
 
     init(params: [String: JSONValue]) throws {
-        let target = try CommandRouterRequestSupport.requiredToolTarget("target", in: params, acceptedKinds: .locator)
-        guard case let .locator(app, locator) = target else {
-            throw JSONRPCError.invalidParams("target must be a locator target")
+        let target = try CommandRouterRequestSupport.requiredToolTarget("target", in: params, acceptedKinds: .element)
+        guard case let .semanticName(app, name) = target else {
+            throw JSONRPCError.invalidParams("target must be an app-scoped semantic name")
         }
         self.app = app
-        self.locator = locator
+        self.name = name
         self.predicate = try Self.predicate(in: params)
         self.timeoutMs = try Self.boundedMilliseconds(
             "timeoutMs",
