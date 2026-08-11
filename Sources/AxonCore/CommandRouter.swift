@@ -491,7 +491,8 @@ private struct PerceptionCommandHandler {
             if params["since"] != nil {
                 return try changedSinceResponse(id: request.id, params: params)
             }
-            guard let target = try decoder.string("target") ?? CommandRouterRequestSupport.optionalString("app", in: params) else {
+            let semanticTarget = try CommandRouterRequestSupport.optionalToolTarget("target", in: params, acceptedKinds: .element)
+            guard semanticTarget != nil || (try CommandRouterRequestSupport.optionalString("app", in: params)) != nil else {
                 let format = try decoder.string("format")
                 let includeAllApps = (try decoder.bool("all") ?? false) || format == "debug"
                 return JSONRPCResponse(
@@ -501,13 +502,31 @@ private struct PerceptionCommandHandler {
                     ]
                 )
             }
-            if (try? SnapshotHandle(target)) != nil {
+            if case let .semanticName(app, name)? = semanticTarget {
+                let parentHandle: String
+                switch services.semanticNameRegistry.lookup(app: app, name: name) {
+                case let .unique(record):
+                    if let retained = record.retainedHandle,
+                       (try? services.elementStore.element(for: retained)) != nil {
+                        parentHandle = retained.rawValue
+                    } else {
+                        let resolution = try services.resolveLocator(app, record.locator, false)
+                        guard resolution.status == .unique, let handle = resolution.best?.handle else {
+                            throw JSONRPCError.invalidParams("Semantic paging target did not resolve uniquely")
+                        }
+                        parentHandle = handle.rawValue
+                    }
+                case .missing:
+                    throw JSONRPCError.invalidParams("Unknown semantic paging target; run look for the app first")
+                case .ambiguous:
+                    throw JSONRPCError.invalidParams("Semantic paging target is ambiguous")
+                }
                 let offset = try decoder.int("offset") ?? 0
                 let limit = try decoder.int("limit") ?? AXSnapshotCapturer.defaultMaxChildrenPerNode
                 let direct = try decoder.bool("direct") ?? false
                 let allDirectChildren = try decoder.bool("all") ?? false
                 let children = try AXSnapshotCapturer(elementStore: services.elementStore).captureChildren(
-                    parentHandle: target,
+                    parentHandle: parentHandle,
                     offset: offset,
                     limit: limit,
                     direct: direct,
@@ -523,7 +542,10 @@ private struct PerceptionCommandHandler {
             let screenText = try decoder.bool("screenText") ?? false
             let includeTree = try decoder.bool("tree") ?? true
             let childDepth = try decoder.int("childDepth")
-            let snapshot = try services.captureSnapshotWithChildDepth(target, screenshot || screenText, childDepth)
+            guard let app = try CommandRouterRequestSupport.optionalString("app", in: params) else {
+                throw JSONRPCError.invalidParams("look requires app when target is omitted")
+            }
+            let snapshot = try services.captureSnapshotWithChildDepth(app, screenshot || screenText, childDepth)
             services.elementStore.store(summary: observedSummary(for: snapshot))
             services.semanticNameRegistry.register(snapshot: snapshot)
             let semanticNames = SemanticNameDeriver.derive(from: snapshot.jsonValue(includeTree: true))

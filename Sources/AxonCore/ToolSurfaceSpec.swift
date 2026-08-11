@@ -117,16 +117,17 @@ public enum ToolSurfaceSpec {
     public static let tools: [ToolSpec] = [
         ToolSpec(
             name: "look",
-            description: "Observe Axon's current surface: no target lists apps, an app target captures state, a handle target pages children, and since returns a change check.",
+            description: "Observe Axon's current surface: no app lists apps, app captures state, a semantic target pages children, and since returns a change check.",
             params: [
-                ToolParameterSpec("target", .string, description: "Bundle id, pid, app name, partial app name, or retained snapshot handle such as s12:4. Omit to list apps."),
+                ToolParameterSpec("app", .string, description: "Bundle id, pid, app name, or partial app name. Omit with target to list apps."),
+                ToolParameterSpec("target", .target(.element), description: "App-scoped semantic name returned by a prior look; pages that element's children."),
                 ToolParameterSpec("since", .string, description: "Snapshot id from a prior look response. Returns a coarse change check instead of a tree."),
                 ToolParameterSpec("screenshot", .boolean, default: .bool(false), description: "Include embedded ScreenCaptureKit screenshot data with an app observation. Defaults to false for MCP."),
                 ToolParameterSpec("screenText", .boolean, default: .bool(false), description: "OCR visible text from the app window screenshot and include it as organized screenText. Defaults to false."),
                 ToolParameterSpec("tree", .boolean, description: "Include the nested AX tree for app observations. Defaults to true for observation format and false for debug format."),
-                ToolParameterSpec("offset", .integer, default: .int(0), description: "Zero-based child offset when target is a retained handle. Defaults to 0."),
-                ToolParameterSpec("limit", .integer, description: "Maximum children when target is a retained handle. Defaults to Axon's sibling page size."),
-                ToolParameterSpec("direct", .boolean, default: .bool(false), description: "For handle targets, return only direct children and retain their handles without recursively capturing descendants."),
+                ToolParameterSpec("offset", .integer, default: .int(0), description: "Zero-based child offset for a semantic target. Defaults to 0."),
+                ToolParameterSpec("limit", .integer, description: "Maximum children for a semantic target. Defaults to Axon's sibling page size."),
+                ToolParameterSpec("direct", .boolean, default: .bool(false), description: "For semantic targets, return only direct children without recursively capturing descendants."),
                 ToolParameterSpec("childDepth", .integer, description: "Initial child depth for app observations. Use 0 to retain top-level windows only and page children by handle."),
                 ToolParameterSpec("depth", .integer, description: "Maximum tree depth to display for app observations, with windows at depth 0."),
                 ToolParameterSpec("all", .boolean, description: "For no-target app lists, include all running processes. For direct handle child requests, include all direct children."),
