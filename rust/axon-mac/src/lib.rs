@@ -11,12 +11,12 @@ use axon_core::{
 };
 use serde_json::{Map, Value, json};
 
-pub mod lifecycle;
+pub mod socket;
 
-#[cfg(macos)]
+#[cfg(target_os = "macos")]
 mod platform;
-#[cfg(macos)]
-pub use platform::{IntegrationProbe, macOSBackend};
+#[cfg(target_os = "macos")]
+pub use platform::MacBackend;
 
 /// Tools this backend does not implement at all. These are not delivery decisions: the request
 /// names something the macOS daemon has no code path for, which stays a JSON-RPC error.
