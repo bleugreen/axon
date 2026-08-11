@@ -11,6 +11,7 @@ use axon_core::{
 };
 use serde_json::{Map, Value, json};
 
+#[cfg(target_os = "macos")]
 pub mod socket;
 
 #[cfg(target_os = "macos")]
