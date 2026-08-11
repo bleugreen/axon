@@ -822,6 +822,18 @@ private func replayFixtureTarget(_ legacyID: String) -> JSONValue {
     ])
 }
 
+private func replayFixtureResolver(_ app: String, _ locator: AXLocator, _ scrollToVisible: Bool) throws -> LocatorResolution {
+    let legacyIDs = ["s1:1", "s1:2", "s1:3"]
+    let legacyID = legacyIDs.first { locator.identifier?.matches($0) == true } ?? "s1:1"
+    let handle = try SnapshotHandle(legacyID)
+    return LocatorResolution(
+        status: .unique,
+        snapshotID: handle.snapshotID,
+        best: LocatorCandidate(index: handle.nodeIndex, handle: handle, role: "AXButton", title: "Fixture", score: 1_000, reasons: []),
+        candidates: []
+    )
+}
+
 private func reorderListFactSnapshot(value: String) -> AppSnapshot {
     AppSnapshot(
         id: SnapshotID("reorder-fact-fixture"),
@@ -1391,6 +1403,7 @@ private func articleSnapshot(children: [AXNode]) -> AppSnapshot {
             Issue.record("Axn fact verification should not use compact snapshot capture")
             return valueFactSnapshot(value: "Wrong")
         },
+        resolveLocator: replayFixtureResolver,
         axnSnapshotProvider: { app in
             axnSnapshotApps.append(app)
             return valueFactSnapshot(value: "Mitch")
@@ -1644,6 +1657,7 @@ private func articleSnapshot(children: [AXNode]) -> AppSnapshot {
 @Test func commandRouterDebugStartCapturesSnapshotForPauseBefore() {
     var snapshotApps: [String] = []
     let router = CommandRouter(
+        resolveLocator: replayFixtureResolver,
         axnSnapshotProvider: { app in
             snapshotApps.append(app)
             return debugPauseSnapshot(id: "pause-snapshot", app: app)
@@ -1680,6 +1694,7 @@ private func articleSnapshot(children: [AXNode]) -> AppSnapshot {
 @Test func commandRouterDebugStepDoesNotCaptureSnapshotForOrdinaryStepPause() {
     var snapshotApps: [String] = []
     let router = CommandRouter(
+        resolveLocator: replayFixtureResolver,
         axnSnapshotProvider: { app in
             snapshotApps.append(app)
             return debugPauseSnapshot(id: "unexpected", app: app)
@@ -1788,6 +1803,7 @@ private func articleSnapshot(children: [AXNode]) -> AppSnapshot {
 @Test func commandRouterDebugContinueCapturesSnapshotAtBreakpoint() {
     var snapshotApps: [String] = []
     let router = CommandRouter(
+        resolveLocator: replayFixtureResolver,
         axnSnapshotProvider: { app in
             snapshotApps.append(app)
             return debugPauseSnapshot(id: "breakpoint-snapshot", app: app)
@@ -1894,6 +1910,7 @@ private func articleSnapshot(children: [AXNode]) -> AppSnapshot {
     var attempts = 0
     var snapshotApps: [String] = []
     let router = CommandRouter(
+        resolveLocator: replayFixtureResolver,
         axnSnapshotProvider: { app in
             let id = "failure-snapshot-\(snapshotApps.count + 1)"
             snapshotApps.append(app)
@@ -2154,6 +2171,7 @@ private func temporaryAxnFile(_ source: String) throws -> String {
 @Test func commandRouterDebugPauseSnapshotRedactsActiveCredentials() throws {
     let secret = "correct horse battery staple"
     let router = CommandRouter(
+        resolveLocator: replayFixtureResolver,
         axnSnapshotProvider: { app in
             AppSnapshot(
                 id: SnapshotID("debug-redaction"),
