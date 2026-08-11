@@ -2080,52 +2080,36 @@ mod tests {
     }
 
     #[test]
-    fn axn_value_facts_drive_expects_requires_dry_run_and_continue_on_error() {
+    fn axn_semantic_name_target_reports_unsupported_without_dispatch() {
         let backend = backend(vec![], Some("ready now"));
-        let handle = backend.snapshot.handle(0).0;
-        let mut router = Router::new(backend.clone());
-        router.snapshot = Some(backend.snapshot.clone());
-        let source = format!(
-            r#"version: 1
+        let clicks = backend.clicks.clone();
+        let focuses = backend.focuses.clone();
+        let mut router = Router::new(backend);
+        let source = r#"version: 1
 actions:
-  - id: pass
-    tool: invoke
-    target: {handle}
-    expects:
-      - id: ready
-        kind: value
-        target: {handle}
-        contains: ready
   - tool: invoke
-    target: {handle}
-    requires: [ready]
-    expects:
-      - id: exact
-        kind: value
-        target: {handle}
-        equals: wrong
-  - tool: invoke
-    target: {handle}
-"#
-        );
+    target:
+      app: App
+      name: root
+"#;
+
         let response = router
-            .request(request(
-                "run",
-                json!({"source":source,"options":{"continueOnError":true}}),
-            ))
+            .request(request("run", json!({"source": source})))
             .unwrap();
         let JsonRpcResponse::Success(success) = response else {
-            panic!()
+            panic!("the .axn run itself returns a batch result")
         };
         let batch = &success.result["batch"];
-        assert!(!batch["success"].as_bool().unwrap());
-        assert_eq!(batch["trace"].as_array().unwrap().len(), 3);
+        assert_eq!(batch["success"], json!(false));
+        assert_eq!(batch["trace"].as_array().unwrap().len(), 1);
         assert!(
-            batch["trace"][1]["error"]
+            batch["trace"][0]["error"]
                 .as_str()
                 .unwrap()
-                .contains("expected")
+                .contains("live semantic-name resolution is not implemented by the Windows provider")
         );
+        assert_eq!(*clicks.borrow(), 0);
+        assert_eq!(*focuses.borrow(), 0);
 
         let dry = router
             .request(request(
@@ -2134,16 +2118,16 @@ actions:
             ))
             .unwrap();
         let JsonRpcResponse::Success(dry) = dry else {
-            panic!()
+            panic!("dry-run returns a batch result")
         };
-        assert!(dry.result["batch"]["dryRun"].as_bool().unwrap());
-        assert!(!dry.result["batch"]["success"].as_bool().unwrap());
-        assert!(
-            dry.result["batch"]["trace"][1]["error"]
-                .as_str()
-                .unwrap()
-                .contains("required fact")
+        assert_eq!(dry.result["batch"]["dryRun"], json!(true));
+        assert_eq!(dry.result["batch"]["success"], json!(true));
+        assert_eq!(
+            dry.result["batch"]["trace"][0]["result"]["target"],
+            json!({"app": "App", "name": "root"})
         );
+        assert_eq!(*clicks.borrow(), 0);
+        assert_eq!(*focuses.borrow(), 0);
     }
 
     /// The pixel rung's router half: which rung a click takes, what a refusal names, and what a
