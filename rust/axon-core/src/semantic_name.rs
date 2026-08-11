@@ -106,6 +106,7 @@ impl SemanticNameDeriver {
             })
             .collect()
     }
+
 }
 
 fn meaningful(value: Option<&str>) -> Option<String> {
@@ -356,6 +357,8 @@ pub struct SemanticCandidate {
 #[derive(Clone)]
 struct Record {
     target: WireElementTarget,
+    app: crate::Application,
+    snapshot_id: crate::SnapshotId,
     candidate_label: Option<String>,
     role: String,
     label: String,
@@ -407,6 +410,8 @@ impl SemanticNameRegistry {
                         app: s.app.name.clone(),
                         name: n.name.clone(),
                     },
+                    app: s.app.clone(),
+                    snapshot_id: s.id.clone(),
                     candidate_label: n.candidate_label.clone(),
                     role: n.role.clone(),
                     label: n.label.clone(),
@@ -426,23 +431,28 @@ impl SemanticNameRegistry {
         names
     }
     pub fn resolve(&self, target: &WireElementTarget, live: &Snapshot) -> SemanticLookup {
+        if !app_matches(&target.app, &live.app) {
+            return SemanticLookup::Missing {
+                target: target.clone(),
+            };
+        }
         let matches: Vec<_> = self
             .order
             .iter()
             .rev()
             .filter_map(|id| self.records.get(id))
             .flatten()
-            .filter(|r| app_matches(&target.app, &live.app) && r.target.name == target.name)
+            .filter(|r| app_matches(&target.app, &r.app) && r.target.name == target.name)
             .collect();
         if matches.is_empty() {
             return SemanticLookup::Missing {
                 target: target.clone(),
             };
         }
-        let newest = &matches[0].handle.0.split(':').next().unwrap_or("");
+        let newest = matches[0].snapshot_id.clone();
         let latest: Vec<_> = matches
             .into_iter()
-            .filter(|r| r.handle.0.starts_with(&format!("{newest}:")))
+            .filter(|r| r.snapshot_id == newest)
             .collect();
         if latest.len() > 1 {
             return SemanticLookup::Ambiguous {
@@ -642,6 +652,38 @@ mod tests {
                 assert!(!json.contains("handle"));
             }
             _ => panic!("duplicate name was not ambiguous"),
+        }
+    }
+
+    #[test]
+    fn registry_never_uses_a_newer_record_from_another_application() {
+        let mut registry = SemanticNameRegistry::default();
+        let mut app_a = snapshot("a-old", vec![button("Save", Some("a-save"))]);
+        app_a.app.name = "App A".into();
+        app_a.app.identifier = Some("com.example.a".into());
+        let name = registry
+            .register(&app_a)
+            .into_iter()
+            .find(|name| name.label == "Save")
+            .unwrap()
+            .name;
+
+        let mut app_b = snapshot("b-new", vec![button("Save", Some("b-save"))]);
+        app_b.app.name = "App B".into();
+        app_b.app.identifier = Some("com.example.b".into());
+        registry.register(&app_b);
+
+        let mut live_a = snapshot("a-live", vec![button("Save", Some("a-save"))]);
+        live_a.app = app_a.app.clone();
+        match registry.resolve(
+            &WireElementTarget {
+                app: "com.example.a".into(),
+                name,
+            },
+            &live_a,
+        ) {
+            SemanticLookup::Unique { handle, .. } => assert_eq!(handle, live_a.handle(1)),
+            _ => panic!("App B's newer record shadowed App A's semantic name"),
         }
     }
 }
