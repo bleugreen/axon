@@ -1,15 +1,21 @@
 //! Isolated Unix-socket daemon and MCP stdio facade for the Rust macOS backend.
 //! The endpoint is mandatory and has no fallback to the installed Swift daemon.
+use crate::{MacBackend, Router, parse_request};
 use axon_core::{
     CapabilityInfo, CapabilityState, DaemonReport, HealthPlatform, JsonRpcId, JsonRpcRequest,
     JsonRpcResponse, PermissionState, PlatformBackend, SessionHealth, health::reason,
 };
-use crate::{MacBackend, Router, parse_request};
 use serde_json::{Value, json};
 use std::{
     fs::{self, File, OpenOptions},
     io::{self, BufRead, BufReader, Write},
-    os::{fd::AsRawFd, unix::{fs::{FileTypeExt, MetadataExt, PermissionsExt}, net::{UnixListener, UnixStream}}},
+    os::{
+        fd::AsRawFd,
+        unix::{
+            fs::{FileTypeExt, MetadataExt, PermissionsExt},
+            net::{UnixListener, UnixStream},
+        },
+    },
     path::PathBuf,
     time::Duration,
 };
@@ -25,19 +31,34 @@ const LOCK_NB: i32 = 4;
 
 fn acquire_lock(path: &std::path::Path) -> io::Result<File> {
     let lock_path = PathBuf::from(format!("{}.lock", path.display()));
-    let lock = OpenOptions::new().create(true).truncate(false).read(true).write(true).open(lock_path)?;
+    let lock = OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true)
+        .open(lock_path)?;
     if unsafe { flock(lock.as_raw_fd(), LOCK_EX | LOCK_NB) } != 0 {
-        return Err(io::Error::new(io::ErrorKind::AddrInUse, "socket ownership lock is held"));
+        return Err(io::Error::new(
+            io::ErrorKind::AddrInUse,
+            "socket ownership lock is held",
+        ));
     }
     Ok(lock)
 }
 
 pub fn path() -> io::Result<PathBuf> {
-    let value = std::env::var_os(SOCKET_ENV)
-        .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, format!("{SOCKET_ENV} must name an isolated socket")))?;
+    let value = std::env::var_os(SOCKET_ENV).ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::NotFound,
+            format!("{SOCKET_ENV} must name an isolated socket"),
+        )
+    })?;
     let path = PathBuf::from(value);
     if path == std::path::Path::new("/tmp/axon.sock") {
-        return Err(io::Error::new(io::ErrorKind::PermissionDenied, "the installed daemon socket is forbidden"));
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "the installed daemon socket is forbidden",
+        ));
     }
     Ok(path)
 }
@@ -62,7 +83,10 @@ pub fn serve() -> io::Result<()> {
             ));
         }
         if UnixStream::connect(&path).is_ok() {
-            return Err(io::Error::new(io::ErrorKind::AddrInUse, "socket already has a listener"));
+            return Err(io::Error::new(
+                io::ErrorKind::AddrInUse,
+                "socket already has a listener",
+            ));
         }
         fs::remove_file(&path)?;
     }
@@ -114,15 +138,25 @@ fn answer(
     writeln!(stream, "{}", serde_json::to_string(&response).unwrap())?;
     Ok(stop)
 }
-fn dispatch(line: &str, router: &mut Router<MacBackend>, reported: &[CapabilityInfo], trusted: bool, endpoint: &std::path::Path) -> (Value, bool) {
+fn dispatch(
+    line: &str,
+    router: &mut Router<MacBackend>,
+    reported: &[CapabilityInfo],
+    trusted: bool,
+    endpoint: &std::path::Path,
+) -> (Value, bool) {
     let request = match parse_request(line) {
         Ok(v) => v,
         Err(v) => return (serde_json::to_value(v).unwrap(), false),
     };
-    let Some(id) = request.id.clone() else { return (Value::Null, false) };
+    let Some(id) = request.id.clone() else {
+        return (Value::Null, false);
+    };
     match request.method.as_str() {
         "health" => {
-            let permission = if trusted { PermissionState::granted("accessibility") } else {
+            let permission = if trusted {
+                PermissionState::granted("accessibility")
+            } else {
                 PermissionState::ungranted("accessibility", reason::ACCESSIBILITY_NOT_GRANTED, None)
             };
             let report = DaemonReport {
@@ -135,10 +169,30 @@ fn dispatch(line: &str, router: &mut Router<MacBackend>, reported: &[CapabilityI
                 permissions: vec![permission],
                 capabilities: CapabilityState::complete(reported),
             };
-            (serde_json::to_value(JsonRpcResponse::success(id, serde_json::to_value(report).unwrap())).unwrap(), false)
+            (
+                serde_json::to_value(JsonRpcResponse::success(
+                    id,
+                    serde_json::to_value(report).unwrap(),
+                ))
+                .unwrap(),
+                false,
+            )
         }
-        "shutdown" => (serde_json::to_value(JsonRpcResponse::success(id, json!({"shutdown":true,"processId":std::process::id()}))).unwrap(), true),
-        _ => (router.request(request).map(|v| serde_json::to_value(v).unwrap()).unwrap_or(Value::Null), false),
+        "shutdown" => (
+            serde_json::to_value(JsonRpcResponse::success(
+                id,
+                json!({"shutdown":true,"processId":std::process::id()}),
+            ))
+            .unwrap(),
+            true,
+        ),
+        _ => (
+            router
+                .request(request)
+                .map(|v| serde_json::to_value(v).unwrap())
+                .unwrap_or(Value::Null),
+            false,
+        ),
     }
 }
 pub fn mcp() -> io::Result<()> {
@@ -146,17 +200,33 @@ pub fn mcp() -> io::Result<()> {
     let mut stdout = io::stdout();
     for line in stdin.lock().lines() {
         let value: Value = serde_json::from_str(&line?).map_err(io::Error::other)?;
-        let Some(id) = value.get("id").cloned() else { continue };
+        let Some(id) = value.get("id").cloned() else {
+            continue;
+        };
         let response = match value.get("method").and_then(Value::as_str) {
-            Some("initialize") => json!({"jsonrpc":"2.0","id":id,"result":{"protocolVersion":"2025-03-26","capabilities":{"tools":{}},"serverInfo":{"name":"axon-mac","version":env!("CARGO_PKG_VERSION")}}}),
+            Some("initialize") => {
+                json!({"jsonrpc":"2.0","id":id,"result":{"protocolVersion":"2025-03-26","capabilities":{"tools":{}},"serverInfo":{"name":"axon-mac","version":env!("CARGO_PKG_VERSION")}}})
+            }
             Some("tools/list") => json!({"jsonrpc":"2.0","id":id,"result":{"tools":tools()}}),
             Some("tools/call") => {
-                let name = value.pointer("/params/name").and_then(Value::as_str).unwrap_or("");
-                let args = value.pointer("/params/arguments").cloned().unwrap_or_else(|| json!({}));
-                let rpc = serde_json::to_string(&JsonRpcRequest::new(Some(JsonRpcId::Integer(1)), name, Some(args))).unwrap();
+                let name = value
+                    .pointer("/params/name")
+                    .and_then(Value::as_str)
+                    .unwrap_or("");
+                let args = value
+                    .pointer("/params/arguments")
+                    .cloned()
+                    .unwrap_or_else(|| json!({}));
+                let rpc = serde_json::to_string(&JsonRpcRequest::new(
+                    Some(JsonRpcId::Integer(1)),
+                    name,
+                    Some(args),
+                ))
+                .unwrap();
                 match request(&rpc) {
                     Ok(body) => {
-                        let response: Value = serde_json::from_str(&body).map_err(io::Error::other)?;
+                        let response: Value =
+                            serde_json::from_str(&body).map_err(io::Error::other)?;
                         if let Some(error) = response.get("error") {
                             json!({"jsonrpc":"2.0","id":id,"result":{"content":[{"type":"text","text":error["message"].as_str().unwrap_or("Axon error")}],"structuredContent":error,"isError":true}})
                         } else {
@@ -164,10 +234,14 @@ pub fn mcp() -> io::Result<()> {
                             json!({"jsonrpc":"2.0","id":id,"result":{"content":[{"type":"text","text":serde_json::to_string(&result).unwrap()}],"structuredContent":result,"isError":false}})
                         }
                     }
-                    Err(error) => json!({"jsonrpc":"2.0","id":id,"error":{"code":-32000,"message":error.to_string()}}),
+                    Err(error) => {
+                        json!({"jsonrpc":"2.0","id":id,"error":{"code":-32000,"message":error.to_string()}})
+                    }
                 }
             }
-            _ => json!({"jsonrpc":"2.0","id":id,"error":{"code":-32601,"message":"method not found"}}),
+            _ => {
+                json!({"jsonrpc":"2.0","id":id,"error":{"code":-32601,"message":"method not found"}})
+            }
         };
         writeln!(stdout, "{}", serde_json::to_string(&response).unwrap())?;
         stdout.flush()?;
@@ -191,7 +265,10 @@ mod tests {
     fn ownership_lock_refuses_a_second_server() {
         let path = std::env::temp_dir().join(format!("axon-mac-lock-{}", std::process::id()));
         let first = acquire_lock(&path).unwrap();
-        assert_eq!(acquire_lock(&path).unwrap_err().kind(), io::ErrorKind::AddrInUse);
+        assert_eq!(
+            acquire_lock(&path).unwrap_err().kind(),
+            io::ErrorKind::AddrInUse
+        );
         drop(first);
         let _ = fs::remove_file(format!("{}.lock", path.display()));
     }
@@ -211,7 +288,15 @@ mod tests {
     }
     #[test]
     fn facade_is_exact_v1_surface() {
-        let names = tools().into_iter().map(|v| v["name"].as_str().unwrap().to_owned()).collect::<Vec<_>>();
-        assert_eq!(names, ["look","find","click","type","keyboard","invoke","scroll","run"]);
+        let names = tools()
+            .into_iter()
+            .map(|v| v["name"].as_str().unwrap().to_owned())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            names,
+            [
+                "look", "find", "click", "type", "keyboard", "invoke", "scroll", "run"
+            ]
+        );
     }
 }

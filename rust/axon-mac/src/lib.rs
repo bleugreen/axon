@@ -582,7 +582,10 @@ impl<
             }
             "invoke" => {
                 let (handle, resolution) = self.resolve(params)?;
-                let action = params.get("action").and_then(Value::as_str).unwrap_or("AXPress");
+                let action = params
+                    .get("action")
+                    .and_then(Value::as_str)
+                    .unwrap_or("AXPress");
                 self.backend
                     .invoke(&handle, action)
                     .map_err(backend_error)?;
@@ -921,7 +924,10 @@ impl<
     fn dispatch(&mut self, tool: &str, params: &Map<String, Value>) -> DispatchOutcome {
         match self.dispatch_tool(tool, params) {
             Ok(result) => DispatchOutcome {
-                success: result.get("success").and_then(Value::as_bool).unwrap_or(true),
+                success: result
+                    .get("success")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(true),
                 result,
                 error: None,
                 resolution: None,
@@ -1043,7 +1049,13 @@ mod tests {
 
     #[test]
     fn excluded_tools_are_capability_errors_before_dispatch() {
-        for tool in ["save", "drag", "wait_for_value", "wait_for_stability", "permit"] {
+        for tool in [
+            "save",
+            "drag",
+            "wait_for_value",
+            "wait_for_stability",
+            "permit",
+        ] {
             let (_, capability) = EXCLUDED.iter().find(|(name, _)| *name == tool).unwrap();
             assert!(!capability.is_empty());
         }
@@ -1069,7 +1081,12 @@ mod tests {
     #[test]
     fn refusal_success_is_not_inferred_from_json_construction() {
         let result = json!({"success":false,"dispatchSuccess":false});
-        assert!(!result.get("success").and_then(Value::as_bool).unwrap_or(true));
+        assert!(
+            !result
+                .get("success")
+                .and_then(Value::as_bool)
+                .unwrap_or(true)
+        );
     }
 
     #[test]
