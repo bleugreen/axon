@@ -196,39 +196,39 @@ fn collect(
             }
         })
         .unwrap_or_else(|| human.to_vec());
-    if let (Some(label), Some(leaf)) = (raw, leaf) {
-        if !matches!(
+    if let (Some(label), Some(leaf)) = (raw, leaf)
+        && !matches!(
             role.as_str(),
             "item" | "cell" | "row" | "group" | "scroll" | "splitter"
-        ) {
-            let mut l = lineage.to_vec();
-            l.push(leaf);
-            let segments = l
-                .iter()
-                .rev()
-                .take(3)
-                .cloned()
-                .collect::<Vec<_>>()
-                .into_iter()
-                .rev()
-                .collect();
-            out.push(Draft {
-                index: own,
-                role,
-                label,
-                identifier,
-                lineage: l,
-                human: {
-                    let mut h = human.to_vec();
-                    h.push(human_label.is_some());
-                    h
-                },
-                segments,
-                collision_free: true,
-                disambiguation: None,
-                candidate_label: None,
-            });
-        }
+        )
+    {
+        let mut l = lineage.to_vec();
+        l.push(leaf);
+        let segments = l
+            .iter()
+            .rev()
+            .take(3)
+            .cloned()
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .collect();
+        out.push(Draft {
+            index: own,
+            role,
+            label,
+            identifier,
+            lineage: l,
+            human: {
+                let mut h = human.to_vec();
+                h.push(human_label.is_some());
+                h
+            },
+            segments,
+            collision_free: true,
+            disambiguation: None,
+            candidate_label: None,
+        });
     }
     for child in &node.children {
         collect(child, &next, &next_human, index, out);
@@ -313,10 +313,10 @@ fn qualify<F: Fn(&Draft) -> Option<String>>(
             *counts.entry(v.clone()).or_insert(0) += 1
         }
         for (&i, v) in ids.iter().zip(vals.iter()) {
-            if let Some(v) = v {
-                if counts[v] == 1 {
-                    reserve(d, i, v.clone(), kind, occupied)
-                }
+            if let Some(v) = v
+                && counts[v] == 1
+            {
+                reserve(d, i, v.clone(), kind, occupied)
             }
         }
     }
