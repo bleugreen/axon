@@ -1349,7 +1349,7 @@ mod tests {
         assert_eq!(e.error.code, -32700);
     }
     #[test]
-    fn ambiguous_locator_cannot_dispatch() {
+    fn legacy_locator_target_is_rejected_without_dispatch() {
         let mut router = Router::new(backend(vec![node("same"), node("same")], None));
         let response = router
             .request(request(
@@ -1358,15 +1358,18 @@ mod tests {
             ))
             .unwrap();
         let JsonRpcResponse::Failure(error) = response else {
-            panic!()
+            panic!("legacy locators must be rejected at the wire boundary")
         };
-        assert!(error.error.message.contains("Ambiguous"));
+        assert_eq!(error.error.code, -32602);
+        assert_eq!(
+            error.error.message,
+            "element target must be an {app, name} object"
+        );
         assert_eq!(*router.backend.clicks.borrow(), 0);
     }
     #[test]
     fn click_rejects_mismatched_immediate_hit_before_send_input() {
         let mut backend = backend(vec![], None);
-        let handle = backend.snapshot.handle(0);
         backend.pointer_target_matches = false;
         let clicks = backend.clicks.clone();
         let mut router = Router::new(backend);
@@ -1381,10 +1384,9 @@ mod tests {
         assert_eq!(*clicks.borrow(), 0);
     }
     #[test]
-    fn click_rejects_duplicate_name_sibling_when_native_identity_differs() {
-        let mut backend = backend(vec![node("duplicate"), node("duplicate")], None);
+    fn legacy_handle_target_is_rejected_without_dispatch() {
+        let backend = backend(vec![node("duplicate"), node("duplicate")], None);
         let target = backend.snapshot.handle(1);
-        backend.pointer_target_matches = false;
         let verified_handles = backend.verified_handles.clone();
         let clicks = backend.clicks.clone();
         let mut router = Router::new(backend);
@@ -1397,8 +1399,15 @@ mod tests {
             ))
             .unwrap();
 
-        assert!(matches!(response, JsonRpcResponse::Failure(_)));
-        assert_eq!(&*verified_handles.borrow(), &[target]);
+        let JsonRpcResponse::Failure(error) = response else {
+            panic!("legacy handles must be rejected at the wire boundary")
+        };
+        assert_eq!(error.error.code, -32602);
+        assert_eq!(
+            error.error.message,
+            "element target must be an {app, name} object"
+        );
+        assert!(verified_handles.borrow().is_empty());
         assert_eq!(*clicks.borrow(), 0);
     }
     fn recognized(text: &str, x: f64) -> axon_core::RecognizedText {
@@ -1618,7 +1627,6 @@ mod tests {
         // application from the resolution rather than treating the absence as already-frontmost,
         // which would dispatch global input with no activation and no proof.
         let backend = backend(vec![], None);
-        let handle = backend.snapshot.handle(0);
         let clicks = backend.clicks.clone();
         let activations = backend.activations.clone();
         let frontmost = backend.frontmost.clone();
@@ -1653,7 +1661,6 @@ mod tests {
         // guarantee the backend does not keep.
         let mut backend = backend(vec![], None);
         backend.foreground_transaction = false;
-        let handle = backend.snapshot.handle(0);
         let clicks = backend.clicks.clone();
         let mut router = Router::new(backend);
         router.snapshot = Some(router.backend.snapshot.clone());
@@ -1685,7 +1692,6 @@ mod tests {
     #[test]
     fn foreground_escalation_captures_activates_dispatches_once_and_restores() {
         let backend = backend(vec![], None);
-        let handle = backend.snapshot.handle(0);
         let clicks = backend.clicks.clone();
         let activations = backend.activations.clone();
         let frontmost = backend.frontmost.clone();
@@ -1733,7 +1739,6 @@ mod tests {
         // still knows nothing about whether the target acted on what `SendInput` posted. `click`
         // declares no postcondition, so nothing here can say that it did.
         let backend = backend(vec![], None);
-        let handle = backend.snapshot.handle(0);
         let clicks = backend.clicks.clone();
         let mut router = Router::new(backend);
         router.snapshot = Some(router.backend.snapshot.clone());
@@ -1824,7 +1829,6 @@ mod tests {
     fn a_failed_restoration_keeps_dispatch_evidence_and_fails_overall() {
         let backend = backend(vec![], None);
         backend.refuses_activation.borrow_mut().push("Prior".into());
-        let handle = backend.snapshot.handle(0);
         let mut router = Router::new(backend);
         router.snapshot = Some(router.backend.snapshot.clone());
 
@@ -1941,7 +1945,6 @@ mod tests {
     #[test]
     fn send_input_requires_the_foreground_opt_in_and_refuses_without_it() {
         let backend = backend(vec![], None);
-        let handle = backend.snapshot.handle(0);
         let clicks = backend.clicks.clone();
         let mut router = Router::new(backend);
         router.snapshot = Some(router.backend.snapshot.clone());
@@ -2008,50 +2011,43 @@ mod tests {
     }
 
     #[test]
-    fn uia_patterns_report_the_semantic_rung_and_never_set_focus() {
+    fn semantic_name_targets_report_unsupported_without_dispatch() {
         let backend = backend(vec![], Some("before"));
-        let handle = backend.snapshot.handle(0);
         let focuses = backend.focuses.clone();
+        let clicks = backend.clicks.clone();
         let mut router = Router::new(backend);
-        router.snapshot = Some(router.backend.snapshot.clone());
 
-        for (method, params, mechanism) in [
-            ("invoke", json!({"target": {"location": {"app": "App", "text": "root"}}}), "UIA InvokePattern"),
+        for (method, params) in [
+            ("invoke", json!({"target": {"app": "App", "name": "root"}})),
             (
                 "type",
-                json!({"target": {"location": {"app": "App", "text": "root"}}, "value": "after"}),
-                "UIA ValuePattern",
+                json!({"target": {"app": "App", "name": "root"}, "value": "after"}),
             ),
             (
                 "scroll",
-                json!({"target": {"location": {"app": "App", "text": "root"}}, "deltaY": -120.0}),
-                "UIA ScrollItemPattern",
+                json!({"target": {"app": "App", "name": "root"}, "deltaY": -120.0}),
             ),
         ] {
             let response = router.request(request(method, params)).unwrap();
-            let result = action_result(&response);
-            assert_eq!(result["delivery"], json!("semantic"), "{method}");
-            assert_eq!(result["dispatchSuccess"], json!(true), "{method}");
-            assert_eq!(result["refusal"], Value::Null, "{method}");
-            assert_eq!(
-                result["deliveryPolicy"],
-                json!("backgroundOnly"),
-                "{method}"
-            );
-            assert_eq!(
-                result["dispatch"]["mechanism"],
-                json!(mechanism),
-                "{method}"
+            let JsonRpcResponse::Failure(error) = response else {
+                panic!("{method} must report unsupported live semantic-name resolution")
+            };
+            assert_eq!(error.error.code, -32004, "{method}");
+            assert!(
+                error.error.message.contains(
+                    "live semantic-name resolution is not implemented by the Windows provider"
+                ),
+                "{method}: {}",
+                error.error.message
             );
         }
-        // SetFocus is a system-wide side effect, so a semantic path must never call it.
+        assert_eq!(*clicks.borrow(), 0);
         assert_eq!(*focuses.borrow(), 0);
     }
 
     #[test]
     fn an_unknown_policy_fails_before_resolution_or_dispatch() {
         let backend = backend(vec![], None);
-        let handle = backend.snapshot.handle(0);
         let clicks = backend.clicks.clone();
         let focuses = backend.focuses.clone();
         let mut router = Router::new(backend);
@@ -2165,8 +2161,7 @@ actions:
             // The whole point of the rung: the default policy, which forbids activation and global
             // input, now carries a click all the way to the target.
             let backend = backend(vec![], None);
-            let handle = backend.snapshot.handle(0);
-            bound(&backend);
+                bound(&backend);
             let clicks = backend.clicks.clone();
             let activations = backend.activations.clone();
             let dispatches = backend.pixel_dispatches.clone();
@@ -2209,8 +2204,7 @@ actions:
             // behaved differently in a context nobody probed, would otherwise produce an accepted
             // post, intact invariants, and a report that the caller's click had worked.
             let backend = backend(vec![], None);
-            let handle = backend.snapshot.handle(0);
-            bound(&backend);
+                bound(&backend);
             let dispatches = backend.pixel_dispatches.clone();
             let mut router = Router::new(backend);
             router.snapshot = Some(router.backend.snapshot.clone());
@@ -2242,8 +2236,7 @@ actions:
             // `success` that is simply hardwired false. A postcondition that verified promotes the
             // action, and the rung's own invariants still gate it.
             let backend = backend(vec![], None);
-            let handle = backend.snapshot.handle(0);
-            bound(&backend);
+                bound(&backend);
             let mut router = Router::new(backend);
             router.snapshot = Some(router.backend.snapshot.clone());
 
@@ -2276,8 +2269,7 @@ actions:
             // A dispatch into the wrong window is only diagnosable afterwards if both the window and
             // the arithmetic that chose the point are on the wire.
             let backend = backend(vec![], None);
-            let handle = backend.snapshot.handle(0);
-            bound(&backend);
+                bound(&backend);
             let mut router = Router::new(backend);
             router.snapshot = Some(router.backend.snapshot.clone());
 
@@ -2357,8 +2349,7 @@ actions:
         #[test]
         fn an_unavailable_plan_under_the_default_policy_dispatches_nothing() {
             let backend = backend(vec![], None);
-            let handle = backend.snapshot.handle(0);
-            let clicks = backend.clicks.clone();
+                let clicks = backend.clicks.clone();
             let dispatches = backend.pixel_dispatches.clone();
             let mut router = Router::new(backend);
             router.snapshot = Some(router.backend.snapshot.clone());
@@ -2383,8 +2374,7 @@ actions:
             // boundary above it is the reported reason. Both have to arrive: one says what to do
             // next, the other says whether the quiet rung would ever carry this target at all.
             let backend = backend(vec![], None);
-            let handle = backend.snapshot.handle(0);
-            *backend.pixel_plan.borrow_mut() = PixelPlan::unavailable(
+                *backend.pixel_plan.borrow_mut() = PixelPlan::unavailable(
                 "window class Widget has no probe-verified client-coordinate message path",
             );
             let clicks = backend.clicks.clone();
@@ -2412,8 +2402,7 @@ actions:
         #[test]
         fn an_unavailable_plan_escalates_to_the_foreground_when_permitted() {
             let backend = backend(vec![], None);
-            let handle = backend.snapshot.handle(0);
-            let clicks = backend.clicks.clone();
+                let clicks = backend.clicks.clone();
             let dispatches = backend.pixel_dispatches.clone();
             let mut router = Router::new(backend);
             router.snapshot = Some(router.backend.snapshot.clone());
@@ -2437,8 +2426,7 @@ actions:
             // An elevated target is the case. Answering it with foregroundNotPermitted would send the
             // caller after an opt-in that buys a dispatch UIPI discards.
             let backend = backend(vec![], None);
-            let handle = backend.snapshot.handle(0);
-            *backend.pixel_plan.borrow_mut() = PixelPlan::blocked(
+                *backend.pixel_plan.borrow_mut() = PixelPlan::blocked(
                 "the target window runs at a higher integrity level than the daemon; UIPI discards \
              posted input",
             );
@@ -2482,8 +2470,7 @@ actions:
                 "the receiving window moved between planning and dispatch",
             ] {
                 let backend = backend(vec![], None);
-                let handle = backend.snapshot.handle(0);
-                bound(&backend);
+                        bound(&backend);
                 *backend.pixel_result.borrow_mut() =
                     Err(PixelDispatchError::Stale(reason.to_string()));
                 let clicks = backend.clicks.clone();
@@ -2514,8 +2501,7 @@ actions:
             // Half a sequence may have left the target believing the button is held. A second attempt
             // at another rung would compound that rather than recover from it.
             let backend = backend(vec![], None);
-            let handle = backend.snapshot.handle(0);
-            bound(&backend);
+                bound(&backend);
             *backend.pixel_result.borrow_mut() = Ok(PixelDispatch {
             complete: false,
             partial: Some("the button-up message was refused twice; the target may still consider the left button held".into()),
@@ -2560,8 +2546,7 @@ actions:
                 (true, false, "real pointer moved"),
             ] {
                 let backend = backend(vec![], None);
-                let handle = backend.snapshot.handle(0);
-                bound(&backend);
+                        bound(&backend);
                 *backend.pixel_result.borrow_mut() = Ok(PixelDispatch {
                     complete: true,
                     partial: None,
