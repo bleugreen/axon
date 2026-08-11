@@ -295,3 +295,34 @@ import Testing
     #expect(fact["id"] == .string("a003.value.0"))
     #expect(keyboardAction.fields["requires"] == .array([.string("a003.value.0")]))
 }
+
+@Test func axnHealingUpdatesLocatorWithoutRenamingSemanticTarget() throws {
+    let axn = try Axn(source: """
+    version: 2
+    actions:
+      - id: a001
+        tool: click
+        target:
+          app: Example
+          name: toolbar/save
+          locator:
+            role: AXButton
+            title: Save
+    """)
+    let event = LocatorHealEvent(
+        actionID: "a001",
+        actionIndex: 0,
+        status: .proposed,
+        confidence: "high",
+        path: "fullSnapshot",
+        evidence: [],
+        proposal: .object(["role": .string("AXButton"), "identifier": .string("save-button")]),
+        diff: "locator changed",
+        reason: nil
+    )
+
+    let revised = AxnHealing.revise(axn, with: [event])
+
+    #expect(revised.blocks[0].jsonValue["target"]?["name"] == .string("toolbar/save"))
+    #expect(revised.blocks[0].jsonValue["target"]?["locator"]?["identifier"] == .string("save-button"))
+}
