@@ -1,0 +1,17 @@
+{
+  "defaultScreenshot": true,
+  "carveOuts": {
+    "appList": false,
+    "since": false,
+    "childPage": false
+  },
+  "explicit": {
+    "true": true,
+    "false": false
+  },
+  "encoding": {
+    "maxDimension": 1280,
+    "mediaType": "image/jpeg",
+    "qualityPercent": 75
+  }
+}

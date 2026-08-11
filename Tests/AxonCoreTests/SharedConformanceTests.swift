@@ -7,6 +7,34 @@ private struct SharedLocatorFixture: Decodable {
     let cases: [SharedLocatorCase]
 }
 
+private struct SharedLookScreenshotPolicy: Decodable {
+    let defaultScreenshot: Bool
+    let carveOuts: [String: Bool]
+    let explicit: [String: Bool]
+    let encoding: SharedScreenshotEncoding
+}
+
+private struct SharedScreenshotEncoding: Decodable {
+    let maxDimension: Int
+    let mediaType: String
+    let qualityPercent: Int
+}
+
+@Test func sharedLookScreenshotPolicyFixture() throws {
+    let fixtureURL = URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent()
+        .appendingPathComponent("../../schema/fixtures/look-screenshot-policy.json")
+        .standardizedFileURL
+    let fixture = try JSONDecoder().decode(SharedLookScreenshotPolicy.self, from: Data(contentsOf: fixtureURL))
+
+    #expect(fixture.defaultScreenshot)
+    #expect(fixture.carveOuts == ["appList": false, "since": false, "childPage": false])
+    #expect(fixture.explicit == ["true": true, "false": false])
+    #expect(fixture.encoding.maxDimension == ScreenshotCapturer.defaultMaxEncodedDimension)
+    #expect(fixture.encoding.mediaType == "image/jpeg")
+    #expect(fixture.encoding.qualityPercent == Int(ScreenshotCapturer.defaultJPEGQuality * 100))
+}
+
 private struct SharedLocatorCase: Decodable {
     let name: String
     let locator: JSONValue
