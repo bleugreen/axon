@@ -213,22 +213,22 @@ public enum ToolSurfaceSpec {
         ),
         ToolSpec(
             name: "click",
-            description: "Click a target specified by snapshot handle, locator object, point, or text location.",
+            description: "Click an app-scoped semantic element name, explicit point, or text location.",
             params: [
                 ToolParameterSpec("target", .target(.pointer), required: true, description: "Target to click."),
                 deliveryPolicyParameter
             ],
-            cliUsage: "axon click [--foreground] <handle|target-json>"
+            cliUsage: "axon click [--foreground] <target-json>"
         ),
         ToolSpec(
             name: "type",
             description: "Fill a writable field by setting AXValue directly on a target, avoiding focus and keystroke timing races.",
             params: [
-                ToolParameterSpec("target", .target(.element), required: true, description: "Handle or locator target for the writable field."),
+                ToolParameterSpec("target", .target(.element), required: true, description: "App-scoped semantic name target for the writable field."),
                 ToolParameterSpec("value", .string, required: true, description: "New string value."),
                 deliveryPolicyParameter
             ],
-            cliUsage: "axon type [--foreground] <handle> <value>"
+            cliUsage: "axon type [--foreground] <target-json> <value>"
         ),
         ToolSpec(
             name: "keyboard",
@@ -256,10 +256,10 @@ public enum ToolSurfaceSpec {
         ),
         ToolSpec(
             name: "drag",
-            description: "Drag from one point, snapshot handle, locator target, or text location to another. Pointer dispatch and verified semantic outcome are reported separately.",
+            description: "Drag from one semantic name, explicit point, or text location to another. Pointer dispatch and verified semantic outcome are reported separately.",
             params: [
-                ToolParameterSpec("from", .target(.pointer), required: true, description: "Starting handle, locator, point, or text location."),
-                ToolParameterSpec("to", .target(.pointer), required: true, description: "Ending handle, locator, point, or text location."),
+                ToolParameterSpec("from", .target(.pointer), required: true, description: "Starting semantic name, point, or text location."),
+                ToolParameterSpec("to", .target(.pointer), required: true, description: "Ending semantic name, point, or text location."),
                 ToolParameterSpec("app", .string, description: "Application that owns the drag. Required for background delivery; also the app foregroundPermitted activates and restores."),
                 ToolParameterSpec("durationMs", .integer, description: "Optional drag duration in milliseconds. The pointer path still emits threshold and intermediate drag events."),
                 ToolParameterSpec("expects", .array, description: "Optional post-action facts used by run to verify semantic success. Direct drag calls without a verified postcondition report an unverified semantic outcome."),
@@ -269,13 +269,13 @@ public enum ToolSurfaceSpec {
         ),
         ToolSpec(
             name: "invoke",
-            description: "Invoke a named AX action on a target specified by snapshot handle or locator object.",
+            description: "Invoke a named accessibility action on an app-scoped semantic element name.",
             params: [
-                ToolParameterSpec("target", .target(.element), required: true, description: "Handle or locator target."),
+                ToolParameterSpec("target", .target(.element), required: true, description: "App-scoped semantic name target."),
                 ToolParameterSpec("name", .string, required: true, description: "Accessibility action name, for example AXPress or AXShowMenu."),
                 deliveryPolicyParameter
             ],
-            cliUsage: "axon invoke <handle> <action-name>"
+            cliUsage: "axon invoke <target-json> <action-name>"
         )
     ]
 
