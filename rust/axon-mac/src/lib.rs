@@ -1,0 +1,2666 @@
+//! macOS UI Automation backend and v1 JSON-RPC tool router.
+
+use axon_core::{
+    AppQuery, AxnCodec, AxnRunner, Capability, DeliveryCandidate, DeliveryCapability,
+    DeliveryOutcome, DeliveryPolicy, DeliveryRefusal, DeliveryRefusalReason, DeliveryRung,
+    DeliverySelection, DispatchOutcome, ExpectedFact, ForegroundTarget, JsonRpcError, JsonRpcId,
+    JsonRpcRequest, JsonRpcResponse, KeyboardIntent, PlatformBackend, ResolutionStatus,
+    RunEnvelope, RunOptions, SemanticLookup, SemanticNameRegistry, Snapshot, SnapshotHandle,
+    TextLocationResolver, TextLocationSource, TextLocationTarget, TextRecognitionProvider,
+    ToolDispatcher, dispatch_in_foreground, goal_success, select_delivery,
+};
+use serde_json::{Map, Value, json};
+
+pub mod lifecycle;
+
+#[cfg(macos)]
+mod platform;
+#[cfg(macos)]
+pub use platform::{IntegrationProbe, macOSBackend};
+
+/// Tools this backend does not implement at all. These are not delivery decisions: the request
+/// names something the macOS daemon has no code path for, which stays a JSON-RPC error.
+const EXCLUDED: &[(&str, &str)] = &[
+    ("save", "SerializeHistory"),
+    ("drag", "PointerDrag"),
+    ("wait_for_value", "WaitForValue"),
+    ("wait_for_stability", "WaitForStability"),
+    ("permit", "PermissionPrompt"),
+];
+
+/// What the pixel rung reports as its mechanism: window messages carrying client coordinates,
+/// posted to one leaf window resolved through verified UIA ancestry.
+const PIXEL_MECHANISM: &str = "HWND client-coordinate message";
+
+/// Why `keyboard` has no pixel rung, and never will in this shape.
+///
+/// The pixel rung is target-bound input derived from verified window geometry. `keyboard` names an
+/// application and an input string; there is no element, so there is no window to bind to and no
+/// transform to report. Key delivery gets an honest home as a `type` fallback, below ValuePattern,
+/// once the pointer path is proven on real targets.
+const NO_KEYBOARD_GEOMETRY: &str = "keyboard input names an application rather than an element, so \
+     there is no verified window geometry to bind it to";
+
+/// Why a text location that resolved from screen text alone cannot travel the pixel rung.
+const NO_RECOGNIZED_TEXT_GEOMETRY: &str = "this text location resolved from recognized screen text \
+     rather than an accessibility element, so there is no ancestry to bind a window to";
+
+/// Why the foreground rung is withheld rather than merely gated behind the opt-in.
+///
+/// Specific because the specifics are what a caller can act on, and what tells the next person
+/// which part of the transaction still needs work.
+const NO_FOREGROUND_TRANSACTION: &str = "this macOS backend can activate an application and \
+     prove it came forward, but macOS refuses to return the foreground to the application it was \
+     taken from, so global input here cannot hand the session back";
+
+pub struct Router<B> {
+    backend: B,
+    snapshot: Option<Snapshot>,
+    semantic_names: SemanticNameRegistry,
+}
+
+#[derive(Clone, Debug)]
+pub struct VisualObservation {
+    pub screenshot: Option<axon_core::Screenshot>,
+    pub recognized_text: Option<Vec<axon_core::RecognizedText>>,
+}
+
+pub trait VisualObservationProvider {
+    fn observe_visuals(
+        &mut self,
+        app: &AppQuery,
+        screenshot: bool,
+        screen_text: bool,
+    ) -> Result<VisualObservation, axon_core::BackendError>;
+}
+
+pub trait PointerTargetVerifier: PlatformBackend {
+    fn verify_pointer_target(
+        &mut self,
+        handle: &SnapshotHandle,
+        point: (f64, f64),
+    ) -> Result<bool, axon_core::BackendError>;
+
+    fn verify_ocr_target(
+        &mut self,
+        app: &AppQuery,
+        point: (f64, f64),
+        _frame: axon_core::Rect,
+    ) -> Result<bool, axon_core::BackendError> {
+        let _ = app;
+        Ok(self.hit_test(point)?.is_some())
+    }
+}
+
+/// A target-bound pointer mechanism: input delivered to one verified window, without activating
+/// the application and without moving the real pointer.
+///
+/// This is the pixel rung's whole contract expressed as a seam. The router that decides *when* to
+/// use it is platform-neutral and testable anywhere; the mechanism behind it is Win32 and is not.
+pub trait BackgroundPixelPointer: PlatformBackend {
+    /// Resolves a delivery plan for one click. Pure inspection with no native side effect, because
+    /// the planner may discard the result and refuse before anything is allowed to happen.
+    fn plan_pixel_click(
+        &mut self,
+        handle: &SnapshotHandle,
+        point: (f64, f64),
+    ) -> Result<PixelPlan, axon_core::BackendError>;
+
+    /// Revalidates the plan and dispatches it. A revalidation failure returns `Stale` and must
+    /// post nothing: a window that moved or an ancestry that broke between planning and dispatch
+    /// means the recorded coordinates now name somewhere else.
+    fn dispatch_pixel_click(
+        &mut self,
+        target: &PixelTarget,
+    ) -> Result<PixelDispatch, PixelDispatchError>;
+}
+
+/// Whether a target-bound mechanism exists for one specific click.
+#[derive(Clone, Debug, PartialEq)]
+pub enum PixelPlan {
+    Bound(PixelTarget),
+    /// No target-bound mechanism here. `reason` names the specific obstacle, because a caller who
+    /// is told only "unsupported" cannot tell an elevated window from an unknown control class.
+    Unavailable {
+        reason: String,
+        /// Whether the obstacle stops *any* synthetic input at this target rather than only the
+        /// target-bound rung.
+        ///
+        /// An integrity boundary is the case that matters: UIPI discards posted messages and
+        /// `SendInput` alike from a lower-integrity process, and `SetForegroundWindow` fails the
+        /// same way. Leaving the foreground candidate available there would answer an elevated
+        /// target with "opt in to foreground delivery", and the opt-in would buy a dispatch
+        /// macOS silently drops — dressed up as a successful one. The obstacle has to be named
+        /// at both rungs or it is not really being refused.
+        blocks_global_input: bool,
+    },
+}
+
+impl PixelPlan {
+    /// No target-bound mechanism, but the obstacle is specific to this rung: a louder one may
+    /// still carry the action.
+    pub fn unavailable(reason: impl Into<String>) -> Self {
+        PixelPlan::Unavailable {
+            reason: reason.into(),
+            blocks_global_input: false,
+        }
+    }
+
+    /// No mechanism at all, at any rung, for the reason given.
+    pub fn blocked(reason: impl Into<String>) -> Self {
+        PixelPlan::Unavailable {
+            reason: reason.into(),
+            blocks_global_input: true,
+        }
+    }
+}
+
+/// One window, bound to one element, with the coordinate transform that reaches it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PixelTarget {
+    /// The element this plan is bound to. Dispatch re-checks it, because a window that is still
+    /// exactly where it was can still be showing something else by then.
+    pub handle: SnapshotHandle,
+    /// The leaf window that receives the messages.
+    pub window: u64,
+    pub window_class: String,
+    /// How the target declares its DPI awareness. Reported so a probe run can distinguish a
+    /// reconciliation that ran from one that was a no-op, which is what tells an allowlist entry
+    /// earned at 100% scaling from one earned where the transform actually had work to do.
+    pub dpi_awareness: &'static str,
+    /// The top-level window the UIA ancestry bound this to. Revalidated before dispatch, so a leaf
+    /// that has been reparented out of the captured window cannot be clicked.
+    pub root_window: u64,
+    pub process_identifier: i64,
+    pub screen_point: (f64, f64),
+    /// The window's client origin in screen coordinates: the transform itself, kept so it can be
+    /// both revalidated and reported.
+    pub client_origin: (f64, f64),
+    pub client_point: (f64, f64),
+}
+
+impl PixelTarget {
+    /// The transform reported as evidence rather than implied.
+    ///
+    /// A dispatch that landed in the wrong window is only diagnosable after the fact if the window
+    /// it went to and the arithmetic that chose the point are both on the wire.
+    pub fn evidence(&self) -> Value {
+        json!({
+            "nativeWindowHandle": format!("0x{:08X}", self.window),
+            "windowClass": self.window_class,
+            "rootNativeWindowHandle": format!("0x{:08X}", self.root_window),
+            "dpiAwareness": self.dpi_awareness,
+            "clientOrigin": {"x": self.client_origin.0, "y": self.client_origin.1},
+            "windowPoint": {"x": self.client_point.0, "y": self.client_point.1},
+            "sourceCoordinateSpace": "screen",
+        })
+    }
+}
+
+/// What a delivered sequence did, and the evidence that it stayed in the background.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PixelDispatch {
+    /// Whether the target processed the whole sequence.
+    ///
+    /// Processed, not effective. A window procedure that examines a click and does nothing returns
+    /// from it exactly like one that acts on it, so this is dispatch evidence and goal success
+    /// still needs a readback or a declared postcondition.
+    pub complete: bool,
+    /// Set when part of the sequence landed and the rest did not, naming the state the target was
+    /// left in. A partial dispatch never escalates: the target may already consider the button
+    /// held, and a second attempt at another rung would compound it.
+    pub partial: Option<String>,
+    /// Observed across the delivery, which is only meaningful because the delivery has an explicit
+    /// end: the backend does not report these until the target's window procedure has processed
+    /// every message. A handler that activates its application or moves the cursor is inside the
+    /// window these two comparisons straddle.
+    pub frontmost_unchanged: bool,
+    pub pointer_unchanged: bool,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum PixelDispatchError {
+    /// Revalidation failed between planning and dispatch. Nothing was posted.
+    Stale(String),
+    Backend(axon_core::BackendError),
+}
+
+/// What a click resolved to, and therefore what can be bound and verified before it is delivered.
+///
+/// The distinction is load-bearing rather than cosmetic: only an element carries the accessibility
+/// ancestry a pixel plan is built from, so a point recovered from screen text has no window to
+/// bind to however precise the point itself is.
+enum ClickTarget {
+    Element(SnapshotHandle),
+    /// A point inside a frame of recognized screen text, with no element behind it.
+    Recognized(AppQuery, axon_core::Rect),
+}
+
+impl<
+    B: PointerTargetVerifier
+        + TextRecognitionProvider
+        + VisualObservationProvider
+        + BackgroundPixelPointer,
+> Router<B>
+{
+    /// What the backend can do, for health documents.
+    ///
+    /// The backend is otherwise private to the router; health is the one caller that needs to ask
+    /// it a question rather than dispatch a tool through it.
+    pub fn capabilities(&self) -> Result<Vec<axon_core::CapabilityInfo>, axon_core::BackendError> {
+        self.backend.capabilities()
+    }
+
+    pub fn new(backend: B) -> Self {
+        Self {
+            backend,
+            snapshot: None,
+            semantic_names: SemanticNameRegistry::default(),
+        }
+    }
+    fn click_text_location(
+        &mut self,
+        value: &Value,
+        policy: DeliveryPolicy,
+    ) -> Result<Value, JsonRpcError> {
+        let target: TextLocationTarget = serde_json::from_value(value.clone())
+            .map_err(|error| rpc_error(-32602, error.to_string()))?;
+        if target.app.is_empty() {
+            return Err(rpc_error(-32602, "location app must not be empty"));
+        }
+        let app = AppQuery {
+            name: Some(target.app.clone()),
+            identifier: None,
+        };
+        let snapshot = self.backend.capture(&app).map_err(backend_error)?;
+        let initial = TextLocationResolver::resolve(&target, &snapshot, &[]);
+        let resolution = if target.source == TextLocationSource::Screenshot
+            || (target.source == TextLocationSource::Auto
+                && initial.status == ResolutionStatus::Missing)
+        {
+            let recognized = self.backend.recognize_text(&app).map_err(backend_error)?;
+            TextLocationResolver::resolve(&target, &snapshot, &recognized)
+        } else {
+            initial
+        };
+        let candidate = resolution.best.as_ref().ok_or_else(|| {
+            rpc_error(
+                -32001,
+                format!("text location resolution was {:?}", resolution.status),
+            )
+        })?;
+        let point = (candidate.point.x, candidate.point.y);
+        let click_target = match &candidate.handle {
+            Some(handle) => ClickTarget::Element(handle.clone()),
+            None => ClickTarget::Recognized(app.clone(), candidate.frame),
+        };
+        // The snapshot becomes the router's before the ladder runs, so foreground delivery recovers
+        // the same canonical identity a handle click does. Handing the caller's raw app string to
+        // the transaction instead would compare a display name against whatever identity the
+        // backend reports for the foreground window, and the two can never match.
+        self.snapshot = Some(snapshot);
+        // A resolved text location is a click like any other. It travels the same ladder and the
+        // same transaction; a separate path here is how a caller ends up with global pointer input
+        // under a policy that forbids it.
+        self.deliver_click(policy, click_target, point, json!(resolution))
+    }
+
+    /// One click, whatever resolved it, travelling the whole ladder exactly once.
+    fn deliver_click(
+        &mut self,
+        policy: DeliveryPolicy,
+        target: ClickTarget,
+        point: (f64, f64),
+        resolution: Value,
+    ) -> Result<Value, JsonRpcError> {
+        let mut result = self.select_and_deliver_click(policy, target, point)?;
+        if let (Some(object), false) = (result.as_object_mut(), resolution.is_null()) {
+            object.insert("resolution".into(), resolution);
+        }
+        Ok(result)
+    }
+
+    fn select_and_deliver_click(
+        &mut self,
+        policy: DeliveryPolicy,
+        target: ClickTarget,
+        point: (f64, f64),
+    ) -> Result<Value, JsonRpcError> {
+        // Planning is pure inspection, so it is safe before the ladder decides. The planner may
+        // discard this plan and refuse, and by then nothing native may have happened.
+        let plan = match &target {
+            ClickTarget::Element(handle) => self
+                .backend
+                .plan_pixel_click(handle, point)
+                .map_err(backend_error)?,
+            ClickTarget::Recognized(..) => PixelPlan::unavailable(NO_RECOGNIZED_TEXT_GEOMETRY),
+        };
+        let ladder = self.pointer_ladder(&plan);
+        let Some(candidate) = self.selected(&ladder, policy) else {
+            return Ok(self.refusal(&ladder, policy));
+        };
+        // Freshness is checked after selection, so the planner still decides before anything
+        // happens, and a target that moved under the request stays a stale-target error rather
+        // than becoming a delivery refusal.
+        let (fresh, stale) = match &target {
+            ClickTarget::Element(handle) => (
+                self.backend.verify_pointer_target(handle, point),
+                "click target moved, is covered, or no longer matches the resolved element",
+            ),
+            ClickTarget::Recognized(app, frame) => (
+                self.backend.verify_ocr_target(app, point, *frame),
+                "click target moved, is covered, or no longer matches the resolved text",
+            ),
+        };
+        if !fresh.map_err(backend_error)? {
+            return Err(rpc_error(-32003, stale));
+        }
+        let verification =
+            json!({"verified": false, "reason": "click has no declared postcondition"});
+        if candidate.rung == DeliveryRung::Pixel {
+            let PixelPlan::Bound(bound) = plan else {
+                unreachable!("the pixel rung is only offered for a bound plan")
+            };
+            return self.dispatch_pixel(policy, &candidate, &bound, verification);
+        }
+        // Owning-application identity is a foreground concern. Refusing on it while a bound pixel
+        // plan was available would decline an action that had a perfectly good target-bound path.
+        let Some(application) = self.resolved_application() else {
+            return Ok(DeliveryOutcome::refusal_result(
+                policy,
+                DeliveryRefusal::new(
+                    DeliveryRefusalReason::TargetIdentityUnavailable,
+                    DeliveryRung::Foreground,
+                    Some(DeliveryCapability::GlobalInput),
+                    "the resolved target's owning application could not be identified, so \
+                     foreground delivery cannot activate and prove it",
+                ),
+            ));
+        };
+        self.foreground_dispatch(
+            policy,
+            &candidate,
+            ForegroundTarget::Application(&application),
+            // `SendInput` drives the real cursor, so the transaction puts it back.
+            true,
+            verification,
+            |backend| backend.pointer_click(point),
+        )
+    }
+
+    /// Posts one bound sequence to one verified window, and reports what that proved.
+    fn dispatch_pixel(
+        &mut self,
+        policy: DeliveryPolicy,
+        candidate: &DeliveryCandidate,
+        target: &PixelTarget,
+        verification: Value,
+    ) -> Result<Value, JsonRpcError> {
+        let dispatch = match self.backend.dispatch_pixel_click(target) {
+            Ok(dispatch) => dispatch,
+            // Revalidation failed, so nothing was posted and the plan now names somewhere else.
+            // That is the same stale target a moved element produces, and it reads the same way.
+            Err(PixelDispatchError::Stale(reason)) => return Err(rpc_error(-32003, reason)),
+            Err(PixelDispatchError::Backend(error)) => return Err(backend_error(error)),
+        };
+        // This rung is defined by what it does not do. A dispatch that changed the foreground or
+        // moved the real pointer was not background delivery, whatever it managed to deliver.
+        let mut problems = Vec::new();
+        if let Some(partial) = &dispatch.partial {
+            problems.push(partial.clone());
+        }
+        if !dispatch.frontmost_unchanged {
+            problems.push("the foreground window changed across the dispatch".to_string());
+        }
+        if !dispatch.pointer_unchanged {
+            problems.push("the real pointer moved across the dispatch".to_string());
+        }
+        // Mechanism acceptance and goal success are kept apart because at this rung the gap between
+        // them is the whole problem. A completed post proves each message was accepted and returned
+        // from; a window procedure that examined one and did nothing returns exactly like one that
+        // acted on it, which is the stated reason `PIXEL_MESSAGE_CLASSES` exists at all. Collapsing
+        // the two would hollow out that table's own defence: a class that regressed, or one that
+        // behaved differently in a context nobody probed, would produce an accepted post, intact
+        // invariants, and a report that the caller's click had worked.
+        let mut result = json!({
+            "success": goal_success(&verification, dispatch.complete && problems.is_empty()),
+            "dispatch": {"success": dispatch.complete, "mechanism": candidate.mechanism},
+            "verification": verification,
+            "backgroundDelivery": {
+                "targetProcessIdentifier": target.process_identifier,
+                "frontmostAppUnchanged": dispatch.frontmost_unchanged,
+                "pointerUnchanged": dispatch.pointer_unchanged,
+            },
+            "targetWindow": target.evidence(),
+        });
+        let object = result
+            .as_object_mut()
+            .expect("a JSON object literal is an object");
+        if !problems.is_empty() {
+            object.insert("message".into(), json!(problems.join("; ")));
+        }
+        DeliveryOutcome {
+            policy,
+            delivery: Some(DeliveryRung::Pixel),
+            dispatch_success: dispatch.complete,
+            refusal: None,
+        }
+        .merge_into(object);
+        Ok(result)
+    }
+
+    /// The stable identity of the application that owns the currently resolved target.
+    ///
+    /// Foreground delivery has to activate the application the *target* belongs to, not whichever
+    /// app string the request happened to carry. A handle-only request carries no app string at
+    /// all, and treating that as "already frontmost" would dispatch global input with no
+    /// activation and no proof — the exact bug this contract exists to close.
+    fn resolved_application(&self) -> Option<String> {
+        let app = &self.snapshot.as_ref()?.app;
+        app.identifier
+            .as_deref()
+            .or(Some(app.name.as_str()))
+            .filter(|identity| !identity.is_empty())
+            .map(str::to_owned)
+    }
+
+    pub fn request(&mut self, request: JsonRpcRequest) -> Option<JsonRpcResponse> {
+        let id = request.id?;
+        let params = request
+            .params
+            .and_then(|v| v.as_object().cloned())
+            .unwrap_or_default();
+        Some(match self.dispatch_tool(&request.method, &params) {
+            Ok(result) => JsonRpcResponse::success(id, result),
+            Err(error) => JsonRpcResponse::failure(id, error),
+        })
+    }
+
+    fn dispatch_tool(
+        &mut self,
+        method: &str,
+        params: &Map<String, Value>,
+    ) -> Result<Value, JsonRpcError> {
+        if let Some((_, capability)) = EXCLUDED.iter().find(|(tool, _)| *tool == method) {
+            return Err(rpc_error(
+                -32004,
+                format!("tool {method} requires unavailable capability {capability}"),
+            ));
+        }
+        // The policy is decoded before the target is resolved and before any backend call, so an
+        // unknown value can never reach a native API.
+        let policy =
+            DeliveryPolicy::from_params(params).map_err(|error| rpc_error(-32602, error))?;
+        match method {
+            "look" => self.look(params),
+            "find" => {
+                let (handle, resolution) = self.resolve(params)?;
+                Ok(json!({"handle": handle, "resolution": resolution}))
+            }
+            "click" => {
+                if let Some(location) = params
+                    .get("target")
+                    .and_then(|target| target.get("location"))
+                    .or_else(|| params.get("location"))
+                {
+                    let location = location.clone();
+                    return self.click_text_location(&location, policy);
+                }
+                // The target is resolved first, so an absent, malformed, or stale target is a
+                // JSON-RPC error. A refusal means the request was well formed and the target
+                // resolved, and the daemon declined to act; the two must not be confused.
+                let (handle, resolution) = self.resolve(params)?;
+                let point = self.node_center(&handle)?;
+                self.deliver_click(
+                    policy,
+                    ClickTarget::Element(handle),
+                    point,
+                    json!(resolution),
+                )
+            }
+            "type" => {
+                let (handle, resolution) = self.resolve(params)?;
+                let value =
+                    required_str(params, "value").or_else(|_| required_str(params, "text"))?;
+                // UIA ValuePattern does not require focus, and calling SetFocus would make this a
+                // foreground action wearing a semantic name.
+                self.backend
+                    .set_value(&handle, value)
+                    .map_err(backend_error)?;
+                let observed = self.backend.read_value(&handle).map_err(backend_error)?;
+                Ok(delivered(
+                    json!({"dispatch":{"success":true,"mechanism":"UIA ValuePattern"},"verification":{"verified":observed.as_deref()==Some(value),"observed":observed},"resolution":resolution}),
+                    policy,
+                    DeliveryRung::Semantic,
+                ))
+            }
+            "keyboard" => {
+                // The intent is validated before the ladder, so a malformed request is an error
+                // rather than a refusal.
+                let intent = keyboard_intent(params)?;
+                let ladder = self.keyboard_ladder();
+                let Some(candidate) = self.selected(&ladder, policy) else {
+                    return Ok(self.refusal(&ladder, policy));
+                };
+                let app = app_query(params);
+                // `keyboard` naming no application is explicitly addressed at whatever holds the
+                // foreground: nothing to activate, nothing to restore. Naming one makes it aimed,
+                // and the transaction compares and activates the backend's own identity for that
+                // application rather than the display name the request carried.
+                let aimed = app.name.is_some() || app.identifier.is_some();
+                let target = if aimed {
+                    match self
+                        .backend
+                        .resolve_application(&app)
+                        .map_err(backend_error)?
+                    {
+                        Some(identity) => Some(identity),
+                        // Falling through to the frontmost here would post keystrokes into whatever
+                        // the user happens to be working in, having been asked for something else.
+                        None => {
+                            return Ok(DeliveryOutcome::refusal_result(
+                                policy,
+                                DeliveryRefusal::new(
+                                    DeliveryRefusalReason::TargetIdentityUnavailable,
+                                    DeliveryRung::Foreground,
+                                    Some(DeliveryCapability::GlobalInput),
+                                    "the requested application could not be identified, so \
+                                     foreground delivery cannot activate and prove it",
+                                ),
+                            ));
+                        }
+                    }
+                } else {
+                    None
+                };
+                self.foreground_dispatch(
+                    policy,
+                    &candidate,
+                    target
+                        .as_deref()
+                        .map_or(ForegroundTarget::Frontmost, ForegroundTarget::Application),
+                    // Keyboard input never touches the cursor, and capturing a pointer it does not
+                    // move would report a restoration that never happened.
+                    false,
+                    json!({"verified":false,"reason":"keyboard input has no declared postcondition"}),
+                    move |backend| backend.keyboard(&app, intent),
+                )
+            }
+            "invoke" => {
+                let (handle, resolution) = self.resolve(params)?;
+                // UIA exposes InvokePattern, not an arbitrary named-action vocabulary, so this
+                // backend performs Invoke and says so rather than claiming a name it cannot honour.
+                self.backend
+                    .invoke(&handle, "Invoke")
+                    .map_err(backend_error)?;
+                Ok(delivered(
+                    json!({"dispatch":{"success":true,"mechanism":"UIA InvokePattern"},"verification":{"verified":false,"reason":"invoke has no declared postcondition"},"resolution":resolution}),
+                    policy,
+                    DeliveryRung::Semantic,
+                ))
+            }
+            "scroll" => {
+                let (handle, resolution) = self.resolve(params)?;
+                let dx = params.get("deltaX").and_then(Value::as_f64).unwrap_or(0.0);
+                let dy = params.get("deltaY").and_then(Value::as_f64).unwrap_or(0.0);
+                self.backend
+                    .scroll(&handle, (dx, dy))
+                    .map_err(backend_error)?;
+                Ok(delivered(
+                    json!({"dispatch":{"success":true,"mechanism":"UIA ScrollItemPattern"},"verification":{"verified":false,"reason":"scroll has no declared postcondition"},"resolution":resolution}),
+                    policy,
+                    DeliveryRung::Semantic,
+                ))
+            }
+            "run" => self.run_axn(params),
+            _ => Err(rpc_error(-32601, format!("unknown method {method}"))),
+        }
+    }
+
+    /// The ladder for a pointer action: no semantic rung, a pixel rung the backend answers for per
+    /// target, and `SendInput` behind the explicit opt-in.
+    fn pointer_ladder(&self, plan: &PixelPlan) -> Vec<DeliveryCandidate> {
+        vec![
+            match plan {
+                PixelPlan::Bound(_) => DeliveryCandidate::available(
+                    DeliveryRung::Pixel,
+                    DeliveryCapability::BackgroundPixelInput,
+                    PIXEL_MECHANISM,
+                ),
+                // The plan's own reason travels intact. A generic "unsupported" here would leave a
+                // caller unable to tell an elevated window from an unrecognized control class.
+                PixelPlan::Unavailable { reason, .. } => DeliveryCandidate::unavailable(
+                    DeliveryRung::Pixel,
+                    DeliveryCapability::BackgroundPixelInput,
+                    PIXEL_MECHANISM,
+                    DeliveryRefusalReason::BackgroundPixelUnsupported,
+                    reason.clone(),
+                ),
+            },
+            match plan {
+                // An obstacle that blocks every synthetic input at this target blocks the loud
+                // rung too, and saying so is what stops the refusal from recommending an opt-in
+                // that would buy a dispatch macOS discards.
+                PixelPlan::Unavailable {
+                    reason,
+                    blocks_global_input: true,
+                } => DeliveryCandidate::unavailable(
+                    DeliveryRung::Foreground,
+                    DeliveryCapability::GlobalInput,
+                    "SendInput",
+                    DeliveryRefusalReason::NoDeliveryCandidate,
+                    reason.clone(),
+                ),
+                _ => self.foreground_candidate(Capability::PointerInput, "SendInput"),
+            },
+        ]
+    }
+
+    /// The ladder for keyboard input, whose pixel rung is permanently absent by construction.
+    fn keyboard_ladder(&self) -> Vec<DeliveryCandidate> {
+        vec![
+            DeliveryCandidate::unavailable(
+                DeliveryRung::Pixel,
+                DeliveryCapability::BackgroundPixelInput,
+                PIXEL_MECHANISM,
+                DeliveryRefusalReason::BackgroundPixelUnsupported,
+                NO_KEYBOARD_GEOMETRY,
+            ),
+            self.foreground_candidate(Capability::KeyboardInput, "SendInput"),
+        ]
+    }
+
+    fn foreground_candidate(&self, capability: Capability, mechanism: &str) -> DeliveryCandidate {
+        match self
+            .capability_restriction(capability)
+            .or_else(|| self.foreground_transaction_restriction())
+        {
+            None => DeliveryCandidate::available(
+                DeliveryRung::Foreground,
+                DeliveryCapability::GlobalInput,
+                mechanism,
+            ),
+            Some(reason) => DeliveryCandidate::unavailable(
+                DeliveryRung::Foreground,
+                DeliveryCapability::GlobalInput,
+                mechanism,
+                DeliveryRefusalReason::NoDeliveryCandidate,
+                reason,
+            ),
+        }
+    }
+
+    /// The health-v1 runtime overlay, consulted by the same decision that dispatches. Session 0, a
+    /// noninteractive window station, and an integrity boundary all arrive here as a restriction.
+    fn capability_restriction(&self, capability: Capability) -> Option<String> {
+        let Ok(capabilities) = self.backend.capabilities() else {
+            return Some(format!(
+                "{} is unavailable: backend capabilities could not be read",
+                capability.key()
+            ));
+        };
+        match capabilities
+            .iter()
+            .find(|info| info.capability == capability)
+        {
+            Some(info) if info.usable => None,
+            Some(info) => {
+                Some(info.restriction.clone().unwrap_or_else(|| {
+                    format!("{} is not usable in this session", capability.key())
+                }))
+            }
+            None => Some(format!(
+                "{} is not available on this backend",
+                capability.key()
+            )),
+        }
+    }
+
+    /// The foreground rung is global input that restores what it borrowed. A backend that cannot
+    /// capture, prove, and hand back the foreground does not get to offer it: dispatching
+    /// unrestored `SendInput` while reporting `delivery: "foreground"` would claim a guarantee it
+    /// does not keep, which is precisely what this contract exists to prevent.
+    fn foreground_transaction_restriction(&self) -> Option<String> {
+        if self.backend.supports_foreground_transaction() {
+            return None;
+        }
+        Some(NO_FOREGROUND_TRANSACTION.to_string())
+    }
+
+    /// Dispatches one action at the selected rung, inside a foreground transaction when the rung is
+    /// the foreground one.
+    fn foreground_dispatch(
+        &mut self,
+        policy: DeliveryPolicy,
+        candidate: &DeliveryCandidate,
+        target: ForegroundTarget<'_>,
+        restores_pointer: bool,
+        verification: Value,
+        body: impl FnOnce(&mut B) -> Result<(), axon_core::BackendError>,
+    ) -> Result<Value, JsonRpcError> {
+        let dispatch = dispatch_in_foreground(&mut self.backend, target, restores_pointer, body);
+        if let Some(refusal) = dispatch.refusal {
+            let mut result = DeliveryOutcome::refusal_result(policy, refusal);
+            if let Some(object) = result.as_object_mut() {
+                object.insert("foreground".into(), json!(dispatch.cleanup));
+            }
+            return Ok(result);
+        }
+        if let Err(error) = dispatch.value.expect("a proved activation dispatches") {
+            // The transaction activated and then handed the session back around this failure, so
+            // its cleanup evidence is the only record of what happened to the user's foreground.
+            // It rides on the error rather than being dropped.
+            let mut failure = backend_error(error);
+            failure.data = Some(json!({ "foreground": dispatch.cleanup }));
+            return Err(failure);
+        }
+
+        let result = json!({
+            // Two separate things have to hold here, and this rung is the one that adds the second.
+            // Dispatch evidence survives a failed hand-back, but the action as a whole did not
+            // succeed if the user's session was not put back where they left it — a cursor left
+            // where synthetic input dropped it counts as much as a window that never came forward
+            // again. And a session handed back immaculately still says nothing about whether the
+            // target acted on what `SendInput` posted, so the verification has to hold as well.
+            "success": goal_success(&verification, dispatch.cleanup.session_restored()),
+            "dispatch": {"success": true, "mechanism": candidate.mechanism},
+            "verification": verification,
+            "foreground": dispatch.cleanup,
+        });
+        Ok(delivered(result, policy, candidate.rung))
+    }
+
+    fn selected(
+        &self,
+        ladder: &[DeliveryCandidate],
+        policy: DeliveryPolicy,
+    ) -> Option<DeliveryCandidate> {
+        match select_delivery(ladder, policy, None) {
+            DeliverySelection::Candidate(candidate) => Some(candidate),
+            DeliverySelection::Refusal(_) => None,
+        }
+    }
+
+    fn refusal(&self, ladder: &[DeliveryCandidate], policy: DeliveryPolicy) -> Value {
+        match select_delivery(ladder, policy, None) {
+            DeliverySelection::Refusal(refusal) => DeliveryOutcome::refusal_result(policy, refusal),
+            DeliverySelection::Candidate(_) => Value::Null,
+        }
+    }
+
+    fn look(&mut self, params: &Map<String, Value>) -> Result<Value, JsonRpcError> {
+        if params.get("app").is_none() {
+            return serde_json::to_value(
+                self.backend
+                    .enumerate_applications()
+                    .map_err(backend_error)?,
+            )
+            .map_err(internal_error);
+        }
+        let app = app_query(params);
+        let snapshot = self.backend.capture(&app).map_err(backend_error)?;
+        let names = self.semantic_names.register(&snapshot);
+        let mut value = serde_json::to_value(axon_core::render_semantic_names(&snapshot, &names))
+            .map_err(internal_error)?;
+        let wants_screenshot = params.get("screenshot").and_then(Value::as_bool) == Some(true);
+        let wants_screen_text = params.get("screenText").and_then(Value::as_bool) == Some(true);
+        let visuals = (wants_screenshot || wants_screen_text)
+            .then(|| {
+                self.backend
+                    .observe_visuals(&app, wants_screenshot, wants_screen_text)
+            })
+            .transpose()
+            .map_err(backend_error)?;
+        if let Some(screenshot) = visuals
+            .as_ref()
+            .and_then(|result| result.screenshot.as_ref())
+        {
+            value
+                .as_object_mut()
+                .expect("snapshots serialize as objects")
+                .insert(
+                    "screenshot".into(),
+                    json!({
+                        "mediaType": screenshot.media_type,
+                        "base64Data": base64::Engine::encode(
+                            &base64::engine::general_purpose::STANDARD,
+                            &screenshot.bytes
+                        ),
+                        "width": screenshot.width,
+                        "height": screenshot.height
+                    }),
+                );
+        }
+        if let Some(screen_text) = visuals.and_then(|result| result.recognized_text) {
+            value
+                .as_object_mut()
+                .expect("snapshots serialize as objects")
+                .insert("screenText".into(), json!(screen_text));
+        }
+        self.snapshot = Some(snapshot);
+        Ok(value)
+    }
+
+    fn resolve(
+        &mut self,
+        params: &Map<String, Value>,
+    ) -> Result<(SnapshotHandle, axon_core::Resolution), JsonRpcError> {
+        let target: axon_core::WireElementTarget =
+            serde_json::from_value(params.get("target").cloned().unwrap_or(Value::Null))
+                .map_err(|_| rpc_error(-32602, "element target must be an {app, name} object"))?;
+        let target = target
+            .validate()
+            .map_err(|error| rpc_error(-32602, error.to_string()))?;
+        let live = self
+            .backend
+            .capture(&AppQuery {
+                name: Some(target.app.clone()),
+                identifier: None,
+            })
+            .map_err(backend_error)?;
+        let lookup = self.semantic_names.resolve(&target, &live);
+        self.snapshot = Some(live);
+        match lookup {
+            SemanticLookup::Unique { handle, resolution } => Ok((handle, resolution)),
+            SemanticLookup::Missing { target } => Err(JsonRpcError {
+                code: -32002,
+                message: format!("semantic name not found: {} / {}", target.app, target.name),
+                data: Some(json!({"status":"missing","query":target})),
+            }),
+            SemanticLookup::Ambiguous { target, candidates } => Err(JsonRpcError {
+                code: -32002,
+                message: format!(
+                    "semantic name is ambiguous: {} / {}",
+                    target.app, target.name
+                ),
+                data: Some(json!({"status":"ambiguous","query":target,"candidates":candidates})),
+            }),
+        }
+    }
+
+    fn node_center(&self, handle: &SnapshotHandle) -> Result<(f64, f64), JsonRpcError> {
+        let node = self.node(handle)?;
+        let r = node
+            .frame
+            .ok_or_else(|| rpc_error(-32003, "target has no actionable frame"))?;
+        Ok((r.x + r.width / 2.0, r.y + r.height / 2.0))
+    }
+
+    fn node(&self, handle: &SnapshotHandle) -> Result<&axon_core::Node, JsonRpcError> {
+        let snapshot = self
+            .snapshot
+            .as_ref()
+            .ok_or_else(|| rpc_error(-32002, "no active snapshot"))?;
+        let index = snapshot
+            .index_for_handle(handle)
+            .map_err(|e| rpc_error(-32002, e.to_string()))?;
+        flattened(snapshot)
+            .nth(index)
+            .ok_or_else(|| rpc_error(-32002, "handle index is outside snapshot"))
+    }
+
+    fn run_axn(&mut self, params: &Map<String, Value>) -> Result<Value, JsonRpcError> {
+        let source = required_str(params, "source")?;
+        let doc = AxnCodec::parse(source).map_err(|e| rpc_error(-32602, e.to_string()))?;
+        let args = params
+            .get("args")
+            .and_then(Value::as_object)
+            .cloned()
+            .unwrap_or_default();
+        let options = params
+            .get("options")
+            .cloned()
+            .map(serde_json::from_value)
+            .transpose()
+            .map_err(|e| rpc_error(-32602, e.to_string()))?
+            .unwrap_or(RunOptions {
+                dry_run: None,
+                continue_on_error: None,
+            });
+        let mut runner = AxnRunner::new(self);
+        let result = runner
+            .run(&doc, &args, options)
+            .map_err(|e| rpc_error(-32602, e.to_string()))?;
+        serde_json::to_value(RunEnvelope { batch: result }).map_err(internal_error)
+    }
+}
+
+impl<
+    B: PointerTargetVerifier
+        + TextRecognitionProvider
+        + VisualObservationProvider
+        + BackgroundPixelPointer,
+> ToolDispatcher for Router<B>
+{
+    fn dispatch(&mut self, tool: &str, params: &Map<String, Value>) -> DispatchOutcome {
+        match self.dispatch_tool(tool, params) {
+            Ok(result) => DispatchOutcome {
+                success: true,
+                result,
+                error: None,
+                resolution: None,
+            },
+            Err(error) => DispatchOutcome {
+                success: false,
+                result: Value::Null,
+                error: Some(error.message),
+                resolution: None,
+            },
+        }
+    }
+    fn verify(&mut self, fact: &ExpectedFact) -> Result<(), String> {
+        if fact.fields.get("kind").and_then(Value::as_str) != Some("value") {
+            return Err(format!("unsupported expected fact kind for {}", fact.id));
+        }
+        let target = fact
+            .fields
+            .get("target")
+            .and_then(Value::as_str)
+            .ok_or_else(|| format!("expected fact {} requires a target handle", fact.id))?;
+        let observed = self
+            .backend
+            .read_value(&SnapshotHandle(target.into()))
+            .map_err(|e| e.to_string())?
+            .ok_or_else(|| format!("expected fact {} observed no value", fact.id))?;
+        if let Some(expected) = fact.fields.get("equals").and_then(Value::as_str) {
+            if observed != expected {
+                return Err(format!(
+                    "expected fact {} failed: expected {expected:?}, observed {observed:?}",
+                    fact.id
+                ));
+            }
+            return Ok(());
+        }
+        if let Some(expected) = fact.fields.get("contains").and_then(Value::as_str) {
+            if !observed.contains(expected) {
+                return Err(format!(
+                    "expected fact {} failed: {observed:?} does not contain {expected:?}",
+                    fact.id
+                ));
+            }
+            return Ok(());
+        }
+        Err(format!(
+            "expected value fact {} requires equals or contains",
+            fact.id
+        ))
+    }
+}
+
+fn flattened(snapshot: &Snapshot) -> impl Iterator<Item = &axon_core::Node> {
+    fn add<'a>(node: &'a axon_core::Node, out: &mut Vec<&'a axon_core::Node>) {
+        out.push(node);
+        for child in &node.children {
+            add(child, out);
+        }
+    }
+    let mut out = Vec::new();
+    for window in &snapshot.app.macos {
+        add(&window.root, &mut out);
+    }
+    out.into_iter()
+}
+fn app_query(params: &Map<String, Value>) -> AppQuery {
+    AppQuery {
+        name: params.get("app").and_then(Value::as_str).map(str::to_owned),
+        identifier: params
+            .get("identifier")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+    }
+}
+/// `keyboard` carries exactly one intent. Neither is an empty request and both at once is an
+/// ambiguous one; each is malformed rather than a delivery decision, so each is a transport error.
+fn keyboard_intent(params: &Map<String, Value>) -> Result<KeyboardIntent<'_>, JsonRpcError> {
+    let text = params.get("text").and_then(Value::as_str);
+    let key = params.get("key").and_then(Value::as_str);
+    match (text, key) {
+        (Some(text), None) => Ok(KeyboardIntent::Text(text)),
+        (None, Some(key)) => Ok(KeyboardIntent::Key(key)),
+        (Some(_), Some(_)) => Err(rpc_error(
+            -32602,
+            "keyboard takes exactly one of text and key; text is entered literally and key names a \
+             keystroke, and a request carrying both does not say which it meant",
+        )),
+        (None, None) => Err(rpc_error(
+            -32602,
+            "keyboard requires exactly one of the string parameters text and key",
+        )),
+    }
+}
+fn required_str<'a>(p: &'a Map<String, Value>, key: &str) -> Result<&'a str, JsonRpcError> {
+    p.get(key)
+        .and_then(Value::as_str)
+        .ok_or_else(|| rpc_error(-32602, format!("missing string parameter {key}")))
+}
+/// Stamps the four stable delivery fields onto an action result.
+fn delivered(mut result: Value, policy: DeliveryPolicy, rung: DeliveryRung) -> Value {
+    if let Some(object) = result.as_object_mut() {
+        DeliveryOutcome::dispatched(policy, rung).merge_into(object);
+    }
+    result
+}
+
+fn rpc_error(code: i64, message: impl Into<String>) -> JsonRpcError {
+    JsonRpcError {
+        code,
+        message: message.into(),
+        data: None,
+    }
+}
+fn backend_error(e: axon_core::BackendError) -> JsonRpcError {
+    rpc_error(-32000, e.to_string())
+}
+fn internal_error(e: serde_json::Error) -> JsonRpcError {
+    rpc_error(-32603, e.to_string())
+}
+
+pub fn parse_request(line: &str) -> Result<JsonRpcRequest, JsonRpcResponse> {
+    serde_json::from_str(line)
+        .map_err(|e| JsonRpcResponse::failure(JsonRpcId::Null, rpc_error(-32700, e.to_string())))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use axon_core::{
+        Application, BackendError, CapabilityInfo, Node, Observation, RecordedCall, Rect,
+        Screenshot, Window,
+    };
+    use std::{cell::RefCell, rc::Rc, time::Duration};
+
+    #[derive(Clone)]
+    struct FakeBackend {
+        snapshot: Snapshot,
+        pointer_target_matches: bool,
+        verified_handles: Rc<RefCell<Vec<SnapshotHandle>>>,
+        value: Rc<RefCell<Option<String>>>,
+        clicks: Rc<RefCell<usize>>,
+        recognized: Vec<axon_core::RecognizedText>,
+        ocr_calls: Rc<RefCell<usize>>,
+        visual_captures: Rc<RefCell<usize>>,
+        ocr_hit_target: Option<Node>,
+        focuses: Rc<RefCell<usize>>,
+        /// Whether this session can reach the global input devices at all. Session 0, a
+        /// noninteractive window station, and an integrity boundary all present as false.
+        global_input_usable: bool,
+        /// Whether this backend can capture, prove, and restore the foreground. Without it the
+        /// foreground rung is withheld rather than dispatched unrestored.
+        foreground_transaction: bool,
+        frontmost: Rc<RefCell<Option<String>>>,
+        /// Applications that refuse to come forward, so activation cannot be proved.
+        refuses_activation: Rc<RefCell<Vec<String>>>,
+        activations: Rc<RefCell<Vec<String>>>,
+        /// What the pixel planner answers for any target. Unavailable by default, which is the
+        /// honest shape for a fake: a bound plan has to be scripted deliberately.
+        pixel_plan: Rc<RefCell<PixelPlan>>,
+        pixel_result: Rc<RefCell<Result<PixelDispatch, PixelDispatchError>>>,
+        /// Sequences actually posted, which is not the same as calls made: a revalidation failure
+        /// posts nothing, and a counter of calls could not tell the two apart.
+        pixel_dispatches: Rc<RefCell<usize>>,
+    }
+    impl BackgroundPixelPointer for FakeBackend {
+        fn plan_pixel_click(
+            &mut self,
+            _: &SnapshotHandle,
+            _: (f64, f64),
+        ) -> Result<PixelPlan, BackendError> {
+            Ok(self.pixel_plan.borrow().clone())
+        }
+        fn dispatch_pixel_click(
+            &mut self,
+            _: &PixelTarget,
+        ) -> Result<PixelDispatch, PixelDispatchError> {
+            let outcome = self.pixel_result.borrow().clone();
+            if outcome.is_ok() {
+                *self.pixel_dispatches.borrow_mut() += 1;
+            }
+            outcome
+        }
+    }
+    impl PointerTargetVerifier for FakeBackend {
+        fn verify_pointer_target(
+            &mut self,
+            handle: &SnapshotHandle,
+            _: (f64, f64),
+        ) -> Result<bool, BackendError> {
+            self.verified_handles.borrow_mut().push(handle.clone());
+            Ok(self.pointer_target_matches)
+        }
+    }
+    impl TextRecognitionProvider for FakeBackend {
+        fn recognize_text(
+            &mut self,
+            _: &AppQuery,
+        ) -> Result<Vec<axon_core::RecognizedText>, BackendError> {
+            *self.ocr_calls.borrow_mut() += 1;
+            Ok(self.recognized.clone())
+        }
+    }
+    impl VisualObservationProvider for FakeBackend {
+        fn observe_visuals(
+            &mut self,
+            _: &AppQuery,
+            screenshot: bool,
+            screen_text: bool,
+        ) -> Result<VisualObservation, BackendError> {
+            *self.visual_captures.borrow_mut() += 1;
+            Ok(VisualObservation {
+                screenshot: screenshot.then(|| Screenshot {
+                    bytes: vec![1, 2, 3],
+                    media_type: "image/png".into(),
+                    width: 640,
+                    height: 480,
+                    frame: Rect {
+                        x: 4.0,
+                        y: 5.0,
+                        width: 640.0,
+                        height: 480.0,
+                    },
+                }),
+                recognized_text: screen_text.then(|| self.recognized.clone()),
+            })
+        }
+    }
+    impl PlatformBackend for FakeBackend {
+        fn capabilities(&self) -> Result<Vec<CapabilityInfo>, BackendError> {
+            Ok(vec![
+                CapabilityInfo {
+                    capability: Capability::PointerInput,
+                    usable: self.global_input_usable,
+                    restriction: (!self.global_input_usable)
+                        .then(|| "session 0 has no interactive window station".to_string()),
+                },
+                CapabilityInfo {
+                    capability: Capability::KeyboardInput,
+                    usable: self.global_input_usable,
+                    restriction: (!self.global_input_usable)
+                        .then(|| "session 0 has no interactive window station".to_string()),
+                },
+            ])
+        }
+        fn enumerate_applications(&self) -> Result<Vec<Application>, BackendError> {
+            Ok(vec![Application {
+                name: self.snapshot.app.name.clone(),
+                identifier: self.snapshot.app.identifier.clone(),
+                macos: vec![],
+            }])
+        }
+        /// Resolved through this backend's own enumeration rather than echoed back, so a request
+        /// naming an application that is not running actually misses. A fake that answered every
+        /// name would make the unidentifiable-target refusal unreachable.
+        fn resolve_application(&mut self, app: &AppQuery) -> Result<Option<String>, BackendError> {
+            let wanted = app.name.as_deref().or(app.identifier.as_deref());
+            Ok(self
+                .enumerate_applications()?
+                .into_iter()
+                .find(|running| Some(running.name.as_str()) == wanted)
+                .map(|running| running.identifier.unwrap_or(running.name)))
+        }
+        fn capture(&mut self, _: &AppQuery) -> Result<Snapshot, BackendError> {
+            Ok(self.snapshot.clone())
+        }
+        fn invoke(&mut self, _: &SnapshotHandle, _: &str) -> Result<(), BackendError> {
+            Ok(())
+        }
+        fn read_value(&self, _: &SnapshotHandle) -> Result<Option<String>, BackendError> {
+            Ok(self.value.borrow().clone())
+        }
+        fn set_value(&mut self, _: &SnapshotHandle, value: &str) -> Result<(), BackendError> {
+            *self.value.borrow_mut() = Some(value.into());
+            Ok(())
+        }
+        fn focus(&mut self, _: &SnapshotHandle) -> Result<(), BackendError> {
+            *self.focuses.borrow_mut() += 1;
+            Ok(())
+        }
+        fn scroll(&mut self, _: &SnapshotHandle, _: (f64, f64)) -> Result<(), BackendError> {
+            Ok(())
+        }
+        fn observe(&mut self, _: &AppQuery, _: Duration) -> Result<Observation, BackendError> {
+            unreachable!()
+        }
+        fn wait_for_value(
+            &mut self,
+            _: &SnapshotHandle,
+            _: &Value,
+            _: Duration,
+        ) -> Result<Observation, BackendError> {
+            unreachable!()
+        }
+        fn pointer_click(&mut self, _: (f64, f64)) -> Result<(), BackendError> {
+            *self.clicks.borrow_mut() += 1;
+            Ok(())
+        }
+        fn pointer_drag(
+            &mut self,
+            _: (f64, f64),
+            _: (f64, f64),
+            _: Duration,
+        ) -> Result<(), BackendError> {
+            unreachable!()
+        }
+        fn keyboard(&mut self, _: &AppQuery, _: KeyboardIntent<'_>) -> Result<(), BackendError> {
+            Ok(())
+        }
+        fn screenshot(&mut self, _: &AppQuery) -> Result<Screenshot, BackendError> {
+            unreachable!()
+        }
+        fn hit_test(&mut self, _: (f64, f64)) -> Result<Option<Node>, BackendError> {
+            Ok(self.ocr_hit_target.clone())
+        }
+        fn recorded_calls(&self) -> Result<Vec<RecordedCall>, BackendError> {
+            unreachable!()
+        }
+        fn set_recording(&mut self, _: bool) -> Result<(), BackendError> {
+            unreachable!()
+        }
+        fn observe_global_input(&mut self, _: Duration) -> Result<Vec<RecordedCall>, BackendError> {
+            unreachable!()
+        }
+        fn supports_foreground_transaction(&self) -> bool {
+            self.foreground_transaction
+        }
+        fn frontmost_application(&mut self) -> Result<Option<String>, BackendError> {
+            Ok(self.frontmost.borrow().clone())
+        }
+        fn activate_application(&mut self, identity: &str) -> Result<bool, BackendError> {
+            self.activations.borrow_mut().push(identity.into());
+            if self
+                .refuses_activation
+                .borrow()
+                .iter()
+                .any(|app| app == identity)
+            {
+                return Ok(false);
+            }
+            *self.frontmost.borrow_mut() = Some(identity.into());
+            Ok(true)
+        }
+    }
+    fn node(name: &str) -> Node {
+        Node {
+            role: "Button".into(),
+            subrole: None,
+            name: Some(name.into()),
+            title: Some(name.into()),
+            label: Some(name.into()),
+            value: None,
+            description: None,
+            identifier: Some(name.into()),
+            actions: vec!["Invoke".into()],
+            frame: Some(Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 20.0,
+                height: 20.0,
+            }),
+            editable: false,
+            children: vec![],
+            child_count: Some(0),
+            truncation_reason: None,
+        }
+    }
+    fn backend(nodes: Vec<Node>, value: Option<&str>) -> FakeBackend {
+        let root = Node {
+            children: nodes,
+            ..node("root")
+        };
+        FakeBackend {
+            snapshot: Snapshot::new(Application {
+                name: "App".into(),
+                identifier: None,
+                macos: vec![Window { title: None, root }],
+            }),
+            pointer_target_matches: true,
+            verified_handles: Rc::new(RefCell::new(vec![])),
+            value: Rc::new(RefCell::new(value.map(str::to_owned))),
+            clicks: Rc::new(RefCell::new(0)),
+            recognized: vec![],
+            ocr_calls: Rc::new(RefCell::new(0)),
+            visual_captures: Rc::new(RefCell::new(0)),
+            ocr_hit_target: Some(node("hit")),
+            focuses: Rc::new(RefCell::new(0)),
+            global_input_usable: true,
+            foreground_transaction: true,
+            frontmost: Rc::new(RefCell::new(Some("Prior".into()))),
+            refuses_activation: Rc::new(RefCell::new(vec![])),
+            activations: Rc::new(RefCell::new(vec![])),
+            pixel_plan: Rc::new(RefCell::new(PixelPlan::unavailable(
+                "this fake backend was given no pixel plan for this target",
+            ))),
+            pixel_result: Rc::new(RefCell::new(Ok(PixelDispatch {
+                complete: true,
+                partial: None,
+                frontmost_unchanged: true,
+                pointer_unchanged: true,
+            }))),
+            pixel_dispatches: Rc::new(RefCell::new(0)),
+        }
+    }
+
+    /// A plan bound to a leaf window inside a captured root, with a transform that reconstructs
+    /// the screen point exactly.
+    fn pixel_target() -> PixelTarget {
+        PixelTarget {
+            handle: SnapshotHandle("s1:0".into()),
+            window: 0x0004_07AE,
+            window_class: "Chrome_RenderWidgetHostHWND".into(),
+            dpi_awareness: "perMonitorAware",
+            root_window: 0x0003_0B12,
+            process_identifier: 4812,
+            screen_point: (204.0, 279.0),
+            client_origin: (120.0, 248.0),
+            client_point: (84.0, 31.0),
+        }
+    }
+    fn request(method: &str, params: Value) -> JsonRpcRequest {
+        JsonRpcRequest::new(Some(JsonRpcId::Integer(1)), method, Some(params))
+    }
+    #[test]
+    fn excluded_tools_fail_before_backend_dispatch() {
+        assert_eq!(EXCLUDED.len(), 5);
+        assert!(EXCLUDED.iter().any(|x| x.0 == "drag"));
+    }
+    #[test]
+    fn invalid_json_is_parse_error() {
+        let e = parse_request("{").unwrap_err();
+        let JsonRpcResponse::Failure(e) = e else {
+            panic!()
+        };
+        assert_eq!(e.error.code, -32700);
+    }
+    #[test]
+    fn legacy_locator_target_is_rejected_without_dispatch() {
+        let mut router = Router::new(backend(vec![node("same"), node("same")], None));
+        let response = router
+            .request(request(
+                "click",
+                json!({"target":{"app":"App","locator":{"role":"Button"}}, "deliveryPolicy": "foregroundPermitted"}),
+            ))
+            .unwrap();
+        let JsonRpcResponse::Failure(error) = response else {
+            panic!("legacy locators must be rejected at the wire boundary")
+        };
+        assert_eq!(error.error.code, -32602);
+        assert_eq!(
+            error.error.message,
+            "element target must be an {app, name} object"
+        );
+        assert_eq!(*router.backend.clicks.borrow(), 0);
+    }
+    #[test]
+    fn click_rejects_mismatched_immediate_hit_before_send_input() {
+        let mut backend = backend(vec![], None);
+        backend.pointer_target_matches = false;
+        let clicks = backend.clicks.clone();
+        let mut router = Router::new(backend);
+        router.snapshot = Some(router.backend.snapshot.clone());
+        let response = router
+            .request(request(
+                "click",
+                json!({"target":{"location":{"app":"App","text":"root"}}, "deliveryPolicy": "foregroundPermitted"}),
+            ))
+            .unwrap();
+        assert!(matches!(response, JsonRpcResponse::Failure(_)));
+        assert_eq!(*clicks.borrow(), 0);
+    }
+    #[test]
+    fn legacy_handle_target_is_rejected_without_dispatch() {
+        let backend = backend(vec![node("duplicate"), node("duplicate")], None);
+        let target = backend.snapshot.handle(1);
+        let verified_handles = backend.verified_handles.clone();
+        let clicks = backend.clicks.clone();
+        let mut router = Router::new(backend);
+        router.snapshot = Some(router.backend.snapshot.clone());
+
+        let response = router
+            .request(request(
+                "click",
+                json!({"target":target.0, "deliveryPolicy": "foregroundPermitted"}),
+            ))
+            .unwrap();
+
+        let JsonRpcResponse::Failure(error) = response else {
+            panic!("legacy handles must be rejected at the wire boundary")
+        };
+        assert_eq!(error.error.code, -32602);
+        assert_eq!(
+            error.error.message,
+            "element target must be an {app, name} object"
+        );
+        assert!(verified_handles.borrow().is_empty());
+        assert_eq!(*clicks.borrow(), 0);
+    }
+    fn recognized(text: &str, x: f64) -> axon_core::RecognizedText {
+        axon_core::RecognizedText {
+            text: text.into(),
+            frame: Rect {
+                x,
+                y: 10.0,
+                width: 40.0,
+                height: 20.0,
+            },
+            confidence: Some(0.9),
+        }
+    }
+    #[test]
+    fn unique_text_location_click_returns_macos_shaped_resolution() {
+        let mut router = Router::new(backend(vec![node("Save")], None));
+        let response = router
+            .request(request(
+                "click",
+                json!({"target":{"location":{"app":"App","text":"save"}}, "deliveryPolicy": "foregroundPermitted"}),
+            ))
+            .unwrap();
+        let JsonRpcResponse::Success(success) = response else {
+            panic!()
+        };
+        assert_eq!(success.result["resolution"]["status"], "unique");
+        assert_eq!(success.result["resolution"]["best"]["source"], "ax");
+        assert_eq!(success.result["resolution"]["point"]["x"], 10.0);
+        let keys = success.result["resolution"].as_object().unwrap();
+        assert!(keys.contains_key("snapshotID"));
+        assert!(!keys.contains_key("snapshotId"));
+        assert_eq!(*router.backend.clicks.borrow(), 1);
+    }
+    #[test]
+    fn look_screenshot_and_text_share_one_capture_and_use_canonical_keys() {
+        let mut backend = backend(vec![], None);
+        backend.recognized = vec![recognized("Save", 100.0)];
+        let captures = backend.visual_captures.clone();
+        let mut router = Router::new(backend);
+        let response = router
+            .request(request(
+                "look",
+                json!({"app":"App","screenshot":true,"screenText":true}),
+            ))
+            .unwrap();
+        let JsonRpcResponse::Success(success) = response else {
+            panic!()
+        };
+        let screenshot = success.result["screenshot"].as_object().unwrap();
+        let keys = screenshot
+            .keys()
+            .map(String::as_str)
+            .collect::<std::collections::BTreeSet<_>>();
+        assert_eq!(
+            keys,
+            ["base64Data", "height", "mediaType", "width"]
+                .into_iter()
+                .collect()
+        );
+        assert_eq!(screenshot["mediaType"], "image/png");
+        assert_eq!(screenshot["base64Data"], "AQID");
+        assert_eq!(screenshot["width"], 640);
+        assert_eq!(screenshot["height"], 480);
+        assert_eq!(success.result["screenText"][0]["text"], "Save");
+        assert_eq!(*captures.borrow(), 1);
+    }
+    #[test]
+    fn ambiguous_text_location_fails_closed() {
+        let mut router = Router::new(backend(vec![node("Save"), node("Save")], None));
+        let response = router
+            .request(request(
+                "click",
+                json!({"target":{"location":{"app":"App","text":"save"}}, "deliveryPolicy": "foregroundPermitted"}),
+            ))
+            .unwrap();
+        assert!(matches!(response, JsonRpcResponse::Failure(_)));
+        assert_eq!(*router.backend.clicks.borrow(), 0);
+    }
+    #[test]
+    fn auto_prefers_uia_without_running_ocr() {
+        let mut backend = backend(vec![node("Save")], None);
+        backend.recognized = vec![recognized("Save", 100.0)];
+        let calls = backend.ocr_calls.clone();
+        let mut router = Router::new(backend);
+        let response = router
+            .request(request(
+                "click",
+                json!({"target":{"location":{"app":"App","text":"save","source":"auto"}}, "deliveryPolicy": "foregroundPermitted"}),
+            ))
+            .unwrap();
+        assert!(matches!(response, JsonRpcResponse::Success(_)));
+        assert_eq!(*calls.borrow(), 0);
+    }
+    #[test]
+    fn forced_screenshot_uses_ocr_even_when_uia_matches() {
+        let mut backend = backend(vec![node("Save")], None);
+        backend.recognized = vec![recognized("Save", 100.0)];
+        let calls = backend.ocr_calls.clone();
+        let mut router = Router::new(backend);
+        let response = router
+            .request(request(
+                "click",
+                json!({"target":{"location":{"app":"App","text":"save","source":"screenshot"}}, "deliveryPolicy": "foregroundPermitted"}),
+            ))
+            .unwrap();
+        let JsonRpcResponse::Success(success) = response else {
+            panic!()
+        };
+        assert_eq!(success.result["resolution"]["best"]["source"], "screenshot");
+        assert_eq!(*calls.borrow(), 1);
+    }
+    #[test]
+    fn ocr_click_refuses_dispatch_when_fresh_hit_test_fails() {
+        let mut backend = backend(vec![], None);
+        backend.recognized = vec![recognized("Save", 100.0)];
+        backend.ocr_hit_target = None;
+        let clicks = backend.clicks.clone();
+        let mut router = Router::new(backend);
+        let response = router
+            .request(request(
+                "click",
+                json!({"target":{"location":{"app":"App","text":"save","source":"screenshot"}}, "deliveryPolicy": "foregroundPermitted"}),
+            ))
+            .unwrap();
+        assert!(matches!(response, JsonRpcResponse::Failure(_)));
+        assert_eq!(*clicks.borrow(), 0);
+    }
+    fn action_result(response: &JsonRpcResponse) -> &Value {
+        let JsonRpcResponse::Success(success) = response else {
+            panic!("a policy or capability denial is an action result, not a transport error")
+        };
+        &success.result
+    }
+
+    #[test]
+    fn a_text_location_click_travels_the_same_ladder_as_any_other_click() {
+        // A resolved text location is still a click. A separate dispatch path here is how a caller
+        // ends up with global pointer input under a policy that forbids it.
+        let mut backend = backend(vec![node("save")], None);
+        backend.recognized = vec![];
+        let clicks = backend.clicks.clone();
+        let mut router = Router::new(backend);
+
+        let refused = router
+            .request(request(
+                "click",
+                json!({"target": {"location": {"app": "App", "text": "save"}}}),
+            ))
+            .unwrap();
+        let result = action_result(&refused);
+        assert_eq!(result["refusal"]["reason"], json!("foregroundNotPermitted"));
+        assert_eq!(result["delivery"], Value::Null);
+        assert_eq!(result["dispatchSuccess"], json!(false));
+        assert_eq!(
+            *clicks.borrow(),
+            0,
+            "the default policy must not emit global pointer input"
+        );
+    }
+
+    #[test]
+    fn a_text_location_click_is_refused_when_the_foreground_rung_is_withheld() {
+        let mut backend = backend(vec![node("save")], None);
+        backend.foreground_transaction = false;
+        let clicks = backend.clicks.clone();
+        let mut router = Router::new(backend);
+
+        let response = router
+            .request(request(
+                "click",
+                json!({
+                    "target": {"location": {"app": "App", "text": "save"}},
+                    "deliveryPolicy": "foregroundPermitted"
+                }),
+            ))
+            .unwrap();
+
+        let result = action_result(&response);
+        assert_eq!(result["refusal"]["reason"], json!("noDeliveryCandidate"));
+        assert_eq!(*clicks.borrow(), 0, "a withheld rung dispatches nothing");
+    }
+
+    #[test]
+    fn a_text_location_click_activates_and_restores_when_opted_in() {
+        let backend = backend(vec![node("save")], None);
+        let clicks = backend.clicks.clone();
+        let activations = backend.activations.clone();
+        let mut router = Router::new(backend);
+
+        let response = router
+            .request(request(
+                "click",
+                json!({
+                    "target": {"location": {"app": "App", "text": "save"}},
+                    "deliveryPolicy": "foregroundPermitted"
+                }),
+            ))
+            .unwrap();
+
+        let result = action_result(&response);
+        assert_eq!(result["delivery"], json!("foreground"));
+        assert_eq!(result["dispatchSuccess"], json!(true));
+        assert_eq!(result["foreground"]["activationProved"], json!(true));
+        assert_eq!(result["foreground"]["restored"], json!(true));
+        assert!(result["resolution"]["status"] != Value::Null);
+        assert_eq!(*clicks.borrow(), 1);
+        assert_eq!(
+            *activations.borrow(),
+            vec!["App".to_string(), "Prior".to_string()]
+        );
+    }
+
+    #[test]
+    fn a_handle_only_click_activates_the_resolved_targets_application() {
+        // The canonical form carries no app string. Foreground delivery must recover the owning
+        // application from the resolution rather than treating the absence as already-frontmost,
+        // which would dispatch global input with no activation and no proof.
+        let backend = backend(vec![], None);
+        let clicks = backend.clicks.clone();
+        let activations = backend.activations.clone();
+        let frontmost = backend.frontmost.clone();
+        let mut router = Router::new(backend);
+        router.snapshot = Some(router.backend.snapshot.clone());
+
+        let response = router
+            .request(request(
+                "click",
+                json!({"target": {"location": {"app": "App", "text": "root"}}, "deliveryPolicy": "foregroundPermitted"}),
+            ))
+            .unwrap();
+
+        let result = action_result(&response);
+        assert_eq!(result["delivery"], json!("foreground"));
+        assert_eq!(result["foreground"]["alreadyFrontmost"], json!(false));
+        assert_eq!(result["foreground"]["activationProved"], json!(true));
+        assert_eq!(result["foreground"]["restored"], json!(true));
+        assert_eq!(
+            *activations.borrow(),
+            vec!["App".to_string(), "Prior".to_string()],
+            "the resolved target's own application is activated, then the prior one restored"
+        );
+        assert_eq!(*clicks.borrow(), 1);
+        assert_eq!(frontmost.borrow().as_deref(), Some("Prior"));
+    }
+
+    #[test]
+    fn a_backend_that_cannot_restore_the_foreground_never_offers_the_rung() {
+        // Unrestored `SendInput` is not the foreground rung, it is the behaviour this contract
+        // exists to prevent. Offering it and reporting `delivery: "foreground"` would claim a
+        // guarantee the backend does not keep.
+        let mut backend = backend(vec![], None);
+        backend.foreground_transaction = false;
+        let clicks = backend.clicks.clone();
+        let mut router = Router::new(backend);
+        router.snapshot = Some(router.backend.snapshot.clone());
+
+        for policy in ["backgroundOnly", "foregroundPermitted"] {
+            let response = router
+                .request(request(
+                    "click",
+                    json!({"target": {"location": {"app": "App", "text": "root"}}, "deliveryPolicy": policy}),
+                ))
+                .unwrap();
+            let result = action_result(&response);
+            assert_eq!(
+                result["refusal"]["reason"],
+                json!("noDeliveryCandidate"),
+                "{policy}"
+            );
+            assert!(
+                result["refusal"]["message"]
+                    .as_str()
+                    .unwrap()
+                    .contains("hand the session back"),
+                "the refusal names the guarantee that cannot be kept, under {policy}"
+            );
+        }
+        assert_eq!(*clicks.borrow(), 0);
+    }
+
+    #[test]
+    fn foreground_escalation_captures_activates_dispatches_once_and_restores() {
+        let backend = backend(vec![], None);
+        let clicks = backend.clicks.clone();
+        let activations = backend.activations.clone();
+        let frontmost = backend.frontmost.clone();
+        let mut router = Router::new(backend);
+        router.snapshot = Some(router.backend.snapshot.clone());
+
+        let response = router
+            .request(request(
+                "click",
+                json!({
+                    "target": {"location": {"app": "App", "text": "root"}},
+                    "app": "App",
+                    "deliveryPolicy": "foregroundPermitted"
+                }),
+            ))
+            .unwrap();
+
+        let result = action_result(&response);
+        assert_eq!(result["delivery"], json!("foreground"));
+        assert_eq!(result["dispatchSuccess"], json!(true));
+        assert_eq!(result["foreground"]["priorApp"], json!("Prior"));
+        assert_eq!(result["foreground"]["alreadyFrontmost"], json!(false));
+        assert_eq!(result["foreground"]["activationProved"], json!(true));
+        assert_eq!(result["foreground"]["restored"], json!(true));
+        // This fake overrides neither pointer seam, so the transaction cannot say where the
+        // pointer started and reports null rather than claiming it handed something back.
+        assert_eq!(result["foreground"]["pointerRestored"], Value::Null);
+        assert_eq!(*clicks.borrow(), 1, "exactly one dispatch");
+        assert_eq!(
+            *activations.borrow(),
+            vec!["App".to_string(), "Prior".to_string()],
+            "activate the target, then hand the session back"
+        );
+        assert_eq!(frontmost.borrow().as_deref(), Some("Prior"));
+        // What the transaction kept is its own promise, and that is not the whole of success.
+        // See the dedicated case below.
+        assert_eq!(result["success"], json!(false));
+    }
+
+    #[test]
+    fn a_restored_session_is_not_by_itself_goal_success() {
+        // The foreground rung's own condition and the action's verification are separate, and this
+        // rung is where they are most easily confused: a transaction that captured, activated,
+        // proved, dispatched and handed the session back has done everything it promised, and
+        // still knows nothing about whether the target acted on what `SendInput` posted. `click`
+        // declares no postcondition, so nothing here can say that it did.
+        let backend = backend(vec![], None);
+        let clicks = backend.clicks.clone();
+        let mut router = Router::new(backend);
+        router.snapshot = Some(router.backend.snapshot.clone());
+
+        let response = router
+            .request(request(
+                "click",
+                json!({
+                    "target": {"location": {"app": "App", "text": "root"}},
+                    "app": "App",
+                    "deliveryPolicy": "foregroundPermitted"
+                }),
+            ))
+            .unwrap();
+
+        let result = action_result(&response);
+        assert_eq!(*clicks.borrow(), 1, "the events went out");
+        assert_eq!(result["foreground"]["restored"], json!(true));
+        assert_eq!(result["dispatchSuccess"], json!(true));
+        assert_eq!(result["dispatch"]["success"], json!(true));
+        assert_eq!(
+            result["success"],
+            json!(false),
+            "a dispatch that verified nothing is not a successful action, however cleanly the \
+             session was handed back"
+        );
+        assert_eq!(
+            result["verification"]["reason"],
+            json!("click has no declared postcondition"),
+            "the caller is told what is missing rather than left to infer it"
+        );
+    }
+
+    #[test]
+    fn a_verified_goal_is_what_makes_a_foreground_dispatch_successful() {
+        // The other half of the same rule, so the assertion above cannot be satisfied by a
+        // `success` that is simply hardwired false. A postcondition that verified promotes the
+        // action, and the transaction's own condition still gates it.
+        let mut router = Router::new(backend(vec![], None));
+        let candidate = DeliveryCandidate::available(
+            DeliveryRung::Foreground,
+            DeliveryCapability::GlobalInput,
+            "SendInput",
+        );
+
+        let promoted = router
+            .foreground_dispatch(
+                DeliveryPolicy::ForegroundPermitted,
+                &candidate,
+                ForegroundTarget::Application("App"),
+                false,
+                json!({"verified": true, "observed": "anything"}),
+                |backend| backend.pointer_click((10.0, 10.0)),
+            )
+            .expect("a proved activation dispatches");
+
+        assert_eq!(promoted["success"], json!(true));
+        assert_eq!(promoted["dispatchSuccess"], json!(true));
+        assert_eq!(promoted["foreground"]["restored"], json!(true));
+    }
+
+    #[test]
+    fn foreground_escalation_refuses_without_dispatching_when_activation_is_not_proved() {
+        let backend = backend(vec![], None);
+        backend.refuses_activation.borrow_mut().push("App".into());
+        let clicks = backend.clicks.clone();
+        let frontmost = backend.frontmost.clone();
+        let mut router = Router::new(backend);
+        router.snapshot = Some(router.backend.snapshot.clone());
+
+        let response = router
+            .request(request(
+                "keyboard",
+                json!({"text": "x", "app": "App", "deliveryPolicy": "foregroundPermitted"}),
+            ))
+            .unwrap();
+
+        let result = action_result(&response);
+        assert_eq!(result["refusal"]["reason"], json!("activationNotProved"));
+        assert_eq!(result["dispatchSuccess"], json!(false));
+        assert_eq!(result["delivery"], Value::Null);
+        // Posting global keystrokes at this moment would send them wherever the user is working.
+        assert_eq!(*clicks.borrow(), 0);
+        assert_eq!(frontmost.borrow().as_deref(), Some("Prior"));
+    }
+
+    #[test]
+    fn a_failed_restoration_keeps_dispatch_evidence_and_fails_overall() {
+        let backend = backend(vec![], None);
+        backend.refuses_activation.borrow_mut().push("Prior".into());
+        let mut router = Router::new(backend);
+        router.snapshot = Some(router.backend.snapshot.clone());
+
+        let response = router
+            .request(request(
+                "click",
+                json!({
+                    "target": {"location": {"app": "App", "text": "root"}},
+                    "app": "App",
+                    "deliveryPolicy": "foregroundPermitted"
+                }),
+            ))
+            .unwrap();
+
+        let result = action_result(&response);
+        assert_eq!(result["dispatchSuccess"], json!(true));
+        assert_eq!(result["delivery"], json!("foreground"));
+        assert_eq!(result["foreground"]["restored"], json!(false));
+        // The events went out, but the user's session was not put back.
+        assert_eq!(result["success"], json!(false));
+
+        // Asserted again with the verification satisfied, because an unverified click fails for
+        // its own reason and would report exactly the same thing if restoration stopped counting
+        // at all. Here it is the only variable left. The first dispatch left the target forward,
+        // so the foreground is put back by hand first: a target that already holds it activates
+        // nothing and has nothing to restore, which is a different case than the one under test.
+        *router.backend.frontmost.borrow_mut() = Some("Prior".into());
+        let candidate = DeliveryCandidate::available(
+            DeliveryRung::Foreground,
+            DeliveryCapability::GlobalInput,
+            "SendInput",
+        );
+        let verified = router
+            .foreground_dispatch(
+                DeliveryPolicy::ForegroundPermitted,
+                &candidate,
+                ForegroundTarget::Application("App"),
+                false,
+                json!({"verified": true, "observed": "anything"}),
+                |backend| backend.pointer_click((10.0, 10.0)),
+            )
+            .expect("a proved activation dispatches");
+        assert_eq!(verified["foreground"]["restored"], json!(false));
+        assert_eq!(verified["dispatchSuccess"], json!(true));
+        assert_eq!(
+            verified["success"],
+            json!(false),
+            "a verified goal does not excuse a session that was not handed back"
+        );
+    }
+
+    #[test]
+    fn an_unresolvable_target_is_a_transport_error_not_a_delivery_refusal() {
+        // A refusal means the request was well formed and the target resolved. A target that is
+        // absent, malformed, or stale never gets that far, so it stays a JSON-RPC error even under
+        // the default policy where the rung would have been refused anyway.
+        let backend = backend(vec![], None);
+        let clicks = backend.clicks.clone();
+        let mut router = Router::new(backend);
+        router.snapshot = Some(router.backend.snapshot.clone());
+
+        for target in [json!("s999:42"), json!("not-a-handle"), Value::Null] {
+            let response = router
+                .request(request("click", json!({"target": target})))
+                .unwrap();
+            let JsonRpcResponse::Failure(failure) = response else {
+                panic!("an unresolvable target is a transport error, not a refusal: {target}")
+            };
+            assert!(failure.error.code < 0, "{target}");
+        }
+        assert_eq!(*clicks.borrow(), 0);
+    }
+
+    #[test]
+    fn a_malformed_keyboard_request_is_a_transport_error_not_a_delivery_refusal() {
+        let mut backend = backend(vec![], None);
+        backend.global_input_usable = false;
+        let mut router = Router::new(backend);
+
+        for params in [json!({}), json!({"text": "x", "key": "Return"})] {
+            let response = router.request(request("keyboard", params.clone())).unwrap();
+
+            let JsonRpcResponse::Failure(failure) = response else {
+                panic!("a keyboard request carrying neither or both intents is malformed: {params}")
+            };
+            assert_eq!(failure.error.code, -32602, "{params}");
+        }
+    }
+
+    #[test]
+    fn keyboard_aimed_at_an_application_that_is_not_running_refuses_rather_than_typing_elsewhere() {
+        // Falling through to the frontmost here would post keystrokes into whatever the user
+        // happens to be working in, having been asked for something else entirely.
+        let backend = backend(vec![], None);
+        let activations = backend.activations.clone();
+        let mut router = Router::new(backend);
+
+        let response = router
+            .request(request(
+                "keyboard",
+                json!({"text": "x", "app": "Absent", "deliveryPolicy": "foregroundPermitted"}),
+            ))
+            .unwrap();
+
+        let result = action_result(&response);
+        assert_eq!(
+            result["refusal"]["reason"],
+            json!("targetIdentityUnavailable")
+        );
+        assert_eq!(result["dispatchSuccess"], json!(false));
+        assert!(activations.borrow().is_empty(), "nothing was activated");
+    }
+
+    #[test]
+    fn send_input_requires_the_foreground_opt_in_and_refuses_without_it() {
+        let backend = backend(vec![], None);
+        let clicks = backend.clicks.clone();
+        let mut router = Router::new(backend);
+        router.snapshot = Some(router.backend.snapshot.clone());
+
+        let refused = router
+            .request(request(
+                "click",
+                json!({"target": {"location": {"app": "App", "text": "root"}}}),
+            ))
+            .unwrap();
+        let result = action_result(&refused);
+        assert_eq!(result["success"], json!(false));
+        assert_eq!(result["strategy"], json!("refused"));
+        assert_eq!(result["delivery"], Value::Null);
+        assert_eq!(result["dispatchSuccess"], json!(false));
+        assert_eq!(result["refusal"]["reason"], json!("foregroundNotPermitted"));
+        assert_eq!(result["refusal"]["requiredRung"], json!("foreground"));
+        assert_eq!(result["refusal"]["capability"], json!("globalInput"));
+        assert_eq!(*clicks.borrow(), 0, "a refusal reaches no backend call");
+
+        let permitted = router
+            .request(request(
+                "click",
+                json!({"target": {"location": {"app": "App", "text": "root"}}, "deliveryPolicy": "foregroundPermitted"}),
+            ))
+            .unwrap();
+        let result = action_result(&permitted);
+        assert_eq!(result["delivery"], json!("foreground"));
+        assert_eq!(result["dispatchSuccess"], json!(true));
+        assert_eq!(result["refusal"], Value::Null);
+        assert_eq!(result["dispatch"]["mechanism"], json!("SendInput"));
+        assert_eq!(*clicks.borrow(), 1);
+    }
+
+    #[test]
+    fn a_session_without_global_input_refuses_even_with_the_opt_in() {
+        let mut backend = backend(vec![], None);
+        // Session 0 and noninteractive window stations arrive here as an unusable capability.
+        backend.global_input_usable = false;
+        let clicks = backend.clicks.clone();
+        let mut router = Router::new(backend);
+        router.snapshot = Some(router.backend.snapshot.clone());
+
+        for policy in ["backgroundOnly", "foregroundPermitted"] {
+            let response = router
+                .request(request(
+                    "keyboard",
+                    json!({"text": "x", "deliveryPolicy": policy}),
+                ))
+                .unwrap();
+            let result = action_result(&response);
+            // Opting in cannot conjure a device, so the refusal names the missing mechanism
+            // rather than sending the caller after a permission that changes nothing.
+            assert_eq!(
+                result["refusal"]["reason"],
+                json!("noDeliveryCandidate"),
+                "{policy}"
+            );
+            assert_eq!(
+                result["refusal"]["message"],
+                json!("session 0 has no interactive window station"),
+                "{policy}"
+            );
+            assert_eq!(result["dispatchSuccess"], json!(false), "{policy}");
+        }
+        assert_eq!(*clicks.borrow(), 0);
+    }
+
+    #[test]
+    fn unknown_semantic_names_fail_closed_without_dispatch() {
+        let backend = backend(vec![], Some("before"));
+        let focuses = backend.focuses.clone();
+        let clicks = backend.clicks.clone();
+        let mut router = Router::new(backend);
+
+        for (method, params) in [
+            ("invoke", json!({"target": {"app": "App", "name": "root"}})),
+            (
+                "type",
+                json!({"target": {"app": "App", "name": "root"}, "value": "after"}),
+            ),
+            (
+                "scroll",
+                json!({"target": {"app": "App", "name": "root"}, "deltaY": -120.0}),
+            ),
+        ] {
+            let response = router.request(request(method, params)).unwrap();
+            let JsonRpcResponse::Failure(error) = response else {
+                panic!("{method} must fail for an unknown semantic name")
+            };
+            assert_eq!(error.error.code, -32002, "{method}");
+            assert_eq!(
+                error.error.data.as_ref().and_then(|v| v["status"].as_str()),
+                Some("missing")
+            );
+        }
+        assert_eq!(*clicks.borrow(), 0);
+        assert_eq!(*focuses.borrow(), 0);
+    }
+
+    #[test]
+    fn an_unknown_policy_fails_before_resolution_or_dispatch() {
+        let backend = backend(vec![], None);
+        let clicks = backend.clicks.clone();
+        let focuses = backend.focuses.clone();
+        let mut router = Router::new(backend);
+        router.snapshot = Some(router.backend.snapshot.clone());
+
+        for method in ["click", "type", "keyboard", "scroll", "invoke"] {
+            let response = router
+                .request(request(
+                    method,
+                    json!({
+                        "target": {"location": {"app": "App", "text": "root"}},
+                        "value": "x",
+                        "text": "x",
+                        "deliveryPolicy": "whateverItTakes"
+                    }),
+                ))
+                .unwrap();
+            let JsonRpcResponse::Failure(failure) = response else {
+                panic!("{method} must reject an unknown policy")
+            };
+            assert_eq!(failure.error.code, -32602, "{method}");
+            assert!(
+                failure.error.message.contains("deliveryPolicy"),
+                "{method}: {}",
+                failure.error.message
+            );
+        }
+        assert_eq!(*clicks.borrow(), 0);
+        assert_eq!(*focuses.borrow(), 0);
+    }
+
+    #[test]
+    fn axn_unknown_semantic_name_fails_closed_without_dispatch() {
+        let backend = backend(vec![], Some("ready now"));
+        let clicks = backend.clicks.clone();
+        let focuses = backend.focuses.clone();
+        let mut router = Router::new(backend);
+        let source = r#"version: 1
+actions:
+  - tool: invoke
+    target:
+      app: App
+      name: root
+"#;
+
+        let response = router
+            .request(request("run", json!({"source": source})))
+            .unwrap();
+        let JsonRpcResponse::Success(success) = response else {
+            panic!("the .axn run itself returns a batch result")
+        };
+        let batch = &success.result["batch"];
+        assert_eq!(batch["success"], json!(false));
+        assert_eq!(batch["trace"].as_array().unwrap().len(), 1);
+        assert!(
+            batch["trace"][0]["error"]
+                .as_str()
+                .unwrap()
+                .contains("semantic name not found")
+        );
+        assert_eq!(*clicks.borrow(), 0);
+        assert_eq!(*focuses.borrow(), 0);
+
+        let dry = router
+            .request(request(
+                "run",
+                json!({"source":source,"options":{"dryRun":true}}),
+            ))
+            .unwrap();
+        let JsonRpcResponse::Success(dry) = dry else {
+            panic!("dry-run returns a batch result")
+        };
+        assert_eq!(dry.result["batch"]["dryRun"], json!(true));
+        assert_eq!(dry.result["batch"]["success"], json!(false));
+        assert_eq!(
+            dry.result["batch"]["trace"][0]["result"]["target"],
+            json!({"app": "App", "name": "root"})
+        );
+        assert_eq!(*clicks.borrow(), 0);
+        assert_eq!(*focuses.borrow(), 0);
+    }
+
+    /// The pixel rung's router half: which rung a click takes, what a refusal names, and what a
+    /// dispatch is allowed to claim. All of it runs against fakes, so it is verified on the
+    /// machine this backend is developed on rather than only on the machine it ships to.
+    mod pixel {
+        use super::*;
+
+        fn bound(backend: &FakeBackend) {
+            *backend.pixel_plan.borrow_mut() = PixelPlan::Bound(pixel_target());
+        }
+
+        #[test]
+        fn a_bound_plan_delivers_at_the_pixel_rung_under_the_default_policy() {
+            // The whole point of the rung: the default policy, which forbids activation and global
+            // input, now carries a click all the way to the target.
+            let backend = backend(vec![], None);
+            bound(&backend);
+            let clicks = backend.clicks.clone();
+            let activations = backend.activations.clone();
+            let dispatches = backend.pixel_dispatches.clone();
+            let mut router = Router::new(backend);
+            router.snapshot = Some(router.backend.snapshot.clone());
+
+            let response = router
+                .request(request(
+                    "click",
+                    json!({"target": {"location": {"app": "App", "text": "root"}}}),
+                ))
+                .unwrap();
+
+            let result = action_result(&response);
+            assert_eq!(result["delivery"], json!("pixel"));
+            assert_eq!(result["dispatchSuccess"], json!(true));
+            // Delivered, and not thereby successful. See the dedicated case below.
+            assert_eq!(result["success"], json!(false));
+            assert_eq!(result["refusal"], Value::Null);
+            assert_eq!(result["deliveryPolicy"], json!("backgroundOnly"));
+            assert_eq!(
+                result["dispatch"]["mechanism"],
+                json!("HWND client-coordinate message")
+            );
+            assert_eq!(result["verification"]["verified"], json!(false));
+            assert_eq!(*dispatches.borrow(), 1);
+            assert_eq!(*clicks.borrow(), 0, "the pixel rung is not SendInput");
+            assert!(
+                activations.borrow().is_empty(),
+                "the pixel rung activates nothing"
+            );
+        }
+
+        #[test]
+        fn a_clean_delivery_is_dispatch_evidence_and_not_goal_success() {
+            // The distinction this rung exists inside, and the one `PIXEL_MESSAGE_CLASSES` is
+            // built to defend. A window procedure that examines a message and does nothing
+            // returns from it exactly like one that acts on it, so a completed post proves the
+            // handler ran and never proves it did anything. `click` declares no postcondition, so
+            // nothing here verifies the goal and `success` says so.
+            //
+            // Collapsing the two would hollow out that table: a class that regressed, or one that
+            // behaved differently in a context nobody probed, would otherwise produce an accepted
+            // post, intact invariants, and a report that the caller's click had worked.
+            let backend = backend(vec![], None);
+            bound(&backend);
+            let dispatches = backend.pixel_dispatches.clone();
+            let mut router = Router::new(backend);
+            router.snapshot = Some(router.backend.snapshot.clone());
+
+            let response = router
+                .request(request(
+                    "click",
+                    json!({"target": {"location": {"app": "App", "text": "root"}}}),
+                ))
+                .unwrap();
+
+            let result = action_result(&response);
+            assert_eq!(*dispatches.borrow(), 1, "the messages were posted");
+            assert_eq!(result["dispatchSuccess"], json!(true));
+            assert_eq!(result["dispatch"]["success"], json!(true));
+            assert_eq!(
+                result["success"],
+                json!(false),
+                "a delivered dispatch that verified nothing is not a successful action"
+            );
+            assert_eq!(result["verification"]["verified"], json!(false));
+            assert_eq!(
+                result["verification"]["reason"],
+                json!("click has no declared postcondition"),
+                "the caller is told what is missing rather than left to infer it"
+            );
+        }
+
+        #[test]
+        fn a_verified_goal_is_what_makes_a_pixel_dispatch_successful() {
+            // The other half of the same rule, so the assertion above cannot be satisfied by a
+            // `success` that is simply hardwired false. A postcondition that verified promotes the
+            // action, and the rung's own invariants still gate it.
+            let backend = backend(vec![], None);
+            bound(&backend);
+            let mut router = Router::new(backend);
+            router.snapshot = Some(router.backend.snapshot.clone());
+
+            let response = router
+                .request(request(
+                    "click",
+                    json!({"target": {"location": {"app": "App", "text": "root"}}}),
+                ))
+                .unwrap();
+            let delivered = action_result(&response).clone();
+
+            let candidate = DeliveryCandidate::available(
+                DeliveryRung::Pixel,
+                DeliveryCapability::BackgroundPixelInput,
+                PIXEL_MECHANISM,
+            );
+            let promoted = router
+                .dispatch_pixel(
+                    DeliveryPolicy::BackgroundOnly,
+                    &candidate,
+                    &pixel_target(),
+                    json!({"verified": true, "observed": "anything"}),
+                )
+                .expect("a bound target dispatches");
+
+            assert_eq!(delivered["success"], json!(false));
+            assert_eq!(promoted["success"], json!(true));
+            assert_eq!(promoted["dispatchSuccess"], json!(true));
+        }
+
+        #[test]
+        fn a_pixel_result_reports_the_window_and_the_transform_that_reached_it() {
+            // A dispatch into the wrong window is only diagnosable afterwards if both the window and
+            // the arithmetic that chose the point are on the wire.
+            let backend = backend(vec![], None);
+            bound(&backend);
+            let mut router = Router::new(backend);
+            router.snapshot = Some(router.backend.snapshot.clone());
+
+            let response = router
+                .request(request(
+                    "click",
+                    json!({"target": {"location": {"app": "App", "text": "root"}}}),
+                ))
+                .unwrap();
+
+            let result = action_result(&response);
+            let window = &result["targetWindow"];
+            assert_eq!(window["nativeWindowHandle"], json!("0x000407AE"));
+            assert_eq!(window["rootNativeWindowHandle"], json!("0x00030B12"));
+            assert_eq!(window["windowClass"], json!("Chrome_RenderWidgetHostHWND"));
+            assert_eq!(window["sourceCoordinateSpace"], json!("screen"));
+            let target = pixel_target();
+            assert_eq!(
+                (
+                    window["clientOrigin"]["x"].as_f64().unwrap()
+                        + window["windowPoint"]["x"].as_f64().unwrap(),
+                    window["clientOrigin"]["y"].as_f64().unwrap()
+                        + window["windowPoint"]["y"].as_f64().unwrap(),
+                ),
+                target.screen_point,
+                "the reported transform reconstructs the screen point"
+            );
+            assert_eq!(
+                result["backgroundDelivery"],
+                json!({
+                    "targetProcessIdentifier": 4812,
+                    "frontmostAppUnchanged": true,
+                    "pointerUnchanged": true
+                })
+            );
+        }
+
+        #[test]
+        fn the_pixel_candidate_carries_the_plans_own_obstacle() {
+            let router = Router::new(backend(vec![], None));
+            let ladder = router.pointer_ladder(&PixelPlan::unavailable(
+                "window class Widget has no probe-verified client-coordinate message path",
+            ));
+
+            let pixel = &ladder[0];
+            assert_eq!(pixel.rung, DeliveryRung::Pixel);
+            assert_eq!(
+                pixel.unavailable,
+                Some(DeliveryRefusalReason::BackgroundPixelUnsupported)
+            );
+            assert_eq!(
+                pixel.unavailable_message.as_deref(),
+                Some("window class Widget has no probe-verified client-coordinate message path")
+            );
+            assert!(
+                ladder[1].is_available(),
+                "a rung-specific obstacle leaves the louder rung alone"
+            );
+        }
+
+        #[test]
+        fn keyboard_has_no_pixel_rung_because_it_names_no_element() {
+            // Not scope being trimmed: the rung is target-bound input derived from verified window
+            // geometry, and `keyboard` carries an app name and a string.
+            let router = Router::new(backend(vec![], None));
+            let ladder = router.keyboard_ladder();
+
+            assert_eq!(
+                ladder[0].unavailable,
+                Some(DeliveryRefusalReason::BackgroundPixelUnsupported)
+            );
+            let message = ladder[0].unavailable_message.clone().unwrap();
+            assert!(
+                message.contains("names an application rather than an element"),
+                "{message}"
+            );
+            assert!(message.contains("window geometry"), "{message}");
+        }
+
+        #[test]
+        fn an_unavailable_plan_under_the_default_policy_dispatches_nothing() {
+            let backend = backend(vec![], None);
+            let clicks = backend.clicks.clone();
+            let dispatches = backend.pixel_dispatches.clone();
+            let mut router = Router::new(backend);
+            router.snapshot = Some(router.backend.snapshot.clone());
+
+            let response = router
+                .request(request(
+                    "click",
+                    json!({"target": {"location": {"app": "App", "text": "root"}}}),
+                ))
+                .unwrap();
+
+            let result = action_result(&response);
+            // The policy boundary outranks the capability gap below it: opting in is the actionable
+            // thing this caller can do, and it would work.
+            assert_eq!(result["refusal"]["reason"], json!("foregroundNotPermitted"));
+            assert_eq!(result["dispatchSuccess"], json!(false));
+            assert_eq!(*clicks.borrow(), 0);
+            assert_eq!(*dispatches.borrow(), 0);
+        }
+
+        #[test]
+        fn the_plans_own_obstacle_reaches_the_caller_beside_the_policy_refusal() {
+            // The whole path, from the plan this backend built to what a caller reads. The window
+            // class with no verified message path is the product of the probe work, and the policy
+            // boundary above it is the reported reason. Both have to arrive: one says what to do
+            // next, the other says whether the quiet rung would ever carry this target at all.
+            let backend = backend(vec![], None);
+            *backend.pixel_plan.borrow_mut() = PixelPlan::unavailable(
+                "window class Widget has no probe-verified client-coordinate message path",
+            );
+            let clicks = backend.clicks.clone();
+            let dispatches = backend.pixel_dispatches.clone();
+            let mut router = Router::new(backend);
+            router.snapshot = Some(router.backend.snapshot.clone());
+
+            let response = router
+                .request(request(
+                    "click",
+                    json!({"target": {"location": {"app": "App", "text": "root"}}}),
+                ))
+                .unwrap();
+
+            let result = action_result(&response);
+            assert_eq!(result["refusal"]["reason"], json!("foregroundNotPermitted"));
+            let obstacle = &result["refusal"]["alsoRefused"][0];
+            assert_eq!(obstacle["rung"], json!("pixel"));
+            assert_eq!(obstacle["reason"], json!("backgroundPixelUnsupported"));
+            assert_eq!(
+                obstacle["message"],
+                json!("window class Widget has no probe-verified client-coordinate message path")
+            );
+            assert_eq!(*clicks.borrow(), 0);
+            assert_eq!(*dispatches.borrow(), 0);
+        }
+
+        #[test]
+        fn an_unavailable_plan_escalates_to_the_foreground_when_permitted() {
+            let backend = backend(vec![], None);
+            let clicks = backend.clicks.clone();
+            let dispatches = backend.pixel_dispatches.clone();
+            let mut router = Router::new(backend);
+            router.snapshot = Some(router.backend.snapshot.clone());
+
+            let response = router
+                .request(request(
+                    "click",
+                    json!({"target": {"location": {"app": "App", "text": "root"}}, "deliveryPolicy": "foregroundPermitted"}),
+                ))
+                .unwrap();
+
+            let result = action_result(&response);
+            assert_eq!(result["delivery"], json!("foreground"));
+            assert_eq!(result["foreground"]["activationProved"], json!(true));
+            assert_eq!(*clicks.borrow(), 1);
+            assert_eq!(*dispatches.borrow(), 0);
+        }
+
+        #[test]
+        fn an_obstacle_that_blocks_all_input_refuses_both_rungs_and_names_itself() {
+            // An elevated target is the case. Answering it with foregroundNotPermitted would send the
+            // caller after an opt-in that buys a dispatch UIPI discards.
+            let backend = backend(vec![], None);
+            *backend.pixel_plan.borrow_mut() = PixelPlan::blocked(
+                "the target window runs at a higher integrity level than the daemon; UIPI discards \
+             posted input",
+            );
+            let clicks = backend.clicks.clone();
+            let dispatches = backend.pixel_dispatches.clone();
+            let activations = backend.activations.clone();
+            let mut router = Router::new(backend);
+            router.snapshot = Some(router.backend.snapshot.clone());
+
+            for policy in ["backgroundOnly", "foregroundPermitted"] {
+                let response = router
+                    .request(request(
+                        "click",
+                        json!({"target": {"location": {"app": "App", "text": "root"}}, "deliveryPolicy": policy}),
+                    ))
+                    .unwrap();
+                let result = action_result(&response);
+                assert_eq!(
+                    result["refusal"]["reason"],
+                    json!("noDeliveryCandidate"),
+                    "{policy}"
+                );
+                assert!(
+                    result["refusal"]["message"]
+                        .as_str()
+                        .unwrap()
+                        .contains("integrity level"),
+                    "{policy}: {}",
+                    result["refusal"]["message"]
+                );
+            }
+            assert_eq!(*clicks.borrow(), 0);
+            assert_eq!(*dispatches.borrow(), 0);
+            assert!(activations.borrow().is_empty());
+        }
+
+        #[test]
+        fn a_broken_ancestry_between_planning_and_dispatch_posts_nothing() {
+            for reason in [
+                "the resolved element is no longer inside the captured window",
+                "the receiving window moved between planning and dispatch",
+            ] {
+                let backend = backend(vec![], None);
+                bound(&backend);
+                *backend.pixel_result.borrow_mut() =
+                    Err(PixelDispatchError::Stale(reason.to_string()));
+                let clicks = backend.clicks.clone();
+                let dispatches = backend.pixel_dispatches.clone();
+                let activations = backend.activations.clone();
+                let mut router = Router::new(backend);
+                router.snapshot = Some(router.backend.snapshot.clone());
+
+                let response = router
+                    .request(request(
+                        "click",
+                        json!({"target": {"location": {"app": "App", "text": "root"}}}),
+                    ))
+                    .unwrap();
+
+                // A target that changed under the request is stale, not refused: the request was
+                // answerable when it arrived and is not answerable now.
+                let JsonRpcResponse::Failure(failure) = response else {
+                    panic!("a failed revalidation is a stale-target error: {reason}")
+                };
+                assert_eq!(failure.error.code, -32003, "{reason}");
+                assert_eq!(failure.error.message, reason);
+                assert_eq!(*dispatches.borrow(), 0, "{reason}");
+                assert_eq!(*clicks.borrow(), 0, "{reason}");
+                assert!(activations.borrow().is_empty(), "{reason}");
+            }
+        }
+
+        #[test]
+        fn a_partial_dispatch_fails_without_falling_through_to_a_louder_rung() {
+            // Half a sequence may have left the target believing the button is held. A second attempt
+            // at another rung would compound that rather than recover from it.
+            let backend = backend(vec![], None);
+            bound(&backend);
+            *backend.pixel_result.borrow_mut() = Ok(PixelDispatch {
+            complete: false,
+            partial: Some("the button-up message was refused twice; the target may still consider the left button held".into()),
+            frontmost_unchanged: true,
+            pointer_unchanged: true,
+        });
+            let clicks = backend.clicks.clone();
+            let mut router = Router::new(backend);
+            router.snapshot = Some(router.backend.snapshot.clone());
+
+            let response = router
+                .request(request(
+                    "click",
+                    json!({"target": {"location": {"app": "App", "text": "root"}}, "deliveryPolicy": "foregroundPermitted"}),
+                ))
+                .unwrap();
+
+            let result = action_result(&response);
+            assert_eq!(result["delivery"], json!("pixel"), "the rung did run");
+            assert_eq!(result["dispatchSuccess"], json!(false));
+            assert_eq!(result["success"], json!(false));
+            assert_eq!(result["dispatch"]["success"], json!(false));
+            assert!(
+                result["message"]
+                    .as_str()
+                    .unwrap()
+                    .contains("still consider the left button held"),
+                "{}",
+                result["message"]
+            );
+            assert_eq!(
+                *clicks.borrow(),
+                0,
+                "a rung that delivered anything never escalates, opt-in or not"
+            );
+        }
+
+        #[test]
+        fn a_dispatch_that_broke_the_rungs_own_invariants_fails_with_its_evidence_intact() {
+            for (frontmost, pointer, expected) in [
+                (false, true, "foreground window changed"),
+                (true, false, "real pointer moved"),
+            ] {
+                let backend = backend(vec![], None);
+                bound(&backend);
+                *backend.pixel_result.borrow_mut() = Ok(PixelDispatch {
+                    complete: true,
+                    partial: None,
+                    frontmost_unchanged: frontmost,
+                    pointer_unchanged: pointer,
+                });
+                let mut router = Router::new(backend);
+                router.snapshot = Some(router.backend.snapshot.clone());
+
+                let response = router
+                    .request(request(
+                        "click",
+                        json!({"target": {"location": {"app": "App", "text": "root"}}}),
+                    ))
+                    .unwrap();
+
+                let result = action_result(&response);
+                assert_eq!(result["success"], json!(false), "{expected}");
+                // The messages went out; they just did not go out quietly. Both facts are reported.
+                assert_eq!(result["dispatchSuccess"], json!(true), "{expected}");
+                assert_eq!(result["delivery"], json!("pixel"), "{expected}");
+                assert!(
+                    result["message"].as_str().unwrap().contains(expected),
+                    "{expected}: {}",
+                    result["message"]
+                );
+                assert_eq!(
+                    result["backgroundDelivery"]["frontmostAppUnchanged"],
+                    json!(frontmost)
+                );
+                assert_eq!(
+                    result["backgroundDelivery"]["pointerUnchanged"],
+                    json!(pointer)
+                );
+            }
+        }
+
+        #[test]
+        fn a_text_location_click_travels_the_pixel_rung_when_its_element_binds() {
+            // The same ladder, reached through the other target form.
+            let backend = backend(vec![node("save")], None);
+            bound(&backend);
+            let clicks = backend.clicks.clone();
+            let dispatches = backend.pixel_dispatches.clone();
+            let mut router = Router::new(backend);
+
+            let response = router
+                .request(request(
+                    "click",
+                    json!({"target": {"location": {"app": "App", "text": "save"}}}),
+                ))
+                .unwrap();
+
+            let result = action_result(&response);
+            assert_eq!(result["delivery"], json!("pixel"));
+            assert_eq!(result["resolution"]["status"], json!("unique"));
+            assert_eq!(*dispatches.borrow(), 1);
+            assert_eq!(*clicks.borrow(), 0);
+        }
+
+        #[test]
+        fn a_click_on_recognized_text_alone_never_binds_a_window() {
+            // Screen text gives a point, not an element, so there is no ancestry to bind a window to
+            // however willing the backend is to plan one. Inferring a window from a bare screen point
+            // is precisely what the rung forbids.
+            let mut backend = backend(vec![], None);
+            backend.recognized = vec![recognized("Save", 100.0)];
+            bound(&backend);
+            let clicks = backend.clicks.clone();
+            let dispatches = backend.pixel_dispatches.clone();
+            let mut router = Router::new(backend);
+
+            let response = router
+            .request(request(
+                "click",
+                json!({
+                    "target": {"location": {"app": "App", "text": "save", "source": "screenshot"}},
+                    "deliveryPolicy": "foregroundPermitted"
+                }),
+            ))
+            .unwrap();
+
+            let result = action_result(&response);
+            assert_eq!(result["resolution"]["best"]["source"], json!("screenshot"));
+            assert_eq!(result["delivery"], json!("foreground"));
+            assert_eq!(*dispatches.borrow(), 0);
+            assert_eq!(*clicks.borrow(), 1);
+        }
+    }
+}
