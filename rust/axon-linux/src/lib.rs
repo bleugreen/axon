@@ -785,65 +785,18 @@ impl<B: PointerTargetVerifier + BackgroundPixelInput> Router<B> {
         &mut self,
         params: &Map<String, Value>,
     ) -> Result<(SnapshotHandle, axon_core::Resolution), JsonRpcError> {
-        let target = params.get("target").unwrap_or(&Value::Null);
-        if let Some(raw) = target.as_str() {
-            let handle = SnapshotHandle(raw.into());
-            let snapshot = self
-                .snapshot
-                .as_ref()
-                .ok_or_else(|| rpc_error(-32002, "no active snapshot; call look first"))?;
-            snapshot
-                .index_for_handle(&handle)
-                .map_err(|e| rpc_error(-32002, e.to_string()))?;
-            let index = snapshot
-                .index_for_handle(&handle)
-                .map_err(|e| rpc_error(-32002, e.to_string()))?;
-            let node = flattened(snapshot)
-                .nth(index)
-                .ok_or_else(|| rpc_error(-32002, "handle index is outside snapshot"))?;
-            let candidate = Candidate {
-                index,
-                handle: handle.clone(),
-                role: node.role.clone(),
-                title: node.title.clone(),
-                frame: node.frame,
-                score: 0,
-                reasons: vec!["snapshot-bound handle".into()],
-            };
-            return Ok((
-                handle,
-                Resolution {
-                    status: ResolutionStatus::Unique,
-                    snapshot_id: snapshot.id.clone(),
-                    confidence: Confidence::High,
-                    best: Some(candidate.clone()),
-                    candidates: vec![candidate],
-                },
-            ));
-        }
-        let locator_value = target
-            .get("locator")
-            .or_else(|| params.get("locator"))
-            .ok_or_else(|| rpc_error(-32602, "target must be a snapshot handle or locator"))?;
-        let locator: Locator = serde_json::from_value(locator_value.clone())
-            .map_err(|e| rpc_error(-32602, e.to_string()))?;
-        let snapshot = self
-            .backend
-            .capture(&app_query_from_target(params, target))
-            .map_err(backend_error)?;
-        let resolution = LocatorResolver::resolve(&locator, &snapshot);
-        let handle = resolution
-            .best
-            .as_ref()
-            .map(|c| c.handle.clone())
-            .ok_or_else(|| {
-                rpc_error(
-                    -32001,
-                    format!("locator resolution was {:?}", resolution.status),
-                )
-            })?;
-        self.snapshot = Some(snapshot);
-        Ok((handle, resolution))
+        let target: axon_core::WireElementTarget = serde_json::from_value(
+            params.get("target").cloned().unwrap_or(Value::Null),
+        )
+        .map_err(|_| rpc_error(-32602, "element target must be an {app, name} object"))?;
+        let target = target.validate().map_err(|error| rpc_error(-32602, error.to_string()))?;
+        Err(rpc_error(
+            -32004,
+            format!(
+                "live semantic-name resolution is not implemented by the Linux provider for {} / {}",
+                target.app, target.name
+            ),
+        ))
     }
 
     fn node_center(&self, handle: &SnapshotHandle) -> Result<(f64, f64), JsonRpcError> {
