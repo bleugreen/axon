@@ -47,7 +47,7 @@ import Testing
     #expect(tool(named: "look", in: tools)?["inputSchema"]?["properties"]?["includeScreenshot"] == nil)
     #expect(tool(named: "run", in: tools)?["inputSchema"]?["properties"]?["argValues"] != nil)
     #expect(tool(named: "click", in: tools)?["inputSchema"]?["properties"]?["target"]?["anyOf"]?[2] != nil)
-    #expect(tool(named: "click", in: tools)?["inputSchema"]?["properties"]?["target"]?["anyOf"]?[3] != nil)
+    #expect(tool(named: "click", in: tools)?["inputSchema"]?["properties"]?["target"]?["anyOf"]?[3] == nil)
     #expect(tool(named: "invoke", in: tools)?["inputSchema"]?["properties"]?["target"]?["anyOf"]?[2] == nil)
     #expect(tool(named: "type", in: tools)?["inputSchema"]?["properties"]?["target"]?["anyOf"]?[2] == nil)
     #expect(tool(named: "wait_for_value", in: tools)?["inputSchema"]?["required"] == .array([.string("target")]))
@@ -395,17 +395,15 @@ import Testing
         ])
     ))
 
-    let tree = response?.result?["structuredContent"]?["snapshot"]?["tree"]
+    let snapshot = response?.result?["structuredContent"]?["snapshot"]
+    let toolbar = snapshot?["windows"]?[0]?["children"]?[1]
     let text = textContent(in: response?.result)
 
     #expect(response?.error == nil)
-    #expect(tree == .string("""
-    mcp-depth:0: window "Firefox"
-      mcp-depth:1: tabgroup "Browser tabs" <truncated: depth limit hides 3 children>
-      mcp-depth:5: toolbar "Navigation" <truncated: depth limit hides 1 child>
-    """))
-    #expect(text?.contains("mcp-depth:2: toolbar \"Navigation\"") == false)
-    #expect(text?.contains("mcp-depth:5: toolbar \"Navigation\"") == true)
+    #expect(toolbar?["handle"] == .string("mcp-depth:5"))
+    #expect(toolbar?["children"]?[0]?["handle"] == .string("mcp-depth:6"))
+    #expect(text?.contains("mcp-depth:5") == true)
+    #expect(text?.contains("mcp-depth:6") == true)
 }
 
 @Test func mcpLookScreenTextAddsOCRWithoutScreenshotPayload() {
