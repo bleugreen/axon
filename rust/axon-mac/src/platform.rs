@@ -171,9 +171,14 @@ impl MacBackend {
     fn applications(&self) -> Vec<(i32, String)> {
         let needed = unsafe { proc_listallpids(std::ptr::null_mut(), 0) };
         if needed <= 0 { return Vec::new(); }
-        let mut pids = vec![0i32; needed as usize / std::mem::size_of::<i32>() + 1];
-        let bytes = unsafe { proc_listallpids(pids.as_mut_ptr().cast(), (pids.len() * 4) as i32) };
-        pids.truncate((bytes.max(0) as usize) / 4);
+        let mut pids = vec![0i32; needed as usize];
+        let returned = unsafe {
+            proc_listallpids(
+                pids.as_mut_ptr().cast(),
+                (pids.len() * std::mem::size_of::<i32>()) as i32,
+            )
+        };
+        pids.truncate(returned.max(0) as usize);
         pids.into_iter().filter_map(|pid| {
             let root = unsafe { AXUIElementCreateApplication(pid) };
             if root.is_null() { return None; }

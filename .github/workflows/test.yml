@@ -70,13 +70,9 @@ jobs:
 
       # Linux CI cannot compile the cfg-gated ApplicationServices declarations. Keep the unsafe
       # boundary visible to pull-request checks on the same macOS runner that validates Swift.
-      - name: Test the macOS Rust backend
+      - name: Lint the macOS AX spike
         working-directory: rust
-        run: cargo test -p axon-mac
-
-      - name: Lint the macOS AX boundary
-        working-directory: rust
-        run: cargo clippy -p axon-mac -p axon-spike-mac --all-targets -- -D warnings
+        run: cargo clippy -p axon-spike-mac --all-targets -- -D warnings
 
       # The macOS archive is the deployed product shape; a packaging break is otherwise only
       # discovered during a release, when it is most expensive.
@@ -96,6 +92,23 @@ jobs:
           grep -q "Axon-$VERSION/Axon.app/" <<<"$LISTING"
           ACTUAL="$(dist/Axon.app/Contents/Resources/bin/axon version)"
           [[ "$ACTUAL" == "$VERSION" ]]
+
+  rust-macos:
+    name: Rust macOS
+    runs-on: macos-14
+    steps:
+      - name: Check out Axon
+        uses: actions/checkout@v4
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - name: Run axon-mac tests
+        working-directory: rust
+        run: cargo test -p axon-mac
+      - name: Lint axon-mac
+        working-directory: rust
+        run: cargo clippy -p axon-mac --all-targets -- -D warnings
 
   rust-core:
     name: Rust core
