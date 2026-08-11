@@ -5,7 +5,7 @@ use axon_core::{
     DeliveryOutcome, DeliveryPolicy, DeliveryRefusal, DeliveryRefusalReason, DeliveryRung,
     DeliverySelection, DispatchOutcome, ExpectedFact, ForegroundTarget, JsonRpcError, JsonRpcId,
     JsonRpcRequest, JsonRpcResponse, KeyboardIntent, PlatformBackend, ResolutionStatus,
-    RunEnvelope, RunOptions, Snapshot, SnapshotHandle, TextLocationResolver, TextLocationSource,
+    RunEnvelope, RunOptions, SemanticLookup, SemanticNameRegistry, Snapshot, SnapshotHandle, TextLocationResolver, TextLocationSource,
     TextLocationTarget, TextRecognitionProvider, ToolDispatcher, dispatch_in_foreground,
     goal_success, select_delivery,
 };
@@ -56,6 +56,7 @@ const NO_FOREGROUND_TRANSACTION: &str = "this Windows backend can activate an ap
 pub struct Router<B> {
     backend: B,
     snapshot: Option<Snapshot>,
+    semantic_names: SemanticNameRegistry,
 }
 
 #[derive(Clone, Debug)]
@@ -254,6 +255,7 @@ impl<
         Self {
             backend,
             snapshot: None,
+            semantic_names: SemanticNameRegistry::default(),
         }
     }
     fn click_text_location(
@@ -797,7 +799,8 @@ impl<
         }
         let app = app_query(params);
         let snapshot = self.backend.capture(&app).map_err(backend_error)?;
-        let mut value = serde_json::to_value(&snapshot).map_err(internal_error)?;
+        let names = self.semantic_names.register(&snapshot);
+        let mut value = serde_json::to_value(axon_core::render_semantic_names(&snapshot, &names)).map_err(internal_error)?;
         let wants_screenshot = params.get("screenshot").and_then(Value::as_bool) == Some(true);
         let wants_screen_text = params.get("screenText").and_then(Value::as_bool) == Some(true);
         let visuals = (wants_screenshot || wants_screen_text)
@@ -847,13 +850,14 @@ impl<
         let target = target
             .validate()
             .map_err(|error| rpc_error(-32602, error.to_string()))?;
-        Err(rpc_error(
-            -32004,
-            format!(
-                "live semantic-name resolution is not implemented by the Windows provider for {} / {}",
-                target.app, target.name
-            ),
-        ))
+        let live = self.backend.capture(&AppQuery { name: Some(target.app.clone()), identifier: Some(target.app.clone()) }).map_err(backend_error)?;
+        let lookup = self.semantic_names.resolve(&target, &live);
+        self.snapshot = Some(live);
+        match lookup {
+            SemanticLookup::Unique { handle, resolution } => Ok((handle, resolution)),
+            SemanticLookup::Missing { target } => Err(JsonRpcError { code: -32002, message: format!("semantic name not found: {} / {}", target.app, target.name), data: Some(json!({"status":"missing","query":target})) }),
+            SemanticLookup::Ambiguous { target, candidates } => Err(JsonRpcError { code: -32002, message: format!("semantic name is ambiguous: {} / {}", target.app, target.name), data: Some(json!({"status":"ambiguous","query":target,"candidates":candidates})) }),
+        }
     }
 
     fn node_center(&self, handle: &SnapshotHandle) -> Result<(f64, f64), JsonRpcError> {
