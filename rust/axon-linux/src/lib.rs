@@ -1966,33 +1966,30 @@ mod tests {
     }
 
     #[test]
-    fn semantic_actions_report_the_semantic_rung_and_never_take_focus() {
+    fn semantic_actions_report_unsupported_capability_without_backend_dispatch() {
         let backend = backend(vec![], Some("before"));
-        let handle = backend.snapshot.handle(0);
         let focuses = backend.focuses.clone();
+        let value = backend.value.clone();
         let mut router = Router::new(backend);
-        router.snapshot = Some(router.backend.snapshot.clone());
 
         for (method, params) in [
-            ("invoke", json!({"target": {"x": 10.0, "y": 10.0}, "name": "Invoke"})),
-            ("type", json!({"target": {"x": 10.0, "y": 10.0}, "value": "after"})),
-            ("scroll", json!({"target": {"x": 10.0, "y": 10.0}, "deltaY": -120.0})),
+            ("invoke", json!({"target": {"app": "App", "name": "Button"}, "name": "Invoke"})),
+            ("type", json!({"target": {"app": "App", "name": "Field"}, "value": "after"})),
+            ("scroll", json!({"target": {"app": "App", "name": "List"}, "deltaY": -120.0})),
         ] {
             let response = router.request(request(method, params)).unwrap();
-            let JsonRpcResponse::Success(success) = response else {
-                panic!("{method} is semantic and always allowed")
+            let JsonRpcResponse::Failure(failure) = response else {
+                panic!("{method} requires unsupported live semantic-name resolution")
             };
-            assert_eq!(success.result["delivery"], json!("semantic"), "{method}");
-            assert_eq!(success.result["dispatchSuccess"], json!(true), "{method}");
-            assert_eq!(success.result["refusal"], Value::Null, "{method}");
-            assert_eq!(
-                success.result["deliveryPolicy"],
-                json!("backgroundOnly"),
-                "{method}"
+            assert_eq!(failure.error.code, -32004, "{method}");
+            assert!(
+                failure.error.message.contains("live semantic-name resolution"),
+                "{method}: {}",
+                failure.error.message
             );
         }
-        // Focus is a system-wide side effect, so a semantic path must never take it.
         assert_eq!(*focuses.borrow(), 0);
+        assert_eq!(value.borrow().as_deref(), Some("before"));
     }
 
     #[test]
@@ -2038,7 +2035,7 @@ mod tests {
         assert_eq!(e.error.code, -32700);
     }
     #[test]
-    fn ambiguous_locator_cannot_dispatch() {
+    fn obsolete_locator_target_is_rejected_without_dispatch() {
         let mut router = Router::new(backend(vec![node("same"), node("same")], None));
         let response = router
             .request(request(
@@ -2049,7 +2046,8 @@ mod tests {
         let JsonRpcResponse::Failure(error) = response else {
             panic!()
         };
-        assert!(error.error.message.contains("Ambiguous"));
+        assert_eq!(error.error.code, -32602);
+        assert!(error.error.message.contains("{app, name}"));
         assert_eq!(*router.backend.clicks.borrow(), 0);
     }
     #[test]
@@ -2097,10 +2095,10 @@ actions:
         assert!(!batch["success"].as_bool().unwrap());
         assert_eq!(batch["trace"].as_array().unwrap().len(), 3);
         assert!(
-            batch["trace"][1]["error"]
+            batch["trace"][0]["error"]
                 .as_str()
                 .unwrap()
-                .contains("expected")
+                .contains("{app, name}")
         );
 
         let dry = router
