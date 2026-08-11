@@ -41,13 +41,10 @@ fn cfstr(value: &str) -> Result<Owned, String> {
 }
 
 fn attribute(element: AXUIElementRef, name: &str) -> Option<Owned> {
-    eprintln!("probe: reading {name}");
     let name = cfstr(name).ok()?;
-    eprintln!("probe: attribute name allocated");
     let mut value = null();
     let error = unsafe { AXUIElementCopyAttributeValue(element, name.0, &mut value) };
-    eprintln!("probe: attribute call returned {error}");
-    (error == 0 && !value.is_null()).then_some(Owned(value))
+    if error == 0 && !value.is_null() { Some(Owned(value)) } else { None }
 }
 
 fn string_value(value: CFTypeRef) -> Option<String> {
@@ -66,9 +63,7 @@ struct Node { element: Owned, depth: usize, role: String, name: String, value: S
 
 fn capture(root: AXUIElementRef, options: &Options) -> Vec<Node> {
     let mut nodes = Vec::new();
-    eprintln!("probe: retaining root");
     let retained_root = Owned(unsafe { CFRetain(root) });
-    eprintln!("probe: root retained");
     let mut stack = vec![(retained_root, 0usize)];
     while let Some((element, depth)) = stack.pop() {
         if nodes.len() >= options.max_nodes { break; }
@@ -98,14 +93,11 @@ fn print_tree(nodes: &[Node]) {
 }
 
 pub fn run(options: &Options) -> Result<(), String> {
-    eprintln!("probe: creating application element for pid {}", options.pid);
     let root = unsafe { AXUIElementCreateApplication(options.pid) };
     if root.is_null() { return Err("AXUIElementCreateApplication returned null".into()); }
-    eprintln!("probe: application element created; starting capture");
     let root = Owned(root);
     let started = Instant::now();
     let before = capture(root.0, options);
-    eprintln!("probe: capture returned {} nodes", before.len());
     let elapsed = started.elapsed();
     print_tree(&before);
     println!("capture_nodes={} capture_ms={:.3}", before.len(), elapsed.as_secs_f64() * 1000.0);
