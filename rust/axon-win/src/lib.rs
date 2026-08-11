@@ -2018,7 +2018,7 @@ mod tests {
     }
 
     #[test]
-    fn semantic_name_targets_report_unsupported_without_dispatch() {
+    fn unknown_semantic_names_fail_closed_without_dispatch() {
         let backend = backend(vec![], Some("before"));
         let focuses = backend.focuses.clone();
         let clicks = backend.clicks.clone();
@@ -2037,16 +2037,10 @@ mod tests {
         ] {
             let response = router.request(request(method, params)).unwrap();
             let JsonRpcResponse::Failure(error) = response else {
-                panic!("{method} must report unsupported live semantic-name resolution")
+                panic!("{method} must fail for an unknown semantic name")
             };
-            assert_eq!(error.error.code, -32004, "{method}");
-            assert!(
-                error.error.message.contains(
-                    "live semantic-name resolution is not implemented by the Windows provider"
-                ),
-                "{method}: {}",
-                error.error.message
-            );
+            assert_eq!(error.error.code, -32002, "{method}");
+            assert_eq!(error.error.data.as_ref().and_then(|v| v["status"].as_str()), Some("missing"));
         }
         assert_eq!(*clicks.borrow(), 0);
         assert_eq!(*focuses.borrow(), 0);
@@ -2087,7 +2081,7 @@ mod tests {
     }
 
     #[test]
-    fn axn_semantic_name_target_reports_unsupported_without_dispatch() {
+    fn axn_unknown_semantic_name_fails_closed_without_dispatch() {
         let backend = backend(vec![], Some("ready now"));
         let clicks = backend.clicks.clone();
         let focuses = backend.focuses.clone();
@@ -2110,9 +2104,7 @@ actions:
         assert_eq!(batch["success"], json!(false));
         assert_eq!(batch["trace"].as_array().unwrap().len(), 1);
         assert!(
-            batch["trace"][0]["error"].as_str().unwrap().contains(
-                "live semantic-name resolution is not implemented by the Windows provider"
-            )
+            batch["trace"][0]["error"].as_str().unwrap().contains("semantic name not found")
         );
         assert_eq!(*clicks.borrow(), 0);
         assert_eq!(*focuses.borrow(), 0);
