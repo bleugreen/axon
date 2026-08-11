@@ -1076,3 +1076,32 @@ configuration with:
 ```sh
 gh api repos/bleugreen/axon/actions/runners/registration-token -X POST --jq .token
 ```
+
+## Rust macOS backend v1
+
+`rust/axon-mac` is the production ApplicationServices implementation of
+`axon_core::PlatformBackend`. It captures each selected application's complete
+Accessibility window tree, including native `AXRole`/`AXSubrole` vocabulary,
+labels, values, identifiers, actions, editability, and screen extents. Its role
+semantics deliberately mirror the Swift tables in
+`Sources/AxonCore/AXHierarchyBulkCapturer.swift` and
+`Sources/AxonCore/AXRoleSemantics.swift`: press is inferred for buttons, links,
+check boxes, radio buttons, and menu items, while combo boxes, text areas, and
+text fields are editable.
+
+The v1 facade exposes `look`, `find`, `click`, `type`, `keyboard`, `invoke`,
+`scroll`, and `run`. `look` derives semantic names through axon-core and actions
+resolve the strict `{app,name}` target through the shared registry; ambiguous
+names return candidates without dispatch. Element clicks use `AXPress`, typing
+uses `AXValue`, invoke uses the requested AX action (defaulting to `AXPress`),
+and scrolling uses `AXScrollToVisible`. Global keyboard input has no semantic
+Accessibility action and therefore refuses honestly in v1. Pixel and foreground
+delivery are likewise unimplemented rather than approximated. Extended
+observation, history, permission prompting, and drag tools fail before native
+dispatch with capability errors.
+
+The daemon has no default endpoint. `AXON_MAC_SOCKET` must name an isolated Unix
+socket, and `/tmp/axon.sock` is rejected explicitly. This keeps development and
+conformance runs separate from the installed Swift daemon. The Swift daemon,
+LaunchAgent, registration, live macOS workflow, recorder, editor, and extended
+capabilities remain canonical and unchanged until a deliberate cutover.
