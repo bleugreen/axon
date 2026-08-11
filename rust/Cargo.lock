@@ -231,6 +231,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "axon-mac"
+version = "0.2.3"
+dependencies = [
+ "axon-core",
+ "base64",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "axon-spike-linux"
 version = "0.1.0"
 dependencies = [

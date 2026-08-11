@@ -1112,7 +1112,11 @@ stable bundle identifier `dev.axon.mac-bench`. The script replaces and
 ad-hoc-signs only the binary inside that stable bundle; it never installs a
 daemon or edits TCC. `scripts/probe-macos-rust-bench` starts that binary on a
 unique isolated socket and performs a trivial Calculator AX read, which future
-builders run before asking for another Accessibility grant.
+builders run before asking for another Accessibility grant. Any live test that
+launches a desktop application on a bench machine must quit that application
+before handing the machine off. The live lane's clean-desktop guard treats a
+leftover application as an occupied session and refuses to run, so cleanup is
+part of every live test rather than an optional follow-up.
 
 macOS application enumeration filters process paths to app-bundle main
 executables and excludes nested XPC services. XPC helpers can inherit their
