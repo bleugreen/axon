@@ -1,11 +1,11 @@
 //! Windows UI Automation backend and v1 JSON-RPC tool router.
 
 use axon_core::{
-    AppQuery, AxnCodec, AxnRunner, Candidate, Capability, Confidence, DeliveryCandidate,
+    AppQuery, AxnCodec, AxnRunner, Capability, DeliveryCandidate,
     DeliveryCapability, DeliveryOutcome, DeliveryPolicy, DeliveryRefusal, DeliveryRefusalReason,
     DeliveryRung, DeliverySelection, DispatchOutcome, ExpectedFact, ForegroundTarget, JsonRpcError,
-    JsonRpcId, JsonRpcRequest, JsonRpcResponse, KeyboardIntent, Locator, LocatorResolver,
-    PlatformBackend, Resolution, ResolutionStatus, RunEnvelope, RunOptions, Snapshot,
+    JsonRpcId, JsonRpcRequest, JsonRpcResponse, KeyboardIntent, PlatformBackend, ResolutionStatus,
+    RunEnvelope, RunOptions, Snapshot,
     SnapshotHandle, TextLocationResolver, TextLocationSource, TextLocationTarget,
     TextRecognitionProvider, ToolDispatcher, dispatch_in_foreground, goal_success, select_delivery,
 };
@@ -985,13 +985,6 @@ fn app_query(params: &Map<String, Value>) -> AppQuery {
             .and_then(Value::as_str)
             .map(str::to_owned),
     }
-}
-fn app_query_from_target(params: &Map<String, Value>, target: &Value) -> AppQuery {
-    let mut q = app_query(params);
-    if q.name.is_none() {
-        q.name = target.get("app").and_then(Value::as_str).map(str::to_owned);
-    }
-    q
 }
 /// `keyboard` carries exactly one intent. Neither is an empty request and both at once is an
 /// ambiguous one; each is malformed rather than a delivery decision, so each is a transport error.
