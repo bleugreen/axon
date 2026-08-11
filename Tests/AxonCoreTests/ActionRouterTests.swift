@@ -258,6 +258,7 @@ private func stabilitySnapshot(id: String, title: String) -> AppSnapshot {
             #expect(scrollToVisible == false)
             return waitUniqueResolution()
         },
+        semanticNameRegistry: registry,
         readableAXState: { handle in
             #expect(handle.rawValue == "wait:0")
             reads += 1
@@ -270,8 +271,7 @@ private func stabilitySnapshot(id: String, title: String) -> AppSnapshot {
         sleepMilliseconds: { milliseconds in
             sleeps.append(milliseconds)
             nowMs += milliseconds
-        },
-        semanticNameRegistry: registry
+        }
     )
 
     let response = router.handle(JSONRPCRequest(
@@ -307,6 +307,7 @@ private func stabilitySnapshot(id: String, title: String) -> AppSnapshot {
     )
     let router = CommandRouter(
         resolveLocator: { _, _, _ in waitUniqueResolution() },
+        semanticNameRegistry: registry,
         readableAXState: { _ in ReadableAXState(fields: ["value": "about:blank"]) },
         now: { Date(timeIntervalSince1970: Double(nowMs) / 1_000) },
         sleepMilliseconds: { nowMs += $0 },
@@ -346,6 +347,7 @@ private func stabilitySnapshot(id: String, title: String) -> AppSnapshot {
         resolveLocator: { _, _, _ in
             LocatorResolution(status: .missing, snapshotID: SnapshotID("wait"), best: nil, candidates: [])
         },
+        semanticNameRegistry: registry,
         readableAXState: { _ in
             Issue.record("wait_for_value should not read state when the locator never resolves uniquely")
             return ReadableAXState(fields: [:])
@@ -441,8 +443,7 @@ private func stabilitySnapshot(id: String, title: String) -> AppSnapshot {
                     details: ["point": point.jsonValue]
                 )
             }
-        ),
-        semanticNameRegistry: registry
+        )
     )
 
     let response = router.handle(JSONRPCRequest(
