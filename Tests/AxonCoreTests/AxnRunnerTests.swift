@@ -2307,6 +2307,7 @@ private func axnActiveCredentialFilter(values: [String]) throws -> ActiveCredent
                 "tool": .string("click"),
                 "target": .object([
                     "app": .string("Example"),
+                    "name": .string("dialog/save"),
                     "locator": .object(["role": .string("AXButton")])
                 ])
             ])
