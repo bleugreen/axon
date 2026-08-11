@@ -73,13 +73,22 @@ public final class ActionHistoryStore: @unchecked Sendable {
         response: JSONRPCResponse,
         sessionID: String,
         observation: ActionObservation? = nil,
+        semanticTargetLocator: ((String, String) -> AXLocator?)? = nil,
         activeSecretRedactor: ActiveSecretRedactor = ActiveSecretRedactor(),
         deterministicRedactor: DeterministicRedactor = .standard
     ) {
         guard shouldRecord(method: request.method) else {
             return
         }
-        let strippedRequest = request.withParams(strippingSensitiveHistoryKeysFrom: request.params)
+        let replayableRequest = JSONRPCRequest(
+            id: request.id,
+            method: request.method,
+            params: attachingReplayEvidenceTo(
+                request.params,
+                semanticTargetLocator: semanticTargetLocator
+            )
+        )
+        let strippedRequest = replayableRequest.withParams(strippingSensitiveHistoryKeysFrom: replayableRequest.params)
         let historyRequest = strippedRequest.withParams(
             redactingSensitiveHistoryValuesFrom: strippedRequest.params,
             activeSecretRedactor: activeSecretRedactor,
@@ -155,6 +164,26 @@ public final class ActionHistoryStore: @unchecked Sendable {
             "actions": .array(actions.map(JSONValue.object))
         ]))
         return ActionHistoryExport(script: script, actionCount: actions.count, recordCount: records.count)
+    }
+
+    private func attachingReplayEvidenceTo(
+        _ params: JSONValue?,
+        semanticTargetLocator: ((String, String) -> AXLocator?)?
+    ) -> JSONValue? {
+        guard case var .object(object)? = params, let semanticTargetLocator else { return params }
+        for key in ["target", "from", "to"] {
+            guard case var .object(target)? = object[key],
+                  case let .string(app)? = target["app"],
+                  case let .string(name)? = target["name"],
+                  target["locator"] == nil,
+                  let locator = semanticTargetLocator(app, name)
+            else {
+                continue
+            }
+            target["locator"] = locator.jsonValue
+            object[key] = .object(target)
+        }
+        return .object(object)
     }
 
     private func slicedRecords(sessionID: String, from: String?, to: String?) throws -> [ActionHistoryRecord] {

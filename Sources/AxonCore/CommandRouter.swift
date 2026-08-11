@@ -336,6 +336,12 @@ public struct CommandRouter {
             response: response,
             sessionID: context.sessionID,
             observation: observations.observation,
+            semanticTargetLocator: { app, name in
+                guard case let .unique(record) = services.semanticNameRegistry.lookup(app: app, name: name) else {
+                    return nil
+                }
+                return record.locator
+            },
             activeSecretRedactor: ActiveSecretRedactor(filter: services.activeCredentialFilterProvider())
         )
         return response
@@ -1332,6 +1338,12 @@ private struct AxnRunCommandHandler {
                     response: childResponse,
                     sessionID: historySessionID,
                     observation: collector.observation,
+                    semanticTargetLocator: { app, name in
+                guard case let .unique(record) = services.semanticNameRegistry.lookup(app: app, name: name) else {
+                    return nil
+                }
+                return record.locator
+            },
                     activeSecretRedactor: activeSecretRedactor()
                 )
             },

@@ -479,7 +479,7 @@ import Testing
     #expect(script.contains("app: Example"))
     #expect(script.contains("role: AXButton"))
     #expect(script.contains("title: Submit"))
-    #expect(script.contains("s1:2") == false)
+    #expect(script.contains("name: s1:2"))
     #expect(script.contains("warnings") == false)
 }
 
@@ -555,7 +555,7 @@ import Testing
     #expect(script.contains("expects") == false)
 }
 
-@Test func saveOmitsAnActionWhenReplayEvidenceIsUnavailable() {
+@Test func saveUsesRegistryReplayEvidenceWhenObservationHasNoLocator() {
     let history = ActionHistoryStore()
     let ephemeral = buttonState(locator: nil, focused: true)
     let router = observingRouter(
@@ -566,8 +566,9 @@ import Testing
     _ = router.handle(clickRequest(target: "s1:2"))
     let script = savedScript(router)
 
-    #expect(script.contains("tool: click") == false)
-    #expect(script.contains("s1:2") == false)
+    #expect(script.contains("tool: click"))
+    #expect(script.contains("name: s1:2"))
+    #expect(script.contains("role: AXButton"))
     #expect(script.contains("warnings") == false)
     #expect(script.contains("expects") == false)
 }
