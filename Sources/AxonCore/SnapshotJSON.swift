@@ -366,3 +366,48 @@ public extension ObservedAppChange {
         ])
     }
 }
+
+
+public extension JSONValue {
+    /// Replaces internal snapshot identity with canonical semantic names for public observations.
+    /// Debug observations retain handles for diagnostics, but names remain the primary vocabulary.
+    func renderingSemanticNames(_ study: SemanticNameStudy, includeDebugHandles: Bool) -> JSONValue {
+        guard case var .object(root) = self else { return self }
+        let names = Dictionary(uniqueKeysWithValues: study.elements.map { ($0.sourceIndex, $0.name) })
+        var nextIndex = 0
+        func renderNode(_ value: JSONValue) -> JSONValue {
+            guard case var .object(node) = value else { return value }
+            let index = nextIndex
+            nextIndex += 1
+            if let name = names[index] { node["name"] = .string(name) }
+            if !includeDebugHandles {
+                node.removeValue(forKey: "handle")
+                node.removeValue(forKey: "index")
+            }
+            if case let .array(children)? = node["children"] {
+                node["children"] = .array(children.map(renderNode))
+            }
+            return .object(node)
+        }
+        if case let .array(windows)? = root["windows"] {
+            root["windows"] = .array(windows.map(renderNode))
+        }
+        if case let .array(indexed)? = root["indexedNodes"] {
+            root["indexedNodes"] = .array(indexed.map { value in
+                guard case var .object(node) = value,
+                      case let .int(index)? = node["index"] else { return value }
+                if let name = names[index] { node["name"] = .string(name) }
+                if !includeDebugHandles {
+                    node.removeValue(forKey: "handle")
+                    node.removeValue(forKey: "index")
+                }
+                return .object(node)
+            })
+        }
+        if !includeDebugHandles, case var .object(focus)? = root["focus"] {
+            focus.removeValue(forKey: "handle")
+            root["focus"] = .object(focus)
+        }
+        return .object(root)
+    }
+}

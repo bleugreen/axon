@@ -518,6 +518,7 @@ private struct PerceptionCommandHandler {
                     result: ["children": children.jsonValue(activeSecretRedactor: activeSecretRedactor)]
                 )
             }
+            let format = try decoder.string("format")
             let screenshot = try decoder.bool("screenshot") ?? false
             let screenText = try decoder.bool("screenText") ?? false
             let includeTree = try decoder.bool("tree") ?? true
@@ -525,10 +526,11 @@ private struct PerceptionCommandHandler {
             let snapshot = try services.captureSnapshotWithChildDepth(target, screenshot || screenText, childDepth)
             services.elementStore.store(summary: observedSummary(for: snapshot))
             services.semanticNameRegistry.register(snapshot: snapshot)
+            let semanticNames = SemanticNameDeriver.derive(from: snapshot.jsonValue(includeTree: true))
             var snapshotJSON = snapshot.jsonValue(
                 includeTree: includeTree,
                 activeSecretRedactor: activeSecretRedactor
-            )
+            ).renderingSemanticNames(semanticNames, includeDebugHandles: format == "debug")
             let screenTextItems = (screenText || screenshot)
                 ? ScreenTextExtractor(recognizeText: services.recognizeText).extract(in: snapshot)
                 : []
