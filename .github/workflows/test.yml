@@ -74,6 +74,17 @@ jobs:
         working-directory: rust
         run: cargo clippy -p axon-spike-mac --all-targets -- -D warnings
 
+      # The self-hosted runner's login keychain unlock is scoped to a macOS security session. A
+      # previous job unlocking it does not make the signing identity available to this job.
+      - name: Unlock signing keychain
+        env:
+          KEYCHAIN_PASSWORD: ${{ secrets.BGLAB_MAC_KEYCHAIN_PASSWORD }}
+        run: |
+          if [ -z "$KEYCHAIN_PASSWORD" ]; then
+            echo '::error::BGLAB_MAC_KEYCHAIN_PASSWORD secret is not set'; exit 1
+          fi
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" ~/Library/Keychains/login.keychain-db
+
       # The macOS archive is the deployed product shape; a packaging break is otherwise only
       # discovered during a release, when it is most expensive.
       - name: Smoke-test the release package layout
