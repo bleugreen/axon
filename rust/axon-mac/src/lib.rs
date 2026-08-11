@@ -498,16 +498,12 @@ impl<
                 Ok(json!({"handle": handle, "resolution": resolution}))
             }
             "click" => {
-                if params
+                if let Some(location) = params
                     .get("target")
                     .and_then(|target| target.get("location"))
                     .or_else(|| params.get("location"))
-                    .is_some()
                 {
-                    return Err(rpc_error(
-                        -32004,
-                        "screen-text click requires the unimplemented pixel rung",
-                    ));
+                    return self.click_text_location(&location.clone(), policy);
                 }
                 let (handle, resolution) = self.resolve(params)?;
                 self.backend
