@@ -245,6 +245,12 @@ private func stabilitySnapshot(id: String, title: String) -> AppSnapshot {
     var nowMs = 0
     var sleeps: [Int] = []
     var reads = 0
+    let registry = SemanticNameRegistry()
+    registry.registerReplayEvidence(
+        app: "Firefox",
+        name: "site-information-button",
+        locator: AXLocator(role: "AXButton")
+    )
     let router = CommandRouter(
         resolveLocator: { app, locator, scrollToVisible in
             #expect(app == "Firefox")
@@ -264,7 +270,8 @@ private func stabilitySnapshot(id: String, title: String) -> AppSnapshot {
         sleepMilliseconds: { milliseconds in
             sleeps.append(milliseconds)
             nowMs += milliseconds
-        }
+        },
+        semanticNameRegistry: registry
     )
 
     let response = router.handle(JSONRPCRequest(
@@ -273,7 +280,7 @@ private func stabilitySnapshot(id: String, title: String) -> AppSnapshot {
         params: .object([
             "target": .object([
                 "app": .string("Firefox"),
-                "locator": .object(["role": .string("AXButton")])
+                "name": .string("site-information-button")
             ]),
             "contains": .string("View site information"),
             "timeoutMs": .int(500),
@@ -292,11 +299,18 @@ private func stabilitySnapshot(id: String, title: String) -> AppSnapshot {
 
 @Test func waitForValueTimesOutWithLastObservedState() {
     var nowMs = 0
+    let registry = SemanticNameRegistry()
+    registry.registerReplayEvidence(
+        app: "Firefox",
+        name: "address-field",
+        locator: AXLocator(role: "AXComboBox")
+    )
     let router = CommandRouter(
         resolveLocator: { _, _, _ in waitUniqueResolution() },
         readableAXState: { _ in ReadableAXState(fields: ["value": "about:blank"]) },
         now: { Date(timeIntervalSince1970: Double(nowMs) / 1_000) },
-        sleepMilliseconds: { nowMs += $0 }
+        sleepMilliseconds: { nowMs += $0 },
+        semanticNameRegistry: registry
     )
 
     let response = router.handle(JSONRPCRequest(
@@ -305,7 +319,7 @@ private func stabilitySnapshot(id: String, title: String) -> AppSnapshot {
         params: .object([
             "target": .object([
                 "app": .string("Firefox"),
-                "locator": .object(["role": .string("AXComboBox")])
+                "name": .string("address-field")
             ]),
             "equals": .string("https://example.com/"),
             "timeoutMs": .int(250),
@@ -322,6 +336,12 @@ private func stabilitySnapshot(id: String, title: String) -> AppSnapshot {
 
 @Test func waitForValueTimesOutWhenTargetNeverResolves() {
     var nowMs = 0
+    let registry = SemanticNameRegistry()
+    registry.registerReplayEvidence(
+        app: "Firefox",
+        name: "address-field",
+        locator: AXLocator(role: "AXComboBox")
+    )
     let router = CommandRouter(
         resolveLocator: { _, _, _ in
             LocatorResolution(status: .missing, snapshotID: SnapshotID("wait"), best: nil, candidates: [])
@@ -331,7 +351,8 @@ private func stabilitySnapshot(id: String, title: String) -> AppSnapshot {
             return ReadableAXState(fields: [:])
         },
         now: { Date(timeIntervalSince1970: Double(nowMs) / 1_000) },
-        sleepMilliseconds: { nowMs += $0 }
+        sleepMilliseconds: { nowMs += $0 },
+        semanticNameRegistry: registry
     )
 
     let response = router.handle(JSONRPCRequest(
@@ -340,7 +361,7 @@ private func stabilitySnapshot(id: String, title: String) -> AppSnapshot {
         params: .object([
             "target": .object([
                 "app": .string("Firefox"),
-                "locator": .object(["role": .string("AXComboBox")])
+                "name": .string("address-field")
             ]),
             "matches": .string("example\\.com"),
             "timeoutMs": .int(200),
@@ -380,7 +401,8 @@ private func stabilitySnapshot(id: String, title: String) -> AppSnapshot {
                 #expect(target == "live-locator:0")
                 return PrimitiveActionResult(action: "click", target: target, strategy: "AXPress", success: true)
             }
-        )
+        ),
+        semanticNameRegistry: registry
     )
 
     let response = router.handle(JSONRPCRequest(
@@ -419,7 +441,8 @@ private func stabilitySnapshot(id: String, title: String) -> AppSnapshot {
                     details: ["point": point.jsonValue]
                 )
             }
-        )
+        ),
+        semanticNameRegistry: registry
     )
 
     let response = router.handle(JSONRPCRequest(
@@ -599,7 +622,13 @@ private func stabilitySnapshot(id: String, title: String) -> AppSnapshot {
     #expect(response.error?.message.contains("<redacted: active-credential>") == true)
 }
 
-@Test func clickRequestRejectsAmbiguousLocatorTarget() {
+@Test func clickRequestRejectsAmbiguousSemanticNameTarget() {
+    let registry = SemanticNameRegistry()
+    registry.registerReplayEvidence(
+        app: "com.example.App",
+        name: "new-button",
+        locator: AXLocator(role: "AXButton", title: .exact("NEW"))
+    )
     let router = CommandRouter(
         resolveLocator: { _, _, scrollToVisible in
             #expect(scrollToVisible == true)
@@ -615,7 +644,8 @@ private func stabilitySnapshot(id: String, title: String) -> AppSnapshot {
                 Issue.record("ambiguous locator should not dispatch a click")
                 return PrimitiveActionResult(action: "click", target: "bad", strategy: "bad", success: false)
             }
-        )
+        ),
+        semanticNameRegistry: registry
     )
 
     let response = router.handle(JSONRPCRequest(
@@ -624,10 +654,7 @@ private func stabilitySnapshot(id: String, title: String) -> AppSnapshot {
         params: .object([
             "target": .object([
                 "app": .string("com.example.App"),
-                "locator": .object([
-                    "role": .string("AXButton"),
-                    "title": .object(["exact": .string("NEW")])
-                ])
+                "name": .string("new-button")
             ])
         ])
     ))
@@ -674,21 +701,46 @@ private func stabilitySnapshot(id: String, title: String) -> AppSnapshot {
 }
 
 @Test func typeRequestPassesValue() {
+    let registry = SemanticNameRegistry()
+    registry.registerReplayEvidence(
+        app: "Example",
+        name: "text-field",
+        locator: AXLocator(role: "AXTextField")
+    )
     let router = CommandRouter(
+        resolveLocator: { _, _, _ in
+            LocatorResolution(
+                status: .unique,
+                snapshotID: SnapshotID("snap"),
+                best: LocatorCandidate(
+                    index: 3,
+                    handle: SnapshotHandle(snapshotID: SnapshotID("snap"), nodeIndex: 3),
+                    role: "AXTextField",
+                    title: nil,
+                    score: 1_000,
+                    reasons: []
+                ),
+                candidates: []
+            )
+        },
         actions: PrimitiveActionHandlers(
             type: { target, value, _ in
                 #expect(target == "snap:3")
                 #expect(value == "hello")
                 return PrimitiveActionResult(action: "type", target: target, strategy: "AXValue", success: true)
             }
-        )
+        ),
+        semanticNameRegistry: registry
     )
 
     let response = router.handle(JSONRPCRequest(
         id: .string("set-1"),
         method: "type",
         params: .object([
-            "target": .string("snap:3"),
+            "target": .object([
+                "app": .string("Example"),
+                "name": .string("text-field")
+            ]),
             "value": .string("hello")
         ])
     ))
