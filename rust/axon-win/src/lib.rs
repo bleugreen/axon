@@ -1374,7 +1374,7 @@ mod tests {
         let response = router
             .request(request(
                 "click",
-                json!({"target":handle.0, "deliveryPolicy": "foregroundPermitted"}),
+                json!({"target":{"location":{"app":"App","text":"root"}}, "deliveryPolicy": "foregroundPermitted"}),
             ))
             .unwrap();
         assert!(matches!(response, JsonRpcResponse::Failure(_)));
@@ -1628,7 +1628,7 @@ mod tests {
         let response = router
             .request(request(
                 "click",
-                json!({"target": handle.0, "deliveryPolicy": "foregroundPermitted"}),
+                json!({"target": {"location": {"app": "App", "text": "root"}}, "deliveryPolicy": "foregroundPermitted"}),
             ))
             .unwrap();
 
@@ -1662,7 +1662,7 @@ mod tests {
             let response = router
                 .request(request(
                     "click",
-                    json!({"target": handle.0, "deliveryPolicy": policy}),
+                    json!({"target": {"location": {"app": "App", "text": "root"}}, "deliveryPolicy": policy}),
                 ))
                 .unwrap();
             let result = action_result(&response);
@@ -1696,7 +1696,7 @@ mod tests {
             .request(request(
                 "click",
                 json!({
-                    "target": handle.0,
+                    "target": {"location": {"app": "App", "text": "root"}},
                     "app": "App",
                     "deliveryPolicy": "foregroundPermitted"
                 }),
@@ -1742,7 +1742,7 @@ mod tests {
             .request(request(
                 "click",
                 json!({
-                    "target": handle.0,
+                    "target": {"location": {"app": "App", "text": "root"}},
                     "app": "App",
                     "deliveryPolicy": "foregroundPermitted"
                 }),
@@ -1832,7 +1832,7 @@ mod tests {
             .request(request(
                 "click",
                 json!({
-                    "target": handle.0,
+                    "target": {"location": {"app": "App", "text": "root"}},
                     "app": "App",
                     "deliveryPolicy": "foregroundPermitted"
                 }),
@@ -1947,7 +1947,7 @@ mod tests {
         router.snapshot = Some(router.backend.snapshot.clone());
 
         let refused = router
-            .request(request("click", json!({"target": handle.0})))
+            .request(request("click", json!({"target": {"location": {"app": "App", "text": "root"}}})))
             .unwrap();
         let result = action_result(&refused);
         assert_eq!(result["success"], json!(false));
@@ -1962,7 +1962,7 @@ mod tests {
         let permitted = router
             .request(request(
                 "click",
-                json!({"target": handle.0, "deliveryPolicy": "foregroundPermitted"}),
+                json!({"target": {"location": {"app": "App", "text": "root"}}, "deliveryPolicy": "foregroundPermitted"}),
             ))
             .unwrap();
         let result = action_result(&permitted);
@@ -2016,15 +2016,15 @@ mod tests {
         router.snapshot = Some(router.backend.snapshot.clone());
 
         for (method, params, mechanism) in [
-            ("invoke", json!({"target": handle.0}), "UIA InvokePattern"),
+            ("invoke", json!({"target": {"location": {"app": "App", "text": "root"}}}), "UIA InvokePattern"),
             (
                 "type",
-                json!({"target": handle.0, "value": "after"}),
+                json!({"target": {"location": {"app": "App", "text": "root"}}, "value": "after"}),
                 "UIA ValuePattern",
             ),
             (
                 "scroll",
-                json!({"target": handle.0, "deltaY": -120.0}),
+                json!({"target": {"location": {"app": "App", "text": "root"}}, "deltaY": -120.0}),
                 "UIA ScrollItemPattern",
             ),
         ] {
@@ -2062,7 +2062,7 @@ mod tests {
                 .request(request(
                     method,
                     json!({
-                        "target": handle.0,
+                        "target": {"location": {"app": "App", "text": "root"}},
                         "value": "x",
                         "text": "x",
                         "deliveryPolicy": "whateverItTakes"
@@ -2174,7 +2174,7 @@ actions:
             router.snapshot = Some(router.backend.snapshot.clone());
 
             let response = router
-                .request(request("click", json!({"target": handle.0})))
+                .request(request("click", json!({"target": {"location": {"app": "App", "text": "root"}}})))
                 .unwrap();
 
             let result = action_result(&response);
@@ -2216,7 +2216,7 @@ actions:
             router.snapshot = Some(router.backend.snapshot.clone());
 
             let response = router
-                .request(request("click", json!({"target": handle.0})))
+                .request(request("click", json!({"target": {"location": {"app": "App", "text": "root"}}})))
                 .unwrap();
 
             let result = action_result(&response);
@@ -2248,7 +2248,7 @@ actions:
             router.snapshot = Some(router.backend.snapshot.clone());
 
             let response = router
-                .request(request("click", json!({"target": handle.0})))
+                .request(request("click", json!({"target": {"location": {"app": "App", "text": "root"}}})))
                 .unwrap();
             let delivered = action_result(&response).clone();
 
@@ -2282,7 +2282,7 @@ actions:
             router.snapshot = Some(router.backend.snapshot.clone());
 
             let response = router
-                .request(request("click", json!({"target": handle.0})))
+                .request(request("click", json!({"target": {"location": {"app": "App", "text": "root"}}})))
                 .unwrap();
 
             let result = action_result(&response);
@@ -2364,7 +2364,7 @@ actions:
             router.snapshot = Some(router.backend.snapshot.clone());
 
             let response = router
-                .request(request("click", json!({"target": handle.0})))
+                .request(request("click", json!({"target": {"location": {"app": "App", "text": "root"}}})))
                 .unwrap();
 
             let result = action_result(&response);
@@ -2393,7 +2393,7 @@ actions:
             router.snapshot = Some(router.backend.snapshot.clone());
 
             let response = router
-                .request(request("click", json!({"target": handle.0})))
+                .request(request("click", json!({"target": {"location": {"app": "App", "text": "root"}}})))
                 .unwrap();
 
             let result = action_result(&response);
@@ -2421,7 +2421,7 @@ actions:
             let response = router
                 .request(request(
                     "click",
-                    json!({"target": handle.0, "deliveryPolicy": "foregroundPermitted"}),
+                    json!({"target": {"location": {"app": "App", "text": "root"}}, "deliveryPolicy": "foregroundPermitted"}),
                 ))
                 .unwrap();
 
@@ -2452,7 +2452,7 @@ actions:
                 let response = router
                     .request(request(
                         "click",
-                        json!({"target": handle.0, "deliveryPolicy": policy}),
+                        json!({"target": {"location": {"app": "App", "text": "root"}}, "deliveryPolicy": policy}),
                     ))
                     .unwrap();
                 let result = action_result(&response);
@@ -2493,7 +2493,7 @@ actions:
                 router.snapshot = Some(router.backend.snapshot.clone());
 
                 let response = router
-                    .request(request("click", json!({"target": handle.0})))
+                    .request(request("click", json!({"target": {"location": {"app": "App", "text": "root"}}})))
                     .unwrap();
 
                 // A target that changed under the request is stale, not refused: the request was
@@ -2529,7 +2529,7 @@ actions:
             let response = router
                 .request(request(
                     "click",
-                    json!({"target": handle.0, "deliveryPolicy": "foregroundPermitted"}),
+                    json!({"target": {"location": {"app": "App", "text": "root"}}, "deliveryPolicy": "foregroundPermitted"}),
                 ))
                 .unwrap();
 
@@ -2572,7 +2572,7 @@ actions:
                 router.snapshot = Some(router.backend.snapshot.clone());
 
                 let response = router
-                    .request(request("click", json!({"target": handle.0})))
+                    .request(request("click", json!({"target": {"location": {"app": "App", "text": "root"}}})))
                     .unwrap();
 
                 let result = action_result(&response);
