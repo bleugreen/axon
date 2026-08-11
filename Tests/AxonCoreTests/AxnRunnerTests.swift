@@ -2217,6 +2217,7 @@ private func axnActiveCredentialFilter(values: [String]) throws -> ActiveCredent
         tool: click
         target:
           app: Example
+          name: dialog/save
           locator:
             role: AXButton
             title: Save
@@ -2307,6 +2308,7 @@ private func axnActiveCredentialFilter(values: [String]) throws -> ActiveCredent
       - tool: click
         target:
           app: Example
+          name: dialog/save
           locator:
             role: AXButton
             title: Save
