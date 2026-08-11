@@ -816,7 +816,8 @@ private func replayFixtureTarget(_ legacyID: String) -> JSONValue {
         "name": .string("fixture/\(legacyID.replacingOccurrences(of: ":", with: "-"))"),
         "locator": .object([
             "role": .string("AXButton"),
-            "title": .string("Fixture")
+            "title": .string("Fixture"),
+            "identifier": .string(legacyID)
         ])
     ])
 }
@@ -1360,7 +1361,7 @@ private func articleSnapshot(children: [AXNode]) -> AppSnapshot {
 
 @Test func commandRouterRunsBatch() {
     var clicked: [String] = []
-    let router = CommandRouter(actions: PrimitiveActionHandlers(
+    let router = CommandRouter(resolveLocator: replayFixtureResolver, actions: PrimitiveActionHandlers(
         click: { target, _ in
             clicked.append(target)
             return PrimitiveActionResult(action: "click", target: "clicked", strategy: "test", success: true)
@@ -1441,7 +1442,7 @@ private func articleSnapshot(children: [AXNode]) -> AppSnapshot {
 
 @Test func commandRouterDebugStartPausesBeforeSelectedBlock() {
     var requests: [String] = []
-    let router = CommandRouter(actions: PrimitiveActionHandlers(
+    let router = CommandRouter(resolveLocator: replayFixtureResolver, actions: PrimitiveActionHandlers(
         click: { target, _ in
             requests.append("click:\(target)")
             return PrimitiveActionResult(action: "click", target: target, strategy: "test", success: true)
@@ -1481,7 +1482,7 @@ private func articleSnapshot(children: [AXNode]) -> AppSnapshot {
 }
 
 @Test func commandRouterDebugStartCarriesCallerDocumentID() {
-    let router = CommandRouter(actions: PrimitiveActionHandlers())
+    let router = CommandRouter(resolveLocator: replayFixtureResolver, actions: PrimitiveActionHandlers())
 
     let response = router.handle(JSONRPCRequest(
         id: .string("debug-start"),
@@ -1498,7 +1499,7 @@ private func articleSnapshot(children: [AXNode]) -> AppSnapshot {
 
 @Test func commandRouterDebugCreateDoesNotRunActions() {
     var requests: [String] = []
-    let router = CommandRouter(actions: PrimitiveActionHandlers(
+    let router = CommandRouter(resolveLocator: replayFixtureResolver, actions: PrimitiveActionHandlers(
         click: { target, _ in
             requests.append("click:\(target)")
             return PrimitiveActionResult(action: "click", target: target, strategy: "test", success: true)
@@ -1532,7 +1533,7 @@ private func articleSnapshot(children: [AXNode]) -> AppSnapshot {
 
 @Test func commandRouterDebugRunToPausesBeforeSelectedBlock() {
     var requests: [String] = []
-    let router = CommandRouter(actions: PrimitiveActionHandlers(
+    let router = CommandRouter(resolveLocator: replayFixtureResolver, actions: PrimitiveActionHandlers(
         click: { target, _ in
             requests.append("click:\(target)")
             return PrimitiveActionResult(action: "click", target: target, strategy: "test", success: true)
@@ -1587,7 +1588,7 @@ private func articleSnapshot(children: [AXNode]) -> AppSnapshot {
 
 @Test func commandRouterDebugSetBreakpointsUpdatesLiveSession() {
     var requests: [String] = []
-    let router = CommandRouter(actions: PrimitiveActionHandlers(
+    let router = CommandRouter(resolveLocator: replayFixtureResolver, actions: PrimitiveActionHandlers(
         click: { target, _ in
             requests.append("click:\(target)")
             return PrimitiveActionResult(action: "click", target: target, strategy: "test", success: true)
@@ -1731,7 +1732,7 @@ private func articleSnapshot(children: [AXNode]) -> AppSnapshot {
 
 @Test func commandRouterDebugContinuePausesAtNextBreakpoint() {
     var requests: [String] = []
-    let router = CommandRouter(actions: PrimitiveActionHandlers(
+    let router = CommandRouter(resolveLocator: replayFixtureResolver, actions: PrimitiveActionHandlers(
         click: { target, _ in
             requests.append("click:\(target)")
             return PrimitiveActionResult(action: "click", target: target, strategy: "test", success: true)
@@ -1841,7 +1842,7 @@ private func articleSnapshot(children: [AXNode]) -> AppSnapshot {
 
 @Test func commandRouterDebugStepExecutesCurrentActionAndAdvances() {
     var requests: [String] = []
-    let router = CommandRouter(actions: PrimitiveActionHandlers(
+    let router = CommandRouter(resolveLocator: replayFixtureResolver, actions: PrimitiveActionHandlers(
         click: { target, _ in
             requests.append("click:\(target)")
             return PrimitiveActionResult(action: "click", target: target, strategy: "test", success: true)
