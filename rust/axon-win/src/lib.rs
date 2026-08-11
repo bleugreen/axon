@@ -5,9 +5,9 @@ use axon_core::{
     DeliveryOutcome, DeliveryPolicy, DeliveryRefusal, DeliveryRefusalReason, DeliveryRung,
     DeliverySelection, DispatchOutcome, ExpectedFact, ForegroundTarget, JsonRpcError, JsonRpcId,
     JsonRpcRequest, JsonRpcResponse, KeyboardIntent, PlatformBackend, ResolutionStatus,
-    RunEnvelope, RunOptions, SemanticLookup, SemanticNameRegistry, Snapshot, SnapshotHandle, TextLocationResolver, TextLocationSource,
-    TextLocationTarget, TextRecognitionProvider, ToolDispatcher, dispatch_in_foreground,
-    goal_success, select_delivery,
+    RunEnvelope, RunOptions, SemanticLookup, SemanticNameRegistry, Snapshot, SnapshotHandle,
+    TextLocationResolver, TextLocationSource, TextLocationTarget, TextRecognitionProvider,
+    ToolDispatcher, dispatch_in_foreground, goal_success, select_delivery,
 };
 use serde_json::{Map, Value, json};
 
@@ -800,7 +800,8 @@ impl<
         let app = app_query(params);
         let snapshot = self.backend.capture(&app).map_err(backend_error)?;
         let names = self.semantic_names.register(&snapshot);
-        let mut value = serde_json::to_value(axon_core::render_semantic_names(&snapshot, &names)).map_err(internal_error)?;
+        let mut value = serde_json::to_value(axon_core::render_semantic_names(&snapshot, &names))
+            .map_err(internal_error)?;
         let wants_screenshot = params.get("screenshot").and_then(Value::as_bool) == Some(true);
         let wants_screen_text = params.get("screenText").and_then(Value::as_bool) == Some(true);
         let visuals = (wants_screenshot || wants_screen_text)
@@ -850,13 +851,30 @@ impl<
         let target = target
             .validate()
             .map_err(|error| rpc_error(-32602, error.to_string()))?;
-        let live = self.backend.capture(&AppQuery { name: Some(target.app.clone()), identifier: None }).map_err(backend_error)?;
+        let live = self
+            .backend
+            .capture(&AppQuery {
+                name: Some(target.app.clone()),
+                identifier: None,
+            })
+            .map_err(backend_error)?;
         let lookup = self.semantic_names.resolve(&target, &live);
         self.snapshot = Some(live);
         match lookup {
             SemanticLookup::Unique { handle, resolution } => Ok((handle, resolution)),
-            SemanticLookup::Missing { target } => Err(JsonRpcError { code: -32002, message: format!("semantic name not found: {} / {}", target.app, target.name), data: Some(json!({"status":"missing","query":target})) }),
-            SemanticLookup::Ambiguous { target, candidates } => Err(JsonRpcError { code: -32002, message: format!("semantic name is ambiguous: {} / {}", target.app, target.name), data: Some(json!({"status":"ambiguous","query":target,"candidates":candidates})) }),
+            SemanticLookup::Missing { target } => Err(JsonRpcError {
+                code: -32002,
+                message: format!("semantic name not found: {} / {}", target.app, target.name),
+                data: Some(json!({"status":"missing","query":target})),
+            }),
+            SemanticLookup::Ambiguous { target, candidates } => Err(JsonRpcError {
+                code: -32002,
+                message: format!(
+                    "semantic name is ambiguous: {} / {}",
+                    target.app, target.name
+                ),
+                data: Some(json!({"status":"ambiguous","query":target,"candidates":candidates})),
+            }),
         }
     }
 
@@ -2040,7 +2058,10 @@ mod tests {
                 panic!("{method} must fail for an unknown semantic name")
             };
             assert_eq!(error.error.code, -32002, "{method}");
-            assert_eq!(error.error.data.as_ref().and_then(|v| v["status"].as_str()), Some("missing"));
+            assert_eq!(
+                error.error.data.as_ref().and_then(|v| v["status"].as_str()),
+                Some("missing")
+            );
         }
         assert_eq!(*clicks.borrow(), 0);
         assert_eq!(*focuses.borrow(), 0);
@@ -2104,7 +2125,10 @@ actions:
         assert_eq!(batch["success"], json!(false));
         assert_eq!(batch["trace"].as_array().unwrap().len(), 1);
         assert!(
-            batch["trace"][0]["error"].as_str().unwrap().contains("semantic name not found")
+            batch["trace"][0]["error"]
+                .as_str()
+                .unwrap()
+                .contains("semantic name not found")
         );
         assert_eq!(*clicks.borrow(), 0);
         assert_eq!(*focuses.borrow(), 0);

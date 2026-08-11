@@ -5,8 +5,8 @@ use axon_core::{
     DeliveryOutcome, DeliveryPolicy, DeliveryRefusal, DeliveryRefusalReason, DeliveryRung,
     DeliverySelection, DispatchOutcome, ExpectedFact, ForegroundTarget, JsonRpcError, JsonRpcId,
     JsonRpcRequest, JsonRpcResponse, KeyboardIntent, PlatformBackend, Resolution, RunEnvelope,
-    RunOptions, SemanticLookup, SemanticNameRegistry, Snapshot, SnapshotHandle, ToolDispatcher, dispatch_in_foreground, goal_success,
-    select_delivery,
+    RunOptions, SemanticLookup, SemanticNameRegistry, Snapshot, SnapshotHandle, ToolDispatcher,
+    dispatch_in_foreground, goal_success, select_delivery,
 };
 use serde_json::{Map, Value, json};
 
@@ -786,7 +786,8 @@ impl<B: PointerTargetVerifier + BackgroundPixelInput> Router<B> {
             .capture(&app_query(params))
             .map_err(backend_error)?;
         let names = self.semantic_names.register(&snapshot);
-        let value = serde_json::to_value(axon_core::render_semantic_names(&snapshot, &names)).map_err(internal_error)?;
+        let value = serde_json::to_value(axon_core::render_semantic_names(&snapshot, &names))
+            .map_err(internal_error)?;
         self.snapshot = Some(snapshot);
         Ok(value)
     }
@@ -833,13 +834,30 @@ impl<B: PointerTargetVerifier + BackgroundPixelInput> Router<B> {
         let target = target
             .validate()
             .map_err(|error| rpc_error(-32602, error.to_string()))?;
-        let live = self.backend.capture(&AppQuery { name: Some(target.app.clone()), identifier: None }).map_err(backend_error)?;
+        let live = self
+            .backend
+            .capture(&AppQuery {
+                name: Some(target.app.clone()),
+                identifier: None,
+            })
+            .map_err(backend_error)?;
         let lookup = self.semantic_names.resolve(&target, &live);
         self.snapshot = Some(live);
         match lookup {
             SemanticLookup::Unique { handle, resolution } => Ok((handle, resolution)),
-            SemanticLookup::Missing { target } => Err(JsonRpcError { code: -32002, message: format!("semantic name not found: {} / {}", target.app, target.name), data: Some(json!({"status":"missing","query":target})) }),
-            SemanticLookup::Ambiguous { target, candidates } => Err(JsonRpcError { code: -32002, message: format!("semantic name is ambiguous: {} / {}", target.app, target.name), data: Some(json!({"status":"ambiguous","query":target,"candidates":candidates})) }),
+            SemanticLookup::Missing { target } => Err(JsonRpcError {
+                code: -32002,
+                message: format!("semantic name not found: {} / {}", target.app, target.name),
+                data: Some(json!({"status":"missing","query":target})),
+            }),
+            SemanticLookup::Ambiguous { target, candidates } => Err(JsonRpcError {
+                code: -32002,
+                message: format!(
+                    "semantic name is ambiguous: {} / {}",
+                    target.app, target.name
+                ),
+                data: Some(json!({"status":"ambiguous","query":target,"candidates":candidates})),
+            }),
         }
     }
 
@@ -1993,7 +2011,14 @@ mod tests {
                 panic!("{method} must fail for an unknown semantic name")
             };
             assert_eq!(failure.error.code, -32002, "{method}");
-            assert_eq!(failure.error.data.as_ref().and_then(|v| v["status"].as_str()), Some("missing"));
+            assert_eq!(
+                failure
+                    .error
+                    .data
+                    .as_ref()
+                    .and_then(|v| v["status"].as_str()),
+                Some("missing")
+            );
         }
         assert_eq!(*focuses.borrow(), 0);
         assert_eq!(value.borrow().as_deref(), Some("before"));
