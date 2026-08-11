@@ -185,28 +185,88 @@ jobs:
           echo 'Axon daemon is ready and Accessibility is granted'
 
           open -a Calculator
-          clear_locator='{"role":"AXButton","description":"All Clear","actions":["AXPress"]}'
-          clear_result=""
+          look=""
+          look_error=""
+          ready=false
           for _ in {1..40}; do
-            clear_result="$("$cli" find Calculator "$clear_locator")"
-            if printf '%s' "$clear_result" | jq -e '.result.resolution.best != null' >/dev/null; then
-              break
+            if candidate="$(printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"look","arguments":{"app":"Calculator"}}}' | "$cli" mcp 2>&1)"; then
+              look="$candidate"
+              if printf '%s' "$look" | jq -e '
+                .result.isError == false
+                and (.result.structuredContent.snapshot.app | strings | length > 0)
+                and ([.result.structuredContent.snapshot.tree | split("\n")[] | select(test(": button \"All Clear\" \\[click\\]"))] | length == 1)
+                and ([.result.structuredContent.snapshot.tree | split("\n")[] | select(test(": button \"1\" \\[click\\]"))] | length == 1)
+              ' >/dev/null; then
+                ready=true
+                break
+              fi
+            else
+              look_error="$candidate"
             fi
             sleep 0.25
           done
-          clear_handle="$(printf '%s' "$clear_result" | jq -er '.result.resolution.best.handle')"
-          echo 'Calculator All Clear button is resolvable'
+          if [[ "$ready" != true ]]; then
+            echo '::error::Calculator did not expose uniquely named All Clear and digit 1 buttons before the resolve deadline'
+            if [[ -n "$look" ]]; then
+              printf '%s\n' "$look" | jq '{
+                isError: .result.isError,
+                snapshot: (.result.structuredContent.snapshot | {app, tree: (.tree | split("\n") | map(select(test(": button "))) | .[0:20])}),
+                error: (.result.structuredContent | {code, message, error})
+              }'
+            elif [[ -n "$look_error" ]]; then
+              printf 'last look error: %.500s\n' "$look_error"
+            fi
+            exit 1
+          fi
+          retained_app="$(printf '%s' "$look" | jq -r '.result.structuredContent.snapshot.app')"
+          clear_name="$(printf '%s' "$look" | jq -r '[.result.structuredContent.snapshot.tree | split("\n")[] | select(test(": button \"All Clear\" \\[click\\]")) | capture("^\\s*(?<name>.+): button").name][0]')"
+          one_name="$(printf '%s' "$look" | jq -r '[.result.structuredContent.snapshot.tree | split("\n")[] | select(test(": button \"1\" \\[click\\]")) | capture("^\\s*(?<name>.+): button").name][0]')"
+          echo 'Calculator All Clear and digit 1 buttons have retained app-scoped semantic names'
 
-          "$cli" invoke "$clear_handle" AXPress | jq -e '.result.action.success == true' >/dev/null
+          clear_invoked="$(jq -cn --arg app "$retained_app" --arg name "$clear_name" '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"invoke","arguments":{"target":{"app":$app,"name":$name},"name":"AXPress"}}}' | "$cli" mcp)"
+          if ! printf '%s' "$clear_invoked" | jq -e '.result.isError == false and .result.structuredContent.action.success == true and .result.structuredContent.action.targetResolution.status == "unique"' >/dev/null; then
+            echo '::error::Calculator All Clear semantic name did not resolve uniquely and dispatch'
+            printf '%s\n' "$clear_invoked" | jq .
+            exit 1
+          fi
           echo 'Calculator All Clear button pressed'
 
-          one_result="$("$cli" find Calculator '{"role":"AXButton","description":"1","actions":["AXPress"]}')"
-          one_handle="$(printf '%s' "$one_result" | jq -er '.result.resolution.best.handle')"
-          "$cli" invoke "$one_handle" AXPress | jq -e '.result.action.success == true' >/dev/null
+          one_invoked="$(jq -cn --arg app "$retained_app" --arg name "$one_name" '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"invoke","arguments":{"target":{"app":$app,"name":$name},"name":"AXPress"}}}' | "$cli" mcp)"
+          if ! printf '%s' "$one_invoked" | jq -e '.result.isError == false and .result.structuredContent.action.success == true and .result.structuredContent.action.targetResolution.status == "unique"' >/dev/null; then
+            echo '::error::Calculator digit 1 semantic name did not resolve uniquely and dispatch'
+            printf '%s\n' "$one_invoked" | jq .
+            exit 1
+          fi
           echo 'Calculator digit 1 pressed'
 
-          "$cli" look Calculator --json \
-            | jq -e '.indexedNodes | any(.role == "AXStaticText" and (.value | strings | contains("1")))'
+          verified=false
+          after=""
+          after_error=""
+          for _ in {1..20}; do
+            if candidate="$(printf '%s\n' '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"look","arguments":{"app":"Calculator"}}}' | "$cli" mcp 2>&1)"; then
+              after="$candidate"
+              if printf '%s' "$after" | jq -e '.result.isError == false and (.result.structuredContent.snapshot.tree | test(": text \"[^\"]*1[^\"]*\""))' >/dev/null; then
+                verified=true
+                break
+              fi
+            else
+              after_error="$candidate"
+            fi
+            sleep 0.1
+          done
+          if [[ "$verified" != true ]]; then
+            echo '::error::Calculator display did not show digit 1 after the semantic invocation'
+            if [[ -n "$after" ]]; then
+              printf '%s\n' "$after" | jq '{
+                isError: .result.isError,
+                display: [.result.structuredContent.snapshot.tree | split("\n")[] | select(test(": text "))][0:20],
+                error: (.result.structuredContent | {code, message, error})
+              }'
+            elif [[ -n "$after_error" ]]; then
+              printf 'last look error: %.500s\n' "$after_error"
+            fi
+            exit 1
+          fi
           echo 'Calculator display verified'
 
       # The counterpart to the parking step, and the reason the probe above may leave the machine
@@ -454,32 +514,63 @@ jobs:
           ../scripts/assert-daemon-under-test "$daemon" "$daemon_pid" /tmp/axon-linux-daemon.log
 
           gnome-calculator --equation 0 >/dev/null 2>&1 &
+          ready=false
           for _ in {1..40}; do
             look="$(printf '%s\n' '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"look","arguments":{"app":"Calculator"}}}' | "$daemon" mcp)"
-            if printf '%s' "$look" | jq -e '[.result.structuredContent.app.windows[].root | .. | objects | select(.role == "text box" and .value? == "0")] | length == 1' >/dev/null; then break; fi
+            if printf '%s' "$look" | jq -e '
+              .result.isError == false
+              and (.result.structuredContent.app.name | strings | length > 0)
+              and ([.result.structuredContent.app.windows[]?.root | .. | objects | select(.role == "text box" and .value? == "0")] | length == 1)
+              and ([.result.structuredContent.app.windows[]?.root | .. | objects | select(.role == "button" and .label? == "1" and (.actions | index("Click")))] | length == 1)
+            ' >/dev/null 2>&1; then
+              ready=true
+              break
+            fi
             sleep 0.25
           done
 
-          printf '%s' "$look" | jq -e '.result.structuredContent.app.windows[0].root' >/dev/null
-          display_object="$(printf '%s' "$look" | jq -er '[.result.structuredContent.app.windows[].root | .. | objects | select(.role == "text box" and .value? == "0")][0].identifier')"
-          retained_name="$(printf '%s' "$look" | jq -er '[.result.structuredContent.app.windows[].root | .. | objects | select(.role == "push button" and .label? == "1")][0].name')"
-          test -n "$retained_name"
+          if [[ "$ready" != true ]]; then
+            echo '::error::GNOME Calculator did not expose one display and one named digit 1 button before the resolve deadline'
+            printf '%s\n' "$look" | jq '{
+              id,
+              jsonrpc,
+              isError: .result.isError,
+              error: (.result.structuredContent | {code, message}),
+              app: (.result.structuredContent.app | {identifier, name}),
+              targets: ([.result.structuredContent.app.windows[]?.root | .. | objects
+                | select(.role? == "text box" or (.role? == "button" and .label? == "1"))
+                | {role, label, value, name, identifier, actions}][0:20])
+            }'
+            exit 1
+          fi
+          retained_app="$(printf '%s' "$look" | jq -r '.result.structuredContent.app.name')"
+          display_object="$(printf '%s' "$look" | jq -r '[.result.structuredContent.app.windows[].root | .. | objects | select(.role == "text box" and .value? == "0")][0].identifier')"
+          retained_name="$(printf '%s' "$look" | jq -r '[.result.structuredContent.app.windows[].root | .. | objects | select(.role == "button" and .label? == "1" and (.actions | index("Click")))][0].name')"
+          echo 'GNOME Calculator display and digit 1 button have retained app-scoped semantic identity'
 
           # The name came from the earlier observation. Resolution captures the live tree again and
           # scores the recorded locator facts; no second look or public snapshot handle participates.
-          invoked="$(jq -cn --arg name "$retained_name" '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"invoke","arguments":{"target":{"app":"Calculator","name":$name},"name":"Click"}}}' | "$daemon" mcp)"
-          printf '%s' "$invoked" | jq -e '.result.structuredContent.dispatch.success == true and .result.structuredContent.resolution.status == "unique"' >/dev/null
+          invoked="$(jq -cn --arg app "$retained_app" --arg name "$retained_name" '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"invoke","arguments":{"target":{"app":$app,"name":$name},"name":"Click"}}}' | "$daemon" mcp)"
+          if ! printf '%s' "$invoked" | jq -e '.result.isError == false and .result.structuredContent.dispatch.success == true and .result.structuredContent.resolution.status == "unique"' >/dev/null; then
+            echo '::error::GNOME Calculator digit 1 semantic name did not resolve uniquely and dispatch'
+            printf '%s\n' "$invoked" | jq .
+            exit 1
+          fi
 
           verified=false
           for _ in {1..20}; do
             after="$(printf '%s\n' '{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"look","arguments":{"app":"Calculator"}}}' | "$daemon" mcp)"
-            if printf '%s' "$after" | jq -e --arg object "$display_object" '[.result.structuredContent.app.windows[].root | .. | objects | select(.identifier? == $object and .value? == "01")] | length == 1' >/dev/null; then
+            if printf '%s' "$after" | jq -e --arg object "$display_object" '[.result.structuredContent.app.windows[]?.root | .. | objects | select(.identifier? == $object and .value? == "01")] | length == 1' >/dev/null 2>&1; then
               verified=true
               break
             fi
             sleep 0.1
           done
-          test "$verified" = true
+          if [[ "$verified" != true ]]; then
+            echo '::error::GNOME Calculator display identity did not change from 0 to 01 after the semantic invocation'
+            printf '%s\n' "$after" | jq --arg object "$display_object" '[.result.structuredContent.app.windows[]?.root | .. | objects | select(.identifier? == $object) | {role, value, name, identifier}]'
+            exit 1
+          fi
           echo 'Linux MCP facade captured, resolved, invoked, and verified GNOME Calculator through the daemon'
 
       # The rung that must NOT light up here. This runner is a GNOME Wayland session: the
