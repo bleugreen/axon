@@ -528,7 +528,7 @@ Direct bindings are the recommendation. The exercised surface is small, the owne
 
 ## TCC measurements and session attribution
 
-The first direct run of the ad-hoc `com.bleugreen.axon.spike109` bundle was denied: it returned only a blank application placeholder, one node in 20.948 ms. After desktop approvals during the session, the same unchanged executable captured 201 nodes. The system database explains why, and prevents a false bundle-carry conclusion: **no `com.bleugreen.axon.spike109` row was created**. Instead, TCC attributed the SSH-originated execution to responsible command hosts.
+The first direct run of the ad-hoc `com.bleugreen.axon.spike109` bundle returned only a blank application placeholder, one node in 20.948 ms, behavior consistent with an untrusted Accessibility client. The probe discarded raw AX errors and did not call `AXIsProcessTrusted`, so this run alone does not prove TCC denial rather than another AX failure. After desktop approvals during the session, the same unchanged executable captured 201 nodes. No `com.bleugreen.axon.spike109` row was created, while new Terminal and sshd-keygen-wrapper rows appeared during approval. That sequence is strong evidence consistent with macOS assigning responsibility to command hosts, but the spike did not inspect audit tokens or responsible-process metadata and therefore does not claim direct attribution proof.
 
 The rows relevant to Axon after the measurement were:
 
