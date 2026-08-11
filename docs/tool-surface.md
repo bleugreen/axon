@@ -6,7 +6,7 @@ files, and the CLI. There are no compatibility aliases for previous tool names.
 ## MCP Tools
 
 ```text
-look(target?, since?, screenshot?, screenText?, tree?, offset?, limit?, direct?, childDepth?, depth?, all?, format?, frames?)
+look(app?, target?, since?, screenshot?, screenText?, tree?, offset?, limit?, direct?, childDepth?, depth?, all?, format?, frames?)
 navigate(app, url)
 windows(app)
 tabs(app, window?)

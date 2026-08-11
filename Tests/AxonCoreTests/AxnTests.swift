@@ -48,7 +48,7 @@ import Testing
 
     let axn = try Axn(source: source)
 
-    #expect(axn.version == 1)
+    #expect(axn.version == 2)
     #expect(axn.editorMetadata.breakpoints == ["a001"])
     #expect(axn.editorMetadata.notes == ["a001": "auth fails here"])
     #expect(axn.args.map(\.name) == ["recipient"])
