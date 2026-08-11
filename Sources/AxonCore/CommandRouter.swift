@@ -498,7 +498,8 @@ private struct PerceptionCommandHandler {
                 return try changedSinceResponse(id: request.id, params: params)
             }
             let semanticTarget = try CommandRouterRequestSupport.optionalToolTarget("target", in: params, acceptedKinds: .element)
-            guard semanticTarget != nil || (try CommandRouterRequestSupport.optionalString("app", in: params)) != nil else {
+            let app = try CommandRouterRequestSupport.optionalString("app", in: params)
+            guard semanticTarget != nil || app != nil else {
                 let format = try decoder.string("format")
                 let includeAllApps = (try decoder.bool("all") ?? false) || format == "debug"
                 return JSONRPCResponse(
@@ -544,7 +545,7 @@ private struct PerceptionCommandHandler {
             let screenText = try decoder.bool("screenText") ?? false
             let includeTree = try decoder.bool("tree") ?? true
             let childDepth = try decoder.int("childDepth")
-            guard let app = try CommandRouterRequestSupport.optionalString("app", in: params) else {
+            guard let app else {
                 throw JSONRPCError.invalidParams("look requires app when target is omitted")
             }
             let snapshot = try services.captureSnapshotWithChildDepth(app, screenshot || screenText, childDepth)

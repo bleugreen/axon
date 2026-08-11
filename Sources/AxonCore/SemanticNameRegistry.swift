@@ -107,7 +107,7 @@ public final class SemanticNameRegistry: @unchecked Sendable {
 
     public func registerReplayEvidence(app: String, name: String, locator: AXLocator) {
         let role = locator.role ?? "unknown"
-        let label = locator.label ?? locator.title ?? locator.description ?? name
+        let label = locator.label ?? locator.title ?? name
         let record = SemanticNameRecord(
             query: SemanticTargetQuery(app: app, name: name),
             appIdentity: AppIdentity(bundleIdentifier: nil, name: app, processIdentifier: 0),
