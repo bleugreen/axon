@@ -512,16 +512,11 @@ private struct PerceptionCommandHandler {
                 let parentHandle: String
                 switch services.semanticNameRegistry.lookup(app: app, name: name) {
                 case let .unique(record):
-                    if let retained = record.retainedHandle,
-                       (try? services.elementStore.element(for: retained)) != nil {
-                        parentHandle = retained.rawValue
-                    } else {
-                        let resolution = try services.resolveLocator(app, record.locator, false)
-                        guard resolution.status == .unique, let handle = resolution.best?.handle else {
-                            throw JSONRPCError.invalidParams("Semantic paging target did not resolve uniquely")
-                        }
-                        parentHandle = handle.rawValue
+                    let resolution = try services.resolveLocator(app, record.locator, false)
+                    guard resolution.status == .unique, let handle = resolution.best?.handle else {
+                        throw JSONRPCError.invalidParams("Semantic paging target did not resolve uniquely")
                     }
+                    parentHandle = handle.rawValue
                 case .missing:
                     throw JSONRPCError.invalidParams("Unknown semantic paging target; run look for the app first")
                 case .ambiguous:
@@ -934,10 +929,6 @@ private struct PrimitiveActionCommandHandler {
             case .missing: throw SemanticResolutionFailure(status: "missing", query: query, candidates: [])
             case let .ambiguous(_, candidates):
                 throw SemanticResolutionFailure(status: "ambiguous", query: query, candidates: candidates)
-            }
-            if let retained = record.retainedHandle,
-               (try? services.elementStore.element(for: retained)) != nil {
-                return ResolvedElementTarget(handle: retained.rawValue, resolution: nil)
             }
             let resolution = try services.resolveLocator(app, record.locator, true)
             guard resolution.status == .unique, let handle = resolution.best?.handle else {

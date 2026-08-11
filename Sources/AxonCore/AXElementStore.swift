@@ -72,9 +72,8 @@ public final class AXElementStore: @unchecked Sendable {
         let baseIndex = elements.count
         elements.append(contentsOf: newElements)
         elementsBySnapshot[snapshotID] = elements
-        snapshotOrder.removeAll { $0 == snapshotID }
-        snapshotOrder.append(snapshotID)
-        pruneOldSnapshots()
+        // Paging extends an existing observation; it must not make that snapshot newer than
+        // the semantic registry entry created by the same observation.
         return baseIndex
     }
 
