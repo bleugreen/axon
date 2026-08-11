@@ -29,18 +29,63 @@ private final class PolicySpy: @unchecked Sendable {
     }
 }
 
+private let primaryTarget = JSONValue.object([
+    "app": .string("Example"),
+    "name": .string("primary-control")
+])
+
+private let destinationTarget = JSONValue.object([
+    "app": .string("Example"),
+    "name": .string("destination-control")
+])
+
 private let mutatingRequests: [(method: String, params: [String: JSONValue])] = [
-    ("click", ["target": .string("s1:2")]),
-    ("type", ["target": .string("s1:2"), "value": .string("hello")]),
+    ("click", ["target": primaryTarget]),
+    ("type", ["target": primaryTarget, "value": .string("hello")]),
     ("keyboard", ["key": .string("Return")]),
-    ("scroll", ["target": .string("s1:2")]),
-    ("drag", ["from": .string("s1:2"), "to": .string("s1:3")]),
-    ("invoke", ["target": .string("s1:2"), "name": .string("AXPress")])
+    ("scroll", ["target": primaryTarget]),
+    ("drag", ["from": primaryTarget, "to": destinationTarget]),
+    ("invoke", ["target": primaryTarget, "name": .string("AXPress")])
 ]
+
+private func deliveryRouter(actions: PrimitiveActionHandlers) -> CommandRouter {
+    let registry = SemanticNameRegistry()
+    registry.registerReplayEvidence(
+        app: "Example",
+        name: "primary-control",
+        locator: AXLocator(role: "AXButton", title: .exact("Primary"))
+    )
+    registry.registerReplayEvidence(
+        app: "Example",
+        name: "destination-control",
+        locator: AXLocator(role: "AXButton", title: .exact("Destination"))
+    )
+    return CommandRouter(
+        resolveLocator: { _, locator, _ in
+            let index = locator.title?.matches("Destination") == true ? 3 : 2
+            let snapshotID = SnapshotID("delivery")
+            return LocatorResolution(
+                status: .unique,
+                snapshotID: snapshotID,
+                best: LocatorCandidate(
+                    index: index,
+                    handle: SnapshotHandle(snapshotID: snapshotID, nodeIndex: index),
+                    role: "AXButton",
+                    title: index == 3 ? "Destination" : "Primary",
+                    score: 1_000,
+                    reasons: []
+                ),
+                candidates: []
+            )
+        },
+        actions: actions,
+        semanticNameRegistry: registry
+    )
+}
 
 @Test func omittedPolicyReachesEveryHandlerAsBackgroundOnly() {
     let spy = PolicySpy()
-    let router = CommandRouter(actions: spy.handlers)
+    let router = deliveryRouter(actions: spy.handlers)
 
     for request in mutatingRequests {
         let response = router.handle(JSONRPCRequest(
@@ -56,7 +101,7 @@ private let mutatingRequests: [(method: String, params: [String: JSONValue])] = 
 
 @Test func explicitForegroundPolicyReachesEveryHandler() {
     let spy = PolicySpy()
-    let router = CommandRouter(actions: spy.handlers)
+    let router = deliveryRouter(actions: spy.handlers)
 
     for request in mutatingRequests {
         var params = request.params
@@ -106,7 +151,7 @@ private let mutatingRequests: [(method: String, params: [String: JSONValue])] = 
         capability: .backgroundPixelInput,
         message: "no target-bound mechanism for this window"
     )
-    let router = CommandRouter(actions: PrimitiveActionHandlers(
+    let router = deliveryRouter(actions: PrimitiveActionHandlers(
         click: { target, policy in
             .refused(action: "click", target: target, policy: policy, refusal: refusal)
         }
@@ -115,7 +160,7 @@ private let mutatingRequests: [(method: String, params: [String: JSONValue])] = 
     let response = router.handle(JSONRPCRequest(
         id: .string("click-refused"),
         method: "click",
-        params: .object(["target": .string("s1:2")])
+        params: .object(["target": primaryTarget])
     ))
 
     // A refusal is an action result, not a transport error: the request was well formed.

@@ -220,7 +220,7 @@ The Rust sibling has one platform-neutral core and narrow native backends:
 MCP stdio facade
   -> JSON-RPC router
     -> shared core
-       snapshot model and retained-handle lifecycle
+       snapshot model, semantic-name contract, and private retained-handle lifecycle
        locator filtering, scoring, confidence, and explanations
        .axn parser, parameter binding, runner, and traces
        capability model and honest result envelopes
@@ -238,6 +238,13 @@ observation, and recording operations. Platform-specific permission failures and
 API restrictions cross the boundary as typed capability or operation errors;
 they do not leak arbitrary native status codes into the public protocol. Native
 diagnostic details may be retained as supplemental information.
+
+At the public Rust boundary, an element target is exactly `{app, name}`. Raw
+snapshot handles and standalone locator objects are rejected before backend work.
+The provider may use a retained handle and native locator evidence internally to
+resolve that name. Until a provider has a live semantic-name registry, it must
+report semantic resolution as unsupported; accepting the old target vocabulary
+as a fallback would create a second, stale public contract.
 
 The socket-daemon shape stays aligned with macOS: a long-lived process owns
 native subscriptions, retained element handles, and caches, while short-lived
@@ -544,7 +551,7 @@ rather than falling through to a louder mechanism.
 | `scroll` | `semantic` (`AXScrollToVisible`); wheel bursts ride `pixel` then `foreground` | `semantic` (UIA `ScrollItemPattern`) | `semantic` (AT-SPI `Component.ScrollTo`) |
 | `click` | `semantic` when the element advertises `AXPress`, else `pixel`, else `foreground` | `pixel` for a probe-verified window class, else refused | `pixel` for a Chromium-family target, else `foreground` on X11 with an EWMH window manager, else refused |
 | `keyboard` | `pixel` with `app`, else `foreground` | refused | `pixel` for a GTK 3 or Qt 6 target named by `app`, else `foreground` on X11 with an EWMH window manager, else refused |
-| `drag` | `pixel` with an app or handle endpoint, else `foreground` | not implemented | not implemented |
+| `drag` | `pixel` with a semantic-name endpoint, else `foreground` | not implemented | not implemented |
 
 No backend reports `pixel` for a mechanism it cannot bind to a verified target.
 
@@ -779,10 +786,11 @@ the target, so the semantic rung sets the value directly and reads it back.
 
 ## Keeping implementations aligned
 
-The platform-neutral specification will drive a shared conformance suite. Its
+The platform-neutral specification drives a shared conformance suite. Its
 fixtures should be language-neutral data wherever possible, with adapters that
 run them against Swift and Rust. Schema snapshots verify the public tools;
-synthetic trees verify locator behavior; request/response fixtures verify JSON-RPC
+synthetic trees verify locator behavior; strict target fixtures reject handles and
+standalone locators while accepting `{app, name}`; request/response fixtures verify JSON-RPC
 and MCP envelopes; `.axn` fixtures verify parsing and traces; backend harnesses
 verify capability and honest-result semantics. `schema/fixtures/delivery` holds
 the delivery vocabulary and result shapes, read by both

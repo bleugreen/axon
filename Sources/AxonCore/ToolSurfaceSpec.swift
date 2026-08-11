@@ -1,19 +1,16 @@
 import Foundation
 
 public enum ToolTargetKind: String, CaseIterable, Sendable {
-    case handle
-    case locator
+    case semanticName
     case point
     case textLocation
 
     public var schemaDescription: String {
         switch self {
-        case .handle:
-            return "Snapshot handle like s12:19."
-        case .locator:
-            return "Locator target object with app and locator fields. Locator may use label, title, value, description, identifier, actions, and ancestors."
+        case .semanticName:
+            return "Semantic element target object with required app and name fields. Run look first to observe canonical names."
         case .point:
-            return "Point target object: { point: { x, y, coordinateSpace } } or { x, y, coordinateSpace }. coordinateSpace is screen, window, or screenshot; window and screenshot points require app when no top-level app is provided. Legacy { x, y } still resolves as screen coordinates for compatibility. Raw points dispatch without element identity or occlusion verification; use a handle or locator when fail-closed target validation is required."
+            return "Point target object: { point: { x, y, coordinateSpace } } or { x, y, coordinateSpace }. coordinateSpace is screen, window, or screenshot; window and screenshot points require app when no top-level app is provided. Raw points dispatch without element identity or occlusion verification; use a semantic name when fail-closed target validation is required."
         case .textLocation:
             return "Text location target object: { location: { app, text, source? } }. Resolves visible text to a click/drag/scroll point using AX text or screenshot OCR without callers providing coordinates."
         }
@@ -27,12 +24,11 @@ public struct ToolTargetKindSet: OptionSet, Sendable {
         self.rawValue = rawValue
     }
 
-    public static let handle = ToolTargetKindSet(rawValue: 1 << 0)
-    public static let locator = ToolTargetKindSet(rawValue: 1 << 1)
+    public static let semanticName = ToolTargetKindSet(rawValue: 1 << 0)
     public static let point = ToolTargetKindSet(rawValue: 1 << 2)
     public static let textLocation = ToolTargetKindSet(rawValue: 1 << 3)
-    public static let element: ToolTargetKindSet = [.handle, .locator]
-    public static let pointer: ToolTargetKindSet = [.handle, .locator, .point, .textLocation]
+    public static let element: ToolTargetKindSet = [.semanticName]
+    public static let pointer: ToolTargetKindSet = [.semanticName, .point, .textLocation]
 
     public var orderedKinds: [ToolTargetKind] {
         ToolTargetKind.allCases.filter { contains($0) }
@@ -40,10 +36,8 @@ public struct ToolTargetKindSet: OptionSet, Sendable {
 
     public func contains(_ kind: ToolTargetKind) -> Bool {
         switch kind {
-        case .handle:
-            return contains(ToolTargetKindSet.handle)
-        case .locator:
-            return contains(ToolTargetKindSet.locator)
+        case .semanticName:
+            return contains(ToolTargetKindSet.semanticName)
         case .point:
             return contains(ToolTargetKindSet.point)
         case .textLocation:
@@ -123,19 +117,20 @@ public enum ToolSurfaceSpec {
     public static let tools: [ToolSpec] = [
         ToolSpec(
             name: "look",
-            description: "Observe Axon's current surface: no target lists apps, an app target captures state, a handle target pages children, and since returns a change check.",
+            description: "Observe Axon's current surface: no app lists apps, app captures state, a semantic target pages children, and since returns a change check.",
             params: [
-                ToolParameterSpec("target", .string, description: "Bundle id, pid, app name, partial app name, or retained snapshot handle such as s12:4. Omit to list apps."),
+                ToolParameterSpec("app", .string, description: "Bundle id, pid, app name, or partial app name. Omit with target to list apps."),
+                ToolParameterSpec("target", .target(.element), description: "App-scoped semantic name returned by a prior look; pages that element's children."),
                 ToolParameterSpec("since", .string, description: "Snapshot id from a prior look response. Returns a coarse change check instead of a tree."),
                 ToolParameterSpec("screenshot", .boolean, default: .bool(false), description: "Include embedded ScreenCaptureKit screenshot data with an app observation. Defaults to false for MCP."),
                 ToolParameterSpec("screenText", .boolean, default: .bool(false), description: "OCR visible text from the app window screenshot and include it as organized screenText. Defaults to false."),
                 ToolParameterSpec("tree", .boolean, description: "Include the nested AX tree for app observations. Defaults to true for observation format and false for debug format."),
-                ToolParameterSpec("offset", .integer, default: .int(0), description: "Zero-based child offset when target is a retained handle. Defaults to 0."),
-                ToolParameterSpec("limit", .integer, description: "Maximum children when target is a retained handle. Defaults to Axon's sibling page size."),
-                ToolParameterSpec("direct", .boolean, default: .bool(false), description: "For handle targets, return only direct children and retain their handles without recursively capturing descendants."),
-                ToolParameterSpec("childDepth", .integer, description: "Initial child depth for app observations. Use 0 to retain top-level windows only and page children by handle."),
+                ToolParameterSpec("offset", .integer, default: .int(0), description: "Zero-based child offset for a semantic target. Defaults to 0."),
+                ToolParameterSpec("limit", .integer, description: "Maximum children for a semantic target. Defaults to Axon's sibling page size."),
+                ToolParameterSpec("direct", .boolean, default: .bool(false), description: "For semantic targets, return only direct children without recursively capturing descendants."),
+                ToolParameterSpec("childDepth", .integer, description: "Initial child depth for app observations. Use 0 to retain top-level windows only and page children by semantic target."),
                 ToolParameterSpec("depth", .integer, description: "Maximum tree depth to display for app observations, with windows at depth 0."),
-                ToolParameterSpec("all", .boolean, description: "For no-target app lists, include all running processes. For direct handle child requests, include all direct children."),
+                ToolParameterSpec("all", .boolean, description: "For no-target app lists, include all running processes. For direct semantic child requests, include all direct children."),
                 ToolParameterSpec("format", .string, description: "Defaults to observation. Use debug only when diagnosing Axon internals."),
                 ToolParameterSpec("frames", .boolean, default: .bool(false), description: "Include frames in observation output. Defaults to false.")
             ],
@@ -163,9 +158,9 @@ public enum ToolSurfaceSpec {
         ),
         ToolSpec(
             name: "wait_for_value",
-            description: "Poll readable AX state from a resolved locator until a contains, equals, or regex predicate holds, or a bounded timeout reports the last observed state.",
+            description: "Poll readable accessibility state from an app-scoped semantic name until a contains, equals, or regex predicate holds, or a bounded timeout reports the last observed state.",
             params: [
-                ToolParameterSpec("target", .target(.locator), required: true, description: "Locator target object with app and locator fields."),
+                ToolParameterSpec("target", .target(.element), required: true, description: "App-scoped semantic name target returned by look."),
                 ToolParameterSpec("contains", .string, description: "Succeed when any readable field contains this text."),
                 ToolParameterSpec("equals", .string, description: "Succeed when any readable field exactly equals this text."),
                 ToolParameterSpec("matches", .string, description: "Succeed when any readable field matches this regular expression."),
@@ -218,22 +213,22 @@ public enum ToolSurfaceSpec {
         ),
         ToolSpec(
             name: "click",
-            description: "Click a target specified by snapshot handle, locator object, point, or text location.",
+            description: "Click an app-scoped semantic element name, explicit point, or text location.",
             params: [
                 ToolParameterSpec("target", .target(.pointer), required: true, description: "Target to click."),
                 deliveryPolicyParameter
             ],
-            cliUsage: "axon click [--foreground] <handle|target-json>"
+            cliUsage: "axon click [--foreground] <target-json>"
         ),
         ToolSpec(
             name: "type",
             description: "Fill a writable field by setting AXValue directly on a target, avoiding focus and keystroke timing races.",
             params: [
-                ToolParameterSpec("target", .target(.element), required: true, description: "Handle or locator target for the writable field."),
+                ToolParameterSpec("target", .target(.element), required: true, description: "App-scoped semantic name target for the writable field."),
                 ToolParameterSpec("value", .string, required: true, description: "New string value."),
                 deliveryPolicyParameter
             ],
-            cliUsage: "axon type [--foreground] <handle> <value>"
+            cliUsage: "axon type [--foreground] <target-json> <value>"
         ),
         ToolSpec(
             name: "keyboard",
@@ -261,10 +256,10 @@ public enum ToolSurfaceSpec {
         ),
         ToolSpec(
             name: "drag",
-            description: "Drag from one point, snapshot handle, locator target, or text location to another. Pointer dispatch and verified semantic outcome are reported separately.",
+            description: "Drag from one semantic name, explicit point, or text location to another. Pointer dispatch and verified semantic outcome are reported separately.",
             params: [
-                ToolParameterSpec("from", .target(.pointer), required: true, description: "Starting handle, locator, point, or text location."),
-                ToolParameterSpec("to", .target(.pointer), required: true, description: "Ending handle, locator, point, or text location."),
+                ToolParameterSpec("from", .target(.pointer), required: true, description: "Starting semantic name, point, or text location."),
+                ToolParameterSpec("to", .target(.pointer), required: true, description: "Ending semantic name, point, or text location."),
                 ToolParameterSpec("app", .string, description: "Application that owns the drag. Required for background delivery; also the app foregroundPermitted activates and restores."),
                 ToolParameterSpec("durationMs", .integer, description: "Optional drag duration in milliseconds. The pointer path still emits threshold and intermediate drag events."),
                 ToolParameterSpec("expects", .array, description: "Optional post-action facts used by run to verify semantic success. Direct drag calls without a verified postcondition report an unverified semantic outcome."),
@@ -274,13 +269,13 @@ public enum ToolSurfaceSpec {
         ),
         ToolSpec(
             name: "invoke",
-            description: "Invoke a named AX action on a target specified by snapshot handle or locator object.",
+            description: "Invoke a named accessibility action on an app-scoped semantic element name.",
             params: [
-                ToolParameterSpec("target", .target(.element), required: true, description: "Handle or locator target."),
+                ToolParameterSpec("target", .target(.element), required: true, description: "App-scoped semantic name target."),
                 ToolParameterSpec("name", .string, required: true, description: "Accessibility action name, for example AXPress or AXShowMenu."),
                 deliveryPolicyParameter
             ],
-            cliUsage: "axon invoke <handle> <action-name>"
+            cliUsage: "axon invoke <target-json> <action-name>"
         )
     ]
 
@@ -399,9 +394,7 @@ public enum ToolSurfaceSchema {
             return .object([
                 "anyOf": .array(kinds.orderedKinds.map { kind in
                     switch kind {
-                    case .handle:
-                        return scalarSchema(type: "string", description: kind.schemaDescription)
-                    case .locator, .point, .textLocation:
+                    case .semanticName, .point, .textLocation:
                         return .object([
                             "type": .string("object"),
                             "description": .string(kind.schemaDescription),

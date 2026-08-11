@@ -13,9 +13,49 @@ import Testing
     #expect(first.elements.first(where: { $0.sourceIndex == 6 })?.name == "notes/folders/add")
     #expect(first.elements.first(where: { $0.sourceIndex == 8 })?.name == "notes/editor/done-button")
     #expect(first.elements.first(where: { $0.sourceIndex == 9 })?.name == "notes/editor/done-text")
-    #expect(first.elements.first(where: { $0.sourceIndex == 10 })?.name == "notes/editor/share-1")
-    #expect(first.elements.first(where: { $0.sourceIndex == 11 })?.name == "notes/editor/share-2")
+    #expect(first.elements.first(where: { $0.sourceIndex == 10 })?.name == "notes/editor/share")
+    #expect(first.elements.first(where: { $0.sourceIndex == 11 })?.name == "notes/editor/share")
+    #expect(first.elements.first(where: { $0.sourceIndex == 10 })?.candidateLabel == "notes/editor/share-1")
+    #expect(first.elements.first(where: { $0.sourceIndex == 11 })?.candidateLabel == "notes/editor/share-2")
+    #expect(first.groups.first(where: { $0.name == "notes/editor/share" }) == SemanticNameGroup(
+        name: "notes/editor/share", sourceIndices: [10, 11], resolution: .ambiguous
+    ))
     #expect(first.summary.collisionFreeCount == first.summary.eligibleElementCount - 2)
+}
+
+@Test func deepAncestryIsBoundedAndUsesAtMostOneResolvingAncestor() throws {
+    let raw = #"{"windows":[{"role":"window","title":"Main","children":[{"role":"group","title":"Left","children":[{"role":"group","title":"Deep","children":[{"role":"group","title":"Card","children":[{"index":10,"role":"button","title":"Open"}]}]}]},{"role":"group","title":"Right","children":[{"role":"group","title":"Deep","children":[{"role":"group","title":"Card","children":[{"index":20,"role":"button","title":"Open"}]}]}]}]}]}"#
+    let result = SemanticNameDeriver.derive(from: try JSONDecoder().decode(JSONValue.self, from: Data(raw.utf8)))
+
+    #expect(result.elements.first(where: { $0.sourceIndex == 10 })?.name == "left/deep/card/open")
+    #expect(result.elements.first(where: { $0.sourceIndex == 20 })?.name == "right/deep/card/open")
+    #expect(result.elements.allSatisfy { $0.segmentCount <= 4 })
+}
+
+@Test func identicalSiblingsKeepOneAmbiguousActionName() throws {
+    let raw = #"{"windows":[{"role":"window","title":"Main","children":[{"index":1,"role":"button","title":"Save"},{"index":2,"role":"button","title":"Save"}]}]}"#
+    let result = SemanticNameDeriver.derive(from: try JSONDecoder().decode(JSONValue.self, from: Data(raw.utf8)))
+    let saves = result.elements.filter { $0.label == "Save" }
+
+    #expect(Set(saves.map(\.name)) == ["main/save"])
+    #expect(saves.allSatisfy { $0.resolution == .ambiguous })
+    #expect(Set(saves.compactMap(\.candidateLabel)) == ["main/save-1", "main/save-2"])
+}
+
+@Test func qualifierDisambiguationReservesVisibleNameNamespace() throws {
+    let raw = #"{"windows":[{"role":"window","title":"Main","children":[{"role":"button","title":"Done","identifier":"button"},{"role":"button","title":"Done"},{"role":"button","title":"Done button"}]}]}"#
+    let result = SemanticNameDeriver.derive(from: try JSONDecoder().decode(JSONValue.self, from: Data(raw.utf8)))
+
+    #expect(Set(result.elements.map(\.name)) == ["main", "main/done", "main/done-button-id", "main/done-button"])
+}
+
+@Test func rolesFromUIAAndATSPIUseNormalizedObservationVocabulary() throws {
+    let raw = #"{"windows":[{"role":"window","title":"Main","children":[{"index":1,"role":"ControlType.Button","title":"Run"},{"index":2,"role":"push button","title":"Run"}]}]}"#
+    let result = SemanticNameDeriver.derive(from: try JSONDecoder().decode(JSONValue.self, from: Data(raw.utf8)))
+    let run = result.elements.filter { $0.label == "Run" }
+
+    #expect(run.map(\.role) == ["button", "button"])
+    #expect(run.allSatisfy { $0.name == "main/run" && $0.resolution == .ambiguous })
 }
 
 @Test func stableIdentifiersDisambiguateReorderedEqualLabelSiblings() throws {

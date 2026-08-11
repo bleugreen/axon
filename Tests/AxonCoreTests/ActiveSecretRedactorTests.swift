@@ -139,7 +139,7 @@ import Testing
     let response = router.handle(JSONRPCRequest(
         id: .string("look"),
         method: "look",
-        params: .object(["target": .string("com.example.App")])
+        params: .object(["app": .string("com.example.App")])
     ))
     let redaction = response.result?["snapshot"]?["indexedNodes"]?[1]?["redaction"]
     let encoded = String(decoding: try JSONEncoder().encode(JSONValue.object(response.result ?? [:])), as: UTF8.self)

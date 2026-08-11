@@ -20,6 +20,38 @@ impl SnapshotId {
 #[serde(transparent)]
 pub struct SnapshotHandle(pub String);
 
+/// The only public element identity accepted by the cross-platform wire contract.
+///
+/// Snapshot handles remain an internal backend cache key. Locator evidence may be retained beside
+/// a semantic name by a recorder or resolver, but neither handles nor standalone locators decode as
+/// an interactive element target.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WireElementTarget {
+    pub app: String,
+    pub name: String,
+}
+
+impl WireElementTarget {
+    pub fn validate(self) -> Result<Self, WireElementTargetError> {
+        if self.app.trim().is_empty() {
+            return Err(WireElementTargetError::EmptyApp);
+        }
+        if self.name.trim().is_empty() {
+            return Err(WireElementTargetError::EmptyName);
+        }
+        Ok(self)
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum WireElementTargetError {
+    #[error("element target app must not be empty")]
+    EmptyApp,
+    #[error("element target name must not be empty")]
+    EmptyName,
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Rect {

@@ -18,6 +18,7 @@ public struct AxnRunner {
     public typealias SnapshotProvider = RecordedFactEvaluator.SnapshotProvider
     public typealias ParameterSourceResolver = (URL) throws -> String?
     public typealias ActiveSecretRedactorProvider = @Sendable () -> ActiveSecretRedactor
+    public typealias ReplayTargetRegistrar = (_ app: String, _ name: String, _ locator: AXLocator) throws -> Void
 
     private static let redactedSecretValue = "<redacted: contains-secret>"
     private let commandHandler: CommandHandler
@@ -28,6 +29,7 @@ public struct AxnRunner {
     private let parameterSourceResolvers: [String: ParameterSourceResolver]
     private let actionRecorder: ActionRecorder?
     private let activeSecretRedactorProvider: ActiveSecretRedactorProvider
+    private let replayTargetRegistrar: ReplayTargetRegistrar?
 
     public init(
         commandHandler: @escaping CommandHandler,
@@ -35,6 +37,7 @@ public struct AxnRunner {
         changePollIntervalMs: Int = 100,
         changeTimeoutMs: Int = 5_000,
         parameterSourceResolvers: [String: ParameterSourceResolver] = AxnRunner.defaultParameterSourceResolvers(),
+        replayTargetRegistrar: ReplayTargetRegistrar? = nil,
         actionRecorder: ActionRecorder? = nil,
         activeSecretRedactorProvider: @escaping ActiveSecretRedactorProvider = { ActiveSecretRedactor() }
     ) {
@@ -45,6 +48,7 @@ public struct AxnRunner {
         self.changeTimeoutMs = max(0, changeTimeoutMs)
         self.parameterSourceResolvers = parameterSourceResolvers
         self.actionRecorder = actionRecorder
+        self.replayTargetRegistrar = replayTargetRegistrar
         self.activeSecretRedactorProvider = activeSecretRedactorProvider
     }
 
@@ -201,7 +205,13 @@ public struct AxnRunner {
                 return axn
             }
             if params["actions"] != nil {
-                return try Axn(jsonValue: .object(params))
+                var document = params
+                // Inline `run(actions:)` requests are not persisted .axn documents. Treat an
+                // omitted version as the current contract while still rejecting an explicit v1.
+                if document["version"] == nil {
+                    document["version"] = .int(2)
+                }
+                return try Axn(jsonValue: .object(document))
             }
             throw AxnRunError.invalidParams("run requires actions or path")
         } catch let error as AxnRunError {
@@ -238,10 +248,59 @@ public struct AxnRunner {
         _ axn: Axn,
         callerArgValues: [String: JSONValue]
     ) throws -> PreparedAxnRun {
+        try validateReplayContract(axn)
         let resolved = try AxnArgumentResolver(sourceResolvers: parameterSourceResolvers)
             .resolve(axn.args, callerArgValues: callerArgValues)
         let substituted = try substituteParameters(in: axn.blocks, resolved: resolved)
         return PreparedAxnRun(axn: axn, actions: substituted)
+    }
+
+    private func validateReplayContract(_ axn: Axn) throws {
+        guard axn.version == 2 else {
+            let obsolete = axn.blocks.enumerated().compactMap { index, block -> (Int, JSONValue)? in
+                guard case let .action(action) = block else { return nil }
+                for key in ["target", "from", "to"] {
+                    if let target = action.fields[key] { return (index, target) }
+                }
+                return nil
+            }.first
+            let suffix = obsolete.map { "; actions[\($0.0)] obsolete target \(renderTarget($0.1))" } ?? ""
+            throw AxnRunError.invalidParams(
+                ".axn version \(axn.version) is not replayable; version 1 targets are obsolete and must be re-recorded or edited as version 2\(suffix)"
+            )
+        }
+
+        for (index, block) in axn.blocks.enumerated() {
+            guard case let .action(action) = block else { continue }
+            for key in ["target", "from", "to"] {
+                guard let target = action.fields[key] else { continue }
+                try validateV2Target(target, path: "actions[\(index)].\(key)")
+            }
+        }
+    }
+
+    private func validateV2Target(_ value: JSONValue, path: String) throws {
+        guard case let .object(target) = value else {
+            throw AxnRunError.invalidParams("\(path) must be a version 2 target object; obsolete target \(renderTarget(value))")
+        }
+        let point = target["point"]?.objectValue ?? target
+        if target["point"] != nil || point["x"] != nil || point["y"] != nil {
+            guard point["x"] != nil, point["y"] != nil else {
+                throw AxnRunError.invalidParams("\(path) point target requires x and y")
+            }
+            return
+        }
+        guard case let .string(app)? = target["app"], !app.isEmpty,
+              case let .string(name)? = target["name"], !name.isEmpty,
+              case .object? = target["locator"]
+        else {
+            throw AxnRunError.invalidParams("\(path) requires non-empty app and name with an attached locator")
+        }
+    }
+
+    private func renderTarget(_ value: JSONValue) -> String {
+        guard let data = try? JSONEncoder().encode(value) else { return String(describing: value) }
+        return String(decoding: data, as: UTF8.self)
     }
 
     private func callerArgValues(in params: [String: JSONValue]) throws -> [String: JSONValue] {
@@ -352,16 +411,18 @@ public struct AxnRunner {
             )
             if let error = response.error {
                 if case let .object(data)? = error.data,
-                   let resolution = data["targetResolution"],
-                   let event = AxnHealing.event(
+                   let resolution = data["targetResolution"] {
+                    record["targetResolution"] = resolution
+                    if let event = AxnHealing.event(
                        action: action,
                        index: index,
                        resolution: resolution,
                        verify: { _, _ in false },
                        activeSecretRedactor: activeSecretRedactorProvider()
-                   ) {
-                    healEvents.append(event)
-                    record["heal"] = event.jsonValue
+                    ) {
+                        healEvents.append(event)
+                        record["heal"] = event.jsonValue
+                    }
                 }
                 record["success"] = .bool(false)
                 record["error"] = traceError(error.message, hasSecretTaint: !secretTaintedFields.isEmpty)
@@ -467,10 +528,23 @@ public struct AxnRunner {
         method: String,
         secretTaintedFields: Set<String>
     ) -> JSONRPCResponse {
+        var dispatchObject = object
+        for key in ["target", "from", "to"] {
+            guard case var .object(target)? = dispatchObject[key],
+                  case .string? = target["app"], case .string? = target["name"] else { continue }
+            // Attached locators seed the private semantic registry before ordinary dispatch.
+            if let locatorValue = target["locator"], case let .string(app)? = target["app"],
+               case let .string(name)? = target["name"] {
+                do { try replayTargetRegistrar?(app, name, AXLocator(jsonValue: locatorValue)) }
+                catch { return JSONRPCResponse(id: .string("run.\(index).\(tool)"), error: .invalidParams("Invalid replay locator evidence: \(error)")) }
+            }
+            target.removeValue(forKey: "locator")
+            dispatchObject[key] = .object(target)
+        }
         let request = JSONRPCRequest(
             id: .string("run.\(index).\(tool)"),
             method: method,
-            params: .object(object)
+            params: .object(dispatchObject)
         )
         let response = commandHandler(request)
         if let actionRecorder {

@@ -366,3 +366,73 @@ public extension ObservedAppChange {
         ])
     }
 }
+
+
+public extension JSONValue {
+    func renderingPagedSemanticNames(_ records: [SemanticNameRecord], parent: SemanticTargetQuery) -> JSONValue {
+        guard case var .object(root) = self else { return self }
+        let names = Dictionary(uniqueKeysWithValues: records.map { ($0.sourceIndex, $0.query.name) })
+        var nextIndex = records.map(\.sourceIndex).min() ?? 0
+        func render(_ value: JSONValue) -> JSONValue {
+            guard case var .object(node) = value else { return value }
+            if let name = names[nextIndex] { node["name"] = .string(name) }
+            nextIndex += 1
+            node.removeValue(forKey: "handle")
+            node.removeValue(forKey: "index")
+            if case let .array(children)? = node["children"] { node["children"] = .array(children.map(render)) }
+            return .object(node)
+        }
+        if case let .array(children)? = root["children"] { root["children"] = .array(children.map(render)) }
+        root["parent"] = .object(["app": .string(parent.app), "name": .string(parent.name)])
+        root.removeValue(forKey: "baseIndex")
+        return .object(root)
+    }
+
+    /// Replaces internal snapshot identity with canonical semantic names for public observations.
+    /// Debug observations retain handles for diagnostics, but names remain the primary vocabulary.
+    func renderingSemanticNames(_ study: SemanticNameStudy, includeDebugHandles: Bool) -> JSONValue {
+        guard case var .object(root) = self else { return self }
+        let names = Dictionary(uniqueKeysWithValues: study.elements.map { ($0.sourceIndex, $0.name) })
+        var nextIndex = 0
+        func renderNode(_ value: JSONValue) -> JSONValue {
+            guard case var .object(node) = value else { return value }
+            let index = nextIndex
+            nextIndex += 1
+            if let name = names[index] { node["name"] = .string(name) }
+            if !includeDebugHandles {
+                node.removeValue(forKey: "handle")
+                node.removeValue(forKey: "index")
+            }
+            if case let .array(children)? = node["children"] {
+                node["children"] = .array(children.map(renderNode))
+            }
+            return .object(node)
+        }
+        if case let .array(windows)? = root["windows"] {
+            root["windows"] = .array(windows.map(renderNode))
+        }
+        if case let .array(indexed)? = root["indexedNodes"] {
+            root["indexedNodes"] = .array(indexed.map { value in
+                guard case var .object(node) = value,
+                      case let .int(index)? = node["index"] else { return value }
+                if let name = names[index] { node["name"] = .string(name) }
+                if !includeDebugHandles {
+                    node.removeValue(forKey: "handle")
+                    node.removeValue(forKey: "index")
+                }
+                return .object(node)
+            })
+        }
+        if !includeDebugHandles, case var .object(focus)? = root["focus"] {
+            focus.removeValue(forKey: "handle")
+            focus.removeValue(forKey: "target")
+            if case var .object(element)? = focus["element"] {
+                element.removeValue(forKey: "handle")
+                element.removeValue(forKey: "index")
+                focus["element"] = .object(element)
+            }
+            root["focus"] = .object(focus)
+        }
+        return .object(root)
+    }
+}

@@ -6,10 +6,10 @@ import Testing
     let tools = ToolSurfaceSchema.mcpToolJSONValues()
 
     #expect(toolNames(in: tools) == ToolSurfaceSpec.toolNames)
-    #expect(tool(named: "click", in: tools)?["inputSchema"]?["properties"]?["target"]?["anyOf"]?[0]?["type"] == .string("string"))
-    #expect(tool(named: "click", in: tools)?["inputSchema"]?["properties"]?["target"]?["anyOf"]?[3] != nil)
-    #expect(tool(named: "invoke", in: tools)?["inputSchema"]?["properties"]?["target"]?["anyOf"]?[1] != nil)
-    #expect(tool(named: "invoke", in: tools)?["inputSchema"]?["properties"]?["target"]?["anyOf"]?[2] == nil)
+    #expect(tool(named: "click", in: tools)?["inputSchema"]?["properties"]?["target"]?["anyOf"]?[0]?["type"] == .string("object"))
+    #expect(tool(named: "click", in: tools)?["inputSchema"]?["properties"]?["target"]?["anyOf"]?[2] != nil)
+    #expect(tool(named: "invoke", in: tools)?["inputSchema"]?["properties"]?["target"]?["anyOf"]?[0] != nil)
+    #expect(tool(named: "invoke", in: tools)?["inputSchema"]?["properties"]?["target"]?["anyOf"]?[1] == nil)
     #expect(tool(named: "type", in: tools)?["inputSchema"]?["required"] == .array([.string("target"), .string("value")]))
     #expect(tool(named: "wait_for_stability", in: tools)?["inputSchema"]?["properties"]?["stableMs"]?["type"] == .string("integer"))
     #expect(tool(named: "wait_for_stability", in: tools)?["inputSchema"]?["properties"]?["timeoutMs"]?["type"] == .string("integer"))
@@ -28,7 +28,7 @@ import Testing
 }
 
 @Test func toolTargetParsesAllTargetKinds() throws {
-    #expect(try ToolTarget(jsonValue: .string("s12:4")) == .handle("s12:4"))
+    #expect(try ToolTarget(jsonValue: .object(["app": .string("Example"), "name": .string("main/submit")])) == .semanticName(app: "Example", name: "main/submit"))
     #expect(try ToolTarget(jsonValue: .object([
         "point": .object(["x": .int(25), "y": .double(40.5)])
     ])) == .point(ActionPoint(x: 25, y: 40.5)))
@@ -50,16 +50,15 @@ import Testing
     #expect(target.app == "Example")
     #expect(target.source == .auto)
 
-    let locator = try ToolTarget(jsonValue: .object([
-        "app": .string("Example"),
-        "locator": .object(["role": .string("AXButton")])
-    ]))
-    guard case let .locator(app, parsedLocator) = locator else {
-        Issue.record("Expected locator target")
-        return
+    #expect(throws: JSONRPCError.self) {
+        try ToolTarget(jsonValue: .string("s12:4"))
     }
-    #expect(app == "Example")
-    #expect(parsedLocator.role == "AXButton")
+    #expect(throws: JSONRPCError.self) {
+        try ToolTarget(jsonValue: .object([
+            "app": .string("Example"),
+            "locator": .object(["role": .string("AXButton")])
+        ]))
+    }
 }
 
 @Test func toolTargetRejectsKindsOutsideToolAcceptance() throws {

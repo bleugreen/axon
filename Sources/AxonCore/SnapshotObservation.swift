@@ -319,7 +319,9 @@ public struct SnapshotObservationFormatter {
         }
 
         let outputRole = outputRole(for: role, label: label)
-        let handle = string("handle", in: object) ?? "\(snapshotID):\(index)"
+        // Debug observations retain private snapshot handles; normal observations replace them
+        // with stable semantic names before reaching this formatter.
+        let handle = string("handle", in: object) ?? string("name", in: object) ?? "\(snapshotID):\(index)"
         var more = continuation(from: truncationReasons, handle: handle)
         let rawChildTotal = object["childCount"]?.intValue ?? rawChildren.count
         if rawChildTotal > Self.maxObservedChildren, compactChildren.count > Self.maxObservedChildren {

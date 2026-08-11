@@ -5,6 +5,7 @@ import Testing
 @Test func commandRouterRecordsCallsWithSessionParentLinks() {
     let history = ActionHistoryStore()
     let router = CommandRouter(
+        resolveLocator: historyResolveLocator,
         actions: PrimitiveActionHandlers(
             click: { target, _ in
                 PrimitiveActionResult(action: "click", target: target, strategy: "test", success: true)
@@ -13,6 +14,7 @@ import Testing
                 PrimitiveActionResult(action: "type", target: target, strategy: "test", success: true)
             }
         ),
+        semanticNameRegistry: historySemanticRegistry,
         history: history
     )
 
@@ -21,7 +23,7 @@ import Testing
         method: "click",
         params: .object([
             "_session": .string("thread-a"),
-            "target": .string("s1:2")
+            "target": semanticTarget("s1:2")
         ])
     ))
     _ = router.handle(JSONRPCRequest(
@@ -29,7 +31,7 @@ import Testing
         method: "type",
         params: .object([
             "_session": .string("thread-a"),
-            "target": .string("s1:3"),
+            "target": semanticTarget("s1:3"),
             "value": .string("Mitch")
         ])
     ))
@@ -53,11 +55,13 @@ import Testing
                 screenshot: nil
             )
         },
+        resolveLocator: historyResolveLocator,
         actions: PrimitiveActionHandlers(
             click: { target, _ in
                 PrimitiveActionResult(action: "click", target: target, strategy: "test", success: true)
             }
         ),
+        semanticNameRegistry: historySemanticRegistry,
         history: history
     )
 
@@ -74,7 +78,7 @@ import Testing
         method: "click",
         params: .object([
             "_session": .string("thread-a"),
-            "target": .string("s-read:1")
+            "target": semanticTarget("s-read:1")
         ])
     ))
 
@@ -86,7 +90,7 @@ import Testing
 
     #expect(response.error == nil)
     let script = response.result?["script"]?.stringValue
-    #expect(script?.hasPrefix("version: 1\nactions:") == true)
+    #expect(script?.hasPrefix("version: 2\nactions:") == true)
     #expect(script?.contains("actions:") == true)
     #expect(script?.contains("tool: click") == true)
     #expect(script?.contains("tool: look") == false)
@@ -104,6 +108,7 @@ import Testing
                 screenshot: nil
             )
         },
+        semanticNameRegistry: historySemanticRegistry,
         history: history
     )
 
@@ -133,6 +138,7 @@ import Testing
 @Test func saveIncludesPrimitiveActionsExecutedInsideRun() {
     let history = ActionHistoryStore()
     let router = CommandRouter(
+        resolveLocator: historyResolveLocator,
         actions: PrimitiveActionHandlers(
             type: { target, value, _ in
                 PrimitiveActionResult(action: "type", target: target, strategy: "test", success: true, details: [
@@ -140,6 +146,7 @@ import Testing
                 ])
             }
         ),
+        semanticNameRegistry: historySemanticRegistry,
         history: history
     )
 
@@ -151,7 +158,7 @@ import Testing
             "actions": .array([
                 .object([
                     "tool": .string("type"),
-                    "target": .string("s1:2"),
+                    "target": replayTarget("s1:2"),
                     "value": .string("Hello")
                 ])
             ])
@@ -181,6 +188,7 @@ import Testing
                 screenshot: nil
             )
         },
+        resolveLocator: historyResolveLocator,
         actions: PrimitiveActionHandlers(
             click: { target, _ in
                 PrimitiveActionResult(action: "click", target: target, strategy: "test", success: true)
@@ -191,6 +199,7 @@ import Testing
                 ])
             }
         ),
+        semanticNameRegistry: historySemanticRegistry,
         history: history
     )
 
@@ -199,7 +208,7 @@ import Testing
         method: "click",
         params: .object([
             "_session": .string("thread-a"),
-            "target": .string("s-a:1")
+            "target": semanticTarget("s-a:1")
         ])
     ))
     _ = router.handle(JSONRPCRequest(
@@ -207,7 +216,7 @@ import Testing
         method: "type",
         params: .object([
             "_session": .string("thread-b"),
-            "target": .string("s-b:1"),
+            "target": semanticTarget("s-b:1"),
             "value": .string("Thread B")
         ])
     ))
@@ -216,7 +225,7 @@ import Testing
         method: "type",
         params: .object([
             "_session": .string("thread-a"),
-            "target": .string("s-a:2"),
+            "target": semanticTarget("s-a:2"),
             "value": .string("Thread A")
         ])
     ))
@@ -272,6 +281,7 @@ import Testing
     var typedValues: [String] = []
     var keyedValues: [String] = []
     let router = CommandRouter(
+        resolveLocator: historyResolveLocator,
         actions: PrimitiveActionHandlers(
             type: { target, value, _ in
                 typedValues.append(value)
@@ -287,6 +297,7 @@ import Testing
                 ])
             }
         ),
+        semanticNameRegistry: historySemanticRegistry,
         history: history,
         activeCredentialFilter: try historyActiveCredentialFilter(values: [activeSecret])
     )
@@ -296,7 +307,7 @@ import Testing
         method: "type",
         params: .object([
             "_session": .string("thread-a"),
-            "target": .string("s1:2"),
+            "target": semanticTarget("s1:2"),
             "value": .string(activeSecret)
         ])
     ))
@@ -331,6 +342,7 @@ import Testing
 @Test func saveRejectsUnknownRangeBoundariesInsteadOfWideningExport() {
     let history = ActionHistoryStore()
     let router = CommandRouter(
+        resolveLocator: historyResolveLocator,
         actions: PrimitiveActionHandlers(
             click: { target, _ in
                 PrimitiveActionResult(action: "click", target: target, strategy: "test", success: true)
@@ -341,6 +353,7 @@ import Testing
                 ])
             }
         ),
+        semanticNameRegistry: historySemanticRegistry,
         history: history
     )
 
@@ -349,7 +362,7 @@ import Testing
         method: "click",
         params: .object([
             "_session": .string("thread-a"),
-            "target": .string("s1:1")
+            "target": semanticTarget("s1:1")
         ])
     ))
     _ = router.handle(JSONRPCRequest(
@@ -357,7 +370,7 @@ import Testing
         method: "type",
         params: .object([
             "_session": .string("thread-a"),
-            "target": .string("s1:2"),
+            "target": semanticTarget("s1:2"),
             "value": .string("Hello")
         ])
     ))
@@ -403,23 +416,30 @@ import Testing
     let history = ActionHistoryStore()
     var typedValues: [String] = []
     let router = CommandRouter(
+        resolveLocator: historyResolveLocator,
         actions: PrimitiveActionHandlers(
             type: { target, value, _ in
                 typedValues.append(value)
                 return PrimitiveActionResult(action: "type", target: target, strategy: "test", success: true)
             }
         ),
+        semanticNameRegistry: historySemanticRegistry,
         history: history
     )
 
     let source = """
-    version: 1
+    version: 2
     args:
       - name: password
         type: secret
     actions:
       - tool: type
-        target: s1:2
+        target:
+          app: Example
+          name: password-field
+          locator:
+            role: AXTextField
+            identifier: password
         value: "{{password}}"
     """
     let path = try temporaryAxnFile(source)
@@ -459,7 +479,7 @@ import Testing
     #expect(script.contains("app: Example"))
     #expect(script.contains("role: AXButton"))
     #expect(script.contains("title: Submit"))
-    #expect(script.contains("s1:2") == false)
+    #expect(script.contains("name: s1:2"))
     #expect(script.contains("warnings") == false)
 }
 
@@ -510,7 +530,7 @@ import Testing
         method: "type",
         params: .object([
             "_session": .string("thread-a"),
-            "target": .string("s1:2"),
+            "target": semanticTarget("s1:2"),
             "value": .string("Ada Lovelace")
         ])
     ))
@@ -535,7 +555,7 @@ import Testing
     #expect(script.contains("expects") == false)
 }
 
-@Test func saveWarnsWhenAStepStaysPinnedToASnapshotHandle() {
+@Test func saveUsesRegistryReplayEvidenceWhenObservationHasNoLocator() {
     let history = ActionHistoryStore()
     let ephemeral = buttonState(locator: nil, focused: true)
     let router = observingRouter(
@@ -546,9 +566,10 @@ import Testing
     _ = router.handle(clickRequest(target: "s1:2"))
     let script = savedScript(router)
 
-    #expect(script.contains("s1:2"))
-    #expect(script.contains("warnings:"))
-    #expect(script.contains("no durable locator"))
+    #expect(script.contains("tool: click"))
+    #expect(script.contains("name: s1:2"))
+    #expect(script.contains("role: AXButton"))
+    #expect(script.contains("warnings") == false)
     #expect(script.contains("expects") == false)
 }
 
@@ -608,6 +629,7 @@ private func observingRouter(
     observer: StubActionStateObserver
 ) -> CommandRouter {
     CommandRouter(
+        resolveLocator: historyResolveLocator,
         actions: PrimitiveActionHandlers(
             click: { target, _ in
                 PrimitiveActionResult(action: "click", target: target, strategy: "test", success: true)
@@ -618,6 +640,7 @@ private func observingRouter(
                 ])
             }
         ),
+        semanticNameRegistry: historySemanticRegistry,
         history: history,
         actionStateObserver: observer,
         sleepMilliseconds: { _ in }
@@ -630,7 +653,7 @@ private func clickRequest(target: String) -> JSONRPCRequest {
         method: "click",
         params: .object([
             "_session": .string("thread-a"),
-            "target": .string(target)
+            "target": semanticTarget(target)
         ])
     )
 }
@@ -654,6 +677,53 @@ private func submitButtonSnapshot(focused: Bool) -> AppSnapshot {
         ],
         screenshot: nil
     )
+}
+
+
+private let historySemanticRegistry: SemanticNameRegistry = {
+    SemanticNameRegistry()
+}()
+
+private func historyResolveLocator(
+    app _: String,
+    locator: AXLocator,
+    scrollToVisible _: Bool
+) throws -> LocatorResolution {
+    let snapshotID = SnapshotID("history-semantic")
+    return LocatorResolution(
+        status: .unique,
+        snapshotID: snapshotID,
+        best: LocatorCandidate(
+            index: 2,
+            handle: SnapshotHandle(snapshotID: snapshotID, nodeIndex: 2),
+            role: locator.role ?? "AXButton",
+            title: "Submit",
+            score: 1_000,
+            reasons: []
+        ),
+        candidates: []
+    )
+}
+
+private func semanticTarget(_ name: String) -> JSONValue {
+    historySemanticRegistry.registerReplayEvidence(
+        app: "Example",
+        name: name,
+        locator: AXLocator(role: "AXButton", title: .exact("Submit"))
+    )
+    return .object([
+        "app": .string("Example"),
+        "name": .string(name)
+    ])
+}
+
+private func replayTarget(_ name: String) -> JSONValue {
+    guard case var .object(target) = semanticTarget(name) else { preconditionFailure() }
+    target["locator"] = .object([
+        "role": .string("AXButton"),
+        "title": .string("Submit")
+    ])
+    return .object(target)
 }
 
 private extension JSONValue {

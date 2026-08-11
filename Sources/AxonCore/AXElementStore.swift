@@ -72,9 +72,8 @@ public final class AXElementStore: @unchecked Sendable {
         let baseIndex = elements.count
         elements.append(contentsOf: newElements)
         elementsBySnapshot[snapshotID] = elements
-        snapshotOrder.removeAll { $0 == snapshotID }
-        snapshotOrder.append(snapshotID)
-        pruneOldSnapshots()
+        // Paging extends an existing observation; it must not make that snapshot newer than
+        // the semantic registry entry created by the same observation.
         return baseIndex
     }
 
@@ -99,6 +98,12 @@ public final class AXElementStore: @unchecked Sendable {
             throw AXElementStoreError.missingElement(handle)
         }
         return elements[handle.nodeIndex]
+    }
+
+    public func index(of element: AXUIElement, in snapshotID: SnapshotID) -> Int? {
+        lock.lock()
+        defer { lock.unlock() }
+        return elementsBySnapshot[snapshotID]?.firstIndex { CFEqual($0, element) }
     }
 
     public func summary(for snapshotID: SnapshotID) throws -> SnapshotSummary {

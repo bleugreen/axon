@@ -11,6 +11,37 @@ import Testing
     #expect(scopes == [.app(editor), .app(browser), .all])
 }
 
+@Test func recordedSemanticTargetUsesCanonicalDeriverOutput() {
+    let snapshot: JSONValue = .object([
+        "windows": .array([.object([
+            "role": .string("window"),
+            "title": .string("Preferences"),
+            "index": .int(0),
+            "children": .array([.object([
+                "role": .string("button"),
+                "title": .string("Save"),
+                "index": .int(1)
+            ])])
+        ])])
+    ])
+    let study = SemanticNameDeriver.derive(from: snapshot)
+    guard let save = study.elements.first(where: { $0.label == "Save" }) else {
+        Issue.record("canonical deriver did not emit the fixture button")
+        return
+    }
+
+    let target = RecordedSemanticTargetBuilder.target(
+        app: "Example",
+        locator: ["role": .string("AXButton"), "title": .string("Save")],
+        snapshotJSON: snapshot,
+        sourceIndex: save.sourceIndex
+    )
+
+    #expect(target?["app"] == .string("Example"))
+    #expect(target?["name"] == .string(save.name))
+    #expect(target?["locator"]?["role"] == .string("AXButton"))
+}
+
 @Test func recordingTranslatorEmitsMechanicalIdsAndRequiredValueGuard() throws {
     let translator = UserRecordingTranslator()
     let target: JSONValue = .object([
@@ -26,7 +57,7 @@ import Testing
         RecordedUserEventGroup(action: .pressKey(app: "Example", key: "Return"))
     ])
 
-    #expect(axnDocument["version"] == .int(1))
+    #expect(axnDocument["version"] == .int(2))
     #expect(axnDocument["actions"]?[0]?["id"] == .string("a001"))
     #expect(axnDocument["actions"]?[0]?["tool"] == .string("type"))
     #expect(axnDocument["actions"]?[0]?["expects"]?[0]?["id"] == .string("a001.value.0"))

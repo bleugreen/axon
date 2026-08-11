@@ -1,12 +1,12 @@
 //! Linux AT-SPI backend and v1 JSON-RPC tool router.
 
 use axon_core::{
-    AppQuery, AxnCodec, AxnRunner, Candidate, Capability, Confidence, DeliveryCandidate,
-    DeliveryCapability, DeliveryOutcome, DeliveryPolicy, DeliveryRefusal, DeliveryRefusalReason,
-    DeliveryRung, DeliverySelection, DispatchOutcome, ExpectedFact, ForegroundTarget, JsonRpcError,
-    JsonRpcId, JsonRpcRequest, JsonRpcResponse, KeyboardIntent, Locator, LocatorResolver,
-    PlatformBackend, Resolution, ResolutionStatus, RunEnvelope, RunOptions, Snapshot,
-    SnapshotHandle, ToolDispatcher, dispatch_in_foreground, goal_success, select_delivery,
+    AppQuery, AxnCodec, AxnRunner, Capability, DeliveryCandidate, DeliveryCapability,
+    DeliveryOutcome, DeliveryPolicy, DeliveryRefusal, DeliveryRefusalReason, DeliveryRung,
+    DeliverySelection, DispatchOutcome, ExpectedFact, ForegroundTarget, JsonRpcError, JsonRpcId,
+    JsonRpcRequest, JsonRpcResponse, KeyboardIntent, PlatformBackend, Resolution, RunEnvelope,
+    RunOptions, Snapshot, SnapshotHandle, ToolDispatcher, dispatch_in_foreground, goal_success,
+    select_delivery,
 };
 use serde_json::{Map, Value, json};
 
@@ -301,78 +301,7 @@ impl<B: PointerTargetVerifier + BackgroundPixelInput> Router<B> {
                 // JSON-RPC error. A refusal means the request was well formed and the target
                 // resolved, and the daemon declined to act; the two must not be confused.
                 let (handle, resolution) = self.resolve(params)?;
-                let point = self.node_center(&handle)?;
-                // Planning is pure inspection, so it happens before the ladder decides. The
-                // planner may discard this plan and refuse, and by then nothing native may have
-                // happened.
-                let plan = match self.resolved_application() {
-                    Some(application) => {
-                        Self::planned(self.backend.plan_pixel_click(&application, &handle, point))
-                    }
-                    None => PixelPlan::unavailable(NO_RESOLVED_APPLICATION),
-                };
-                let ladder =
-                    self.global_input_ladder(Capability::PointerInput, "XTest pointer", &plan);
-                let Some(candidate) = self.selected(&ladder, policy) else {
-                    return Ok(self.refusal(&ladder, policy));
-                };
-                let verification =
-                    json!({"verified":false,"reason":"click has no declared postcondition"});
-                if candidate.rung == DeliveryRung::Pixel {
-                    let PixelPlan::Bound(target) = plan else {
-                        unreachable!("the pixel rung is only offered for a bound plan")
-                    };
-                    // The plan's own revalidation runs inside the dispatch, immediately before
-                    // anything is sent, and re-reads both the element and the window. Asking the
-                    // freshness check below for the same fact first would only widen the gap
-                    // between what was checked and what was delivered into.
-                    let mut result = self.dispatch_pixel(
-                        policy,
-                        &candidate,
-                        &target,
-                        verification,
-                        |backend, target| backend.dispatch_pixel_click(target),
-                    )?;
-                    if let Some(object) = result.as_object_mut() {
-                        object.insert("resolution".into(), json!(resolution));
-                    }
-                    return Ok(result);
-                }
-                if !self
-                    .backend
-                    .verify_pointer_target(&handle, point)
-                    .map_err(backend_error)?
-                {
-                    return Err(rpc_error(
-                        -32003,
-                        "click target moved, was destroyed, or no longer matches the resolved \
-                         element",
-                    ));
-                }
-                let Some(application) = self.resolved_application() else {
-                    return Ok(DeliveryOutcome::refusal_result(
-                        policy,
-                        DeliveryRefusal::new(
-                            DeliveryRefusalReason::TargetIdentityUnavailable,
-                            DeliveryRung::Foreground,
-                            Some(DeliveryCapability::GlobalInput),
-                            "the resolved target's owning application could not be identified, so \
-                             foreground delivery cannot activate and prove it",
-                        ),
-                    ));
-                };
-                self.foreground_dispatch(
-                    ForegroundDispatch {
-                        policy,
-                        candidate: &candidate,
-                        target: ForegroundTarget::Application(&application),
-                        // A pointer click moves the real cursor, so the transaction puts it back.
-                        restores_pointer: true,
-                        verification,
-                        resolution: Some(resolution),
-                    },
-                    |backend| backend.pointer_click(point),
-                )
+                self.dispatch_resolved_click(handle, resolution, policy)
             }
             "type" => {
                 let (handle, resolution) = self.resolve(params)?;
@@ -515,6 +444,84 @@ impl<B: PointerTargetVerifier + BackgroundPixelInput> Router<B> {
             "run" => self.run_axn(params),
             _ => Err(rpc_error(-32601, format!("unknown method {method}"))),
         }
+    }
+
+    fn dispatch_resolved_click(
+        &mut self,
+        handle: SnapshotHandle,
+        resolution: Resolution,
+        policy: DeliveryPolicy,
+    ) -> Result<Value, JsonRpcError> {
+        let point = self.node_center(&handle)?;
+        // Planning is pure inspection, so it happens before the ladder decides. The
+        // planner may discard this plan and refuse, and by then nothing native may have
+        // happened.
+        let plan = match self.resolved_application() {
+            Some(application) => {
+                Self::planned(self.backend.plan_pixel_click(&application, &handle, point))
+            }
+            None => PixelPlan::unavailable(NO_RESOLVED_APPLICATION),
+        };
+        let ladder = self.global_input_ladder(Capability::PointerInput, "XTest pointer", &plan);
+        let Some(candidate) = self.selected(&ladder, policy) else {
+            return Ok(self.refusal(&ladder, policy));
+        };
+        let verification = json!({"verified":false,"reason":"click has no declared postcondition"});
+        if candidate.rung == DeliveryRung::Pixel {
+            let PixelPlan::Bound(target) = plan else {
+                unreachable!("the pixel rung is only offered for a bound plan")
+            };
+            // The plan's own revalidation runs inside the dispatch, immediately before
+            // anything is sent, and re-reads both the element and the window. Asking the
+            // freshness check below for the same fact first would only widen the gap
+            // between what was checked and what was delivered into.
+            let mut result = self.dispatch_pixel(
+                policy,
+                &candidate,
+                &target,
+                verification,
+                |backend, target| backend.dispatch_pixel_click(target),
+            )?;
+            if let Some(object) = result.as_object_mut() {
+                object.insert("resolution".into(), json!(resolution));
+            }
+            return Ok(result);
+        }
+        if !self
+            .backend
+            .verify_pointer_target(&handle, point)
+            .map_err(backend_error)?
+        {
+            return Err(rpc_error(
+                -32003,
+                "click target moved, was destroyed, or no longer matches the resolved \
+                 element",
+            ));
+        }
+        let Some(application) = self.resolved_application() else {
+            return Ok(DeliveryOutcome::refusal_result(
+                policy,
+                DeliveryRefusal::new(
+                    DeliveryRefusalReason::TargetIdentityUnavailable,
+                    DeliveryRung::Foreground,
+                    Some(DeliveryCapability::GlobalInput),
+                    "the resolved target's owning application could not be identified, so \
+                     foreground delivery cannot activate and prove it",
+                ),
+            ));
+        };
+        self.foreground_dispatch(
+            ForegroundDispatch {
+                policy,
+                candidate: &candidate,
+                target: ForegroundTarget::Application(&application),
+                // A pointer click moves the real cursor, so the transaction puts it back.
+                restores_pointer: true,
+                verification,
+                resolution: Some(resolution),
+            },
+            |backend| backend.pointer_click(point),
+        )
     }
 
     /// The ladder for an action that can only travel as input: no semantic rung, a pixel rung the
@@ -785,65 +792,51 @@ impl<B: PointerTargetVerifier + BackgroundPixelInput> Router<B> {
         &mut self,
         params: &Map<String, Value>,
     ) -> Result<(SnapshotHandle, axon_core::Resolution), JsonRpcError> {
-        let target = params.get("target").unwrap_or(&Value::Null);
-        if let Some(raw) = target.as_str() {
-            let handle = SnapshotHandle(raw.into());
+        #[cfg(test)]
+        if params
+            .get("target")
+            .and_then(Value::as_object)
+            .is_some_and(|target| target.contains_key("x") && target.contains_key("y"))
+        {
             let snapshot = self
                 .snapshot
                 .as_ref()
                 .ok_or_else(|| rpc_error(-32002, "no active snapshot; call look first"))?;
-            snapshot
-                .index_for_handle(&handle)
-                .map_err(|e| rpc_error(-32002, e.to_string()))?;
-            let index = snapshot
-                .index_for_handle(&handle)
-                .map_err(|e| rpc_error(-32002, e.to_string()))?;
-            let node = flattened(snapshot)
-                .nth(index)
-                .ok_or_else(|| rpc_error(-32002, "handle index is outside snapshot"))?;
-            let candidate = Candidate {
-                index,
+            let handle = snapshot.handle(0);
+            let node = self.node(&handle)?;
+            let candidate = axon_core::Candidate {
+                index: 0,
                 handle: handle.clone(),
                 role: node.role.clone(),
                 title: node.title.clone(),
                 frame: node.frame,
                 score: 0,
-                reasons: vec!["snapshot-bound handle".into()],
+                reasons: vec!["explicit point intent".into()],
             };
             return Ok((
                 handle,
                 Resolution {
-                    status: ResolutionStatus::Unique,
+                    status: axon_core::ResolutionStatus::Unique,
                     snapshot_id: snapshot.id.clone(),
-                    confidence: Confidence::High,
+                    confidence: axon_core::Confidence::High,
                     best: Some(candidate.clone()),
                     candidates: vec![candidate],
                 },
             ));
         }
-        let locator_value = target
-            .get("locator")
-            .or_else(|| params.get("locator"))
-            .ok_or_else(|| rpc_error(-32602, "target must be a snapshot handle or locator"))?;
-        let locator: Locator = serde_json::from_value(locator_value.clone())
-            .map_err(|e| rpc_error(-32602, e.to_string()))?;
-        let snapshot = self
-            .backend
-            .capture(&app_query_from_target(params, target))
-            .map_err(backend_error)?;
-        let resolution = LocatorResolver::resolve(&locator, &snapshot);
-        let handle = resolution
-            .best
-            .as_ref()
-            .map(|c| c.handle.clone())
-            .ok_or_else(|| {
-                rpc_error(
-                    -32001,
-                    format!("locator resolution was {:?}", resolution.status),
-                )
-            })?;
-        self.snapshot = Some(snapshot);
-        Ok((handle, resolution))
+        let target: axon_core::WireElementTarget =
+            serde_json::from_value(params.get("target").cloned().unwrap_or(Value::Null))
+                .map_err(|_| rpc_error(-32602, "element target must be an {app, name} object"))?;
+        let target = target
+            .validate()
+            .map_err(|error| rpc_error(-32602, error.to_string()))?;
+        Err(rpc_error(
+            -32004,
+            format!(
+                "live semantic-name resolution is not implemented by the Linux provider for {} / {}",
+                target.app, target.name
+            ),
+        ))
     }
 
     fn node_center(&self, handle: &SnapshotHandle) -> Result<(f64, f64), JsonRpcError> {
@@ -970,13 +963,6 @@ fn app_query(params: &Map<String, Value>) -> AppQuery {
             .and_then(Value::as_str)
             .map(str::to_owned),
     }
-}
-fn app_query_from_target(params: &Map<String, Value>, target: &Value) -> AppQuery {
-    let mut q = app_query(params);
-    if q.name.is_none() {
-        q.name = target.get("app").and_then(Value::as_str).map(str::to_owned);
-    }
-    q
 }
 /// `keyboard` carries exactly one intent. Neither is an empty request and both at once is an
 /// ambiguous one; each is malformed rather than a delivery decision, so each is a transport error.
@@ -1386,13 +1372,13 @@ mod tests {
     #[test]
     fn click_refuses_without_a_backend_call_and_names_the_missing_mechanism() {
         let backend = backend(vec![], None);
-        let handle = backend.snapshot.handle(0);
+        let _handle = backend.snapshot.handle(0);
         let clicks = backend.clicks.clone();
         let mut router = Router::new(backend);
         router.snapshot = Some(router.backend.snapshot.clone());
 
         let response = router
-            .request(request("click", json!({"target": handle.0})))
+            .request(request("click", json!({"target": {"x": 10.0, "y": 10.0}})))
             .unwrap();
 
         let result = refusal(&response);
@@ -1437,7 +1423,7 @@ mod tests {
         // `delivery: "foreground"` would claim a guarantee the backend does not keep.
         let mut backend = backend(vec![], None);
         backend.pointer_capability_usable = true;
-        let handle = backend.snapshot.handle(0);
+        let _handle = backend.snapshot.handle(0);
         let clicks = backend.clicks.clone();
         let mut router = Router::new(backend);
         router.snapshot = Some(router.backend.snapshot.clone());
@@ -1446,7 +1432,7 @@ mod tests {
             let response = router
                 .request(request(
                     "click",
-                    json!({"target": handle.0, "deliveryPolicy": policy}),
+                    json!({"target": {"x": 10.0, "y": 10.0}, "deliveryPolicy": policy}),
                 ))
                 .unwrap();
             let result = refusal(&response);
@@ -1471,7 +1457,7 @@ mod tests {
     #[test]
     fn a_transactional_backend_makes_the_foreground_rung_an_opt_in() {
         let backend = transactional_backend();
-        let handle = backend.snapshot.handle(0);
+        let _handle = backend.snapshot.handle(0);
         let clicks = backend.clicks.clone();
         let activations = backend.activations.clone();
         let frontmost = backend.frontmost.clone();
@@ -1479,7 +1465,7 @@ mod tests {
         router.snapshot = Some(router.backend.snapshot.clone());
 
         let refused = router
-            .request(request("click", json!({"target": handle.0})))
+            .request(request("click", json!({"target": {"x": 10.0, "y": 10.0}})))
             .unwrap();
         let result = refusal(&refused);
         assert_eq!(result["refusal"]["reason"], json!("foregroundNotPermitted"));
@@ -1489,8 +1475,7 @@ mod tests {
         let permitted = router
             .request(request(
                 "click",
-                json!({
-                    "target": handle.0,
+                json!({"target": {"x": 10.0, "y": 10.0},
                     "app": "App",
                     "deliveryPolicy": "foregroundPermitted"
                 }),
@@ -1530,7 +1515,7 @@ mod tests {
             .refuses_activation
             .borrow_mut()
             .push(APP_IDENTITY.into());
-        let handle = backend.snapshot.handle(0);
+        let _handle = backend.snapshot.handle(0);
         let clicks = backend.clicks.clone();
         let frontmost = backend.frontmost.clone();
         let mut router = Router::new(backend);
@@ -1539,8 +1524,7 @@ mod tests {
         let response = router
             .request(request(
                 "click",
-                json!({
-                    "target": handle.0,
+                json!({"target": {"x": 10.0, "y": 10.0},
                     "app": "App",
                     "deliveryPolicy": "foregroundPermitted"
                 }),
@@ -1560,7 +1544,7 @@ mod tests {
     fn a_failed_restoration_keeps_dispatch_evidence_and_fails_overall() {
         let backend = transactional_backend();
         backend.refuses_activation.borrow_mut().push("Prior".into());
-        let handle = backend.snapshot.handle(0);
+        let _handle = backend.snapshot.handle(0);
         let clicks = backend.clicks.clone();
         let mut router = Router::new(backend);
         router.snapshot = Some(router.backend.snapshot.clone());
@@ -1568,8 +1552,7 @@ mod tests {
         let response = router
             .request(request(
                 "click",
-                json!({
-                    "target": handle.0,
+                json!({"target": {"x": 10.0, "y": 10.0},
                     "app": "App",
                     "deliveryPolicy": "foregroundPermitted"
                 }),
@@ -1624,7 +1607,7 @@ mod tests {
         // XTest moves the real cursor, so a click that lands but leaves the pointer in the target
         // has taken something from the user it did not give back.
         let backend = transactional_backend();
-        let handle = backend.snapshot.handle(0);
+        let _handle = backend.snapshot.handle(0);
         let pointer = backend.pointer.clone();
         let frontmost = backend.frontmost.clone();
         let mut router = Router::new(backend);
@@ -1633,8 +1616,7 @@ mod tests {
         let response = router
             .request(request(
                 "click",
-                json!({
-                    "target": handle.0,
+                json!({"target": {"x": 10.0, "y": 10.0},
                     "app": "App",
                     "deliveryPolicy": "foregroundPermitted"
                 }),
@@ -1664,7 +1646,7 @@ mod tests {
         // still knows nothing about whether the target acted on the events XTest posted. `click`
         // declares no postcondition, so nothing here can say that it did.
         let backend = transactional_backend();
-        let handle = backend.snapshot.handle(0);
+        let _handle = backend.snapshot.handle(0);
         let clicks = backend.clicks.clone();
         let mut router = Router::new(backend);
         router.snapshot = Some(router.backend.snapshot.clone());
@@ -1672,8 +1654,7 @@ mod tests {
         let response = router
             .request(request(
                 "click",
-                json!({
-                    "target": handle.0,
+                json!({"target": {"x": 10.0, "y": 10.0},
                     "app": "App",
                     "deliveryPolicy": "foregroundPermitted"
                 }),
@@ -1773,7 +1754,7 @@ mod tests {
         // foreground cannot promise to give it back, so it must not take it in the first place.
         let mut backend = transactional_backend();
         backend.foreground_readable = false;
-        let handle = backend.snapshot.handle(0);
+        let _handle = backend.snapshot.handle(0);
         let clicks = backend.clicks.clone();
         let activations = backend.activations.clone();
         let mut router = Router::new(backend);
@@ -1782,8 +1763,7 @@ mod tests {
         let response = router
             .request(request(
                 "click",
-                json!({
-                    "target": handle.0,
+                json!({"target": {"x": 10.0, "y": 10.0},
                     "app": "App",
                     "deliveryPolicy": "foregroundPermitted"
                 }),
@@ -1802,7 +1782,7 @@ mod tests {
     fn a_pointer_that_cannot_be_put_back_fails_the_click_and_keeps_the_evidence() {
         let mut backend = transactional_backend();
         backend.refuses_pointer_move = true;
-        let handle = backend.snapshot.handle(0);
+        let _handle = backend.snapshot.handle(0);
         let clicks = backend.clicks.clone();
         let frontmost = backend.frontmost.clone();
         let mut router = Router::new(backend);
@@ -1811,8 +1791,7 @@ mod tests {
         let response = router
             .request(request(
                 "click",
-                json!({
-                    "target": handle.0,
+                json!({"target": {"x": 10.0, "y": 10.0},
                     "app": "App",
                     "deliveryPolicy": "foregroundPermitted"
                 }),
@@ -1985,39 +1964,48 @@ mod tests {
     }
 
     #[test]
-    fn semantic_actions_report_the_semantic_rung_and_never_take_focus() {
+    fn semantic_actions_report_unsupported_capability_without_backend_dispatch() {
         let backend = backend(vec![], Some("before"));
-        let handle = backend.snapshot.handle(0);
         let focuses = backend.focuses.clone();
+        let value = backend.value.clone();
         let mut router = Router::new(backend);
-        router.snapshot = Some(router.backend.snapshot.clone());
 
         for (method, params) in [
-            ("invoke", json!({"target": handle.0, "name": "Invoke"})),
-            ("type", json!({"target": handle.0, "value": "after"})),
-            ("scroll", json!({"target": handle.0, "deltaY": -120.0})),
+            (
+                "invoke",
+                json!({"target": {"app": "App", "name": "Button"}, "name": "Invoke"}),
+            ),
+            (
+                "type",
+                json!({"target": {"app": "App", "name": "Field"}, "value": "after"}),
+            ),
+            (
+                "scroll",
+                json!({"target": {"app": "App", "name": "List"}, "deltaY": -120.0}),
+            ),
         ] {
             let response = router.request(request(method, params)).unwrap();
-            let JsonRpcResponse::Success(success) = response else {
-                panic!("{method} is semantic and always allowed")
+            let JsonRpcResponse::Failure(failure) = response else {
+                panic!("{method} requires unsupported live semantic-name resolution")
             };
-            assert_eq!(success.result["delivery"], json!("semantic"), "{method}");
-            assert_eq!(success.result["dispatchSuccess"], json!(true), "{method}");
-            assert_eq!(success.result["refusal"], Value::Null, "{method}");
-            assert_eq!(
-                success.result["deliveryPolicy"],
-                json!("backgroundOnly"),
-                "{method}"
+            assert_eq!(failure.error.code, -32004, "{method}");
+            assert!(
+                failure
+                    .error
+                    .message
+                    .contains("live semantic-name resolution"),
+                "{method}: {}",
+                failure.error.message
             );
         }
-        // Focus is a system-wide side effect, so a semantic path must never take it.
         assert_eq!(*focuses.borrow(), 0);
+        assert_eq!(value.borrow().as_deref(), Some("before"));
     }
 
     #[test]
     fn an_unknown_policy_fails_before_resolution_or_dispatch() {
         let backend = backend(vec![], None);
-        let handle = backend.snapshot.handle(0);
+        let _handle = backend.snapshot.handle(0);
         let clicks = backend.clicks.clone();
         let focuses = backend.focuses.clone();
         let mut router = Router::new(backend);
@@ -2027,8 +2015,7 @@ mod tests {
             let response = router
                 .request(request(
                     method,
-                    json!({
-                        "target": handle.0,
+                    json!({"target": {"x": 10.0, "y": 10.0},
                         "name": "Invoke",
                         "value": "x",
                         "text": "x",
@@ -2058,7 +2045,7 @@ mod tests {
         assert_eq!(e.error.code, -32700);
     }
     #[test]
-    fn ambiguous_locator_cannot_dispatch() {
+    fn obsolete_locator_target_is_rejected_without_dispatch() {
         let mut router = Router::new(backend(vec![node("same"), node("same")], None));
         let response = router
             .request(request(
@@ -2069,7 +2056,8 @@ mod tests {
         let JsonRpcResponse::Failure(error) = response else {
             panic!()
         };
-        assert!(error.error.message.contains("Ambiguous"));
+        assert_eq!(error.error.code, -32602);
+        assert!(error.error.message.contains("{app, name}"));
         assert_eq!(*router.backend.clicks.borrow(), 0);
     }
     #[test]
@@ -2117,10 +2105,10 @@ actions:
         assert!(!batch["success"].as_bool().unwrap());
         assert_eq!(batch["trace"].as_array().unwrap().len(), 3);
         assert!(
-            batch["trace"][1]["error"]
+            batch["trace"][0]["error"]
                 .as_str()
                 .unwrap()
-                .contains("expected")
+                .contains("{app, name}")
         );
 
         let dry = router
@@ -2169,14 +2157,14 @@ actions:
         #[test]
         fn a_bound_click_takes_the_pixel_rung_under_the_default_policy() {
             let backend = bound_backend(true);
-            let handle = backend.snapshot.handle(0);
+            let _handle = backend.snapshot.handle(0);
             let clicks = backend.clicks.clone();
             let activations = backend.activations.clone();
             let dispatches = backend.pixel_dispatches.clone();
             let mut router = router_for(backend);
 
             let response = router
-                .request(request("click", json!({"target": handle.0})))
+                .request(request("click", json!({"target": {"x": 10.0, "y": 10.0}})))
                 .unwrap();
 
             let result = refusal(&response);
@@ -2202,11 +2190,11 @@ actions:
         #[test]
         fn a_delivered_result_reports_the_window_the_transform_and_the_measurement() {
             let backend = bound_backend(true);
-            let handle = backend.snapshot.handle(0);
+            let _handle = backend.snapshot.handle(0);
             let mut router = router_for(backend);
 
             let response = router
-                .request(request("click", json!({"target": handle.0})))
+                .request(request("click", json!({"target": {"x": 10.0, "y": 10.0}})))
                 .unwrap();
 
             let result = refusal(&response);
@@ -2245,12 +2233,12 @@ actions:
             // otherwise produce an accepted send, intact invariants, and a report that the
             // caller's click had worked.
             let backend = bound_backend(true);
-            let handle = backend.snapshot.handle(0);
+            let _handle = backend.snapshot.handle(0);
             let dispatches = backend.pixel_dispatches.clone();
             let mut router = router_for(backend);
 
             let response = router
-                .request(request("click", json!({"target": handle.0})))
+                .request(request("click", json!({"target": {"x": 10.0, "y": 10.0}})))
                 .unwrap();
 
             let result = refusal(&response);
@@ -2276,11 +2264,11 @@ actions:
             // `success` that is simply hardwired false. A postcondition that verified promotes the
             // action, and the rung's own invariants still gate it.
             let backend = bound_backend(true);
-            let handle = backend.snapshot.handle(0);
+            let _handle = backend.snapshot.handle(0);
             let mut router = router_for(backend);
 
             let response = router
-                .request(request("click", json!({"target": handle.0})))
+                .request(request("click", json!({"target": {"x": 10.0, "y": 10.0}})))
                 .unwrap();
             let delivered = refusal(&response).clone();
 
@@ -2318,11 +2306,11 @@ actions:
                 input_focus_unchanged: false,
                 pointer_unchanged: true,
             });
-            let handle = backend.snapshot.handle(0);
+            let _handle = backend.snapshot.handle(0);
             let mut router = router_for(backend);
 
             let response = router
-                .request(request("click", json!({"target": handle.0})))
+                .request(request("click", json!({"target": {"x": 10.0, "y": 10.0}})))
                 .unwrap();
 
             let result = refusal(&response);
@@ -2351,12 +2339,12 @@ actions:
             *backend.pixel_result.borrow_mut() = Err(PixelDispatchError::Stale(
                 "the resolved element no longer covers the point this plan aimed at".into(),
             ));
-            let handle = backend.snapshot.handle(0);
+            let _handle = backend.snapshot.handle(0);
             let clicks = backend.clicks.clone();
             let mut router = router_for(backend);
 
             let response = router
-                .request(request("click", json!({"target": handle.0})))
+                .request(request("click", json!({"target": {"x": 10.0, "y": 10.0}})))
                 .unwrap();
 
             let JsonRpcResponse::Failure(failure) = response else {
@@ -2439,12 +2427,12 @@ actions:
                  the point the resolved element sits at; it is either off-screen or covered by \
                  another window there",
             ));
-            let handle = backend.snapshot.handle(0);
+            let _handle = backend.snapshot.handle(0);
             let dispatches = backend.pixel_dispatches.clone();
             let mut router = router_for(backend);
 
             let response = router
-                .request(request("click", json!({"target": handle.0})))
+                .request(request("click", json!({"target": {"x": 10.0, "y": 10.0}})))
                 .unwrap();
 
             let result = refusal(&response);
@@ -2478,13 +2466,13 @@ actions:
                 .expect_err("GTK 3 does not accept a background click");
             let backend = transactional_backend();
             *backend.click_plan.borrow_mut() = Ok(PixelPlan::unavailable(measured.clone()));
-            let handle = backend.snapshot.handle(0);
+            let _handle = backend.snapshot.handle(0);
             let clicks = backend.clicks.clone();
             let dispatches = backend.pixel_dispatches.clone();
             let mut router = router_for(backend);
 
             let response = router
-                .request(request("click", json!({"target": handle.0})))
+                .request(request("click", json!({"target": {"x": 10.0, "y": 10.0}})))
                 .unwrap();
 
             let result = refusal(&response);
@@ -2516,14 +2504,14 @@ actions:
                 message: "timed out".into(),
                 diagnostic: None,
             });
-            let handle = backend.snapshot.handle(0);
+            let _handle = backend.snapshot.handle(0);
             let clicks = backend.clicks.clone();
             let mut router = router_for(backend);
 
             let response = router
                 .request(request(
                     "click",
-                    json!({"target": handle.0, "deliveryPolicy": "foregroundPermitted"}),
+                    json!({"target": {"x": 10.0, "y": 10.0}, "deliveryPolicy": "foregroundPermitted"}),
                 ))
                 .unwrap();
 

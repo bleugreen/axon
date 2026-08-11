@@ -5,7 +5,7 @@ accepted by `run`, so a recording can be replayed from MCP or with
 `axon run path.axn`.
 
 ```yaml
-version: 1
+version: 2
 args:
   - name: assignee
     type: string
@@ -15,16 +15,29 @@ args:
     default: mitch@example.com
 actions:
   - tool: type
-    target: s1:12
+    target: {app: Example, name: form/assignee}
     value: "{{assignee}}"
   - tool: type
-    target: s1:14
+    target: {app: Example, name: form/assignee-email}
     value: "{{assignee_email}}"
   - tool: click
-    target: s1:20
+    target: {app: Example, name: form/submit}
 ```
 
 `run` stops on the first failed action by default and returns a run result with a trace. `AxnRunner` and the CLI summary operate on this unwrapped shape; socket and MCP tool-call responses preserve the legacy externally visible `{"batch": ...}` envelope around it.
+
+## Version 2 target policy
+
+Version 2 is a deliberate breaking change. Every interactive element target is
+an app-scoped semantic name, `{app, name}`. A recorded action may also carry a
+`locator` beside those fields as replay evidence, but a locator without `name` is
+not a target. Snapshot handles such as `s1:12` are session-local cache keys and
+are never accepted from `.axn` files.
+
+Version 1 files are rejected before the first dispatch. The error identifies the
+first action whose obsolete target requires attention. Axon does not guess a
+migration because a snapshot handle contains no durable identity; re-record the
+workflow or edit it to version 2 with semantic names.
 
 ```json
 {
@@ -91,16 +104,16 @@ about later runs of the same file. Grant it once, where the run genuinely needs
 it, and every other step stays in the background.
 
 ```yaml
-version: 1
+version: 2
 actions:
   # Semantic: sets AXValue and reads it back. No focus, no activation.
   - tool: type
-    target: s1:12
+    target: {app: Example, name: form/assignee}
     value: "{{assignee}}"
 
   # Still backgroundOnly, because the policy above did not carry over.
   - tool: click
-    target: s1:20
+    target: {app: Example, name: form/submit}
 
   # This one shortcut needs the app frontmost, so it opts in explicitly. Axon
   # activates the app, posts the keystroke, and restores the prior app.
@@ -111,7 +124,7 @@ actions:
 
   # Back to backgroundOnly.
   - tool: invoke
-    target: s1:24
+    target: {app: Example, name: form/submit-menu}
     name: AXPress
 ```
 
@@ -122,21 +135,21 @@ no `expects` postcondition can promote it to success. A step that *did* dispatch
 but could not prove its goal is exactly the case `expects` exists for, and a
 postcondition that verifies clears the declined escalation it no longer explains.
 
-The format version is unchanged. `.axn` steps already retain tool parameters
-verbatim, so `deliveryPolicy` needs no new syntax and the external `{"batch": ...}`
-envelope is untouched.
+`deliveryPolicy` needs no special version-2 syntax: `.axn` steps retain tool
+parameters verbatim, and the external `{"batch": ...}` envelope is untouched.
 
 ## Metadata
 
 Actions may carry metadata that `run` strips before dispatch:
 
 ```yaml
-version: 1
+version: 2
 actions:
   - id: a001
     tool: type
     target:
       app: Safari
+      name: form/issue-title
       locator:
         role: AXTextField
         identifier: issue-title
@@ -146,6 +159,7 @@ actions:
         kind: value
         target:
           app: Safari
+          name: form/issue-title
           locator:
             role: AXTextField
             identifier: issue-title
@@ -161,9 +175,9 @@ actions:
 ```
 
 A fact's matchers live under `state`, keyed by what the fact is about: `value`,
-`selected`, `focused`, `enabled`. A fact's `target` must be an `{app, locator}`
-pair, never a snapshot handle — a handle is not durable identity and goes stale
-with the session that produced it.
+`selected`, `focused`, `enabled`. A fact's `target` must include `{app, name}`.
+It may attach `locator` evidence, but is never a snapshot handle or standalone
+locator.
 
 The pair above is the one case where a workflow asserts its own input back at
 itself, and it is a *dependency guard* rather than a postcondition: the `requires`
@@ -254,9 +268,9 @@ deterministic redaction rules recognise it.
 Beyond those, a candidate is also dropped when the element has no durable
 locator and when the assertion is empty.
 
-Steps whose target could not be given a durable locator keep their snapshot
-handle and carry a `warnings` entry saying so, because such a step cannot replay
-in a later session at all.
+Steps whose target cannot be given a semantic name are not emitted as replayable
+version-2 actions. The recorder reports a warning instead of preserving an
+unusable snapshot handle.
 
 ## CLI
 
