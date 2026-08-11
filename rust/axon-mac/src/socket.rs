@@ -7,15 +7,30 @@ use axon_core::{
 use crate::{MacBackend, Router, parse_request};
 use serde_json::{Value, json};
 use std::{
-    fs,
+    fs::{self, File, OpenOptions},
     io::{self, BufRead, BufReader, Write},
-    os::unix::{fs::PermissionsExt, net::{UnixListener, UnixStream}},
+    os::{fd::AsRawFd, unix::{fs::{FileTypeExt, PermissionsExt}, net::{UnixListener, UnixStream}}},
     path::PathBuf,
     time::Duration,
 };
 
 pub const SOCKET_ENV: &str = "AXON_MAC_SOCKET";
 pub const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+
+unsafe extern "C" {
+    fn flock(fd: i32, operation: i32) -> i32;
+}
+const LOCK_EX: i32 = 2;
+const LOCK_NB: i32 = 4;
+
+fn acquire_lock(path: &std::path::Path) -> io::Result<File> {
+    let lock_path = PathBuf::from(format!("{}.lock", path.display()));
+    let lock = OpenOptions::new().create(true).read(true).write(true).open(lock_path)?;
+    if unsafe { flock(lock.as_raw_fd(), LOCK_EX | LOCK_NB) } != 0 {
+        return Err(io::Error::new(io::ErrorKind::AddrInUse, "socket ownership lock is held"));
+    }
+    Ok(lock)
+}
 
 pub fn path() -> io::Result<PathBuf> {
     let value = std::env::var_os(SOCKET_ENV)
@@ -37,7 +52,15 @@ pub fn request(line: &str) -> io::Result<String> {
 }
 pub fn serve() -> io::Result<()> {
     let path = path()?;
+    let _ownership = acquire_lock(&path)?;
     if path.exists() {
+        let metadata = fs::symlink_metadata(&path)?;
+        if !metadata.file_type().is_socket() {
+            return Err(io::Error::new(
+                io::ErrorKind::AlreadyExists,
+                "refusing to replace a non-socket endpoint",
+            ));
+        }
         if UnixStream::connect(&path).is_ok() {
             return Err(io::Error::new(io::ErrorKind::AddrInUse, "socket already has a listener"));
         }
@@ -134,6 +157,21 @@ mod tests {
     fn endpoint_is_explicit_and_rejects_installed_socket() {
         unsafe { std::env::set_var(SOCKET_ENV, "/tmp/axon.sock") };
         assert_eq!(path().unwrap_err().kind(), io::ErrorKind::PermissionDenied);
+    }
+    #[test]
+    fn ownership_lock_refuses_a_second_server() {
+        let path = std::env::temp_dir().join(format!("axon-mac-lock-{}", std::process::id()));
+        let first = acquire_lock(&path).unwrap();
+        assert_eq!(acquire_lock(&path).unwrap_err().kind(), io::ErrorKind::AddrInUse);
+        drop(first);
+        let _ = fs::remove_file(format!("{}.lock", path.display()));
+    }
+    #[test]
+    fn non_socket_endpoints_are_identifiable_before_reclaim() {
+        let path = std::env::temp_dir().join(format!("axon-mac-file-{}", std::process::id()));
+        fs::write(&path, b"keep").unwrap();
+        assert!(!fs::symlink_metadata(&path).unwrap().file_type().is_socket());
+        fs::remove_file(path).unwrap();
     }
     #[test]
     fn facade_is_exact_v1_surface() {
