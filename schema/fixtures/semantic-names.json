@@ -1,0 +1,31 @@
+{
+  "snapshot": {
+    "id": "semantic-fixture",
+    "app": {
+      "name": "Example",
+      "identifier": "com.example.App",
+      "windows": [{
+        "title": "Main",
+        "root": {
+          "role": "window",
+          "title": "Main",
+          "children": [
+            {"role": "button", "title": "Done"},
+            {"role": "text", "title": "Done"},
+            {"role": "button", "title": "Done button"},
+            {"role": "button", "title": "Share"},
+            {"role": "button", "title": "Share"}
+          ]
+        }
+      }]
+    }
+  },
+  "expected": [
+    {"sourceIndex":0,"name":"main","resolution":"unique"},
+    {"sourceIndex":1,"name":"main/done-button-role","resolution":"unique"},
+    {"sourceIndex":2,"name":"main/done-text","resolution":"unique"},
+    {"sourceIndex":3,"name":"main/done-button","resolution":"unique"},
+    {"sourceIndex":4,"name":"main/share","resolution":"ambiguous","candidateLabel":"main/share-1"},
+    {"sourceIndex":5,"name":"main/share","resolution":"ambiguous","candidateLabel":"main/share-2"}
+  ]
+}

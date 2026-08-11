@@ -1968,7 +1968,7 @@ mod tests {
     }
 
     #[test]
-    fn semantic_actions_report_unsupported_capability_without_backend_dispatch() {
+    fn unknown_semantic_names_fail_closed_without_backend_dispatch() {
         let backend = backend(vec![], Some("before"));
         let focuses = backend.focuses.clone();
         let value = backend.value.clone();
@@ -1990,17 +1990,10 @@ mod tests {
         ] {
             let response = router.request(request(method, params)).unwrap();
             let JsonRpcResponse::Failure(failure) = response else {
-                panic!("{method} requires unsupported live semantic-name resolution")
+                panic!("{method} must fail for an unknown semantic name")
             };
-            assert_eq!(failure.error.code, -32004, "{method}");
-            assert!(
-                failure
-                    .error
-                    .message
-                    .contains("live semantic-name resolution"),
-                "{method}: {}",
-                failure.error.message
-            );
+            assert_eq!(failure.error.code, -32002, "{method}");
+            assert_eq!(failure.error.data.as_ref().and_then(|v| v["status"].as_str()), Some("missing"));
         }
         assert_eq!(*focuses.borrow(), 0);
         assert_eq!(value.borrow().as_deref(), Some("before"));
