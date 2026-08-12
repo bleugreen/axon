@@ -14,9 +14,15 @@ pub enum LookObservationKind {
     ChildPage,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize)]
 #[serde(transparent)]
 pub struct SinceToken(String);
+
+impl<'de> Deserialize<'de> for SinceToken {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        Self::parse(String::deserialize(deserializer)?).map_err(serde::de::Error::custom)
+    }
+}
 
 impl SinceToken {
     pub fn new(app_identity: &str, snapshot_id: &SnapshotId, observer_sequence: u64) -> Self {
@@ -333,6 +339,10 @@ mod since_tests {
             )
             .is_err()
         );
+        assert!(serde_json::from_str::<LookSinceResult>(
+            r#"{"app":"Fixture","unchanged":true,"since":"garbage"}"#
+        )
+        .is_err());
         assert!(
             serde_json::from_str::<LookSinceResult>(
                 r#"{"app":"Fixture","unchanged":false,"since":"obs-61.62.1"}"#
