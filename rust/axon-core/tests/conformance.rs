@@ -9,6 +9,110 @@ struct LocatorFixture {
     cases: Vec<LocatorCase>,
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AmbiguousDiffFixture {
+    baseline: Vec<AmbiguousDiffName>,
+    fresh: Vec<AmbiguousDiffName>,
+    expected_matched: Vec<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AmbiguousDiffName {
+    name: String,
+    candidate_label: String,
+    identity_key: String,
+}
+
+#[test]
+fn ambiguous_duplicate_order_never_authorizes_identity_pairing() {
+    let fixture: AmbiguousDiffFixture = serde_json::from_str(include_str!(
+        "../../../schema/fixtures/semantic-diff-ambiguous.json"
+    ))
+    .unwrap();
+    let matched = fixture
+        .fresh
+        .iter()
+        .filter(|fresh| {
+            fixture.baseline.iter().any(|baseline| {
+                baseline.name == fresh.name
+                    && baseline.candidate_label == fresh.candidate_label
+                    && baseline.identity_key == fresh.identity_key
+            })
+        })
+        .map(|name| name.candidate_label.clone())
+        .collect::<Vec<_>>();
+    assert_eq!(matched, fixture.expected_matched);
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct LookSinceWireFixture {
+    unchanged: String,
+    diff: String,
+    baseline_expired: String,
+    threshold: String,
+}
+
+#[test]
+fn look_since_response_forms_are_byte_exact() {
+    let fixture: LookSinceWireFixture = serde_json::from_str(include_str!(
+        "../../../schema/fixtures/look-since-responses.json"
+    ))
+    .unwrap();
+    let observation = Snapshot {
+        id: SnapshotId("fixture-1".into()),
+        app: Application {
+            name: "Fixture".into(),
+            identifier: Some("fixture.app".into()),
+            windows: vec![],
+        },
+    };
+    let token = SinceToken::new("fixture.app", &observation.id, 7);
+    let diff = SemanticDiff {
+        added: vec![],
+        removed: vec![],
+        changed: vec![FieldChange {
+            name: "field/search".into(),
+            field: "value".into(),
+            from: Value::Null,
+            to: json!("axon"),
+        }],
+    };
+    let responses = [
+        (
+            LookSinceResult::unchanged("Fixture", token.clone()),
+            fixture.unchanged,
+        ),
+        (
+            LookSinceResult::diff("Fixture", token.clone(), diff),
+            fixture.diff,
+        ),
+        (
+            LookSinceResult::fallback(
+                "Fixture",
+                observation.clone(),
+                token.clone(),
+                LookFallbackNote::BaselineExpired,
+            ),
+            fixture.baseline_expired,
+        ),
+        (
+            LookSinceResult::fallback(
+                "Fixture",
+                observation,
+                token,
+                LookFallbackNote::DiffExceededThreshold,
+            ),
+            fixture.threshold,
+        ),
+    ];
+    for (response, expected) in responses {
+        assert_eq!(serde_json::to_string(&response).unwrap(), expected);
+    }
+}
+
 #[test]
 fn wire_element_targets_are_strictly_app_scoped_semantic_names() {
     let target: WireElementTarget = serde_json::from_value(json!({
