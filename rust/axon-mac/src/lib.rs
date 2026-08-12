@@ -7,9 +7,11 @@ use axon_core::{
     JsonRpcRequest, JsonRpcResponse, KeyboardIntent, PlatformBackend, ResolutionStatus,
     RunEnvelope, RunOptions, SemanticLookup, SemanticNameRegistry, Snapshot, SnapshotHandle,
     TextLocationResolver, TextLocationSource, TextLocationTarget, TextRecognitionProvider,
-    ToolDispatcher, dispatch_in_foreground, goal_success, select_delivery,
+    ToolDispatcher, DiffPolicy, SemanticElementName, SinceToken, classify_semantic_diff,
+    dispatch_in_foreground, goal_success, look_since_response, select_delivery,
 };
 use serde_json::{Map, Value, json};
+use std::{collections::HashMap, thread, time::{Duration, Instant}};
 
 #[cfg(target_os = "macos")]
 pub mod socket;
@@ -24,8 +26,6 @@ pub use platform::MacBackend;
 const EXCLUDED: &[(&str, &str)] = &[
     ("save", "SerializeHistory"),
     ("drag", "PointerDrag"),
-    ("wait_for_value", "WaitForValue"),
-    ("wait_for_stability", "WaitForStability"),
     ("permit", "PermissionPrompt"),
 ];
 
@@ -56,6 +56,8 @@ pub struct Router<B> {
     backend: B,
     snapshot: Option<Snapshot>,
     semantic_names: SemanticNameRegistry,
+    observations: HashMap<String, (Snapshot, Vec<SemanticElementName>)>,
+    observation_sequence: u64,
 }
 
 #[derive(Clone, Debug)]
@@ -255,6 +257,8 @@ impl<
             backend,
             snapshot: None,
             semantic_names: SemanticNameRegistry::default(),
+            observations: HashMap::new(),
+            observation_sequence: 0,
         }
     }
     fn click_text_location(
@@ -492,6 +496,8 @@ impl<
             DeliveryPolicy::from_params(params).map_err(|error| rpc_error(-32602, error))?;
         match method {
             "look" => self.look(params),
+            "wait_for_value" => self.wait_for_value(params),
+            "wait_for_stability" => self.wait_for_stability(params),
             "find" => {
                 let (handle, resolution) = self.resolve(params)?;
                 Ok(json!({"handle": handle, "resolution": resolution}))
@@ -809,6 +815,23 @@ impl<
         let app = app_query(params);
         let snapshot = self.backend.capture(&app).map_err(backend_error)?;
         let names = self.semantic_names.register(&snapshot);
+        self.observation_sequence += 1;
+        let app_identity = snapshot.app.identifier.as_deref().unwrap_or(&snapshot.app.name);
+        let next_since = SinceToken::new(app_identity, &snapshot.id, self.observation_sequence);
+        if let Some(raw_since) = params.get("since").and_then(Value::as_str) {
+            let requested = SinceToken::parse(raw_since)
+                .map_err(|error| rpc_error(-32602, error.to_string()))?;
+            let comparison = self.observations.get(requested.as_str())
+                .map(|(baseline, baseline_names)| classify_semantic_diff(
+                    baseline, baseline_names, &snapshot, &names, DiffPolicy::default()
+                ))
+                .transpose()
+                .map_err(|error| rpc_error(-32603, error.to_string()))?;
+            let result = look_since_response(snapshot.app.name.clone(), snapshot.clone(), next_since.clone(), comparison);
+            self.observations.insert(next_since.as_str().into(), (snapshot.clone(), names));
+            self.snapshot = Some(snapshot);
+            return serde_json::to_value(result).map_err(internal_error);
+        }
         let mut value = serde_json::to_value(axon_core::render_semantic_names(&snapshot, &names))
             .map_err(internal_error)?;
         let wants_screenshot = axon_core::screenshot_requested(
@@ -866,8 +889,66 @@ impl<
                     serde_json::to_value(unavailable).map_err(internal_error)?,
                 );
         }
+        value.as_object_mut().expect("snapshots serialize as objects")
+            .insert("since".into(), json!(next_since));
+        self.observations.insert(next_since.as_str().into(), (snapshot.clone(), names));
         self.snapshot = Some(snapshot);
         Ok(value)
+    }
+
+    fn wait_for_value(&mut self, params: &Map<String, Value>) -> Result<Value, JsonRpcError> {
+        let timeout = bounded_ms(params, "timeoutMs", 5_000, 60_000)?;
+        let interval = bounded_ms(params, "intervalMs", 100, 1_000)?;
+        let started = Instant::now();
+        let mut last_observed = None;
+        let mut last_resolution = None;
+        loop {
+            match self.resolve(params) {
+                Ok((handle, resolution)) => {
+                    last_resolution = Some(resolution.clone());
+                    let observed = self.backend.read_value(&handle).map_err(backend_error)?;
+                    last_observed = observed.clone();
+                    let satisfied = observed.as_deref().is_some_and(|value| {
+                        params.get("equals").and_then(Value::as_str).is_some_and(|expected| value == expected)
+                            || params.get("contains").and_then(Value::as_str).is_some_and(|expected| value.contains(expected))
+                            || params.get("matches").and_then(Value::as_str).is_some_and(|expected| value == expected)
+                    });
+                    if satisfied {
+                        return Ok(json!({"wait":{"success":true,"status":"satisfied","elapsedMs":started.elapsed().as_millis(),"lastObserved":{"value":observed},"resolution":resolution}}));
+                    }
+                }
+                Err(error) if error.code == -32002 => {}
+                Err(error) => return Err(error),
+            }
+            if started.elapsed() >= timeout {
+                let status = if last_observed.is_some() { "predicate_timeout" } else { "target_unresolved_timeout" };
+                return Ok(json!({"wait":{"success":false,"status":status,"elapsedMs":started.elapsed().as_millis(),"lastObserved":last_observed.map(|value| json!({"value":value})),"resolution":last_resolution}}));
+            }
+            thread::sleep(interval.min(timeout.saturating_sub(started.elapsed())));
+        }
+    }
+
+    fn wait_for_stability(&mut self, params: &Map<String, Value>) -> Result<Value, JsonRpcError> {
+        let app = app_query(params);
+        if app.name.is_none() && app.identifier.is_none() { return Err(rpc_error(-32602, "wait_for_stability requires app")); }
+        let timeout = bounded_ms(params, "timeoutMs", 5_000, 60_000)?;
+        let interval = bounded_ms(params, "intervalMs", 100, 1_000)?;
+        let stable_for = bounded_ms(params, "stableMs", 500, 60_000)?;
+        let condition = params.get("condition").and_then(Value::as_str).unwrap_or("stable");
+        if !matches!(condition, "stable" | "changed") { return Err(rpc_error(-32602, "condition must be stable or changed")); }
+        let started = Instant::now();
+        let first = self.backend.capture(&app).map_err(backend_error)?;
+        let mut last = first.app.clone();
+        let mut stable_since = Instant::now();
+        loop {
+            let snapshot = self.backend.capture(&app).map_err(backend_error)?;
+            if snapshot.app != last { last = snapshot.app.clone(); stable_since = Instant::now(); }
+            let satisfied = if condition == "changed" { snapshot.app != first.app } else { stable_since.elapsed() >= stable_for };
+            if satisfied || started.elapsed() >= timeout {
+                return Ok(json!({"wait":{"success":satisfied,"status":if satisfied {"satisfied"} else {"timeout"},"condition":condition,"elapsedMs":started.elapsed().as_millis(),"stableMs":stable_since.elapsed().as_millis(),"snapshot":snapshot}}));
+            }
+            thread::sleep(interval.min(timeout.saturating_sub(started.elapsed())));
+        }
     }
 
     fn resolve(
@@ -996,6 +1077,17 @@ impl<
             fact.id
         ))
     }
+}
+
+fn bounded_ms(
+    params: &Map<String, Value>,
+    key: &str,
+    default: u64,
+    maximum: u64,
+) -> Result<Duration, JsonRpcError> {
+    let value = params.get(key).and_then(Value::as_u64).unwrap_or(default);
+    if value == 0 { return Err(rpc_error(-32602, format!("{key} must be positive"))); }
+    Ok(Duration::from_millis(value.min(maximum)))
 }
 
 fn app_query(params: &Map<String, Value>) -> AppQuery {
