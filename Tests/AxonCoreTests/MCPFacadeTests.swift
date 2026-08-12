@@ -341,7 +341,7 @@ import Testing
         ])
     ))
 
-    let snapshot = response?.result?["structuredContent"]?["snapshot"]
+    let snapshot = response?.result?["structuredContent"]
     let text = textContent(in: response?.result)
     #expect(response?.error == nil)
     #expect(snapshot?["format"] == .string("observation"))
@@ -398,7 +398,7 @@ import Testing
         ])
     ))
 
-    let snapshot = response?.result?["structuredContent"]?["snapshot"]
+    let snapshot = response?.result?["structuredContent"]
     let toolbar = snapshot?["windows"]?[0]?["children"]?[1]
     let text = textContent(in: response?.result)
 
@@ -462,7 +462,7 @@ import Testing
     ))
 
     let result = response?.result
-    let snapshot = result?["structuredContent"]?["snapshot"]
+    let snapshot = result?["structuredContent"]
     let text = textContent(in: result)
 
     #expect(response?.error == nil)
@@ -523,7 +523,7 @@ import Testing
         ])
     ))
 
-    let snapshot = response?.result?["structuredContent"]?["snapshot"]
+    let snapshot = response?.result?["structuredContent"]
 
     #expect(response?.error == nil)
     #expect(snapshot?["screenText"]?[0]?["text"] == .string("Framed text"))
@@ -564,7 +564,7 @@ import Testing
     ))
 
     let result = response?.result
-    let snapshot = result?["structuredContent"]?["snapshot"]
+    let snapshot = result?["structuredContent"]
     let encoded = try encodedJSONString(.object(result ?? [:]))
 
     #expect(response?.error == nil)
@@ -608,7 +608,7 @@ import Testing
     ))
 
     let result = response?.result
-    let snapshot = result?["structuredContent"]?["snapshot"]
+    let snapshot = result?["structuredContent"]
     let encoded = try encodedJSONString(.object(result ?? [:]))
 
     #expect(response?.error == nil)
@@ -665,7 +665,7 @@ import Testing
     ))
 
     let result = response?.result
-    let snapshot = result?["structuredContent"]?["snapshot"]
+    let snapshot = result?["structuredContent"]
     let encoded = try encodedJSONString(.object(result ?? [:]))
 
     #expect(response?.error == nil)
@@ -713,7 +713,7 @@ import Testing
     ))
 
     let result = response?.result
-    let snapshot = result?["structuredContent"]?["snapshot"]
+    let snapshot = result?["structuredContent"]
     let encoded = try encodedJSONString(.object(result ?? [:]))
 
     #expect(response?.error == nil)
@@ -775,7 +775,7 @@ import Testing
     ))
 
     let result = response?.result
-    let snapshot = result?["structuredContent"]?["snapshot"]
+    let snapshot = result?["structuredContent"]
     let encoded = try encodedJSONString(.object(result ?? [:]))
 
     #expect(response?.error == nil)
@@ -852,7 +852,7 @@ import Testing
 
     #expect(response?.error == nil)
     #expect(response?.result?["isError"] == .bool(false))
-    #expect(response?.result?["structuredContent"]?["snapshot"]?["screenshot"]?["width"] == .int(20))
+    #expect(response?.result?["structuredContent"]?["screenshot"]?["width"] == .int(20))
 }
 
 @Test func mcpRemovedSensitiveArgumentDoesNotRejectScreenText() {
@@ -903,7 +903,7 @@ import Testing
 
     #expect(response?.error == nil)
     #expect(response?.result?["isError"] == .bool(false))
-    #expect(response?.result?["structuredContent"]?["snapshot"]?["screenText"]?[0]?["text"] == .string("Visible text"))
+    #expect(response?.result?["structuredContent"]?["screenText"]?[0]?["text"] == .string("Visible text"))
 }
 
 @Test func mcpScreenshotUsesImageContentInsteadOfTextualBase64() {
@@ -938,7 +938,7 @@ import Testing
     ))
 
     let result = response?.result
-    let screenshot = result?["structuredContent"]?["snapshot"]?["screenshot"]
+    let screenshot = result?["structuredContent"]?["screenshot"]
     let text = textContent(in: result)
     let image = imageContent(in: result)
 
@@ -986,7 +986,7 @@ import Testing
     ))
 
     let result = response?.result
-    let screenshot = result?["structuredContent"]?["snapshot"]?["screenshot"]
+    let screenshot = result?["structuredContent"]?["screenshot"]
     let text = textContent(in: result)
     let image = imageContent(in: result)
 

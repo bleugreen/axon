@@ -127,8 +127,8 @@ import Testing
             ])
         )
     ])
-    #expect(response?.result?["structuredContent"]?["snapshot"]?["format"] == .string("observation"))
-    #expect(response?.result?["structuredContent"]?["snapshot"]?["snapshot"] == .string("snapshot-1"))
+    #expect(response?.result?["structuredContent"]?["format"] == .string("observation"))
+    #expect(response?.result?["structuredContent"]?["snapshot"] == .string("snapshot-1"))
 }
 
 /// Builds the shipped release layout: one `.app` holding the daemon app at `Contents/MacOS/Axon`
