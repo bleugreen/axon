@@ -936,6 +936,18 @@ impl<
     }
 
     fn wait_for_value(&mut self, params: &Map<String, Value>) -> Result<Value, JsonRpcError> {
+        let predicates = ["contains", "equals", "matches"]
+            .into_iter()
+            .filter_map(|key| params.get(key).and_then(Value::as_str).map(|value| (key, value)))
+            .collect::<Vec<_>>();
+        if predicates.len() != 1 || predicates[0].1.is_empty() {
+            return Err(rpc_error(-32602, "wait_for_value requires exactly one non-empty contains, equals, or matches predicate"));
+        }
+        let (predicate_kind, predicate_value) = predicates[0];
+        let regex = (predicate_kind == "matches")
+            .then(|| regex::Regex::new(predicate_value).map_err(|error| rpc_error(-32602, error.to_string())))
+            .transpose()?;
+        let predicate = json!({predicate_kind: predicate_value});
         let timeout = bounded_ms(params, "timeoutMs", 5_000, 60_000)?;
         let interval = bounded_ms(params, "intervalMs", 100, 1_000)?;
         let started = Instant::now();
@@ -947,25 +959,15 @@ impl<
                     last_resolution = Some(resolution.clone());
                     let observed = self.backend.read_value(&handle).map_err(backend_error)?;
                     last_observed = observed.clone();
-                    let satisfied = observed.as_deref().is_some_and(|value| {
-                        params
-                            .get("equals")
-                            .and_then(Value::as_str)
-                            .is_some_and(|expected| value == expected)
-                            || params
-                                .get("contains")
-                                .and_then(Value::as_str)
-                                .is_some_and(|expected| value.contains(expected))
-                            || params.get("matches").and_then(Value::as_str).is_some_and(
-                                |pattern| {
-                                    regex::Regex::new(pattern)
-                                        .is_ok_and(|regex| regex.is_match(value))
-                                },
-                            )
+                    let satisfied = observed.as_deref().is_some_and(|value| match predicate_kind {
+                        "equals" => value == predicate_value,
+                        "contains" => value.contains(predicate_value),
+                        "matches" => regex.as_ref().is_some_and(|regex| regex.is_match(value)),
+                        _ => false,
                     });
                     if satisfied {
                         return Ok(
-                            json!({"wait":{"success":true,"status":"satisfied","elapsedMs":started.elapsed().as_millis(),"lastObserved":{"value":observed},"resolution":resolution}}),
+                            json!({"wait":{"success":true,"status":"satisfied","predicate":predicate,"elapsedMs":started.elapsed().as_millis(),"matched":{"field":"value","value":observed},"lastObserved":{"value":observed},"resolution":resolution,"message":"wait_for_value predicate satisfied"}}),
                         );
                     }
                 }
@@ -979,7 +981,7 @@ impl<
                     "target_unresolved_timeout"
                 };
                 return Ok(
-                    json!({"wait":{"success":false,"status":status,"elapsedMs":started.elapsed().as_millis(),"lastObserved":last_observed.map(|value| json!({"value":value})),"resolution":last_resolution}}),
+                    json!({"wait":{"success":false,"status":status,"predicate":predicate,"elapsedMs":started.elapsed().as_millis(),"matched":null,"lastObserved":last_observed.map(|value| json!({"value":value})),"resolution":last_resolution,"message":if status == "predicate_timeout" {"wait_for_value timed out before the predicate matched"} else {"wait_for_value timed out before the target resolved uniquely"}}}),
                 );
             }
             thread::sleep(interval.min(timeout.saturating_sub(started.elapsed())));
@@ -1003,16 +1005,29 @@ impl<
         }
         let started = Instant::now();
         let first = self.backend.capture(&app).map_err(backend_error)?;
-        let mut last = first.app.clone();
+        let first_names = self.semantic_names.register(&first);
+        let mut last = first.clone();
+        let mut last_names = first_names.clone();
         let mut stable_since = Instant::now();
         loop {
             let snapshot = self.backend.capture(&app).map_err(backend_error)?;
-            if snapshot.app != last {
-                last = snapshot.app.clone();
+            let names = self.semantic_names.register(&snapshot);
+            let changed_from_last = !matches!(
+                classify_semantic_diff(&last, &last_names, &snapshot, &names, DiffPolicy::default())
+                    .map_err(|error| rpc_error(-32603, error.to_string()))?,
+                axon_core::DiffClassification::Unchanged
+            );
+            if changed_from_last {
+                last = snapshot.clone();
+                last_names = names.clone();
                 stable_since = Instant::now();
             }
             let satisfied = if condition == "changed" {
-                snapshot.app != first.app
+                !matches!(
+                    classify_semantic_diff(&first, &first_names, &snapshot, &names, DiffPolicy::default())
+                        .map_err(|error| rpc_error(-32603, error.to_string()))?,
+                    axon_core::DiffClassification::Unchanged
+                )
             } else {
                 stable_since.elapsed() >= stable_for
             };

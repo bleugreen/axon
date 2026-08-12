@@ -29,6 +29,7 @@ pub const SOCKET_ENV: &str = "AXON_SOCKET_PATH";
 pub const PRIVATE_SOCKET_ENV: &str = "AXON_MAC_SOCKET";
 pub const DEFAULT_SOCKET_PATH: &str = "/tmp/axon.sock";
 pub const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+pub const LONG_REQUEST_TIMEOUT: Duration = Duration::from_secs(300);
 
 unsafe extern "C" {
     fn flock(fd: i32, operation: i32) -> i32;
@@ -94,7 +95,15 @@ pub fn path() -> io::Result<PathBuf> {
 }
 pub fn request(line: &str) -> io::Result<String> {
     let mut stream = UnixStream::connect(path()?)?;
-    stream.set_read_timeout(Some(REQUEST_TIMEOUT))?;
+    let method = serde_json::from_str::<Value>(line)
+        .ok()
+        .and_then(|value| value.get("method").and_then(Value::as_str).map(str::to_owned));
+    let timeout = if matches!(method.as_deref(), Some("run" | "wait_for_value" | "wait_for_stability")) {
+        LONG_REQUEST_TIMEOUT
+    } else {
+        REQUEST_TIMEOUT
+    };
+    stream.set_read_timeout(Some(timeout))?;
     stream.write_all(line.as_bytes())?;
     stream.write_all(b"\n")?;
     let mut response = String::new();
