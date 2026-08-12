@@ -13,7 +13,10 @@ function Fail([string]$Message) {
     throw "Axon install failed: $Message"
 }
 
-if (-not $IsWindows) {
+$RunningOnWindows = [System.Runtime.InteropServices.RuntimeInformation]::IsOSPlatform(
+    [System.Runtime.InteropServices.OSPlatform]::Windows
+)
+if (-not $RunningOnWindows) {
     Fail "unsupported platform $([System.Runtime.InteropServices.RuntimeInformation]::OSDescription); install.ps1 supports only windows/x86_64"
 }
 $Architecture = [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString()
@@ -111,7 +114,7 @@ try {
     }
 
     New-Item -ItemType Directory -Force -Path $InstallDirectory | Out-Null
-    Copy-Item -LiteralPath (Join-Path $SourceDirectory '*') -Destination $InstallDirectory -Recurse -Force
+    Copy-Item -Path (Join-Path $SourceDirectory '*') -Destination $InstallDirectory -Recurse -Force
     if (-not (Test-Path -LiteralPath $Executable -PathType Leaf)) {
         Fail "the installed executable is missing at $Executable"
     }
