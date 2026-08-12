@@ -147,11 +147,6 @@ jobs:
   # automation daemon does (register a scheduled task, relaunch into the interactive session, serve a
   # pipe). Signing is applied between staging and archiving so the archive a consumer downloads and
   # the checksum that vouches for it both describe the signed bytes.
-  #
-  # The AXON_WIN_SIGNING repository variable exists only because the certificate profile is waiting
-  # on Azure's organization identity validation, and an ungated signing step would fail every
-  # release until that clears. Delete the variable and the `if:` conditions below once a signed
-  # release has shipped: signing a release is not an option to keep switching off.
   windows:
     name: Build Windows
     needs: version
@@ -173,7 +168,6 @@ jobs:
         run: ./scripts/package-rust axon-win --stage-only
 
       - name: Check signing configuration
-        if: vars.AXON_WIN_SIGNING == 'enabled'
         env:
           AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
           AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
@@ -183,17 +177,16 @@ jobs:
           AZURE_SIGNING_PROFILE: ${{ vars.AZURE_SIGNING_PROFILE }}
         run: |
           set -euo pipefail
-          : "${AZURE_TENANT_ID:?AZURE_TENANT_ID is required when AXON_WIN_SIGNING is enabled}"
-          : "${AZURE_CLIENT_ID:?AZURE_CLIENT_ID is required when AXON_WIN_SIGNING is enabled}"
-          : "${AZURE_SUBSCRIPTION_ID:?AZURE_SUBSCRIPTION_ID is required when AXON_WIN_SIGNING is enabled}"
-          : "${AZURE_SIGNING_ENDPOINT:?AZURE_SIGNING_ENDPOINT is required when AXON_WIN_SIGNING is enabled}"
-          : "${AZURE_SIGNING_ACCOUNT:?AZURE_SIGNING_ACCOUNT is required when AXON_WIN_SIGNING is enabled}"
-          : "${AZURE_SIGNING_PROFILE:?AZURE_SIGNING_PROFILE is required when AXON_WIN_SIGNING is enabled}"
+          : "${AZURE_TENANT_ID:?AZURE_TENANT_ID is required for Windows release signing}"
+          : "${AZURE_CLIENT_ID:?AZURE_CLIENT_ID is required for Windows release signing}"
+          : "${AZURE_SUBSCRIPTION_ID:?AZURE_SUBSCRIPTION_ID is required for Windows release signing}"
+          : "${AZURE_SIGNING_ENDPOINT:?AZURE_SIGNING_ENDPOINT is required for Windows release signing}"
+          : "${AZURE_SIGNING_ACCOUNT:?AZURE_SIGNING_ACCOUNT is required for Windows release signing}"
+          : "${AZURE_SIGNING_PROFILE:?AZURE_SIGNING_PROFILE is required for Windows release signing}"
 
       # No client secret is stored: the workflow presents a GitHub OIDC token and Azure exchanges it
       # for the signer role on the certificate profile.
       - name: Azure login
-        if: vars.AXON_WIN_SIGNING == 'enabled'
         uses: azure/login@v3
         with:
           client-id: ${{ secrets.AZURE_CLIENT_ID }}
@@ -201,7 +194,6 @@ jobs:
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
       - name: Sign axon-win.exe
-        if: vars.AXON_WIN_SIGNING == 'enabled'
         uses: azure/artifact-signing-action@v2
         with:
           endpoint: ${{ vars.AZURE_SIGNING_ENDPOINT }}
@@ -237,7 +229,6 @@ jobs:
       # Verified from inside the archive rather than from the staging directory, because the archive
       # is what a consumer downloads and Windows is what evaluates the signature on it.
       - name: Verify the archived binary carries a trusted signature
-        if: vars.AXON_WIN_SIGNING == 'enabled'
         shell: pwsh
         env:
           VERSION: ${{ needs.version.outputs.version }}

@@ -137,12 +137,9 @@ job's ability to sign. The configuration it reads:
 | --- | --- | --- |
 | `AZURE_TENANT_ID`, `AZURE_CLIENT_ID`, `AZURE_SUBSCRIPTION_ID` | secrets | the Entra app registration that holds the Certificate Profile Signer role |
 | `AZURE_SIGNING_ENDPOINT`, `AZURE_SIGNING_ACCOUNT`, `AZURE_SIGNING_PROFILE` | variables | which signing account and certificate profile to sign with |
-| `AXON_WIN_SIGNING` | variable | signing runs only when this is `enabled` |
 
-`AXON_WIN_SIGNING` is a temporary gate, not a supported mode. It exists because the certificate
-profile cannot be created until Azure finishes validating the publishing organization's identity,
-and an ungated signing step would fail every release until then. Once a signed release has shipped,
-delete the variable and the conditions that read it.
+Windows release signing is mandatory: missing signing configuration or an invalid or untimestamped
+signature fails the release job.
 
 ## Homebrew Cask
 
