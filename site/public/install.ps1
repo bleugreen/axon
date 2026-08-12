@@ -119,6 +119,13 @@ try {
         Fail "the installed executable is missing at $Executable"
     }
 
+    $CliExecutable = Join-Path $InstallDirectory 'axon.exe'
+    try {
+        New-Item -ItemType HardLink -Path $CliExecutable -Target $Executable -Force | Out-Null
+    } catch {
+        Fail "could not create the axon.exe CLI link at $CliExecutable. $($_.Exception.Message)"
+    }
+
     Write-Host "Registering the daemon from permanent path $Executable..."
     & $Executable daemon install
     if ($LASTEXITCODE -ne 0) {
@@ -138,7 +145,7 @@ try {
     Set-Content -LiteralPath $Marker -Value $Version -NoNewline
 
     Write-Host "`nAxon $Version installed successfully."
-    Write-Host "CLI: $Executable"
+    Write-Host "CLI: $CliExecutable -> $Executable"
     Write-Host 'The versioned install directory was added to your user PATH; open a new terminal to use axon-win.exe there.'
     Write-Host "`nRegister Axon with an MCP client:"
     Write-Host '  claude mcp add axon -- axon mcp'
