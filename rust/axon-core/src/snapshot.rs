@@ -129,10 +129,14 @@ impl Snapshot {
     pub fn node(&self, index: usize) -> Option<&Node> {
         fn add<'a>(node: &'a Node, nodes: &mut Vec<&'a Node>) {
             nodes.push(node);
-            for child in &node.children { add(child, nodes); }
+            for child in &node.children {
+                add(child, nodes);
+            }
         }
         let mut nodes = Vec::new();
-        for window in &self.app.windows { add(&window.root, &mut nodes); }
+        for window in &self.app.windows {
+            add(&window.root, &mut nodes);
+        }
         nodes.get(index).copied()
     }
     pub fn index_for_handle(&self, handle: &SnapshotHandle) -> Result<usize, HandleError> {
