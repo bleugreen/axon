@@ -354,13 +354,24 @@ impl PlatformBackend for LinuxBackend {
         // rather than about this build, and the same answer decides both the health document and
         // the dispatch ladder.
         let restriction = self.input_restriction();
-        let input = [Capability::PointerInput, Capability::KeyboardInput, Capability::Screenshot].map(|capability| {
+        let input = [Capability::PointerInput, Capability::KeyboardInput].map(|capability| {
             CapabilityInfo {
                 capability,
                 usable: restriction.is_none(),
                 restriction: restriction.map(str::to_string),
             }
         });
+        let screenshot = CapabilityInfo {
+            capability: Capability::Screenshot,
+            usable: restriction.is_none(),
+            restriction: restriction.map(|reason| {
+                if reason.contains("Wayland") {
+                    "a desktop portal authorization flow is required".to_string()
+                } else {
+                    reason.to_string()
+                }
+            }),
+        };
         Ok(usable
             .into_iter()
             .map(|capability| CapabilityInfo {
@@ -378,6 +389,7 @@ impl PlatformBackend for LinuxBackend {
                     }),
             )
             .chain(input)
+            .chain([screenshot])
             .collect())
     }
     fn enumerate_applications(&self) -> Result<Vec<Application>, BackendError> {
@@ -441,6 +453,12 @@ impl PlatformBackend for LinuxBackend {
         self.x11(Capability::KeyboardInput)?.keyboard(intent)
     }
     fn screenshot(&mut self, app: &AppQuery) -> Result<Screenshot, BackendError> {
+        if matches!(&self.input, InputSession::Unavailable(reason) if reason.contains("Wayland")) {
+            return Err(capability(
+                Capability::Screenshot,
+                "a desktop portal authorization flow is required",
+            ));
+        }
         let identity = self
             .ask(|r| Command::Identity(app.clone(), r))?
             .ok_or_else(|| operation("capture screenshot", "no AT-SPI application matched"))?;
