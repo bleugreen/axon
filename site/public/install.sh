@@ -117,7 +117,7 @@ if [ "$ALREADY_INSTALLED" -eq 0 ]; then
   case "$EXPECTED_SHA" in
     '' | *[!0-9A-Fa-f]*) fail "the published checksum for $ARCHIVE is malformed; the archive was not installed" ;;
   esac
-  [ ""${#EXPECTED_SHA}"" -eq 64 ] || fail "the published checksum for $ARCHIVE is malformed; the archive was not installed"
+  [ "${#EXPECTED_SHA}" -eq 64 ] || fail "the published checksum for $ARCHIVE is malformed; the archive was not installed"
   if [ "$SHA_COMMAND" = shasum ]; then
     ACTUAL_SHA="$(shasum -a 256 "$ARCHIVE_PATH" | awk '{ print $1 }')"
   else
