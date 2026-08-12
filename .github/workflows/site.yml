@@ -1,14 +1,15 @@
 name: Deploy axn.dev
 
 on:
-  push:
-    branches:
-      - main
+  pull_request:
     paths:
       - "site/**"
       - "docs/**"
       - "VERSION"
       - ".github/workflows/site.yml"
+  push:
+    branches:
+      - main
   workflow_dispatch:
 
 permissions:
@@ -38,6 +39,7 @@ jobs:
           cache-dependency-path: site/package-lock.json
 
       - name: Check Cloudflare credentials
+        if: github.event_name == 'push'
         run: |
           set -euo pipefail
           if [[ -z "$CLOUDFLARE_API_TOKEN" ]]; then
@@ -56,4 +58,5 @@ jobs:
         run: npm run build
 
       - name: Deploy to Cloudflare Pages
+        if: github.event_name == 'push'
         run: npx wrangler pages deploy dist --project-name=axn-dev
