@@ -8,7 +8,7 @@ The matrix below is the current user-facing contract. Detailed evidence, backend
 
 **Supported** means live evidence backs the capability. **Supported with limits** names a restriction you should plan around. **Experimental** is implemented without current live proof. **Refused** and **Not implemented** are explicit gaps that Axon reports rather than hiding.
 
-| environment | inspect and act semantically | pointer and keyboard | screenshots | important requirements and limits |
+| environment | semantic actions | input | images | requirements and limits |
 | --- | --- | --- | --- | --- |
 | macOS 14+ | **Supported** | **Experimental** | **Experimental** | Accessibility permission is required. Screen Recording permission is required for screenshots. |
 | Windows 10+ | **Supported with limits** — semantic activation uses `InvokePattern` | **Pointer supported with limits** for a small set of controls; keyboard is **refused** | **Supported** | Must run in an interactive user session. Elevated targets require matching elevation or UIAccess. |
