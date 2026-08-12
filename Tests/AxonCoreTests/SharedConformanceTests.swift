@@ -17,7 +17,7 @@ private struct SharedLookScreenshotPolicy: Decodable {
 private struct SharedScreenshotEncoding: Decodable {
     let maxDimension: Int
     let mediaType: String
-    let qualityPercent: Int
+    let quality: String
 }
 
 @Test func sharedLookScreenshotPolicyFixture() throws {
@@ -31,8 +31,8 @@ private struct SharedScreenshotEncoding: Decodable {
     #expect(fixture.carveOuts == ["appList": false, "since": false, "childPage": false])
     #expect(fixture.explicit == ["true": true, "false": false])
     #expect(fixture.encoding.maxDimension == ScreenshotCapturer.defaultMaxEncodedDimension)
-    #expect(fixture.encoding.mediaType == "image/jpeg")
-    #expect(fixture.encoding.qualityPercent == Int(ScreenshotCapturer.defaultJPEGQuality * 100))
+    #expect(fixture.encoding.mediaType == "image/png")
+    #expect(fixture.encoding.quality == "lossless")
 }
 
 private struct SharedLocatorCase: Decodable {

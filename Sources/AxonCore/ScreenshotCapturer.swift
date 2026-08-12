@@ -8,7 +8,6 @@ import UniformTypeIdentifiers
 public struct ScreenshotCapturer {
     /// Public observations are bounded to keep the image token-comparable with the AX tree.
     public static let defaultMaxEncodedDimension = 1280
-    public static let defaultJPEGQuality = 0.75
 
     private let timeoutSeconds: TimeInterval
     private let maxEncodedDimension: Int
@@ -110,20 +109,18 @@ public struct ScreenshotCapturer {
     private func encode(_ image: CGImage) -> EncodedScreenshot? {
         let data = NSMutableData()
         guard
-            let destination = CGImageDestinationCreateWithData(data, UTType.jpeg.identifier as CFString, 1, nil)
+            let destination = CGImageDestinationCreateWithData(data, UTType.png.identifier as CFString, 1, nil)
         else {
             return nil
         }
 
-        CGImageDestinationAddImage(destination, image, [
-            kCGImageDestinationLossyCompressionQuality: Self.defaultJPEGQuality
-        ] as CFDictionary)
+        CGImageDestinationAddImage(destination, image, nil)
         guard CGImageDestinationFinalize(destination) else {
             return nil
         }
 
         return EncodedScreenshot(
-            mediaType: "image/jpeg",
+            mediaType: "image/png",
             base64Data: (data as Data).base64EncodedString(),
             width: image.width,
             height: image.height

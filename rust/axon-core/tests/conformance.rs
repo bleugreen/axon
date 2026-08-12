@@ -302,7 +302,7 @@ struct LookScreenshotPolicyFixture {
 struct ScreenshotEncodingFixture {
     max_dimension: u32,
     media_type: String,
-    quality_percent: u8,
+    quality: String,
 }
 
 #[test]
@@ -321,7 +321,7 @@ fn shared_look_screenshot_policy_is_byte_exact() {
     assert_eq!(fixture.encoding.max_dimension, OBSERVATION_SCREENSHOT_MAX_DIMENSION);
     assert_eq!(fixture.encoding.media_type, OBSERVATION_SCREENSHOT_MEDIA_TYPE);
     assert_eq!(
-        fixture.encoding.quality_percent,
-        OBSERVATION_SCREENSHOT_JPEG_QUALITY_PERCENT
+        fixture.encoding.quality,
+        OBSERVATION_SCREENSHOT_QUALITY
     );
 }

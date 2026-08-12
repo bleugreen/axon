@@ -3,8 +3,8 @@ use serde::Serialize;
 
 /// The canonical image budget for every public `look` surface.
 pub const OBSERVATION_SCREENSHOT_MAX_DIMENSION: u32 = 1280;
-pub const OBSERVATION_SCREENSHOT_JPEG_QUALITY_PERCENT: u8 = 75;
-pub const OBSERVATION_SCREENSHOT_MEDIA_TYPE: &str = "image/jpeg";
+pub const OBSERVATION_SCREENSHOT_QUALITY: &str = "lossless";
+pub const OBSERVATION_SCREENSHOT_MEDIA_TYPE: &str = "image/png";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LookObservationKind {

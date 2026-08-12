@@ -11,7 +11,7 @@
   },
   "encoding": {
     "maxDimension": 1280,
-    "mediaType": "image/jpeg",
-    "qualityPercent": 75
+    "mediaType": "image/png",
+    "quality": "lossless"
   }
 }
