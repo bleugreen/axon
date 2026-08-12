@@ -452,7 +452,8 @@ import Testing
             "name": .string("look"),
             "arguments": .object([
                 "app": .string("com.example.App"),
-                "screenText": .bool(true)
+                "screenText": .bool(true),
+                "screenshot": .bool(false)
             ])
         ])
     ))
