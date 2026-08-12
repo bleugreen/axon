@@ -7,6 +7,7 @@ use std::{ffi::c_void, ptr::null};
 type CFTypeRef = *const c_void;
 type CFMutableDataRef = *mut c_void;
 type CFStringRef = *const c_void;
+type CFArrayRef = *const c_void;
 type CGImageRef = *const c_void;
 type CGContextRef = *mut c_void;
 
@@ -15,6 +16,51 @@ type CGContextRef = *mut c_void;
 struct CGPoint {
     x: f64,
     y: f64,
+}
+
+fn window_id_for_pid(pid: i32) -> Result<u32, BackendError> {
+    let windows = Owned::new(
+        unsafe {
+            CGWindowListCopyWindowInfo(
+                WINDOW_LIST_OPTION_ON_SCREEN_ONLY | WINDOW_LIST_EXCLUDE_DESKTOP_ELEMENTS,
+                0,
+            )
+        },
+        "list on-screen windows",
+    )?;
+    for index in 0..unsafe { CFArrayGetCount(windows.0) } {
+        let dictionary = unsafe { CFArrayGetValueAtIndex(windows.0, index) };
+        if dictionary.is_null() {
+            continue;
+        }
+        let owner = dictionary_number(dictionary, unsafe { kCGWindowOwnerPID });
+        let layer = dictionary_number(dictionary, unsafe { kCGWindowLayer });
+        if owner == Some(i64::from(pid)) && layer == Some(0) {
+            return dictionary_number(dictionary, unsafe { kCGWindowNumber })
+                .and_then(|value| u32::try_from(value).ok())
+                .ok_or_else(|| op("resolve capture window", "window has no numeric identifier"));
+        }
+    }
+    Err(op(
+        "resolve capture window",
+        "application owns no on-screen layer-zero window",
+    ))
+}
+
+fn dictionary_number(dictionary: *const c_void, key: CFStringRef) -> Option<i64> {
+    let value = unsafe { CFDictionaryGetValue(dictionary, key) };
+    if value.is_null() {
+        return None;
+    }
+    let mut number = 0i64;
+    unsafe { CFNumberGetValue(value, 4, (&mut number as *mut i64).cast()) }.then_some(number)
+}
+
+#[link(name = "CoreGraphics", kind = "framework")]
+unsafe extern "C" {
+    static kCGWindowNumber: CFStringRef;
+    static kCGWindowOwnerPID: CFStringRef;
+    static kCGWindowLayer: CFStringRef;
 }
 
 #[repr(C)]
@@ -32,6 +78,8 @@ struct CGRect {
 }
 
 const WINDOW_LIST_OPTION_INCLUDING_WINDOW: u32 = 1 << 3;
+const WINDOW_LIST_OPTION_ON_SCREEN_ONLY: u32 = 1;
+const WINDOW_LIST_EXCLUDE_DESKTOP_ELEMENTS: u32 = 1 << 4;
 const WINDOW_IMAGE_BOUNDS_IGNORE_FRAMING: u32 = 1 << 0;
 const INTERPOLATION_HIGH: i32 = 3;
 
@@ -45,6 +93,7 @@ unsafe extern "C" {
         window_id: u32,
         image_option: u32,
     ) -> CGImageRef;
+    fn CGWindowListCopyWindowInfo(list_option: u32, relative_to_window: u32) -> CFArrayRef;
     fn CGImageGetWidth(image: CGImageRef) -> usize;
     fn CGImageGetHeight(image: CGImageRef) -> usize;
     fn CGBitmapContextCreate(
@@ -68,6 +117,10 @@ unsafe extern "C" {
     fn CFDataCreateMutable(allocator: *const c_void, capacity: isize) -> CFMutableDataRef;
     fn CFDataGetLength(data: CFMutableDataRef) -> isize;
     fn CFDataGetBytePtr(data: CFMutableDataRef) -> *const u8;
+    fn CFArrayGetCount(array: CFArrayRef) -> isize;
+    fn CFArrayGetValueAtIndex(array: CFArrayRef, index: isize) -> *const c_void;
+    fn CFDictionaryGetValue(dictionary: *const c_void, key: *const c_void) -> *const c_void;
+    fn CFNumberGetValue(number: CFTypeRef, number_type: i64, value: *mut c_void) -> bool;
     fn CFStringCreateWithCString(
         allocator: *const c_void,
         text: *const i8,
@@ -107,7 +160,7 @@ pub(crate) fn screen_capture_enabled() -> bool {
     unsafe { CGPreflightScreenCaptureAccess() }
 }
 
-pub(crate) fn screenshot(window_id: u32, frame: Rect) -> Result<Screenshot, BackendError> {
+pub(crate) fn screenshot(pid: i32, frame: Rect) -> Result<Screenshot, BackendError> {
     if !screen_capture_enabled() {
         return Err(BackendError::Capability {
             capability: Capability::Screenshot,
@@ -115,6 +168,7 @@ pub(crate) fn screenshot(window_id: u32, frame: Rect) -> Result<Screenshot, Back
             diagnostic: None,
         });
     }
+    let window_id = window_id_for_pid(pid)?;
 
     let captured = Owned::new(
         unsafe {

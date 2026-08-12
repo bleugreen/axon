@@ -35,10 +35,6 @@ struct CGPoint {
     y: f64,
 }
 
-fn number_value(value: CFTypeRef) -> Option<i64> {
-    let mut number = 0i64;
-    unsafe { CFNumberGetValue(value, 4, (&mut number as *mut i64).cast()) }.then_some(number)
-}
 #[repr(C)]
 #[derive(Clone, Copy, Default)]
 struct CGSize {
@@ -81,7 +77,6 @@ unsafe extern "C" {
     fn CFArrayGetTypeID() -> usize;
     fn CFArrayGetCount(array: CFArrayRef) -> isize;
     fn CFArrayGetValueAtIndex(array: CFArrayRef, index: isize) -> *const c_void;
-    fn CFNumberGetValue(number: CFTypeRef, number_type: i64, value: *mut c_void) -> bool;
     fn CFRetain(value: CFTypeRef) -> CFTypeRef;
     fn CFRelease(value: CFTypeRef);
 }
@@ -479,6 +474,12 @@ impl PlatformBackend for MacBackend {
         Err(cap(Capability::PointerInput, "drag excluded from v1"))
     }
     fn screenshot(&mut self, app: &AppQuery) -> Result<Screenshot, BackendError> {
+        if !window_capture::screen_capture_enabled() {
+            return Err(cap(
+                Capability::Screenshot,
+                "Screen Recording permission is not granted",
+            ));
+        }
         let (pid, _) = self.resolve(app)?;
         let root = unsafe { AXUIElementCreateApplication(pid) };
         let root = (!root.is_null()).then(|| Owned(root)).ok_or_else(|| {
@@ -506,16 +507,7 @@ impl PlatformBackend for MacBackend {
         }
         let window_frame = frame(window)
             .ok_or_else(|| op("capture screenshot", "window exposes no screen frame"))?;
-        let window_number = attribute(window, "AXWindowNumber")
-            .and_then(|value| number_value(value.0))
-            .and_then(|value| u32::try_from(value).ok())
-            .ok_or_else(|| {
-                op(
-                    "capture screenshot",
-                    "window exposes no CGWindow identifier",
-                )
-            })?;
-        window_capture::screenshot(window_number, window_frame)
+        window_capture::screenshot(pid, window_frame)
     }
     fn hit_test(&mut self, _: (f64, f64)) -> Result<Option<Node>, BackendError> {
         Err(cap(Capability::HitTest, "excluded from v1"))
