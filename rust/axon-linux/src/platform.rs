@@ -338,10 +338,6 @@ impl PlatformBackend for LinuxBackend {
                 "AT-SPI has no portable delta-scroll operation",
             ),
             (
-                Capability::Screenshot,
-                "a desktop portal authorization flow is required",
-            ),
-            (
                 Capability::HitTest,
                 "AT-SPI point lookup is not implemented",
             ),
@@ -358,7 +354,7 @@ impl PlatformBackend for LinuxBackend {
         // rather than about this build, and the same answer decides both the health document and
         // the dispatch ladder.
         let restriction = self.input_restriction();
-        let input = [Capability::PointerInput, Capability::KeyboardInput].map(|capability| {
+        let input = [Capability::PointerInput, Capability::KeyboardInput, Capability::Screenshot].map(|capability| {
             CapabilityInfo {
                 capability,
                 usable: restriction.is_none(),
@@ -444,11 +440,14 @@ impl PlatformBackend for LinuxBackend {
     fn keyboard(&mut self, _: &AppQuery, intent: KeyboardIntent<'_>) -> Result<(), BackendError> {
         self.x11(Capability::KeyboardInput)?.keyboard(intent)
     }
-    fn screenshot(&mut self, _: &AppQuery) -> Result<Screenshot, BackendError> {
-        Err(capability(
-            Capability::Screenshot,
-            "requires desktop portal authorization",
-        ))
+    fn screenshot(&mut self, app: &AppQuery) -> Result<Screenshot, BackendError> {
+        let identity = self
+            .ask(|r| Command::Identity(app.clone(), r))?
+            .ok_or_else(|| operation("capture screenshot", "no AT-SPI application matched"))?;
+        let process_id = self
+            .lookup(|candidate| (candidate.identity == identity).then_some(candidate.process_id))?
+            .ok_or_else(|| operation("capture screenshot", "the matched application has no process id"))?;
+        self.x11(Capability::Screenshot)?.screenshot_for_pid(process_id)
     }
     fn hit_test(&mut self, _: (f64, f64)) -> Result<Option<Node>, BackendError> {
         Err(capability(Capability::HitTest, "not implemented"))

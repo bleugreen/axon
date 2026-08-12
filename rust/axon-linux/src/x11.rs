@@ -13,7 +13,9 @@ use crate::{
     pixel::SendVariant,
     platform::{capability, operation},
 };
-use axon_core::{BackendError, Capability, KeyboardIntent};
+use axon_core::{BackendError, Capability, KeyboardIntent, Rect, Screenshot};
+use image::{DynamicImage, ImageFormat, RgbaImage, imageops::FilterType};
+use std::io::Cursor;
 use std::{
     sync::atomic::{AtomicU32, Ordering},
     time::{SystemTime, UNIX_EPOCH},
@@ -24,7 +26,7 @@ use x11rb::{
         xproto::{
             Atom, AtomEnum, BUTTON_PRESS_EVENT, BUTTON_RELEASE_EVENT, ButtonPressEvent,
             ClientMessageEvent, ConnectionExt as _, EventMask, KEY_PRESS_EVENT, KEY_RELEASE_EVENT,
-            KeyButMask, KeyPressEvent, MOTION_NOTIFY_EVENT, Window,
+            ImageFormat as XImageFormat, KeyButMask, KeyPressEvent, MOTION_NOTIFY_EVENT, Window,
         },
         xtest::{self, ConnectionExt as _},
     },
@@ -44,6 +46,60 @@ x11rb::atom_manager! {
         _NET_ACTIVE_WINDOW,
         _NET_CLIENT_LIST,
         _NET_WM_PID,
+    }
+
+    /// Captures the process's first managed top-level window without involving a desktop portal.
+    /// This path is valid only on a real X11 session; the platform layer refuses XWayland before it
+    /// can reach here because it cannot capture Wayland-native windows honestly.
+    pub fn screenshot_for_pid(&self, pid: u32) -> Result<Screenshot, BackendError> {
+        let window = self
+            .windows_for_pid(pid)?
+            .into_iter()
+            .next()
+            .ok_or_else(|| operation("capture X11 window", "the application owns no managed window"))?;
+        let geometry = self.window_geometry(window)?;
+        let (width, height) = geometry.size;
+        let reply = self
+            .connection
+            .get_image(XImageFormat::Z_PIXMAP, window, 0, 0, width, height, u32::MAX)
+            .map_err(|error| operation("request X11 window pixels", error))?
+            .reply()
+            .map_err(|error| operation("read X11 window pixels", error))?;
+        let pixel_count = usize::from(width) * usize::from(height);
+        if reply.data.len() != pixel_count * 4 {
+            return Err(operation(
+                "decode X11 window pixels",
+                format!("expected 4 bytes per pixel, received {} bytes for {pixel_count} pixels", reply.data.len()),
+            ));
+        }
+        let mut rgba = Vec::with_capacity(reply.data.len());
+        for pixel in reply.data.chunks_exact(4) {
+            rgba.extend_from_slice(&[pixel[2], pixel[1], pixel[0], 255]);
+        }
+        let image = RgbaImage::from_raw(u32::from(width), u32::from(height), rgba)
+            .ok_or_else(|| operation("decode X11 window pixels", "pixel buffer dimensions disagree"))?;
+        let max = axon_core::OBSERVATION_SCREENSHOT_MAX_DIMENSION;
+        let image = if image.width().max(image.height()) > max {
+            DynamicImage::ImageRgba8(image).resize(max, max, FilterType::Triangle)
+        } else {
+            DynamicImage::ImageRgba8(image)
+        };
+        let mut bytes = Cursor::new(Vec::new());
+        image
+            .write_to(&mut bytes, ImageFormat::Png)
+            .map_err(|error| operation("encode X11 screenshot PNG", error))?;
+        Ok(Screenshot {
+            bytes: bytes.into_inner(),
+            media_type: axon_core::OBSERVATION_SCREENSHOT_MEDIA_TYPE.into(),
+            width: image.width(),
+            height: image.height(),
+            frame: Rect {
+                x: f64::from(geometry.origin.0),
+                y: f64::from(geometry.origin.1),
+                width: f64::from(width),
+                height: f64::from(height),
+            },
+        })
     }
 }
 
