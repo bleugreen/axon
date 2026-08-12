@@ -21,7 +21,7 @@ public enum ToolTarget: Equatable, Sendable {
             if (try? SnapshotHandle(value)) != nil {
                 throw JSONRPCError.invalidParams("\(fieldName) no longer accepts snapshot handles; use {app,name} from look")
             }
-            throw JSONRPCError.invalidParams("\(fieldName) semantic targets must be {app,name}")
+            throw JSONRPCError.invalidParams("\(fieldName) semantic targets must be {app,name}; for an app observation pass the top-level app: parameter (bundle identifier, PID, or app name)")
         }
 
         guard case let .object(object) = jsonValue else {

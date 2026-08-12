@@ -31,18 +31,24 @@ public enum SemanticNameLookup: Equatable, Sendable {
 
 /// App-process-scoped semantic identity captured at observation time.
 ///
-/// The registry follows snapshot retention rather than wall-clock time. Registering a relaunched app
-/// atomically removes records for the previous process, and pruning a snapshot removes every name whose
-/// durable evidence was derived from it.
+/// The registry follows snapshot retention rather than wall-clock time. Registering a live app removes
+/// overlapping evidence only for processes that are no longer running, and pruning a snapshot removes
+/// every name whose durable evidence was derived from it.
 public final class SemanticNameRegistry: @unchecked Sendable {
     private let lock = NSLock()
     private let maxSnapshots: Int
+    private let isProcessRunning: (Int32) -> Bool
     private var recordsBySnapshot: [SnapshotID: [SemanticNameRecord]] = [:]
     private var snapshotOrder: [SnapshotID] = []
-    private var processByAppKey: [String: Int32] = [:]
 
-    public init(maxSnapshots: Int = AXElementStore.defaultMaxSnapshots) {
+    public init(
+        maxSnapshots: Int = AXElementStore.defaultMaxSnapshots,
+        isProcessRunning: @escaping (Int32) -> Bool = { processIdentifier in
+            AppResolver().runningApps().contains { $0.processIdentifier == processIdentifier }
+        }
+    ) {
         self.maxSnapshots = max(1, maxSnapshots)
+        self.isProcessRunning = isProcessRunning
     }
 
     @discardableResult
@@ -71,12 +77,7 @@ public final class SemanticNameRegistry: @unchecked Sendable {
 
         lock.lock()
         defer { lock.unlock() }
-        invalidateRelaunchedApp(snapshot.app)
-        recordsBySnapshot[snapshot.id] = records
-        snapshotOrder.removeAll { $0 == snapshot.id }
-        snapshotOrder.append(snapshot.id)
-        for key in Self.appKeys(snapshot.app) { processByAppKey[key] = snapshot.app.processIdentifier }
-        pruneOldSnapshots()
+        registerLive(records, for: snapshot.app, snapshotID: snapshot.id, replacing: true)
         return records
     }
 
@@ -100,8 +101,7 @@ public final class SemanticNameRegistry: @unchecked Sendable {
         }
         lock.lock()
         defer { lock.unlock() }
-        let existing = recordsBySnapshot[page.snapshotID] ?? []
-        recordsBySnapshot[page.snapshotID] = existing + records
+        registerLive(records, for: app, snapshotID: page.snapshotID, replacing: false)
         return records
     }
 
@@ -148,13 +148,30 @@ public final class SemanticNameRegistry: @unchecked Sendable {
         snapshotOrder.removeAll { $0 == snapshotID }
     }
 
-    private func invalidateRelaunchedApp(_ app: AppIdentity) {
-        let changed = Self.appKeys(app).contains { key in
-            processByAppKey[key].map { $0 != app.processIdentifier } ?? false
-        }
-        guard changed else { return }
-        let stale = recordsBySnapshot.compactMap { snapshotID, records in
-            records.contains(where: { Self.matches(app.name, identity: $0.appIdentity) }) ? snapshotID : nil
+    private func registerLive(
+        _ records: [SemanticNameRecord],
+        for app: AppIdentity,
+        snapshotID: SnapshotID,
+        replacing: Bool
+    ) {
+        invalidateDeadProcesses(overlapping: app)
+        recordsBySnapshot[snapshotID] = replacing ? records : (recordsBySnapshot[snapshotID] ?? []) + records
+        snapshotOrder.removeAll { $0 == snapshotID }
+        snapshotOrder.append(snapshotID)
+        pruneOldSnapshots()
+    }
+
+    private func invalidateDeadProcesses(overlapping app: AppIdentity) {
+        guard app.processIdentifier > 0 else { return }
+        let stale = recordsBySnapshot.compactMap { snapshotID, records -> SnapshotID? in
+            let identities = records.map(\.appIdentity)
+            let belongsToDeadOverlappingProcess = identities.contains { identity in
+                identity.processIdentifier > 0
+                    && identity.processIdentifier != app.processIdentifier
+                    && Self.hasStableIdentityOverlap(app, identity)
+                    && !isProcessRunning(identity.processIdentifier)
+            }
+            return belongsToDeadOverlappingProcess ? snapshotID : nil
         }
         stale.forEach { recordsBySnapshot.removeValue(forKey: $0) }
         snapshotOrder.removeAll { stale.contains($0) }
@@ -167,11 +184,22 @@ public final class SemanticNameRegistry: @unchecked Sendable {
     }
 
     private static func appKeys(_ app: AppIdentity) -> [String] {
-        [app.name.lowercased(), app.bundleIdentifier?.lowercased()].compactMap { $0 }
+        var keys = [app.name.lowercased(), app.bundleIdentifier?.lowercased()].compactMap { $0 }
+        if app.processIdentifier > 0 {
+            keys.append(String(app.processIdentifier))
+            keys.append("pid:\(app.processIdentifier)")
+        }
+        return keys
     }
 
     private static func matches(_ query: String, identity: AppIdentity) -> Bool {
         appKeys(identity).contains(query.lowercased())
+    }
+
+    private static func hasStableIdentityOverlap(_ lhs: AppIdentity, _ rhs: AppIdentity) -> Bool {
+        if lhs.name.caseInsensitiveCompare(rhs.name) == .orderedSame { return true }
+        guard let lhsBundle = lhs.bundleIdentifier, let rhsBundle = rhs.bundleIdentifier else { return false }
+        return lhsBundle.caseInsensitiveCompare(rhsBundle) == .orderedSame
     }
 
     private struct NodeContext {

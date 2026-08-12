@@ -130,6 +130,11 @@ public struct CommandRouterServices {
     }
 }
 
+private func locatorResolutionApp(for record: SemanticNameRecord, callerApp: String) -> String {
+    let processIdentifier = record.appIdentity.processIdentifier
+    return processIdentifier > 0 ? String(processIdentifier) : callerApp
+}
+
 private struct SemanticResolutionFailure: Error {
     let status: String
     let query: SemanticTargetQuery
@@ -521,7 +526,11 @@ private struct PerceptionCommandHandler {
                 let parentHandle: String
                 switch services.semanticNameRegistry.lookup(app: app, name: name) {
                 case let .unique(record):
-                    let resolution = try services.resolveLocator(app, record.locator, false)
+                    let resolution = try services.resolveLocator(
+                        locatorResolutionApp(for: record, callerApp: app),
+                        record.locator,
+                        false
+                    )
                     guard resolution.status == .unique, let handle = resolution.best?.handle else {
                         throw JSONRPCError.invalidParams("Semantic paging target did not resolve uniquely")
                     }
@@ -651,7 +660,11 @@ private struct PerceptionCommandHandler {
             case let .ambiguous(query, candidates):
                 throw SemanticResolutionFailure(status: "ambiguous", query: query, candidates: candidates)
             }
-            let resolution = try services.resolveLocator(request.app, record.locator, false)
+            let resolution = try services.resolveLocator(
+                locatorResolutionApp(for: record, callerApp: request.app),
+                record.locator,
+                false
+            )
             lastResolution = resolution
             if resolution.status == .unique, let handle = resolution.best?.handle {
                 let state = try services.readableAXState(handle)
@@ -944,7 +957,11 @@ private struct PrimitiveActionCommandHandler {
             case let .ambiguous(_, candidates):
                 throw SemanticResolutionFailure(status: "ambiguous", query: query, candidates: candidates)
             }
-            let resolution = try services.resolveLocator(app, record.locator, true)
+            let resolution = try services.resolveLocator(
+                locatorResolutionApp(for: record, callerApp: app),
+                record.locator,
+                true
+            )
             guard resolution.status == .unique, let handle = resolution.best?.handle else {
                 throw LocatorResolutionFailure(resolution: resolution)
             }

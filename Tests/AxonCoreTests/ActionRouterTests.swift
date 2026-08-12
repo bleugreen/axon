@@ -65,6 +65,17 @@ import Testing
     #expect(response.result?["wait"]?["elapsedMs"] == .int(200))
 }
 
+private func semanticActionSnapshot(id: String, pid: Int32, buttonTitle: String) -> AppSnapshot {
+    AppSnapshot(
+        id: SnapshotID(id),
+        app: AppIdentity(bundleIdentifier: "com.example.Registry", name: "Registry", processIdentifier: pid),
+        windows: [AXNode(role: "AXWindow", title: "Main", children: [
+            AXNode(role: "AXButton", title: buttonTitle, actions: ["AXPress"])
+        ])],
+        screenshot: nil
+    )
+}
+
 private func stabilitySnapshot(id: String, title: String) -> AppSnapshot {
     AppSnapshot(
         id: SnapshotID(id),
@@ -241,19 +252,19 @@ private func stabilitySnapshot(id: String, title: String) -> AppSnapshot {
     #expect(response.result?["resolution"]?["best"]?["handle"] == .string("live-locator:2"))
 }
 
-@Test func waitForValueSucceedsWhenDescriptionMatches() {
+@Test func waitForValueSucceedsWhenDescriptionMatches() throws {
     var nowMs = 0
     var sleeps: [Int] = []
     var reads = 0
-    let registry = SemanticNameRegistry()
-    registry.registerReplayEvidence(
-        app: "Firefox",
-        name: "site-information-button",
-        locator: AXLocator(role: "AXButton")
-    )
+    var resolvedApps: [String] = []
+    let registry = SemanticNameRegistry(isProcessRunning: { $0 == 6060 })
+    let name = try #require(registry.register(snapshot: semanticActionSnapshot(
+        id: "wait-live", pid: 6060, buttonTitle: "Site information"
+    )).first { $0.label == "Site information" }).query.name
     let router = CommandRouter(
         resolveLocator: { app, locator, scrollToVisible in
-            #expect(app == "Firefox")
+            resolvedApps.append(app)
+            #expect(app == "6060")
             #expect(locator.role == "AXButton")
             #expect(scrollToVisible == false)
             return waitUniqueResolution()
@@ -279,8 +290,8 @@ private func stabilitySnapshot(id: String, title: String) -> AppSnapshot {
         method: "wait_for_value",
         params: .object([
             "target": .object([
-                "app": .string("Firefox"),
-                "name": .string("site-information-button")
+                "app": .string("Registry"),
+                "name": .string(name)
             ]),
             "contains": .string("View site information"),
             "timeoutMs": .int(500),
@@ -295,6 +306,7 @@ private func stabilitySnapshot(id: String, title: String) -> AppSnapshot {
     #expect(response.result?["wait"]?["matched"]?["value"] == .string("View site information"))
     #expect(response.result?["wait"]?["elapsedMs"] == .int(100))
     #expect(sleeps == [100])
+    #expect(resolvedApps == ["6060", "6060"])
 }
 
 @Test func waitForValueTimesOutWithLastObservedState() {
@@ -376,16 +388,14 @@ private func stabilitySnapshot(id: String, title: String) -> AppSnapshot {
     #expect(response.result?["wait"]?["resolution"]?["status"] == .string("missing"))
 }
 
-@Test func clickRequestAcceptsSemanticNameTarget() {
-    let registry = SemanticNameRegistry()
-    registry.registerReplayEvidence(
-        app: "com.example.App",
-        name: "new-button",
-        locator: AXLocator(role: "AXButton", title: .exact("NEW"))
-    )
+@Test func clickRequestAcceptsSemanticNameTarget() throws {
+    let registry = SemanticNameRegistry(isProcessRunning: { $0 == 4242 })
+    let name = try #require(registry.register(snapshot: semanticActionSnapshot(
+        id: "action-live", pid: 4242, buttonTitle: "NEW"
+    )).first { $0.label == "NEW" }).query.name
     let router = CommandRouter(
         resolveLocator: { app, locator, scrollToVisible in
-            #expect(app == "com.example.App")
+            #expect(app == "4242")
             #expect(locator.role == "AXButton")
             #expect(locator.title?.matches("NEW") == true)
             #expect(scrollToVisible == true)
@@ -410,8 +420,8 @@ private func stabilitySnapshot(id: String, title: String) -> AppSnapshot {
         method: "click",
         params: .object([
             "target": .object([
-                "app": .string("com.example.App"),
-                "name": .string("new-button")
+                "app": .string("Registry"),
+                "name": .string(name)
             ])
         ])
     ))
@@ -422,6 +432,33 @@ private func stabilitySnapshot(id: String, title: String) -> AppSnapshot {
     #expect(response.result?["action"]?["targetResolution"]?["confidence"] == .string("low"))
     #expect(response.result?["action"]?["targetResolution"]?["best"] == nil)
     #expect(response.result?["action"]?["targetResolution"]?["candidates"] == nil)
+}
+
+@Test func clickRequestAcceptsBarePIDSemanticTarget() throws {
+    let registry = SemanticNameRegistry(isProcessRunning: { $0 == 5151 })
+    let name = try #require(registry.register(snapshot: semanticActionSnapshot(
+        id: "pid-action", pid: 5151, buttonTitle: "Launch"
+    )).first { $0.label == "Launch" }).query.name
+    let router = CommandRouter(
+        resolveLocator: { app, _, _ in
+            #expect(app == "5151")
+            return LocatorResolution(
+                status: .unique, snapshotID: SnapshotID("resolved"),
+                best: LocatorCandidate(index: 0, handle: SnapshotHandle(snapshotID: SnapshotID("resolved"), nodeIndex: 0), role: "AXButton", title: "Launch", score: 1_000, reasons: []),
+                candidates: []
+            )
+        },
+        actions: PrimitiveActionHandlers(click: { target, _ in
+            PrimitiveActionResult(action: "click", target: target, strategy: "AXPress", success: true)
+        }),
+        semanticNameRegistry: registry
+    )
+
+    let response = router.handle(JSONRPCRequest(
+        id: .string("pid-click"), method: "click",
+        params: .object(["target": .object(["app": .string("5151"), "name": .string(name)])])
+    ))
+    #expect(response.error == nil)
 }
 
 @Test func clickRequestAcceptsTextLocationTarget() {
@@ -660,6 +697,17 @@ private func stabilitySnapshot(id: String, title: String) -> AppSnapshot {
 
     #expect(response.error?.code == -32602)
     #expect(response.error?.message == "Locator did not resolve uniquely: ambiguous")
+}
+
+@Test func clickRequestGuidesBareSemanticTargetsToAppObservationParameter() {
+    let response = CommandRouter().handle(JSONRPCRequest(
+        id: .string("click-bare-semantic"), method: "click",
+        params: .object(["target": .string("submit-button")])
+    ))
+
+    #expect(response.error?.code == -32602)
+    #expect(response.error?.message.contains("must be {app,name}") == true)
+    #expect(response.error?.message.contains("top-level app: parameter (bundle identifier, PID, or app name)") == true)
 }
 
 @Test func clickRequestReportsStaleSnapshotHandleAsInvalidParams() {
