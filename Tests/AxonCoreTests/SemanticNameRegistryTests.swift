@@ -34,13 +34,73 @@ import Testing
     }
 }
 
-@Test func semanticRegistryInvalidatesPreviousProcessOnRelaunch() throws {
-    let registry = SemanticNameRegistry(maxSnapshots: 4)
-    let old = registry.register(snapshot: registrySnapshot(id: "old", pid: 10, buttonTitle: "Submit"))
-    let oldName = try #require(old.first { $0.label == "Submit" }).query.name
-    registry.register(snapshot: registrySnapshot(id: "new", pid: 11, buttonTitle: "Cancel"))
-    guard case .missing = registry.lookup(app: "Registry", name: oldName) else {
-        Issue.record("old process semantic records survived relaunch")
+@Test func semanticRegistryAcceptsBareAndPrefixedPIDQueries() throws {
+    let registry = SemanticNameRegistry(isProcessRunning: { $0 == 10 })
+    let name = try #require(registry.register(snapshot: registrySnapshot(id: "pid", pid: 10, buttonTitle: "Submit")).first { $0.label == "Submit" }).query.name
+
+    guard case let .unique(bare) = registry.lookup(app: "10", name: name),
+          case let .unique(prefixed) = registry.lookup(app: "pid:10", name: name) else {
+        Issue.record("expected both PID query forms to resolve")
+        return
+    }
+    #expect(bare.appIdentity.processIdentifier == 10)
+    #expect(prefixed.appIdentity.processIdentifier == 10)
+}
+
+@Test func semanticRegistryPreservesCoexistingProcessesAndInvalidatesOnlyDeadRelaunchEvidence() throws {
+    final class Liveness: @unchecked Sendable { var running: Set<Int32> = [10, 20] }
+    let liveness = Liveness()
+    let registry = SemanticNameRegistry(maxSnapshots: 4, isProcessRunning: { liveness.running.contains($0) })
+    let firstName = try #require(registry.register(snapshot: registrySnapshot(id: "first", pid: 10, buttonTitle: "Submit")).first { $0.label == "Submit" }).query.name
+    let peerName = try #require(registry.register(snapshot: registrySnapshot(id: "peer", pid: 20, buttonTitle: "Share")).first { $0.label == "Share" }).query.name
+    guard case .unique = registry.lookup(app: "10", name: firstName),
+          case .unique = registry.lookup(app: "20", name: peerName) else {
+        Issue.record("live same-identity processes did not coexist")
+        return
+    }
+
+    liveness.running = [20, 11]
+    let replacementName = try #require(registry.register(snapshot: registrySnapshot(id: "replacement", pid: 11, buttonTitle: "Cancel")).first { $0.label == "Cancel" }).query.name
+    guard case .missing = registry.lookup(app: "10", name: firstName),
+          case .unique = registry.lookup(app: "11", name: replacementName),
+          case .unique = registry.lookup(app: "20", name: peerName) else {
+        Issue.record("relaunch cleanup did not remove only the dead process")
+        return
+    }
+}
+
+@Test func semanticRegistryPageRegistrationUsesLiveLifecycleOrderingAndPruning() throws {
+    final class Liveness: @unchecked Sendable { var running: Set<Int32> = [10, 20] }
+    let liveness = Liveness()
+    let registry = SemanticNameRegistry(maxSnapshots: 2, isProcessRunning: { liveness.running.contains($0) })
+    let oldName = try #require(registry.register(snapshot: registrySnapshot(id: "old", pid: 10, buttonTitle: "Old")).first { $0.label == "Old" }).query.name
+    let peerName = try #require(registry.register(snapshot: registrySnapshot(id: "peer", pid: 20, buttonTitle: "Peer")).first { $0.label == "Peer" }).query.name
+
+    liveness.running = [11, 20]
+    let page = AXChildrenPage(
+        snapshotID: SnapshotID("replacement"), parentHandle: "replacement:0",
+        offset: 0, limit: 1, total: 1, baseIndex: 1,
+        children: [AXNode(role: "AXButton", title: "Paged", actions: ["AXPress"])]
+    )
+    let pageName = try #require(registry.register(page: page, app: AppIdentity(
+        bundleIdentifier: "com.example.Registry", name: "Registry", processIdentifier: 11
+    )).first { $0.label == "Paged" }).query.name
+    guard case .missing = registry.lookup(app: "10", name: oldName),
+          case .unique = registry.lookup(app: "20", name: peerName),
+          case .unique = registry.lookup(app: "11", name: pageName) else {
+        Issue.record("page registration bypassed live lifecycle")
+        return
+    }
+
+    registry.register(snapshot: AppSnapshot(
+        id: SnapshotID("other"),
+        app: AppIdentity(bundleIdentifier: "com.example.Other", name: "Other", processIdentifier: 30),
+        windows: [AXNode(role: "AXWindow", title: "Other", children: [AXNode(role: "AXButton", title: "Other")])],
+        screenshot: nil
+    ))
+    guard case .missing = registry.lookup(app: "20", name: peerName),
+          case .unique = registry.lookup(app: "11", name: pageName) else {
+        Issue.record("page registration did not refresh ordering or participate in pruning")
         return
     }
 }
