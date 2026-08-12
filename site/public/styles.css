@@ -359,6 +359,23 @@ footer {
   font-size: 12px;
 }
 
+@media (max-width: 1050px) {
+  .docs-shell {
+    grid-template-columns: 1fr;
+    gap: 36px;
+    padding: 38px 20px 84px;
+  }
+  .docs-shell aside {
+    position: static;
+    flex-direction: row;
+    overflow-x: auto;
+    margin: 0 -20px;
+    padding: 0 20px 14px;
+  }
+  .docs-shell aside a { margin: 0; white-space: nowrap; }
+  .docs-label { display: none; }
+}
+
 @media (max-width: 780px) {
   .site-header, footer { padding-left: 20px; padding-right: 20px; }
   .hero { padding-top: 82px; padding-bottom: 84px; }
