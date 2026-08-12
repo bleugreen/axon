@@ -39,10 +39,20 @@ struct CGPoint {
 impl ReadableStateProvider for MacBackend {
     fn readable_state(&self, target: &SnapshotHandle) -> Result<Map<String, Value>, BackendError> {
         let element = self.element(target)?;
-        Ok([("value", "AXValue"), ("title", "AXTitle"), ("description", "AXDescription"), ("identifier", "AXIdentifier"), ("help", "AXHelp")]
-            .into_iter()
-            .filter_map(|(field, attribute)| text_attribute(element, attribute).filter(|value| !value.is_empty()).map(|value| (field.into(), Value::String(value))))
-            .collect())
+        Ok([
+            ("value", "AXValue"),
+            ("title", "AXTitle"),
+            ("description", "AXDescription"),
+            ("identifier", "AXIdentifier"),
+            ("help", "AXHelp"),
+        ]
+        .into_iter()
+        .filter_map(|(field, attribute)| {
+            text_attribute(element, attribute)
+                .filter(|value| !value.is_empty())
+                .map(|value| (field.into(), Value::String(value)))
+        })
+        .collect())
     }
 }
 
