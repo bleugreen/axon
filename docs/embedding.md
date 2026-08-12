@@ -1,8 +1,9 @@
 # Embedding Axon
 
-This is the contract a consumer relies on when it bundles Axon with something else. Cairn's
-executor is the first such consumer, but nothing here is specific to it: Cairn uses the same
-facade, the same lifecycle verbs, and the same status document as any other client.
+This guide is for developers building on Axon: products that bundle and manage the service as part of their own experience.
+
+This is the contract a consumer relies on when it bundles Axon with something else: one facade,
+one set of lifecycle verbs, and one machine-readable status document across supported platforms.
 
 Axon's trust boundary is deliberately local and does not move. There is no remote protocol, no
 network listener, and no authentication layer, and there never will be. A consumer that needs to
@@ -353,4 +354,4 @@ These are settled and will not change:
 
 - No remote protocol, no network listener, no authentication layer. Axon's authorization is the
   operating system's own same-user access control on a local socket or pipe.
-- No Cairn-specific code paths. Cairn consumes the same facade as any other MCP client.
+- No consumer-specific code paths. Every integration uses the same facade and lifecycle contract.

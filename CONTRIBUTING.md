@@ -30,7 +30,7 @@ Build a signed app bundle (unsigned ad-hoc by default, suitable for local testin
 make package-app
 ```
 
-For signing and notarization options, see [docs/install.md](docs/install.md).
+For signing, packaging, and notarization options, see [docs/releasing.md](docs/releasing.md).
 
 ## Releasing
 

@@ -1,56 +1,52 @@
-# Tool Surface
+# What you can do with Axon
 
-Axon exposes one verb-shaped vocabulary through MCP, the socket router, `.axn`
-files, and the CLI. There are no compatibility aliases for previous tool names.
+Axon gives your agent a way to understand and operate desktop apps using their accessibility information. You describe the outcome; the agent uses Axon to inspect the app, choose a meaningful target, act, and check what happened.
 
-## MCP Tools
+## Start by looking
 
-```text
-look(app?, target?, since?, screenshot?, screenText?, tree?, offset?, limit?, direct?, childDepth?, depth?, all?, format?, frames?)
-navigate(app, url)
-windows(app)
-tabs(app, window?)
-find(app, locator)
-wait_for_value(target, contains?, equals?, matches?, timeoutMs?, intervalMs?)
-wait_for_stability(app, condition?, stableMs?, timeoutMs?, intervalMs?)
-permit()
-run(actions?, path?, argValues?, continueOnError?, dryRun?, healedPath?)
-save(sessionId?, from?, to?, path?, includeReads?)
-click(target, deliveryPolicy?)
-type(target, value, deliveryPolicy?)
-keyboard(text?, key?, app?, deliveryPolicy?)
-scroll(target?, app?, deltaX?, deltaY?, deliveryPolicy?)
-drag(from, to, app?, durationMs?, expects?, deliveryPolicy?)
-invoke(target, name, deliveryPolicy?)
-```
+Ask your agent to look at an app before acting:
 
-## CLI Commands
+> Look at Safari and tell me what is open.
 
-```text
-axon permit
-axon refresh-secrets [--json]
-axon look [app | target-json] [--since snapshot-id] [--no-screenshot] [--screen-text] [--frames] [--json] [--details] [--debug] [--no-tree] [--offset n] [--limit n] [--depth n]
-axon find <app> '<locator-json>'
-axon wait_for_value '<target-json>' (--contains text | --equals text | --matches regex) [--timeout-ms n] [--interval-ms n]
-axon wait_for_stability <app> [--condition stable|changed] [--stable-ms n] [--timeout-ms n] [--interval-ms n]
-axon run <path.axn> [--arg name=value] [--dry-run] [--healed-path file] [--continue-on-error]
-axon save [--session id] [--from call] [--to call] [--path file.axn] [--include-reads]
+Axon returns a compact description of windows and controls using roles, labels, values, and stable semantic names. It can include a screenshot when that helps. Passwords, credentials, and other recognized sensitive values are redacted.
 
-axon click [--foreground] <target-json>
-axon type [--foreground] <target-json> <value>
-axon keyboard [--app app] [--foreground] (--text text | --key keystroke)
-axon scroll [--app app] [--target target-json] [--dx n] [--dy n]
-axon drag [--app app] [--duration-ms n] [--foreground] <from-json> <to-json>
-axon invoke [--foreground] <target-json> <action-name>
-```
+## Act on meaningful targets
 
-The command line has one positional slot where `look` has two parameters, so the
-shape of the argument selects between them: a bare word is an `app` to observe,
-and a JSON object is a `target` whose children are paged. Every other command
-that takes a target takes it as JSON, because an element target is the
-`{app, name}` object `look` returned and never a bare string.
+You can refer to controls by what they are, not by screen coordinates:
 
-## Perception
+> Click the **Create issue** button in Linear.
+
+> Fill the **Email** field with `ada@example.com`.
+
+> Open Safari to `https://example.com`.
+
+Axon prefers semantic actions supplied by the app, such as pressing a button or setting a field value. Coordinates are an escape hatch for surfaces that do not expose useful accessibility information.
+
+## Keep control of your desktop
+
+Actions run in the background when the operating system and app allow it. Axon does not silently move your pointer, steal focus, use the clipboard, or send global keyboard input.
+
+When an action genuinely requires the app in front, your agent must opt in for that specific step. The permission does not carry into later actions.
+
+## Expect honest results
+
+Axon separates “the operating system accepted the input” from “the intended result happened.” If it cannot verify an outcome, it says so. If a safe delivery path does not exist, it refuses the action instead of guessing.
+
+For tasks with a clear result, ask the agent to wait for it:
+
+> Submit the form, then wait until the confirmation message appears.
+
+## Save repeatable work
+
+A useful sequence can be saved as a human-readable [`.axn` file](axn.md). You can inspect it, edit parameters, keep it in version control, and run it again.
+
+> Save what we just did as `create-issue.axn`.
+
+For platform-specific limits, see [Cross-platform support](cross-platform.md).
+
+## Protocol reference
+
+### See what an app exposes
 
 `look()` lists regular running UI apps by default. Use `all: true` or
 `format: "debug"` through MCP, or `axon look --details`, when raw running
@@ -151,7 +147,7 @@ and return `finalObservation` on success or timeout. This is the post-navigation
 settle primitive; use `wait_for_value` when readiness has a specific semantic
 field predicate instead.
 
-## Delivery
+### Act without stealing focus
 
 Every mutating action takes a `deliveryPolicy`, and the CLI spells
 `foregroundPermitted` as `--foreground`. `backgroundOnly` is the default and
@@ -238,7 +234,7 @@ the overall result is a failure.
 Axon has no clipboard path and will not grow one by accident: the pasteboard is
 modelled as a forbidden delivery capability that the planner refuses on sight.
 
-## Actions
+### Interact with a target
 
 Interactive element targets are app-scoped semantic names:
 
@@ -319,7 +315,7 @@ receiving application. Without it the only rung left is foreground, and
 `invoke` runs a named AX action such as `AXPress` or `AXShowMenu`. It is always
 semantic and never escalates.
 
-## Recordings
+### Save and replay useful work
 
 `run` executes `.axn` actions from a file, inline actions, or both. When both
 `path` and `actions` are provided, the file is loaded first and inline actions
@@ -358,3 +354,52 @@ as `look` and `find` are omitted unless `includeReads` is true.
 kinds are `exists`, `focused`, `value`, `selected`, `enabled`, `window`,
 `menu-selection`, and `changed`; facts resolve through the same locator model as
 actions.
+
+### Protocol signatures
+
+#### MCP
+
+```text
+look(app?, target?, since?, screenshot?, screenText?, tree?, offset?, limit?, direct?, childDepth?, depth?, all?, format?, frames?)
+navigate(app, url)
+windows(app)
+tabs(app, window?)
+find(app, locator)
+wait_for_value(target, contains?, equals?, matches?, timeoutMs?, intervalMs?)
+wait_for_stability(app, condition?, stableMs?, timeoutMs?, intervalMs?)
+permit()
+run(actions?, path?, argValues?, continueOnError?, dryRun?, healedPath?)
+save(sessionId?, from?, to?, path?, includeReads?)
+click(target, deliveryPolicy?)
+type(target, value, deliveryPolicy?)
+keyboard(text?, key?, app?, deliveryPolicy?)
+scroll(target?, app?, deltaX?, deltaY?, deliveryPolicy?)
+drag(from, to, app?, durationMs?, expects?, deliveryPolicy?)
+invoke(target, name, deliveryPolicy?)
+```
+
+#### CLI
+
+```text
+axon permit
+axon refresh-secrets [--json]
+axon look [app | target-json] [--since snapshot-id] [--no-screenshot] [--screen-text] [--frames] [--json] [--details] [--debug] [--no-tree] [--offset n] [--limit n] [--depth n]
+axon find <app> '<locator-json>'
+axon wait_for_value '<target-json>' (--contains text | --equals text | --matches regex) [--timeout-ms n] [--interval-ms n]
+axon wait_for_stability <app> [--condition stable|changed] [--stable-ms n] [--timeout-ms n] [--interval-ms n]
+axon run <path.axn> [--arg name=value] [--dry-run] [--healed-path file] [--continue-on-error]
+axon save [--session id] [--from call] [--to call] [--path file.axn] [--include-reads]
+
+axon click [--foreground] <target-json>
+axon type [--foreground] <target-json> <value>
+axon keyboard [--app app] [--foreground] (--text text | --key keystroke)
+axon scroll [--app app] [--target target-json] [--dx n] [--dy n]
+axon drag [--app app] [--duration-ms n] [--foreground] <from-json> <to-json>
+axon invoke [--foreground] <target-json> <action-name>
+```
+
+The command line has one positional slot where `look` has two parameters, so the
+shape of the argument selects between them: a bare word is an `app` to observe,
+and a JSON object is a `target` whose children are paged. Every other command
+that takes a target takes it as JSON, because an element target is the
+`{app, name}` object `look` returned and never a bare string.

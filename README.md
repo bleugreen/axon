@@ -53,14 +53,14 @@ The four guarantees Axon tries to make:
 
 ## Documentation
 
-- [Install and Operations](docs/install.md) — build, daemon lifecycle, MCP setup, logs, troubleshooting
-- [Cross-platform](docs/cross-platform.md) — the evidence-based support matrix, backend design, and live verification lanes
-- [Embedding Axon](docs/embedding.md) — the contract for bundling Axon: versioned artifacts, lifecycle verbs, and the `health-v1` status document
-- [Tool Surface](docs/tool-surface.md) — MCP/CLI commands, target shapes, screenshots, action semantics
-- [The `.axn` File](docs/axn.md) — file schema, history export, replay
-- [Design](docs/design.md) — architecture and long-term direction
-- [Decision Log](docs/decision-log.md) — durable decisions made while shaping the project
-- [Open Issues](docs/issues) — known gaps and active follow-up work
+- [Install](docs/install.md) — install Axon, grant permissions, and troubleshoot the local service
+- [Connect your agent](docs/connect.md) — register Axon with Claude Code, Codex, or another MCP client
+- [Tools](docs/tool-surface.md) — understand the tool vocabulary, target shapes, and action semantics
+- [The `.axn` file](docs/axn.md) — save, inspect, and replay agent work
+- [Cross-platform](docs/cross-platform.md) — see what is supported on macOS, Windows, and Linux
+- [Embedding](docs/embedding.md) — integrate and manage Axon from another product
+
+Contributor references, design rationale, and historical records remain in [`docs/`](docs/).
 
 ## Current Shape
 
@@ -83,7 +83,7 @@ make test
 make package-app
 ```
 
-See [Install and Operations](docs/install.md) for signing, notarization, and the development socket workflow.
+See [Releasing Axon](docs/releasing.md) for signing, notarization, and the development socket workflow.
 
 ## Contributing
 
