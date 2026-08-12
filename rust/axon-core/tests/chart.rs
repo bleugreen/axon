@@ -39,7 +39,10 @@ fn duplicate_chart_seeds_return_missing_when_all_live_candidates_are_gone() {
     let registry = SemanticNameRegistry::default();
     let live = snapshot("live", vec![node("Other", None)]);
     match ChartSeededResolver::new(&registry, &mut store).resolve(
-        &WireElementTarget { app: "App".into(), name },
+        &WireElementTarget {
+            app: "App".into(),
+            name,
+        },
         &live,
         "com.example.app",
         None,
@@ -48,9 +51,14 @@ fn duplicate_chart_seeds_return_missing_when_all_live_candidates_are_gone() {
         SemanticLookup::Missing { .. } => {}
         _ => panic!("fully stale duplicate seeds did not resolve missing"),
     }
-    assert!(store.chart("com.example.app").entries.iter()
-        .filter(|entry| entry.key.candidate_ordinal.is_some())
-        .all(|entry| entry.resolution_failures == 1));
+    assert!(
+        store
+            .chart("com.example.app")
+            .entries
+            .iter()
+            .filter(|entry| entry.key.candidate_ordinal.is_some())
+            .all(|entry| entry.resolution_failures == 1)
+    );
     let _ = fs::remove_dir_all(root);
 }
 fn snapshot(id: &str, children: Vec<Node>) -> Snapshot {
@@ -225,7 +233,14 @@ fn persistence_is_private_total_deterministic_and_per_app() {
     let replaced = fs::read(&path).unwrap();
     assert_ne!(bytes, replaced);
     let reloaded = ChartStore::new(root.clone()).load("com.example.app");
-    assert!(reloaded.entries.iter().map(|entry| entry.observations).sum::<u64>() > first_observations);
+    assert!(
+        reloaded
+            .entries
+            .iter()
+            .map(|entry| entry.observations)
+            .sum::<u64>()
+            > first_observations
+    );
     assert_ne!(
         loaded.chart_path("../evil"),
         loaded.chart_path("com.example.app")
