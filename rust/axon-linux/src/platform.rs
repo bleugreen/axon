@@ -170,7 +170,19 @@ struct SessionFacts {
 /// that works while its proof quietly does not is the precise failure this contract exists to
 /// refuse.
 fn input_restriction(facts: SessionFacts) -> Option<&'static str> {
-    screenshot_restriction(facts).or_else(|| (!facts.xtest).then_some(NO_XTEST))
+    if facts.wayland {
+        return Some(WAYLAND_SESSION);
+    }
+    if !facts.x_display {
+        return Some(NO_X_DISPLAY);
+    }
+    if !facts.window_manager {
+        return Some(NO_WINDOW_MANAGER);
+    }
+    if !facts.xtest {
+        return Some(NO_XTEST);
+    }
+    None
 }
 
 /// Why an application window cannot be located and captured in this session.
