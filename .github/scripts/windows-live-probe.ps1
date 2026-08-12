@@ -636,13 +636,18 @@ function Invoke-ProbeStage {
             $response = Invoke-AxonMcp -Request $request
             $window = $response.result.structuredContent.app.windows |
                 ForEach-Object root | Where-Object role -eq 'Window' | Select-Object -First 1
-            if ($response.result.isError -eq $false -and $null -ne $window) {
+            $screenshot = $response.result.structuredContent.app.screenshot
+            $screenshotOk = $null -ne $screenshot -and
+                $screenshot.mediaType -eq 'image/png' -and
+                $screenshot.base64Data.Length -gt 0 -and
+                [Math]::Max([int]$screenshot.width, [int]$screenshot.height) -le 1280
+            if ($response.result.isError -eq $false -and $null -ne $window -and $screenshotOk) {
                 $verified = @{ response = $response; window = $window; app = $app.name }
                 break
             }
         }
         if ($null -eq $verified) {
-            throw "look returned no Window root from any application this lane did not start (considered: $($considered -join ', '))"
+            throw "look returned no Window root with a downscaled PNG from any application this lane did not start (considered: $($considered -join ', '))"
         }
         Write-Note "isError:false snapshot=$($verified.response.result.structuredContent.id) root=$($verified.window.role) app=$($verified.app)"
     }
