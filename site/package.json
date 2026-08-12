@@ -9,8 +9,5 @@
   "dependencies": {
     "github-slugger": "2.0.0",
     "marked": "15.0.12"
-  },
-  "devDependencies": {
-    "wrangler": "4.122.0"
   }
 }

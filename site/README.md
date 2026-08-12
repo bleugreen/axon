@@ -17,11 +17,15 @@ Files in `public/` are copied unchanged to the domain root. The platform install
 
 ## Cloudflare Pages
 
-The deployment workflow expects an existing Cloudflare Pages project named `axn-dev` and these
-GitHub Actions repository secrets:
+Cloudflare Pages owns builds and deployments through its native GitHub integration. Configure the
+project with:
 
-- `CLOUDFLARE_API_TOKEN`: a Cloudflare API token with Pages edit permission.
-- `CLOUDFLARE_ACCOUNT_ID`: the account identifier that owns the Pages project.
+- Production branch: `main`
+- Framework preset: None
+- Build command: `npm ci && npm run build`
+- Build output directory: `dist`
+- Root directory: `site`
 
-After the first deployment, attach `axn.dev` as the project's custom domain in the Cloudflare
-dashboard. DNS configuration is intentionally not managed by this repository.
+No GitHub Actions secrets are required. Cloudflare builds pull-request previews and deploys the
+production site when `main` changes. After the first deployment, attach `axn.dev` as the project's
+custom domain in the Cloudflare dashboard. DNS configuration is intentionally not managed here.
