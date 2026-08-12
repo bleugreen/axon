@@ -33,10 +33,6 @@ fn validate_replay_contract(doc: &AxnDocument) -> Result<(), AxnError> {
         let suffix = obsolete.map(|(i, v)| format!("; actions[{i}] obsolete target {v}")).unwrap_or_default();
         return Err(AxnError::Invalid(format!(".axn version {} is not replayable; version 1 targets are obsolete and must be re-recorded or edited as version 2{suffix}", doc.version)));
     }
-    pub fn with_healed_output(mut self, source_path: Option<String>, healed_path: String) -> Self {
-        self.healed_output = Some((source_path, healed_path));
-        self
-    }
     for (index, action) in doc.actions.iter().enumerate() {
         if action.tool.trim().is_empty() { return Err(AxnError::Invalid(format!("actions[{index}] requires tool"))); }
         for key in ["target", "from", "to"] { if let Some(v) = action.params.get(key) { validate_target(v, &format!("actions[{index}].{key}"))?; } }
@@ -320,6 +316,10 @@ impl<'a, D: ToolDispatcher> AxnRunner<'a, D> {
         self.sources.insert(scheme.into(), Box::new(resolver));
         self
     }
+    pub fn with_healed_output(mut self, source_path: Option<String>, healed_path: String) -> Self {
+        self.healed_output = Some((source_path, healed_path));
+        self
+    }
     pub fn run(
         &mut self,
         doc: &AxnDocument,
@@ -361,7 +361,7 @@ impl<'a, D: ToolDispatcher> AxnRunner<'a, D> {
                 }
             }
             if let Some(error) = action.requires.iter().find_map(|id| facts.get(id).and_then(|fact| self.dispatcher.verify(fact).err())) {
-                trace.push(TraceEntry { index, tool: action.tool.clone(), success: false, action_id: action.id.clone(), result: None, error: Some(error), resolution: None });
+                trace.push(TraceEntry { index, tool: action.tool.clone(), success: false, action_id: action.id.clone(), result: None, error: Some(error), resolution: None, heal: None });
                 success = false;
                 if !continue_on_error { break } else { continue }
             }
