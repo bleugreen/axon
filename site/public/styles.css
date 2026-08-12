@@ -47,9 +47,8 @@ footer {
   letter-spacing: -.045em;
 }
 .wordmark img {
-  width: 27px;
-  height: 27px;
-  border-radius: 7px;
+  width: 33px;
+  height: 33px;
 }
 .wordmark-text { display: inline-flex; }
 .wordmark-text b { color: var(--ink); font-weight: inherit; }
@@ -408,7 +407,7 @@ footer {
   .site-header { padding-top: 18px; padding-bottom: 18px; }
   .site-header nav { gap: 20px; }
   .wordmark { gap: 6px; font-size: 19px; }
-  .wordmark img { width: 24px; height: 24px; border-radius: 6px; }
+  .wordmark img { width: 29px; height: 29px; }
   .hero { padding-top: 60px; padding-bottom: 64px; }
   .hero h1 {
     margin-top: 22px;

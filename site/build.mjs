@@ -114,12 +114,12 @@ function page({ title, description, body, docsPage = false, docsSlug }) {
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="description" content="${escapeHtml(description)}">
   <title>${escapeHtml(title)}</title>
-  <link rel="icon" href="/axon-icon.svg" type="image/svg+xml">
+  <link rel="icon" href="/axon-mark.svg" type="image/svg+xml">
   <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
   <header class="site-header">
-    <a class="wordmark" href="/" aria-label="Axon home"><img src="/axon-icon.svg" alt=""><span class="wordmark-text"><b>axn</b><i>.dev</i></span></a>
+    <a class="wordmark" href="/" aria-label="Axon home"><img src="/axon-mark.svg" alt=""><span class="wordmark-text"><b>axn</b><i>.dev</i></span></a>
     <nav aria-label="Primary"><a href="/docs/install/">Docs</a><a href="https://github.com/bleugreen/axon">GitHub</a></nav>
   </header>
   ${docsPage ? `<div class="docs-shell${docsSlug === 'cross-platform' ? ' docs-shell-wide' : ''}"><aside><div class="docs-label">Documentation</div>${nav}</aside><main class="prose">${body}</main></div>` : body}
@@ -181,7 +181,7 @@ async function build() {
   await rm(outputRoot, { recursive: true, force: true });
   await mkdir(outputRoot, { recursive: true });
   await cp(join(siteRoot, 'public'), outputRoot, { recursive: true });
-  await cp(join(repositoryRoot, 'Assets', 'AxonIcon.svg'), join(outputRoot, 'axon-icon.svg'));
+  await cp(join(repositoryRoot, 'Assets', 'AxonMark.svg'), join(outputRoot, 'axon-mark.svg'));
   const version = (await readFile(join(repositoryRoot, 'VERSION'), 'utf8')).trim();
   await writeFile(join(outputRoot, 'index.html'), home(version));
 
