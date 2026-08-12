@@ -8,7 +8,7 @@ code or pretending the operating systems expose one normalized accessibility
 API.
 
 What each environment can actually prove today is recorded in the
-[support matrix](#support-matrix) below. The support matrix is the claim. Contributor-facing backend architecture and verification machinery live in [Cross-platform internals](cross-platform-internals.md).
+[support matrix](#support-matrix) below. The support matrix is the claim. Contributor-facing backend architecture and verification machinery live in [Cross-platform internals](../docs/cross-platform-internals.md).
 
 ## Support matrix
 
