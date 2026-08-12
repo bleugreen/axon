@@ -35,6 +35,32 @@ struct CGPoint {
     y: f64,
 }
 
+fn screenshot_restriction(
+    accessibility_enabled: bool,
+    screen_recording_enabled: bool,
+) -> Option<&'static str> {
+    if !accessibility_enabled {
+        Some("Accessibility permission is not granted")
+    } else if !screen_recording_enabled {
+        Some("Screen Recording permission is not granted")
+    } else {
+        None
+    }
+
+    #[test]
+    fn screenshot_capability_requires_both_native_permissions() {
+        assert_eq!(
+            screenshot_restriction(false, true),
+            Some("Accessibility permission is not granted")
+        );
+        assert_eq!(
+            screenshot_restriction(true, false),
+            Some("Screen Recording permission is not granted")
+        );
+        assert_eq!(screenshot_restriction(true, true), None);
+    }
+}
+
 #[repr(C)]
 #[derive(Clone, Copy, Default)]
 struct CGSize {
@@ -328,6 +354,8 @@ impl MacBackend {
 
 impl PlatformBackend for MacBackend {
     fn capabilities(&self) -> Result<Vec<CapabilityInfo>, BackendError> {
+        let accessibility_enabled = self.accessibility_enabled();
+        let screen_recording_enabled = window_capture::screen_capture_enabled();
         let supported = [
             Capability::Enumerate,
             Capability::Capture,
@@ -343,16 +371,18 @@ impl PlatformBackend for MacBackend {
             .into_iter()
             .map(|capability| {
                 let usable = if capability == Capability::Screenshot {
-                    window_capture::screen_capture_enabled()
+                    screenshot_restriction(accessibility_enabled, screen_recording_enabled).is_none()
                 } else {
-                    supported.contains(&capability) && self.accessibility_enabled()
+                    supported.contains(&capability) && accessibility_enabled
                 };
                 CapabilityInfo {
                     capability,
                     usable,
                     restriction: (!usable).then(|| {
                         if capability == Capability::Screenshot {
-                            "Screen Recording permission is not granted".into()
+                            screenshot_restriction(accessibility_enabled, screen_recording_enabled)
+                                .expect("an unusable screenshot capability has a restriction")
+                                .into()
                         } else if supported.contains(&capability) {
                             "Accessibility permission is not granted".into()
                         } else {
