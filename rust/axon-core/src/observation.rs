@@ -15,7 +15,12 @@ pub enum LookObservationKind {
 }
 
 pub fn screenshot_requested(explicit: Option<bool>, kind: LookObservationKind) -> bool {
-    explicit.unwrap_or(matches!(kind, LookObservationKind::FullApp))
+    match kind {
+        LookObservationKind::FullApp => explicit.unwrap_or(true),
+        LookObservationKind::AppList
+        | LookObservationKind::ChangeCheck
+        | LookObservationKind::ChildPage => false,
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -60,7 +65,7 @@ mod tests {
             Some(false),
             LookObservationKind::FullApp
         ));
-        assert!(screenshot_requested(
+        assert!(!screenshot_requested(
             Some(true),
             LookObservationKind::ChangeCheck
         ));
