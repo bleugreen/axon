@@ -994,41 +994,29 @@ impl<B: PointerTargetVerifier + BackgroundPixelInput> ToolDispatcher for Router<
         }
     }
     fn verify(&mut self, fact: &ExpectedFact) -> Result<(), String> {
-        if fact.fields.get("kind").and_then(Value::as_str) != Some("value") {
-            return Err(format!("unsupported expected fact kind for {}", fact.id));
-        }
-        let target = fact
-            .fields
-            .get("target")
-            .and_then(Value::as_str)
-            .ok_or_else(|| format!("expected fact {} requires a target handle", fact.id))?;
-        let observed = self
-            .backend
-            .read_value(&SnapshotHandle(target.into()))
-            .map_err(|e| e.to_string())?
-            .ok_or_else(|| format!("expected fact {} observed no value", fact.id))?;
-        if let Some(expected) = fact.fields.get("equals").and_then(Value::as_str) {
-            if observed != expected {
-                return Err(format!(
-                    "expected fact {} failed: expected {expected:?}, observed {observed:?}",
-                    fact.id
-                ));
+        let (app, locator) = axon_core::expected_fact_target(fact)?;
+        let snapshot = self.backend.capture(&AppQuery { name: Some(app), identifier: None }).map_err(|error| error.to_string())?;
+        let resolution = axon_core::LocatorResolver::resolve(&locator, &snapshot);
+        let candidate = resolution.best.ok_or_else(|| format!("fact {} locator did not resolve uniquely: {:?}", fact.id, resolution.status))?;
+        let handle = snapshot.handle(candidate.index);
+        let node = flattened(&snapshot).nth(candidate.index).ok_or_else(|| format!("fact {} resolved outside snapshot", fact.id))?;
+        let mut observed = serde_json::to_value(node).map_err(|error| error.to_string())?.as_object().cloned().unwrap_or_default();
+        observed.insert("exists".into(), Value::Bool(true));
+        if matches!(axon_core::expected_fact_kind(fact)?, "value" | "selected") {
+            if let Some(value) = self.backend.read_value(&handle).map_err(|error| error.to_string())? {
+                observed.insert(axon_core::expected_fact_kind(fact)?.into(), Value::String(value));
             }
-            return Ok(());
         }
-        if let Some(expected) = fact.fields.get("contains").and_then(Value::as_str) {
-            if !observed.contains(expected) {
-                return Err(format!(
-                    "expected fact {} failed: {observed:?} does not contain {expected:?}",
-                    fact.id
-                ));
-            }
-            return Ok(());
-        }
-        Err(format!(
-            "expected value fact {} requires equals or contains",
-            fact.id
-        ))
+        axon_core::verify_expected_fact_state(fact, &observed)
+    }
+    fn capture_changed_baseline(&mut self, fact: &ExpectedFact) -> Result<Value, String> {
+        let (app, _) = axon_core::expected_fact_target(fact)?;
+        let snapshot = self.backend.capture(&AppQuery { name: Some(app), identifier: None }).map_err(|error| error.to_string())?;
+        serde_json::to_value(snapshot.app).map_err(|error| error.to_string())
+    }
+    fn verify_changed(&mut self, fact: &ExpectedFact, baseline: &Value) -> Result<(), String> {
+        let current = self.capture_changed_baseline(fact)?;
+        (current != *baseline).then_some(()).ok_or_else(|| format!("fact {} did not verify: app did not change", fact.id))
     }
 }
 
