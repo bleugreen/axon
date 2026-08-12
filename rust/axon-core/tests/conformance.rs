@@ -9,6 +9,50 @@ struct LocatorFixture {
     cases: Vec<LocatorCase>,
 }
 
+#[test]
+fn v2_replay_registers_locator_and_strips_recording_metadata() {
+    let doc = AxnCodec::parse(include_str!("../fixtures/swift-action-history-v2.yaml")).unwrap();
+    let mut dispatcher = Dispatcher { calls: vec![], fail_at: None, registrations: vec![] };
+    AxnRunner::new(&mut dispatcher).run(&doc, &Map::new(), RunOptions { dry_run: None, continue_on_error: None }).unwrap();
+    assert_eq!(dispatcher.registrations.len(), 1);
+    assert_eq!(dispatcher.registrations[0].0, "Example");
+    assert_eq!(dispatcher.registrations[0].1, "submit-button");
+    assert_eq!(dispatcher.calls[0].1["target"], json!({"app":"Example","name":"submit-button"}));
+}
+
+#[test]
+fn v1_and_malformed_v2_targets_are_rejected_for_replay() {
+    let v1 = AxnCodec::parse(include_str!("../fixtures/workflow.axn")).unwrap();
+    let mut dispatcher = NoDispatch;
+    let error = AxnRunner::new(&mut dispatcher).run(&v1, &Map::new(), RunOptions { dry_run: None, continue_on_error: None }).unwrap_err().to_string();
+    assert!(error.contains("version 1 targets are obsolete"));
+    let malformed = AxnCodec::parse("version: 2\nactions:\n- tool: click\n  target: {app: Example, name: submit}\n").unwrap();
+    let error = AxnRunner::new(&mut dispatcher).run(&malformed, &Map::new(), RunOptions { dry_run: None, continue_on_error: None }).unwrap_err().to_string();
+    assert!(error.contains("attached locator"));
+}
+
+#[test]
+fn parameter_validation_is_strict_before_dispatch() {
+    let source = r#"{"version":2,"args":[{"name":"token","type":"secret","source":"env://TOKEN"}],"actions":[{"tool":"type","target":{"app":"Example","name":"field","locator":{}},"value":"{{ missing }}"}]}"#;
+    let doc = AxnCodec::parse(source).unwrap();
+    let mut dispatcher = Dispatcher { calls: vec![], fail_at: None, registrations: vec![] };
+    let mut runner = AxnRunner::new(&mut dispatcher).with_source("env", |_| Ok(Some("secret".into())));
+    let error = runner.run(&doc, &Map::new(), RunOptions { dry_run: None, continue_on_error: None }).unwrap_err().to_string();
+    assert!(error.contains("undeclared arg reference: missing"));
+    assert!(dispatcher.calls.is_empty());
+}
+
+fn replayable_workflow() -> AxnDocument {
+    let mut doc = replayable_workflow();
+    doc.version = 2;
+    for action in &mut doc.actions {
+        if action.params.contains_key("target") {
+            action.params.insert("target".into(), json!({"app":"Example","name":"field","locator":{"role":"AXTextField"},"recording":{"ignored":true}}));
+        }
+    }
+    doc
+}
+
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct AmbiguousDiffFixture {
@@ -207,8 +251,13 @@ fn handles_fail_across_snapshot_lifetimes() {
 struct Dispatcher {
     calls: Vec<(String, Map<String, Value>)>,
     fail_at: Option<usize>,
+    registrations: Vec<(String, String, Locator)>,
 }
 impl ToolDispatcher for Dispatcher {
+    fn register_replay_target(&mut self, app: &str, name: &str, locator: &Locator) -> Result<(), String> {
+        self.registrations.push((app.into(), name.into(), locator.clone()));
+        Ok(())
+    }
     fn dispatch(&mut self, tool: &str, params: &Map<String, Value>) -> DispatchOutcome {
         let index = self.calls.len();
         self.calls.push((tool.into(), params.clone()));
@@ -235,12 +284,14 @@ impl ToolDispatcher for Dispatcher {
 
 #[test]
 fn axn_round_trip_binding_and_trace_semantics() {
-    let doc = AxnCodec::parse(include_str!("../fixtures/workflow.axn")).unwrap();
+    let doc = replayable_workflow();
     let yaml = AxnCodec::to_yaml(&doc).unwrap();
     assert_eq!(AxnCodec::parse(&yaml).unwrap(), doc);
     let mut dispatcher = Dispatcher {
         calls: vec![],
         fail_at: Some(1),
+        registrations: vec![],
+        registrations: vec![],
     };
     let mut runner = AxnRunner::new(&mut dispatcher).with_source("env", |source: &str| {
         Ok((source == "env://TOKEN").then(|| "s3cr3t".into()))
@@ -265,7 +316,7 @@ fn axn_round_trip_binding_and_trace_semantics() {
 
 #[test]
 fn continue_on_error_preserves_trace_and_secret_is_redacted() {
-    let doc = AxnCodec::parse(include_str!("../fixtures/workflow.axn")).unwrap();
+    let doc = replayable_workflow();
     let mut dispatcher = Dispatcher {
         calls: vec![],
         fail_at: Some(1),
