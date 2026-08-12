@@ -41,7 +41,7 @@ footer {
 .wordmark {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
+  gap: 3px;
   font: 650 21px/1 var(--sans);
   text-decoration: none;
   letter-spacing: -.045em;
@@ -406,7 +406,7 @@ footer {
 @media (max-width: 480px) {
   .site-header { padding-top: 18px; padding-bottom: 18px; }
   .site-header nav { gap: 20px; }
-  .wordmark { gap: 6px; font-size: 19px; }
+  .wordmark { gap: 2px; font-size: 19px; }
   .wordmark img { width: 35px; height: 35px; }
   .hero { padding-top: 60px; padding-bottom: 64px; }
   .hero h1 {
