@@ -144,6 +144,12 @@ impl PixelPlan {
             reason: reason.into(),
             blocks_global_input: false,
         }
+        if let Some(unavailable) = screenshot_unavailable {
+            value.as_object_mut().expect("snapshots serialize as objects").insert(
+                "screenshotUnavailable".into(),
+                serde_json::to_value(unavailable).map_err(internal_error)?,
+            );
+        }
     }
 
     /// No mechanism at all, at any rung, for the reason given.
@@ -802,15 +808,23 @@ impl<
         let names = self.semantic_names.register(&snapshot);
         let mut value = serde_json::to_value(axon_core::render_semantic_names(&snapshot, &names))
             .map_err(internal_error)?;
-        let wants_screenshot = params.get("screenshot").and_then(Value::as_bool) == Some(true);
+        let wants_screenshot = axon_core::screenshot_requested(
+            params.get("screenshot").and_then(Value::as_bool),
+            axon_core::LookObservationKind::FullApp,
+        );
         let wants_screen_text = params.get("screenText").and_then(Value::as_bool) == Some(true);
-        let visuals = (wants_screenshot || wants_screen_text)
-            .then(|| {
-                self.backend
-                    .observe_visuals(&app, wants_screenshot, wants_screen_text)
-            })
-            .transpose()
-            .map_err(backend_error)?;
+        let (visuals, screenshot_unavailable) = if wants_screenshot || wants_screen_text {
+            match self.backend.observe_visuals(&app, wants_screenshot, wants_screen_text) {
+                Ok(visuals) => (Some(visuals), None),
+                Err(error) if wants_screenshot && !wants_screen_text => (
+                    None,
+                    Some(axon_core::ScreenshotUnavailable::from_backend_error(error)),
+                ),
+                Err(error) => return Err(backend_error(error)),
+            }
+        } else {
+            (None, None)
+        };
         if let Some(screenshot) = visuals
             .as_ref()
             .and_then(|result| result.screenshot.as_ref())

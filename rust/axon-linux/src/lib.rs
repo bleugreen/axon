@@ -781,13 +781,43 @@ impl<B: PointerTargetVerifier + BackgroundPixelInput> Router<B> {
             )
             .map_err(internal_error);
         }
+        let app = app_query(params);
         let snapshot = self
             .backend
-            .capture(&app_query(params))
+            .capture(&app)
             .map_err(backend_error)?;
         let names = self.semantic_names.register(&snapshot);
-        let value = serde_json::to_value(axon_core::render_semantic_names(&snapshot, &names))
+        let mut value = serde_json::to_value(axon_core::render_semantic_names(&snapshot, &names))
             .map_err(internal_error)?;
+        let wants_screenshot = axon_core::screenshot_requested(
+            params.get("screenshot").and_then(Value::as_bool),
+            axon_core::LookObservationKind::FullApp,
+        );
+        if wants_screenshot {
+            match self.backend.screenshot(&app) {
+                Ok(screenshot) => {
+                    value.as_object_mut().expect("snapshots serialize as objects").insert(
+                        "screenshot".into(),
+                        json!({
+                            "mediaType": screenshot.media_type,
+                            "base64Data": base64::Engine::encode(
+                                &base64::engine::general_purpose::STANDARD,
+                                &screenshot.bytes
+                            ),
+                            "width": screenshot.width,
+                            "height": screenshot.height
+                        }),
+                    );
+                }
+                Err(error) => {
+                    let unavailable = axon_core::ScreenshotUnavailable::from_backend_error(error);
+                    value.as_object_mut().expect("snapshots serialize as objects").insert(
+                        "screenshotUnavailable".into(),
+                        serde_json::to_value(unavailable).map_err(internal_error)?,
+                    );
+                }
+            }
+        }
         self.snapshot = Some(snapshot);
         Ok(value)
     }

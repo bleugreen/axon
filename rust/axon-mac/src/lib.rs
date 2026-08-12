@@ -143,6 +143,15 @@ impl PixelPlan {
             reason: reason.into(),
             blocks_global_input: false,
         }
+        if wants_screenshot {
+            value.as_object_mut().expect("snapshots serialize as objects").insert(
+                "screenshotUnavailable".into(),
+                json!({
+                    "code": "capability-unavailable",
+                    "reason": "screenshot capture is excluded from axon-mac v1"
+                }),
+            );
+        }
     }
 
     /// No mechanism at all, at any rung, for the reason given.
@@ -792,12 +801,10 @@ impl<
     }
 
     fn look(&mut self, params: &Map<String, Value>) -> Result<Value, JsonRpcError> {
-        if params.get("screenshot").and_then(Value::as_bool) == Some(true)
-            || params.get("screenText").and_then(Value::as_bool) == Some(true)
-        {
+        if params.get("screenText").and_then(Value::as_bool) == Some(true) {
             return Err(rpc_error(
                 -32004,
-                "screenshot and screenText observations are unavailable in axon-mac v1",
+                "screenText observations are unavailable in axon-mac v1",
             ));
         }
         if params.get("app").is_none() {
@@ -813,7 +820,10 @@ impl<
         let names = self.semantic_names.register(&snapshot);
         let mut value = serde_json::to_value(axon_core::render_semantic_names(&snapshot, &names))
             .map_err(internal_error)?;
-        let wants_screenshot = params.get("screenshot").and_then(Value::as_bool) == Some(true);
+        let wants_screenshot = axon_core::screenshot_requested(
+            params.get("screenshot").and_then(Value::as_bool),
+            axon_core::LookObservationKind::FullApp,
+        );
         let wants_screen_text = params.get("screenText").and_then(Value::as_bool) == Some(true);
         let visuals = (wants_screenshot || wants_screen_text)
             .then(|| {
