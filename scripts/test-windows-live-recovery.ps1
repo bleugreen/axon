@@ -493,10 +493,14 @@ function Invoke-AxonMcp {
     @{
         result = @{
             isError = $false
+            content = @(
+                @{ type = 'text'; text = '{}' },
+                @{ type = 'image'; mimeType = 'image/png'; data = 'cG5n' }
+            )
             structuredContent = @{
                 id = 'snapshot-1'
                 app = @{ windows = @(@{ root = @{ role = 'Window' } }) }
-                screenshot = @{ mediaType = 'image/png'; base64Data = 'cG5n'; width = 800; height = 600 }
+                screenshot = @{ mediaType = 'image/png'; contentTransport = 'mcp_image'; width = 800; height = 600 }
             }
         }
     } | ConvertTo-Json -Depth 10 | ConvertFrom-Json -Depth 100
