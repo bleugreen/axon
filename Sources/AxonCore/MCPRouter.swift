@@ -124,17 +124,10 @@ public struct MCPRouter {
             frames: Self.bool("frames", in: arguments) ?? false,
             maxDepth: Self.int("depth", in: arguments).map { max(0, $0) }
         )
-        let content = MCPContent.normalize(.object(["snapshot": observation]))
-        return JSONRPCResponse(id: id, result: [
-            "content": .array([
-                .object([
-                    "type": .string("text"),
-                    "text": .string(formatter.text(from: content.structured["snapshot"] ?? observation))
-                ])
-            ] + content.images),
-            "structuredContent": content.structured,
-            "isError": .bool(false)
-        ])
+        return JSONRPCResponse(id: id, result: MCPContent.toolResult(
+            structuredContent: observation,
+            isError: false
+        ))
     }
 
     private func appListObservationResult(
@@ -246,9 +239,23 @@ private extension JSONRPCError {
             "message": .string(message)
         ])
     }
+
+    static func toolResult(structuredContent: JSONValue, isError: Bool) -> [String: JSONValue] {
+        let content = normalize(structuredContent)
+        return [
+            "content": .array([
+                .object([
+                    "type": .string("text"),
+                    "text": .string(content.structured.compactJSONString)
+                ])
+            ] + content.images),
+            "structuredContent": content.structured,
+            "isError": .bool(isError)
+        ]
+    }
 }
 
-private struct MCPContent {
+struct MCPContent {
     let structured: JSONValue
     let images: [JSONValue]
 
