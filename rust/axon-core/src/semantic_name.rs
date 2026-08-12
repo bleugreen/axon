@@ -385,6 +385,7 @@ pub struct SemanticNameRegistry {
     max_snapshots: usize,
     order: VecDeque<crate::SnapshotId>,
     records: HashMap<crate::SnapshotId, Vec<Record>>,
+    replay_locators: HashMap<WireElementTarget, Locator>,
 }
 impl Default for SemanticNameRegistry {
     fn default() -> Self {
@@ -397,6 +398,7 @@ impl SemanticNameRegistry {
             max_snapshots: max.max(1),
             order: VecDeque::new(),
             records: HashMap::new(),
+            replay_locators: HashMap::new(),
         }
     }
     pub fn register(&mut self, s: &Snapshot) -> Vec<SemanticElementName> {
@@ -433,11 +435,22 @@ impl SemanticNameRegistry {
         }
         names
     }
+    /// Attach recorder evidence without manufacturing a snapshot handle. Resolution still
+    /// validates the locator against the next live platform snapshot.
+    pub fn register_replay_locator(&mut self, target: WireElementTarget, locator: Locator) {
+        self.replay_locators.insert(target, locator);
+    }
+
     pub fn resolve(&self, target: &WireElementTarget, live: &Snapshot) -> SemanticLookup {
         match self.resolve_retained(target, live) {
-            RetainedSemanticLookup::NoRecord => SemanticLookup::Missing {
-                target: target.clone(),
-            },
+            RetainedSemanticLookup::NoRecord => self.replay_locators.get(target).map_or_else(
+                || SemanticLookup::Missing { target: target.clone() },
+                |locator| lookup_from_resolution(
+                    target,
+                    LocatorResolver::resolve(locator, live),
+                    locator,
+                ),
+            ),
             RetainedSemanticLookup::Resolved(lookup) => *lookup,
         }
     }
