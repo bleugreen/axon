@@ -169,7 +169,7 @@ function home(version) {
         <div><p class="kicker">Install Axon ${escapeHtml(version)}</p><h2>Get started.</h2></div>
         <div class="commands">
           ${shellBlock('curl -fsSL https://axn.dev/install.sh | sh', 'macOS / Linux · shell')}
-          ${shellBlock('irm https://axn.dev/install.ps1 | iex', 'Windows · PowerShell')}
+          ${shellBlock('irm https://axn.dev/install.ps1 | iex', 'Windows · administrator PowerShell')}
           ${shellBlock('brew install --cask bleugreen/tap/axon', 'macOS · Homebrew')}
         </div>
       </section>

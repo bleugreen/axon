@@ -17,7 +17,7 @@ macOS or Linux:
 curl -fsSL https://axn.dev/install.sh | sh
 ```
 
-Windows PowerShell:
+Administrator PowerShell (open PowerShell with **Run as administrator**):
 
 ```powershell
 irm https://axn.dev/install.ps1 | iex

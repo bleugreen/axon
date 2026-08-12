@@ -24,6 +24,12 @@ if ($Architecture -ne 'AMD64') {
     Fail "unsupported platform windows/$($Architecture.ToLowerInvariant()); release binaries exist only for macos/aarch64, linux/x86_64, and windows/x86_64"
 }
 
+$Identity = [System.Security.Principal.WindowsIdentity]::GetCurrent()
+$Principal = New-Object System.Security.Principal.WindowsPrincipal($Identity)
+if (-not $Principal.IsInRole([System.Security.Principal.WindowsBuiltInRole]::Administrator)) {
+    Fail "installing Axon registers its daemon with Task Scheduler, which needs an elevated shell. Open PowerShell with 'Run as administrator' and rerun: irm https://axn.dev/install.ps1 | iex"
+}
+
 $Pinned = -not [string]::IsNullOrWhiteSpace($Version)
 if ($Pinned) {
     $Version = $Version.Trim().TrimStart('v')

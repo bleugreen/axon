@@ -18,9 +18,13 @@ curl -fsSL https://axn.dev/install.sh | sh
 
 ### Windows
 
+Open PowerShell with **Run as administrator**, then run:
+
 ```powershell
 irm https://axn.dev/install.ps1 | iex
 ```
+
+Administrator access is required because the installer registers the Axon daemon with Windows Task Scheduler.
 
 The installers verify the release checksum, install into a permanent versioned directory, register the daemon from that location, and put its CLI on `PATH`. Pin a release with `AXON_VERSION=0.3.1` on macOS or Linux. In PowerShell, set `$env:AXON_VERSION = '0.3.1'` before running the installer.
 
