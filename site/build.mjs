@@ -28,7 +28,14 @@ const escapeHtml = (value) => String(value)
   .replaceAll('>', '&gt;')
   .replaceAll('"', '&quot;');
 
-function renderMarkdown(source) {
+function renderMarkdown(source, { omitSections = [] } = {}) {
+  for (const heading of omitSections) {
+    const start = source.indexOf(`## ${heading}\n`);
+    if (start === -1) continue;
+    const next = source.indexOf('\n## ', start + 4);
+    source = source.slice(0, start) + (next === -1 ? '' : source.slice(next + 1));
+  }
+
   const slugger = new GithubSlugger();
   const marked = new Marked({ gfm: true });
 
@@ -96,7 +103,7 @@ function shellBlock(command, label) {
   return `<div class="command"><span>${escapeHtml(label)}</span><code>${escapeHtml(command)}</code></div>`;
 }
 
-function page({ title, description, body, docsPage = false, docsSlug, version }) {
+function page({ title, description, body, docsPage = false, docsSlug }) {
   const nav = docs.map(([slug, label]) =>
     `<a href="/docs/${slug}/"${slug === docsSlug ? ' aria-current="page"' : ''}>${label}</a>`
   ).join('');
@@ -114,7 +121,7 @@ function page({ title, description, body, docsPage = false, docsSlug, version })
     <a class="wordmark" href="/" aria-label="Axon home"><span>axn</span><i>.dev</i></a>
     <nav aria-label="Primary"><a href="/docs/install/">Docs</a><a href="https://github.com/bleugreen/axon">GitHub</a></nav>
   </header>
-  ${docsPage ? `<div class="docs-shell${docsSlug === 'cross-platform' ? ' docs-shell-wide' : ''}"><aside><div class="docs-label">Documentation</div>${nav}</aside><main class="prose"><div class="version-stamp">Describes Axon v${escapeHtml(version)}</div>${body}</main></div>` : body}
+  ${docsPage ? `<div class="docs-shell${docsSlug === 'cross-platform' ? ' docs-shell-wide' : ''}"><aside><div class="docs-label">Documentation</div>${nav}</aside><main class="prose">${body}</main></div>` : body}
   <footer><span>Axon is open source under the MIT license.</span><span>Small. Local. Inspectable.</span></footer>
 </body>
 </html>`;
@@ -183,10 +190,11 @@ async function build() {
     await writeFile(join(directory, 'index.html'), page({
       title: `${title} — Axon`,
       description: `${title}, from the Axon documentation.`,
-      body: renderMarkdown(markdown),
+      body: renderMarkdown(markdown, {
+        omitSections: slug === 'tool-surface' ? ['Protocol signatures'] : [],
+      }),
       docsPage: true,
       docsSlug: slug,
-      version,
     }));
   }
   await validateInternalLinks();

@@ -352,13 +352,6 @@ footer {
 }
 .prose td { color: #56534d; background: rgba(251, 248, 241, .38); }
 .prose hr { margin: 56px 0; border: 0; border-top: 1px solid var(--line); }
-.version-stamp {
-  display: inline-block;
-  margin-bottom: 22px;
-  color: var(--faint);
-  font-size: 12px;
-}
-
 @media (max-width: 1050px) {
   .docs-shell {
     grid-template-columns: 1fr;
