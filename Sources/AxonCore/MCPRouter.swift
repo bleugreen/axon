@@ -270,7 +270,7 @@ struct MCPContent {
 private extension JSONValue {
     var compactJSONString: String {
         let encoder = JSONEncoder()
-        encoder.outputFormatting = [.sortedKeys]
+        encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
         let data = (try? encoder.encode(self)) ?? Data("null".utf8)
         return String(decoding: data, as: UTF8.self)
     }
