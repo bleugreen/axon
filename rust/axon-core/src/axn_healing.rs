@@ -21,6 +21,56 @@ pub struct TargetResolution {
     pub observed_locator: Option<Value>,
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    fn action() -> AxnAction { serde_json::from_value(json!({"id":"submit","tool":"click","target":{"app":"Mail","name":"send","locator":{"role":"button","title":{"exact":"Send"}},"recording":{"ignored":true}}})).unwrap() }
+    fn resolution(status: ResolutionStatus, observed: Option<Value>) -> TargetResolution { TargetResolution {
+        status, confidence: Confidence::High, path: "fullSnapshot".into(), context_complete: true,
+        candidates: vec![], reasons: vec![], evidence: vec![json!({"field":"title","outcome":"changed"})], observed_locator: observed,
+    } }
+
+    #[test]
+    fn unique_drift_proposes_only_after_confidence_reverification() {
+        let proposal = json!({"role":"button","title":{"exact":"Send now"}});
+        let event = healing_event(&action(), 0, &resolution(ResolutionStatus::Unique, Some(proposal.clone())), &[], |actual, confidence| actual == &proposal && confidence == Confidence::High).unwrap();
+        assert_eq!(event.status, LocatorHealStatus::Proposed);
+        assert_eq!(event.proposal, Some(proposal));
+        let halted = healing_event(&action(), 0, &resolution(ResolutionStatus::Unique, Some(json!({"role":"button"}))), &[], |_, _| false).unwrap();
+        assert_eq!(halted.status, LocatorHealStatus::Halted);
+        assert_eq!(halted.reason.as_deref(), Some("proposal did not resolve uniquely at equal or higher confidence"));
+    }
+
+    #[test]
+    fn clean_resolution_emits_nothing_and_non_unique_halts() {
+        let mut clean = resolution(ResolutionStatus::Unique, None); clean.evidence = vec![json!({"field":"title","outcome":"matched"})];
+        assert!(healing_event(&action(), 0, &clean, &[], |_, _| true).is_none());
+        let missing = healing_event(&action(), 0, &resolution(ResolutionStatus::Missing, None), &[], |_, _| true).unwrap();
+        assert_eq!(missing.status, LocatorHealStatus::Halted);
+        assert!(missing.proposal.is_none());
+    }
+
+    #[test]
+    fn secrets_halt_without_leaking_and_revision_changes_only_locator() {
+        let mut tainted = resolution(ResolutionStatus::Unique, Some(json!({"role":"button","title":{"exact":"token-123"}})));
+        tainted.evidence = vec![json!({"field":"title","outcome":"changed","actual":"token-123","secretTainted":true})];
+        let event = healing_event(&action(), 0, &tainted, &["token-123".into()], |_, _| true).unwrap();
+        assert_eq!(event.status, LocatorHealStatus::Halted);
+        assert!(!serde_json::to_string(&event).unwrap().contains("token-123"));
+
+        let proposal = json!({"role":"button","title":{"exact":"Send now"}});
+        let proposed = healing_event(&action(), 0, &resolution(ResolutionStatus::Unique, Some(proposal.clone())), &[], |_, _| true).unwrap();
+        let doc = crate::AxnDocument { version: 2, arguments: vec![], actions: vec![action()], flags: Map::new() };
+        let revised = revise(&doc, &[proposed.clone()]);
+        assert_eq!(revised.actions[0].params["target"]["locator"], proposal);
+        assert_eq!(revised.actions[0].params["target"]["recording"], json!({"ignored":true}));
+        let yaml = reviewed_yaml(&doc, &[proposed]).unwrap();
+        assert!(yaml.starts_with("# Axon healed locator proposals. Review before replaying.\n"));
+    }
+}
+
 fn default_path() -> String { "fullSnapshot".into() }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]

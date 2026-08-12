@@ -1174,6 +1174,9 @@ impl<
                 continue_on_error: None,
             });
         let mut runner = AxnRunner::new(self);
+        if let Some(healed_path) = params.get("healedPath").and_then(Value::as_str) {
+            runner = runner.with_healed_output(params.get("sourcePath").and_then(Value::as_str).map(str::to_owned), healed_path.to_owned());
+        }
         let result = runner
             .run(&doc, &args, options)
             .map_err(|e| rpc_error(-32602, e.to_string()))?;
