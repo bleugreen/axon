@@ -60,10 +60,12 @@ function renderMarkdown(source) {
   return marked.parse(source);
 }
 
-function internalPath(href) {
-  const path = href.split('#', 1)[0];
-  if (!path.startsWith('/')) return undefined;
-  return path.endsWith('/') ? `${path}index.html` : path;
+function internalTarget(href, currentPage) {
+  const [rawPath, fragment] = href.split('#', 2);
+  if (!rawPath && fragment) return { path: currentPage, fragment };
+  if (!rawPath.startsWith('/')) return undefined;
+  const path = rawPath.endsWith('/') ? `${rawPath}index.html` : rawPath;
+  return { path, fragment };
 }
 
 async function validateInternalLinks() {
@@ -75,10 +77,13 @@ async function validateInternalLinks() {
   for (const page of pages) {
     const html = await readFile(join(outputRoot, page), 'utf8');
     for (const [, href] of html.matchAll(/href="([^"]+)"/g)) {
-      const target = internalPath(href);
+      const target = internalTarget(href, page);
       if (!target) continue;
       try {
-        await readFile(join(outputRoot, target));
+        const targetHtml = await readFile(join(outputRoot, target.path), 'utf8');
+        if (target.fragment && !targetHtml.includes(`id="${escapeHtml(decodeURIComponent(target.fragment))}"`)) {
+          missing.push(`${page}: ${href} (missing heading)`);
+        }
       } catch {
         missing.push(`${page}: ${href}`);
       }

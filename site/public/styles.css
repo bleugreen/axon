@@ -316,9 +316,24 @@ footer {
   vertical-align: top;
 }
 .prose th {
+  position: sticky;
+  top: 0;
+  z-index: 2;
   background: var(--paper-deep);
   color: var(--ink);
   font-weight: 650;
+}
+.docs-shell-wide .prose th:first-child,
+.docs-shell-wide .prose td:first-child {
+  position: sticky;
+  left: 0;
+  z-index: 1;
+  min-width: 155px;
+  background: var(--paper);
+}
+.docs-shell-wide .prose th:first-child {
+  z-index: 3;
+  background: var(--paper-deep);
 }
 .prose td { color: #56534d; background: rgba(251, 248, 241, .38); }
 .prose hr { margin: 56px 0; border: 0; border-top: 1px solid var(--line); }
