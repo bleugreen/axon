@@ -23,8 +23,9 @@ irm https://axn.dev/install.ps1 | iex
 
 The installers verify the release checksum, install into a permanent versioned directory, register
 the daemon from that location, and put its CLI on `PATH`. Pin a release with
-`AXON_VERSION=0.3.1` on macOS or Linux, or `-Version 0.3.1` when invoking the downloaded PowerShell
-script.
+`AXON_VERSION=0.3.1` on macOS or Linux. In PowerShell, the one-liner can be pinned with
+`$env:AXON_VERSION = '0.3.1'; irm https://axn.dev/install.ps1 | iex`; a saved copy also accepts
+`-Version 0.3.1`.
 
 On macOS, Homebrew remains an alternative:
 
