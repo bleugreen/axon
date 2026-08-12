@@ -46,7 +46,7 @@ For platform-specific limits, see [Cross-platform support](cross-platform.md).
 
 ## Protocol reference
 
-## See what an app exposes
+### See what an app exposes
 
 `look()` lists regular running UI apps by default. Use `all: true` or
 `format: "debug"` through MCP, or `axon look --details`, when raw running
@@ -147,7 +147,7 @@ and return `finalObservation` on success or timeout. This is the post-navigation
 settle primitive; use `wait_for_value` when readiness has a specific semantic
 field predicate instead.
 
-## Act without stealing focus
+### Act without stealing focus
 
 Every mutating action takes a `deliveryPolicy`, and the CLI spells
 `foregroundPermitted` as `--foreground`. `backgroundOnly` is the default and
@@ -234,7 +234,7 @@ the overall result is a failure.
 Axon has no clipboard path and will not grow one by accident: the pasteboard is
 modelled as a forbidden delivery capability that the planner refuses on sight.
 
-## Interact with a target
+### Interact with a target
 
 Interactive element targets are app-scoped semantic names:
 
@@ -315,7 +315,7 @@ receiving application. Without it the only rung left is foreground, and
 `invoke` runs a named AX action such as `AXPress` or `AXShowMenu`. It is always
 semantic and never escalates.
 
-## Save and replay useful work
+### Save and replay useful work
 
 `run` executes `.axn` actions from a file, inline actions, or both. When both
 `path` and `actions` are provided, the file is loaded first and inline actions
@@ -355,9 +355,9 @@ kinds are `exists`, `focused`, `value`, `selected`, `enabled`, `window`,
 `menu-selection`, and `changed`; facts resolve through the same locator model as
 actions.
 
-## Protocol signatures
+### Protocol signatures
 
-### MCP
+#### MCP
 
 ```text
 look(app?, target?, since?, screenshot?, screenText?, tree?, offset?, limit?, direct?, childDepth?, depth?, all?, format?, frames?)
@@ -378,7 +378,7 @@ drag(from, to, app?, durationMs?, expects?, deliveryPolicy?)
 invoke(target, name, deliveryPolicy?)
 ```
 
-### CLI
+#### CLI
 
 ```text
 axon permit
