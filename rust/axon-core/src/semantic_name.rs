@@ -497,11 +497,7 @@ impl SemanticNameRegistry {
             }
         }
         let result = LocatorResolver::resolve(&latest[0].locator, live);
-        RetainedSemanticLookup::Resolved(lookup_from_resolution(
-            target,
-            result,
-            &latest[0].locator,
-        ))
+        RetainedSemanticLookup::Resolved(lookup_from_resolution(target, result, &latest[0].locator))
     }
 }
 pub(crate) fn lookup_from_resolution(
@@ -511,19 +507,30 @@ pub(crate) fn lookup_from_resolution(
 ) -> SemanticLookup {
     match result.status {
         ResolutionStatus::Unique => SemanticLookup::Unique {
-            handle: result.best.as_ref().expect("unique resolution has a best candidate").handle.clone(),
+            handle: result
+                .best
+                .as_ref()
+                .expect("unique resolution has a best candidate")
+                .handle
+                .clone(),
             resolution: result,
         },
-        ResolutionStatus::Missing => SemanticLookup::Missing { target: target.clone() },
+        ResolutionStatus::Missing => SemanticLookup::Missing {
+            target: target.clone(),
+        },
         ResolutionStatus::Ambiguous => SemanticLookup::Ambiguous {
             target: target.clone(),
-            candidates: result.candidates.iter().map(|candidate| SemanticCandidate {
-                name: target.name.clone(),
-                candidate_label: None,
-                role: candidate.role.clone(),
-                label: candidate.title.clone().unwrap_or_default(),
-                locator: locator.clone(),
-            }).collect(),
+            candidates: result
+                .candidates
+                .iter()
+                .map(|candidate| SemanticCandidate {
+                    name: target.name.clone(),
+                    candidate_label: None,
+                    role: candidate.role.clone(),
+                    label: candidate.title.clone().unwrap_or_default(),
+                    locator: locator.clone(),
+                })
+                .collect(),
         },
     }
 }

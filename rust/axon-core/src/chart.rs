@@ -1,8 +1,8 @@
 use crate::{
-    locator as runtime_locator, lookup_from_resolution, walk_context, AncestorLocator, Locator,
-    LocatorResolver, ResolutionStatus, RetainedSemanticLookup, SemanticCandidate,
-    SemanticElementName, SemanticLookup, SemanticNameDeriver, SemanticNameRegistry, Snapshot,
-    TextMatcher, WireElementTarget,
+    AncestorLocator, Locator, LocatorResolver, ResolutionStatus, RetainedSemanticLookup,
+    SemanticCandidate, SemanticElementName, SemanticLookup, SemanticNameDeriver,
+    SemanticNameRegistry, Snapshot, TextMatcher, WireElementTarget, locator as runtime_locator,
+    lookup_from_resolution, walk_context,
 };
 use serde::{Deserialize, Serialize};
 use std::{
@@ -119,11 +119,7 @@ impl AppChart {
 /// Observation strength is `1 - exp(-observations / 3)`; recency has a 90-day
 /// half-life; reliability is add-one smoothed; and a known app-version mismatch
 /// applies a multiplicative 0.5 haircut. A clock before `last_seen` has zero age.
-pub fn confidence(
-    element: &ChartElement,
-    now: u64,
-    observed_app_version: Option<&str>,
-) -> f64 {
+pub fn confidence(element: &ChartElement, now: u64, observed_app_version: Option<&str>) -> f64 {
     let observation_strength = 1.0 - (-(element.observations as f64) / 3.0).exp();
     let age_days = now.saturating_sub(element.last_seen) as f64 / SECONDS_PER_DAY;
     let recency = 2_f64.powf(-age_days / 90.0);
@@ -153,7 +149,8 @@ impl ChartStore {
     }
 
     pub fn chart_path(&self, app_identity: &str) -> PathBuf {
-        self.root.join(format!("{}.json", hex(app_identity.as_bytes())))
+        self.root
+            .join(format!("{}.json", hex(app_identity.as_bytes())))
     }
 
     pub fn load(&mut self, app_identity: &str) -> AppChart {
@@ -180,29 +177,26 @@ impl ChartStore {
         let names = SemanticNameDeriver::derive(snapshot);
         let mut contexts = Vec::new();
         for window in &snapshot.app.windows {
-            walk_context(
-                &window.root,
-                &[],
-                window.title.as_deref(),
-                &mut contexts,
-            );
+            walk_context(&window.root, &[], window.title.as_deref(), &mut contexts);
         }
 
         let observed: Vec<_> = names
             .iter()
             .filter_map(|name| {
-                contexts.get(name.source_index).map(|(node, ancestors, window)| {
-                    new_element(
-                        name,
-                        ChartLocator::from(&runtime_locator(
-                            node,
-                            ancestors,
-                            window.as_deref(),
-                        )),
-                        app_version,
-                        now,
-                    )
-                })
+                contexts
+                    .get(name.source_index)
+                    .map(|(node, ancestors, window)| {
+                        new_element(
+                            name,
+                            ChartLocator::from(&runtime_locator(
+                                node,
+                                ancestors,
+                                window.as_deref(),
+                            )),
+                            app_version,
+                            now,
+                        )
+                    })
             })
             .collect();
 
@@ -211,7 +205,9 @@ impl ChartStore {
             .get_mut(app_identity)
             .expect("chart is loaded before capture");
         reconcile(&mut chart.entries, observed, app_version, now);
-        chart.entries.sort_by(|left, right| left.key.cmp(&right.key));
+        chart
+            .entries
+            .sort_by(|left, right| left.key.cmp(&right.key));
     }
 
     pub fn record_success(&mut self, app_identity: &str, key: &ChartKey, _now: u64) {
@@ -241,12 +237,7 @@ impl ChartStore {
             .collect()
     }
 
-    pub fn prune(
-        &mut self,
-        app_identity: &str,
-        now: u64,
-        observed_app_version: Option<&str>,
-    ) {
+    pub fn prune(&mut self, app_identity: &str, now: u64, observed_app_version: Option<&str>) {
         self.ensure_loaded(app_identity);
         self.charts
             .get_mut(app_identity)
@@ -257,12 +248,7 @@ impl ChartStore {
             });
     }
 
-    pub fn save(
-        &mut self,
-        app_identity: &str,
-        now: u64,
-        observed_app_version: Option<&str>,
-    ) {
+    pub fn save(&mut self, app_identity: &str, now: u64, observed_app_version: Option<&str>) {
         self.prune(app_identity, now, observed_app_version);
         let path = self.chart_path(app_identity);
         let chart = self.charts[app_identity].clone();
@@ -364,13 +350,18 @@ impl<'a> ChartSeededResolver<'a> {
             let locator = seed.locator.to_locator();
             let resolution = LocatorResolver::resolve(&locator, live);
             self.charts.record_failure(app_identity, &seed.key, now);
-            candidates.extend(resolution.candidates.iter().map(|candidate| SemanticCandidate {
-                name: target.name.clone(),
-                candidate_label: None,
-                role: candidate.role.clone(),
-                label: candidate.title.clone().unwrap_or_default(),
-                locator: locator.clone(),
-            }));
+            candidates.extend(
+                resolution
+                    .candidates
+                    .iter()
+                    .map(|candidate| SemanticCandidate {
+                        name: target.name.clone(),
+                        candidate_label: None,
+                        role: candidate.role.clone(),
+                        label: candidate.title.clone().unwrap_or_default(),
+                        locator: locator.clone(),
+                    }),
+            );
         }
         SemanticLookup::Ambiguous {
             target: target.clone(),
@@ -431,8 +422,10 @@ fn reconcile(
         let previous = old.iter().find(|entry| {
             entry.key.name == fresh.key.name
                 && match fresh.key.candidate_ordinal {
-                    Some(_) => entry.key.candidate_ordinal.is_some()
-                        && entry.key.identity_key == fresh.key.identity_key,
+                    Some(_) => {
+                        entry.key.candidate_ordinal.is_some()
+                            && entry.key.identity_key == fresh.key.identity_key
+                    }
                     None => entry.key.candidate_ordinal.is_none(),
                 }
         });
@@ -458,7 +451,9 @@ fn load_chart(path: &Path, app_identity: &str) -> AppChart {
             if chart.schema_version == CHART_SCHEMA_VERSION
                 && chart.app_identity == app_identity =>
         {
-            chart.entries.sort_by(|left, right| left.key.cmp(&right.key));
+            chart
+                .entries
+                .sort_by(|left, right| left.key.cmp(&right.key));
             chart
         }
         _ => AppChart::empty(app_identity),
