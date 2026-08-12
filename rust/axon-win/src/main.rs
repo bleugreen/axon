@@ -46,7 +46,6 @@ impl StartupLog {
             let _ = file.write_all(line.as_bytes());
         }
     }
-
 }
 
 #[cfg(windows)]
