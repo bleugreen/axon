@@ -9,6 +9,48 @@ struct LocatorFixture {
     cases: Vec<LocatorCase>,
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct LookSinceWireFixture {
+    unchanged: String,
+    diff: String,
+    baseline_expired: String,
+    threshold: String,
+}
+
+#[test]
+fn look_since_response_forms_are_byte_exact() {
+    let fixture: LookSinceWireFixture = serde_json::from_str(include_str!(
+        "../../../schema/fixtures/look-since-responses.json"
+    ))
+    .unwrap();
+    let observation = Snapshot {
+        id: SnapshotId("fixture-1".into()),
+        app: Application {
+            name: "Fixture".into(),
+            identifier: Some("fixture.app".into()),
+            windows: vec![],
+        },
+    };
+    let token = SinceToken::new("fixture.app", &observation.id, 7);
+    let diff = SemanticDiff {
+        added: vec![], removed: vec![],
+        changed: vec![FieldChange {
+            name: "field/search".into(), field: "value".into(),
+            from: Value::Null, to: json!("axon"),
+        }],
+    };
+    let responses = [
+        (LookSinceResult::unchanged("Fixture", token.clone()), fixture.unchanged),
+        (LookSinceResult::diff("Fixture", token.clone(), diff), fixture.diff),
+        (LookSinceResult::fallback("Fixture", observation.clone(), token.clone(), LookFallbackNote::BaselineExpired), fixture.baseline_expired),
+        (LookSinceResult::fallback("Fixture", observation, token, LookFallbackNote::DiffExceededThreshold), fixture.threshold),
+    ];
+    for (response, expected) in responses {
+        assert_eq!(serde_json::to_string(&response).unwrap(), expected);
+    }
+}
+
 #[test]
 fn wire_element_targets_are_strictly_app_scoped_semantic_names() {
     let target: WireElementTarget = serde_json::from_value(json!({
