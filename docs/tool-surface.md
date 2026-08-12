@@ -56,8 +56,11 @@ The observation tree is a DSL string with app-scoped semantic names, normalized 
 actions, and explicit truncation markers. Full app observations include a window
 screenshot by default; use `screenshot: false` or `--no-screenshot` to omit it.
 `look(since:)` change checks and semantic-target child pages remain imageless by
-default because they refine an observation the caller already has. `screenText: true`
-OCRs visible text from the screenshot.
+default because they refine an observation the caller already has. Observation images are
+lossless PNGs, never upscaled, with their longest edge bounded to 1280 pixels. If a
+backend cannot capture the requested image, the accessibility observation still succeeds:
+`screenshot` is absent and `screenshotUnavailable` reports a stable code and reason.
+`screenText: true` OCRs visible text from the screenshot.
 App observations also report `focus`. `available` includes the focused element's
 role and label plus its semantic name when that element belongs to the captured
 tree. `none` means the app reported no focused UI element. `inaccessible` means
