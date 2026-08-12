@@ -195,9 +195,7 @@ fn screenshot_session() -> InputSession {
     classify_x11_session(screenshot_restriction)
 }
 
-fn classify_x11_session(
-    restriction: fn(SessionFacts) -> Option<&'static str>,
-) -> InputSession {
+fn classify_x11_session(restriction: fn(SessionFacts) -> Option<&'static str>) -> InputSession {
     // Asked before an X connection is attempted, because a Wayland session is one whether or not
     // XWayland happens to answer, and what XWayland could answer is about X11 clients alone.
     let wayland = std::env::var_os("WAYLAND_DISPLAY").is_some();
