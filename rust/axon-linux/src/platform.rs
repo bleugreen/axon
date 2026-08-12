@@ -482,12 +482,9 @@ impl PlatformBackend for LinuxBackend {
         self.x11(Capability::KeyboardInput)?.keyboard(intent)
     }
     fn screenshot(&mut self, app: &AppQuery) -> Result<Screenshot, BackendError> {
-        let x11 = match &self.screenshot {
-            InputSession::Available(session) => session.as_ref(),
-            InputSession::Unavailable(reason) => {
-                return Err(capability(Capability::Screenshot, reason));
-            }
-        };
+        if let InputSession::Unavailable(reason) = &self.screenshot {
+            return Err(capability(Capability::Screenshot, reason));
+        }
         let identity = self
             .ask(|r| Command::Identity(app.clone(), r))?
             .ok_or_else(|| operation("capture screenshot", "no AT-SPI application matched"))?;
@@ -499,7 +496,11 @@ impl PlatformBackend for LinuxBackend {
                     "the matched application has no process id",
                 )
             })?;
-        x11.screenshot_for_pid(process_id)
+        match &self.screenshot {
+            InputSession::Available(session) => session.screenshot_for_pid(process_id),
+            // Availability was checked before the AT-SPI identity refresh and is immutable.
+            InputSession::Unavailable(reason) => Err(capability(Capability::Screenshot, reason)),
+        }
     }
     fn hit_test(&mut self, _: (f64, f64)) -> Result<Option<Node>, BackendError> {
         Err(capability(Capability::HitTest, "not implemented"))
