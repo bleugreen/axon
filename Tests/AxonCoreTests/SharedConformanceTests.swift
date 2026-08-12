@@ -2,6 +2,18 @@ import Foundation
 import Testing
 @testable import AxonCore
 
+@Test func sharedMCPObservationEnvelopeIsByteExact() throws {
+    let fixtureURL = URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent()
+        .appendingPathComponent("../../schema/fixtures/mcp-look-observation-envelope.json")
+        .standardizedFileURL
+    let fixture = try JSONDecoder().decode(JSONValue.self, from: Data(contentsOf: fixtureURL))
+    let structuredContent = try #require(fixture["structuredContent"])
+    let expected = try #require(fixture["result"])
+
+    #expect(MCPContent.toolResult(structuredContent: structuredContent, isError: false) == expected.objectValue)
+}
+
 private struct SharedLocatorFixture: Decodable {
     let snapshot: SharedSnapshot
     let cases: [SharedLocatorCase]

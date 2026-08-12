@@ -58,6 +58,11 @@ processes, bundle identifiers, or pids are needed.
 
 `look(app: ...)` captures an accessibility snapshot. MCP returns a compact
 agent-facing observation by default; `format: "debug"` returns the raw snapshot.
+The MCP observation is the `structuredContent` object itself: `app`, `snapshot`,
+`tree`, `focus`, `screenshot`, `screenshotUnavailable`, `screenText`, redaction,
+and warnings are top-level siblings. There is no `structuredContent.snapshot`
+wrapper. Screenshot metadata stays at `structuredContent.screenshot`; its base64
+bytes travel in a sibling MCP image content item.
 The observation tree is a DSL string with app-scoped semantic names, normalized roles, labels,
 actions, and explicit truncation markers. Full app observations include a window
 screenshot by default; use `screenshot: false` or `--no-screenshot` to omit it.

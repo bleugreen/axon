@@ -211,7 +211,7 @@ jobs:
             if [[ -n "$look" ]]; then
               printf '%s\n' "$look" | jq '{
                 isError: .result.isError,
-                snapshot: (.result.structuredContent.snapshot | {app, tree: (.tree | split("\n") | map(select(test(": button "))) | .[0:20])}),
+                observation: (.result.structuredContent | {app, tree: (.tree | split("\n") | map(select(test(": button "))) | .[0:20])}),
                 error: (.result.structuredContent | {code, message, error})
               }'
             elif [[ -n "$look_error" ]]; then
