@@ -16,6 +16,18 @@ pub struct AxnDocument {
     pub flags: Map<String, Value>,
 }
 
+pub fn expected_fact_target(fact: &ExpectedFact) -> Result<(String, crate::Locator), String> {
+    let target = fact.fields.get("target").and_then(Value::as_object)
+        .ok_or_else(|| format!("fact {} target must be an object", fact.id))?;
+    let app = target.get("app").and_then(Value::as_str).filter(|app| !app.is_empty())
+        .ok_or_else(|| format!("fact {} target requires app", fact.id))?;
+    let locator = target.get("locator")
+        .ok_or_else(|| format!("fact {} target requires locator", fact.id))?;
+    let locator = serde_json::from_value(locator.clone())
+        .map_err(|error| format!("fact {} has invalid locator: {error}", fact.id))?;
+    Ok((app.to_owned(), locator))
+}
+
 fn same_path(left: &str, right: &str) -> bool {
     let absolute = |path: &str| { let path = std::path::PathBuf::from(path); if path.is_absolute() { path } else { std::env::current_dir().unwrap_or_default().join(path) } };
     std::fs::canonicalize(left).unwrap_or_else(|_| absolute(left)) == std::fs::canonicalize(right).unwrap_or_else(|_| absolute(right))
