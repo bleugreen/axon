@@ -3,15 +3,19 @@
 use axon_core::{
     AppQuery, AxnCodec, AxnRunner, Capability, DeliveryCandidate, DeliveryCapability,
     DeliveryOutcome, DeliveryPolicy, DeliveryRefusal, DeliveryRefusalReason, DeliveryRung,
-    DeliverySelection, DispatchOutcome, ExpectedFact, ForegroundTarget, JsonRpcError, JsonRpcId,
-    JsonRpcRequest, JsonRpcResponse, KeyboardIntent, PlatformBackend, ResolutionStatus,
-    RunEnvelope, RunOptions, SemanticLookup, SemanticNameRegistry, Snapshot, SnapshotHandle,
-    TextLocationResolver, TextLocationSource, TextLocationTarget, TextRecognitionProvider,
-    ToolDispatcher, DiffPolicy, SemanticElementName, SinceToken, classify_semantic_diff,
-    dispatch_in_foreground, goal_success, look_since_response, select_delivery,
+    DeliverySelection, DiffPolicy, DispatchOutcome, ExpectedFact, ForegroundTarget, JsonRpcError,
+    JsonRpcId, JsonRpcRequest, JsonRpcResponse, KeyboardIntent, PlatformBackend, ResolutionStatus,
+    RunEnvelope, RunOptions, SemanticElementName, SemanticLookup, SemanticNameRegistry, SinceToken,
+    Snapshot, SnapshotHandle, TextLocationResolver, TextLocationSource, TextLocationTarget,
+    TextRecognitionProvider, ToolDispatcher, classify_semantic_diff, dispatch_in_foreground,
+    goal_success, look_since_response, select_delivery,
 };
 use serde_json::{Map, Value, json};
-use std::{collections::HashMap, thread, time::{Duration, Instant}};
+use std::{
+    collections::HashMap,
+    thread,
+    time::{Duration, Instant},
+};
 
 #[cfg(target_os = "macos")]
 pub mod socket;
@@ -497,7 +501,11 @@ impl<
         params: &Map<String, Value>,
     ) -> Result<Value, JsonRpcError> {
         if let Some((_, capability)) = EXCLUDED.iter().find(|(tool, _)| *tool == method) {
-            return Err(capability_unavailable(method, capability, "not-implemented"));
+            return Err(capability_unavailable(
+                method,
+                capability,
+                "not-implemented",
+            ));
         }
         // The policy is decoded before the target is resolved and before any backend call, so an
         // unknown value can never reach a native API.
@@ -808,7 +816,11 @@ impl<
 
     fn look(&mut self, params: &Map<String, Value>) -> Result<Value, JsonRpcError> {
         if params.get("screenText").and_then(Value::as_bool) == Some(true) {
-            return Err(capability_unavailable("look", "screenText", "not-implemented"));
+            return Err(capability_unavailable(
+                "look",
+                "screenText",
+                "not-implemented",
+            ));
         }
         if params.get("app").is_none() {
             return serde_json::to_value(
@@ -822,19 +834,37 @@ impl<
         let snapshot = self.backend.capture(&app).map_err(backend_error)?;
         let names = self.semantic_names.register(&snapshot);
         self.observation_sequence += 1;
-        let app_identity = snapshot.app.identifier.as_deref().unwrap_or(&snapshot.app.name);
+        let app_identity = snapshot
+            .app
+            .identifier
+            .as_deref()
+            .unwrap_or(&snapshot.app.name);
         let next_since = SinceToken::new(app_identity, &snapshot.id, self.observation_sequence);
         if let Some(raw_since) = params.get("since").and_then(Value::as_str) {
             let requested = SinceToken::parse(raw_since)
                 .map_err(|error| rpc_error(-32602, error.to_string()))?;
-            let comparison = self.observations.get(requested.as_str())
-                .map(|(baseline, baseline_names)| classify_semantic_diff(
-                    baseline, baseline_names, &snapshot, &names, DiffPolicy::default()
-                ))
+            let comparison = self
+                .observations
+                .get(requested.as_str())
+                .map(|(baseline, baseline_names)| {
+                    classify_semantic_diff(
+                        baseline,
+                        baseline_names,
+                        &snapshot,
+                        &names,
+                        DiffPolicy::default(),
+                    )
+                })
                 .transpose()
                 .map_err(|error| rpc_error(-32603, error.to_string()))?;
-            let result = look_since_response(snapshot.app.name.clone(), snapshot.clone(), next_since.clone(), comparison);
-            self.observations.insert(next_since.as_str().into(), (snapshot.clone(), names));
+            let result = look_since_response(
+                snapshot.app.name.clone(),
+                snapshot.clone(),
+                next_since.clone(),
+                comparison,
+            );
+            self.observations
+                .insert(next_since.as_str().into(), (snapshot.clone(), names));
             self.snapshot = Some(snapshot);
             return serde_json::to_value(result).map_err(internal_error);
         }
@@ -895,9 +925,12 @@ impl<
                     serde_json::to_value(unavailable).map_err(internal_error)?,
                 );
         }
-        value.as_object_mut().expect("snapshots serialize as objects")
+        value
+            .as_object_mut()
+            .expect("snapshots serialize as objects")
             .insert("since".into(), json!(next_since));
-        self.observations.insert(next_since.as_str().into(), (snapshot.clone(), names));
+        self.observations
+            .insert(next_since.as_str().into(), (snapshot.clone(), names));
         self.snapshot = Some(snapshot);
         Ok(value)
     }
@@ -915,21 +948,39 @@ impl<
                     let observed = self.backend.read_value(&handle).map_err(backend_error)?;
                     last_observed = observed.clone();
                     let satisfied = observed.as_deref().is_some_and(|value| {
-                        params.get("equals").and_then(Value::as_str).is_some_and(|expected| value == expected)
-                            || params.get("contains").and_then(Value::as_str).is_some_and(|expected| value.contains(expected))
-                            || params.get("matches").and_then(Value::as_str)
-                                .is_some_and(|pattern| regex::Regex::new(pattern).is_ok_and(|regex| regex.is_match(value)))
+                        params
+                            .get("equals")
+                            .and_then(Value::as_str)
+                            .is_some_and(|expected| value == expected)
+                            || params
+                                .get("contains")
+                                .and_then(Value::as_str)
+                                .is_some_and(|expected| value.contains(expected))
+                            || params.get("matches").and_then(Value::as_str).is_some_and(
+                                |pattern| {
+                                    regex::Regex::new(pattern)
+                                        .is_ok_and(|regex| regex.is_match(value))
+                                },
+                            )
                     });
                     if satisfied {
-                        return Ok(json!({"wait":{"success":true,"status":"satisfied","elapsedMs":started.elapsed().as_millis(),"lastObserved":{"value":observed},"resolution":resolution}}));
+                        return Ok(
+                            json!({"wait":{"success":true,"status":"satisfied","elapsedMs":started.elapsed().as_millis(),"lastObserved":{"value":observed},"resolution":resolution}}),
+                        );
                     }
                 }
                 Err(error) if error.code == -32002 => {}
                 Err(error) => return Err(error),
             }
             if started.elapsed() >= timeout {
-                let status = if last_observed.is_some() { "predicate_timeout" } else { "target_unresolved_timeout" };
-                return Ok(json!({"wait":{"success":false,"status":status,"elapsedMs":started.elapsed().as_millis(),"lastObserved":last_observed.map(|value| json!({"value":value})),"resolution":last_resolution}}));
+                let status = if last_observed.is_some() {
+                    "predicate_timeout"
+                } else {
+                    "target_unresolved_timeout"
+                };
+                return Ok(
+                    json!({"wait":{"success":false,"status":status,"elapsedMs":started.elapsed().as_millis(),"lastObserved":last_observed.map(|value| json!({"value":value})),"resolution":last_resolution}}),
+                );
             }
             thread::sleep(interval.min(timeout.saturating_sub(started.elapsed())));
         }
@@ -937,22 +988,38 @@ impl<
 
     fn wait_for_stability(&mut self, params: &Map<String, Value>) -> Result<Value, JsonRpcError> {
         let app = app_query(params);
-        if app.name.is_none() && app.identifier.is_none() { return Err(rpc_error(-32602, "wait_for_stability requires app")); }
+        if app.name.is_none() && app.identifier.is_none() {
+            return Err(rpc_error(-32602, "wait_for_stability requires app"));
+        }
         let timeout = bounded_ms(params, "timeoutMs", 5_000, 60_000)?;
         let interval = bounded_ms(params, "intervalMs", 100, 1_000)?;
         let stable_for = bounded_ms(params, "stableMs", 500, 60_000)?;
-        let condition = params.get("condition").and_then(Value::as_str).unwrap_or("stable");
-        if !matches!(condition, "stable" | "changed") { return Err(rpc_error(-32602, "condition must be stable or changed")); }
+        let condition = params
+            .get("condition")
+            .and_then(Value::as_str)
+            .unwrap_or("stable");
+        if !matches!(condition, "stable" | "changed") {
+            return Err(rpc_error(-32602, "condition must be stable or changed"));
+        }
         let started = Instant::now();
         let first = self.backend.capture(&app).map_err(backend_error)?;
         let mut last = first.app.clone();
         let mut stable_since = Instant::now();
         loop {
             let snapshot = self.backend.capture(&app).map_err(backend_error)?;
-            if snapshot.app != last { last = snapshot.app.clone(); stable_since = Instant::now(); }
-            let satisfied = if condition == "changed" { snapshot.app != first.app } else { stable_since.elapsed() >= stable_for };
+            if snapshot.app != last {
+                last = snapshot.app.clone();
+                stable_since = Instant::now();
+            }
+            let satisfied = if condition == "changed" {
+                snapshot.app != first.app
+            } else {
+                stable_since.elapsed() >= stable_for
+            };
             if satisfied || started.elapsed() >= timeout {
-                return Ok(json!({"wait":{"success":satisfied,"status":if satisfied {"satisfied"} else {"timeout"},"condition":condition,"elapsedMs":started.elapsed().as_millis(),"stableMs":stable_since.elapsed().as_millis(),"snapshot":snapshot}}));
+                return Ok(
+                    json!({"wait":{"success":satisfied,"status":if satisfied {"satisfied"} else {"timeout"},"condition":condition,"elapsedMs":started.elapsed().as_millis(),"stableMs":stable_since.elapsed().as_millis(),"snapshot":snapshot}}),
+                );
             }
             thread::sleep(interval.min(timeout.saturating_sub(started.elapsed())));
         }
@@ -1093,7 +1160,9 @@ fn bounded_ms(
     maximum: u64,
 ) -> Result<Duration, JsonRpcError> {
     let value = params.get(key).and_then(Value::as_u64).unwrap_or(default);
-    if value == 0 { return Err(rpc_error(-32602, format!("{key} must be positive"))); }
+    if value == 0 {
+        return Err(rpc_error(-32602, format!("{key} must be positive")));
+    }
     Ok(Duration::from_millis(value.min(maximum)))
 }
 
@@ -1151,10 +1220,16 @@ fn rpc_error(code: i64, message: impl Into<String>) -> JsonRpcError {
 }
 fn backend_error(e: axon_core::BackendError) -> JsonRpcError {
     match e {
-        axon_core::BackendError::Capability { capability, reason, diagnostic } => JsonRpcError {
+        axon_core::BackendError::Capability {
+            capability,
+            reason,
+            diagnostic,
+        } => JsonRpcError {
             code: -32004,
             message: format!("capability {} is unavailable: {reason}", capability.key()),
-            data: Some(json!({"kind":"capability-unavailable","capability":capability.key(),"reason":reason,"diagnostic":diagnostic})),
+            data: Some(
+                json!({"kind":"capability-unavailable","capability":capability.key(),"reason":reason,"diagnostic":diagnostic}),
+            ),
         },
         other => rpc_error(-32000, other.to_string()),
     }
@@ -1164,7 +1239,9 @@ fn capability_unavailable(tool: &str, capability: &str, reason: &str) -> JsonRpc
     JsonRpcError {
         code: -32004,
         message: format!("tool {tool} requires unavailable capability {capability}"),
-        data: Some(json!({"kind":"capability-unavailable","tool":tool,"capability":capability,"reason":reason})),
+        data: Some(
+            json!({"kind":"capability-unavailable","tool":tool,"capability":capability,"reason":reason}),
+        ),
     }
 }
 fn internal_error(e: serde_json::Error) -> JsonRpcError {
@@ -1182,11 +1259,7 @@ mod tests {
 
     #[test]
     fn excluded_tools_are_capability_errors_before_dispatch() {
-        for tool in [
-            "save",
-            "drag",
-            "permit",
-        ] {
+        for tool in ["save", "drag", "permit"] {
             let (_, capability) = EXCLUDED.iter().find(|(name, _)| *name == tool).unwrap();
             assert!(!capability.is_empty());
         }

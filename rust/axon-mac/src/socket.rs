@@ -16,7 +16,11 @@ use std::{
         },
     },
     path::PathBuf,
-    sync::{Arc, mpsc, atomic::{AtomicBool, Ordering}},
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+        mpsc,
+    },
     thread,
     time::Duration,
 };
@@ -45,12 +49,16 @@ unsafe extern "C" {
 unsafe extern "C" {
     fn CFRelease(value: *const std::ffi::c_void);
 }
-unsafe extern "C" { fn getuid() -> u32; }
+unsafe extern "C" {
+    fn getuid() -> u32;
+}
 
 fn session_health() -> SessionHealth {
     let session = unsafe { CGSessionCopyCurrentDictionary() };
     let graphical = !session.is_null();
-    if graphical { unsafe { CFRelease(session) }; }
+    if graphical {
+        unsafe { CFRelease(session) };
+    }
     let interactive = unsafe { getuid() } != 0 && graphical;
     if interactive && graphical {
         SessionHealth::usable(None)
@@ -117,14 +125,19 @@ pub fn serve() -> io::Result<()> {
     thread::spawn(move || {
         let backend = MacBackend::new().map_err(|error| error.to_string());
         let _ = ready_tx.send(backend.as_ref().map(|_| ()).map_err(Clone::clone));
-        let Ok(backend) = backend else { return; };
+        let Ok(backend) = backend else {
+            return;
+        };
         let mut router = Router::new(backend);
         for request in router_rx {
             let response = router.request(request.request);
             let _ = request.response.send(response);
         }
     });
-    ready_rx.recv().map_err(io::Error::other)?.map_err(io::Error::other)?;
+    ready_rx
+        .recv()
+        .map_err(io::Error::other)?
+        .map_err(io::Error::other)?;
     let stopping = Arc::new(AtomicBool::new(false));
     let listener = UnixListener::bind(&path)?;
     listener.set_nonblocking(true)?;
@@ -172,7 +185,9 @@ fn answer(
     }
     let (response, stop) = dispatch(line.trim(), router, endpoint);
     writeln!(stream, "{}", serde_json::to_string(&response).unwrap())?;
-    if stop { stopping.store(true, Ordering::Release); }
+    if stop {
+        stopping.store(true, Ordering::Release);
+    }
     Ok(())
 }
 fn dispatch(
@@ -228,7 +243,12 @@ fn dispatch(
                 ready: trusted && session.interactive && session.graphical,
                 process_id,
                 endpoint: endpoint.display().to_string(),
-                provenance: Some(DaemonProvenance { backend: "rust-axon-mac".into(), process_id, executable_path, version }),
+                provenance: Some(DaemonProvenance {
+                    backend: "rust-axon-mac".into(),
+                    process_id,
+                    executable_path,
+                    version,
+                }),
                 session,
                 permissions: vec![permission, screen_recording],
                 capabilities: CapabilityState::complete(&reported),
@@ -253,10 +273,19 @@ fn dispatch(
         _ => (
             {
                 let (response_tx, response_rx) = mpsc::sync_channel(1);
-                if router.send(RouterRequest { request, response: response_tx }).is_err() {
+                if router
+                    .send(RouterRequest {
+                        request,
+                        response: response_tx,
+                    })
+                    .is_err()
+                {
                     Value::Null
                 } else {
-                    response_rx.recv().ok().flatten()
+                    response_rx
+                        .recv()
+                        .ok()
+                        .flatten()
                         .map(|value| serde_json::to_value(value).unwrap())
                         .unwrap_or(Value::Null)
                 }
@@ -342,7 +371,10 @@ mod tests {
     }
     #[test]
     fn endpoint_defaults_to_canonical_installed_socket() {
-        unsafe { std::env::remove_var(PRIVATE_SOCKET_ENV); std::env::remove_var(SOCKET_ENV); }
+        unsafe {
+            std::env::remove_var(PRIVATE_SOCKET_ENV);
+            std::env::remove_var(SOCKET_ENV);
+        }
         assert_eq!(path().unwrap(), PathBuf::from(DEFAULT_SOCKET_PATH));
     }
     #[test]
@@ -379,7 +411,16 @@ mod tests {
         assert_eq!(
             names,
             [
-                "look", "find", "wait_for_value", "wait_for_stability", "click", "type", "keyboard", "invoke", "scroll", "run"
+                "look",
+                "find",
+                "wait_for_value",
+                "wait_for_stability",
+                "click",
+                "type",
+                "keyboard",
+                "invoke",
+                "scroll",
+                "run"
             ]
         );
     }
