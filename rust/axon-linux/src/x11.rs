@@ -879,6 +879,105 @@ impl KeyboardMapping {
     }
 }
 
+fn decode_zpixmap(
+    width: u16,
+    height: u16,
+    layout: PixelLayout,
+    data: &[u8],
+) -> Result<Vec<u8>, BackendError> {
+    let bytes_per_pixel = usize::from(layout.bits_per_pixel).div_ceil(8);
+    if bytes_per_pixel == 0 || bytes_per_pixel > 4 || layout.scanline_pad == 0 {
+        return Err(operation(
+            "decode X11 window pixels",
+            format!("unsupported {}-bit pixel layout with {}-bit scanline padding", layout.bits_per_pixel, layout.scanline_pad),
+        ));
+    }
+    let row_bits = usize::from(width) * usize::from(layout.bits_per_pixel);
+    let pad = usize::from(layout.scanline_pad);
+    let stride = row_bits.div_ceil(pad) * pad / 8;
+    let expected = stride * usize::from(height);
+    if data.len() != expected {
+        return Err(operation(
+            "decode X11 window pixels",
+            format!("expected {expected} bytes from the server pixel layout, received {}", data.len()),
+        ));
+    }
+
+    fn channel(pixel: u32, mask: u32) -> u8 {
+        if mask == 0 {
+            return 0;
+        }
+        let shift = mask.trailing_zeros();
+        let maximum = mask >> shift;
+        ((((pixel & mask) >> shift) as u64 * 255 + u64::from(maximum) / 2)
+            / u64::from(maximum)) as u8
+    }
+
+    let mut rgba = Vec::with_capacity(usize::from(width) * usize::from(height) * 4);
+    for row in data.chunks_exact(stride) {
+        for bytes in row[..usize::from(width) * bytes_per_pixel].chunks_exact(bytes_per_pixel) {
+            let mut encoded = [0u8; 4];
+            if layout.least_significant_byte_first {
+                encoded[..bytes_per_pixel].copy_from_slice(bytes);
+                let pixel = u32::from_le_bytes(encoded);
+                rgba.extend_from_slice(&[
+                    channel(pixel, layout.red_mask),
+                    channel(pixel, layout.green_mask),
+                    channel(pixel, layout.blue_mask),
+                    255,
+                ]);
+            } else {
+                encoded[4 - bytes_per_pixel..].copy_from_slice(bytes);
+                let pixel = u32::from_be_bytes(encoded);
+                rgba.extend_from_slice(&[
+                    channel(pixel, layout.red_mask),
+                    channel(pixel, layout.green_mask),
+                    channel(pixel, layout.blue_mask),
+                    255,
+                ]);
+            }
+        }
+    }
+    Ok(rgba)
+}
+
+#[cfg(test)]
+mod screenshot_tests {
+    use super::*;
+
+    #[test]
+    fn decodes_live_style_32_bit_little_endian_true_color() {
+        let layout = PixelLayout {
+            bits_per_pixel: 32,
+            scanline_pad: 32,
+            least_significant_byte_first: true,
+            red_mask: 0x00ff_0000,
+            green_mask: 0x0000_ff00,
+            blue_mask: 0x0000_00ff,
+        };
+        assert_eq!(
+            decode_zpixmap(1, 1, layout, &[0x33, 0x22, 0x11, 0]).unwrap(),
+            [0x11, 0x22, 0x33, 0xff]
+        );
+    }
+
+    #[test]
+    fn decodes_16_bit_big_endian_rgb565_from_masks() {
+        let layout = PixelLayout {
+            bits_per_pixel: 16,
+            scanline_pad: 16,
+            least_significant_byte_first: false,
+            red_mask: 0xf800,
+            green_mask: 0x07e0,
+            blue_mask: 0x001f,
+        };
+        assert_eq!(
+            decode_zpixmap(2, 1, layout, &[0xf8, 0x00, 0x00, 0x1f]).unwrap(),
+            [255, 0, 0, 255, 0, 0, 255, 255]
+        );
+    }
+}
+
 /// Screen coordinates cross the wire as 16-bit signed values, so a point outside that range is
 /// clamped rather than wrapped into a different part of the screen.
 pub(crate) fn coordinate(value: f64) -> i16 {
