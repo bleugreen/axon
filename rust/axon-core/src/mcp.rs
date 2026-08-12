@@ -14,25 +14,6 @@ pub fn mcp_tool_result(mut structured_content: Value, is_error: bool) -> Value {
     })
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn shared_observation_envelope_is_byte_exact() {
-        let fixture: Value = serde_json::from_str(include_str!(
-            "../../../schema/fixtures/mcp-look-observation-envelope.json"
-        ))
-        .unwrap();
-        let actual = mcp_tool_result(fixture["structuredContent"].clone(), false);
-        assert_eq!(actual, fixture["result"]);
-        assert_eq!(
-            serde_json::to_string(&actual).unwrap(),
-            serde_json::to_string(&fixture["result"]).unwrap()
-        );
-    }
-}
-
 fn extract_images(value: &mut Value, images: &mut Vec<Value>) {
     match value {
         Value::Object(object) => {
@@ -55,3 +36,23 @@ fn extract_images(value: &mut Value, images: &mut Vec<Value>) {
         _ => {}
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn shared_observation_envelope_is_byte_exact() {
+        let fixture: Value = serde_json::from_str(include_str!(
+            "../../../schema/fixtures/mcp-look-observation-envelope.json"
+        ))
+        .unwrap();
+        let actual = mcp_tool_result(fixture["structuredContent"].clone(), false);
+        assert_eq!(actual, fixture["result"]);
+        assert_eq!(
+            serde_json::to_string(&actual).unwrap(),
+            serde_json::to_string(&fixture["result"]).unwrap()
+        );
+    }
+}
+
