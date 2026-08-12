@@ -1,0 +1,55 @@
+{
+  "actions" : [
+    {
+      "expects" : [
+        {
+          "id" : "a001.value.0",
+          "kind" : "value",
+          "state" : {
+            "value" : {
+              "contains" : "Axon"
+            }
+          },
+          "target" : {
+            "app" : "Example",
+            "locator" : {
+              "identifier" : "search",
+              "role" : "AXTextField"
+            },
+            "name" : "search-field"
+          }
+        }
+      ],
+      "id" : "a001",
+      "target" : {
+        "app" : "Example",
+        "locator" : {
+          "identifier" : "search",
+          "role" : "AXTextField"
+        },
+        "name" : "search-field"
+      },
+      "tool" : "type",
+      "value" : "Axon"
+    },
+    {
+      "app" : "Example",
+      "expects" : [
+        {
+          "id" : "a002.changed.0",
+          "kind" : "changed",
+          "target" : {
+            "app" : "Example"
+          }
+        }
+      ],
+      "id" : "a002",
+      "key" : "Return",
+      "requires" : [
+        "a001.value.0"
+      ],
+      "tool" : "keyboard"
+    }
+  ],
+  "version" : 2
+}

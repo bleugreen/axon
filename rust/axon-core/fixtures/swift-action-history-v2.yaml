@@ -1,0 +1,10 @@
+version: 2
+actions:
+  - id: a001
+    tool: click
+    target:
+      app: Example
+      locator:
+        role: AXButton
+        title: Submit
+      name: submit-button
