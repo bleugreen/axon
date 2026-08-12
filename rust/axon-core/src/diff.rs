@@ -232,3 +232,95 @@ fn compare_fields(before: &Node, after: &Node, name: &str, changes: &mut Vec<Fie
         (from != to).then(|| FieldChange { name: name.into(), field: field.into(), from, to })
     }));
 }
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++    use crate::{Application, Rect, SemanticNameDeriver, SnapshotId, Window};
++
++    fn node(role: &str, label: Option<&str>) -> Node {
++        Node {
++            role: role.into(), subrole: None, name: None, title: None,
++            label: label.map(Into::into), value: None, description: None,
++            identifier: None, actions: vec![], frame: None, editable: false,
++            children: vec![], child_count: None, truncation_reason: None,
++        }
++    }
++    fn snapshot(id: &str, children: Vec<Node>) -> Snapshot {
++        let mut root = node("window", Some("Main"));
++        root.children = children;
++        Snapshot { id: SnapshotId(id.into()), app: Application {
++            name: "Fixture".into(), identifier: Some("fixture.app".into()),
++            windows: vec![Window { title: Some("Main".into()), root }],
++        }}
++    }
++    fn classify(before: &Snapshot, after: &Snapshot) -> DiffClassification {
++        classify_semantic_diff(
++            before, &SemanticNameDeriver::derive(before),
++            after, &SemanticNameDeriver::derive(after),
++            DiffPolicy::default(),
++        ).unwrap()
++    }
++
++    #[test]
++    fn value_null_transitions_and_action_order_retain_wire_types() {
++        let before = snapshot("s1", vec![node("textField", Some("Search"))]);
++        let mut filled = node("textField", Some("Search"));
++        filled.value = Some("axon".into());
++        filled.actions = vec!["focus".into(), "setValue".into()];
++        let after = snapshot("s2", vec![filled]);
++        let DiffClassification::Diff(diff) = classify(&before, &after) else { panic!() };
++        assert_eq!(diff.changed[0].field, "value");
++        assert_eq!(diff.changed[0].from, Value::Null);
++        assert_eq!(diff.changed[0].to, json!("axon"));
++        assert_eq!(diff.changed[1].to, json!(["focus", "setValue"]));
++
++        let DiffClassification::Diff(reverse) = classify(&after, &before) else { panic!() };
++        assert_eq!(reverse.changed[0].from, json!("axon"));
++        assert_eq!(reverse.changed[0].to, Value::Null);
++    }
++
++    #[test]
++    fn frame_and_canonical_noise_are_unchanged() {
++        let mut moving = node("button", Some("Save"));
++        moving.frame = Some(Rect { x: 1.0, y: 2.0, width: 3.0, height: 4.0 });
++        let before = snapshot("s1", vec![moving.clone(), node("AXScrollBar", None), node("group", None)]);
++        moving.frame.as_mut().unwrap().x = 50.0;
++        let after = snapshot("s2", vec![moving, node("scroll-indicator", None)]);
++        assert_eq!(classify(&before, &after), DiffClassification::Unchanged);
++    }
++
++    #[test]
++    fn invalid_sources_and_identity_reuse_are_conservative() {
++        let before = snapshot("s1", vec![node("button", Some("Save"))]);
++        let after = before.clone();
++        let mut names = SemanticNameDeriver::derive(&before);
++        names[0].source_index = 99;
++        assert!(matches!(
++            classify_semantic_diff(&before, &names, &after, &SemanticNameDeriver::derive(&after), DiffPolicy::default()),
++            Err(DiffError::SourceIndexOutOfBounds { .. })
++        ));
++
++        let baseline_names = SemanticNameDeriver::derive(&before);
++        let mut fresh_names = baseline_names.clone();
++        fresh_names[1].identity_key.push_str("different");
++        let DiffClassification::ThresholdExceeded = classify_semantic_diff(
++            &before, &baseline_names, &after, &fresh_names, DiffPolicy::default()
++        ).unwrap() else { panic!() };
++    }
++
++    #[test]
++    fn threshold_counts_changed_elements_and_keeps_exact_boundary() {
++        let before = snapshot("s1", vec![node("button", Some("A")), node("button", Some("B"))]);
++        let mut changed = node("button", Some("A"));
++        changed.value = Some("new".into());
++        changed.editable = true;
++        let after = snapshot("s2", vec![changed, node("button", Some("B"))]);
++        assert!(matches!(classify(&before, &after), DiffClassification::Diff(_)));
++
++        let over = snapshot("s3", vec![node("button", Some("C")), node("button", Some("D"))]);
++        assert_eq!(classify(&before, &over), DiffClassification::ThresholdExceeded);
++        assert_eq!(DiffPolicy::new(0.5).unwrap().threshold(), 0.5);
++        assert!(DiffPolicy::new(f64::NAN).is_err());
++    }
++}
