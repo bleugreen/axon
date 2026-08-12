@@ -43,21 +43,6 @@ impl Default for DiffPolicy {
     fn default() -> Self {
         Self { threshold: 0.5 }
     }
-
-    #[test]
-    fn compatible_identity_allows_identifier_changes() {
-        let mut before_node = node("button", Some("Save"));
-        before_node.identifier = Some("save-old".into());
-        let mut after_node = node("button", Some("Save"));
-        after_node.identifier = Some("save-new".into());
-        let before = snapshot("s1", vec![before_node]);
-        let after = snapshot("s2", vec![after_node]);
-        let DiffClassification::Diff(diff) = classify(&before, &after) else {
-            panic!()
-        };
-        assert_eq!(diff.changed.len(), 1);
-        assert_eq!(diff.changed[0].field, "identifier");
-    }
 }
 
 impl DiffPolicy {
@@ -449,6 +434,21 @@ mod tests {
         .unwrap() else {
             panic!()
         };
+    }
+
+    #[test]
+    fn compatible_identity_allows_identifier_changes() {
+        let mut before_node = node("button", Some("Save"));
+        before_node.identifier = Some("save-old".into());
+        let mut after_node = node("button", Some("Save"));
+        after_node.identifier = Some("save-new".into());
+        let before = snapshot("s1", vec![before_node]);
+        let after = snapshot("s2", vec![after_node]);
+        let DiffClassification::Diff(diff) = classify(&before, &after) else {
+            panic!()
+        };
+        assert_eq!(diff.changed.len(), 1);
+        assert_eq!(diff.changed[0].field, "identifier");
     }
 
     #[test]
