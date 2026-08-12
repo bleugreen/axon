@@ -220,3 +220,72 @@ mod tests {
         ));
     }
 }
+
+
+#[cfg(test)]
+mod since_tests {
+    use super::*;
+    use crate::{Application, Node, Window};
+
+    fn snapshot() -> Snapshot {
+        Snapshot {
+            id: SnapshotId("fixture-1".into()),
+            app: Application {
+                name: "Fixture".into(),
+                identifier: Some("fixture.app".into()),
+                windows: vec![Window {
+                    title: Some("Main".into()),
+                    root: Node {
+                        role: "window".into(), subrole: None, name: None,
+                        title: Some("Main".into()), label: None, value: None,
+                        description: None, identifier: None, actions: vec![], frame: None,
+                        editable: false, children: vec![], child_count: None,
+                        truncation_reason: None,
+                    },
+                }],
+            },
+        }
+    }
+
+    #[test]
+    fn token_round_trip_and_validation() {
+        let token = SinceToken::new("fixture.app", &SnapshotId("s.1/opaque".into()), 42);
+        assert!(token.as_str().starts_with("obs-"));
+        assert_eq!(SinceToken::parse(token.as_str()).unwrap(), token);
+        for malformed in ["bad-00.00.1", "obs-", "obs-zz.00.1", "obs-00.00.no"] {
+            assert!(SinceToken::parse(malformed).is_err());
+        }
+    }
+
+    #[test]
+    fn response_forms_are_strict_and_select_screenshot_policy() {
+        let token = SinceToken::new("fixture.app", &SnapshotId("fixture-1".into()), 1);
+        let unchanged = LookSinceResult::unchanged("Fixture", token.clone());
+        assert_eq!(unchanged.observation_kind(), LookObservationKind::ChangeCheck);
+        assert!(!screenshot_requested(Some(true), unchanged.observation_kind()));
+
+        let diff = LookSinceResult::diff("Fixture", token.clone(), SemanticDiff::default());
+        assert!(!screenshot_requested(None, diff.observation_kind()));
+
+        for note in [LookFallbackNote::BaselineExpired, LookFallbackNote::DiffExceededThreshold] {
+            let full = LookSinceResult::fallback("Fixture", snapshot(), token.clone(), note);
+            assert!(screenshot_requested(None, full.observation_kind()));
+        }
+        assert!(serde_json::from_str::<LookSinceResult>(
+            r#"{"app":"Fixture","unchanged":true,"since":"obs-61.62.1","extra":1}"#
+        ).is_err());
+        assert!(serde_json::from_str::<LookSinceResult>(
+            r#"{"app":"Fixture","unchanged":false,"since":"obs-61.62.1"}"#
+        ).is_err());
+    }
+
+    #[test]
+    fn missing_baseline_is_a_full_fallback() {
+        let token = SinceToken::new("fixture.app", &SnapshotId("fixture-1".into()), 2);
+        let result = look_since_response("Fixture", snapshot(), token, None);
+        assert!(matches!(
+            result,
+            LookSinceResult::Full(LookFull { note: LookFallbackNote::BaselineExpired, .. })
+        ));
+    }
+}
