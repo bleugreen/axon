@@ -60,9 +60,12 @@ if ((Test-Path -LiteralPath $Marker -PathType Leaf) -and (Test-Path -LiteralPath
         New-Item -ItemType HardLink -Path $CliExecutable -Target $Executable | Out-Null
     }
     $UserPath = [Environment]::GetEnvironmentVariable('Path', 'User')
-    if (($UserPath -split ';') -notcontains $InstallDirectory) {
-        [Environment]::SetEnvironmentVariable('Path', "$InstallDirectory;$UserPath", 'User')
-    }
+    $PathEntries = @($UserPath -split ';' | Where-Object {
+        -not [string]::IsNullOrWhiteSpace($_) -and
+        -not $_.TrimEnd('\').StartsWith($InstallRoot.TrimEnd('\') + '\', [System.StringComparison]::OrdinalIgnoreCase)
+    })
+    $NewUserPath = (@($InstallDirectory) + $PathEntries) -join ';'
+    [Environment]::SetEnvironmentVariable('Path', $NewUserPath, 'User')
     Write-Host "Axon $Version is installed and registered."
     exit 0
 }
