@@ -339,10 +339,12 @@ mod since_tests {
             )
             .is_err()
         );
-        assert!(serde_json::from_str::<LookSinceResult>(
-            r#"{"app":"Fixture","unchanged":true,"since":"garbage"}"#
-        )
-        .is_err());
+        assert!(
+            serde_json::from_str::<LookSinceResult>(
+                r#"{"app":"Fixture","unchanged":true,"since":"garbage"}"#
+            )
+            .is_err()
+        );
         assert!(
             serde_json::from_str::<LookSinceResult>(
                 r#"{"app":"Fixture","unchanged":false,"since":"obs-61.62.1"}"#

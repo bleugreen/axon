@@ -243,9 +243,7 @@ fn identity_compatible(left: &str, right: &str) -> bool {
     if left.len() < 4 || right.len() < 4 || left[2] != right[2] {
         return false;
     }
-    left[0] == right[0]
-        || left[1] == right[1]
-        || (!left[3].is_empty() && left[3] == right[3])
+    left[0] == right[0] || left[1] == right[1] || (!left[3].is_empty() && left[3] == right[3])
 }
 
 fn normalized_role(role: &str) -> String {
