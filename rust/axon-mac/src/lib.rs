@@ -938,14 +938,25 @@ impl<
     fn wait_for_value(&mut self, params: &Map<String, Value>) -> Result<Value, JsonRpcError> {
         let predicates = ["contains", "equals", "matches"]
             .into_iter()
-            .filter_map(|key| params.get(key).and_then(Value::as_str).map(|value| (key, value)))
+            .filter_map(|key| {
+                params
+                    .get(key)
+                    .and_then(Value::as_str)
+                    .map(|value| (key, value))
+            })
             .collect::<Vec<_>>();
         if predicates.len() != 1 || predicates[0].1.is_empty() {
-            return Err(rpc_error(-32602, "wait_for_value requires exactly one non-empty contains, equals, or matches predicate"));
+            return Err(rpc_error(
+                -32602,
+                "wait_for_value requires exactly one non-empty contains, equals, or matches predicate",
+            ));
         }
         let (predicate_kind, predicate_value) = predicates[0];
         let regex = (predicate_kind == "matches")
-            .then(|| regex::Regex::new(predicate_value).map_err(|error| rpc_error(-32602, error.to_string())))
+            .then(|| {
+                regex::Regex::new(predicate_value)
+                    .map_err(|error| rpc_error(-32602, error.to_string()))
+            })
             .transpose()?;
         let predicate = json!({predicate_kind: predicate_value});
         let timeout = bounded_ms(params, "timeoutMs", 5_000, 60_000)?;
@@ -959,12 +970,14 @@ impl<
                     last_resolution = Some(resolution.clone());
                     let observed = self.backend.read_value(&handle).map_err(backend_error)?;
                     last_observed = observed.clone();
-                    let satisfied = observed.as_deref().is_some_and(|value| match predicate_kind {
-                        "equals" => value == predicate_value,
-                        "contains" => value.contains(predicate_value),
-                        "matches" => regex.as_ref().is_some_and(|regex| regex.is_match(value)),
-                        _ => false,
-                    });
+                    let satisfied = observed
+                        .as_deref()
+                        .is_some_and(|value| match predicate_kind {
+                            "equals" => value == predicate_value,
+                            "contains" => value.contains(predicate_value),
+                            "matches" => regex.as_ref().is_some_and(|regex| regex.is_match(value)),
+                            _ => false,
+                        });
                     if satisfied {
                         return Ok(
                             json!({"wait":{"success":true,"status":"satisfied","predicate":predicate,"elapsedMs":started.elapsed().as_millis(),"matched":{"field":"value","value":observed},"lastObserved":{"value":observed},"resolution":resolution,"message":"wait_for_value predicate satisfied"}}),
@@ -1013,8 +1026,14 @@ impl<
             let snapshot = self.backend.capture(&app).map_err(backend_error)?;
             let names = self.semantic_names.register(&snapshot);
             let changed_from_last = !matches!(
-                classify_semantic_diff(&last, &last_names, &snapshot, &names, DiffPolicy::default())
-                    .map_err(|error| rpc_error(-32603, error.to_string()))?,
+                classify_semantic_diff(
+                    &last,
+                    &last_names,
+                    &snapshot,
+                    &names,
+                    DiffPolicy::default()
+                )
+                .map_err(|error| rpc_error(-32603, error.to_string()))?,
                 axon_core::DiffClassification::Unchanged
             );
             if changed_from_last {
@@ -1024,8 +1043,14 @@ impl<
             }
             let satisfied = if condition == "changed" {
                 !matches!(
-                    classify_semantic_diff(&first, &first_names, &snapshot, &names, DiffPolicy::default())
-                        .map_err(|error| rpc_error(-32603, error.to_string()))?,
+                    classify_semantic_diff(
+                        &first,
+                        &first_names,
+                        &snapshot,
+                        &names,
+                        DiffPolicy::default()
+                    )
+                    .map_err(|error| rpc_error(-32603, error.to_string()))?,
                     axon_core::DiffClassification::Unchanged
                 )
             } else {

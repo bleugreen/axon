@@ -95,10 +95,16 @@ pub fn path() -> io::Result<PathBuf> {
 }
 pub fn request(line: &str) -> io::Result<String> {
     let mut stream = UnixStream::connect(path()?)?;
-    let method = serde_json::from_str::<Value>(line)
-        .ok()
-        .and_then(|value| value.get("method").and_then(Value::as_str).map(str::to_owned));
-    let timeout = if matches!(method.as_deref(), Some("run" | "wait_for_value" | "wait_for_stability")) {
+    let method = serde_json::from_str::<Value>(line).ok().and_then(|value| {
+        value
+            .get("method")
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+    });
+    let timeout = if matches!(
+        method.as_deref(),
+        Some("run" | "wait_for_value" | "wait_for_stability")
+    ) {
         LONG_REQUEST_TIMEOUT
     } else {
         REQUEST_TIMEOUT
