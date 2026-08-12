@@ -240,6 +240,18 @@ private extension JSONRPCError {
         ])
     }
 
+}
+
+struct MCPContent {
+    let structured: JSONValue
+    let images: [JSONValue]
+
+    static func normalize(_ value: JSONValue) -> MCPContent {
+        var images: [JSONValue] = []
+        let structured = value.redactingMCPImagePayloads(into: &images)
+        return MCPContent(structured: structured, images: images)
+    }
+
     static func toolResult(structuredContent: JSONValue, isError: Bool) -> [String: JSONValue] {
         let content = normalize(structuredContent)
         return [
@@ -252,17 +264,6 @@ private extension JSONRPCError {
             "structuredContent": content.structured,
             "isError": .bool(isError)
         ]
-    }
-}
-
-struct MCPContent {
-    let structured: JSONValue
-    let images: [JSONValue]
-
-    static func normalize(_ value: JSONValue) -> MCPContent {
-        var images: [JSONValue] = []
-        let structured = value.redactingMCPImagePayloads(into: &images)
-        return MCPContent(structured: structured, images: images)
     }
 }
 
