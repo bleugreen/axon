@@ -207,6 +207,7 @@ fn input_session() -> InputSession {
 pub struct LinuxBackend {
     tx: mpsc::Sender<Command>,
     input: InputSession,
+    screenshot: Option<Box<X11Session>>,
     /// AT-SPI identity to process id, read on demand and refreshed when stale or missed.
     identities: Vec<AppIdentity>,
     identities_read: Option<Instant>,
@@ -245,9 +246,15 @@ impl LinuxBackend {
             .map_err(|_| operation("start AT-SPI actor", "actor exited"))??;
         // A missing or unusable X11 session is an ordinary state, not a startup failure: capture
         // and the semantic rung run on AT-SPI alone, and only global input is withheld.
+        let screenshot = std::env::var_os("WAYLAND_DISPLAY")
+            .is_none()
+            .then(X11Session::connect)
+            .flatten()
+            .map(Box::new);
         Ok(Self {
             tx,
             input: input_session(),
+            screenshot,
             identities: Vec::new(),
             identities_read: None,
         })
@@ -363,12 +370,12 @@ impl PlatformBackend for LinuxBackend {
         });
         let screenshot = CapabilityInfo {
             capability: Capability::Screenshot,
-            usable: restriction.is_none(),
-            restriction: restriction.map(|reason| {
-                if reason.contains("Wayland") {
+            usable: self.screenshot.is_some(),
+            restriction: self.screenshot.is_none().then(|| {
+                if std::env::var_os("WAYLAND_DISPLAY").is_some() {
                     "a desktop portal authorization flow is required".to_string()
                 } else {
-                    reason.to_string()
+                    NO_X_DISPLAY.to_string()
                 }
             }),
         };
@@ -470,7 +477,9 @@ impl PlatformBackend for LinuxBackend {
                     "the matched application has no process id",
                 )
             })?;
-        self.x11(Capability::Screenshot)?
+        self.screenshot
+            .as_deref()
+            .ok_or_else(|| capability(Capability::Screenshot, NO_X_DISPLAY))?
             .screenshot_for_pid(process_id)
     }
     fn hit_test(&mut self, _: (f64, f64)) -> Result<Option<Node>, BackendError> {

@@ -327,6 +327,9 @@ private func lookCommand(arguments: [String]) throws -> (params: [String: JSONVa
             }
             params["since"] = .string(arguments[index + 1])
             index += 2
+        case "--screenshot":
+            params["screenshot"] = .bool(true)
+            index += 1
         case "--no-screenshot":
             params["screenshot"] = .bool(false)
             index += 1

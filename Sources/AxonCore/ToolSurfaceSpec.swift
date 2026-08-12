@@ -122,7 +122,7 @@ public enum ToolSurfaceSpec {
                 ToolParameterSpec("app", .string, description: "Bundle id, pid, app name, or partial app name. Omit with target to list apps."),
                 ToolParameterSpec("target", .target(.element), description: "App-scoped semantic name returned by a prior look; pages that element's children."),
                 ToolParameterSpec("since", .string, description: "Snapshot id from a prior look response. Returns a coarse change check instead of a tree."),
-                ToolParameterSpec("screenshot", .boolean, default: .bool(true), description: "Include a downscaled window screenshot with a full app observation. Defaults to true; since change checks and semantic-target child pages remain imageless unless explicitly requested."),
+                ToolParameterSpec("screenshot", .boolean, default: .bool(true), description: "Include a downscaled window screenshot with a full app observation. Defaults to true; since change checks and semantic-target child pages are always imageless."),
                 ToolParameterSpec("screenText", .boolean, default: .bool(false), description: "OCR visible text from the app window screenshot and include it as organized screenText. Defaults to false."),
                 ToolParameterSpec("tree", .boolean, description: "Include the nested AX tree for app observations. Defaults to true for observation format and false for debug format."),
                 ToolParameterSpec("offset", .integer, default: .int(0), description: "Zero-based child offset for a semantic target. Defaults to 0."),
