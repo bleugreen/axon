@@ -39,9 +39,17 @@ footer {
 }
 .site-header { border-bottom: 1px solid var(--line); }
 .wordmark {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
   font: 650 21px/1 var(--sans);
   text-decoration: none;
   letter-spacing: -.045em;
+}
+.wordmark img {
+  width: 27px;
+  height: 27px;
+  border-radius: 7px;
 }
 .wordmark span { color: var(--ink); }
 .wordmark i { color: var(--moss); font-style: normal; }
@@ -396,15 +404,42 @@ footer {
   .docs-shell-wide .prose th { position: static; }
 }
 @media (max-width: 480px) {
-  .hero h1 { font-size: 52px; }
-  .hero > p { font-size: 18px; }
+  .site-header { padding-top: 18px; padding-bottom: 18px; }
+  .site-header nav { gap: 20px; }
+  .wordmark { gap: 6px; font-size: 19px; }
+  .wordmark img { width: 24px; height: 24px; border-radius: 6px; }
+  .hero { padding-top: 60px; padding-bottom: 64px; }
+  .hero h1 {
+    margin-top: 22px;
+    font-size: clamp(45px, 13vw, 54px);
+    line-height: .98;
+    letter-spacing: -.045em;
+  }
+  .hero > p { font-size: 17px; line-height: 1.55; }
+  .hero-actions { margin-top: 30px; }
+  .guarantees { padding-top: 68px; padding-bottom: 72px; }
+  .section-heading { gap: 16px; }
+  .section-heading h2, .artifact h2, .install h2 {
+    font-size: 42px;
+    line-height: 1.06;
+  }
   .hero-actions { align-items: stretch; flex-direction: column; }
   .button { text-align: center; }
   .loop { gap: 10px; font-size: 13px; }
-  .guarantee-grid { grid-template-columns: 1fr; }
-  .guarantee-grid article { min-height: auto; border-right: 0; }
+  .guarantee-grid { margin-top: 44px; grid-template-columns: 1fr; }
+  .guarantee-grid article {
+    min-height: auto;
+    padding: 24px 0 28px;
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
+  }
   .guarantee-grid article + article { padding-left: 0; }
-  .artifact { padding-left: 20px; padding-right: 20px; }
+  .guarantee-grid h3 { margin-top: 20px; }
+  .artifact {
+    padding: 72px 20px;
+    gap: 38px;
+  }
+  .install { padding-top: 72px; padding-bottom: 76px; gap: 36px; }
   .artifact pre { font-size: 11px; }
   .command code { font-size: 11px; }
   footer { align-items: flex-start; gap: 12px; flex-direction: column; }
