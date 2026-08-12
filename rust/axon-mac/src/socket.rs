@@ -2,8 +2,8 @@
 //! The endpoint is mandatory and has no fallback to the installed Swift daemon.
 use crate::{MacBackend, Router, parse_request};
 use axon_core::{
-    CapabilityState, DaemonReport, HealthPlatform, JsonRpcId, JsonRpcRequest,
-    JsonRpcResponse, PermissionState, PlatformBackend, SessionHealth, health::reason,
+    CapabilityState, DaemonReport, HealthPlatform, JsonRpcId, JsonRpcRequest, JsonRpcResponse,
+    PermissionState, PlatformBackend, SessionHealth, health::reason,
 };
 use serde_json::{Value, json};
 use std::{

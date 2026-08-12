@@ -91,10 +91,8 @@ unsafe extern "C" {
     static kCGWindowOwnerPID: CFStringRef;
     static kCGWindowLayer: CFStringRef;
     static kCGWindowBounds: CFStringRef;
-    fn CGRectMakeWithDictionaryRepresentation(
-        dictionary: *const c_void,
-        rect: *mut CGRect,
-    ) -> bool;
+    fn CGRectMakeWithDictionaryRepresentation(dictionary: *const c_void, rect: *mut CGRect)
+    -> bool;
 }
 
 #[repr(C)]
