@@ -417,7 +417,16 @@ fn reconcile(
     now: u64,
 ) {
     let old = std::mem::take(current);
-    let mut next = Vec::with_capacity(observed.len());
+    let observed_names = observed
+        .iter()
+        .map(|entry| entry.key.name.as_str())
+        .collect::<std::collections::HashSet<_>>();
+    let mut next: Vec<_> = old
+        .iter()
+        .filter(|entry| !observed_names.contains(entry.key.name.as_str()))
+        .cloned()
+        .collect();
+    next.reserve(observed.len());
     for mut fresh in observed {
         let previous = old.iter().find(|entry| {
             entry.key.name == fresh.key.name
