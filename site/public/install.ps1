@@ -13,14 +13,14 @@ function Fail([string]$Message) {
     throw "Axon install failed: $Message"
 }
 
-$RunningOnWindows = [System.Runtime.InteropServices.RuntimeInformation]::IsOSPlatform(
-    [System.Runtime.InteropServices.OSPlatform]::Windows
-)
-if (-not $RunningOnWindows) {
-    Fail "unsupported platform $([System.Runtime.InteropServices.RuntimeInformation]::OSDescription); install.ps1 supports only windows/x86_64"
+if ($env:OS -ne 'Windows_NT') {
+    Fail "unsupported platform; install.ps1 supports only windows/x86_64"
 }
-$Architecture = [System.Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString()
-if ($Architecture -ne 'X64') {
+$Architecture = $env:PROCESSOR_ARCHITEW6432
+if ([string]::IsNullOrEmpty($Architecture)) {
+    $Architecture = $env:PROCESSOR_ARCHITECTURE
+}
+if ($Architecture -ne 'AMD64') {
     Fail "unsupported platform windows/$($Architecture.ToLowerInvariant()); release binaries exist only for macos/aarch64, linux/x86_64, and windows/x86_64"
 }
 
@@ -79,12 +79,12 @@ try {
 
     Write-Host "Downloading Axon $Version for windows/x86_64..."
     try {
-        Invoke-WebRequest -Uri "$BaseUrl/$Archive" -OutFile $ArchivePath
+        Invoke-WebRequest -UseBasicParsing -Uri "$BaseUrl/$Archive" -OutFile $ArchivePath
     } catch {
         Fail "could not download $Archive; confirm that version $Version has a windows/x86_64 release at $BaseUrl. $($_.Exception.Message)"
     }
     try {
-        Invoke-WebRequest -Uri "$BaseUrl/$Archive.sha256" -OutFile $ChecksumPath
+        Invoke-WebRequest -UseBasicParsing -Uri "$BaseUrl/$Archive.sha256" -OutFile $ChecksumPath
     } catch {
         Fail "could not download $Archive.sha256; the archive was not installed. $($_.Exception.Message)"
     }
