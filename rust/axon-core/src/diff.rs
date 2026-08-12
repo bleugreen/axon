@@ -216,7 +216,14 @@ fn compatible(left: &Entry<'_>, right: &Entry<'_>) -> bool {
     left.semantic.name == right.semantic.name
         && left.semantic.resolution == right.semantic.resolution
         && left.ordinal == right.ordinal
-        && identity_compatible(&left.semantic.identity_key, &right.semantic.identity_key)
+        && match left.semantic.resolution {
+            SemanticNameResolution::Ambiguous => {
+                left.semantic.identity_key == right.semantic.identity_key
+            }
+            SemanticNameResolution::Unique => {
+                identity_compatible(&left.semantic.identity_key, &right.semantic.identity_key)
+            }
+        }
 }
 
 fn identity_compatible(left: &str, right: &str) -> bool {
@@ -225,10 +232,14 @@ fn identity_compatible(left: &str, right: &str) -> bool {
     }
     let left = left.split('\u{1f}').collect::<Vec<_>>();
     let right = right.split('\u{1f}').collect::<Vec<_>>();
-    if left.len() < 4 || right.len() < 4 || left[2] != right[2] {
+    if left.len() < 4 || right.len() < 4 || left[2..left.len() - 1] != right[2..right.len() - 1] {
         return false;
     }
-    left[0] == right[0] || left[1] == right[1] || (!left[3].is_empty() && left[3] == right[3])
+    let left_identifier = left.last().expect("identity key has components");
+    let right_identifier = right.last().expect("identity key has components");
+    left[0] == right[0]
+        || left[1] == right[1]
+        || (!left_identifier.is_empty() && left_identifier == right_identifier)
 }
 
 fn normalized_role(role: &str) -> String {

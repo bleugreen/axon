@@ -11,6 +11,41 @@ struct LocatorFixture {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
+struct AmbiguousDiffFixture {
+    baseline: Vec<AmbiguousDiffName>,
+    fresh: Vec<AmbiguousDiffName>,
+    expected_matched: Vec<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AmbiguousDiffName {
+    name: String,
+    candidate_label: String,
+    identity_key: String,
+}
+
+#[test]
+fn ambiguous_duplicate_order_never_authorizes_identity_pairing() {
+    let fixture: AmbiguousDiffFixture = serde_json::from_str(include_str!(
+        "../../../schema/fixtures/semantic-diff-ambiguous.json"
+    ))
+    .unwrap();
+    let matched = fixture
+        .fresh
+        .iter()
+        .filter(|fresh| fixture.baseline.iter().any(|baseline| {
+            baseline.name == fresh.name
+                && baseline.candidate_label == fresh.candidate_label
+                && baseline.identity_key == fresh.identity_key
+        }))
+        .map(|name| name.candidate_label.clone())
+        .collect::<Vec<_>>();
+    assert_eq!(matched, fixture.expected_matched);
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct LookSinceWireFixture {
     unchanged: String,
     diff: String,
