@@ -423,7 +423,7 @@ mod tests {
 
         let baseline_names = SemanticNameDeriver::derive(&before);
         let mut fresh_names = baseline_names.clone();
-        fresh_names[1].identity_key.push_str("different");
+        fresh_names[1].identity_key = "other-role\u{1f}other-label\u{1f}other-lineage\u{1f}other-id".into();
         let DiffClassification::ThresholdExceeded = classify_semantic_diff(
             &before,
             &baseline_names,
