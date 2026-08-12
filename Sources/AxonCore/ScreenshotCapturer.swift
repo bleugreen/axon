@@ -6,7 +6,8 @@ import ImageIO
 import UniformTypeIdentifiers
 
 public struct ScreenshotCapturer {
-    public static let defaultMaxEncodedDimension = 1600
+    /// Public observations are bounded to keep the image token-comparable with the AX tree.
+    public static let defaultMaxEncodedDimension = 1280
 
     private let timeoutSeconds: TimeInterval
     private let maxEncodedDimension: Int

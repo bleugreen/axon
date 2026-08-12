@@ -8,6 +8,7 @@ publish.workspace = true
 axon-core = { path = "../axon-core" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+base64 = "0.22"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 # Proxies and the wire types only. `atspi-connection` is deliberately absent from this crate's
@@ -27,6 +28,7 @@ atspi = { version = "0.30.0", default-features = false, features = [
 tokio = { version = "1.47.1", features = ["rt", "time"] }
 # Pure Rust, so no libxtst development package is needed to build this crate anywhere.
 x11rb = { version = "0.14", features = ["xtest"] }
+image = { version = "0.25", default-features = false, features = ["png"] }
 
 # Each hermetic test is its own miniature desktop, so both need the protocol layer directly rather
 # than through the backend: `x11_foreground` an EWMH window manager, `atspi_activation` an AT-SPI

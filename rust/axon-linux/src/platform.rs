@@ -154,6 +154,7 @@ struct SessionFacts {
     wayland: bool,
     x_display: bool,
     window_manager: bool,
+    screenshot_windows: bool,
     xtest: bool,
 }
 
@@ -184,8 +185,30 @@ fn input_restriction(facts: SessionFacts) -> Option<&'static str> {
     None
 }
 
+/// Why an application window cannot be located and captured in this session.
+fn screenshot_restriction(facts: SessionFacts) -> Option<&'static str> {
+    if facts.wayland {
+        return Some("a desktop portal authorization flow is required");
+    }
+    if !facts.x_display {
+        return Some(NO_X_DISPLAY);
+    }
+    if !facts.screenshot_windows {
+        return Some(NO_WINDOW_MANAGER);
+    }
+    None
+}
+
 /// Observes the session once, at startup, and classifies it.
 fn input_session() -> InputSession {
+    classify_x11_session(input_restriction)
+}
+
+fn screenshot_session() -> InputSession {
+    classify_x11_session(screenshot_restriction)
+}
+
+fn classify_x11_session(restriction: fn(SessionFacts) -> Option<&'static str>) -> InputSession {
     // Asked before an X connection is attempted, because a Wayland session is one whether or not
     // XWayland happens to answer, and what XWayland could answer is about X11 clients alone.
     let wayland = std::env::var_os("WAYLAND_DISPLAY").is_some();
@@ -194,9 +217,12 @@ fn input_session() -> InputSession {
         wayland,
         x_display: x11.is_some(),
         window_manager: x11.as_ref().is_some_and(X11Session::supports_ewmh),
+        screenshot_windows: x11
+            .as_ref()
+            .is_some_and(X11Session::supports_screenshot_capture),
         xtest: x11.as_ref().is_some_and(X11Session::supports_xtest),
     };
-    match (input_restriction(facts), x11) {
+    match (restriction(facts), x11) {
         (None, Some(session)) => InputSession::Available(Box::new(session)),
         (Some(reason), _) => InputSession::Unavailable(reason),
         // Unreachable: no session is exactly what NO_X_DISPLAY reports.
@@ -207,6 +233,7 @@ fn input_session() -> InputSession {
 pub struct LinuxBackend {
     tx: mpsc::Sender<Command>,
     input: InputSession,
+    screenshot: InputSession,
     /// AT-SPI identity to process id, read on demand and refreshed when stale or missed.
     identities: Vec<AppIdentity>,
     identities_read: Option<Instant>,
@@ -243,11 +270,12 @@ impl LinuxBackend {
         ready_rx
             .recv()
             .map_err(|_| operation("start AT-SPI actor", "actor exited"))??;
-        // A missing or unusable X11 session is an ordinary state, not a startup failure: capture
-        // and the semantic rung run on AT-SPI alone, and only global input is withheld.
+        // Missing X11 mechanisms are ordinary states, not startup failures: the semantic rung runs
+        // on AT-SPI alone, while health and look retain the precise restriction for each mechanism.
         Ok(Self {
             tx,
             input: input_session(),
+            screenshot: screenshot_session(),
             identities: Vec::new(),
             identities_read: None,
         })
@@ -338,10 +366,6 @@ impl PlatformBackend for LinuxBackend {
                 "AT-SPI has no portable delta-scroll operation",
             ),
             (
-                Capability::Screenshot,
-                "a desktop portal authorization flow is required",
-            ),
-            (
                 Capability::HitTest,
                 "AT-SPI point lookup is not implemented",
             ),
@@ -365,6 +389,18 @@ impl PlatformBackend for LinuxBackend {
                 restriction: restriction.map(str::to_string),
             }
         });
+        let screenshot = match &self.screenshot {
+            InputSession::Available(_) => CapabilityInfo {
+                capability: Capability::Screenshot,
+                usable: true,
+                restriction: None,
+            },
+            InputSession::Unavailable(reason) => CapabilityInfo {
+                capability: Capability::Screenshot,
+                usable: false,
+                restriction: Some((*reason).to_string()),
+            },
+        };
         Ok(usable
             .into_iter()
             .map(|capability| CapabilityInfo {
@@ -382,6 +418,7 @@ impl PlatformBackend for LinuxBackend {
                     }),
             )
             .chain(input)
+            .chain([screenshot])
             .collect())
     }
     fn enumerate_applications(&self) -> Result<Vec<Application>, BackendError> {
@@ -444,11 +481,26 @@ impl PlatformBackend for LinuxBackend {
     fn keyboard(&mut self, _: &AppQuery, intent: KeyboardIntent<'_>) -> Result<(), BackendError> {
         self.x11(Capability::KeyboardInput)?.keyboard(intent)
     }
-    fn screenshot(&mut self, _: &AppQuery) -> Result<Screenshot, BackendError> {
-        Err(capability(
-            Capability::Screenshot,
-            "requires desktop portal authorization",
-        ))
+    fn screenshot(&mut self, app: &AppQuery) -> Result<Screenshot, BackendError> {
+        if let InputSession::Unavailable(reason) = &self.screenshot {
+            return Err(capability(Capability::Screenshot, reason));
+        }
+        let identity = self
+            .ask(|r| Command::Identity(app.clone(), r))?
+            .ok_or_else(|| operation("capture screenshot", "no AT-SPI application matched"))?;
+        let process_id = self
+            .lookup(|candidate| (candidate.identity == identity).then_some(candidate.process_id))?
+            .ok_or_else(|| {
+                operation(
+                    "capture screenshot",
+                    "the matched application has no process id",
+                )
+            })?;
+        match &self.screenshot {
+            InputSession::Available(session) => session.screenshot_for_pid(process_id),
+            // Availability was checked before the AT-SPI identity refresh and is immutable.
+            InputSession::Unavailable(reason) => Err(capability(Capability::Screenshot, reason)),
+        }
     }
     fn hit_test(&mut self, _: (f64, f64)) -> Result<Option<Node>, BackendError> {
         Err(capability(Capability::HitTest, "not implemented"))
@@ -1637,6 +1689,7 @@ mod tests {
         wayland: false,
         x_display: true,
         window_manager: true,
+        screenshot_windows: true,
         xtest: true,
     };
 
@@ -1666,6 +1719,25 @@ mod tests {
                 ..USABLE
             }),
             Some(NO_XTEST)
+        );
+    }
+
+    #[test]
+    fn screenshots_need_ewmh_window_discovery_but_not_xtest() {
+        assert_eq!(screenshot_restriction(USABLE), None);
+        assert_eq!(
+            screenshot_restriction(SessionFacts {
+                screenshot_windows: false,
+                ..USABLE
+            }),
+            Some(NO_WINDOW_MANAGER)
+        );
+        assert_eq!(
+            screenshot_restriction(SessionFacts {
+                xtest: false,
+                ..USABLE
+            }),
+            None
         );
     }
 

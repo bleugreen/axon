@@ -208,7 +208,7 @@ public struct MCPRouter {
         var updated = arguments
         let format = outputFormat(in: arguments)
         if updated["screenshot"] == nil {
-            updated["screenshot"] = .bool(false)
+            updated["screenshot"] = .bool(true)
         }
         if updated["tree"] == nil {
             updated["tree"] = .bool(format != "debug")

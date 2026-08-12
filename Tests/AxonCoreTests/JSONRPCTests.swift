@@ -92,11 +92,11 @@ import Testing
     #expect(response.error == nil)
 }
 
-@Test func lookRequestDefaultsToNoScreenshot() {
+@Test func lookRequestDefaultsToScreenshot() {
     let router = CommandRouter(
         captureSnapshot: { app, screenshot in
             #expect(app == "com.example.App")
-            #expect(screenshot == false)
+            #expect(screenshot == true)
             return AppSnapshot(
                 id: SnapshotID("snap-no-image"),
                 app: AppIdentity(bundleIdentifier: "com.example.App", name: "Example", processIdentifier: 7),
@@ -148,7 +148,7 @@ import Testing
     let token = "sk-proj-abcdef1234567890SECRET"
     let router = CommandRouter(
         captureSnapshot: { _, screenshot in
-            #expect(screenshot == false)
+            #expect(screenshot == true)
             return AppSnapshot(
                 id: SnapshotID("snap-sensitive-router"),
                 app: AppIdentity(bundleIdentifier: "com.example.App", name: "Example", processIdentifier: 7),

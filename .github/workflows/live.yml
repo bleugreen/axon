@@ -194,6 +194,7 @@ jobs:
               if printf '%s' "$look" | jq -e '
                 .result.isError == false
                 and (.result.structuredContent.snapshot.app | strings | length > 0)
+                and ([.result.content[] | select(.type == "image" and .mimeType == "image/png" and (.data | length > 0))] | length == 1)
                 and ([.result.structuredContent.snapshot.tree | split("\n")[] | select(test(": button \"All Clear\" \\[click\\]"))] | length == 1)
                 and ([.result.structuredContent.snapshot.tree | split("\n")[] | select(test(": button \"1\" \\[click\\]"))] | length == 1)
               ' >/dev/null; then
@@ -520,6 +521,8 @@ jobs:
             if printf '%s' "$look" | jq -e '
               .result.isError == false
               and (.result.structuredContent.app.name | strings | length > 0)
+              and .result.structuredContent.screenshotUnavailable.code == "portal-authorization-required"
+              and (.result.structuredContent.screenshot? == null)
               and ([.result.structuredContent.app.windows[]?.root | .. | objects | select(.role == "text box" and .value? == "0")] | length == 1)
               and ([.result.structuredContent.app.windows[]?.root | .. | objects | select(.role == "button" and .label? == "1" and (.actions | index("Click")))] | length == 1)
             ' >/dev/null 2>&1; then

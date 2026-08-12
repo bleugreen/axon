@@ -13,7 +13,9 @@ use crate::{
     pixel::SendVariant,
     platform::{capability, operation},
 };
-use axon_core::{BackendError, Capability, KeyboardIntent};
+use axon_core::{BackendError, Capability, KeyboardIntent, Rect, Screenshot};
+use image::{DynamicImage, ImageFormat, RgbaImage, imageops::FilterType};
+use std::io::Cursor;
 use std::{
     sync::atomic::{AtomicU32, Ordering},
     time::{SystemTime, UNIX_EPOCH},
@@ -23,8 +25,9 @@ use x11rb::{
     protocol::{
         xproto::{
             Atom, AtomEnum, BUTTON_PRESS_EVENT, BUTTON_RELEASE_EVENT, ButtonPressEvent,
-            ClientMessageEvent, ConnectionExt as _, EventMask, KEY_PRESS_EVENT, KEY_RELEASE_EVENT,
-            KeyButMask, KeyPressEvent, MOTION_NOTIFY_EVENT, Window,
+            ClientMessageEvent, ConnectionExt as _, EventMask, ImageFormat as XImageFormat,
+            ImageOrder, KEY_PRESS_EVENT, KEY_RELEASE_EVENT, KeyButMask, KeyPressEvent,
+            MOTION_NOTIFY_EVENT, Window,
         },
         xtest::{self, ConnectionExt as _},
     },
@@ -45,6 +48,17 @@ x11rb::atom_manager! {
         _NET_CLIENT_LIST,
         _NET_WM_PID,
     }
+
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct PixelLayout {
+    bits_per_pixel: u8,
+    scanline_pad: u8,
+    least_significant_byte_first: bool,
+    red_mask: u32,
+    green_mask: u32,
+    blue_mask: u32,
 }
 
 /// A connection to the session's X server, and the facts about it that decide what may be offered.
@@ -133,9 +147,22 @@ impl X11Session {
         else {
             return false;
         };
-        [self.atoms._NET_ACTIVE_WINDOW, self.atoms._NET_WM_PID]
-            .iter()
-            .all(|required| supported.contains(required))
+        supports_atoms(
+            &supported,
+            &[self.atoms._NET_ACTIVE_WINDOW, self.atoms._NET_WM_PID],
+        )
+    }
+
+    /// Whether the window manager publishes the properties application-window capture consumes.
+    pub fn supports_screenshot_capture(&self) -> bool {
+        let Ok(supported) = self.property(self.root, self.atoms._NET_SUPPORTED, AtomEnum::ATOM)
+        else {
+            return false;
+        };
+        supports_atoms(
+            &supported,
+            &[self.atoms._NET_CLIENT_LIST, self.atoms._NET_WM_PID],
+        )
     }
 
     /// The window EWMH reports as active, read plainly.
@@ -248,6 +275,112 @@ impl X11Session {
         Ok(WindowGeometry {
             origin,
             size: (size.width, size.height),
+        })
+    }
+
+    /// Captures the process's first managed top-level window without involving a desktop portal.
+    /// This path is valid only on a real X11 session; the platform layer refuses XWayland before it
+    /// can reach here because it cannot capture Wayland-native windows honestly.
+    pub fn screenshot_for_pid(&self, pid: u32) -> Result<Screenshot, BackendError> {
+        let window = self
+            .windows_for_pid(pid)?
+            .into_iter()
+            .next()
+            .ok_or_else(|| {
+                operation(
+                    "capture X11 window",
+                    "the application owns no managed window",
+                )
+            })?;
+        let geometry = self.window_geometry(window)?;
+        let (width, height) = geometry.size;
+        let attributes = self
+            .connection
+            .get_window_attributes(window)
+            .map_err(|error| operation("request X11 window attributes", error))?
+            .reply()
+            .map_err(|error| operation("read X11 window attributes", error))?;
+        let depth = self
+            .connection
+            .get_geometry(window)
+            .map_err(|error| operation("request X11 window depth", error))?
+            .reply()
+            .map_err(|error| operation("read X11 window depth", error))?
+            .depth;
+        let setup = self.connection.setup();
+        let format = setup
+            .pixmap_formats
+            .iter()
+            .find(|format| format.depth == depth)
+            .ok_or_else(|| {
+                operation(
+                    "decode X11 window pixels",
+                    "the window depth has no pixmap format",
+                )
+            })?;
+        let visual = setup
+            .roots
+            .iter()
+            .flat_map(|screen| &screen.allowed_depths)
+            .flat_map(|depth| &depth.visuals)
+            .find(|visual| visual.visual_id == attributes.visual)
+            .ok_or_else(|| {
+                operation(
+                    "decode X11 window pixels",
+                    "the window visual is not in the X11 setup",
+                )
+            })?;
+        let layout = PixelLayout {
+            bits_per_pixel: format.bits_per_pixel,
+            scanline_pad: format.scanline_pad,
+            least_significant_byte_first: setup.image_byte_order == ImageOrder::LSB_FIRST,
+            red_mask: visual.red_mask,
+            green_mask: visual.green_mask,
+            blue_mask: visual.blue_mask,
+        };
+        let reply = self
+            .connection
+            .get_image(
+                XImageFormat::Z_PIXMAP,
+                window,
+                0,
+                0,
+                width,
+                height,
+                u32::MAX,
+            )
+            .map_err(|error| operation("request X11 window pixels", error))?
+            .reply()
+            .map_err(|error| operation("read X11 window pixels", error))?;
+        let rgba = decode_zpixmap(width, height, layout, &reply.data)?;
+        let image =
+            RgbaImage::from_raw(u32::from(width), u32::from(height), rgba).ok_or_else(|| {
+                operation(
+                    "decode X11 window pixels",
+                    "pixel buffer dimensions disagree",
+                )
+            })?;
+        let max = axon_core::OBSERVATION_SCREENSHOT_MAX_DIMENSION;
+        let image = if image.width().max(image.height()) > max {
+            DynamicImage::ImageRgba8(image).resize(max, max, FilterType::Triangle)
+        } else {
+            DynamicImage::ImageRgba8(image)
+        };
+        let mut bytes = Cursor::new(Vec::new());
+        image
+            .write_to(&mut bytes, ImageFormat::Png)
+            .map_err(|error| operation("encode X11 screenshot PNG", error))?;
+        Ok(Screenshot {
+            bytes: bytes.into_inner(),
+            media_type: axon_core::OBSERVATION_SCREENSHOT_MEDIA_TYPE.into(),
+            width: image.width(),
+            height: image.height(),
+            frame: Rect {
+                x: f64::from(geometry.origin.0),
+                y: f64::from(geometry.origin.1),
+                width: f64::from(width),
+                height: f64::from(height),
+            },
         })
     }
 
@@ -769,8 +902,129 @@ impl KeyboardMapping {
     }
 }
 
+fn supports_atoms(supported: &[Atom], required: &[Atom]) -> bool {
+    required.iter().all(|atom| supported.contains(atom))
+}
+
+fn decode_zpixmap(
+    width: u16,
+    height: u16,
+    layout: PixelLayout,
+    data: &[u8],
+) -> Result<Vec<u8>, BackendError> {
+    let bytes_per_pixel = usize::from(layout.bits_per_pixel).div_ceil(8);
+    if bytes_per_pixel == 0 || bytes_per_pixel > 4 || layout.scanline_pad == 0 {
+        return Err(operation(
+            "decode X11 window pixels",
+            format!(
+                "unsupported {}-bit pixel layout with {}-bit scanline padding",
+                layout.bits_per_pixel, layout.scanline_pad
+            ),
+        ));
+    }
+    let row_bits = usize::from(width) * usize::from(layout.bits_per_pixel);
+    let pad = usize::from(layout.scanline_pad);
+    let stride = row_bits.div_ceil(pad) * pad / 8;
+    let expected = stride * usize::from(height);
+    if data.len() != expected {
+        return Err(operation(
+            "decode X11 window pixels",
+            format!(
+                "expected {expected} bytes from the server pixel layout, received {}",
+                data.len()
+            ),
+        ));
+    }
+
+    fn channel(pixel: u32, mask: u32) -> u8 {
+        if mask == 0 {
+            return 0;
+        }
+        let shift = mask.trailing_zeros();
+        let maximum = mask >> shift;
+        ((((pixel & mask) >> shift) as u64 * 255 + u64::from(maximum) / 2) / u64::from(maximum))
+            as u8
+    }
+
+    let mut rgba = Vec::with_capacity(usize::from(width) * usize::from(height) * 4);
+    for row in data.chunks_exact(stride) {
+        for bytes in row[..usize::from(width) * bytes_per_pixel].chunks_exact(bytes_per_pixel) {
+            let mut encoded = [0u8; 4];
+            if layout.least_significant_byte_first {
+                encoded[..bytes_per_pixel].copy_from_slice(bytes);
+                let pixel = u32::from_le_bytes(encoded);
+                rgba.extend_from_slice(&[
+                    channel(pixel, layout.red_mask),
+                    channel(pixel, layout.green_mask),
+                    channel(pixel, layout.blue_mask),
+                    255,
+                ]);
+            } else {
+                encoded[4 - bytes_per_pixel..].copy_from_slice(bytes);
+                let pixel = u32::from_be_bytes(encoded);
+                rgba.extend_from_slice(&[
+                    channel(pixel, layout.red_mask),
+                    channel(pixel, layout.green_mask),
+                    channel(pixel, layout.blue_mask),
+                    255,
+                ]);
+            }
+        }
+    }
+    Ok(rgba)
+}
+
 /// Screen coordinates cross the wire as 16-bit signed values, so a point outside that range is
 /// clamped rather than wrapped into a different part of the screen.
 pub(crate) fn coordinate(value: f64) -> i16 {
     value.round().clamp(i16::MIN as f64, i16::MAX as f64) as i16
+}
+
+#[cfg(test)]
+mod screenshot_tests {
+    use super::*;
+
+    #[test]
+    fn screenshot_capture_requires_client_list_and_pid_atoms() {
+        const CLIENT_LIST: Atom = 1;
+        const PID: Atom = 2;
+        const ACTIVE_WINDOW: Atom = 3;
+        let required = [CLIENT_LIST, PID];
+
+        assert!(supports_atoms(&[CLIENT_LIST, PID], &required));
+        assert!(!supports_atoms(&[ACTIVE_WINDOW, PID], &required));
+        assert!(!supports_atoms(&[CLIENT_LIST], &required));
+    }
+
+    #[test]
+    fn decodes_live_style_32_bit_little_endian_true_color() {
+        let layout = PixelLayout {
+            bits_per_pixel: 32,
+            scanline_pad: 32,
+            least_significant_byte_first: true,
+            red_mask: 0x00ff_0000,
+            green_mask: 0x0000_ff00,
+            blue_mask: 0x0000_00ff,
+        };
+        assert_eq!(
+            decode_zpixmap(1, 1, layout, &[0x33, 0x22, 0x11, 0]).unwrap(),
+            [0x11, 0x22, 0x33, 0xff]
+        );
+    }
+
+    #[test]
+    fn decodes_16_bit_big_endian_rgb565_from_masks() {
+        let layout = PixelLayout {
+            bits_per_pixel: 16,
+            scanline_pad: 16,
+            least_significant_byte_first: false,
+            red_mask: 0xf800,
+            green_mask: 0x07e0,
+            blue_mask: 0x001f,
+        };
+        assert_eq!(
+            decode_zpixmap(2, 1, layout, &[0xf8, 0x00, 0x00, 0x1f]).unwrap(),
+            [255, 0, 0, 255, 0, 0, 255, 255]
+        );
+    }
 }

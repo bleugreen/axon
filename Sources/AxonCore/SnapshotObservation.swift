@@ -41,6 +41,9 @@ public struct SnapshotObservationFormatter {
         if let screenshot = object["screenshot"], screenshot != .null {
             observation["screenshot"] = screenshot
         }
+        if let screenshotUnavailable = object["screenshotUnavailable"] {
+            observation["screenshotUnavailable"] = screenshotUnavailable
+        }
         if let screenText = compactScreenText(from: object["screenText"], frames: frames) {
             observation["screenText"] = screenText
         }

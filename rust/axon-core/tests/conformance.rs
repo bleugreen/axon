@@ -287,3 +287,44 @@ fn semantic_names_match_the_shared_language_neutral_fixture() {
         assert_eq!(actual.candidate_label, expected.candidate_label);
     }
 }
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct LookScreenshotPolicyFixture {
+    default_screenshot: bool,
+    carve_outs: Map<String, Value>,
+    explicit: Map<String, Value>,
+    encoding: ScreenshotEncodingFixture,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ScreenshotEncodingFixture {
+    max_dimension: u32,
+    media_type: String,
+    quality: String,
+}
+
+#[test]
+fn shared_look_screenshot_policy_is_byte_exact() {
+    let fixture: LookScreenshotPolicyFixture = serde_json::from_str(include_str!(
+        "../../../schema/fixtures/look-screenshot-policy.json"
+    ))
+    .unwrap();
+
+    assert!(fixture.default_screenshot);
+    assert_eq!(fixture.carve_outs["appList"], false);
+    assert_eq!(fixture.carve_outs["since"], false);
+    assert_eq!(fixture.carve_outs["childPage"], false);
+    assert_eq!(fixture.explicit["true"], true);
+    assert_eq!(fixture.explicit["false"], false);
+    assert_eq!(
+        fixture.encoding.max_dimension,
+        OBSERVATION_SCREENSHOT_MAX_DIMENSION
+    );
+    assert_eq!(
+        fixture.encoding.media_type,
+        OBSERVATION_SCREENSHOT_MEDIA_TYPE
+    );
+    assert_eq!(fixture.encoding.quality, OBSERVATION_SCREENSHOT_QUALITY);
+}

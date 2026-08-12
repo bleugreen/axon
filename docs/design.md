@@ -88,6 +88,10 @@ The editor AX tree sidebar currently participates in this same shipped pipeline.
 
 `SnapshotObservationFormatter` is not a capturer. It renders captured snapshot JSON and children-page JSON into the observation DSL used by MCP and the CLI. `MCPRouter` applies MCP defaults for `look`, routes app snapshots, app lists, and handle-child pages through the formatter unless `format: "debug"` is requested, and the CLI `look` command uses the same formatter for non-JSON output.
 
+Full app observations request a screenshot by default. App lists, `look(since:)` change checks, and semantic-target child pages do not, because those shapes either precede an observation or refine one the caller already holds. `screenshot: false` and `--no-screenshot` opt a full observation out. Every backend applies the shared axon-core image budget before transport: PNG, lossless, with the long edge bounded to 1280 pixels and no upscaling. Capture unavailability does not discard an accessibility observation; the image field stays absent and `screenshotUnavailable` carries a stable machine-readable code plus the backend reason.
+
+Ambiguous semantic-name results may eventually carry cropped thumbnails for individual candidates, especially when labels alone cannot distinguish a large repeated set. That belongs in the shared ambiguity result after the Swift and Rust facade shapes converge: each candidate should reference a bounded crop derived from the observation image, not initiate a second capture. This stage deliberately adds no candidate thumbnails.
+
 Bounded readiness waits reuse the command router's clock and interval seams. `wait_for_value` repeatedly resolves one locator and evaluates readable AX fields. `wait_for_stability` instead compares complete app observation signatures, including the accessibility tree and focused element, so navigation readiness is not forced into a value-only predicate. Stability means the signature has remained unchanged for a caller-bounded window; change means it differs from the initial signature. Every timeout returns the final captured observation.
 
 ### Locator Resolver

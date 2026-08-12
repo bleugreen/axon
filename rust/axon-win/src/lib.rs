@@ -802,15 +802,26 @@ impl<
         let names = self.semantic_names.register(&snapshot);
         let mut value = serde_json::to_value(axon_core::render_semantic_names(&snapshot, &names))
             .map_err(internal_error)?;
-        let wants_screenshot = params.get("screenshot").and_then(Value::as_bool) == Some(true);
+        let wants_screenshot = axon_core::screenshot_requested(
+            params.get("screenshot").and_then(Value::as_bool),
+            axon_core::LookObservationKind::FullApp,
+        );
         let wants_screen_text = params.get("screenText").and_then(Value::as_bool) == Some(true);
-        let visuals = (wants_screenshot || wants_screen_text)
-            .then(|| {
-                self.backend
-                    .observe_visuals(&app, wants_screenshot, wants_screen_text)
-            })
-            .transpose()
-            .map_err(backend_error)?;
+        let (visuals, screenshot_unavailable) = if wants_screenshot || wants_screen_text {
+            match self
+                .backend
+                .observe_visuals(&app, wants_screenshot, wants_screen_text)
+            {
+                Ok(visuals) => (Some(visuals), None),
+                Err(error) if wants_screenshot && !wants_screen_text => (
+                    None,
+                    Some(axon_core::ScreenshotUnavailable::from_backend_error(error)),
+                ),
+                Err(error) => return Err(backend_error(error)),
+            }
+        } else {
+            (None, None)
+        };
         if let Some(screenshot) = visuals
             .as_ref()
             .and_then(|result| result.screenshot.as_ref())
@@ -836,6 +847,15 @@ impl<
                 .as_object_mut()
                 .expect("snapshots serialize as objects")
                 .insert("screenText".into(), json!(screen_text));
+        }
+        if let Some(unavailable) = screenshot_unavailable {
+            value
+                .as_object_mut()
+                .expect("snapshots serialize as objects")
+                .insert(
+                    "screenshotUnavailable".into(),
+                    serde_json::to_value(unavailable).map_err(internal_error)?,
+                );
         }
         self.snapshot = Some(snapshot);
         Ok(value)
@@ -1464,6 +1484,33 @@ mod tests {
         assert!(!keys.contains_key("snapshotId"));
         assert_eq!(*router.backend.clicks.borrow(), 1);
     }
+    #[test]
+    fn look_defaults_to_screenshot_and_explicit_false_opts_out() {
+        let default_backend = backend(vec![], None);
+        let default_captures = default_backend.visual_captures.clone();
+        let mut default_router = Router::new(default_backend);
+        let response = default_router
+            .request(request("look", json!({"app":"App"})))
+            .unwrap();
+        let JsonRpcResponse::Success(success) = response else {
+            panic!()
+        };
+        assert_eq!(success.result["screenshot"]["mediaType"], "image/png");
+        assert_eq!(*default_captures.borrow(), 1);
+
+        let opted_out_backend = backend(vec![], None);
+        let opted_out_captures = opted_out_backend.visual_captures.clone();
+        let mut opted_out_router = Router::new(opted_out_backend);
+        let response = opted_out_router
+            .request(request("look", json!({"app":"App","screenshot":false})))
+            .unwrap();
+        let JsonRpcResponse::Success(success) = response else {
+            panic!()
+        };
+        assert!(success.result.get("screenshot").is_none());
+        assert_eq!(*opted_out_captures.borrow(), 0);
+    }
+
     #[test]
     fn look_screenshot_and_text_share_one_capture_and_use_canonical_keys() {
         let mut backend = backend(vec![], None);

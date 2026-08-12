@@ -310,11 +310,11 @@ import Testing
     #expect(response?.result?["structuredContent"]?["error"]?["code"] == .int(-32602))
 }
 
-@Test func mcpLookDefaultsToCompactStateWithoutScreenshot() {
+@Test func mcpLookDefaultsToCompactStateWithScreenshotCapture() {
     let commandRouter = CommandRouter(
         captureSnapshot: { app, screenshot in
             #expect(app == "com.example.App")
-            #expect(screenshot == false)
+            #expect(screenshot == true)
             return AppSnapshot(
                 id: SnapshotID("mcp-compact"),
                 app: AppIdentity(bundleIdentifier: "com.example.App", name: "Example", processIdentifier: 7),
@@ -349,6 +349,9 @@ import Testing
     #expect(snapshot?["tree"]?.stringValue?.contains("main/run: button \"Run\" [click]") == true)
     #expect(snapshot?["indexedNodes"] == nil)
     #expect(snapshot?["windows"] == nil)
+    #expect(snapshot?["screenshot"] == nil)
+    #expect(snapshot?["screenshotUnavailable"]?["code"] == .string("capture-failed"))
+    #expect(snapshot?["screenshotUnavailable"]?["reason"]?.stringValue?.contains("ScreenCaptureKit") == true)
     #expect(text?.contains("snapshot: mcp-compact") == true)
     #expect(text?.contains("main/run: button \"Run\" [click]") == true)
     #expect(text?.contains("snapshot:") == true)
@@ -360,7 +363,7 @@ import Testing
     let commandRouter = CommandRouter(
         captureSnapshot: { app, screenshot in
             #expect(app == "org.mozilla.firefox")
-            #expect(screenshot == false)
+            #expect(screenshot == true)
             return AppSnapshot(
                 id: SnapshotID("mcp-depth"),
                 app: AppIdentity(bundleIdentifier: "org.mozilla.firefox", name: "Firefox", processIdentifier: 7),
@@ -452,7 +455,8 @@ import Testing
             "name": .string("look"),
             "arguments": .object([
                 "app": .string("com.example.App"),
-                "screenText": .bool(true)
+                "screenText": .bool(true),
+                "screenshot": .bool(false)
             ])
         ])
     ))
@@ -469,6 +473,7 @@ import Testing
     #expect(snapshot?["screenText"]?[1]?["text"] == .string("Second line"))
     #expect(snapshot?["screenText"]?[1]?["confidence"] == .double(0.91))
     #expect(snapshot?["screenshot"] == nil)
+    #expect(snapshot?["screenshotUnavailable"] == nil)
     #expect(imageContent(in: result) == nil)
     #expect(text?.contains("screenText:") == true)
     #expect(text?.contains("- \"First line\"") == true)
@@ -533,7 +538,7 @@ import Testing
     let commandRouter = CommandRouter(
         captureSnapshot: { app, screenshot in
             #expect(app == "com.example.App")
-            #expect(screenshot == false)
+            #expect(screenshot == true)
             return AppSnapshot(
                 id: SnapshotID("mcp-sensitive"),
                 app: AppIdentity(bundleIdentifier: "com.example.App", name: "Example", processIdentifier: 7),
@@ -576,7 +581,7 @@ import Testing
     let commandRouter = CommandRouter(
         captureSnapshot: { app, screenshot in
             #expect(app == "com.example.App")
-            #expect(screenshot == false)
+            #expect(screenshot == true)
             return AppSnapshot(
                 id: SnapshotID("mcp-active"),
                 app: AppIdentity(bundleIdentifier: "com.example.App", name: "Example", processIdentifier: 7),
