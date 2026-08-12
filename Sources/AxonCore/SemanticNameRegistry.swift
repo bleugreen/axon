@@ -31,9 +31,9 @@ public enum SemanticNameLookup: Equatable, Sendable {
 
 /// App-process-scoped semantic identity captured at observation time.
 ///
-/// The registry follows snapshot retention rather than wall-clock time. Registering a relaunched app
-/// atomically removes records for the previous process, and pruning a snapshot removes every name whose
-/// durable evidence was derived from it.
+/// The registry follows snapshot retention rather than wall-clock time. Registering a live app removes
+/// overlapping evidence only for processes that are no longer running, and pruning a snapshot removes
+/// every name whose durable evidence was derived from it.
 public final class SemanticNameRegistry: @unchecked Sendable {
     private let lock = NSLock()
     private let maxSnapshots: Int
