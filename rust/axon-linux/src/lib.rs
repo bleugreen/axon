@@ -1043,7 +1043,7 @@ impl<B: PointerTargetVerifier + BackgroundPixelInput> ToolDispatcher for Router<
         axon_core::verify_expected_fact_state(fact, &observed)
     }
     fn capture_changed_baseline(&mut self, fact: &ExpectedFact) -> Result<Value, String> {
-        let (app, _) = axon_core::expected_fact_target(fact)?;
+        let app = axon_core::expected_fact_app(fact)?;
         let snapshot = self
             .backend
             .capture(&AppQuery {

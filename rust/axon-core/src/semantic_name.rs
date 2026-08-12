@@ -442,15 +442,13 @@ impl SemanticNameRegistry {
     }
 
     pub fn resolve(&self, target: &WireElementTarget, live: &Snapshot) -> SemanticLookup {
+        if let Some(locator) = self.replay_locators.get(target) {
+            return lookup_from_resolution(target, LocatorResolver::resolve(locator, live), locator);
+        }
         match self.resolve_retained(target, live) {
-            RetainedSemanticLookup::NoRecord => self.replay_locators.get(target).map_or_else(
-                || SemanticLookup::Missing {
-                    target: target.clone(),
-                },
-                |locator| {
-                    lookup_from_resolution(target, LocatorResolver::resolve(locator, live), locator)
-                },
-            ),
+            RetainedSemanticLookup::NoRecord => SemanticLookup::Missing {
+                target: target.clone(),
+            },
             RetainedSemanticLookup::Resolved(lookup) => *lookup,
         }
     }
