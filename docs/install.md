@@ -9,10 +9,33 @@ Axon's deployed shape is a menu bar daemon, a separate editor app, and a bundled
 
 ## Install
 
+Install the latest release directly on macOS or Linux:
+
+```sh
+curl -fsSL https://axn.dev/install.sh | sh
+```
+
+On Windows PowerShell:
+
+```powershell
+irm https://axn.dev/install.ps1 | iex
+```
+
+The installers verify the release checksum, install into a permanent versioned directory, register
+the daemon from that location, and put its CLI on `PATH`. Pin a release with
+`AXON_VERSION=0.3.1` on macOS or Linux. In PowerShell, the one-liner can be pinned with
+`$env:AXON_VERSION = '0.3.1'; irm https://axn.dev/install.ps1 | iex`; a saved copy also accepts
+`-Version 0.3.1`.
+
+On macOS, Homebrew remains an alternative:
+
 ```sh
 brew install --cask bleugreen/tap/axon
 axon
 ```
+
+The direct installer refuses to create a second installation when the Homebrew cask is already
+installed. Upgrade a Homebrew-managed machine with `brew upgrade --cask bleugreen/tap/axon`.
 
 With no arguments, `axon` launches `Axon.app`, checks the local socket, and requests Accessibility permission only when it is missing.
 

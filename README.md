@@ -11,13 +11,32 @@ On macOS it runs as a menu bar service; on Windows and Linux the sibling Rust da
 
 ## Quick Start
 
+macOS or Linux:
+
+```sh
+curl -fsSL https://axn.dev/install.sh | sh
+```
+
+Windows PowerShell:
+
+```powershell
+irm https://axn.dev/install.ps1 | iex
+```
+
+Or install on macOS with Homebrew:
+
 ```sh
 brew install --cask bleugreen/tap/axon
 axon
+```
+
+Then register the installed CLI with an MCP client:
+
+```sh
 claude mcp add axon -- axon mcp   # or: codex mcp add axon -- axon mcp
 ```
 
-`axon` with no arguments launches `Axon.app`, checks the socket, and requests Accessibility permission if it is missing. Approve `Axon.app` in **System Settings → Privacy & Security → Accessibility**. Once accessibility is trusted, the setup output prints the register-with-MCP commands shown above.
+On macOS, `axon` with no arguments launches `Axon.app`, checks the socket, and requests Accessibility permission if it is missing. Approve `Axon.app` in **System Settings → Privacy & Security → Accessibility**. Once accessibility is trusted, the setup output prints the register-with-MCP commands shown above.
 
 ## Why Axon
 
