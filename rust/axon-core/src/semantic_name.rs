@@ -12,6 +12,10 @@ pub enum SemanticNameResolution {
     Unique,
     Ambiguous,
 }
+pub(crate) enum RetainedSemanticLookup {
+    NoRecord,
+    Resolved(SemanticLookup),
+}
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -430,10 +434,22 @@ impl SemanticNameRegistry {
         names
     }
     pub fn resolve(&self, target: &WireElementTarget, live: &Snapshot) -> SemanticLookup {
-        if !app_matches(&target.app, &live.app) {
-            return SemanticLookup::Missing {
+        match self.resolve_retained(target, live) {
+            RetainedSemanticLookup::NoRecord => SemanticLookup::Missing {
                 target: target.clone(),
-            };
+            },
+            RetainedSemanticLookup::Resolved(lookup) => lookup,
+        }
+    }
+    pub(crate) fn resolve_retained(
+        &self,
+        target: &WireElementTarget,
+        live: &Snapshot,
+    ) -> RetainedSemanticLookup {
+        if !app_matches(&target.app, &live.app) {
+            return RetainedSemanticLookup::Resolved(SemanticLookup::Missing {
+                target: target.clone(),
+            });
         }
         let matches: Vec<_> = self
             .order
@@ -444,9 +460,7 @@ impl SemanticNameRegistry {
             .filter(|r| app_matches(&target.app, &r.app) && r.target.name == target.name)
             .collect();
         if matches.is_empty() {
-            return SemanticLookup::Missing {
-                target: target.clone(),
-            };
+            return RetainedSemanticLookup::NoRecord;
         }
         let newest = matches[0].snapshot_id.clone();
         let latest: Vec<_> = matches
@@ -454,7 +468,7 @@ impl SemanticNameRegistry {
             .filter(|r| r.snapshot_id == newest)
             .collect();
         if latest.len() > 1 {
-            return SemanticLookup::Ambiguous {
+            return RetainedSemanticLookup::Resolved(SemanticLookup::Ambiguous {
                 target: target.clone(),
                 candidates: latest
                     .into_iter()
@@ -466,7 +480,7 @@ impl SemanticNameRegistry {
                         locator: r.locator.clone(),
                     })
                     .collect(),
-            };
+            });
         }
         if latest[0].snapshot_id == live.id {
             let validation = LocatorResolver::resolve(&latest[0].locator, live);
@@ -476,38 +490,41 @@ impl SemanticNameRegistry {
                     .as_ref()
                     .is_some_and(|best| best.handle == latest[0].handle)
             {
-                return SemanticLookup::Unique {
+                return RetainedSemanticLookup::Resolved(SemanticLookup::Unique {
                     handle: latest[0].handle.clone(),
                     resolution: validation,
-                };
+                });
             }
         }
         let result = LocatorResolver::resolve(&latest[0].locator, live);
-        if result.status == ResolutionStatus::Unique {
-            SemanticLookup::Unique {
-                handle: result.best.as_ref().unwrap().handle.clone(),
-                resolution: result,
-            }
-        } else if result.status == ResolutionStatus::Missing {
-            SemanticLookup::Missing {
-                target: target.clone(),
-            }
-        } else {
-            SemanticLookup::Ambiguous {
-                target: target.clone(),
-                candidates: result
-                    .candidates
-                    .iter()
-                    .map(|c| SemanticCandidate {
-                        name: target.name.clone(),
-                        candidate_label: None,
-                        role: c.role.clone(),
-                        label: c.title.clone().unwrap_or_default(),
-                        locator: latest[0].locator.clone(),
-                    })
-                    .collect(),
-            }
-        }
+        RetainedSemanticLookup::Resolved(lookup_from_resolution(
+            target,
+            result,
+            &latest[0].locator,
+        ))
+    }
+}
+pub(crate) fn lookup_from_resolution(
+    target: &WireElementTarget,
+    result: Resolution,
+    locator: &Locator,
+) -> SemanticLookup {
+    match result.status {
+        ResolutionStatus::Unique => SemanticLookup::Unique {
+            handle: result.best.as_ref().expect("unique resolution has a best candidate").handle.clone(),
+            resolution: result,
+        },
+        ResolutionStatus::Missing => SemanticLookup::Missing { target: target.clone() },
+        ResolutionStatus::Ambiguous => SemanticLookup::Ambiguous {
+            target: target.clone(),
+            candidates: result.candidates.iter().map(|candidate| SemanticCandidate {
+                name: target.name.clone(),
+                candidate_label: None,
+                role: candidate.role.clone(),
+                label: candidate.title.clone().unwrap_or_default(),
+                locator: locator.clone(),
+            }).collect(),
+        },
     }
 }
 fn app_matches(q: &str, a: &crate::Application) -> bool {
@@ -531,7 +548,7 @@ fn scope(n: &crate::Node) -> AncestorLocator {
         label: exact(n.label.as_deref()),
     }
 }
-fn locator(n: &crate::Node, a: &[crate::Node], window: Option<&str>) -> Locator {
+pub(crate) fn locator(n: &crate::Node, a: &[crate::Node], window: Option<&str>) -> Locator {
     Locator {
         role: Some(n.role.clone()),
         subrole: n.subrole.clone(),
@@ -551,7 +568,7 @@ fn locator(n: &crate::Node, a: &[crate::Node], window: Option<&str>) -> Locator 
         frame: n.frame,
     }
 }
-fn walk_context(
+pub(crate) fn walk_context(
     n: &crate::Node,
     a: &[crate::Node],
     w: Option<&str>,
