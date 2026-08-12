@@ -147,9 +147,22 @@ impl X11Session {
         else {
             return false;
         };
-        [self.atoms._NET_ACTIVE_WINDOW, self.atoms._NET_WM_PID]
-            .iter()
-            .all(|required| supported.contains(required))
+        supports_atoms(
+            &supported,
+            &[self.atoms._NET_ACTIVE_WINDOW, self.atoms._NET_WM_PID],
+        )
+    }
+
+    /// Whether the window manager publishes the properties application-window capture consumes.
+    pub fn supports_screenshot_capture(&self) -> bool {
+        let Ok(supported) = self.property(self.root, self.atoms._NET_SUPPORTED, AtomEnum::ATOM)
+        else {
+            return false;
+        };
+        supports_atoms(
+            &supported,
+            &[self.atoms._NET_CLIENT_LIST, self.atoms._NET_WM_PID],
+        )
     }
 
     /// The window EWMH reports as active, read plainly.
@@ -889,6 +902,10 @@ impl KeyboardMapping {
     }
 }
 
+fn supports_atoms(supported: &[Atom], required: &[Atom]) -> bool {
+    required.iter().all(|atom| supported.contains(atom))
+}
+
 fn decode_zpixmap(
     width: u16,
     height: u16,
@@ -960,6 +977,18 @@ fn decode_zpixmap(
 #[cfg(test)]
 mod screenshot_tests {
     use super::*;
+
+    #[test]
+    fn screenshot_capture_requires_client_list_and_pid_atoms() {
+        const CLIENT_LIST: Atom = 1;
+        const PID: Atom = 2;
+        const ACTIVE_WINDOW: Atom = 3;
+        let required = [CLIENT_LIST, PID];
+
+        assert!(supports_atoms(&[CLIENT_LIST, PID], &required));
+        assert!(!supports_atoms(&[ACTIVE_WINDOW, PID], &required));
+        assert!(!supports_atoms(&[CLIENT_LIST], &required));
+    }
 
     #[test]
     fn decodes_live_style_32_bit_little_endian_true_color() {

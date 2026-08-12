@@ -154,6 +154,7 @@ struct SessionFacts {
     wayland: bool,
     x_display: bool,
     window_manager: bool,
+    screenshot_windows: bool,
     xtest: bool,
 }
 
@@ -180,7 +181,7 @@ fn screenshot_restriction(facts: SessionFacts) -> Option<&'static str> {
     if !facts.x_display {
         return Some(NO_X_DISPLAY);
     }
-    if !facts.window_manager {
+    if !facts.screenshot_windows {
         return Some(NO_WINDOW_MANAGER);
     }
     None
@@ -204,6 +205,9 @@ fn classify_x11_session(restriction: fn(SessionFacts) -> Option<&'static str>) -
         wayland,
         x_display: x11.is_some(),
         window_manager: x11.as_ref().is_some_and(X11Session::supports_ewmh),
+        screenshot_windows: x11
+            .as_ref()
+            .is_some_and(X11Session::supports_screenshot_capture),
         xtest: x11.as_ref().is_some_and(X11Session::supports_xtest),
     };
     match (restriction(facts), x11) {
@@ -1672,6 +1676,7 @@ mod tests {
         wayland: false,
         x_display: true,
         window_manager: true,
+        screenshot_windows: true,
         xtest: true,
     };
 
@@ -1709,7 +1714,7 @@ mod tests {
         assert_eq!(screenshot_restriction(USABLE), None);
         assert_eq!(
             screenshot_restriction(SessionFacts {
-                window_manager: false,
+                screenshot_windows: false,
                 ..USABLE
             }),
             Some(NO_WINDOW_MANAGER)
