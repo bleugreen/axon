@@ -985,7 +985,7 @@ impl<
                         .backend
                         .readable_state(&handle)
                         .map_err(backend_error)?;
-                    last_observed = observed.clone();
+                    last_observed = Some(observed.clone());
                     let matched = ["value", "title", "description", "identifier", "help"]
                         .into_iter()
                         .find_map(|field| {
