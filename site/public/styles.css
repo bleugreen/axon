@@ -221,6 +221,10 @@ footer {
   gap: 82px;
   padding: 64px 34px 110px;
 }
+.docs-shell-wide {
+  max-width: 1500px;
+  grid-template-columns: 220px minmax(0, 1fr);
+}
 .docs-shell aside {
   position: sticky;
   top: 28px;

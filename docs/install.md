@@ -48,38 +48,7 @@ axon mcp       # the stdio MCP entrypoint clients run
 
 `axon setup` remains an explicit alias for no-arg `axon` for scripts that prefer named commands.
 
-For a consumer embedding Axon in something else, the CLI-managed daemon lifecycle is a separate
-path from the menu bar app. See [Embedding Axon](embedding.md) for the full contract:
-
-```sh
-axon daemon install     # register this install's daemon to start at login, then wait for health
-axon daemon restart
-axon daemon uninstall
-axon shutdown           # stop the daemon, keep the registration
-axon status --json      # the machine-readable health-v1 document
-axon version
-```
-
-The two differ in how you drive Axon, not in what runs. `Axon.app` is the ordinary user
-experience: a visible menu bar service to inspect, quit, and approve. The `daemon` verbs put that
-same app under launchd so a consumer can manage Axon without a person in the loop — on macOS
-`daemon install` registers the enclosing `Axon.app`, so Accessibility and Screen Recording are
-granted to the app bundle once and survive every upgrade. See
-[Embedding Axon](embedding.md#what-gets-registered) for why. Invoke it from a permanent location
-regardless, because launchd still has to find the bundle.
-
-One consequence worth knowing: when a registration is installed, launchd keeps the app alive, so
-**Quit** in the menu bar restarts it rather than stopping it. Use `axon shutdown` to stop the
-running daemon, or `axon daemon uninstall` to remove the registration as well.
-
-The lower-level socket server still exists:
-
-```sh
-axon serve
-```
-
-It is what a registration without an enclosing app bundle runs — a development build, for
-instance — and it is useful directly when debugging.
+Developers bundling Axon into another product should use the managed lifecycle described in [Embedding Axon](embedding.md).
 
 ## Permissions
 

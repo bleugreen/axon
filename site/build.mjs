@@ -109,7 +109,7 @@ function page({ title, description, body, docsPage = false, docsSlug, version })
     <a class="wordmark" href="/" aria-label="Axon home"><span>axn</span><i>.dev</i></a>
     <nav aria-label="Primary"><a href="/docs/install/">Docs</a><a href="https://github.com/bleugreen/axon">GitHub</a></nav>
   </header>
-  ${docsPage ? `<div class="docs-shell"><aside><div class="docs-label">Documentation</div>${nav}</aside><main class="prose"><div class="version-stamp">Describes Axon v${escapeHtml(version)}</div>${body}</main></div>` : body}
+  ${docsPage ? `<div class="docs-shell${docsSlug === 'cross-platform' ? ' docs-shell-wide' : ''}"><aside><div class="docs-label">Documentation</div>${nav}</aside><main class="prose"><div class="version-stamp">Describes Axon v${escapeHtml(version)}</div>${body}</main></div>` : body}
   <footer><span>Axon is open source under the MIT license.</span><span>Small. Local. Inspectable.</span></footer>
 </body>
 </html>`;
@@ -153,11 +153,11 @@ function home(version) {
     <b>value:</b> Ship the honest path</code></pre>
       </section>
       <section class="install">
-        <div><p class="kicker">Install Axon ${escapeHtml(version)}</p><h2>Start local.</h2><p>Homebrew is the primary path on macOS. Direct installers are available for shell-based setup on every supported platform.</p></div>
+        <div><p class="kicker">Install Axon ${escapeHtml(version)}</p><h2>Start local.</h2><p>Direct installers verify the release and keep Axon in a permanent local path. Homebrew remains available as a deliberate macOS alternative.</p></div>
         <div class="commands">
-          ${shellBlock('brew install --cask bleugreen/tap/axon', 'macOS · Homebrew')}
           ${shellBlock('curl -fsSL https://axn.dev/install.sh | sh', 'macOS / Linux · shell')}
           ${shellBlock('irm https://axn.dev/install.ps1 | iex', 'Windows · PowerShell')}
+          ${shellBlock('brew install --cask bleugreen/tap/axon', 'macOS · Homebrew')}
         </div>
       </section>
     </main>`,
