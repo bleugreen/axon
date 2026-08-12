@@ -97,9 +97,11 @@ pub fn classify_semantic_diff(
     let mut fresh_match = vec![None; fresh.len()];
 
     for (fresh_index, fresh_entry) in fresh.iter().enumerate() {
-        if let Some((baseline_index, _)) = baseline.iter().enumerate().find(|(index, entry)| {
-            !baseline_matched[*index] && compatible(entry, fresh_entry)
-        }) {
+        if let Some((baseline_index, _)) = baseline
+            .iter()
+            .enumerate()
+            .find(|(index, entry)| !baseline_matched[*index] && compatible(entry, fresh_entry))
+        {
             baseline_matched[baseline_index] = true;
             fresh_match[fresh_index] = Some(baseline_index);
         }
@@ -124,7 +126,9 @@ pub fn classify_semantic_diff(
     let mut changed = Vec::new();
     let mut changed_elements = 0;
     for (fresh_index, baseline_index) in fresh_match.iter().enumerate() {
-        let Some(baseline_index) = baseline_index else { continue };
+        let Some(baseline_index) = baseline_index else {
+            continue;
+        };
         let before = changed.len();
         compare_fields(
             baseline[*baseline_index].node,
@@ -135,7 +139,11 @@ pub fn classify_semantic_diff(
         changed_elements += usize::from(changed.len() != before);
     }
 
-    let diff = SemanticDiff { added, removed, changed };
+    let diff = SemanticDiff {
+        added,
+        removed,
+        changed,
+    };
     if diff.added.is_empty() && diff.removed.is_empty() && diff.changed.is_empty() {
         return Ok(DiffClassification::Unchanged);
     }
@@ -155,25 +163,39 @@ fn entries<'a>(
     let mut nodes = Vec::new();
     fn collect<'a>(node: &'a Node, nodes: &mut Vec<&'a Node>) {
         nodes.push(node);
-        for child in &node.children { collect(child, nodes); }
+        for child in &node.children {
+            collect(child, nodes);
+        }
     }
-    for window in &snapshot.app.windows { collect(&window.root, &mut nodes); }
+    for window in &snapshot.app.windows {
+        collect(&window.root, &mut nodes);
+    }
 
     let mut seen = HashSet::new();
     let mut result = Vec::new();
     for semantic in names {
         if !seen.insert(semantic.source_index) {
-            return Err(DiffError::DuplicateSourceIndex { index: semantic.source_index });
+            return Err(DiffError::DuplicateSourceIndex {
+                index: semantic.source_index,
+            });
         }
-        let node = *nodes.get(semantic.source_index).ok_or(DiffError::SourceIndexOutOfBounds {
-            index: semantic.source_index,
-        })?;
-        if is_noise(node) { continue; }
+        let node = *nodes
+            .get(semantic.source_index)
+            .ok_or(DiffError::SourceIndexOutOfBounds {
+                index: semantic.source_index,
+            })?;
+        if is_noise(node) {
+            continue;
+        }
         let ordinal = match semantic.resolution {
             SemanticNameResolution::Unique => None,
             SemanticNameResolution::Ambiguous => Some(candidate_ordinal(semantic)?),
         };
-        result.push(Entry { semantic, node, ordinal });
+        result.push(Entry {
+            semantic,
+            node,
+            ordinal,
+        });
     }
     Ok(result)
 }
@@ -185,7 +207,9 @@ fn candidate_ordinal(name: &SemanticElementName) -> Result<usize, DiffError> {
         .and_then(|label| label.strip_prefix(&prefix))
         .and_then(|ordinal| ordinal.parse::<usize>().ok())
         .filter(|ordinal| *ordinal > 0)
-        .ok_or_else(|| DiffError::MalformedCandidateLabel { name: name.name.clone() })
+        .ok_or_else(|| DiffError::MalformedCandidateLabel {
+            name: name.name.clone(),
+        })
 }
 
 fn compatible(left: &Entry<'_>, right: &Entry<'_>) -> bool {
@@ -196,22 +220,39 @@ fn compatible(left: &Entry<'_>, right: &Entry<'_>) -> bool {
 }
 
 fn normalized_role(role: &str) -> String {
-    role.chars().filter(|c| c.is_ascii_alphanumeric()).flat_map(char::to_lowercase).collect()
+    role.chars()
+        .filter(|c| c.is_ascii_alphanumeric())
+        .flat_map(char::to_lowercase)
+        .collect()
 }
 
 fn is_noise(node: &Node) -> bool {
     let role = normalized_role(&node.role);
-    if matches!(role.as_str(), "scrollbar" | "axscrollbar" | "indicator" | "scrollindicator" | "axscrollindicator") {
+    if matches!(
+        role.as_str(),
+        "scrollbar" | "axscrollbar" | "indicator" | "scrollindicator" | "axscrollindicator"
+    ) {
         return true;
     }
-    matches!(role.as_str(), "row" | "axrow" | "cell" | "axcell" | "group" | "axgroup" | "container" | "axcontainer")
-        && [&node.title, &node.label, &node.value, &node.description, &node.identifier]
-            .into_iter().all(|value| value.as_deref().is_none_or(|value| value.trim().is_empty()))
+    matches!(
+        role.as_str(),
+        "row" | "axrow" | "cell" | "axcell" | "group" | "axgroup" | "container" | "axcontainer"
+    ) && [
+        &node.title,
+        &node.label,
+        &node.value,
+        &node.description,
+        &node.identifier,
+    ]
+    .into_iter()
+    .all(|value| value.as_deref().is_none_or(|value| value.trim().is_empty()))
         && node.actions.is_empty()
 }
 
 fn semantic_label(node: &Node) -> Option<&str> {
-    node.title.as_deref().filter(|v| !v.trim().is_empty())
+    node.title
+        .as_deref()
+        .filter(|v| !v.trim().is_empty())
         .or_else(|| node.label.as_deref().filter(|v| !v.trim().is_empty()))
 }
 
@@ -219,17 +260,42 @@ fn compare_fields(before: &Node, after: &Node, name: &str, changes: &mut Vec<Fie
     let fields = [
         ("role", json!(before.role), json!(after.role)),
         ("subrole", json!(before.subrole), json!(after.subrole)),
-        ("label", json!(semantic_label(before)), json!(semantic_label(after))),
+        (
+            "label",
+            json!(semantic_label(before)),
+            json!(semantic_label(after)),
+        ),
         ("value", json!(before.value), json!(after.value)),
-        ("description", json!(before.description), json!(after.description)),
-        ("identifier", json!(before.identifier), json!(after.identifier)),
+        (
+            "description",
+            json!(before.description),
+            json!(after.description),
+        ),
+        (
+            "identifier",
+            json!(before.identifier),
+            json!(after.identifier),
+        ),
         ("actions", json!(before.actions), json!(after.actions)),
         ("editable", json!(before.editable), json!(after.editable)),
-        ("childCount", json!(before.child_count), json!(after.child_count)),
-        ("truncationReason", json!(before.truncation_reason), json!(after.truncation_reason)),
+        (
+            "childCount",
+            json!(before.child_count),
+            json!(after.child_count),
+        ),
+        (
+            "truncationReason",
+            json!(before.truncation_reason),
+            json!(after.truncation_reason),
+        ),
     ];
     changes.extend(fields.into_iter().filter_map(|(field, from, to)| {
-        (from != to).then(|| FieldChange { name: name.into(), field: field.into(), from, to })
+        (from != to).then(|| FieldChange {
+            name: name.into(),
+            field: field.into(),
+            from,
+            to,
+        })
     }));
 }
 
@@ -240,26 +306,46 @@ mod tests {
 
     fn node(role: &str, label: Option<&str>) -> Node {
         Node {
-            role: role.into(), subrole: None, name: None, title: None,
-            label: label.map(Into::into), value: None, description: None,
-            identifier: None, actions: vec![], frame: None, editable: false,
-            children: vec![], child_count: None, truncation_reason: None,
+            role: role.into(),
+            subrole: None,
+            name: None,
+            title: None,
+            label: label.map(Into::into),
+            value: None,
+            description: None,
+            identifier: None,
+            actions: vec![],
+            frame: None,
+            editable: false,
+            children: vec![],
+            child_count: None,
+            truncation_reason: None,
         }
     }
     fn snapshot(id: &str, children: Vec<Node>) -> Snapshot {
         let mut root = node("window", Some("Main"));
         root.children = children;
-        Snapshot { id: SnapshotId(id.into()), app: Application {
-            name: "Fixture".into(), identifier: Some("fixture.app".into()),
-            windows: vec![Window { title: Some("Main".into()), root }],
-        }}
+        Snapshot {
+            id: SnapshotId(id.into()),
+            app: Application {
+                name: "Fixture".into(),
+                identifier: Some("fixture.app".into()),
+                windows: vec![Window {
+                    title: Some("Main".into()),
+                    root,
+                }],
+            },
+        }
     }
     fn classify(before: &Snapshot, after: &Snapshot) -> DiffClassification {
         classify_semantic_diff(
-            before, &SemanticNameDeriver::derive(before),
-            after, &SemanticNameDeriver::derive(after),
+            before,
+            &SemanticNameDeriver::derive(before),
+            after,
+            &SemanticNameDeriver::derive(after),
             DiffPolicy::default(),
-        ).unwrap()
+        )
+        .unwrap()
     }
 
     #[test]
@@ -269,13 +355,17 @@ mod tests {
         filled.value = Some("axon".into());
         filled.actions = vec!["focus".into(), "setValue".into()];
         let after = snapshot("s2", vec![filled]);
-        let DiffClassification::Diff(diff) = classify(&before, &after) else { panic!() };
+        let DiffClassification::Diff(diff) = classify(&before, &after) else {
+            panic!()
+        };
         assert_eq!(diff.changed[0].field, "value");
         assert_eq!(diff.changed[0].from, Value::Null);
         assert_eq!(diff.changed[0].to, json!("axon"));
         assert_eq!(diff.changed[1].to, json!(["focus", "setValue"]));
 
-        let DiffClassification::Diff(reverse) = classify(&after, &before) else { panic!() };
+        let DiffClassification::Diff(reverse) = classify(&after, &before) else {
+            panic!()
+        };
         assert_eq!(reverse.changed[0].from, json!("axon"));
         assert_eq!(reverse.changed[0].to, Value::Null);
     }
@@ -283,8 +373,20 @@ mod tests {
     #[test]
     fn frame_and_canonical_noise_are_unchanged() {
         let mut moving = node("button", Some("Save"));
-        moving.frame = Some(Rect { x: 1.0, y: 2.0, width: 3.0, height: 4.0 });
-        let before = snapshot("s1", vec![moving.clone(), node("AXScrollBar", None), node("group", None)]);
+        moving.frame = Some(Rect {
+            x: 1.0,
+            y: 2.0,
+            width: 3.0,
+            height: 4.0,
+        });
+        let before = snapshot(
+            "s1",
+            vec![
+                moving.clone(),
+                node("AXScrollBar", None),
+                node("group", None),
+            ],
+        );
         moving.frame.as_mut().unwrap().x = 50.0;
         let after = snapshot("s2", vec![moving, node("scroll-indicator", None)]);
         assert_eq!(classify(&before, &after), DiffClassification::Unchanged);
@@ -297,7 +399,13 @@ mod tests {
         let mut names = SemanticNameDeriver::derive(&before);
         names[0].source_index = 99;
         assert!(matches!(
-            classify_semantic_diff(&before, &names, &after, &SemanticNameDeriver::derive(&after), DiffPolicy::default()),
+            classify_semantic_diff(
+                &before,
+                &names,
+                &after,
+                &SemanticNameDeriver::derive(&after),
+                DiffPolicy::default()
+            ),
             Err(DiffError::SourceIndexOutOfBounds { .. })
         ));
 
@@ -305,21 +413,40 @@ mod tests {
         let mut fresh_names = baseline_names.clone();
         fresh_names[1].identity_key.push_str("different");
         let DiffClassification::ThresholdExceeded = classify_semantic_diff(
-            &before, &baseline_names, &after, &fresh_names, DiffPolicy::default()
-        ).unwrap() else { panic!() };
+            &before,
+            &baseline_names,
+            &after,
+            &fresh_names,
+            DiffPolicy::default(),
+        )
+        .unwrap() else {
+            panic!()
+        };
     }
 
     #[test]
     fn threshold_counts_changed_elements_and_keeps_exact_boundary() {
-        let before = snapshot("s1", vec![node("button", Some("A")), node("button", Some("B"))]);
+        let before = snapshot(
+            "s1",
+            vec![node("button", Some("A")), node("button", Some("B"))],
+        );
         let mut changed = node("button", Some("A"));
         changed.value = Some("new".into());
         changed.editable = true;
         let after = snapshot("s2", vec![changed, node("button", Some("B"))]);
-        assert!(matches!(classify(&before, &after), DiffClassification::Diff(_)));
+        assert!(matches!(
+            classify(&before, &after),
+            DiffClassification::Diff(_)
+        ));
 
-        let over = snapshot("s3", vec![node("button", Some("C")), node("button", Some("D"))]);
-        assert_eq!(classify(&before, &over), DiffClassification::ThresholdExceeded);
+        let over = snapshot(
+            "s3",
+            vec![node("button", Some("C")), node("button", Some("D"))],
+        );
+        assert_eq!(
+            classify(&before, &over),
+            DiffClassification::ThresholdExceeded
+        );
         assert_eq!(DiffPolicy::new(0.5).unwrap().threshold(), 0.5);
         assert!(DiffPolicy::new(f64::NAN).is_err());
     }

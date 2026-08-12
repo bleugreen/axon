@@ -34,17 +34,42 @@ fn look_since_response_forms_are_byte_exact() {
     };
     let token = SinceToken::new("fixture.app", &observation.id, 7);
     let diff = SemanticDiff {
-        added: vec![], removed: vec![],
+        added: vec![],
+        removed: vec![],
         changed: vec![FieldChange {
-            name: "field/search".into(), field: "value".into(),
-            from: Value::Null, to: json!("axon"),
+            name: "field/search".into(),
+            field: "value".into(),
+            from: Value::Null,
+            to: json!("axon"),
         }],
     };
     let responses = [
-        (LookSinceResult::unchanged("Fixture", token.clone()), fixture.unchanged),
-        (LookSinceResult::diff("Fixture", token.clone(), diff), fixture.diff),
-        (LookSinceResult::fallback("Fixture", observation.clone(), token.clone(), LookFallbackNote::BaselineExpired), fixture.baseline_expired),
-        (LookSinceResult::fallback("Fixture", observation, token, LookFallbackNote::DiffExceededThreshold), fixture.threshold),
+        (
+            LookSinceResult::unchanged("Fixture", token.clone()),
+            fixture.unchanged,
+        ),
+        (
+            LookSinceResult::diff("Fixture", token.clone(), diff),
+            fixture.diff,
+        ),
+        (
+            LookSinceResult::fallback(
+                "Fixture",
+                observation.clone(),
+                token.clone(),
+                LookFallbackNote::BaselineExpired,
+            ),
+            fixture.baseline_expired,
+        ),
+        (
+            LookSinceResult::fallback(
+                "Fixture",
+                observation,
+                token,
+                LookFallbackNote::DiffExceededThreshold,
+            ),
+            fixture.threshold,
+        ),
     ];
     for (response, expected) in responses {
         assert_eq!(serde_json::to_string(&response).unwrap(), expected);

@@ -34,7 +34,9 @@ impl SinceToken {
         Ok(Self(value))
     }
 
-    pub fn as_str(&self) -> &str { &self.0 }
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
 }
 
 fn hex_encode(bytes: &[u8]) -> String {
@@ -42,21 +44,39 @@ fn hex_encode(bytes: &[u8]) -> String {
 }
 
 fn decode_component(value: &str) -> Option<Vec<u8>> {
-    if value.is_empty() || value.len() % 2 != 0 { return None; }
-    value.as_bytes().chunks_exact(2).map(|pair| {
-        std::str::from_utf8(pair).ok().and_then(|digits| u8::from_str_radix(digits, 16).ok())
-    }).collect()
+    if value.is_empty() || value.len() % 2 != 0 {
+        return None;
+    }
+    value
+        .as_bytes()
+        .chunks_exact(2)
+        .map(|pair| {
+            std::str::from_utf8(pair)
+                .ok()
+                .and_then(|digits| u8::from_str_radix(digits, 16).ok())
+        })
+        .collect()
 }
 
 fn validate_since_token(value: &str) -> Result<(), SinceTokenError> {
-    let body = value.strip_prefix("obs-").ok_or(SinceTokenError::Malformed)?;
+    let body = value
+        .strip_prefix("obs-")
+        .ok_or(SinceTokenError::Malformed)?;
     let mut components = body.split('.');
-    let app = components.next().and_then(decode_component).ok_or(SinceTokenError::Malformed)?;
-    let snapshot = components.next().and_then(decode_component).ok_or(SinceTokenError::Malformed)?;
+    let app = components
+        .next()
+        .and_then(decode_component)
+        .ok_or(SinceTokenError::Malformed)?;
+    let snapshot = components
+        .next()
+        .and_then(decode_component)
+        .ok_or(SinceTokenError::Malformed)?;
     let sequence = components.next().ok_or(SinceTokenError::Malformed)?;
     if components.next().is_some()
         || std::str::from_utf8(&app).ok().is_none_or(str::is_empty)
-        || std::str::from_utf8(&snapshot).ok().is_none_or(str::is_empty)
+        || std::str::from_utf8(&snapshot)
+            .ok()
+            .is_none_or(str::is_empty)
         || sequence.is_empty()
         || sequence.parse::<u64>().is_err()
     {
@@ -97,7 +117,11 @@ pub struct LookUnchanged {
 
 fn deserialize_true<'de, D: Deserializer<'de>>(deserializer: D) -> Result<bool, D::Error> {
     let value = bool::deserialize(deserializer)?;
-    if value { Ok(true) } else { Err(serde::de::Error::custom("unchanged must be true")) }
+    if value {
+        Ok(true)
+    } else {
+        Err(serde::de::Error::custom("unchanged must be true"))
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -119,11 +143,19 @@ pub struct LookFull {
 
 impl LookSinceResult {
     pub fn unchanged(app: impl Into<String>, since: SinceToken) -> Self {
-        Self::Unchanged(LookUnchanged { app: app.into(), unchanged: true, since })
+        Self::Unchanged(LookUnchanged {
+            app: app.into(),
+            unchanged: true,
+            since,
+        })
     }
 
     pub fn diff(app: impl Into<String>, since: SinceToken, diff: SemanticDiff) -> Self {
-        Self::Diff(LookDiff { app: app.into(), since, diff })
+        Self::Diff(LookDiff {
+            app: app.into(),
+            since,
+            diff,
+        })
     }
 
     pub fn fallback(
@@ -132,7 +164,12 @@ impl LookSinceResult {
         since: SinceToken,
         note: LookFallbackNote,
     ) -> Self {
-        Self::Full(LookFull { app: app.into(), observation, since, note })
+        Self::Full(LookFull {
+            app: app.into(),
+            observation,
+            since,
+            note,
+        })
     }
 
     pub fn observation_kind(&self) -> LookObservationKind {
@@ -151,7 +188,9 @@ pub fn look_since_response(
 ) -> LookSinceResult {
     let app = app.into();
     match comparison {
-        None => LookSinceResult::fallback(app, observation, since, LookFallbackNote::BaselineExpired),
+        None => {
+            LookSinceResult::fallback(app, observation, since, LookFallbackNote::BaselineExpired)
+        }
         Some(DiffClassification::Unchanged) => LookSinceResult::unchanged(app, since),
         Some(DiffClassification::Diff(diff)) => LookSinceResult::diff(app, since, diff),
         Some(DiffClassification::ThresholdExceeded) => LookSinceResult::fallback(
@@ -221,7 +260,6 @@ mod tests {
     }
 }
 
-
 #[cfg(test)]
 mod since_tests {
     use super::*;
@@ -236,10 +274,19 @@ mod since_tests {
                 windows: vec![Window {
                     title: Some("Main".into()),
                     root: Node {
-                        role: "window".into(), subrole: None, name: None,
-                        title: Some("Main".into()), label: None, value: None,
-                        description: None, identifier: None, actions: vec![], frame: None,
-                        editable: false, children: vec![], child_count: None,
+                        role: "window".into(),
+                        subrole: None,
+                        name: None,
+                        title: Some("Main".into()),
+                        label: None,
+                        value: None,
+                        description: None,
+                        identifier: None,
+                        actions: vec![],
+                        frame: None,
+                        editable: false,
+                        children: vec![],
+                        child_count: None,
                         truncation_reason: None,
                     },
                 }],
@@ -261,22 +308,37 @@ mod since_tests {
     fn response_forms_are_strict_and_select_screenshot_policy() {
         let token = SinceToken::new("fixture.app", &SnapshotId("fixture-1".into()), 1);
         let unchanged = LookSinceResult::unchanged("Fixture", token.clone());
-        assert_eq!(unchanged.observation_kind(), LookObservationKind::ChangeCheck);
-        assert!(!screenshot_requested(Some(true), unchanged.observation_kind()));
+        assert_eq!(
+            unchanged.observation_kind(),
+            LookObservationKind::ChangeCheck
+        );
+        assert!(!screenshot_requested(
+            Some(true),
+            unchanged.observation_kind()
+        ));
 
         let diff = LookSinceResult::diff("Fixture", token.clone(), SemanticDiff::default());
         assert!(!screenshot_requested(None, diff.observation_kind()));
 
-        for note in [LookFallbackNote::BaselineExpired, LookFallbackNote::DiffExceededThreshold] {
+        for note in [
+            LookFallbackNote::BaselineExpired,
+            LookFallbackNote::DiffExceededThreshold,
+        ] {
             let full = LookSinceResult::fallback("Fixture", snapshot(), token.clone(), note);
             assert!(screenshot_requested(None, full.observation_kind()));
         }
-        assert!(serde_json::from_str::<LookSinceResult>(
-            r#"{"app":"Fixture","unchanged":true,"since":"obs-61.62.1","extra":1}"#
-        ).is_err());
-        assert!(serde_json::from_str::<LookSinceResult>(
-            r#"{"app":"Fixture","unchanged":false,"since":"obs-61.62.1"}"#
-        ).is_err());
+        assert!(
+            serde_json::from_str::<LookSinceResult>(
+                r#"{"app":"Fixture","unchanged":true,"since":"obs-61.62.1","extra":1}"#
+            )
+            .is_err()
+        );
+        assert!(
+            serde_json::from_str::<LookSinceResult>(
+                r#"{"app":"Fixture","unchanged":false,"since":"obs-61.62.1"}"#
+            )
+            .is_err()
+        );
     }
 
     #[test]
@@ -285,7 +347,10 @@ mod since_tests {
         let result = look_since_response("Fixture", snapshot(), token, None);
         assert!(matches!(
             result,
-            LookSinceResult::Full(LookFull { note: LookFallbackNote::BaselineExpired, .. })
+            LookSinceResult::Full(LookFull {
+                note: LookFallbackNote::BaselineExpired,
+                ..
+            })
         ));
     }
 }
