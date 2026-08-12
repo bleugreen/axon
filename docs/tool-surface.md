@@ -29,7 +29,7 @@ invoke(target, name, deliveryPolicy?)
 ```text
 axon permit
 axon refresh-secrets [--json]
-axon look [target] [--since snapshot-id] [--no-screenshot] [--screen-text] [--frames] [--json] [--details] [--debug] [--no-tree] [--offset n] [--limit n] [--depth n]
+axon look [app | target-json] [--since snapshot-id] [--no-screenshot] [--screen-text] [--frames] [--json] [--details] [--debug] [--no-tree] [--offset n] [--limit n] [--depth n]
 axon find <app> '<locator-json>'
 axon wait_for_value '<target-json>' (--contains text | --equals text | --matches regex) [--timeout-ms n] [--interval-ms n]
 axon wait_for_stability <app> [--condition stable|changed] [--stable-ms n] [--timeout-ms n] [--interval-ms n]
@@ -41,8 +41,14 @@ axon type [--foreground] <target-json> <value>
 axon keyboard [--app app] [--foreground] (--text text | --key keystroke)
 axon scroll [--app app] [--target target-json] [--dx n] [--dy n]
 axon drag [--app app] [--duration-ms n] [--foreground] <from-json> <to-json>
-axon invoke <target-json> <action-name>
+axon invoke [--foreground] <target-json> <action-name>
 ```
+
+The command line has one positional slot where `look` has two parameters, so the
+shape of the argument selects between them: a bare word is an `app` to observe,
+and a JSON object is a `target` whose children are paged. Every other command
+that takes a target takes it as JSON, because an element target is the
+`{app, name}` object `look` returned and never a bare string.
 
 ## Perception
 
@@ -50,7 +56,7 @@ axon invoke <target-json> <action-name>
 `format: "debug"` through MCP, or `axon look --details`, when raw running
 processes, bundle identifiers, or pids are needed.
 
-`look(target: app)` captures an accessibility snapshot. MCP returns a compact
+`look(app: ...)` captures an accessibility snapshot. MCP returns a compact
 agent-facing observation by default; `format: "debug"` returns the raw snapshot.
 The observation tree is a DSL string with app-scoped semantic names, normalized roles, labels,
 actions, and explicit truncation markers. Full app observations include a window

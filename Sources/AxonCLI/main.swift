@@ -6,7 +6,6 @@ let arguments = Array(CommandLine.arguments.dropFirst())
 let command = arguments.first ?? "bootstrap"
 let socketPath = AxonEnvironment.socketPath()
 let jsonEncoder = JSONEncoder()
-let jsonDecoder = JSONDecoder()
 let axonAppBundleIdentifier = AppBundle.axonDaemonIdentifier
 let axonEditorBundleIdentifier = AppBundle.axonEditorIdentifier
 
@@ -52,7 +51,7 @@ do {
             .send(JSONRPCRequest(
                 id: .string("wait_for_stability"),
                 method: "wait_for_stability",
-                params: .object(try waitForStabilityParams(arguments: arguments))
+                params: .object(try CLICommandParser.waitForStability(arguments: arguments))
             ))
         try printResponse(response)
 
@@ -65,7 +64,7 @@ do {
         try refreshSecrets(arguments: arguments)
 
     case "look":
-        let look = try lookCommand(arguments: arguments)
+        let look = try CLICommandParser.look(arguments: arguments)
         let response = try SocketClient(path: socketPath)
             .send(JSONRPCRequest(
                 id: .string("look"),
@@ -119,18 +118,11 @@ do {
         }
 
     case "find":
-        guard arguments.count >= 3 else {
-            throw CLIError.missingArguments("find requires an app and locator JSON")
-        }
-        let locator = try decodeJSONValue(arguments.dropFirst(2).joined(separator: " "))
         let response = try SocketClient(path: socketPath)
             .send(JSONRPCRequest(
                 id: .string("find"),
                 method: "find",
-                params: .object([
-                    "app": .string(arguments[1]),
-                    "locator": locator
-                ])
+                params: .object(try CLICommandParser.find(arguments: arguments))
         ))
         try printResponse(response)
 
@@ -139,17 +131,16 @@ do {
             .send(JSONRPCRequest(
                 id: .string("wait_for_value"),
                 method: "wait_for_value",
-                params: .object(try waitForValueParams(arguments: arguments))
+                params: .object(try CLICommandParser.waitForValue(arguments: arguments))
             ))
         try printResponse(response)
 
     case "run":
-        let command = try runCommand(arguments: arguments)
         let response = try SocketClient(path: socketPath, responseTimeoutSeconds: SocketClient.defaultRunResponseTimeoutSeconds)
             .send(JSONRPCRequest(
-                id: .string(command.method),
-                method: command.method,
-                params: .object(command.params)
+                id: .string("run"),
+                method: "run",
+                params: .object(try CLICommandParser.run(arguments: arguments))
             ))
         try printResponse(response)
 
@@ -158,43 +149,27 @@ do {
             .send(JSONRPCRequest(
                 id: .string("save"),
                 method: "save",
-                params: .object(try saveParams(arguments: arguments))
+                params: .object(try CLICommandParser.save(arguments: arguments))
             ))
         try printResponse(response)
 
     case "click":
-        var (rest, policy) = deliveryPolicyArgument(in: arguments)
-        let target = try requiredArgument(after: command, in: rest)
-        try sendAction(method: "click", params: policy.applied(to: ["target": targetArgument(target)]))
+        try sendAction(method: "click", params: CLICommandParser.click(arguments: arguments))
 
     case "scroll":
-        try sendAction(method: "scroll", params: scrollParams(arguments: arguments))
+        try sendAction(method: "scroll", params: CLICommandParser.scroll(arguments: arguments))
 
     case "drag":
-        try sendAction(method: "drag", params: dragParams(arguments: arguments))
+        try sendAction(method: "drag", params: CLICommandParser.drag(arguments: arguments))
 
     case "invoke":
-        let (rest, policy) = deliveryPolicyArgument(in: arguments)
-        guard rest.count >= 3 else {
-            throw CLIError.missingArguments("invoke requires a target and action name")
-        }
-        try sendAction(method: "invoke", params: policy.applied(to: [
-            "target": .string(rest[1]),
-            "name": .string(rest[2])
-        ]))
+        try sendAction(method: "invoke", params: CLICommandParser.invoke(arguments: arguments))
 
     case "type":
-        let (rest, policy) = deliveryPolicyArgument(in: arguments)
-        guard rest.count >= 3 else {
-            throw CLIError.missingArguments("type requires a target and value")
-        }
-        try sendAction(method: "type", params: policy.applied(to: [
-            "target": .string(rest[1]),
-            "value": .string(rest.dropFirst(2).joined(separator: " "))
-        ]))
+        try sendAction(method: "type", params: CLICommandParser.type(arguments: arguments))
 
     case "keyboard":
-        try sendAction(method: "keyboard", params: try keyboardParams(arguments: arguments))
+        try sendAction(method: "keyboard", params: CLICommandParser.keyboard(arguments: arguments))
 
     case "help", "--help", "-h":
         print("""
@@ -239,39 +214,6 @@ do {
     exit(1)
 }
 
-private func waitForStabilityParams(arguments: [String]) throws -> [String: JSONValue] {
-    guard arguments.count >= 2 else { throw CLIError.missingArguments("wait_for_stability requires an app") }
-    var params: [String: JSONValue] = ["app": .string(arguments[1])]
-    var index = 2
-    while index < arguments.count {
-        let key: String
-        switch arguments[index] {
-        case "--condition": key = "condition"
-        case "--stable-ms": key = "stableMs"
-        case "--timeout-ms": key = "timeoutMs"
-        case "--interval-ms": key = "intervalMs"
-        default: throw CLIError.missingArguments("unexpected wait_for_stability argument: \(arguments[index])")
-        }
-        guard index + 1 < arguments.count else { throw CLIError.missingArguments("wait_for_stability \(arguments[index]) requires a value") }
-        if key == "condition" {
-            params[key] = .string(arguments[index + 1])
-        } else if let value = Int(arguments[index + 1]) {
-            params[key] = .int(value)
-        } else {
-            throw CLIError.missingArguments("wait_for_stability \(arguments[index]) requires an integer")
-        }
-        index += 2
-    }
-    return params
-}
-
-private func requiredArgument(after command: String, in arguments: [String]) throws -> String {
-    guard arguments.count >= 2 else {
-        throw CLIError.missingArgument(command)
-    }
-    return arguments[1]
-}
-
 private func sendAction(method: String, params: [String: JSONValue]) throws {
     let response = try SocketClient(path: socketPath)
         .send(JSONRPCRequest(id: .string(method), method: method, params: .object(params)))
@@ -308,294 +250,11 @@ private func refreshSecrets(arguments: [String]) throws {
     }
 }
 
-private func targetArgument(_ argument: String) -> JSONValue {
-    (try? decodeJSONValue(argument)) ?? .string(argument)
-}
-
-private func lookCommand(arguments: [String]) throws -> (params: [String: JSONValue], frames: Bool, json: Bool, details: Bool) {
-    var params: [String: JSONValue] = [:]
-    var frames = false
-    var json = false
-    var details = false
-    var target: String?
-    var index = 1
-    while index < arguments.count {
-        switch arguments[index] {
-        case "--since":
-            guard index + 1 < arguments.count else {
-                throw CLIError.missingArguments("look --since requires a snapshot id")
-            }
-            params["since"] = .string(arguments[index + 1])
-            index += 2
-        case "--screenshot":
-            params["screenshot"] = .bool(true)
-            index += 1
-        case "--no-screenshot":
-            params["screenshot"] = .bool(false)
-            index += 1
-        case "--screen-text":
-            params["screenText"] = .bool(true)
-            index += 1
-        case "--frames":
-            frames = true
-            index += 1
-        case "--json":
-            json = true
-            index += 1
-        case "--details", "--debug":
-            details = true
-            json = arguments[index] == "--debug"
-            params["all"] = .bool(true)
-            if arguments[index] == "--debug" {
-                params["format"] = .string("debug")
-            }
-            index += 1
-        case "--no-tree":
-            params["tree"] = .bool(false)
-            index += 1
-        case "--offset":
-            guard index + 1 < arguments.count, let value = Int(arguments[index + 1]) else {
-                throw CLIError.missingArguments("look --offset requires an integer")
-            }
-            params["offset"] = .int(value)
-            index += 2
-        case "--limit":
-            guard index + 1 < arguments.count, let value = Int(arguments[index + 1]) else {
-                throw CLIError.missingArguments("look --limit requires an integer")
-            }
-            params["limit"] = .int(value)
-            index += 2
-        case "--depth":
-            guard index + 1 < arguments.count, let value = Int(arguments[index + 1]) else {
-                throw CLIError.missingArguments("look --depth requires an integer")
-            }
-            params["depth"] = .int(value)
-            index += 2
-        default:
-            if target == nil {
-                target = arguments[index]
-                index += 1
-            } else {
-                throw CLIError.missingArguments("unexpected look argument: \(arguments[index])")
-            }
-        }
-    }
-    if let target {
-        params["target"] = .string(target)
-    }
-    return (params, frames, json, details)
-}
-
 private func lookDepth(in params: [String: JSONValue]) -> Int? {
     guard case let .int(depth)? = params["depth"] else {
         return nil
     }
     return max(0, depth)
-}
-
-private func waitForValueParams(arguments: [String]) throws -> [String: JSONValue] {
-    guard arguments.count >= 4 else {
-        throw CLIError.missingArguments("wait_for_value requires a target JSON and exactly one predicate")
-    }
-    var params: [String: JSONValue] = ["target": try decodeJSONValue(arguments[1])]
-    var index = 2
-    while index < arguments.count {
-        switch arguments[index] {
-        case "--contains":
-            guard index + 1 < arguments.count else { throw CLIError.missingArguments("wait_for_value --contains requires text") }
-            params["contains"] = .string(arguments[index + 1])
-            index += 2
-        case "--equals":
-            guard index + 1 < arguments.count else { throw CLIError.missingArguments("wait_for_value --equals requires text") }
-            params["equals"] = .string(arguments[index + 1])
-            index += 2
-        case "--matches":
-            guard index + 1 < arguments.count else { throw CLIError.missingArguments("wait_for_value --matches requires a regex") }
-            params["matches"] = .string(arguments[index + 1])
-            index += 2
-        case "--timeout-ms":
-            guard index + 1 < arguments.count, let value = Int(arguments[index + 1]) else {
-                throw CLIError.missingArguments("wait_for_value --timeout-ms requires an integer")
-            }
-            params["timeoutMs"] = .int(value)
-            index += 2
-        case "--interval-ms":
-            guard index + 1 < arguments.count, let value = Int(arguments[index + 1]) else {
-                throw CLIError.missingArguments("wait_for_value --interval-ms requires an integer")
-            }
-            params["intervalMs"] = .int(value)
-            index += 2
-        default:
-            throw CLIError.missingArguments("unexpected wait_for_value argument: \(arguments[index])")
-        }
-    }
-    return params
-}
-
-/// `--foreground` is the CLI spelling of `deliveryPolicy: foregroundPermitted`.
-///
-/// It is a per-invocation opt-in like the wire parameter it stands for, and it is stripped before
-/// the remaining arguments are parsed so it may appear anywhere in the command line.
-private struct DeliveryPolicyArgument {
-    let permitsForeground: Bool
-
-    func applied(to params: [String: JSONValue]) -> [String: JSONValue] {
-        guard permitsForeground else {
-            return params
-        }
-        var params = params
-        params["deliveryPolicy"] = .string(DeliveryPolicy.foregroundPermitted.rawValue)
-        return params
-    }
-}
-
-private func deliveryPolicyArgument(in arguments: [String]) -> ([String], DeliveryPolicyArgument) {
-    let remaining = arguments.filter { $0 != "--foreground" }
-    return (remaining, DeliveryPolicyArgument(permitsForeground: remaining.count != arguments.count))
-}
-
-private func keyboardParams(arguments: [String]) throws -> [String: JSONValue] {
-    let (arguments, policy) = deliveryPolicyArgument(in: arguments)
-    var params: [String: JSONValue] = [:]
-    var index = 1
-    while index < arguments.count {
-        switch arguments[index] {
-        case "--app":
-            guard index + 1 < arguments.count else {
-                throw CLIError.missingArguments("keyboard --app requires an app")
-            }
-            params["app"] = .string(arguments[index + 1])
-            index += 2
-        case "--text", "--key":
-            let option = String(arguments[index].dropFirst(2))
-            guard index + 1 < arguments.count else {
-                throw CLIError.missingArguments("keyboard --\(option) requires a value")
-            }
-            guard params[option] == nil else {
-                throw CLIError.missingArguments("keyboard --\(option) may only be provided once")
-            }
-            params[option] = .string(arguments[index + 1])
-            index += 2
-        default:
-            throw CLIError.missingArguments("unexpected keyboard argument: \(arguments[index]); use --text or --key")
-        }
-    }
-    guard (params["text"] == nil) != (params["key"] == nil) else {
-        throw CLIError.missingArguments("keyboard requires exactly one of --text or --key")
-    }
-    return policy.applied(to: params)
-}
-
-private func scrollParams(arguments: [String]) throws -> [String: JSONValue] {
-    let (arguments, policy) = deliveryPolicyArgument(in: arguments)
-    var params: [String: JSONValue] = [:]
-    var index = 1
-    while index < arguments.count {
-        switch arguments[index] {
-        case "--app":
-            guard index + 1 < arguments.count else {
-                throw CLIError.missingArguments("scroll --app requires an app")
-            }
-            params["app"] = .string(arguments[index + 1])
-            index += 2
-        case "--target":
-            guard index + 1 < arguments.count else {
-                throw CLIError.missingArguments("scroll --target requires target JSON or handle")
-            }
-            params["target"] = targetArgument(arguments[index + 1])
-            index += 2
-        case "--dx":
-            guard index + 1 < arguments.count, let value = Double(arguments[index + 1]) else {
-                throw CLIError.missingArguments("scroll --dx requires a number")
-            }
-            params["deltaX"] = .double(value)
-            index += 2
-        case "--dy":
-            guard index + 1 < arguments.count, let value = Double(arguments[index + 1]) else {
-                throw CLIError.missingArguments("scroll --dy requires a number")
-            }
-            params["deltaY"] = .double(value)
-            index += 2
-        default:
-            throw CLIError.missingArguments("unexpected scroll argument: \(arguments[index])")
-        }
-    }
-    return policy.applied(to: params)
-}
-
-private func dragParams(arguments: [String]) throws -> [String: JSONValue] {
-    let (arguments, policy) = deliveryPolicyArgument(in: arguments)
-    var params: [String: JSONValue] = [:]
-    var endpoints: [JSONValue] = []
-    var index = 1
-    while index < arguments.count {
-        switch arguments[index] {
-        case "--app":
-            guard index + 1 < arguments.count else {
-                throw CLIError.missingArguments("drag --app requires an app")
-            }
-            params["app"] = .string(arguments[index + 1])
-            index += 2
-        case "--duration-ms":
-            guard index + 1 < arguments.count, let value = Int(arguments[index + 1]) else {
-                throw CLIError.missingArguments("drag --duration-ms requires an integer")
-            }
-            params["durationMs"] = .int(value)
-            index += 2
-        default:
-            endpoints.append(targetArgument(arguments[index]))
-            index += 1
-        }
-    }
-    guard endpoints.count == 2 else {
-        throw CLIError.missingArguments("drag requires from-json and to-json")
-    }
-    params["from"] = endpoints[0]
-    params["to"] = endpoints[1]
-    return policy.applied(to: params)
-}
-
-private func saveParams(arguments: [String]) throws -> [String: JSONValue] {
-    var params: [String: JSONValue] = [:]
-    var index = 1
-    while index < arguments.count {
-        switch arguments[index] {
-        case "--session":
-            guard index + 1 < arguments.count else {
-                throw CLIError.missingArguments("save --session requires an id")
-            }
-            params["sessionId"] = .string(arguments[index + 1])
-            index += 2
-        case "--from":
-            guard index + 1 < arguments.count else {
-                throw CLIError.missingArguments("save --from requires a call id")
-            }
-            params["from"] = .string(arguments[index + 1])
-            index += 2
-        case "--to":
-            guard index + 1 < arguments.count else {
-                throw CLIError.missingArguments("save --to requires a call id")
-            }
-            params["to"] = .string(arguments[index + 1])
-            index += 2
-        case "--path":
-            guard index + 1 < arguments.count else {
-                throw CLIError.missingArguments("save --path requires a file path")
-            }
-            params["path"] = .string(arguments[index + 1])
-            index += 2
-        case "--include-reads":
-            params["includeReads"] = .bool(true)
-            index += 1
-        default:
-            throw CLIError.missingArguments("unexpected save argument: \(arguments[index])")
-        }
-    }
-    return params
-}
-
-private func decodeJSONValue(_ rawValue: String) throws -> JSONValue {
-    try jsonDecoder.decode(JSONValue.self, from: Data(rawValue.utf8))
 }
 
 private func printResponse(_ response: JSONRPCResponse) throws {
@@ -700,60 +359,6 @@ private func bundledAxonAppURL() -> URL? {
         return nil
     }
     return URL(fileURLWithPath: bundle.path, isDirectory: true)
-}
-
-private func runCommand(arguments: [String]) throws -> (method: String, params: [String: JSONValue]) {
-    var params: [String: JSONValue] = [:]
-    var index = 1
-    var path: String?
-    var argValues: [String: JSONValue] = [:]
-
-    while index < arguments.count {
-        let argument = arguments[index]
-        switch argument {
-        case "--continue-on-error":
-            params["continueOnError"] = .bool(true)
-            index += 1
-        case "--dry-run":
-            params["dryRun"] = .bool(true)
-            index += 1
-        case "--healed-path":
-            guard index + 1 < arguments.count else {
-                throw CLIError.missingArguments("run --healed-path requires a file")
-            }
-            params["healedPath"] = .string(arguments[index + 1])
-            index += 2
-        case "--arg":
-            guard index + 1 < arguments.count else {
-                throw CLIError.missingArguments("run --arg requires name=value")
-            }
-            let assignment = arguments[index + 1]
-            guard let separator = assignment.firstIndex(of: "="), separator > assignment.startIndex else {
-                throw CLIError.missingArguments("run --arg requires name=value")
-            }
-            let name = String(assignment[..<separator])
-            let value = String(assignment[assignment.index(after: separator)...])
-            argValues[name] = .string(value)
-            index += 2
-        default:
-            if path == nil {
-                path = argument
-                index += 1
-            } else {
-                throw CLIError.missingArguments("unexpected run argument: \(argument)")
-            }
-        }
-    }
-
-    guard let path else {
-        throw CLIError.missingArguments("run requires a path")
-    }
-    params["path"] = .string(path)
-    if !argValues.isEmpty {
-        params["argValues"] = .object(argValues)
-    }
-
-    return ("run", params)
 }
 
 /// The CLI-managed embedding lifecycle: a LaunchAgent whose program is this install's daemon.
@@ -1071,37 +676,5 @@ private func stringValue(_ value: JSONValue) -> String? {
         return String(bool)
     case .object, .array, .null:
         return nil
-    }
-}
-
-private enum CLIError: Error, CustomStringConvertible {
-    case missingArgument(String)
-    case missingArguments(String)
-    case invalidArguments(String)
-    case operationFailed(String)
-
-    var description: String {
-        switch self {
-        case let .missingArgument(command):
-            return "\(command) requires an app argument"
-        case let .missingArguments(message):
-            return message
-        case let .invalidArguments(message):
-            return message
-        case let .operationFailed(message):
-            return message
-        }
-    }
-
-    /// The shared exit-code contract: 2 means the command was used wrongly, 1 means it was used
-    /// correctly and could not be completed. Anything a consumer scripts against depends on the
-    /// difference, so it is stated once here rather than at each throw site.
-    var exitCode: Int32 {
-        switch self {
-        case .missingArgument, .missingArguments:
-            return 2
-        case .invalidArguments, .operationFailed:
-            return 1
-        }
     }
 }

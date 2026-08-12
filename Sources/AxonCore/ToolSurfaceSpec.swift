@@ -134,7 +134,7 @@ public enum ToolSurfaceSpec {
                 ToolParameterSpec("format", .string, description: "Defaults to observation. Use debug only when diagnosing Axon internals."),
                 ToolParameterSpec("frames", .boolean, default: .bool(false), description: "Include frames in observation output. Defaults to false.")
             ],
-            cliUsage: "axon look [target] [--since snapshot-id] [--no-screenshot] [--screen-text] [--frames] [--json] [--details] [--debug] [--no-tree] [--offset n] [--limit n] [--depth n]"
+            cliUsage: "axon look [app | target-json] [--since snapshot-id] [--no-screenshot] [--screen-text] [--frames] [--json] [--details] [--debug] [--no-tree] [--offset n] [--limit n] [--depth n]"
         ),
         ToolSpec(name: "navigate", description: "Navigate the active tab of a supported browser through its application scripting dictionary and verify the URL by read-back.", params: [
             ToolParameterSpec("app", .string, required: true, description: "Safari or Google Chrome, by name or exact bundle identifier."),
@@ -275,7 +275,7 @@ public enum ToolSurfaceSpec {
                 ToolParameterSpec("name", .string, required: true, description: "Accessibility action name, for example AXPress or AXShowMenu."),
                 deliveryPolicyParameter
             ],
-            cliUsage: "axon invoke <target-json> <action-name>"
+            cliUsage: "axon invoke [--foreground] <target-json> <action-name>"
         )
     ]
 
