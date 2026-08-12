@@ -225,6 +225,13 @@ footer {
   max-width: 1500px;
   grid-template-columns: 220px minmax(0, 1fr);
 }
+.docs-shell-wide .prose table {
+  display: table;
+  table-layout: fixed;
+}
+.docs-shell-wide .prose th,
+.docs-shell-wide .prose td { min-width: 0; }
+
 .docs-shell aside {
   position: sticky;
   top: 28px;
