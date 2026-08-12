@@ -36,10 +36,20 @@ function renderMarkdown(source) {
   marked.use({
     walkTokens(token) {
       if (token.type !== 'link') return;
+      if (/^(?:javascript|data|vbscript):/i.test(token.href.trim())) {
+        token.href = '#unsafe-link';
+        return;
+      }
       const match = token.href.match(/^([^/:#]+)\.md(#[^ ]+)?$/);
       if (match) token.href = `/docs/${match[1]}/${match[2] ?? ''}`;
+      if (token.href.startsWith('../')) {
+        token.href = `https://github.com/bleugreen/axon/blob/main/${token.href.slice(3)}`;
+      }
     },
     renderer: {
+      html({ raw }) {
+        return escapeHtml(raw);
+      },
       heading({ tokens, depth }) {
         const text = this.parser.parseInline(tokens);
         const id = slugger.slug(tokens.map((token) => token.text ?? token.raw ?? '').join(''));
@@ -49,6 +59,33 @@ function renderMarkdown(source) {
   });
 
   return marked.parse(source);
+}
+
+function internalPath(href) {
+  const path = href.split('#', 1)[0];
+  if (!path.startsWith('/')) return undefined;
+  return path.endsWith('/') ? `${path}index.html` : path;
+}
+
+async function validateInternalLinks() {
+  const pages = [
+    '/index.html',
+    ...[...docs, ...supportingDocs].map(([slug]) => `/docs/${slug}/index.html`),
+  ];
+  const missing = [];
+  for (const page of pages) {
+    const html = await readFile(join(outputRoot, page), 'utf8');
+    for (const [, href] of html.matchAll(/href="([^"]+)"/g)) {
+      const target = internalPath(href);
+      if (!target) continue;
+      try {
+        await readFile(join(outputRoot, target));
+      } catch {
+        missing.push(`${page}: ${href}`);
+      }
+    }
+  }
+  if (missing.length) throw new Error(`Broken internal links:\n${missing.join('\n')}`);
 }
 
 function shellBlock(command, label) {
@@ -145,6 +182,7 @@ async function build() {
       version,
     }));
   }
+  await validateInternalLinks();
 }
 
 function serve() {
