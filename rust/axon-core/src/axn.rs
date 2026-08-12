@@ -404,7 +404,10 @@ impl<'a, D: ToolDispatcher> AxnRunner<'a, D> {
                 action
                     .expects
                     .iter()
-                    .find_map(|fact| changed_baselines.get(&fact.id).map_or_else(|| self.dispatcher.verify(fact), |baseline| self.dispatcher.verify_changed(fact, baseline)).err())
+                    .find_map(|fact| match changed_baselines.get(&fact.id) {
+                        Some(baseline) => self.dispatcher.verify_changed(fact, baseline).err(),
+                        None => self.dispatcher.verify(fact).err(),
+                    })
             } else {
                 None
             };
