@@ -18,6 +18,8 @@ fn v2_replay_registers_locator_and_strips_recording_metadata() {
         registrations: vec![],
     };
     AxnRunner::new(&mut dispatcher)
+        .with_source("op", |_: &str| Ok(Some("secret".into())))
+        .with_source("env", |_: &str| Ok(Some("/tmp/report".into())))
         .run(
             &doc,
             &serde_json::from_value(json!({"recipient":"test@example.com"})).unwrap(),
