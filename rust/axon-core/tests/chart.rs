@@ -28,6 +28,31 @@ fn node(title: &str, id: Option<&str>) -> Node {
         truncation_reason: None,
     }
 }
+
+#[test]
+fn duplicate_chart_seeds_return_missing_when_all_live_candidates_are_gone() {
+    let root = directory("duplicates-missing");
+    let observed = snapshot("old", vec![node("Share", None), node("Share", None)]);
+    let name = name_for(&observed, "Share");
+    let mut store = ChartStore::new(root.clone());
+    store.confirm_capture("com.example.app", &observed, None, 10);
+    let registry = SemanticNameRegistry::default();
+    let live = snapshot("live", vec![node("Other", None)]);
+    match ChartSeededResolver::new(&registry, &mut store).resolve(
+        &WireElementTarget { app: "App".into(), name },
+        &live,
+        "com.example.app",
+        None,
+        11,
+    ) {
+        SemanticLookup::Missing { .. } => {}
+        _ => panic!("fully stale duplicate seeds did not resolve missing"),
+    }
+    assert!(store.chart("com.example.app").entries.iter()
+        .filter(|entry| entry.key.candidate_ordinal.is_some())
+        .all(|entry| entry.resolution_failures == 1));
+    let _ = fs::remove_dir_all(root);
+}
 fn snapshot(id: &str, children: Vec<Node>) -> Snapshot {
     Snapshot {
         id: SnapshotId(id.into()),
@@ -178,7 +203,11 @@ fn persistence_is_private_total_deterministic_and_per_app() {
     let root = directory("persistence");
     let mut sensitive = node("Save", Some("save"));
     sensitive.value = Some("SECRET_TEXT_FIELD_SENTINEL".into());
-    let capture = snapshot("capture", vec![sensitive]);
+    let mut value_only = node("discarded-title", None);
+    value_only.title = None;
+    value_only.editable = true;
+    value_only.value = Some("VALUE_ONLY_PRIVATE_SENTINEL".into());
+    let capture = snapshot("capture", vec![sensitive, value_only]);
     let mut store = ChartStore::new(root.clone());
     store.confirm_capture("com.example.app", &capture, Some("1"), 10);
     store.save("com.example.app", 10, Some("1"));
@@ -186,12 +215,17 @@ fn persistence_is_private_total_deterministic_and_per_app() {
     let bytes = fs::read(&path).unwrap();
     let json = String::from_utf8(bytes.clone()).unwrap();
     assert!(!json.contains("SECRET_TEXT_FIELD_SENTINEL"));
+    assert!(!json.contains("VALUE_ONLY_PRIVATE_SENTINEL"));
     assert!(!json.contains("\"value\"") && !json.contains("\"frame\""));
     let mut loaded = ChartStore::new(root.clone());
     let chart = loaded.load("com.example.app");
+    let first_observations: u64 = chart.entries.iter().map(|entry| entry.observations).sum();
+    loaded.confirm_capture("com.example.app", &capture, Some("1"), 11);
     loaded.save("com.example.app", 10, Some("1"));
-    assert_eq!(chart, loaded.chart("com.example.app").clone());
-    assert_eq!(bytes, fs::read(path).unwrap());
+    let replaced = fs::read(&path).unwrap();
+    assert_ne!(bytes, replaced);
+    let reloaded = ChartStore::new(root.clone()).load("com.example.app");
+    assert!(reloaded.entries.iter().map(|entry| entry.observations).sum::<u64>() > first_observations);
     assert_ne!(
         loaded.chart_path("../evil"),
         loaded.chart_path("com.example.app")

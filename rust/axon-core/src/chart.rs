@@ -25,6 +25,34 @@ pub struct ChartKey {
     pub identity_key: String,
 }
 
+fn snapshot_without_values(snapshot: &Snapshot) -> Snapshot {
+    fn clear(node: &mut crate::Node) {
+        node.value = None;
+        for child in &mut node.children {
+            clear(child);
+        }
+    }
+
+    let mut sanitized = snapshot.clone();
+    for window in &mut sanitized.app.windows {
+        clear(&mut window.root);
+    }
+    sanitized
+}
+
+fn replace_file(source: &Path, destination: &Path) -> std::io::Result<()> {
+    match fs::rename(source, destination) {
+        Ok(()) => Ok(()),
+        Err(first_error) if destination.exists() => {
+            // Windows rename does not replace an existing file. The temporary sibling still
+            // ensures readers never observe a partially written chart.
+            fs::remove_file(destination)?;
+            fs::rename(source, destination).map_err(|_| first_error)
+        }
+        Err(error) => Err(error),
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ChartLocator {
@@ -174,7 +202,10 @@ impl ChartStore {
         now: u64,
     ) {
         self.ensure_loaded(app_identity);
-        let names = SemanticNameDeriver::derive(snapshot);
+        // Derivation may otherwise promote a node value into its public name, label, lineage, and
+        // identity key. Derive from a value-free clone so persisted chart metadata cannot contain
+        // text-field contents, including values inherited through ancestor lineage.
+        let names = SemanticNameDeriver::derive(&snapshot_without_values(snapshot));
         let mut contexts = Vec::new();
         for window in &snapshot.app.windows {
             walk_context(&window.root, &[], window.title.as_deref(), &mut contexts);
@@ -269,7 +300,7 @@ impl ChartStore {
         if fs::write(&temporary, json).is_err() {
             return;
         }
-        if fs::rename(&temporary, &path).is_err() {
+        if replace_file(&temporary, &path).is_err() {
             let _ = fs::remove_file(&temporary);
         }
     }
@@ -363,9 +394,15 @@ impl<'a> ChartSeededResolver<'a> {
                     }),
             );
         }
-        SemanticLookup::Ambiguous {
-            target: target.clone(),
-            candidates,
+        if candidates.is_empty() {
+            SemanticLookup::Missing {
+                target: target.clone(),
+            }
+        } else {
+            SemanticLookup::Ambiguous {
+                target: target.clone(),
+                candidates,
+            }
         }
     }
 }
