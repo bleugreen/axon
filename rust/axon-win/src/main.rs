@@ -992,7 +992,7 @@ mod pipe {
     }
 
     #[cfg(test)]
-    mod tests {
+    mod facade_tests {
         use super::*;
 
         #[test]
