@@ -37,6 +37,30 @@ struct RouterRequest {
 const LOCK_EX: i32 = 2;
 const LOCK_NB: i32 = 4;
 
+#[link(name = "ApplicationServices", kind = "framework")]
+unsafe extern "C" {
+    fn CGSessionCopyCurrentDictionary() -> *const std::ffi::c_void;
+}
+#[link(name = "CoreFoundation", kind = "framework")]
+unsafe extern "C" {
+    fn CFRelease(value: *const std::ffi::c_void);
+}
+unsafe extern "C" { fn getuid() -> u32; }
+
+fn session_health() -> SessionHealth {
+    let session = unsafe { CGSessionCopyCurrentDictionary() };
+    let graphical = !session.is_null();
+    if graphical { unsafe { CFRelease(session) }; }
+    let interactive = unsafe { getuid() } != 0 && graphical;
+    if interactive && graphical {
+        SessionHealth::usable(None)
+    } else if !interactive {
+        SessionHealth::degraded(false, graphical, reason::NOT_INTERACTIVE_SESSION, None)
+    } else {
+        SessionHealth::degraded(true, false, reason::NO_GRAPHICAL_SESSION, None)
+    }
+}
+
 fn acquire_lock(path: &std::path::Path) -> io::Result<File> {
     let lock_path = PathBuf::from(format!("{}.lock", path.display()));
     let lock = OpenOptions::new()
@@ -197,12 +221,7 @@ fn dispatch(
             let executable_path = std::env::current_exe()
                 .map(|path| path.display().to_string())
                 .unwrap_or_default();
-            let graphical = std::env::var_os("HOME").is_some();
-            let session = if graphical {
-                SessionHealth::usable(None)
-            } else {
-                SessionHealth::degraded(false, false, reason::NO_GRAPHICAL_SESSION, None)
-            };
+            let session = session_health();
             let report = DaemonReport {
                 version: version.clone(),
                 platform: HealthPlatform::Macos,
@@ -303,7 +322,7 @@ fn mcp_success_response(id: Value, result: Value) -> Value {
     json!({"jsonrpc":"2.0","id":id,"result":axon_core::mcp_tool_result(result, false)})
 }
 fn tools() -> Vec<Value> {
-    ["look","find","click","type","keyboard","invoke","scroll","run"].into_iter()
+    ["look","find","wait_for_value","wait_for_stability","click","type","keyboard","invoke","scroll","run"].into_iter()
         .map(|name| json!({"name":name,"description":format!("Axon macOS {name}"),"inputSchema":{"type":"object","additionalProperties":true}})).collect()
 }
 
@@ -360,7 +379,7 @@ mod tests {
         assert_eq!(
             names,
             [
-                "look", "find", "click", "type", "keyboard", "invoke", "scroll", "run"
+                "look", "find", "wait_for_value", "wait_for_stability", "click", "type", "keyboard", "invoke", "scroll", "run"
             ]
         );
     }

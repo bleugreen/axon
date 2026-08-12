@@ -485,10 +485,7 @@ impl<
         params: &Map<String, Value>,
     ) -> Result<Value, JsonRpcError> {
         if let Some((_, capability)) = EXCLUDED.iter().find(|(tool, _)| *tool == method) {
-            return Err(rpc_error(
-                -32004,
-                format!("tool {method} requires unavailable capability {capability}"),
-            ));
+            return Err(capability_unavailable(method, capability, "not-implemented"));
         }
         // The policy is decoded before the target is resolved and before any backend call, so an
         // unknown value can never reach a native API.
@@ -799,10 +796,7 @@ impl<
 
     fn look(&mut self, params: &Map<String, Value>) -> Result<Value, JsonRpcError> {
         if params.get("screenText").and_then(Value::as_bool) == Some(true) {
-            return Err(rpc_error(
-                -32004,
-                "screenText observations are unavailable in axon-mac v1",
-            ));
+            return Err(capability_unavailable("look", "screenText", "not-implemented"));
         }
         if params.get("app").is_none() {
             return serde_json::to_value(
@@ -1143,7 +1137,22 @@ fn rpc_error(code: i64, message: impl Into<String>) -> JsonRpcError {
     }
 }
 fn backend_error(e: axon_core::BackendError) -> JsonRpcError {
-    rpc_error(-32000, e.to_string())
+    match e {
+        axon_core::BackendError::Capability { capability, reason, diagnostic } => JsonRpcError {
+            code: -32004,
+            message: format!("capability {} is unavailable: {reason}", capability.key()),
+            data: Some(json!({"kind":"capability-unavailable","capability":capability.key(),"reason":reason,"diagnostic":diagnostic})),
+        },
+        other => rpc_error(-32000, other.to_string()),
+    }
+}
+
+fn capability_unavailable(tool: &str, capability: &str, reason: &str) -> JsonRpcError {
+    JsonRpcError {
+        code: -32004,
+        message: format!("tool {tool} requires unavailable capability {capability}"),
+        data: Some(json!({"kind":"capability-unavailable","tool":tool,"capability":capability,"reason":reason})),
+    }
 }
 fn internal_error(e: serde_json::Error) -> JsonRpcError {
     rpc_error(-32603, e.to_string())
@@ -1163,8 +1172,6 @@ mod tests {
         for tool in [
             "save",
             "drag",
-            "wait_for_value",
-            "wait_for_stability",
             "permit",
         ] {
             let (_, capability) = EXCLUDED.iter().find(|(name, _)| *name == tool).unwrap();
