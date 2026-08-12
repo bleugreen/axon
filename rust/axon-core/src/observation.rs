@@ -44,7 +44,7 @@ fn hex_encode(bytes: &[u8]) -> String {
 }
 
 fn decode_component(value: &str) -> Option<Vec<u8>> {
-    if value.is_empty() || value.len() % 2 != 0 {
+    if value.is_empty() || !value.len().is_multiple_of(2) {
         return None;
     }
     value
