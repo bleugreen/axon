@@ -299,14 +299,24 @@ impl X11Session {
             .pixmap_formats
             .iter()
             .find(|format| format.depth == depth)
-            .ok_or_else(|| operation("decode X11 window pixels", "the window depth has no pixmap format"))?;
+            .ok_or_else(|| {
+                operation(
+                    "decode X11 window pixels",
+                    "the window depth has no pixmap format",
+                )
+            })?;
         let visual = setup
             .roots
             .iter()
             .flat_map(|screen| &screen.allowed_depths)
             .flat_map(|depth| &depth.visuals)
             .find(|visual| visual.visual_id == attributes.visual)
-            .ok_or_else(|| operation("decode X11 window pixels", "the window visual is not in the X11 setup"))?;
+            .ok_or_else(|| {
+                operation(
+                    "decode X11 window pixels",
+                    "the window visual is not in the X11 setup",
+                )
+            })?;
         let layout = PixelLayout {
             bits_per_pixel: format.bits_per_pixel,
             scanline_pad: format.scanline_pad,
@@ -889,7 +899,10 @@ fn decode_zpixmap(
     if bytes_per_pixel == 0 || bytes_per_pixel > 4 || layout.scanline_pad == 0 {
         return Err(operation(
             "decode X11 window pixels",
-            format!("unsupported {}-bit pixel layout with {}-bit scanline padding", layout.bits_per_pixel, layout.scanline_pad),
+            format!(
+                "unsupported {}-bit pixel layout with {}-bit scanline padding",
+                layout.bits_per_pixel, layout.scanline_pad
+            ),
         ));
     }
     let row_bits = usize::from(width) * usize::from(layout.bits_per_pixel);
@@ -899,7 +912,10 @@ fn decode_zpixmap(
     if data.len() != expected {
         return Err(operation(
             "decode X11 window pixels",
-            format!("expected {expected} bytes from the server pixel layout, received {}", data.len()),
+            format!(
+                "expected {expected} bytes from the server pixel layout, received {}",
+                data.len()
+            ),
         ));
     }
 
@@ -909,8 +925,8 @@ fn decode_zpixmap(
         }
         let shift = mask.trailing_zeros();
         let maximum = mask >> shift;
-        ((((pixel & mask) >> shift) as u64 * 255 + u64::from(maximum) / 2)
-            / u64::from(maximum)) as u8
+        ((((pixel & mask) >> shift) as u64 * 255 + u64::from(maximum) / 2) / u64::from(maximum))
+            as u8
     }
 
     let mut rgba = Vec::with_capacity(usize::from(width) * usize::from(height) * 4);
