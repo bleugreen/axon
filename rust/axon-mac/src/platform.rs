@@ -1,7 +1,8 @@
 use crate::{
     BackgroundPixelPointer, PixelDispatch, PixelDispatchError, PixelPlan, PixelTarget,
-    PointerTargetVerifier, VisualObservation, VisualObservationProvider,
+    PointerTargetVerifier, ReadableStateProvider, VisualObservation, VisualObservationProvider,
 };
+use serde_json::{Map, Value};
 
 #[path = "capture.rs"]
 mod window_capture;
@@ -33,6 +34,16 @@ const AX_VALUE_CGSIZE: i64 = 2;
 struct CGPoint {
     x: f64,
     y: f64,
+}
+
+impl ReadableStateProvider for MacBackend {
+    fn readable_state(&self, target: &SnapshotHandle) -> Result<Map<String, Value>, BackendError> {
+        let element = self.element(target)?;
+        Ok([("value", "AXValue"), ("title", "AXTitle"), ("description", "AXDescription"), ("identifier", "AXIdentifier"), ("help", "AXHelp")]
+            .into_iter()
+            .filter_map(|(field, attribute)| text_attribute(element, attribute).filter(|value| !value.is_empty()).map(|value| (field.into(), Value::String(value))))
+            .collect())
+    }
 }
 
 fn screenshot_restriction(

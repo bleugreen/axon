@@ -75,6 +75,9 @@ pub struct Router<B> {
     observations: HashMap<String, (Snapshot, Vec<SemanticElementName>)>,
     observation_sequence: u64,
 }
+pub trait ReadableStateProvider {
+    fn readable_state(&self, target: &SnapshotHandle) -> Result<Map<String, Value>, axon_core::BackendError>;
+}
 
 #[derive(Clone, Debug)]
 pub struct VisualObservation {
@@ -257,6 +260,7 @@ impl<
     B: PointerTargetVerifier
         + TextRecognitionProvider
         + VisualObservationProvider
+        + ReadableStateProvider
         + BackgroundPixelPointer,
 > Router<B>
 {
@@ -959,8 +963,8 @@ impl<
             })
             .transpose()?;
         let predicate = json!({predicate_kind: predicate_value});
-        let timeout = bounded_ms(params, "timeoutMs", 5_000, 60_000)?;
-        let interval = bounded_ms(params, "intervalMs", 100, 1_000)?;
+        let timeout = bounded_ms(params, "timeoutMs", 5_000, 0, 60_000)?;
+        let interval = bounded_ms(params, "intervalMs", 100, 10, timeout.as_millis().max(100) as u64)?;
         let started = Instant::now();
         let mut last_observed = None;
         let mut last_resolution = None;
@@ -968,19 +972,19 @@ impl<
             match self.resolve(params) {
                 Ok((handle, resolution)) => {
                     last_resolution = Some(resolution.clone());
-                    let observed = self.backend.read_value(&handle).map_err(backend_error)?;
+                    let observed = self.backend.readable_state(&handle).map_err(backend_error)?;
                     last_observed = observed.clone();
-                    let satisfied = observed
-                        .as_deref()
-                        .is_some_and(|value| match predicate_kind {
-                            "equals" => value == predicate_value,
-                            "contains" => value.contains(predicate_value),
-                            "matches" => regex.as_ref().is_some_and(|regex| regex.is_match(value)),
-                            _ => false,
-                        });
-                    if satisfied {
+                    let matched = ["value", "title", "description", "identifier", "help"]
+                        .into_iter().find_map(|field| observed.get(field).and_then(Value::as_str)
+                            .filter(|value| match predicate_kind {
+                                "equals" => *value == predicate_value,
+                                "contains" => value.to_lowercase().contains(&predicate_value.to_lowercase()),
+                                "matches" => regex.as_ref().is_some_and(|regex| regex.is_match(value)),
+                                _ => false,
+                            }).map(|value| json!({"field":field,"value":value})));
+                    if let Some(matched) = matched {
                         return Ok(
-                            json!({"wait":{"success":true,"status":"satisfied","predicate":predicate,"elapsedMs":started.elapsed().as_millis(),"matched":{"field":"value","value":observed},"lastObserved":{"value":observed},"resolution":resolution,"message":"wait_for_value predicate satisfied"}}),
+                            json!({"wait":{"success":true,"status":"satisfied","predicate":predicate,"elapsedMs":started.elapsed().as_millis(),"matched":matched,"lastObserved":observed,"resolution":resolution,"message":"wait_for_value predicate satisfied"}}),
                         );
                     }
                 }
@@ -988,13 +992,13 @@ impl<
                 Err(error) => return Err(error),
             }
             if started.elapsed() >= timeout {
-                let status = if last_observed.is_some() {
+                let status = if last_observed.as_ref().is_some_and(|state| !state.is_empty()) {
                     "predicate_timeout"
                 } else {
                     "target_unresolved_timeout"
                 };
                 return Ok(
-                    json!({"wait":{"success":false,"status":status,"predicate":predicate,"elapsedMs":started.elapsed().as_millis(),"matched":null,"lastObserved":last_observed.map(|value| json!({"value":value})),"resolution":last_resolution,"message":if status == "predicate_timeout" {"wait_for_value timed out before the predicate matched"} else {"wait_for_value timed out before the target resolved uniquely"}}}),
+                    json!({"wait":{"success":false,"status":status,"predicate":predicate,"elapsedMs":started.elapsed().as_millis(),"matched":null,"lastObserved":last_observed,"resolution":last_resolution,"message":if status == "predicate_timeout" {"wait_for_value timed out before the predicate matched"} else {"wait_for_value timed out before the target resolved uniquely"}}}),
                 );
             }
             thread::sleep(interval.min(timeout.saturating_sub(started.elapsed())));
@@ -1006,9 +1010,9 @@ impl<
         if app.name.is_none() && app.identifier.is_none() {
             return Err(rpc_error(-32602, "wait_for_stability requires app"));
         }
-        let timeout = bounded_ms(params, "timeoutMs", 5_000, 60_000)?;
-        let interval = bounded_ms(params, "intervalMs", 100, 1_000)?;
-        let stable_for = bounded_ms(params, "stableMs", 500, 60_000)?;
+        let timeout = bounded_ms(params, "timeoutMs", 5_000, 0, 60_000)?;
+        let interval = bounded_ms(params, "intervalMs", 100, 10, timeout.as_millis().max(100) as u64)?;
+        let stable_for = bounded_ms(params, "stableMs", 500, 0, 60_000)?;
         let condition = params
             .get("condition")
             .and_then(Value::as_str)
@@ -1132,6 +1136,7 @@ impl<
     B: PointerTargetVerifier
         + TextRecognitionProvider
         + VisualObservationProvider
+        + ReadableStateProvider
         + BackgroundPixelPointer,
 > ToolDispatcher for Router<B>
 {
@@ -1197,12 +1202,15 @@ fn bounded_ms(
     params: &Map<String, Value>,
     key: &str,
     default: u64,
+    minimum: u64,
     maximum: u64,
 ) -> Result<Duration, JsonRpcError> {
-    let value = params.get(key).and_then(Value::as_u64).unwrap_or(default);
-    if value == 0 {
-        return Err(rpc_error(-32602, format!("{key} must be positive")));
-    }
+    let value = match params.get(key) {
+        None | Some(Value::Null) => default,
+        Some(Value::Number(number)) => number.as_u64().ok_or_else(|| rpc_error(-32602, format!("{key} must be a non-negative integer")))?,
+        Some(_) => return Err(rpc_error(-32602, format!("{key} must be an integer"))),
+    };
+    if value < minimum { return Err(rpc_error(-32602, format!("{key} must be at least {minimum}"))); }
     Ok(Duration::from_millis(value.min(maximum)))
 }
 
