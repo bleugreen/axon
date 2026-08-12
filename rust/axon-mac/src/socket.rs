@@ -59,24 +59,6 @@ fn session_health() -> SessionHealth {
     if graphical {
         unsafe { CFRelease(session) };
     }
-    #[test]
-    fn health_bypasses_an_unavailable_backend_worker() {
-        let (router, receiver) = mpsc::channel();
-        drop(receiver);
-        let request = serde_json::to_string(&JsonRpcRequest::new(
-            Some(JsonRpcId::Integer(1)),
-            "health",
-            Some(json!({})),
-        ))
-        .unwrap();
-
-        let (response, stop) = dispatch(&request, &router, std::path::Path::new("/tmp/test.sock"));
-
-        assert!(!stop);
-        assert_eq!(response.pointer("/result/provenance/backend"), Some(&json!("rust-axon-mac")));
-        assert!(response.pointer("/result/provenance/processId").is_some());
-        assert!(response.pointer("/result/provenance/executablePath").is_some());
-    }
     let interactive = unsafe { getuid() } != 0 && graphical;
     if interactive && graphical {
         SessionHealth::usable(None)
@@ -394,6 +376,24 @@ mod tests {
             std::env::remove_var(SOCKET_ENV);
         }
         assert_eq!(path().unwrap(), PathBuf::from(DEFAULT_SOCKET_PATH));
+    }
+    #[test]
+    fn health_bypasses_an_unavailable_backend_worker() {
+        let (router, receiver) = mpsc::channel();
+        drop(receiver);
+        let request = serde_json::to_string(&JsonRpcRequest::new(
+            Some(JsonRpcId::Integer(1)),
+            "health",
+            Some(json!({})),
+        ))
+        .unwrap();
+
+        let (response, stop) = dispatch(&request, &router, std::path::Path::new("/tmp/test.sock"));
+
+        assert!(!stop);
+        assert_eq!(response.pointer("/result/provenance/backend"), Some(&json!("rust-axon-mac")));
+        assert!(response.pointer("/result/provenance/processId").is_some());
+        assert!(response.pointer("/result/provenance/executablePath").is_some());
     }
     #[test]
     fn ownership_lock_refuses_a_second_server() {
