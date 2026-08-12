@@ -146,7 +146,7 @@ try {
 
     Write-Host "`nAxon $Version installed successfully."
     Write-Host "CLI: $CliExecutable -> $Executable"
-    Write-Host 'The versioned install directory was added to your user PATH; open a new terminal to use axon-win.exe there.'
+    Write-Host 'The versioned install directory was added to your user PATH; open a new terminal to use axon.'
     Write-Host "`nRegister Axon with an MCP client:"
     Write-Host '  claude mcp add axon -- axon mcp'
     Write-Host '  codex mcp add axon -- axon mcp'
