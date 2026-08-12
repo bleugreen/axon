@@ -982,7 +982,7 @@ mod pipe {
         } else {
             let result = response.get("result").cloned().unwrap_or(Value::Null);
             Ok(
-                json!({"jsonrpc":"2.0","id":id,"result":{"content":[{"type":"text","text":serde_json::to_string(&result).unwrap()}],"structuredContent":result,"isError":false}}),
+                json!({"jsonrpc":"2.0","id":id,"result":axon_core::mcp_tool_result(result, false)}),
             )
         }
     }
