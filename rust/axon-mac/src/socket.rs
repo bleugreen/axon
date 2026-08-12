@@ -93,6 +93,10 @@ pub fn serve() -> io::Result<()> {
     let backend = MacBackend::new().map_err(|e| io::Error::other(e.to_string()))?;
     let reported = backend.capabilities().unwrap_or_default();
     let trusted = backend.accessibility_enabled();
+    let screen_recording_granted = reported
+        .iter()
+        .find(|info| info.capability == axon_core::Capability::Screenshot)
+        .is_some_and(|info| info.usable);
     let mut router = Router::new(backend);
     let listener = UnixListener::bind(&path)?;
     fs::set_permissions(&path, fs::Permissions::from_mode(0o600))?;
@@ -105,7 +109,14 @@ pub fn serve() -> io::Result<()> {
                 continue;
             }
         };
-        match answer(stream, &mut router, &reported, trusted, &path) {
+        match answer(
+            stream,
+            &mut router,
+            &reported,
+            trusted,
+            screen_recording_granted,
+            &path,
+        ) {
             Ok(true) => break,
             Ok(false) => {}
             Err(error) => eprintln!("axon-mac: dropped a client connection: {error}"),
@@ -126,6 +137,7 @@ fn answer(
     router: &mut Router<MacBackend>,
     reported: &[CapabilityInfo],
     trusted: bool,
+    screen_recording_granted: bool,
     endpoint: &std::path::Path,
 ) -> io::Result<bool> {
     stream.set_read_timeout(Some(REQUEST_TIMEOUT))?;
@@ -134,7 +146,14 @@ fn answer(
     if BufReader::new(stream.try_clone()?).read_line(&mut line)? == 0 {
         return Ok(false);
     }
-    let (response, stop) = dispatch(line.trim(), router, reported, trusted, endpoint);
+    let (response, stop) = dispatch(
+        line.trim(),
+        router,
+        reported,
+        trusted,
+        screen_recording_granted,
+        endpoint,
+    );
     writeln!(stream, "{}", serde_json::to_string(&response).unwrap())?;
     Ok(stop)
 }
@@ -143,6 +162,7 @@ fn dispatch(
     router: &mut Router<MacBackend>,
     reported: &[CapabilityInfo],
     trusted: bool,
+    screen_recording_granted: bool,
     endpoint: &std::path::Path,
 ) -> (Value, bool) {
     let request = match parse_request(line) {
@@ -159,6 +179,15 @@ fn dispatch(
             } else {
                 PermissionState::ungranted("accessibility", reason::ACCESSIBILITY_NOT_GRANTED, None)
             };
+            let screen_recording = if screen_recording_granted {
+                PermissionState::granted("screenRecording")
+            } else {
+                PermissionState::ungranted(
+                    "screenRecording",
+                    reason::SCREEN_RECORDING_NOT_GRANTED,
+                    None,
+                )
+            };
             let report = DaemonReport {
                 version: env!("CARGO_PKG_VERSION").into(),
                 platform: HealthPlatform::Macos,
@@ -166,7 +195,7 @@ fn dispatch(
                 process_id: std::process::id(),
                 endpoint: endpoint.display().to_string(),
                 session: SessionHealth::usable(None),
-                permissions: vec![permission],
+                permissions: vec![permission, screen_recording],
                 capabilities: CapabilityState::complete(reported),
             };
             (
