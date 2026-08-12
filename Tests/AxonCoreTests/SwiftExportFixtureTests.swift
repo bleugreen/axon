@@ -43,6 +43,10 @@ import Testing
     let json = try JSONEncoder.swiftFixtureEncoder.encode(
         translator.axnDocument(from: groups, arguments: arguments)
     )
+    if ProcessInfo.processInfo.environment["UPDATE_SWIFT_EXPORT_FIXTURES"] == "1" {
+        try Data(yaml.utf8).write(to: fixtureURL("swift-user-recording-v2.yaml"))
+        try json.write(to: fixtureURL("swift-user-recording-v2.json"))
+    }
     let expectedYAML = try fixtureData("swift-user-recording-v2.yaml")
     let expectedJSON = try fixtureData("swift-user-recording-v2.json")
 
@@ -120,12 +124,15 @@ private func fixtureTarget(name: String, locator: [String: JSONValue]) -> JSONVa
 }
 
 private func fixtureData(_ name: String) throws -> Data {
-    let url = URL(fileURLWithPath: #filePath)
+    try Data(contentsOf: fixtureURL(name))
+}
+
+private func fixtureURL(_ name: String) -> URL {
+    URL(fileURLWithPath: #filePath)
         .deletingLastPathComponent()
         .appendingPathComponent("../../rust/axon-core/fixtures")
         .appendingPathComponent(name)
         .standardizedFileURL
-    return try Data(contentsOf: url)
 }
 
 private extension JSONEncoder {
