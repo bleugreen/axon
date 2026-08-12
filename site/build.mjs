@@ -119,7 +119,7 @@ function page({ title, description, body, docsPage = false, docsSlug }) {
 </head>
 <body>
   <header class="site-header">
-    <a class="wordmark" href="/" aria-label="Axon home"><img src="/axon-icon.svg" alt=""><span>axn</span><i>.dev</i></a>
+    <a class="wordmark" href="/" aria-label="Axon home"><img src="/axon-icon.svg" alt=""><span class="wordmark-text"><b>axn</b><i>.dev</i></span></a>
     <nav aria-label="Primary"><a href="/docs/install/">Docs</a><a href="https://github.com/bleugreen/axon">GitHub</a></nav>
   </header>
   ${docsPage ? `<div class="docs-shell${docsSlug === 'cross-platform' ? ' docs-shell-wide' : ''}"><aside><div class="docs-label">Documentation</div>${nav}</aside><main class="prose">${body}</main></div>` : body}

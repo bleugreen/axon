@@ -51,7 +51,8 @@ footer {
   height: 27px;
   border-radius: 7px;
 }
-.wordmark span { color: var(--ink); }
+.wordmark-text { display: inline-flex; }
+.wordmark-text b { color: var(--ink); font-weight: inherit; }
 .wordmark i { color: var(--moss); font-style: normal; }
 .site-header nav { display: flex; gap: 30px; }
 .site-header nav a {
