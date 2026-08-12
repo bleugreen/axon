@@ -1,4 +1,4 @@
-use crate::Resolution;
+use crate::{Confidence, LocatorHealEvent, LocatorHealStatus, TargetResolution, healing_event, reviewed_yaml};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use std::collections::{HashMap, HashSet};
@@ -183,7 +183,7 @@ pub struct DispatchOutcome {
     #[serde(default)]
     pub error: Option<String>,
     #[serde(default)]
-    pub resolution: Option<Resolution>,
+    pub resolution: Option<TargetResolution>,
 }
 pub trait ToolDispatcher {
     /// Seed platform semantic resolution with locator evidence attached by the recorder.
@@ -198,6 +198,7 @@ pub trait ToolDispatcher {
     }
     fn dispatch(&mut self, tool: &str, params: &Map<String, Value>) -> DispatchOutcome;
     fn verify(&mut self, fact: &ExpectedFact) -> Result<(), String>;
+    fn verify_replay_locator(&mut self, _app: &str, _locator: &Value, _minimum: Confidence) -> bool { false }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -207,6 +208,10 @@ pub struct RunOptions {
     pub dry_run: Option<bool>,
     #[serde(default)]
     pub continue_on_error: Option<bool>,
+    #[serde(default)]
+    pub healed_path: Option<String>,
+    #[serde(default)]
+    pub source_path: Option<String>,
 }
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -215,7 +220,13 @@ pub struct RunResult {
     pub dry_run: bool,
     pub continue_on_error: bool,
     pub trace: Vec<TraceEntry>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub heal: Option<HealingSummary>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub healed_path: Option<String>,
 }
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct HealingSummary { pub count: usize, pub events: Vec<LocatorHealEvent> }
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TraceEntry {
@@ -229,7 +240,10 @@ pub struct TraceEntry {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub resolution: Option<Resolution>,
+    #[serde(rename = "targetResolution")]
+    pub resolution: Option<TargetResolution>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub heal: Option<LocatorHealEvent>,
 }
 
 pub struct AxnRunner<'a, D: ToolDispatcher> {
