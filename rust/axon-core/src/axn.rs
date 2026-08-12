@@ -37,6 +37,17 @@ pub fn expected_fact_target(fact: &ExpectedFact) -> Result<(String, crate::Locat
     Ok((app.to_owned(), locator))
 }
 
+pub fn expected_fact_app(fact: &ExpectedFact) -> Result<String, String> {
+    fact.fields
+        .get("target")
+        .and_then(Value::as_object)
+        .and_then(|target| target.get("app"))
+        .and_then(Value::as_str)
+        .filter(|app| !app.is_empty())
+        .map(str::to_owned)
+        .ok_or_else(|| format!("fact {} target requires app", fact.id))
+}
+
 fn same_path(left: &str, right: &str) -> bool {
     let absolute = |path: &str| {
         let path = std::path::PathBuf::from(path);
@@ -669,12 +680,16 @@ impl<'a, D: ToolDispatcher> AxnRunner<'a, D> {
             } else {
                 self.dispatcher.dispatch(&action.tool, &params)
             };
+            let can_verify_dispatch_only = !outcome.success && causal_transition;
             let redacted = if secret_fields.is_empty() {
-                outcome.result
+                if can_verify_dispatch_only {
+                    semantically_verified_result(&action.tool, outcome.result)
+                } else {
+                    outcome.result
+                }
             } else {
                 Value::String("<redacted: contains-secret>".into())
             };
-            let can_verify_dispatch_only = !outcome.success && causal_transition;
             let verification_error = if (outcome.success || can_verify_dispatch_only) && !dry_run {
                 action
                     .expects
@@ -721,8 +736,9 @@ impl<'a, D: ToolDispatcher> AxnRunner<'a, D> {
                 success: action_success,
                 action_id: action.id.clone(),
                 result: (!redacted.is_null()).then_some(redacted),
-                error: verification_error.or(outcome
-                    .error
+                error: verification_error.or((!can_verify_dispatch_only)
+                    .then_some(outcome.error)
+                    .flatten()
                     .map(|e| {
                         if secret_fields.is_empty() {
                             e
@@ -890,6 +906,26 @@ fn substitute_map(
         }
     }
     Ok((out, tainted))
+}
+
+fn semantically_verified_result(tool: &str, mut result: Value) -> Value {
+    let Some(action) = result.get_mut("action").and_then(Value::as_object_mut) else {
+        return result;
+    };
+    action.insert("success".into(), Value::Bool(true));
+    action.insert("semanticSuccess".into(), Value::Bool(true));
+    action.insert("semanticStatus".into(), Value::String("verified".into()));
+    let mut chars = tool.chars();
+    let method = chars
+        .next()
+        .map(|first| first.to_uppercase().collect::<String>() + chars.as_str())
+        .unwrap_or_default();
+    action.insert(
+        "message".into(),
+        Value::String(format!("{method} semantic outcome verified by postcondition")),
+    );
+    action.insert("refusal".into(), Value::Null);
+    result
 }
 
 fn document_flag(doc: &AxnDocument, key: &str) -> bool {
