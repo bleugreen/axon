@@ -154,7 +154,7 @@ fn cold_resolution_records_outcomes_and_retained_evidence_bypasses_chart() {
 #[test]
 fn duplicate_chart_seeds_remain_ambiguous_even_when_only_one_matches() {
     let root = directory("duplicates");
-    let observed = snapshot("old", vec![node("Share", Some("a")), node("Share", Some("b"))]);
+    let observed = snapshot("old", vec![node("Share", None), node("Share", None)]);
     let name = name_for(&observed, "Share");
     let mut store = ChartStore::new(root.clone());
     store.confirm_capture("com.example.app", &observed, None, 10);
