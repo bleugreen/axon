@@ -369,6 +369,13 @@ footer {
   }
   .docs-shell aside a { margin: 0; white-space: nowrap; }
   .docs-label { display: none; }
+  .docs-shell-wide .prose table {
+    display: block;
+    table-layout: auto;
+  }
+  .docs-shell-wide .prose th,
+  .docs-shell-wide .prose td { min-width: 150px; }
+  .docs-shell-wide .prose th { position: static; }
 }
 @media (max-width: 480px) {
   .hero h1 { font-size: 52px; }
