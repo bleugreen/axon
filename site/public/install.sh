@@ -80,10 +80,9 @@ LINK_PATH="$BIN_DIR/axon"
 MARKER="$INSTALL_DIR/.axon-install-complete"
 CLI="$INSTALL_DIR/$RELATIVE_CLI"
 
+ALREADY_INSTALLED=0
 if [ -f "$MARKER" ] && [ -x "$CLI" ]; then
-  printf 'Axon %s is already installed at %s (%s).\n' "$VERSION" "$INSTALL_DIR" "$PLATFORM"
-  printf 'CLI: %s\n' "$LINK_PATH"
-  exit 0
+  ALREADY_INSTALLED=1
 fi
 
 case "$ARCHIVE_KIND" in
@@ -98,55 +97,65 @@ else
   fail "neither shasum nor sha256sum was found; install one and run this installer again"
 fi
 
-TMP_DIR="$(mktemp -d 2>/dev/null)" || fail "could not create a temporary directory"
-cleanup() {
-  rm -rf "$TMP_DIR"
-}
-trap cleanup EXIT HUP INT TERM
+if [ "$ALREADY_INSTALLED" -eq 0 ]; then
+  TMP_DIR="$(mktemp -d 2>/dev/null)" || fail "could not create a temporary directory"
+  cleanup() {
+    rm -rf "$TMP_DIR"
+  }
+  trap cleanup EXIT HUP INT TERM
 
-ARCHIVE_PATH="$TMP_DIR/$ARCHIVE"
-CHECKSUM_PATH="$ARCHIVE_PATH.sha256"
-BASE_URL="$RELEASES_URL/v$VERSION"
-printf 'Downloading Axon %s for %s...\n' "$VERSION" "$PLATFORM"
-curl -fL --retry 3 --output "$ARCHIVE_PATH" "$BASE_URL/$ARCHIVE" ||
-  fail "could not download $ARCHIVE; confirm that version $VERSION has a $PLATFORM release at $BASE_URL"
-curl -fL --retry 3 --output "$CHECKSUM_PATH" "$BASE_URL/$ARCHIVE.sha256" ||
-  fail "could not download $ARCHIVE.sha256; the archive was not installed"
+  ARCHIVE_PATH="$TMP_DIR/$ARCHIVE"
+  CHECKSUM_PATH="$ARCHIVE_PATH.sha256"
+  BASE_URL="$RELEASES_URL/v$VERSION"
+  printf 'Downloading Axon %s for %s...\n' "$VERSION" "$PLATFORM"
+  curl -fL --retry 3 --output "$ARCHIVE_PATH" "$BASE_URL/$ARCHIVE" ||
+    fail "could not download $ARCHIVE; confirm that version $VERSION has a $PLATFORM release at $BASE_URL"
+  curl -fL --retry 3 --output "$CHECKSUM_PATH" "$BASE_URL/$ARCHIVE.sha256" ||
+    fail "could not download $ARCHIVE.sha256; the archive was not installed"
 
-EXPECTED_SHA="$(awk 'NR == 1 { print $1 }' "$CHECKSUM_PATH")"
-case "$EXPECTED_SHA" in
-  '' | *[!0-9A-Fa-f]*) fail "the published checksum for $ARCHIVE is malformed; the archive was not installed" ;;
-esac
-[ "${#EXPECTED_SHA}" -eq 64 ] || fail "the published checksum for $ARCHIVE is malformed; the archive was not installed"
-if [ "$SHA_COMMAND" = shasum ]; then
-  ACTUAL_SHA="$(shasum -a 256 "$ARCHIVE_PATH" | awk '{ print $1 }')"
+  EXPECTED_SHA="$(awk 'NR == 1 { print $1 }' "$CHECKSUM_PATH")"
+  case "$EXPECTED_SHA" in
+    '' | *[!0-9A-Fa-f]*) fail "the published checksum for $ARCHIVE is malformed; the archive was not installed" ;;
+  esac
+  [ ""${#EXPECTED_SHA}"" -eq 64 ] || fail "the published checksum for $ARCHIVE is malformed; the archive was not installed"
+  if [ "$SHA_COMMAND" = shasum ]; then
+    ACTUAL_SHA="$(shasum -a 256 "$ARCHIVE_PATH" | awk '{ print $1 }')"
+  else
+    ACTUAL_SHA="$(sha256sum "$ARCHIVE_PATH" | awk '{ print $1 }')"
+  fi
+  [ "$ACTUAL_SHA" = "$EXPECTED_SHA" ] || fail "checksum verification failed for $ARCHIVE; expected $EXPECTED_SHA but downloaded $ACTUAL_SHA"
+  printf 'Verified SHA-256: %s\n' "$ACTUAL_SHA"
+
+  EXTRACT_DIR="$TMP_DIR/extracted"
+  mkdir -p "$EXTRACT_DIR"
+  if [ "$ARCHIVE_KIND" = zip ]; then
+    unzip -q "$ARCHIVE_PATH" -d "$EXTRACT_DIR" || fail "could not unpack $ARCHIVE with unzip"
+  else
+    tar -xzf "$ARCHIVE_PATH" -C "$EXTRACT_DIR" || fail "could not unpack $ARCHIVE with tar"
+  fi
+  SOURCE_DIR="$EXTRACT_DIR/$CONTENT_DIR"
+  [ -d "$SOURCE_DIR" ] || fail "$ARCHIVE did not contain the expected directory $CONTENT_DIR"
+  [ -x "$SOURCE_DIR/$RELATIVE_CLI" ] || fail "$ARCHIVE did not contain the expected executable $RELATIVE_CLI"
+
+  STAGED_INSTALL="$INSTALL_DIR.installing"
+  rm -rf "$STAGED_INSTALL" || fail "could not clear incomplete staging directory $STAGED_INSTALL"
+  mkdir -p "$STAGED_INSTALL" || fail "could not create staging directory $STAGED_INSTALL"
+  cp -R "$SOURCE_DIR"/. "$STAGED_INSTALL"/ || fail "could not stage Axon beside permanent install directory $INSTALL_DIR"
+  [ -x "$STAGED_INSTALL/$RELATIVE_CLI" ] || fail "the staged CLI is not executable"
+  if [ -e "$INSTALL_DIR" ]; then
+    rm -rf "$INSTALL_DIR" || fail "could not replace incomplete install directory $INSTALL_DIR"
+  fi
+  mv "$STAGED_INSTALL" "$INSTALL_DIR" || fail "could not move the verified install into permanent path $INSTALL_DIR"
+  printf '%s\n' "$VERSION" > "$MARKER" || fail "could not write installation marker at $MARKER"
 else
-  ACTUAL_SHA="$(sha256sum "$ARCHIVE_PATH" | awk '{ print $1 }')"
+  printf 'Axon %s is already installed at %s; reconciling daemon and PATH state.\n' "$VERSION" "$INSTALL_DIR"
 fi
-[ "$ACTUAL_SHA" = "$EXPECTED_SHA" ] || fail "checksum verification failed for $ARCHIVE; expected $EXPECTED_SHA but downloaded $ACTUAL_SHA"
-printf 'Verified SHA-256: %s\n' "$ACTUAL_SHA"
-
-EXTRACT_DIR="$TMP_DIR/extracted"
-mkdir -p "$EXTRACT_DIR"
-if [ "$ARCHIVE_KIND" = zip ]; then
-  unzip -q "$ARCHIVE_PATH" -d "$EXTRACT_DIR" || fail "could not unpack $ARCHIVE with unzip"
-else
-  tar -xzf "$ARCHIVE_PATH" -C "$EXTRACT_DIR" || fail "could not unpack $ARCHIVE with tar"
-fi
-SOURCE_DIR="$EXTRACT_DIR/$CONTENT_DIR"
-[ -d "$SOURCE_DIR" ] || fail "$ARCHIVE did not contain the expected directory $CONTENT_DIR"
-[ -x "$SOURCE_DIR/$RELATIVE_CLI" ] || fail "$ARCHIVE did not contain the expected executable $RELATIVE_CLI"
-
-mkdir -p "$INSTALL_DIR" || fail "could not create permanent install directory $INSTALL_DIR"
-cp -R "$SOURCE_DIR"/. "$INSTALL_DIR"/ || fail "could not copy Axon into permanent install directory $INSTALL_DIR"
-[ -x "$CLI" ] || fail "the installed CLI is not executable at $CLI"
 
 printf 'Registering the daemon from permanent path %s...\n' "$CLI"
 "$CLI" daemon install
 
 mkdir -p "$BIN_DIR" || fail "could not create PATH directory $BIN_DIR"
 ln -sfn "$CLI" "$LINK_PATH" || fail "could not link $LINK_PATH to $CLI"
-printf '%s\n' "$VERSION" > "$MARKER" || fail "installation succeeded but its completion marker could not be written at $MARKER"
 
 printf '\nAxon %s installed successfully.\n' "$VERSION"
 printf 'CLI: %s -> %s\n' "$LINK_PATH" "$CLI"
