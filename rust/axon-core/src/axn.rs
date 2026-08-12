@@ -33,6 +33,10 @@ fn validate_replay_contract(doc: &AxnDocument) -> Result<(), AxnError> {
         let suffix = obsolete.map(|(i, v)| format!("; actions[{i}] obsolete target {v}")).unwrap_or_default();
         return Err(AxnError::Invalid(format!(".axn version {} is not replayable; version 1 targets are obsolete and must be re-recorded or edited as version 2{suffix}", doc.version)));
     }
+    pub fn with_healed_output(mut self, source_path: Option<String>, healed_path: String) -> Self {
+        self.healed_output = Some((source_path, healed_path));
+        self
+    }
     for (index, action) in doc.actions.iter().enumerate() {
         if action.tool.trim().is_empty() { return Err(AxnError::Invalid(format!("actions[{index}] requires tool"))); }
         for key in ["target", "from", "to"] { if let Some(v) = action.params.get(key) { validate_target(v, &format!("actions[{index}].{key}"))?; } }
@@ -261,10 +265,6 @@ pub struct RunOptions {
     pub dry_run: Option<bool>,
     #[serde(default)]
     pub continue_on_error: Option<bool>,
-    #[serde(default)]
-    pub healed_path: Option<String>,
-    #[serde(default)]
-    pub source_path: Option<String>,
 }
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -302,12 +302,14 @@ pub struct TraceEntry {
 pub struct AxnRunner<'a, D: ToolDispatcher> {
     dispatcher: &'a mut D,
     sources: HashMap<String, Box<dyn ArgumentSourceResolver + 'a>>,
+    healed_output: Option<(Option<String>, String)>,
 }
 impl<'a, D: ToolDispatcher> AxnRunner<'a, D> {
     pub fn new(dispatcher: &'a mut D) -> Self {
         Self {
             dispatcher,
             sources: HashMap::new(),
+            healed_output: None,
         }
     }
     pub fn with_source(
@@ -333,8 +335,7 @@ impl<'a, D: ToolDispatcher> AxnRunner<'a, D> {
         let continue_on_error = options
             .continue_on_error
             .unwrap_or_else(|| document_flag(doc, "continueOnError"));
-        let healed_path = options.healed_path.clone();
-        let source_path = options.source_path.clone();
+        let healed_output = self.healed_output.clone();
         let mut trace = Vec::new();
         let mut heal_events = Vec::new();
         let mut facts: HashMap<String, ExpectedFact> = HashMap::new();
@@ -446,7 +447,7 @@ impl<'a, D: ToolDispatcher> AxnRunner<'a, D> {
             }
         }
         let written_healed_path = if !dry_run && heal_events.iter().any(|e| e.status == LocatorHealStatus::Proposed) {
-            if let Some(path) = healed_path {
+            if let Some((source_path, path)) = healed_output {
                 if source_path.as_ref().is_some_and(|source| same_path(source, &path)) {
                     return Err(AxnError::Invalid("healedPath must differ from the source path".into()));
                 }
