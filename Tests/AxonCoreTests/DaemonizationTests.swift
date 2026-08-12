@@ -122,7 +122,7 @@ import Testing
             method: "look",
             params: .object([
                 "app": .string("com.example.App"),
-                "screenshot": .bool(false),
+                "screenshot": .bool(true),
                 "tree": .bool(true)
             ])
         )

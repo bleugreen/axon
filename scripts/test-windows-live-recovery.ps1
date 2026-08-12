@@ -493,7 +493,11 @@ function Invoke-AxonMcp {
     @{
         result = @{
             isError = $false
-            structuredContent = @{ id = 'snapshot-1'; app = @{ windows = @(@{ root = @{ role = 'Window' } }) } }
+            structuredContent = @{
+                id = 'snapshot-1'
+                app = @{ windows = @(@{ root = @{ role = 'Window' } }) }
+                screenshot = @{ mediaType = 'image/png'; base64Data = 'cG5n'; width = 800; height = 600 }
+            }
         }
     } | ConvertTo-Json -Depth 10 | ConvertFrom-Json -Depth 100
 }
@@ -959,13 +963,17 @@ Test-Scenario "probe: the daemon's own console window is not evidence about a de
         @{
             result = @{
                 isError = $false
-                structuredContent = @{ id = 'snapshot-1'; app = @{ windows = @(@{ root = @{ role = 'Window' } }) } }
+                structuredContent = @{
+                    id = 'snapshot-1'
+                    app = @{ windows = @(@{ root = @{ role = 'Window' } }) }
+                    screenshot = @{ mediaType = 'image/png'; base64Data = 'cG5n'; width = 800; height = 600 }
+                }
             }
         } | ConvertTo-Json -Depth 10 | ConvertFrom-Json -Depth 100
     }
     $result = Invoke-StageUnderTest -Name 'probe'
     Check 'the stage fails' $result.Failed
-    Check 'it says what it looked at' ($result.Error -match 'no Window root from any application this lane did not start') $result.Error
+    Check 'it says what it looked at' ($result.Error -match 'no Window root with a downscaled PNG from any application this lane did not start') $result.Error
 }
 
 Test-Scenario 'probe: a registration that moved during the run fails the stage' {
