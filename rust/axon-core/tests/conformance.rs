@@ -544,7 +544,7 @@ fn changed_captures_before_dispatch_and_dispatch_only_can_succeed_causally() {
     };
     let result = AxnRunner::new(&mut dispatcher).run(
         &doc, &Map::new(),
-        RunOptions { dry_run: Some(false), continue_on_error: Some(false), healed_path: None, source_path: None },
+        RunOptions { dry_run: Some(false), continue_on_error: Some(false) },
     ).unwrap();
     assert!(result.success);
     assert!(result.trace[0].success);
@@ -567,7 +567,7 @@ fn requires_reverifies_the_established_fact_before_dispatch() {
     };
     let result = AxnRunner::new(&mut dispatcher).run(
         &doc, &Map::new(),
-        RunOptions { dry_run: Some(false), continue_on_error: Some(false), healed_path: None, source_path: None },
+        RunOptions { dry_run: Some(false), continue_on_error: Some(false) },
     ).unwrap();
     assert!(!result.success);
     assert_eq!(dispatcher.dispatched, 1);
