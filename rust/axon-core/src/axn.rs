@@ -149,11 +149,8 @@ impl AxnCodec {
         let doc: AxnDocument = serde_json::from_str(source)
             .or_else(|_| serde_yaml::from_str(source))
             .map_err(|e| AxnError::Invalid(e.to_string()))?;
-        if doc.version != 1 {
-            return Err(AxnError::Invalid(format!(
-                "unsupported version {}",
-                doc.version
-            )));
+        if !matches!(doc.version, 1 | 2) {
+            return Err(AxnError::Invalid(format!("unsupported version {}", doc.version)));
         }
         Ok(doc)
     }

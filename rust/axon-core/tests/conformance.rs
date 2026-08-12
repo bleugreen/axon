@@ -384,7 +384,7 @@ impl ToolDispatcher for NoDispatch {
 
 #[test]
 fn document_flags_drive_dry_run_without_backend_verification() {
-    let mut doc = AxnCodec::parse(include_str!("../fixtures/workflow.axn")).unwrap();
+    let mut doc = replayable_workflow();
     doc.flags.insert("dryRun".into(), Value::Bool(true));
     doc.flags
         .insert("continueOnError".into(), Value::Bool(true));
