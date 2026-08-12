@@ -75,6 +75,24 @@ pub struct Router<B> {
     observations: HashMap<String, (Snapshot, Vec<SemanticElementName>)>,
     observation_sequence: u64,
 }
+
+/// Replay targets may carry recording-only locator evidence. Native tool decoding receives only
+/// the primitive semantic target; the shared runner remains responsible for registering the
+/// attached locator before crossing this boundary.
+fn primitive_dispatch_params(params: &Map<String, Value>) -> Map<String, Value> {
+    let mut params = params.clone();
+    for key in ["target", "from", "to"] {
+        let Some(Value::Object(target)) = params.get_mut(key) else {
+            continue;
+        };
+        if target.get("app").and_then(Value::as_str).is_some()
+            && target.get("name").and_then(Value::as_str).is_some()
+        {
+            target.retain(|field, _| field == "app" || field == "name");
+        }
+    }
+    params
+}
 pub trait ReadableStateProvider {
     fn readable_state(
         &self,
@@ -1172,7 +1190,8 @@ impl<
 > ToolDispatcher for Router<B>
 {
     fn dispatch(&mut self, tool: &str, params: &Map<String, Value>) -> DispatchOutcome {
-        match self.dispatch_tool(tool, params) {
+        let params = primitive_dispatch_params(params);
+        match self.dispatch_tool(tool, &params) {
             Ok(result) => DispatchOutcome {
                 success: result
                     .get("success")
@@ -1342,6 +1361,23 @@ pub fn parse_request(line: &str) -> Result<JsonRpcRequest, JsonRpcResponse> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn replay_metadata_is_stripped_from_semantic_targets_before_native_dispatch() {
+        let params = json!({
+            "target": {"app":"Notes", "name":"save", "locator":{"role":"button"}, "recordedAt":12},
+            "from": {"x":1, "y":2, "recordedAt":12},
+            "value": "draft"
+        })
+        .as_object()
+        .unwrap()
+        .clone();
+
+        let primitive = primitive_dispatch_params(&params);
+        assert_eq!(primitive["target"], json!({"app":"Notes", "name":"save"}));
+        assert_eq!(primitive["from"], params["from"]);
+        assert_eq!(primitive["value"], "draft");
+    }
 
     #[test]
     fn excluded_tools_are_capability_errors_before_dispatch() {

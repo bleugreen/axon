@@ -59,6 +59,24 @@ pub struct Router<B> {
     semantic_names: SemanticNameRegistry,
 }
 
+/// Replay targets may carry recording-only locator evidence. Native tool decoding receives only
+/// the primitive semantic target; the shared runner remains responsible for registering the
+/// attached locator before crossing this boundary.
+fn primitive_dispatch_params(params: &Map<String, Value>) -> Map<String, Value> {
+    let mut params = params.clone();
+    for key in ["target", "from", "to"] {
+        let Some(Value::Object(target)) = params.get_mut(key) else {
+            continue;
+        };
+        if target.get("app").and_then(Value::as_str).is_some()
+            && target.get("name").and_then(Value::as_str).is_some()
+        {
+            target.retain(|field, _| field == "app" || field == "name");
+        }
+    }
+    params
+}
+
 #[derive(Clone, Debug)]
 pub struct VisualObservation {
     pub screenshot: Option<axon_core::Screenshot>,
@@ -953,7 +971,8 @@ impl<
 > ToolDispatcher for Router<B>
 {
     fn dispatch(&mut self, tool: &str, params: &Map<String, Value>) -> DispatchOutcome {
-        match self.dispatch_tool(tool, params) {
+        let params = primitive_dispatch_params(params);
+        match self.dispatch_tool(tool, &params) {
             Ok(result) => DispatchOutcome {
                 success: true,
                 result,
@@ -1088,6 +1107,23 @@ mod tests {
         Screenshot, Window,
     };
     use std::{cell::RefCell, rc::Rc, time::Duration};
+
+    #[test]
+    fn replay_metadata_is_stripped_from_semantic_targets_before_native_dispatch() {
+        let params = json!({
+            "target": {"app":"Notepad", "name":"save", "locator":{"role":"button"}, "recordedAt":12},
+            "from": {"x":1, "y":2, "recordedAt":12},
+            "value": "draft"
+        })
+        .as_object()
+        .unwrap()
+        .clone();
+
+        let primitive = primitive_dispatch_params(&params);
+        assert_eq!(primitive["target"], json!({"app":"Notepad", "name":"save"}));
+        assert_eq!(primitive["from"], params["from"]);
+        assert_eq!(primitive["value"], "draft");
+    }
 
     #[derive(Clone)]
     struct FakeBackend {

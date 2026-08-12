@@ -19,9 +19,11 @@ import Testing
 
     let yaml = try translator.yaml(from: groups)
     let json = try JSONEncoder.swiftFixtureEncoder.encode(translator.axnDocument(from: groups))
+    let expectedYAML = try fixtureData("swift-user-recording-v2.yaml")
+    let expectedJSON = try fixtureData("swift-user-recording-v2.json")
 
-    #expect(Data(yaml.utf8) == try fixtureData("swift-user-recording-v2.yaml"))
-    #expect(json == try fixtureData("swift-user-recording-v2.json"))
+    #expect(Data(yaml.utf8) == expectedYAML)
+    #expect(json == expectedJSON)
 }
 
 @Test func actionHistoryExportMatchesPinnedSwiftV2Fixture() throws {
@@ -48,9 +50,10 @@ import Testing
 
     let export = try history.exportScript(sessionID: "swift-fixture")
 
+    let expectedYAML = try fixtureData("swift-action-history-v2.yaml")
     #expect(export.actionCount == 1)
     #expect(export.recordCount == 1)
-    #expect(Data(export.script.utf8) == try fixtureData("swift-action-history-v2.yaml"))
+    #expect(Data(export.script.utf8) == expectedYAML)
 }
 
 private func fixtureData(_ name: String) throws -> Data {

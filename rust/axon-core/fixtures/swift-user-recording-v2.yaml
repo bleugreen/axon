@@ -1,34 +1,34 @@
 version: 2
 actions:
-  - id: a001
-    tool: type
+- id: a001
+  tool: type
+  target:
+    app: Example
+    locator:
+      identifier: search
+      role: AXTextField
+    name: search-field
+  value: Axon
+  expects:
+  - id: a001.value.0
+    kind: value
+    state:
+      value:
+        contains: Axon
     target:
       app: Example
       locator:
         identifier: search
         role: AXTextField
       name: search-field
-    value: Axon
-    expects:
-      - id: a001.value.0
-        kind: value
-        target:
-          app: Example
-          locator:
-            identifier: search
-            role: AXTextField
-          name: search-field
-        state:
-          value:
-            contains: Axon
-  - id: a002
-    tool: keyboard
-    app: Example
-    key: Return
-    requires:
-      - a001.value.0
-    expects:
-      - id: a002.changed.0
-        kind: changed
-        target:
-          app: Example
+- id: a002
+  tool: keyboard
+  app: Example
+  key: Return
+  requires:
+  - a001.value.0
+  expects:
+  - id: a002.changed.0
+    kind: changed
+    target:
+      app: Example
