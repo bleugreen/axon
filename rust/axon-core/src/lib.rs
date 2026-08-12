@@ -3,6 +3,7 @@
 pub mod axn;
 pub mod backend;
 pub mod delivery;
+pub mod diff;
 pub mod health;
 pub mod lifecycle;
 pub mod locator;
@@ -15,6 +16,7 @@ pub mod text;
 pub use axn::*;
 pub use backend::*;
 pub use delivery::*;
+pub use diff::*;
 pub use health::*;
 pub use lifecycle::*;
 pub use locator::*;
