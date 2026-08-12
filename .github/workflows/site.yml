@@ -36,7 +36,7 @@ jobs:
           cache-dependency-path: site/package-lock.json
 
       - name: Check Cloudflare credentials
-        if: github.event_name == 'push'
+        if: github.event_name != 'pull_request'
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
@@ -58,7 +58,7 @@ jobs:
         run: npm run build
 
       - name: Deploy to Cloudflare Pages
-        if: github.event_name == 'push'
+        if: github.event_name != 'pull_request'
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
