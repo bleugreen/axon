@@ -203,7 +203,7 @@ async function build() {
 }
 
 function serve() {
-  const types = { '.css': 'text/css; charset=utf-8', '.html': 'text/html; charset=utf-8', '.sh': 'text/plain; charset=utf-8', '.ps1': 'text/plain; charset=utf-8' };
+  const types = { '.css': 'text/css; charset=utf-8', '.html': 'text/html; charset=utf-8', '.svg': 'image/svg+xml', '.sh': 'text/plain; charset=utf-8', '.ps1': 'text/plain; charset=utf-8' };
   const server = createServer(async (request, response) => {
     const pathname = decodeURIComponent(new URL(request.url, 'http://localhost').pathname);
     let file = join(outputRoot, pathname);
