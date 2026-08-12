@@ -46,19 +46,6 @@ fn screenshot_restriction(
     } else {
         None
     }
-
-    #[test]
-    fn screenshot_capability_requires_both_native_permissions() {
-        assert_eq!(
-            screenshot_restriction(false, true),
-            Some("Accessibility permission is not granted")
-        );
-        assert_eq!(
-            screenshot_restriction(true, false),
-            Some("Screen Recording permission is not granted")
-        );
-        assert_eq!(screenshot_restriction(true, true), None);
-    }
 }
 
 #[repr(C)]
@@ -599,5 +586,17 @@ mod tests {
                 .unwrap()
                 .usable
         );
+    }
+    #[test]
+    fn screenshot_capability_requires_both_native_permissions() {
+        assert_eq!(
+            screenshot_restriction(false, true),
+            Some("Accessibility permission is not granted")
+        );
+        assert_eq!(
+            screenshot_restriction(true, false),
+            Some("Screen Recording permission is not granted")
+        );
+        assert_eq!(screenshot_restriction(true, true), None);
     }
 }
