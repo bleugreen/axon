@@ -169,8 +169,13 @@ struct SessionFacts {
 /// that works while its proof quietly does not is the precise failure this contract exists to
 /// refuse.
 fn input_restriction(facts: SessionFacts) -> Option<&'static str> {
+    screenshot_restriction(facts).or_else(|| (!facts.xtest).then_some(NO_XTEST))
+}
+
+/// Why an application window cannot be located and captured in this session.
+fn screenshot_restriction(facts: SessionFacts) -> Option<&'static str> {
     if facts.wayland {
-        return Some(WAYLAND_SESSION);
+        return Some("a desktop portal authorization flow is required");
     }
     if !facts.x_display {
         return Some(NO_X_DISPLAY);
@@ -178,14 +183,21 @@ fn input_restriction(facts: SessionFacts) -> Option<&'static str> {
     if !facts.window_manager {
         return Some(NO_WINDOW_MANAGER);
     }
-    if !facts.xtest {
-        return Some(NO_XTEST);
-    }
     None
 }
 
 /// Observes the session once, at startup, and classifies it.
 fn input_session() -> InputSession {
+    classify_x11_session(input_restriction)
+}
+
+fn screenshot_session() -> InputSession {
+    classify_x11_session(screenshot_restriction)
+}
+
+fn classify_x11_session(
+    restriction: fn(SessionFacts) -> Option<&'static str>,
+) -> InputSession {
     // Asked before an X connection is attempted, because a Wayland session is one whether or not
     // XWayland happens to answer, and what XWayland could answer is about X11 clients alone.
     let wayland = std::env::var_os("WAYLAND_DISPLAY").is_some();
@@ -196,7 +208,7 @@ fn input_session() -> InputSession {
         window_manager: x11.as_ref().is_some_and(X11Session::supports_ewmh),
         xtest: x11.as_ref().is_some_and(X11Session::supports_xtest),
     };
-    match (input_restriction(facts), x11) {
+    match (restriction(facts), x11) {
         (None, Some(session)) => InputSession::Available(Box::new(session)),
         (Some(reason), _) => InputSession::Unavailable(reason),
         // Unreachable: no session is exactly what NO_X_DISPLAY reports.
@@ -207,7 +219,7 @@ fn input_session() -> InputSession {
 pub struct LinuxBackend {
     tx: mpsc::Sender<Command>,
     input: InputSession,
-    screenshot: Option<Box<X11Session>>,
+    screenshot: InputSession,
     /// AT-SPI identity to process id, read on demand and refreshed when stale or missed.
     identities: Vec<AppIdentity>,
     identities_read: Option<Instant>,
@@ -244,17 +256,12 @@ impl LinuxBackend {
         ready_rx
             .recv()
             .map_err(|_| operation("start AT-SPI actor", "actor exited"))??;
-        // A missing or unusable X11 session is an ordinary state, not a startup failure: capture
-        // and the semantic rung run on AT-SPI alone, and only global input is withheld.
-        let screenshot = std::env::var_os("WAYLAND_DISPLAY")
-            .is_none()
-            .then(X11Session::connect)
-            .flatten()
-            .map(Box::new);
+        // Missing X11 mechanisms are ordinary states, not startup failures: the semantic rung runs
+        // on AT-SPI alone, while health and look retain the precise restriction for each mechanism.
         Ok(Self {
             tx,
             input: input_session(),
-            screenshot,
+            screenshot: screenshot_session(),
             identities: Vec::new(),
             identities_read: None,
         })
@@ -368,16 +375,17 @@ impl PlatformBackend for LinuxBackend {
                 restriction: restriction.map(str::to_string),
             }
         });
-        let screenshot = CapabilityInfo {
-            capability: Capability::Screenshot,
-            usable: self.screenshot.is_some(),
-            restriction: self.screenshot.is_none().then(|| {
-                if std::env::var_os("WAYLAND_DISPLAY").is_some() {
-                    "a desktop portal authorization flow is required".to_string()
-                } else {
-                    NO_X_DISPLAY.to_string()
-                }
-            }),
+        let screenshot = match &self.screenshot {
+            InputSession::Available(_) => CapabilityInfo {
+                capability: Capability::Screenshot,
+                usable: true,
+                restriction: None,
+            },
+            InputSession::Unavailable(reason) => CapabilityInfo {
+                capability: Capability::Screenshot,
+                usable: false,
+                restriction: Some((*reason).to_string()),
+            },
         };
         Ok(usable
             .into_iter()
@@ -460,12 +468,12 @@ impl PlatformBackend for LinuxBackend {
         self.x11(Capability::KeyboardInput)?.keyboard(intent)
     }
     fn screenshot(&mut self, app: &AppQuery) -> Result<Screenshot, BackendError> {
-        if matches!(&self.input, InputSession::Unavailable(reason) if reason.contains("Wayland")) {
-            return Err(capability(
-                Capability::Screenshot,
-                "a desktop portal authorization flow is required",
-            ));
-        }
+        let x11 = match &self.screenshot {
+            InputSession::Available(session) => session.as_ref(),
+            InputSession::Unavailable(reason) => {
+                return Err(capability(Capability::Screenshot, reason));
+            }
+        };
         let identity = self
             .ask(|r| Command::Identity(app.clone(), r))?
             .ok_or_else(|| operation("capture screenshot", "no AT-SPI application matched"))?;
@@ -477,10 +485,7 @@ impl PlatformBackend for LinuxBackend {
                     "the matched application has no process id",
                 )
             })?;
-        self.screenshot
-            .as_deref()
-            .ok_or_else(|| capability(Capability::Screenshot, NO_X_DISPLAY))?
-            .screenshot_for_pid(process_id)
+        x11.screenshot_for_pid(process_id)
     }
     fn hit_test(&mut self, _: (f64, f64)) -> Result<Option<Node>, BackendError> {
         Err(capability(Capability::HitTest, "not implemented"))
@@ -1698,6 +1703,25 @@ mod tests {
                 ..USABLE
             }),
             Some(NO_XTEST)
+        );
+    }
+
+    #[test]
+    fn screenshots_need_ewmh_window_discovery_but_not_xtest() {
+        assert_eq!(screenshot_restriction(USABLE), None);
+        assert_eq!(
+            screenshot_restriction(SessionFacts {
+                window_manager: false,
+                ..USABLE
+            }),
+            Some(NO_WINDOW_MANAGER)
+        );
+        assert_eq!(
+            screenshot_restriction(SessionFacts {
+                xtest: false,
+                ..USABLE
+            }),
+            None
         );
     }
 
