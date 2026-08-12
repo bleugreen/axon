@@ -13,7 +13,15 @@ public struct SocketCommandRouter: JSONRPCCommandHandling {
     public init(path: String = AxonEnvironment.socketPath()) {
         self.path = path
         self.sendRequest = { request in
-            try SocketClient(path: path).send(request)
+            let longRequest = request.method == "run"
+                || request.method == "wait_for_value"
+                || request.method == "wait_for_stability"
+            return try SocketClient(
+                path: path,
+                responseTimeoutSeconds: longRequest
+                    ? SocketClient.defaultRunResponseTimeoutSeconds
+                    : SocketClient.defaultResponseTimeoutSeconds
+            ).send(request)
         }
     }
 

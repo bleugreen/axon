@@ -1,9 +1,8 @@
-//! Isolated Unix-socket daemon and MCP stdio facade for the Rust macOS backend.
-//! The endpoint is mandatory and has no fallback to the installed Swift daemon.
+//! Production Unix-socket daemon and MCP stdio facade for the Rust macOS backend.
 use crate::{MacBackend, Router, parse_request};
 use axon_core::{
-    CapabilityState, DaemonReport, HealthPlatform, JsonRpcId, JsonRpcRequest, JsonRpcResponse,
-    PermissionState, SessionHealth, health::reason,
+    CapabilityState, DaemonProvenance, DaemonReport, HealthPlatform, JsonRpcId, JsonRpcRequest,
+    JsonRpcResponse, PermissionState, PlatformBackend, SessionHealth, health::reason,
 };
 use serde_json::{Value, json};
 use std::{
@@ -17,17 +16,59 @@ use std::{
         },
     },
     path::PathBuf,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+        mpsc,
+    },
+    thread,
     time::Duration,
 };
 
-pub const SOCKET_ENV: &str = "AXON_MAC_SOCKET";
+pub const SOCKET_ENV: &str = "AXON_SOCKET_PATH";
+pub const PRIVATE_SOCKET_ENV: &str = "AXON_MAC_SOCKET";
+pub const DEFAULT_SOCKET_PATH: &str = "/tmp/axon.sock";
 pub const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
+pub const LONG_REQUEST_TIMEOUT: Duration = Duration::from_secs(300);
 
 unsafe extern "C" {
     fn flock(fd: i32, operation: i32) -> i32;
 }
+
+struct RouterRequest {
+    request: JsonRpcRequest,
+    response: mpsc::SyncSender<Option<JsonRpcResponse>>,
+}
 const LOCK_EX: i32 = 2;
 const LOCK_NB: i32 = 4;
+
+#[link(name = "ApplicationServices", kind = "framework")]
+unsafe extern "C" {
+    fn CGSessionCopyCurrentDictionary() -> *const std::ffi::c_void;
+}
+#[link(name = "CoreFoundation", kind = "framework")]
+unsafe extern "C" {
+    fn CFRelease(value: *const std::ffi::c_void);
+}
+unsafe extern "C" {
+    fn getuid() -> u32;
+}
+
+fn session_health() -> SessionHealth {
+    let session = unsafe { CGSessionCopyCurrentDictionary() };
+    let graphical = !session.is_null();
+    if graphical {
+        unsafe { CFRelease(session) };
+    }
+    let interactive = unsafe { getuid() } != 0 && graphical;
+    if interactive && graphical {
+        SessionHealth::usable(None)
+    } else if !interactive {
+        SessionHealth::degraded(false, graphical, reason::NOT_INTERACTIVE_SESSION, None)
+    } else {
+        SessionHealth::degraded(true, false, reason::NO_GRAPHICAL_SESSION, None)
+    }
+}
 
 fn acquire_lock(path: &std::path::Path) -> io::Result<File> {
     let lock_path = PathBuf::from(format!("{}.lock", path.display()));
@@ -47,24 +88,28 @@ fn acquire_lock(path: &std::path::Path) -> io::Result<File> {
 }
 
 pub fn path() -> io::Result<PathBuf> {
-    let value = std::env::var_os(SOCKET_ENV).ok_or_else(|| {
-        io::Error::new(
-            io::ErrorKind::NotFound,
-            format!("{SOCKET_ENV} must name an isolated socket"),
-        )
-    })?;
-    let path = PathBuf::from(value);
-    if path == std::path::Path::new("/tmp/axon.sock") {
-        return Err(io::Error::new(
-            io::ErrorKind::PermissionDenied,
-            "the installed daemon socket is forbidden",
-        ));
-    }
-    Ok(path)
+    Ok(std::env::var_os(PRIVATE_SOCKET_ENV)
+        .or_else(|| std::env::var_os(SOCKET_ENV))
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(DEFAULT_SOCKET_PATH)))
 }
 pub fn request(line: &str) -> io::Result<String> {
     let mut stream = UnixStream::connect(path()?)?;
-    stream.set_read_timeout(Some(REQUEST_TIMEOUT))?;
+    let method = serde_json::from_str::<Value>(line).ok().and_then(|value| {
+        value
+            .get("method")
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+    });
+    let timeout = if matches!(
+        method.as_deref(),
+        Some("run" | "wait_for_value" | "wait_for_stability")
+    ) {
+        LONG_REQUEST_TIMEOUT
+    } else {
+        REQUEST_TIMEOUT
+    };
+    stream.set_read_timeout(Some(timeout))?;
     stream.write_all(line.as_bytes())?;
     stream.write_all(b"\n")?;
     let mut response = String::new();
@@ -90,23 +135,45 @@ pub fn serve() -> io::Result<()> {
         }
         fs::remove_file(&path)?;
     }
-    let backend = MacBackend::new().map_err(|e| io::Error::other(e.to_string()))?;
-    let mut router = Router::new(backend);
+    let (router_tx, router_rx) = mpsc::channel::<RouterRequest>();
+    let (ready_tx, ready_rx) = mpsc::sync_channel(1);
+    thread::spawn(move || {
+        let backend = MacBackend::new().map_err(|error| error.to_string());
+        let _ = ready_tx.send(backend.as_ref().map(|_| ()).map_err(Clone::clone));
+        let Ok(backend) = backend else {
+            return;
+        };
+        let mut router = Router::new(backend);
+        for request in router_rx {
+            let response = router.request(request.request);
+            let _ = request.response.send(response);
+        }
+    });
+    ready_rx
+        .recv()
+        .map_err(io::Error::other)?
+        .map_err(io::Error::other)?;
+    let stopping = Arc::new(AtomicBool::new(false));
     let listener = UnixListener::bind(&path)?;
+    listener.set_nonblocking(true)?;
     fs::set_permissions(&path, fs::Permissions::from_mode(0o600))?;
     let bound = fs::symlink_metadata(&path)?;
-    for incoming in listener.incoming() {
-        let stream = match incoming {
-            Ok(stream) => stream,
-            Err(error) => {
-                eprintln!("axon-mac: accept failed: {error}");
-                continue;
+    while !stopping.load(Ordering::Acquire) {
+        match listener.accept() {
+            Ok((stream, _)) => {
+                let router = router_tx.clone();
+                let stopping = Arc::clone(&stopping);
+                let endpoint = path.clone();
+                thread::spawn(move || {
+                    if let Err(error) = answer(stream, &router, &endpoint, &stopping) {
+                        eprintln!("axon-mac: dropped a client connection: {error}");
+                    }
+                });
             }
-        };
-        match answer(stream, &mut router, &path) {
-            Ok(true) => break,
-            Ok(false) => {}
-            Err(error) => eprintln!("axon-mac: dropped a client connection: {error}"),
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                thread::sleep(Duration::from_millis(10));
+            }
+            Err(error) => eprintln!("axon-mac: accept failed: {error}"),
         }
     }
     if let Ok(current) = fs::symlink_metadata(&path)
@@ -121,22 +188,26 @@ pub fn serve() -> io::Result<()> {
 
 fn answer(
     mut stream: UnixStream,
-    router: &mut Router<MacBackend>,
+    router: &mpsc::Sender<RouterRequest>,
     endpoint: &std::path::Path,
-) -> io::Result<bool> {
+    stopping: &AtomicBool,
+) -> io::Result<()> {
     stream.set_read_timeout(Some(REQUEST_TIMEOUT))?;
     stream.set_write_timeout(Some(REQUEST_TIMEOUT))?;
     let mut line = String::new();
     if BufReader::new(stream.try_clone()?).read_line(&mut line)? == 0 {
-        return Ok(false);
+        return Ok(());
     }
     let (response, stop) = dispatch(line.trim(), router, endpoint);
     writeln!(stream, "{}", serde_json::to_string(&response).unwrap())?;
-    Ok(stop)
+    if stop {
+        stopping.store(true, Ordering::Release);
+    }
+    Ok(())
 }
 fn dispatch(
     line: &str,
-    router: &mut Router<MacBackend>,
+    router: &mpsc::Sender<RouterRequest>,
     endpoint: &std::path::Path,
 ) -> (Value, bool) {
     let request = match parse_request(line) {
@@ -148,7 +219,11 @@ fn dispatch(
     };
     match request.method.as_str() {
         "health" => {
-            let reported = router.capabilities().unwrap_or_default();
+            // Health deliberately does not take the mutable router lock. A replay or wait may own
+            // backend state for minutes, but status must remain a truthful liveness probe.
+            let reported = MacBackend::new()
+                .and_then(|backend| backend.capabilities())
+                .unwrap_or_default();
             let trusted = reported
                 .iter()
                 .find(|info| info.capability == axon_core::Capability::Capture)
@@ -171,13 +246,25 @@ fn dispatch(
                     None,
                 )
             };
+            let version = env!("CARGO_PKG_VERSION").to_owned();
+            let process_id = std::process::id();
+            let executable_path = std::env::current_exe()
+                .map(|path| path.display().to_string())
+                .unwrap_or_default();
+            let session = session_health();
             let report = DaemonReport {
-                version: env!("CARGO_PKG_VERSION").into(),
+                version: version.clone(),
                 platform: HealthPlatform::Macos,
-                ready: trusted,
-                process_id: std::process::id(),
+                ready: trusted && session.interactive && session.graphical,
+                process_id,
                 endpoint: endpoint.display().to_string(),
-                session: SessionHealth::usable(None),
+                provenance: Some(DaemonProvenance {
+                    backend: "rust-axon-mac".into(),
+                    process_id,
+                    executable_path,
+                    version,
+                }),
+                session,
                 permissions: vec![permission, screen_recording],
                 capabilities: CapabilityState::complete(&reported),
             };
@@ -199,10 +286,25 @@ fn dispatch(
             true,
         ),
         _ => (
-            router
-                .request(request)
-                .map(|v| serde_json::to_value(v).unwrap())
-                .unwrap_or(Value::Null),
+            {
+                let (response_tx, response_rx) = mpsc::sync_channel(1);
+                if router
+                    .send(RouterRequest {
+                        request,
+                        response: response_tx,
+                    })
+                    .is_err()
+                {
+                    Value::Null
+                } else {
+                    response_rx
+                        .recv()
+                        .ok()
+                        .flatten()
+                        .map(|value| serde_json::to_value(value).unwrap())
+                        .unwrap_or(Value::Null)
+                }
+            },
             false,
         ),
     }
@@ -264,7 +366,7 @@ fn mcp_success_response(id: Value, result: Value) -> Value {
     json!({"jsonrpc":"2.0","id":id,"result":axon_core::mcp_tool_result(result, false)})
 }
 fn tools() -> Vec<Value> {
-    ["look","find","click","type","keyboard","invoke","scroll","run"].into_iter()
+    ["look","find","wait_for_value","wait_for_stability","click","type","keyboard","invoke","scroll","run"].into_iter()
         .map(|name| json!({"name":name,"description":format!("Axon macOS {name}"),"inputSchema":{"type":"object","additionalProperties":true}})).collect()
 }
 
@@ -283,9 +385,37 @@ mod tests {
         );
     }
     #[test]
-    fn endpoint_is_explicit_and_rejects_installed_socket() {
-        unsafe { std::env::set_var(SOCKET_ENV, "/tmp/axon.sock") };
-        assert_eq!(path().unwrap_err().kind(), io::ErrorKind::PermissionDenied);
+    fn endpoint_defaults_to_canonical_installed_socket() {
+        unsafe {
+            std::env::remove_var(PRIVATE_SOCKET_ENV);
+            std::env::remove_var(SOCKET_ENV);
+        }
+        assert_eq!(path().unwrap(), PathBuf::from(DEFAULT_SOCKET_PATH));
+    }
+    #[test]
+    fn health_bypasses_an_unavailable_backend_worker() {
+        let (router, receiver) = mpsc::channel();
+        drop(receiver);
+        let request = serde_json::to_string(&JsonRpcRequest::new(
+            Some(JsonRpcId::Integer(1)),
+            "health",
+            Some(json!({})),
+        ))
+        .unwrap();
+
+        let (response, stop) = dispatch(&request, &router, std::path::Path::new("/tmp/test.sock"));
+
+        assert!(!stop);
+        assert_eq!(
+            response.pointer("/result/provenance/backend"),
+            Some(&json!("rust-axon-mac"))
+        );
+        assert!(response.pointer("/result/provenance/processId").is_some());
+        assert!(
+            response
+                .pointer("/result/provenance/executablePath")
+                .is_some()
+        );
     }
     #[test]
     fn ownership_lock_refuses_a_second_server() {
@@ -321,7 +451,16 @@ mod tests {
         assert_eq!(
             names,
             [
-                "look", "find", "click", "type", "keyboard", "invoke", "scroll", "run"
+                "look",
+                "find",
+                "wait_for_value",
+                "wait_for_stability",
+                "click",
+                "type",
+                "keyboard",
+                "invoke",
+                "scroll",
+                "run"
             ]
         );
     }

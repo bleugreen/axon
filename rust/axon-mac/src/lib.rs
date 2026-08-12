@@ -3,13 +3,19 @@
 use axon_core::{
     AppQuery, AxnCodec, AxnRunner, Capability, DeliveryCandidate, DeliveryCapability,
     DeliveryOutcome, DeliveryPolicy, DeliveryRefusal, DeliveryRefusalReason, DeliveryRung,
-    DeliverySelection, DispatchOutcome, ExpectedFact, ForegroundTarget, JsonRpcError, JsonRpcId,
-    JsonRpcRequest, JsonRpcResponse, KeyboardIntent, PlatformBackend, ResolutionStatus,
-    RunEnvelope, RunOptions, SemanticLookup, SemanticNameRegistry, Snapshot, SnapshotHandle,
-    TextLocationResolver, TextLocationSource, TextLocationTarget, TextRecognitionProvider,
-    ToolDispatcher, dispatch_in_foreground, goal_success, select_delivery,
+    DeliverySelection, DiffPolicy, DispatchOutcome, ExpectedFact, ForegroundTarget, JsonRpcError,
+    JsonRpcId, JsonRpcRequest, JsonRpcResponse, KeyboardIntent, PlatformBackend, ResolutionStatus,
+    RunEnvelope, RunOptions, SemanticElementName, SemanticLookup, SemanticNameRegistry, SinceToken,
+    Snapshot, SnapshotHandle, TextLocationResolver, TextLocationSource, TextLocationTarget,
+    TextRecognitionProvider, ToolDispatcher, classify_semantic_diff, dispatch_in_foreground,
+    goal_success, look_since_response, select_delivery,
 };
 use serde_json::{Map, Value, json};
+use std::{
+    collections::HashMap,
+    thread,
+    time::{Duration, Instant},
+};
 
 #[cfg(target_os = "macos")]
 pub mod socket;
@@ -24,9 +30,19 @@ pub use platform::MacBackend;
 const EXCLUDED: &[(&str, &str)] = &[
     ("save", "SerializeHistory"),
     ("drag", "PointerDrag"),
-    ("wait_for_value", "WaitForValue"),
-    ("wait_for_stability", "WaitForStability"),
     ("permit", "PermissionPrompt"),
+    ("navigate", "BrowserScripting"),
+    ("windows", "BrowserScripting"),
+    ("tabs", "BrowserScripting"),
+    ("debug.create", "DebugSession"),
+    ("debug.start", "DebugSession"),
+    ("debug.step", "DebugSession"),
+    ("debug.retry", "DebugSession"),
+    ("debug.continue", "DebugSession"),
+    ("debug.resume", "DebugSession"),
+    ("debug.runTo", "DebugSession"),
+    ("debug.setBreakpoints", "DebugSession"),
+    ("debug.stop", "DebugSession"),
 ];
 
 /// Pixel delivery is withheld in v1; this mechanism label makes that absence explicit.
@@ -56,6 +72,14 @@ pub struct Router<B> {
     backend: B,
     snapshot: Option<Snapshot>,
     semantic_names: SemanticNameRegistry,
+    observations: HashMap<String, (Snapshot, Vec<SemanticElementName>)>,
+    observation_sequence: u64,
+}
+pub trait ReadableStateProvider {
+    fn readable_state(
+        &self,
+        target: &SnapshotHandle,
+    ) -> Result<Map<String, Value>, axon_core::BackendError>;
 }
 
 #[derive(Clone, Debug)]
@@ -239,6 +263,7 @@ impl<
     B: PointerTargetVerifier
         + TextRecognitionProvider
         + VisualObservationProvider
+        + ReadableStateProvider
         + BackgroundPixelPointer,
 > Router<B>
 {
@@ -255,6 +280,8 @@ impl<
             backend,
             snapshot: None,
             semantic_names: SemanticNameRegistry::default(),
+            observations: HashMap::new(),
+            observation_sequence: 0,
         }
     }
     fn click_text_location(
@@ -481,9 +508,10 @@ impl<
         params: &Map<String, Value>,
     ) -> Result<Value, JsonRpcError> {
         if let Some((_, capability)) = EXCLUDED.iter().find(|(tool, _)| *tool == method) {
-            return Err(rpc_error(
-                -32004,
-                format!("tool {method} requires unavailable capability {capability}"),
+            return Err(capability_unavailable(
+                method,
+                capability,
+                "not-implemented",
             ));
         }
         // The policy is decoded before the target is resolved and before any backend call, so an
@@ -492,6 +520,8 @@ impl<
             DeliveryPolicy::from_params(params).map_err(|error| rpc_error(-32602, error))?;
         match method {
             "look" => self.look(params),
+            "wait_for_value" => self.wait_for_value(params),
+            "wait_for_stability" => self.wait_for_stability(params),
             "find" => {
                 let (handle, resolution) = self.resolve(params)?;
                 Ok(json!({"handle": handle, "resolution": resolution}))
@@ -793,9 +823,10 @@ impl<
 
     fn look(&mut self, params: &Map<String, Value>) -> Result<Value, JsonRpcError> {
         if params.get("screenText").and_then(Value::as_bool) == Some(true) {
-            return Err(rpc_error(
-                -32004,
-                "screenText observations are unavailable in axon-mac v1",
+            return Err(capability_unavailable(
+                "look",
+                "screenText",
+                "not-implemented",
             ));
         }
         if params.get("app").is_none() {
@@ -809,6 +840,41 @@ impl<
         let app = app_query(params);
         let snapshot = self.backend.capture(&app).map_err(backend_error)?;
         let names = self.semantic_names.register(&snapshot);
+        self.observation_sequence += 1;
+        let app_identity = snapshot
+            .app
+            .identifier
+            .as_deref()
+            .unwrap_or(&snapshot.app.name);
+        let next_since = SinceToken::new(app_identity, &snapshot.id, self.observation_sequence);
+        if let Some(raw_since) = params.get("since").and_then(Value::as_str) {
+            let requested = SinceToken::parse(raw_since)
+                .map_err(|error| rpc_error(-32602, error.to_string()))?;
+            let comparison = self
+                .observations
+                .get(requested.as_str())
+                .map(|(baseline, baseline_names)| {
+                    classify_semantic_diff(
+                        baseline,
+                        baseline_names,
+                        &snapshot,
+                        &names,
+                        DiffPolicy::default(),
+                    )
+                })
+                .transpose()
+                .map_err(|error| rpc_error(-32603, error.to_string()))?;
+            let result = look_since_response(
+                snapshot.app.name.clone(),
+                snapshot.clone(),
+                next_since.clone(),
+                comparison,
+            );
+            self.observations
+                .insert(next_since.as_str().into(), (snapshot.clone(), names));
+            self.snapshot = Some(snapshot);
+            return serde_json::to_value(result).map_err(internal_error);
+        }
         let mut value = serde_json::to_value(axon_core::render_semantic_names(&snapshot, &names))
             .map_err(internal_error)?;
         let wants_screenshot = axon_core::screenshot_requested(
@@ -866,8 +932,172 @@ impl<
                     serde_json::to_value(unavailable).map_err(internal_error)?,
                 );
         }
+        value
+            .as_object_mut()
+            .expect("snapshots serialize as objects")
+            .insert("since".into(), json!(next_since));
+        self.observations
+            .insert(next_since.as_str().into(), (snapshot.clone(), names));
         self.snapshot = Some(snapshot);
         Ok(value)
+    }
+
+    fn wait_for_value(&mut self, params: &Map<String, Value>) -> Result<Value, JsonRpcError> {
+        let predicates = ["contains", "equals", "matches"]
+            .into_iter()
+            .filter_map(|key| {
+                params
+                    .get(key)
+                    .and_then(Value::as_str)
+                    .map(|value| (key, value))
+            })
+            .collect::<Vec<_>>();
+        if predicates.len() != 1 || predicates[0].1.is_empty() {
+            return Err(rpc_error(
+                -32602,
+                "wait_for_value requires exactly one non-empty contains, equals, or matches predicate",
+            ));
+        }
+        let (predicate_kind, predicate_value) = predicates[0];
+        let regex = (predicate_kind == "matches")
+            .then(|| {
+                regex::Regex::new(predicate_value)
+                    .map_err(|error| rpc_error(-32602, error.to_string()))
+            })
+            .transpose()?;
+        let predicate = json!({predicate_kind: predicate_value});
+        let timeout = bounded_ms(params, "timeoutMs", 5_000, 0, 60_000)?;
+        let interval = bounded_ms(
+            params,
+            "intervalMs",
+            100,
+            10,
+            timeout.as_millis().max(100) as u64,
+        )?;
+        let started = Instant::now();
+        let mut last_observed = None;
+        let mut last_resolution = None;
+        loop {
+            match self.resolve(params) {
+                Ok((handle, resolution)) => {
+                    last_resolution = Some(resolution.clone());
+                    let observed = self
+                        .backend
+                        .readable_state(&handle)
+                        .map_err(backend_error)?;
+                    last_observed = Some(observed.clone());
+                    let matched = ["value", "title", "description", "identifier", "help"]
+                        .into_iter()
+                        .find_map(|field| {
+                            observed
+                                .get(field)
+                                .and_then(Value::as_str)
+                                .filter(|value| match predicate_kind {
+                                    "equals" => *value == predicate_value,
+                                    "contains" => value
+                                        .to_lowercase()
+                                        .contains(&predicate_value.to_lowercase()),
+                                    "matches" => {
+                                        regex.as_ref().is_some_and(|regex| regex.is_match(value))
+                                    }
+                                    _ => false,
+                                })
+                                .map(|value| json!({"field":field,"value":value}))
+                        });
+                    if let Some(matched) = matched {
+                        return Ok(
+                            json!({"wait":{"success":true,"status":"satisfied","predicate":predicate,"elapsedMs":started.elapsed().as_millis(),"matched":matched,"lastObserved":observed,"resolution":resolution,"message":"wait_for_value predicate satisfied"}}),
+                        );
+                    }
+                }
+                Err(error) if error.code == -32002 => {}
+                Err(error) => return Err(error),
+            }
+            if started.elapsed() >= timeout {
+                let status = if last_observed
+                    .as_ref()
+                    .is_some_and(|state| !state.is_empty())
+                {
+                    "predicate_timeout"
+                } else {
+                    "target_unresolved_timeout"
+                };
+                return Ok(
+                    json!({"wait":{"success":false,"status":status,"predicate":predicate,"elapsedMs":started.elapsed().as_millis(),"matched":null,"lastObserved":last_observed,"resolution":last_resolution,"message":if status == "predicate_timeout" {"wait_for_value timed out before the predicate matched"} else {"wait_for_value timed out before the target resolved uniquely"}}}),
+                );
+            }
+            thread::sleep(interval.min(timeout.saturating_sub(started.elapsed())));
+        }
+    }
+
+    fn wait_for_stability(&mut self, params: &Map<String, Value>) -> Result<Value, JsonRpcError> {
+        let app = app_query(params);
+        if app.name.is_none() && app.identifier.is_none() {
+            return Err(rpc_error(-32602, "wait_for_stability requires app"));
+        }
+        let timeout = bounded_ms(params, "timeoutMs", 5_000, 0, 60_000)?;
+        let interval = bounded_ms(
+            params,
+            "intervalMs",
+            100,
+            10,
+            timeout.as_millis().max(100) as u64,
+        )?;
+        let stable_for = bounded_ms(params, "stableMs", 500, 0, 60_000)?;
+        let condition = params
+            .get("condition")
+            .and_then(Value::as_str)
+            .unwrap_or("stable");
+        if !matches!(condition, "stable" | "changed") {
+            return Err(rpc_error(-32602, "condition must be stable or changed"));
+        }
+        let started = Instant::now();
+        let first = self.backend.capture(&app).map_err(backend_error)?;
+        let first_names = self.semantic_names.register(&first);
+        let mut last = first.clone();
+        let mut last_names = first_names.clone();
+        let mut stable_since = Instant::now();
+        loop {
+            let snapshot = self.backend.capture(&app).map_err(backend_error)?;
+            let names = self.semantic_names.register(&snapshot);
+            let changed_from_last = !matches!(
+                classify_semantic_diff(
+                    &last,
+                    &last_names,
+                    &snapshot,
+                    &names,
+                    DiffPolicy::default()
+                )
+                .map_err(|error| rpc_error(-32603, error.to_string()))?,
+                axon_core::DiffClassification::Unchanged
+            );
+            if changed_from_last {
+                last = snapshot.clone();
+                last_names = names.clone();
+                stable_since = Instant::now();
+            }
+            let satisfied = if condition == "changed" {
+                !matches!(
+                    classify_semantic_diff(
+                        &first,
+                        &first_names,
+                        &snapshot,
+                        &names,
+                        DiffPolicy::default()
+                    )
+                    .map_err(|error| rpc_error(-32603, error.to_string()))?,
+                    axon_core::DiffClassification::Unchanged
+                )
+            } else {
+                stable_since.elapsed() >= stable_for
+            };
+            if satisfied || started.elapsed() >= timeout {
+                return Ok(
+                    json!({"wait":{"success":satisfied,"status":if satisfied {"satisfied"} else {"timeout"},"condition":condition,"elapsedMs":started.elapsed().as_millis(),"stableMs":stable_since.elapsed().as_millis(),"snapshot":snapshot}}),
+                );
+            }
+            thread::sleep(interval.min(timeout.saturating_sub(started.elapsed())));
+        }
     }
 
     fn resolve(
@@ -937,6 +1167,7 @@ impl<
     B: PointerTargetVerifier
         + TextRecognitionProvider
         + VisualObservationProvider
+        + ReadableStateProvider
         + BackgroundPixelPointer,
 > ToolDispatcher for Router<B>
 {
@@ -998,6 +1229,29 @@ impl<
     }
 }
 
+fn bounded_ms(
+    params: &Map<String, Value>,
+    key: &str,
+    default: u64,
+    minimum: u64,
+    maximum: u64,
+) -> Result<Duration, JsonRpcError> {
+    let value = match params.get(key) {
+        None | Some(Value::Null) => default,
+        Some(Value::Number(number)) => number
+            .as_u64()
+            .ok_or_else(|| rpc_error(-32602, format!("{key} must be a non-negative integer")))?,
+        Some(_) => return Err(rpc_error(-32602, format!("{key} must be an integer"))),
+    };
+    if value < minimum {
+        return Err(rpc_error(
+            -32602,
+            format!("{key} must be at least {minimum}"),
+        ));
+    }
+    Ok(Duration::from_millis(value.min(maximum)))
+}
+
 fn app_query(params: &Map<String, Value>) -> AppQuery {
     AppQuery {
         name: params.get("app").and_then(Value::as_str).map(str::to_owned),
@@ -1051,7 +1305,30 @@ fn rpc_error(code: i64, message: impl Into<String>) -> JsonRpcError {
     }
 }
 fn backend_error(e: axon_core::BackendError) -> JsonRpcError {
-    rpc_error(-32000, e.to_string())
+    match e {
+        axon_core::BackendError::Capability {
+            capability,
+            reason,
+            diagnostic,
+        } => JsonRpcError {
+            code: -32004,
+            message: format!("capability {} is unavailable: {reason}", capability.key()),
+            data: Some(
+                json!({"kind":"capability-unavailable","capability":capability.key(),"reason":reason,"diagnostic":diagnostic}),
+            ),
+        },
+        other => rpc_error(-32000, other.to_string()),
+    }
+}
+
+fn capability_unavailable(tool: &str, capability: &str, reason: &str) -> JsonRpcError {
+    JsonRpcError {
+        code: -32004,
+        message: format!("tool {tool} requires unavailable capability {capability}"),
+        data: Some(
+            json!({"kind":"capability-unavailable","tool":tool,"capability":capability,"reason":reason}),
+        ),
+    }
 }
 fn internal_error(e: serde_json::Error) -> JsonRpcError {
     rpc_error(-32603, e.to_string())
@@ -1068,16 +1345,21 @@ mod tests {
 
     #[test]
     fn excluded_tools_are_capability_errors_before_dispatch() {
-        for tool in [
-            "save",
-            "drag",
-            "wait_for_value",
-            "wait_for_stability",
-            "permit",
-        ] {
+        for tool in ["save", "drag", "permit"] {
             let (_, capability) = EXCLUDED.iter().find(|(name, _)| *name == tool).unwrap();
             assert!(!capability.is_empty());
         }
+    }
+
+    #[test]
+    fn unavailable_tools_have_machine_readable_errors() {
+        let error = capability_unavailable("drag", "PointerDrag", "not-implemented");
+        assert_eq!(error.code, -32004);
+        assert_eq!(
+            error.data.as_ref().unwrap()["kind"],
+            "capability-unavailable"
+        );
+        assert_eq!(error.data.as_ref().unwrap()["tool"], "drag");
     }
 
     #[test]

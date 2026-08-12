@@ -26,6 +26,20 @@ public enum HealthSchemaError: Error, CustomStringConvertible {
     }
 }
 
+public struct DaemonProvenance: Codable, Equatable, Sendable {
+    public var backend: String
+    public var processId: Int
+    public var executablePath: String
+    public var version: String
+
+    public init(backend: String, processId: Int, executablePath: String, version: String) {
+        self.backend = backend
+        self.processId = processId
+        self.executablePath = executablePath
+        self.version = version
+    }
+}
+
 /// Encodes as the literal `health-v1` and refuses to decode any other schema major.
 public struct HealthSchemaVersion: Codable, Equatable, Sendable {
     public init() {}
@@ -120,6 +134,7 @@ public struct DaemonHealth: Codable, Equatable, Sendable {
     public var running: Bool
     public var ready: Bool
     public var endpoint: String
+    public var provenance: DaemonProvenance?
     public var processId: Int?
     public var reason: String?
     public var detail: String?
@@ -128,6 +143,7 @@ public struct DaemonHealth: Codable, Equatable, Sendable {
         running: Bool,
         ready: Bool,
         endpoint: String,
+        provenance: DaemonProvenance? = nil,
         processId: Int? = nil,
         reason: String? = nil,
         detail: String? = nil
@@ -135,6 +151,7 @@ public struct DaemonHealth: Codable, Equatable, Sendable {
         self.running = running
         self.ready = ready
         self.endpoint = endpoint
+        self.provenance = provenance
         self.processId = processId
         self.reason = reason
         self.detail = detail

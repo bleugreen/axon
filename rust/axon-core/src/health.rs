@@ -64,6 +64,17 @@ pub mod reason {
     pub const UNKNOWN: &str = "unknown";
 }
 
+/// Additive daemon identity carried by the private health RPC so clients can prove which
+/// implementation owns the endpoint instead of inferring it from the socket path.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DaemonProvenance {
+    pub backend: String,
+    pub process_id: u32,
+    pub executable_path: String,
+    pub version: String,
+}
+
 /// Inputs that describe a daemon which did not answer.
 pub struct NotRunningHealth<'a> {
     pub version: String,
@@ -350,6 +361,8 @@ pub struct DaemonReport {
     pub ready: bool,
     pub process_id: u32,
     pub endpoint: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provenance: Option<DaemonProvenance>,
     pub session: SessionHealth,
     pub permissions: Vec<PermissionState>,
     pub capabilities: Vec<CapabilityState>,
@@ -538,6 +551,7 @@ mod tests {
                 ready: false,
                 process_id: 12,
                 endpoint: r"\\.\pipe\axon-v1".into(),
+                provenance: None,
                 session: SessionHealth::usable(None),
                 permissions: vec![],
                 capabilities: CapabilityState::all_unusable(reason::DAEMON_NOT_READY),
