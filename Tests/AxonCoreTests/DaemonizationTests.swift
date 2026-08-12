@@ -191,7 +191,7 @@ private func makeReleaseBundle(
         .appendingPathComponent("axon-upgrade-\(UUID().uuidString)")
     defer { try? FileManager.default.removeItem(at: root) }
     let installed = try makeReleaseBundle(at: root.appendingPathComponent("0.2.2/Axon.app"))
-    let upgraded = try makeReleaseBundle(at: root.appendingPathComponent("0.3.0/Axon.app"))
+    let upgraded = try makeReleaseBundle(at: root.appendingPathComponent("0.3.1/Axon.app"))
 
     let before = DaemonProgram.resolved(invokedExecutable: installed)
     let after = DaemonProgram.resolved(invokedExecutable: upgraded)
