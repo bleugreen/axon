@@ -576,6 +576,10 @@ private struct PerceptionCommandHandler {
                     activeSecretRedactor: activeSecretRedactor
                 )
             }
+            snapshotJSON = snapshotJSON.addingScreenshotUnavailable(
+                requestedScreenshot: screenshot,
+                capturedScreenshot: snapshot.screenshot
+            )
             snapshotJSON = snapshotJSON.omittingScreenshotForActiveCredentialRedaction(
                 requestedScreenshot: screenshot,
                 forceOmit: screenshotOCRDetectedActiveCredential
@@ -1619,6 +1623,20 @@ private extension JSONValue {
         if !includeScreenshot {
             object["screenshot"] = .null
         }
+        return .object(object)
+    }
+
+    func addingScreenshotUnavailable(
+        requestedScreenshot: Bool,
+        capturedScreenshot: EncodedScreenshot?
+    ) -> JSONValue {
+        guard requestedScreenshot, capturedScreenshot == nil, case var .object(object) = self else {
+            return self
+        }
+        object["screenshotUnavailable"] = .object([
+            "code": .string("capture-failed"),
+            "reason": .string("ScreenCaptureKit did not return an encodable application window image")
+        ])
         return .object(object)
     }
 
