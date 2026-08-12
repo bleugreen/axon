@@ -203,7 +203,55 @@ pub trait ToolDispatcher {
     }
     fn dispatch(&mut self, tool: &str, params: &Map<String, Value>) -> DispatchOutcome;
     fn verify(&mut self, fact: &ExpectedFact) -> Result<(), String>;
+    fn capture_changed_baseline(&mut self, fact: &ExpectedFact) -> Result<Value, String> {
+        Err(format!("changed fact {} is unsupported", fact.id))
+    }
+    fn verify_changed(&mut self, fact: &ExpectedFact, _baseline: &Value) -> Result<(), String> {
+        Err(format!("changed fact {} is unsupported", fact.id))
+    }
     fn verify_replay_locator(&mut self, _app: &str, _locator: &Value, _minimum: Confidence) -> bool { false }
+}
+
+pub fn expected_fact_kind(fact: &ExpectedFact) -> Result<&str, String> {
+    fact.fields.get("kind").and_then(Value::as_str).filter(|kind| !kind.is_empty())
+        .ok_or_else(|| format!("fact {} requires kind", fact.id))
+}
+
+pub fn verify_expected_fact_state(fact: &ExpectedFact, observed: &Map<String, Value>) -> Result<(), String> {
+    let kind = expected_fact_kind(fact)?;
+    if matches!(kind, "exists" | "window" | "window-exists" | "menu-selection") {
+        return observed.get("exists").and_then(Value::as_bool).unwrap_or(true).then_some(())
+            .ok_or_else(|| format!("fact {} did not verify: target does not exist", fact.id));
+    }
+    if kind == "changed" { return Err(format!("changed fact {} requires a pre-dispatch baseline", fact.id)); }
+    let key = match kind {
+        "focused" => "focused", "enabled" => "enabled", "value" => "value", "selected" => "selected",
+        other => return Err(format!("fact {} is unsupported: unknown kind {other}", fact.id)),
+    };
+    let expected = fact.fields.get("state").and_then(Value::as_object).and_then(|state| state.get(key));
+    let actual = observed.get(key);
+    if matches!(key, "focused" | "enabled") {
+        let expected = expected.and_then(|value| value.as_bool().or_else(|| value.get("equals")?.as_bool())).unwrap_or(true);
+        return (actual.and_then(Value::as_bool) == Some(expected)).then_some(())
+            .ok_or_else(|| format!("fact {} did not verify: {key} expected {expected}, got {actual:?}", fact.id));
+    }
+    let actual = actual.and_then(Value::as_str);
+    let Some(expected) = expected else {
+        return actual.is_some().then_some(()).ok_or_else(|| format!("fact {} did not verify: {key} was nil", fact.id));
+    };
+    let (needle, contains, case_sensitive) = if let Some(value) = expected.as_str() {
+        (value, false, false)
+    } else if let Some(object) = expected.as_object() {
+        let case_sensitive = object.get("caseSensitive").and_then(Value::as_bool).unwrap_or(false);
+        if let Some(value) = object.get("contains").and_then(Value::as_str) { (value, true, case_sensitive) }
+        else if let Some(value) = object.get("equals").or_else(|| object.get("exact")).and_then(Value::as_str) { (value, false, case_sensitive) }
+        else { return Err(format!("fact {} {key} expectation must include equals, exact, or contains", fact.id)); }
+    } else { return Err(format!("fact {} {key} expectation must be a string or object", fact.id)); };
+    let matched = actual.is_some_and(|actual| {
+        let (actual, needle) = if case_sensitive { (actual.to_owned(), needle.to_owned()) } else { (actual.to_lowercase(), needle.to_lowercase()) };
+        if contains { actual.contains(&needle) } else { actual == needle }
+    });
+    matched.then_some(()).ok_or_else(|| format!("fact {} did not verify: {key} expectation failed, got {actual:?}", fact.id))
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -289,10 +337,10 @@ impl<'a, D: ToolDispatcher> AxnRunner<'a, D> {
         let source_path = options.source_path.clone();
         let mut trace = Vec::new();
         let mut heal_events = Vec::new();
-        let mut facts = HashSet::new();
+        let mut facts: HashMap<String, ExpectedFact> = HashMap::new();
         let mut success = true;
         for (index, action) in doc.actions.iter().enumerate() {
-            if let Some(missing) = action.requires.iter().find(|id| !facts.contains(*id)) {
+            if let Some(missing) = action.requires.iter().find(|id| !facts.contains_key(*id)) {
                 let e = format!("required fact is unavailable: {missing}");
                 trace.push(TraceEntry {
                     index,
@@ -311,6 +359,21 @@ impl<'a, D: ToolDispatcher> AxnRunner<'a, D> {
                     continue;
                 }
             }
+            if let Some(error) = action.requires.iter().find_map(|id| facts.get(id).and_then(|fact| self.dispatcher.verify(fact).err())) {
+                trace.push(TraceEntry { index, tool: action.tool.clone(), success: false, action_id: action.id.clone(), result: None, error: Some(error), resolution: None });
+                success = false;
+                if !continue_on_error { break } else { continue }
+            }
+            let changed_baselines = if dry_run { HashMap::new() } else {
+                action.expects.iter().filter(|fact| expected_fact_kind(fact).ok() == Some("changed"))
+                    .map(|fact| self.dispatcher.capture_changed_baseline(fact).map(|baseline| (fact.id.clone(), baseline)))
+                    .collect::<Result<HashMap<_, _>, _>>().map_err(AxnError::Invalid)?
+            };
+            let causal_transition = if dry_run || action.expects.is_empty() { false }
+                else if action.expects.iter().any(|fact| expected_fact_kind(fact).ok() == Some("changed")) { true }
+                else if matches!(action.tool.as_str(), "click" | "keyboard" | "drag" | "scroll") {
+                    action.expects.iter().any(|fact| self.dispatcher.verify(fact).is_err())
+                } else { false };
             let (params, secret_fields) = substitute_map(&action.params, &bindings, index)?;
             let params = prepare_dispatch_params(self.dispatcher, &params)?;
             let outcome = if dry_run {
@@ -335,11 +398,12 @@ impl<'a, D: ToolDispatcher> AxnRunner<'a, D> {
             } else {
                 Value::String("<redacted: contains-secret>".into())
             };
-            let verification_error = if outcome.success && !dry_run {
+            let can_verify_dispatch_only = !outcome.success && causal_transition;
+            let verification_error = if (outcome.success || can_verify_dispatch_only) && !dry_run {
                 action
                     .expects
                     .iter()
-                    .find_map(|fact| self.dispatcher.verify(fact).err())
+                    .find_map(|fact| changed_baselines.get(&fact.id).map_or_else(|| self.dispatcher.verify(fact), |baseline| self.dispatcher.verify_changed(fact, baseline)).err())
             } else {
                 None
             };
@@ -350,7 +414,7 @@ impl<'a, D: ToolDispatcher> AxnRunner<'a, D> {
                 })
             }) };
             if let Some(event) = &heal { heal_events.push(event.clone()); }
-            let action_success = outcome.success && verification_error.is_none();
+            let action_success = (outcome.success || can_verify_dispatch_only) && verification_error.is_none();
             let entry = TraceEntry {
                 index,
                 tool: action.tool.clone(),
@@ -371,7 +435,7 @@ impl<'a, D: ToolDispatcher> AxnRunner<'a, D> {
                 heal,
             };
             if entry.success && !dry_run {
-                facts.extend(action.expects.iter().map(|f| f.id.clone()))
+                facts.extend(action.expects.iter().map(|f| (f.id.clone(), f.clone())))
             } else {
                 success = false
             }
