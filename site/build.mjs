@@ -1,0 +1,168 @@
+import { cp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
+import { createServer } from 'node:http';
+import { extname, join, resolve } from 'node:path';
+import GithubSlugger from 'github-slugger';
+import { Marked } from 'marked';
+
+const siteRoot = resolve(import.meta.dirname);
+const repositoryRoot = resolve(siteRoot, '..');
+const outputRoot = join(siteRoot, 'dist');
+const docsRoot = join(repositoryRoot, 'docs');
+
+const docs = [
+  ['install', 'Install and Operations'],
+  ['cross-platform', 'Cross-platform'],
+  ['embedding', 'Embedding Axon'],
+  ['tool-surface', 'Tool Surface'],
+  ['axn', 'The .axn File'],
+  ['design', 'Design'],
+  ['decision-log', 'Decision Log'],
+];
+
+// cross-platform.md links to this contract. It is rendered but deliberately omitted from the
+// primary navigation so the requested documentation set remains focused.
+const supportingDocs = [['platform-spec', 'Platform Contract']];
+
+const escapeHtml = (value) => String(value)
+  .replaceAll('&', '&amp;')
+  .replaceAll('<', '&lt;')
+  .replaceAll('>', '&gt;')
+  .replaceAll('"', '&quot;');
+
+function renderMarkdown(source) {
+  const slugger = new GithubSlugger();
+  const marked = new Marked({ gfm: true });
+
+  marked.use({
+    walkTokens(token) {
+      if (token.type !== 'link') return;
+      const match = token.href.match(/^([^/:#]+)\.md(#[^ ]+)?$/);
+      if (match) token.href = `/docs/${match[1]}/${match[2] ?? ''}`;
+    },
+    renderer: {
+      heading({ tokens, depth }) {
+        const text = this.parser.parseInline(tokens);
+        const id = slugger.slug(tokens.map((token) => token.text ?? token.raw ?? '').join(''));
+        return `<h${depth} id="${escapeHtml(id)}">${text}</h${depth}>\n`;
+      },
+    },
+  });
+
+  return marked.parse(source);
+}
+
+function shellBlock(command, label) {
+  return `<div class="command"><span>${escapeHtml(label)}</span><code>${escapeHtml(command)}</code></div>`;
+}
+
+function page({ title, description, body, docsPage = false }) {
+  const nav = docs.map(([slug, label]) => `<a href="/docs/${slug}/">${label}</a>`).join('');
+  return `<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="${escapeHtml(description)}">
+  <title>${escapeHtml(title)}</title>
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+  <header class="site-header">
+    <a class="wordmark" href="/" aria-label="Axon home"><span>axn</span><i>.dev</i></a>
+    <nav aria-label="Primary"><a href="/docs/install/">Docs</a><a href="https://github.com/bleugreen/axon">GitHub</a></nav>
+  </header>
+  ${docsPage ? `<div class="docs-shell"><aside><div class="docs-label">Documentation</div>${nav}</aside><main class="prose">${body}</main></div>` : body}
+  <footer><span>Axon is open source under the MIT license.</span><span>Small. Local. Inspectable.</span></footer>
+</body>
+</html>`;
+}
+
+function home(version) {
+  const guarantees = [
+    ['01', 'Semantic targets', 'Address a button by role, label, window, and context. Coordinates remain an escape hatch, not the foundation.'],
+    ['02', 'Honest results', 'Dispatch and outcome are separate facts. A click that changed nothing does not quietly report success.'],
+    ['03', 'Replayable work', 'Save sessions as plain-text .axn files. Read them, edit them, share them, and run them again.'],
+    ['04', 'Local by design', 'One visible service over local inter-process communication. Nothing hosted, gated, or proprietary.'],
+  ];
+  return page({
+    title: 'Axon — local UI access for agents',
+    description: 'A local accessibility service that gives agents semantic, honest, and replayable control of desktop apps.',
+    body: `<main>
+      <section class="hero">
+        <div class="eyebrow"><span></span> Local accessibility infrastructure</div>
+        <h1>Give agents a path<br>into <em>running apps.</em></h1>
+        <p>Axon turns the accessibility layer already built into macOS, Windows, and Linux into a small, consistent tool surface for agents.</p>
+        <div class="hero-actions"><a class="button primary" href="/docs/install/">Get started</a><a class="button" href="/docs/tool-surface/">Explore the tools</a></div>
+      </section>
+      <section class="loop" aria-label="Axon's core loop">
+        <span>look</span><i>→</i><span>find</span><i>→</i><span>act</span><i>→</i><span>record</span>
+      </section>
+      <section class="guarantees">
+        <div class="section-heading"><p>What Axon guarantees</p><h2>Automation that can<br>explain itself.</h2></div>
+        <div class="guarantee-grid">${guarantees.map(([number, title, copy]) => `<article><span>${number}</span><h3>${title}</h3><p>${copy}</p></article>`).join('')}</div>
+      </section>
+      <section class="artifact">
+        <div><p class="kicker">The unit of memory</p><h2>A route becomes<br>a reflex.</h2><p>A <code>.axn</code> file is an ordered sequence of tool calls, kept as human-readable text instead of disappearing into chat history.</p><a href="/docs/axn/">Read about the file format →</a></div>
+        <pre aria-label="Example axn file"><code><b>version:</b> 2
+<b>actions:</b>
+  - <b>tool:</b> click
+    <b>target:</b>
+      <b>app:</b> Linear
+      <b>role:</b> button
+      <b>name:</b> New issue
+  - <b>tool:</b> type
+    <b>target:</b> { <b>role:</b> textField }
+    <b>value:</b> Ship the honest path</code></pre>
+      </section>
+      <section class="install">
+        <div><p class="kicker">Install Axon ${escapeHtml(version)}</p><h2>Start local.</h2><p>Homebrew is the primary path on macOS. Direct installers are available for shell-based setup on every supported platform.</p></div>
+        <div class="commands">
+          ${shellBlock('brew install --cask bleugreen/tap/axon', 'macOS · Homebrew')}
+          ${shellBlock('curl -fsSL https://axn.dev/install.sh | sh', 'macOS / Linux · shell')}
+          ${shellBlock('irm https://axn.dev/install.ps1 | iex', 'Windows · PowerShell')}
+        </div>
+      </section>
+    </main>`,
+  });
+}
+
+async function build() {
+  await rm(outputRoot, { recursive: true, force: true });
+  await mkdir(outputRoot, { recursive: true });
+  await cp(join(siteRoot, 'public'), outputRoot, { recursive: true });
+  const version = (await readFile(join(repositoryRoot, 'VERSION'), 'utf8')).trim();
+  await writeFile(join(outputRoot, 'index.html'), home(version));
+
+  for (const [slug, title] of [...docs, ...supportingDocs]) {
+    const markdown = await readFile(join(docsRoot, `${slug}.md`), 'utf8');
+    const directory = join(outputRoot, 'docs', slug);
+    await mkdir(directory, { recursive: true });
+    await writeFile(join(directory, 'index.html'), page({
+      title: `${title} — Axon`,
+      description: `${title}, from the Axon documentation.`,
+      body: renderMarkdown(markdown),
+      docsPage: true,
+    }));
+  }
+}
+
+function serve() {
+  const types = { '.css': 'text/css; charset=utf-8', '.html': 'text/html; charset=utf-8', '.sh': 'text/plain; charset=utf-8', '.ps1': 'text/plain; charset=utf-8' };
+  const server = createServer(async (request, response) => {
+    const pathname = decodeURIComponent(new URL(request.url, 'http://localhost').pathname);
+    let file = join(outputRoot, pathname);
+    if (pathname.endsWith('/')) file = join(file, 'index.html');
+    try {
+      const content = await readFile(file);
+      response.writeHead(200, { 'content-type': types[extname(file)] ?? 'application/octet-stream' });
+      response.end(content);
+    } catch {
+      response.writeHead(404, { 'content-type': 'text/plain; charset=utf-8' });
+      response.end('Not found');
+    }
+  });
+  server.listen(4321, '127.0.0.1', () => console.log('Axon site running at http://127.0.0.1:4321'));
+}
+
+await build();
+if (process.argv.includes('--serve')) serve();
