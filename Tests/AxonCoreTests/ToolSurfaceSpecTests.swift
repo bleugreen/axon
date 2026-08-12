@@ -17,6 +17,7 @@ import Testing
     #expect(tool(named: "keyboard", in: tools)?["inputSchema"]?["properties"]?["keys"] == nil)
     #expect(tool(named: "keyboard", in: tools)?["inputSchema"]?["oneOf"]?[0]?["required"] == .array([.string("text")]))
     #expect(tool(named: "keyboard", in: tools)?["inputSchema"]?["oneOf"]?[1]?["required"] == .array([.string("key")]))
+    #expect(tool(named: "look", in: tools)?["inputSchema"]?["properties"]?["screenshot"]?["default"] == .bool(true))
 }
 
 @Test func toolSurfaceDocsSignatureBlockMatchesSpec() throws {

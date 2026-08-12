@@ -310,11 +310,11 @@ import Testing
     #expect(response?.result?["structuredContent"]?["error"]?["code"] == .int(-32602))
 }
 
-@Test func mcpLookDefaultsToCompactStateWithoutScreenshot() {
+@Test func mcpLookDefaultsToCompactStateWithScreenshotCapture() {
     let commandRouter = CommandRouter(
         captureSnapshot: { app, screenshot in
             #expect(app == "com.example.App")
-            #expect(screenshot == false)
+            #expect(screenshot == true)
             return AppSnapshot(
                 id: SnapshotID("mcp-compact"),
                 app: AppIdentity(bundleIdentifier: "com.example.App", name: "Example", processIdentifier: 7),
@@ -360,7 +360,7 @@ import Testing
     let commandRouter = CommandRouter(
         captureSnapshot: { app, screenshot in
             #expect(app == "org.mozilla.firefox")
-            #expect(screenshot == false)
+            #expect(screenshot == true)
             return AppSnapshot(
                 id: SnapshotID("mcp-depth"),
                 app: AppIdentity(bundleIdentifier: "org.mozilla.firefox", name: "Firefox", processIdentifier: 7),
@@ -533,7 +533,7 @@ import Testing
     let commandRouter = CommandRouter(
         captureSnapshot: { app, screenshot in
             #expect(app == "com.example.App")
-            #expect(screenshot == false)
+            #expect(screenshot == true)
             return AppSnapshot(
                 id: SnapshotID("mcp-sensitive"),
                 app: AppIdentity(bundleIdentifier: "com.example.App", name: "Example", processIdentifier: 7),
@@ -576,7 +576,7 @@ import Testing
     let commandRouter = CommandRouter(
         captureSnapshot: { app, screenshot in
             #expect(app == "com.example.App")
-            #expect(screenshot == false)
+            #expect(screenshot == true)
             return AppSnapshot(
                 id: SnapshotID("mcp-active"),
                 app: AppIdentity(bundleIdentifier: "com.example.App", name: "Example", processIdentifier: 7),
