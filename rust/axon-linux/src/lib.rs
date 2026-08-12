@@ -1019,8 +1019,8 @@ impl<B: PointerTargetVerifier + BackgroundPixelInput> ToolDispatcher for Router<
             )
         })?;
         let handle = snapshot.handle(candidate.index);
-        let node = flattened(&snapshot)
-            .nth(candidate.index)
+        let node = snapshot
+            .node(candidate.index)
             .ok_or_else(|| format!("fact {} resolved outside snapshot", fact.id))?;
         let mut observed = serde_json::to_value(node)
             .map_err(|error| error.to_string())?
