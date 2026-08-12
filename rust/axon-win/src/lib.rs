@@ -957,7 +957,13 @@ impl<
             });
         let mut runner = AxnRunner::new(self);
         if let Some(healed_path) = params.get("healedPath").and_then(Value::as_str) {
-            runner = runner.with_healed_output(params.get("sourcePath").and_then(Value::as_str).map(str::to_owned), healed_path.to_owned());
+            runner = runner.with_healed_output(
+                params
+                    .get("sourcePath")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned),
+                healed_path.to_owned(),
+            );
         }
         let result = runner
             .run(&doc, &args, options)
@@ -980,7 +986,10 @@ impl<
         locator: &axon_core::Locator,
     ) -> Result<(), String> {
         self.semantic_names.register_replay_locator(
-            axon_core::WireElementTarget { app: app.into(), name: name.into() },
+            axon_core::WireElementTarget {
+                app: app.into(),
+                name: name.into(),
+            },
             locator.clone(),
         );
         Ok(())
@@ -1005,28 +1014,60 @@ impl<
     }
     fn verify(&mut self, fact: &ExpectedFact) -> Result<(), String> {
         let (app, locator) = axon_core::expected_fact_target(fact)?;
-        let snapshot = self.backend.capture(&AppQuery { name: Some(app), identifier: None }).map_err(|error| error.to_string())?;
+        let snapshot = self
+            .backend
+            .capture(&AppQuery {
+                name: Some(app),
+                identifier: None,
+            })
+            .map_err(|error| error.to_string())?;
         let resolution = axon_core::LocatorResolver::resolve(&locator, &snapshot);
-        let candidate = resolution.best.ok_or_else(|| format!("fact {} locator did not resolve uniquely: {:?}", fact.id, resolution.status))?;
+        let candidate = resolution.best.ok_or_else(|| {
+            format!(
+                "fact {} locator did not resolve uniquely: {:?}",
+                fact.id, resolution.status
+            )
+        })?;
         let handle = snapshot.handle(candidate.index);
-        let node = flattened(&snapshot).nth(candidate.index).ok_or_else(|| format!("fact {} resolved outside snapshot", fact.id))?;
-        let mut observed = serde_json::to_value(node).map_err(|error| error.to_string())?.as_object().cloned().unwrap_or_default();
+        let node = flattened(&snapshot)
+            .nth(candidate.index)
+            .ok_or_else(|| format!("fact {} resolved outside snapshot", fact.id))?;
+        let mut observed = serde_json::to_value(node)
+            .map_err(|error| error.to_string())?
+            .as_object()
+            .cloned()
+            .unwrap_or_default();
         observed.insert("exists".into(), Value::Bool(true));
         if matches!(axon_core::expected_fact_kind(fact)?, "value" | "selected") {
-            if let Some(value) = self.backend.read_value(&handle).map_err(|error| error.to_string())? {
-                observed.insert(axon_core::expected_fact_kind(fact)?.into(), Value::String(value));
+            if let Some(value) = self
+                .backend
+                .read_value(&handle)
+                .map_err(|error| error.to_string())?
+            {
+                observed.insert(
+                    axon_core::expected_fact_kind(fact)?.into(),
+                    Value::String(value),
+                );
             }
         }
         axon_core::verify_expected_fact_state(fact, &observed)
     }
     fn capture_changed_baseline(&mut self, fact: &ExpectedFact) -> Result<Value, String> {
         let (app, _) = axon_core::expected_fact_target(fact)?;
-        let snapshot = self.backend.capture(&AppQuery { name: Some(app), identifier: None }).map_err(|error| error.to_string())?;
+        let snapshot = self
+            .backend
+            .capture(&AppQuery {
+                name: Some(app),
+                identifier: None,
+            })
+            .map_err(|error| error.to_string())?;
         serde_json::to_value(snapshot.app).map_err(|error| error.to_string())
     }
     fn verify_changed(&mut self, fact: &ExpectedFact, baseline: &Value) -> Result<(), String> {
         let current = self.capture_changed_baseline(fact)?;
-        (current != *baseline).then_some(()).ok_or_else(|| format!("fact {} did not verify: app did not change", fact.id))
+        (current != *baseline)
+            .then_some(())
+            .ok_or_else(|| format!("fact {} did not verify: app did not change", fact.id))
     }
 }
 

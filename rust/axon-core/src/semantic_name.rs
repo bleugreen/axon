@@ -444,12 +444,12 @@ impl SemanticNameRegistry {
     pub fn resolve(&self, target: &WireElementTarget, live: &Snapshot) -> SemanticLookup {
         match self.resolve_retained(target, live) {
             RetainedSemanticLookup::NoRecord => self.replay_locators.get(target).map_or_else(
-                || SemanticLookup::Missing { target: target.clone() },
-                |locator| lookup_from_resolution(
-                    target,
-                    LocatorResolver::resolve(locator, live),
-                    locator,
-                ),
+                || SemanticLookup::Missing {
+                    target: target.clone(),
+                },
+                |locator| {
+                    lookup_from_resolution(target, LocatorResolver::resolve(locator, live), locator)
+                },
             ),
             RetainedSemanticLookup::Resolved(lookup) => *lookup,
         }

@@ -12,22 +12,61 @@ struct LocatorFixture {
 #[test]
 fn v2_replay_registers_locator_and_strips_recording_metadata() {
     let doc = AxnCodec::parse(include_str!("../fixtures/swift-action-history-v2.yaml")).unwrap();
-    let mut dispatcher = Dispatcher { calls: vec![], fail_at: None, registrations: vec![] };
-    AxnRunner::new(&mut dispatcher).run(&doc, &serde_json::from_value(json!({"recipient":"test@example.com"})).unwrap(), RunOptions { dry_run: None, continue_on_error: None }).unwrap();
+    let mut dispatcher = Dispatcher {
+        calls: vec![],
+        fail_at: None,
+        registrations: vec![],
+    };
+    AxnRunner::new(&mut dispatcher)
+        .run(
+            &doc,
+            &serde_json::from_value(json!({"recipient":"test@example.com"})).unwrap(),
+            RunOptions {
+                dry_run: None,
+                continue_on_error: None,
+            },
+        )
+        .unwrap();
     assert_eq!(dispatcher.registrations.len(), 1);
     assert_eq!(dispatcher.registrations[0].0, "Example");
     assert_eq!(dispatcher.registrations[0].1, "submit-button");
-    assert_eq!(dispatcher.calls[0].1["target"], json!({"app":"Example","name":"submit-button"}));
+    assert_eq!(
+        dispatcher.calls[0].1["target"],
+        json!({"app":"Example","name":"submit-button"})
+    );
 }
 
 #[test]
 fn v1_and_malformed_v2_targets_are_rejected_for_replay() {
     let v1 = AxnCodec::parse(include_str!("../fixtures/workflow.axn")).unwrap();
     let mut dispatcher = NoDispatch;
-    let error = AxnRunner::new(&mut dispatcher).run(&v1, &Map::new(), RunOptions { dry_run: None, continue_on_error: None }).unwrap_err().to_string();
+    let error = AxnRunner::new(&mut dispatcher)
+        .run(
+            &v1,
+            &Map::new(),
+            RunOptions {
+                dry_run: None,
+                continue_on_error: None,
+            },
+        )
+        .unwrap_err()
+        .to_string();
     assert!(error.contains("version 1 targets are obsolete"));
-    let malformed = AxnCodec::parse("version: 2\nactions:\n- tool: click\n  target: {app: Example, name: submit}\n").unwrap();
-    let error = AxnRunner::new(&mut dispatcher).run(&malformed, &Map::new(), RunOptions { dry_run: None, continue_on_error: None }).unwrap_err().to_string();
+    let malformed = AxnCodec::parse(
+        "version: 2\nactions:\n- tool: click\n  target: {app: Example, name: submit}\n",
+    )
+    .unwrap();
+    let error = AxnRunner::new(&mut dispatcher)
+        .run(
+            &malformed,
+            &Map::new(),
+            RunOptions {
+                dry_run: None,
+                continue_on_error: None,
+            },
+        )
+        .unwrap_err()
+        .to_string();
     assert!(error.contains("attached locator"));
 }
 
@@ -35,9 +74,24 @@ fn v1_and_malformed_v2_targets_are_rejected_for_replay() {
 fn parameter_validation_is_strict_before_dispatch() {
     let source = r#"{"version":2,"args":[{"name":"token","type":"secret","source":"env://TOKEN"}],"actions":[{"tool":"type","target":{"app":"Example","name":"field","locator":{}},"value":"{{ missing }}"}]}"#;
     let doc = AxnCodec::parse(source).unwrap();
-    let mut dispatcher = Dispatcher { calls: vec![], fail_at: None, registrations: vec![] };
-    let mut runner = AxnRunner::new(&mut dispatcher).with_source("env", |_: &str| Ok(Some("secret".into())));
-    let error = runner.run(&doc, &Map::new(), RunOptions { dry_run: None, continue_on_error: None }).unwrap_err().to_string();
+    let mut dispatcher = Dispatcher {
+        calls: vec![],
+        fail_at: None,
+        registrations: vec![],
+    };
+    let mut runner =
+        AxnRunner::new(&mut dispatcher).with_source("env", |_: &str| Ok(Some("secret".into())));
+    let error = runner
+        .run(
+            &doc,
+            &Map::new(),
+            RunOptions {
+                dry_run: None,
+                continue_on_error: None,
+            },
+        )
+        .unwrap_err()
+        .to_string();
     assert!(error.contains("undeclared arg reference: missing"));
     drop(runner);
     assert!(dispatcher.calls.is_empty());
@@ -255,8 +309,14 @@ struct Dispatcher {
     registrations: Vec<(String, String, Locator)>,
 }
 impl ToolDispatcher for Dispatcher {
-    fn register_replay_target(&mut self, app: &str, name: &str, locator: &Locator) -> Result<(), String> {
-        self.registrations.push((app.into(), name.into(), locator.clone()));
+    fn register_replay_target(
+        &mut self,
+        app: &str,
+        name: &str,
+        locator: &Locator,
+    ) -> Result<(), String> {
+        self.registrations
+            .push((app.into(), name.into(), locator.clone()));
         Ok(())
     }
     fn dispatch(&mut self, tool: &str, params: &Map<String, Value>) -> DispatchOutcome {
@@ -485,16 +545,33 @@ fn shared_look_screenshot_policy_is_byte_exact() {
     assert_eq!(fixture.encoding.quality, OBSERVATION_SCREENSHOT_QUALITY);
 }
 
-
 #[test]
 fn swift_shaped_semantic_facts_cover_supported_state_vocabulary() {
     let cases = [
-        (json!({"id":"exists","kind":"exists","target":{"app":"Example","locator":{"role":"AXButton"}}}), json!({"exists":true})),
-        (json!({"id":"window","kind":"window","target":{"app":"Example","locator":{"role":"AXWindow"}}}), json!({"exists":true})),
-        (json!({"id":"focused","kind":"focused","target":{"app":"Example","locator":{"role":"AXTextField"}},"state":{"focused":true}}), json!({"focused":true})),
-        (json!({"id":"enabled","kind":"enabled","target":{"app":"Example","locator":{"role":"AXButton"}},"state":{"enabled":{"equals":false}}}), json!({"enabled":false})),
-        (json!({"id":"value","kind":"value","target":{"app":"Example","locator":{"role":"AXTextField"}},"state":{"value":{"contains":"HELLO"}}}), json!({"value":"hello world"})),
-        (json!({"id":"selected","kind":"selected","target":{"app":"Example","locator":{"role":"AXCheckBox"}},"state":{"selected":{"exact":"1","caseSensitive":true}}}), json!({"selected":"1"})),
+        (
+            json!({"id":"exists","kind":"exists","target":{"app":"Example","locator":{"role":"AXButton"}}}),
+            json!({"exists":true}),
+        ),
+        (
+            json!({"id":"window","kind":"window","target":{"app":"Example","locator":{"role":"AXWindow"}}}),
+            json!({"exists":true}),
+        ),
+        (
+            json!({"id":"focused","kind":"focused","target":{"app":"Example","locator":{"role":"AXTextField"}},"state":{"focused":true}}),
+            json!({"focused":true}),
+        ),
+        (
+            json!({"id":"enabled","kind":"enabled","target":{"app":"Example","locator":{"role":"AXButton"}},"state":{"enabled":{"equals":false}}}),
+            json!({"enabled":false}),
+        ),
+        (
+            json!({"id":"value","kind":"value","target":{"app":"Example","locator":{"role":"AXTextField"}},"state":{"value":{"contains":"HELLO"}}}),
+            json!({"value":"hello world"}),
+        ),
+        (
+            json!({"id":"selected","kind":"selected","target":{"app":"Example","locator":{"role":"AXCheckBox"}},"state":{"selected":{"exact":"1","caseSensitive":true}}}),
+            json!({"selected":"1"}),
+        ),
     ];
     for (fact, observed) in cases {
         let fact: ExpectedFact = serde_json::from_value(fact).unwrap();
@@ -512,7 +589,12 @@ struct SemanticDispatcher {
 impl ToolDispatcher for SemanticDispatcher {
     fn dispatch(&mut self, _tool: &str, _params: &Map<String, Value>) -> DispatchOutcome {
         self.dispatched += 1;
-        DispatchOutcome { success: !self.fail_dispatch, result: json!({"dispatchOnly":self.fail_dispatch}), error: None, resolution: None }
+        DispatchOutcome {
+            success: !self.fail_dispatch,
+            result: json!({"dispatchOnly":self.fail_dispatch}),
+            error: None,
+            resolution: None,
+        }
     }
     fn verify(&mut self, fact: &ExpectedFact) -> Result<(), String> {
         let state = &self.states[self.cursor.min(self.states.len() - 1)];
@@ -524,7 +606,9 @@ impl ToolDispatcher for SemanticDispatcher {
     }
     fn verify_changed(&mut self, fact: &ExpectedFact, baseline: &Value) -> Result<(), String> {
         let current = self.changed_captures.get(1).unwrap();
-        (current != baseline).then_some(()).ok_or_else(|| format!("fact {} did not verify: app did not change", fact.id))
+        (current != baseline)
+            .then_some(())
+            .ok_or_else(|| format!("fact {} did not verify: app did not change", fact.id))
     }
 }
 
@@ -539,13 +623,22 @@ fn changed_captures_before_dispatch_and_dispatch_only_can_succeed_causally() {
         "expects":[{"id":"click.changed.1","kind":"changed","target":{"app":"Example","locator":{"role":"AXWindow"}}}]
     }]));
     let mut dispatcher = SemanticDispatcher {
-        states: vec![Map::new()], cursor: 0, dispatched: 0, fail_dispatch: true,
+        states: vec![Map::new()],
+        cursor: 0,
+        dispatched: 0,
+        fail_dispatch: true,
         changed_captures: vec![json!({"value":"before"}), json!({"value":"after"})],
     };
-    let result = AxnRunner::new(&mut dispatcher).run(
-        &doc, &Map::new(),
-        RunOptions { dry_run: Some(false), continue_on_error: Some(false) },
-    ).unwrap();
+    let result = AxnRunner::new(&mut dispatcher)
+        .run(
+            &doc,
+            &Map::new(),
+            RunOptions {
+                dry_run: Some(false),
+                continue_on_error: Some(false),
+            },
+        )
+        .unwrap();
     assert!(result.success);
     assert!(result.trace[0].success);
     assert_eq!(dispatcher.dispatched, 1);
@@ -564,13 +657,28 @@ fn requires_reverifies_the_established_fact_before_dispatch() {
             json!({"value":"ready"}).as_object().unwrap().clone(),
             json!({"value":"stale"}).as_object().unwrap().clone(),
         ],
-        cursor: 0, dispatched: 0, fail_dispatch: false, changed_captures: vec![],
+        cursor: 0,
+        dispatched: 0,
+        fail_dispatch: false,
+        changed_captures: vec![],
     };
-    let result = AxnRunner::new(&mut dispatcher).run(
-        &doc, &Map::new(),
-        RunOptions { dry_run: Some(false), continue_on_error: Some(false) },
-    ).unwrap();
+    let result = AxnRunner::new(&mut dispatcher)
+        .run(
+            &doc,
+            &Map::new(),
+            RunOptions {
+                dry_run: Some(false),
+                continue_on_error: Some(false),
+            },
+        )
+        .unwrap();
     assert!(!result.success);
     assert_eq!(dispatcher.dispatched, 1);
-    assert!(result.trace[1].error.as_deref().unwrap().contains("expectation failed"));
+    assert!(
+        result.trace[1]
+            .error
+            .as_deref()
+            .unwrap()
+            .contains("expectation failed")
+    );
 }
