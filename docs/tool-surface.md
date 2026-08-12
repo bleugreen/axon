@@ -1,56 +1,8 @@
-# Tool Surface
+# Use Axon tools
 
-Axon exposes one verb-shaped vocabulary through MCP, the socket router, `.axn`
-files, and the CLI. There are no compatibility aliases for previous tool names.
+Your agent uses Axon in a simple loop: inspect an app, choose a semantic target, act, and verify the result. You normally do not call these tools yourself; this guide explains what to ask for and how to read what Axon reports.
 
-## MCP Tools
-
-```text
-look(app?, target?, since?, screenshot?, screenText?, tree?, offset?, limit?, direct?, childDepth?, depth?, all?, format?, frames?)
-navigate(app, url)
-windows(app)
-tabs(app, window?)
-find(app, locator)
-wait_for_value(target, contains?, equals?, matches?, timeoutMs?, intervalMs?)
-wait_for_stability(app, condition?, stableMs?, timeoutMs?, intervalMs?)
-permit()
-run(actions?, path?, argValues?, continueOnError?, dryRun?, healedPath?)
-save(sessionId?, from?, to?, path?, includeReads?)
-click(target, deliveryPolicy?)
-type(target, value, deliveryPolicy?)
-keyboard(text?, key?, app?, deliveryPolicy?)
-scroll(target?, app?, deltaX?, deltaY?, deliveryPolicy?)
-drag(from, to, app?, durationMs?, expects?, deliveryPolicy?)
-invoke(target, name, deliveryPolicy?)
-```
-
-## CLI Commands
-
-```text
-axon permit
-axon refresh-secrets [--json]
-axon look [app | target-json] [--since snapshot-id] [--no-screenshot] [--screen-text] [--frames] [--json] [--details] [--debug] [--no-tree] [--offset n] [--limit n] [--depth n]
-axon find <app> '<locator-json>'
-axon wait_for_value '<target-json>' (--contains text | --equals text | --matches regex) [--timeout-ms n] [--interval-ms n]
-axon wait_for_stability <app> [--condition stable|changed] [--stable-ms n] [--timeout-ms n] [--interval-ms n]
-axon run <path.axn> [--arg name=value] [--dry-run] [--healed-path file] [--continue-on-error]
-axon save [--session id] [--from call] [--to call] [--path file.axn] [--include-reads]
-
-axon click [--foreground] <target-json>
-axon type [--foreground] <target-json> <value>
-axon keyboard [--app app] [--foreground] (--text text | --key keystroke)
-axon scroll [--app app] [--target target-json] [--dx n] [--dy n]
-axon drag [--app app] [--duration-ms n] [--foreground] <from-json> <to-json>
-axon invoke [--foreground] <target-json> <action-name>
-```
-
-The command line has one positional slot where `look` has two parameters, so the
-shape of the argument selects between them: a bare word is an `app` to observe,
-and a JSON object is a `target` whose children are paged. Every other command
-that takes a target takes it as JSON, because an element target is the
-`{app, name}` object `look` returned and never a bare string.
-
-## Perception
+## See what an app exposes
 
 `look()` lists regular running UI apps by default. Use `all: true` or
 `format: "debug"` through MCP, or `axon look --details`, when raw running
@@ -151,7 +103,7 @@ and return `finalObservation` on success or timeout. This is the post-navigation
 settle primitive; use `wait_for_value` when readiness has a specific semantic
 field predicate instead.
 
-## Delivery
+## Act without stealing focus
 
 Every mutating action takes a `deliveryPolicy`, and the CLI spells
 `foregroundPermitted` as `--foreground`. `backgroundOnly` is the default and
@@ -238,7 +190,7 @@ the overall result is a failure.
 Axon has no clipboard path and will not grow one by accident: the pasteboard is
 modelled as a forbidden delivery capability that the planner refuses on sight.
 
-## Actions
+## Interact with a target
 
 Interactive element targets are app-scoped semantic names:
 
@@ -319,7 +271,7 @@ receiving application. Without it the only rung left is foreground, and
 `invoke` runs a named AX action such as `AXPress` or `AXShowMenu`. It is always
 semantic and never escalates.
 
-## Recordings
+## Save and replay useful work
 
 `run` executes `.axn` actions from a file, inline actions, or both. When both
 `path` and `actions` are provided, the file is loaded first and inline actions
@@ -358,3 +310,52 @@ as `look` and `find` are omitted unless `includeReads` is true.
 kinds are `exists`, `focused`, `value`, `selected`, `enabled`, `window`,
 `menu-selection`, and `changed`; facts resolve through the same locator model as
 actions.
+
+## Protocol signatures
+
+### MCP
+
+```text
+look(app?, target?, since?, screenshot?, screenText?, tree?, offset?, limit?, direct?, childDepth?, depth?, all?, format?, frames?)
+navigate(app, url)
+windows(app)
+tabs(app, window?)
+find(app, locator)
+wait_for_value(target, contains?, equals?, matches?, timeoutMs?, intervalMs?)
+wait_for_stability(app, condition?, stableMs?, timeoutMs?, intervalMs?)
+permit()
+run(actions?, path?, argValues?, continueOnError?, dryRun?, healedPath?)
+save(sessionId?, from?, to?, path?, includeReads?)
+click(target, deliveryPolicy?)
+type(target, value, deliveryPolicy?)
+keyboard(text?, key?, app?, deliveryPolicy?)
+scroll(target?, app?, deltaX?, deltaY?, deliveryPolicy?)
+drag(from, to, app?, durationMs?, expects?, deliveryPolicy?)
+invoke(target, name, deliveryPolicy?)
+```
+
+### CLI
+
+```text
+axon permit
+axon refresh-secrets [--json]
+axon look [app | target-json] [--since snapshot-id] [--no-screenshot] [--screen-text] [--frames] [--json] [--details] [--debug] [--no-tree] [--offset n] [--limit n] [--depth n]
+axon find <app> '<locator-json>'
+axon wait_for_value '<target-json>' (--contains text | --equals text | --matches regex) [--timeout-ms n] [--interval-ms n]
+axon wait_for_stability <app> [--condition stable|changed] [--stable-ms n] [--timeout-ms n] [--interval-ms n]
+axon run <path.axn> [--arg name=value] [--dry-run] [--healed-path file] [--continue-on-error]
+axon save [--session id] [--from call] [--to call] [--path file.axn] [--include-reads]
+
+axon click [--foreground] <target-json>
+axon type [--foreground] <target-json> <value>
+axon keyboard [--app app] [--foreground] (--text text | --key keystroke)
+axon scroll [--app app] [--target target-json] [--dx n] [--dy n]
+axon drag [--app app] [--duration-ms n] [--foreground] <from-json> <to-json>
+axon invoke [--foreground] <target-json> <action-name>
+```
+
+The command line has one positional slot where `look` has two parameters, so the
+shape of the argument selects between them: a bare word is an `app` to observe,
+and a JSON object is a `target` whose children are paged. Every other command
+that takes a target takes it as JSON, because an element target is the
+`{app, name}` object `look` returned and never a bare string.
