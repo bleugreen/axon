@@ -2,6 +2,9 @@ use crate::{
     BackgroundPixelPointer, PixelDispatch, PixelDispatchError, PixelPlan, PixelTarget,
     PointerTargetVerifier, VisualObservation, VisualObservationProvider,
 };
+
+#[path = "capture.rs"]
+mod window_capture;
 use axon_core::{
     AppQuery, Application, BackendError, Capability, CapabilityInfo, KeyboardIntent, Node,
     Observation, PlatformBackend, RecordedCall, Rect, Screenshot, Snapshot, SnapshotHandle, Window,
@@ -30,6 +33,11 @@ const AX_VALUE_CGSIZE: i64 = 2;
 struct CGPoint {
     x: f64,
     y: f64,
+}
+
+fn number_value(value: CFTypeRef) -> Option<i64> {
+    let mut number = 0i64;
+    unsafe { CFNumberGetValue(value, 4, (&mut number as *mut i64).cast()) }.then_some(number)
 }
 #[repr(C)]
 #[derive(Clone, Copy, Default)]
@@ -73,6 +81,7 @@ unsafe extern "C" {
     fn CFArrayGetTypeID() -> usize;
     fn CFArrayGetCount(array: CFArrayRef) -> isize;
     fn CFArrayGetValueAtIndex(array: CFArrayRef, index: isize) -> *const c_void;
+    fn CFNumberGetValue(number: CFTypeRef, number_type: i64, value: *mut c_void) -> bool;
     fn CFRetain(value: CFTypeRef) -> CFTypeRef;
     fn CFRelease(value: CFTypeRef);
 }
@@ -333,16 +342,23 @@ impl PlatformBackend for MacBackend {
             Capability::SetValue,
             Capability::Focus,
             Capability::Scroll,
+            Capability::Screenshot,
         ];
         Ok(Capability::ALL
             .into_iter()
             .map(|capability| {
-                let usable = supported.contains(&capability) && self.accessibility_enabled();
+                let usable = if capability == Capability::Screenshot {
+                    window_capture::screen_capture_enabled()
+                } else {
+                    supported.contains(&capability) && self.accessibility_enabled()
+                };
                 CapabilityInfo {
                     capability,
                     usable,
                     restriction: (!usable).then(|| {
-                        if supported.contains(&capability) {
+                        if capability == Capability::Screenshot {
+                            "Screen Recording permission is not granted".into()
+                        } else if supported.contains(&capability) {
                             "Accessibility permission is not granted".into()
                         } else {
                             "excluded from axon-mac v1".into()
@@ -462,8 +478,25 @@ impl PlatformBackend for MacBackend {
     ) -> Result<(), BackendError> {
         Err(cap(Capability::PointerInput, "drag excluded from v1"))
     }
-    fn screenshot(&mut self, _: &AppQuery) -> Result<Screenshot, BackendError> {
-        Err(cap(Capability::Screenshot, "excluded from v1"))
+    fn screenshot(&mut self, app: &AppQuery) -> Result<Screenshot, BackendError> {
+        let (pid, _) = self.resolve(app)?;
+        let root = unsafe { AXUIElementCreateApplication(pid) };
+        let root = (!root.is_null())
+            .then(|| Owned(root))
+            .ok_or_else(|| op("capture screenshot", "AXUIElementCreateApplication returned null"))?;
+        let windows = attribute(root.0, "AXWindows")
+            .ok_or_else(|| op("capture screenshot", "application exposes no AXWindows"))?;
+        let window = unsafe { CFArrayGetValueAtIndex(windows.0, 0) };
+        if window.is_null() {
+            return Err(op("capture screenshot", "application has no capturable window"));
+        }
+        let window_frame = frame(window)
+            .ok_or_else(|| op("capture screenshot", "window exposes no screen frame"))?;
+        let window_number = attribute(window, "AXWindowNumber")
+            .and_then(|value| number_value(value.0))
+            .and_then(|value| u32::try_from(value).ok())
+            .ok_or_else(|| op("capture screenshot", "window exposes no CGWindow identifier"))?;
+        window_capture::screenshot(window_number, window_frame)
     }
     fn hit_test(&mut self, _: (f64, f64)) -> Result<Option<Node>, BackendError> {
         Err(cap(Capability::HitTest, "excluded from v1"))
@@ -481,12 +514,12 @@ impl PlatformBackend for MacBackend {
 impl VisualObservationProvider for MacBackend {
     fn observe_visuals(
         &mut self,
-        _: &AppQuery,
-        _: bool,
-        _: bool,
+        app: &AppQuery,
+        screenshot: bool,
+        _screen_text: bool,
     ) -> Result<VisualObservation, BackendError> {
         Ok(VisualObservation {
-            screenshot: None,
+            screenshot: screenshot.then(|| self.screenshot(app)).transpose()?,
             recognized_text: None,
         })
     }
