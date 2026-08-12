@@ -551,6 +551,7 @@ mod tests {
                 ready: false,
                 process_id: 12,
                 endpoint: r"\\.\pipe\axon-v1".into(),
+                provenance: None,
                 session: SessionHealth::usable(None),
                 permissions: vec![],
                 capabilities: CapabilityState::all_unusable(reason::DAEMON_NOT_READY),
