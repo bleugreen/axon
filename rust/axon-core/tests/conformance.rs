@@ -34,11 +34,13 @@ fn ambiguous_duplicate_order_never_authorizes_identity_pairing() {
     let matched = fixture
         .fresh
         .iter()
-        .filter(|fresh| fixture.baseline.iter().any(|baseline| {
-            baseline.name == fresh.name
-                && baseline.candidate_label == fresh.candidate_label
-                && baseline.identity_key == fresh.identity_key
-        }))
+        .filter(|fresh| {
+            fixture.baseline.iter().any(|baseline| {
+                baseline.name == fresh.name
+                    && baseline.candidate_label == fresh.candidate_label
+                    && baseline.identity_key == fresh.identity_key
+            })
+        })
         .map(|name| name.candidate_label.clone())
         .collect::<Vec<_>>();
     assert_eq!(matched, fixture.expected_matched);
