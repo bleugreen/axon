@@ -481,33 +481,7 @@ impl PlatformBackend for MacBackend {
             ));
         }
         let (pid, _) = self.resolve(app)?;
-        let root = unsafe { AXUIElementCreateApplication(pid) };
-        let root = (!root.is_null()).then(|| Owned(root)).ok_or_else(|| {
-            op(
-                "capture screenshot",
-                "AXUIElementCreateApplication returned null",
-            )
-        })?;
-        let windows = attribute(root.0, "AXWindows")
-            .ok_or_else(|| op("capture screenshot", "application exposes no AXWindows"))?;
-        if unsafe { CFGetTypeID(windows.0) } != unsafe { CFArrayGetTypeID() }
-            || unsafe { CFArrayGetCount(windows.0) } == 0
-        {
-            return Err(op(
-                "capture screenshot",
-                "application has no capturable window",
-            ));
-        }
-        let window = unsafe { CFArrayGetValueAtIndex(windows.0, 0) };
-        if window.is_null() {
-            return Err(op(
-                "capture screenshot",
-                "application has no capturable window",
-            ));
-        }
-        let window_frame = frame(window)
-            .ok_or_else(|| op("capture screenshot", "window exposes no screen frame"))?;
-        window_capture::screenshot(pid, window_frame)
+        window_capture::screenshot(pid)
     }
     fn hit_test(&mut self, _: (f64, f64)) -> Result<Option<Node>, BackendError> {
         Err(cap(Capability::HitTest, "excluded from v1"))

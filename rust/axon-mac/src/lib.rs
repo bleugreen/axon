@@ -822,7 +822,7 @@ impl<
                 .observe_visuals(&app, wants_screenshot, wants_screen_text)
             {
                 Ok(visuals) => (Some(visuals), None),
-                Err(error) if wants_screenshot && !wants_screen_text => (
+                Err(error) if wants_screenshot => (
                     None,
                     Some(axon_core::ScreenshotUnavailable::from_backend_error(error)),
                 ),

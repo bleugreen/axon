@@ -2,7 +2,7 @@
 //! The endpoint is mandatory and has no fallback to the installed Swift daemon.
 use crate::{MacBackend, Router, parse_request};
 use axon_core::{
-    CapabilityInfo, CapabilityState, DaemonReport, HealthPlatform, JsonRpcId, JsonRpcRequest,
+    CapabilityState, DaemonReport, HealthPlatform, JsonRpcId, JsonRpcRequest,
     JsonRpcResponse, PermissionState, PlatformBackend, SessionHealth, health::reason,
 };
 use serde_json::{Value, json};
@@ -91,12 +91,6 @@ pub fn serve() -> io::Result<()> {
         fs::remove_file(&path)?;
     }
     let backend = MacBackend::new().map_err(|e| io::Error::other(e.to_string()))?;
-    let reported = backend.capabilities().unwrap_or_default();
-    let trusted = backend.accessibility_enabled();
-    let screen_recording_granted = reported
-        .iter()
-        .find(|info| info.capability == axon_core::Capability::Screenshot)
-        .is_some_and(|info| info.usable);
     let mut router = Router::new(backend);
     let listener = UnixListener::bind(&path)?;
     fs::set_permissions(&path, fs::Permissions::from_mode(0o600))?;
@@ -109,14 +103,7 @@ pub fn serve() -> io::Result<()> {
                 continue;
             }
         };
-        match answer(
-            stream,
-            &mut router,
-            &reported,
-            trusted,
-            screen_recording_granted,
-            &path,
-        ) {
+        match answer(stream, &mut router, &path) {
             Ok(true) => break,
             Ok(false) => {}
             Err(error) => eprintln!("axon-mac: dropped a client connection: {error}"),
@@ -135,9 +122,6 @@ pub fn serve() -> io::Result<()> {
 fn answer(
     mut stream: UnixStream,
     router: &mut Router<MacBackend>,
-    reported: &[CapabilityInfo],
-    trusted: bool,
-    screen_recording_granted: bool,
     endpoint: &std::path::Path,
 ) -> io::Result<bool> {
     stream.set_read_timeout(Some(REQUEST_TIMEOUT))?;
@@ -146,23 +130,13 @@ fn answer(
     if BufReader::new(stream.try_clone()?).read_line(&mut line)? == 0 {
         return Ok(false);
     }
-    let (response, stop) = dispatch(
-        line.trim(),
-        router,
-        reported,
-        trusted,
-        screen_recording_granted,
-        endpoint,
-    );
+    let (response, stop) = dispatch(line.trim(), router, endpoint);
     writeln!(stream, "{}", serde_json::to_string(&response).unwrap())?;
     Ok(stop)
 }
 fn dispatch(
     line: &str,
     router: &mut Router<MacBackend>,
-    reported: &[CapabilityInfo],
-    trusted: bool,
-    screen_recording_granted: bool,
     endpoint: &std::path::Path,
 ) -> (Value, bool) {
     let request = match parse_request(line) {
@@ -174,6 +148,15 @@ fn dispatch(
     };
     match request.method.as_str() {
         "health" => {
+            let reported = router.capabilities().unwrap_or_default();
+            let trusted = reported
+                .iter()
+                .find(|info| info.capability == axon_core::Capability::Capture)
+                .is_some_and(|info| info.usable);
+            let screen_recording_granted = reported
+                .iter()
+                .find(|info| info.capability == axon_core::Capability::Screenshot)
+                .is_some_and(|info| info.usable);
             let permission = if trusted {
                 PermissionState::granted("accessibility")
             } else {
@@ -196,7 +179,7 @@ fn dispatch(
                 endpoint: endpoint.display().to_string(),
                 session: SessionHealth::usable(None),
                 permissions: vec![permission, screen_recording],
-                capabilities: CapabilityState::complete(reported),
+                capabilities: CapabilityState::complete(&reported),
             };
             (
                 serde_json::to_value(JsonRpcResponse::success(

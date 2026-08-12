@@ -18,7 +18,12 @@ struct CGPoint {
     y: f64,
 }
 
-fn window_id_for_pid(pid: i32) -> Result<u32, BackendError> {
+struct CaptureWindow {
+    id: u32,
+    frame: Rect,
+}
+
+fn window_for_pid(pid: i32) -> Result<CaptureWindow, BackendError> {
     let windows = Owned::new(
         unsafe {
             CGWindowListCopyWindowInfo(
@@ -36,9 +41,33 @@ fn window_id_for_pid(pid: i32) -> Result<u32, BackendError> {
         let owner = dictionary_number(dictionary, unsafe { kCGWindowOwnerPID });
         let layer = dictionary_number(dictionary, unsafe { kCGWindowLayer });
         if owner == Some(i64::from(pid)) && layer == Some(0) {
-            return dictionary_number(dictionary, unsafe { kCGWindowNumber })
+            let id = dictionary_number(dictionary, unsafe { kCGWindowNumber })
                 .and_then(|value| u32::try_from(value).ok())
-                .ok_or_else(|| op("resolve capture window", "window has no numeric identifier"));
+                .ok_or_else(|| op("resolve capture window", "window has no numeric identifier"))?;
+            let bounds = unsafe { CFDictionaryGetValue(dictionary, kCGWindowBounds) };
+            let mut frame = CGRect {
+                origin: CGPoint { x: 0.0, y: 0.0 },
+                size: CGSize {
+                    width: 0.0,
+                    height: 0.0,
+                },
+            };
+            if bounds.is_null()
+                || !unsafe { CGRectMakeWithDictionaryRepresentation(bounds, &mut frame) }
+                || frame.size.width <= 0.0
+                || frame.size.height <= 0.0
+            {
+                return Err(op("resolve capture window", "window has no valid bounds"));
+            }
+            return Ok(CaptureWindow {
+                id,
+                frame: Rect {
+                    x: frame.origin.x,
+                    y: frame.origin.y,
+                    width: frame.size.width,
+                    height: frame.size.height,
+                },
+            });
         }
     }
     Err(op(
@@ -61,6 +90,11 @@ unsafe extern "C" {
     static kCGWindowNumber: CFStringRef;
     static kCGWindowOwnerPID: CFStringRef;
     static kCGWindowLayer: CFStringRef;
+    static kCGWindowBounds: CFStringRef;
+    fn CGRectMakeWithDictionaryRepresentation(
+        dictionary: *const c_void,
+        rect: *mut CGRect,
+    ) -> bool;
 }
 
 #[repr(C)]
@@ -160,7 +194,7 @@ pub(crate) fn screen_capture_enabled() -> bool {
     unsafe { CGPreflightScreenCaptureAccess() }
 }
 
-pub(crate) fn screenshot(pid: i32, frame: Rect) -> Result<Screenshot, BackendError> {
+pub(crate) fn screenshot(pid: i32) -> Result<Screenshot, BackendError> {
     if !screen_capture_enabled() {
         return Err(BackendError::Capability {
             capability: Capability::Screenshot,
@@ -168,14 +202,14 @@ pub(crate) fn screenshot(pid: i32, frame: Rect) -> Result<Screenshot, BackendErr
             diagnostic: None,
         });
     }
-    let window_id = window_id_for_pid(pid)?;
+    let window = window_for_pid(pid)?;
 
     let captured = Owned::new(
         unsafe {
             CGWindowListCreateImage(
                 CGRectNull,
                 WINDOW_LIST_OPTION_INCLUDING_WINDOW,
-                window_id,
+                window.id,
                 WINDOW_IMAGE_BOUNDS_IGNORE_FRAMING,
             )
         },
@@ -200,7 +234,7 @@ pub(crate) fn screenshot(pid: i32, frame: Rect) -> Result<Screenshot, BackendErr
         media_type: OBSERVATION_SCREENSHOT_MEDIA_TYPE.into(),
         width: u32::try_from(width).map_err(|_| op("capture window image", "width overflow"))?,
         height: u32::try_from(height).map_err(|_| op("capture window image", "height overflow"))?,
-        frame,
+        frame: window.frame,
     })
 }
 
