@@ -144,12 +144,6 @@ impl PixelPlan {
             reason: reason.into(),
             blocks_global_input: false,
         }
-        if let Some(unavailable) = screenshot_unavailable {
-            value.as_object_mut().expect("snapshots serialize as objects").insert(
-                "screenshotUnavailable".into(),
-                serde_json::to_value(unavailable).map_err(internal_error)?,
-            );
-        }
     }
 
     /// No mechanism at all, at any rung, for the reason given.
@@ -850,6 +844,12 @@ impl<
                 .as_object_mut()
                 .expect("snapshots serialize as objects")
                 .insert("screenText".into(), json!(screen_text));
+        }
+        if let Some(unavailable) = screenshot_unavailable {
+            value.as_object_mut().expect("snapshots serialize as objects").insert(
+                "screenshotUnavailable".into(),
+                serde_json::to_value(unavailable).map_err(internal_error)?,
+            );
         }
         self.snapshot = Some(snapshot);
         Ok(value)

@@ -143,15 +143,6 @@ impl PixelPlan {
             reason: reason.into(),
             blocks_global_input: false,
         }
-        if wants_screenshot {
-            value.as_object_mut().expect("snapshots serialize as objects").insert(
-                "screenshotUnavailable".into(),
-                json!({
-                    "code": "capability-unavailable",
-                    "reason": "screenshot capture is excluded from axon-mac v1"
-                }),
-            );
-        }
     }
 
     /// No mechanism at all, at any rung, for the reason given.
@@ -857,6 +848,15 @@ impl<
                 .as_object_mut()
                 .expect("snapshots serialize as objects")
                 .insert("screenText".into(), json!(screen_text));
+        }
+        if wants_screenshot {
+            value.as_object_mut().expect("snapshots serialize as objects").insert(
+                "screenshotUnavailable".into(),
+                json!({
+                    "code": "capability-unavailable",
+                    "reason": "screenshot capture is excluded from axon-mac v1"
+                }),
+            );
         }
         self.snapshot = Some(snapshot);
         Ok(value)
