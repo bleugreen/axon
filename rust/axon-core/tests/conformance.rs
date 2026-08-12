@@ -36,14 +36,15 @@ fn parameter_validation_is_strict_before_dispatch() {
     let source = r#"{"version":2,"args":[{"name":"token","type":"secret","source":"env://TOKEN"}],"actions":[{"tool":"type","target":{"app":"Example","name":"field","locator":{}},"value":"{{ missing }}"}]}"#;
     let doc = AxnCodec::parse(source).unwrap();
     let mut dispatcher = Dispatcher { calls: vec![], fail_at: None, registrations: vec![] };
-    let mut runner = AxnRunner::new(&mut dispatcher).with_source("env", |_| Ok(Some("secret".into())));
+    let mut runner = AxnRunner::new(&mut dispatcher).with_source("env", |_: &str| Ok(Some("secret".into())));
     let error = runner.run(&doc, &Map::new(), RunOptions { dry_run: None, continue_on_error: None }).unwrap_err().to_string();
     assert!(error.contains("undeclared arg reference: missing"));
+    drop(runner);
     assert!(dispatcher.calls.is_empty());
 }
 
 fn replayable_workflow() -> AxnDocument {
-    let mut doc = replayable_workflow();
+    let mut doc = AxnCodec::parse(include_str!("../fixtures/workflow.axn")).unwrap();
     doc.version = 2;
     for action in &mut doc.actions {
         if action.params.contains_key("target") {
