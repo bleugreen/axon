@@ -191,7 +191,7 @@ async function build() {
       title: `${title} — Axon`,
       description: `${title}, from the Axon documentation.`,
       body: renderMarkdown(markdown, {
-        omitSections: slug === 'tool-surface' ? ['Protocol signatures'] : [],
+        omitSections: slug === 'tool-surface' ? ['Protocol reference'] : [],
       }),
       docsPage: true,
       docsSlug: slug,
