@@ -1,6 +1,50 @@
-# Use Axon tools
+# What you can do with Axon
 
-Your agent uses Axon in a simple loop: inspect an app, choose a semantic target, act, and verify the result. You normally do not call these tools yourself; this guide explains what to ask for and how to read what Axon reports.
+Axon gives your agent a way to understand and operate desktop apps using their accessibility information. You describe the outcome; the agent uses Axon to inspect the app, choose a meaningful target, act, and check what happened.
+
+## Start by looking
+
+Ask your agent to look at an app before acting:
+
+> Look at Safari and tell me what is open.
+
+Axon returns a compact description of windows and controls using roles, labels, values, and stable semantic names. It can include a screenshot when that helps. Passwords, credentials, and other recognized sensitive values are redacted.
+
+## Act on meaningful targets
+
+You can refer to controls by what they are, not by screen coordinates:
+
+> Click the **Create issue** button in Linear.
+
+> Fill the **Email** field with `ada@example.com`.
+
+> Open Safari to `https://example.com`.
+
+Axon prefers semantic actions supplied by the app, such as pressing a button or setting a field value. Coordinates are an escape hatch for surfaces that do not expose useful accessibility information.
+
+## Keep control of your desktop
+
+Actions run in the background when the operating system and app allow it. Axon does not silently move your pointer, steal focus, use the clipboard, or send global keyboard input.
+
+When an action genuinely requires the app in front, your agent must opt in for that specific step. The permission does not carry into later actions.
+
+## Expect honest results
+
+Axon separates “the operating system accepted the input” from “the intended result happened.” If it cannot verify an outcome, it says so. If a safe delivery path does not exist, it refuses the action instead of guessing.
+
+For tasks with a clear result, ask the agent to wait for it:
+
+> Submit the form, then wait until the confirmation message appears.
+
+## Save repeatable work
+
+A useful sequence can be saved as a human-readable [`.axn` file](axn.md). You can inspect it, edit parameters, keep it in version control, and run it again.
+
+> Save what we just did as `create-issue.axn`.
+
+For platform-specific limits, see [Cross-platform support](cross-platform.md).
+
+## Protocol reference
 
 ## See what an app exposes
 
