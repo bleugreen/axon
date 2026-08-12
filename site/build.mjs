@@ -55,7 +55,7 @@ function shellBlock(command, label) {
   return `<div class="command"><span>${escapeHtml(label)}</span><code>${escapeHtml(command)}</code></div>`;
 }
 
-function page({ title, description, body, docsPage = false }) {
+function page({ title, description, body, docsPage = false, version }) {
   const nav = docs.map(([slug, label]) => `<a href="/docs/${slug}/">${label}</a>`).join('');
   return `<!doctype html>
 <html lang="en">
@@ -71,7 +71,7 @@ function page({ title, description, body, docsPage = false }) {
     <a class="wordmark" href="/" aria-label="Axon home"><span>axn</span><i>.dev</i></a>
     <nav aria-label="Primary"><a href="/docs/install/">Docs</a><a href="https://github.com/bleugreen/axon">GitHub</a></nav>
   </header>
-  ${docsPage ? `<div class="docs-shell"><aside><div class="docs-label">Documentation</div>${nav}</aside><main class="prose">${body}</main></div>` : body}
+  ${docsPage ? `<div class="docs-shell"><aside><div class="docs-label">Documentation</div>${nav}</aside><main class="prose"><div class="version-stamp">Describes Axon v${escapeHtml(version)}</div>${body}</main></div>` : body}
   <footer><span>Axon is open source under the MIT license.</span><span>Small. Local. Inspectable.</span></footer>
 </body>
 </html>`;
@@ -142,6 +142,7 @@ async function build() {
       description: `${title}, from the Axon documentation.`,
       body: renderMarkdown(markdown),
       docsPage: true,
+      version,
     }));
   }
 }
