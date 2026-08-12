@@ -10,13 +10,12 @@ const outputRoot = join(siteRoot, 'dist');
 const docsRoot = join(repositoryRoot, 'docs');
 
 const docs = [
-  ['install', 'Install and Operations'],
+  ['install', 'Install'],
+  ['connect', 'Connect your agent'],
+  ['tool-surface', 'Tools'],
+  ['axn', 'The .axn file'],
   ['cross-platform', 'Cross-platform'],
-  ['embedding', 'Embedding Axon'],
-  ['tool-surface', 'Tool Surface'],
-  ['axn', 'The .axn File'],
-  ['design', 'Design'],
-  ['decision-log', 'Decision Log'],
+  ['embedding', 'Embedding'],
 ];
 
 // cross-platform.md links to this contract. It is rendered but deliberately omitted from the
@@ -92,8 +91,10 @@ function shellBlock(command, label) {
   return `<div class="command"><span>${escapeHtml(label)}</span><code>${escapeHtml(command)}</code></div>`;
 }
 
-function page({ title, description, body, docsPage = false, version }) {
-  const nav = docs.map(([slug, label]) => `<a href="/docs/${slug}/">${label}</a>`).join('');
+function page({ title, description, body, docsPage = false, docsSlug, version }) {
+  const nav = docs.map(([slug, label]) =>
+    `<a href="/docs/${slug}/"${slug === docsSlug ? ' aria-current="page"' : ''}>${label}</a>`
+  ).join('');
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -126,7 +127,7 @@ function home(version) {
     description: 'A local accessibility service that gives agents semantic, honest, and replayable control of desktop apps.',
     body: `<main>
       <section class="hero">
-        <div class="eyebrow"><span></span> Local accessibility infrastructure</div>
+        <div class="eyebrow"><span></span>Local accessibility infrastructure</div>
         <h1>Give agents a path<br>into <em>running apps.</em></h1>
         <p>Axon turns the accessibility layer already built into macOS, Windows, and Linux into a small, consistent tool surface for agents.</p>
         <div class="hero-actions"><a class="button primary" href="/docs/install/">Get started</a><a class="button" href="/docs/tool-surface/">Explore the tools</a></div>
@@ -179,6 +180,7 @@ async function build() {
       description: `${title}, from the Axon documentation.`,
       body: renderMarkdown(markdown),
       docsPage: true,
+      docsSlug: slug,
       version,
     }));
   }
