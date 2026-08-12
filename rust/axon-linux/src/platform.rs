@@ -464,8 +464,14 @@ impl PlatformBackend for LinuxBackend {
             .ok_or_else(|| operation("capture screenshot", "no AT-SPI application matched"))?;
         let process_id = self
             .lookup(|candidate| (candidate.identity == identity).then_some(candidate.process_id))?
-            .ok_or_else(|| operation("capture screenshot", "the matched application has no process id"))?;
-        self.x11(Capability::Screenshot)?.screenshot_for_pid(process_id)
+            .ok_or_else(|| {
+                operation(
+                    "capture screenshot",
+                    "the matched application has no process id",
+                )
+            })?;
+        self.x11(Capability::Screenshot)?
+            .screenshot_for_pid(process_id)
     }
     fn hit_test(&mut self, _: (f64, f64)) -> Result<Option<Node>, BackendError> {
         Err(capability(Capability::HitTest, "not implemented"))

@@ -318,10 +318,13 @@ fn shared_look_screenshot_policy_is_byte_exact() {
     assert_eq!(fixture.carve_outs["childPage"], false);
     assert_eq!(fixture.explicit["true"], true);
     assert_eq!(fixture.explicit["false"], false);
-    assert_eq!(fixture.encoding.max_dimension, OBSERVATION_SCREENSHOT_MAX_DIMENSION);
-    assert_eq!(fixture.encoding.media_type, OBSERVATION_SCREENSHOT_MEDIA_TYPE);
     assert_eq!(
-        fixture.encoding.quality,
-        OBSERVATION_SCREENSHOT_QUALITY
+        fixture.encoding.max_dimension,
+        OBSERVATION_SCREENSHOT_MAX_DIMENSION
     );
+    assert_eq!(
+        fixture.encoding.media_type,
+        OBSERVATION_SCREENSHOT_MEDIA_TYPE
+    );
+    assert_eq!(fixture.encoding.quality, OBSERVATION_SCREENSHOT_QUALITY);
 }

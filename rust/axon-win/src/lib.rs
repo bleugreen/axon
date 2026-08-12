@@ -808,7 +808,10 @@ impl<
         );
         let wants_screen_text = params.get("screenText").and_then(Value::as_bool) == Some(true);
         let (visuals, screenshot_unavailable) = if wants_screenshot || wants_screen_text {
-            match self.backend.observe_visuals(&app, wants_screenshot, wants_screen_text) {
+            match self
+                .backend
+                .observe_visuals(&app, wants_screenshot, wants_screen_text)
+            {
                 Ok(visuals) => (Some(visuals), None),
                 Err(error) if wants_screenshot && !wants_screen_text => (
                     None,
@@ -846,10 +849,13 @@ impl<
                 .insert("screenText".into(), json!(screen_text));
         }
         if let Some(unavailable) = screenshot_unavailable {
-            value.as_object_mut().expect("snapshots serialize as objects").insert(
-                "screenshotUnavailable".into(),
-                serde_json::to_value(unavailable).map_err(internal_error)?,
-            );
+            value
+                .as_object_mut()
+                .expect("snapshots serialize as objects")
+                .insert(
+                    "screenshotUnavailable".into(),
+                    serde_json::to_value(unavailable).map_err(internal_error)?,
+                );
         }
         self.snapshot = Some(snapshot);
         Ok(value)
@@ -1486,7 +1492,9 @@ mod tests {
         let response = default_router
             .request(request("look", json!({"app":"App"})))
             .unwrap();
-        let JsonRpcResponse::Success(success) = response else { panic!() };
+        let JsonRpcResponse::Success(success) = response else {
+            panic!()
+        };
         assert_eq!(success.result["screenshot"]["mediaType"], "image/png");
         assert_eq!(*default_captures.borrow(), 1);
 
@@ -1496,7 +1504,9 @@ mod tests {
         let response = opted_out_router
             .request(request("look", json!({"app":"App","screenshot":false})))
             .unwrap();
-        let JsonRpcResponse::Success(success) = response else { panic!() };
+        let JsonRpcResponse::Success(success) = response else {
+            panic!()
+        };
         assert!(success.result.get("screenshot").is_none());
         assert_eq!(*opted_out_captures.borrow(), 0);
     }

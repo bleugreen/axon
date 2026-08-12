@@ -51,9 +51,18 @@ mod tests {
     fn defaults_only_full_app_observations_to_screenshot() {
         assert!(screenshot_requested(None, LookObservationKind::FullApp));
         assert!(!screenshot_requested(None, LookObservationKind::AppList));
-        assert!(!screenshot_requested(None, LookObservationKind::ChangeCheck));
+        assert!(!screenshot_requested(
+            None,
+            LookObservationKind::ChangeCheck
+        ));
         assert!(!screenshot_requested(None, LookObservationKind::ChildPage));
-        assert!(!screenshot_requested(Some(false), LookObservationKind::FullApp));
-        assert!(screenshot_requested(Some(true), LookObservationKind::ChangeCheck));
+        assert!(!screenshot_requested(
+            Some(false),
+            LookObservationKind::FullApp
+        ));
+        assert!(screenshot_requested(
+            Some(true),
+            LookObservationKind::ChangeCheck
+        ));
     }
 }

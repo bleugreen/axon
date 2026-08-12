@@ -782,10 +782,7 @@ impl<B: PointerTargetVerifier + BackgroundPixelInput> Router<B> {
             .map_err(internal_error);
         }
         let app = app_query(params);
-        let snapshot = self
-            .backend
-            .capture(&app)
-            .map_err(backend_error)?;
+        let snapshot = self.backend.capture(&app).map_err(backend_error)?;
         let names = self.semantic_names.register(&snapshot);
         let mut value = serde_json::to_value(axon_core::render_semantic_names(&snapshot, &names))
             .map_err(internal_error)?;
@@ -796,25 +793,31 @@ impl<B: PointerTargetVerifier + BackgroundPixelInput> Router<B> {
         if wants_screenshot {
             match self.backend.screenshot(&app) {
                 Ok(screenshot) => {
-                    value.as_object_mut().expect("snapshots serialize as objects").insert(
-                        "screenshot".into(),
-                        json!({
-                            "mediaType": screenshot.media_type,
-                            "base64Data": base64::Engine::encode(
-                                &base64::engine::general_purpose::STANDARD,
-                                &screenshot.bytes
-                            ),
-                            "width": screenshot.width,
-                            "height": screenshot.height
-                        }),
-                    );
+                    value
+                        .as_object_mut()
+                        .expect("snapshots serialize as objects")
+                        .insert(
+                            "screenshot".into(),
+                            json!({
+                                "mediaType": screenshot.media_type,
+                                "base64Data": base64::Engine::encode(
+                                    &base64::engine::general_purpose::STANDARD,
+                                    &screenshot.bytes
+                                ),
+                                "width": screenshot.width,
+                                "height": screenshot.height
+                            }),
+                        );
                 }
                 Err(error) => {
                     let unavailable = axon_core::ScreenshotUnavailable::from_backend_error(error);
-                    value.as_object_mut().expect("snapshots serialize as objects").insert(
-                        "screenshotUnavailable".into(),
-                        serde_json::to_value(unavailable).map_err(internal_error)?,
-                    );
+                    value
+                        .as_object_mut()
+                        .expect("snapshots serialize as objects")
+                        .insert(
+                            "screenshotUnavailable".into(),
+                            serde_json::to_value(unavailable).map_err(internal_error)?,
+                        );
                 }
             }
         }
@@ -1409,8 +1412,12 @@ mod tests {
     #[test]
     fn look_defaults_to_honest_screenshot_absence_and_opt_out_omits_the_claim() {
         let mut default_router = Router::new(backend(vec![], None));
-        let response = default_router.request(request("look", json!({"app":"App"}))).unwrap();
-        let JsonRpcResponse::Success(success) = response else { panic!() };
+        let response = default_router
+            .request(request("look", json!({"app":"App"})))
+            .unwrap();
+        let JsonRpcResponse::Success(success) = response else {
+            panic!()
+        };
         assert_eq!(
             success.result["screenshotUnavailable"]["code"],
             "portal-authorization-required"
@@ -1421,7 +1428,9 @@ mod tests {
         let response = opted_out_router
             .request(request("look", json!({"app":"App","screenshot":false})))
             .unwrap();
-        let JsonRpcResponse::Success(success) = response else { panic!() };
+        let JsonRpcResponse::Success(success) = response else {
+            panic!()
+        };
         assert!(success.result.get("screenshotUnavailable").is_none());
         assert!(success.result.get("screenshot").is_none());
     }
