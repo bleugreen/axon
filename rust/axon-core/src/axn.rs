@@ -6,6 +6,7 @@ use std::collections::{HashMap, HashSet};
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AxnDocument {
+    #[serde(default = "default_version", deserialize_with = "deserialize_version")]
     pub version: u32,
     #[serde(default, rename = "args")]
     pub arguments: Vec<AxnArgument>,
@@ -14,6 +15,75 @@ pub struct AxnDocument {
     #[serde(flatten)]
     pub flags: Map<String, Value>,
 }
+
+fn default_version() -> u32 { 1 }
+fn deserialize_version<'de, D: serde::Deserializer<'de>>(d: D) -> Result<u32, D::Error> {
+    #[derive(Deserialize)] #[serde(untagged)] enum V { N(u32), S(String) }
+    match V::deserialize(d)? { V::N(v) => Ok(v), V::S(v) => v.parse().map_err(serde::de::Error::custom) }
+}
+
+fn validate_replay_contract(doc: &AxnDocument) -> Result<(), AxnError> {
+    if doc.version != 2 {
+        let obsolete = doc.actions.iter().enumerate().find_map(|(i, a)| ["target", "from", "to"].iter().find_map(|k| a.params.get(*k).map(|v| (i, v))));
+        let suffix = obsolete.map(|(i, v)| format!("; actions[{i}] obsolete target {v}")).unwrap_or_default();
+        return Err(AxnError::Invalid(format!(".axn version {} is not replayable; version 1 targets are obsolete and must be re-recorded or edited as version 2{suffix}", doc.version)));
+    }
+    for (index, action) in doc.actions.iter().enumerate() {
+        if action.tool.trim().is_empty() { return Err(AxnError::Invalid(format!("actions[{index}] requires tool"))); }
+        for key in ["target", "from", "to"] { if let Some(v) = action.params.get(key) { validate_target(v, &format!("actions[{index}].{key}"))?; } }
+    }
+    Ok(())
+}
+
+fn validate_target(value: &Value, path: &str) -> Result<(), AxnError> {
+    let object = value.as_object().ok_or_else(|| AxnError::Invalid(format!("{path} must be a version 2 target object; obsolete target {value}")))?;
+    let point = object.get("point").and_then(Value::as_object).unwrap_or(object);
+    if object.contains_key("point") || point.contains_key("x") || point.contains_key("y") {
+        if point.contains_key("x") && point.contains_key("y") { return Ok(()); }
+        return Err(AxnError::Invalid(format!("{path} point target requires x and y")));
+    }
+    let valid = object.get("app").and_then(Value::as_str).is_some_and(|v| !v.is_empty())
+        && object.get("name").and_then(Value::as_str).is_some_and(|v| !v.is_empty())
+        && object.get("locator").is_some_and(Value::is_object);
+    if valid { Ok(()) } else { Err(AxnError::Invalid(format!("{path} requires non-empty app and name with an attached locator"))) }
+}
+
+fn prepare_dispatch_params<D: ToolDispatcher>(dispatcher: &mut D, params: &Map<String, Value>) -> Result<Map<String, Value>, AxnError> {
+    let mut primitive = params.clone();
+    for key in ["target", "from", "to"] {
+        let Some(Value::Object(target)) = primitive.get_mut(key) else { continue };
+        let (Some(app), Some(name), Some(locator_value)) = (target.get("app").and_then(Value::as_str), target.get("name").and_then(Value::as_str), target.get("locator")) else { continue };
+        let locator: crate::Locator = serde_json::from_value(locator_value.clone()).map_err(|e| AxnError::Invalid(format!("invalid attached locator: {e}")))?;
+        dispatcher.register_replay_target(app, name, &locator).map_err(AxnError::Invalid)?;
+        let app = app.to_owned(); let name = name.to_owned();
+        *target = Map::from_iter([("app".into(), Value::String(app)), ("name".into(), Value::String(name))]);
+    }
+    Ok(primitive)
+}
+
+fn valid_argument_name(name: &str) -> bool {
+    let mut chars = name.chars();
+    chars.next().is_some_and(|c| c.is_ascii_lowercase()) && chars.all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_')
+}
+fn valid_email(value: &str) -> bool { let mut p = value.split('@'); p.next().is_some_and(|v| !v.is_empty()) && p.next().is_some_and(|v| v.contains('.') && !v.starts_with('.')) && p.next().is_none() }
+fn valid_date(value: &str) -> bool { let b = value.as_bytes(); b.len() >= 10 && b[4] == b'-' && b[7] == b'-' && b[..4].iter().chain(&b[5..7]).chain(&b[8..10]).all(u8::is_ascii_digit) }
+fn contains_reference(value: &Value) -> bool { match value { Value::String(s) => s.contains("{{") || s.contains("}}"), Value::Array(a) => a.iter().any(contains_reference), Value::Object(o) => o.values().any(contains_reference), _ => false } }
+fn substitute_string(template: &str, bindings: &HashMap<String, (String, bool)>) -> Result<(String, bool), AxnError> {
+    let mut output = String::new(); let mut rest = template; let mut secret = false;
+    while let Some(start) = rest.find("{{") {
+        output.push_str(&rest[..start]); let tail = &rest[start + 2..];
+        let end = tail.find("}}").ok_or_else(|| AxnError::Invalid(format!("invalid arg reference syntax: {template}")))?;
+        let token = &tail[..end];
+        if token.contains('{') || token.contains('}') { return Err(AxnError::Invalid(format!("invalid arg reference syntax: {template}"))); }
+        let name = token.trim();
+        if !valid_reference_name(name) { return Err(AxnError::Invalid(format!("invalid arg reference syntax: {template}"))); }
+        let (value, tainted) = bindings.get(name).ok_or_else(|| AxnError::Invalid(format!("undeclared arg reference: {name}")))?;
+        output.push_str(value); secret |= *tainted; rest = &tail[end + 2..];
+    }
+    if rest.contains("}}") { return Err(AxnError::Invalid(format!("invalid arg reference syntax: {template}"))); }
+    output.push_str(rest); Ok((output, secret))
+}
+fn valid_reference_name(name: &str) -> bool { let mut c = name.chars(); c.next().is_some_and(|x| x.is_ascii_alphabetic()) && c.all(|x| x.is_ascii_alphanumeric() || x == '_') }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct AxnArgument {
@@ -26,6 +96,8 @@ pub struct AxnArgument {
     pub default: Option<Value>,
     #[serde(default)]
     pub source: Option<String>,
+    #[serde(flatten)]
+    pub unknown_fields: Map<String, Value>,
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -35,6 +107,7 @@ pub enum ArgumentType {
     Number,
     Path,
     Secret,
+    Date,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -116,6 +189,16 @@ pub struct DispatchOutcome {
     pub resolution: Option<Resolution>,
 }
 pub trait ToolDispatcher {
+    /// Seed platform semantic resolution with locator evidence attached by the recorder.
+    /// Implementations must resolve this locator through their normal live backend.
+    fn register_replay_target(
+        &mut self,
+        _app: &str,
+        _name: &str,
+        _locator: &crate::Locator,
+    ) -> Result<(), String> {
+        Ok(())
+    }
     fn dispatch(&mut self, tool: &str, params: &Map<String, Value>) -> DispatchOutcome;
     fn verify(&mut self, fact: &ExpectedFact) -> Result<(), String>;
 }
@@ -177,6 +260,7 @@ impl<'a, D: ToolDispatcher> AxnRunner<'a, D> {
         arg_values: &Map<String, Value>,
         options: RunOptions,
     ) -> Result<RunResult, AxnError> {
+        validate_replay_contract(doc)?;
         let bindings = self.bind(&doc.arguments, arg_values)?;
         let dry_run = options
             .dry_run
@@ -206,7 +290,8 @@ impl<'a, D: ToolDispatcher> AxnRunner<'a, D> {
                     continue;
                 }
             }
-            let (params, secret_fields) = substitute_map(&action.params, &bindings)?;
+            let (params, secret_fields) = substitute_map(&action.params, &bindings, index)?;
+            let params = prepare_dispatch_params(self.dispatcher, &params)?;
             let outcome = if dry_run {
                 let mut shown = params.clone();
                 for key in &secret_fields {
@@ -280,7 +365,22 @@ impl<'a, D: ToolDispatcher> AxnRunner<'a, D> {
         values: &Map<String, Value>,
     ) -> Result<HashMap<String, (String, bool)>, AxnError> {
         let mut out = HashMap::new();
+        let mut names = HashSet::new();
+        for (index, arg) in args.iter().enumerate() {
+            if !valid_argument_name(&arg.name) {
+                return Err(AxnError::Invalid(format!("args[{index}] requires snake_case name")));
+            }
+            if !names.insert(arg.name.clone()) {
+                return Err(AxnError::Invalid(format!("duplicate arg: {}", arg.name)));
+            }
+        }
+        if let Some(unknown) = values.keys().filter(|name| !names.contains(*name)).min() {
+            return Err(AxnError::Invalid(format!("unknown arg: {unknown}")));
+        }
         for arg in args {
+            if arg.source.is_some() && values.contains_key(&arg.name) {
+                return Err(AxnError::Invalid(format!("arg {} is sourced and cannot be overridden", arg.name)));
+            }
             let value = if let Some(source) = &arg.source {
                 let scheme = source
                     .split_once("://")
@@ -294,6 +394,7 @@ impl<'a, D: ToolDispatcher> AxnRunner<'a, D> {
                     .resolve(source)
                     .map_err(AxnError::Source)?
                     .map(Value::String)
+                    .or_else(|| arg.default.clone())
             } else {
                 values
                     .get(&arg.name)
@@ -326,26 +427,32 @@ fn render_arg(kind: &ArgumentType, v: &Value) -> Option<String> {
                 n.to_string()
             }
         }),
-        ArgumentType::Email => v.as_str().filter(|s| s.contains('@')).map(str::to_owned),
+        ArgumentType::Email => v.as_str().filter(|s| valid_email(s)).map(str::to_owned),
+        ArgumentType::Date => v.as_str().filter(|s| valid_date(s)).map(str::to_owned),
         _ => v.as_str().map(str::to_owned),
     }
 }
 fn substitute_map(
     map: &Map<String, Value>,
     bindings: &HashMap<String, (String, bool)>,
+    action_index: usize,
 ) -> Result<(Map<String, Value>, HashSet<String>), AxnError> {
     let mut out = map.clone();
     let mut tainted = HashSet::new();
+    for (key, value) in map {
+        if !matches!(key.as_str(), "value" | "text" | "key") && contains_reference(value) {
+            return Err(AxnError::Invalid(format!("parameter references are only supported in string value fields: actions[{action_index}].{key}")));
+        }
+    }
     for key in ["value", "text", "key"] {
-        if let Some(Value::String(s)) = out.get(key) {
-            let mut next = s.clone();
-            for (name, (value, secret)) in bindings {
-                let token = format!("{{{{{name}}}}}");
-                if next.contains(&token) && *secret {
-                    tainted.insert(key.into());
-                }
-                next = next.replace(&token, value)
+        if let Some(value) = out.get(key) {
+            if !value.is_string() && contains_reference(value) {
+                return Err(AxnError::Invalid(format!("parameter references are only supported in string value fields: actions[{action_index}].{key}")));
             }
+        }
+        if let Some(Value::String(s)) = out.get(key) {
+            let (next, secret) = substitute_string(s, bindings)?;
+            if secret { tainted.insert(key.into()); }
             out.insert(key.into(), Value::String(next));
         }
     }
