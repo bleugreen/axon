@@ -4,6 +4,7 @@
 set -eu
 # pipefail is not specified by POSIX (notably, dash does not implement it). Enable it when the
 # system shell provides it; this script does not otherwise depend on pipelines for correctness.
+# shellcheck disable=SC3040
 if (set -o pipefail) 2>/dev/null; then
   set -o pipefail
 fi
