@@ -352,10 +352,10 @@ import Testing
     #expect(snapshot?["screenshot"] == nil)
     #expect(snapshot?["screenshotUnavailable"]?["code"] == .string("capture-failed"))
     #expect(snapshot?["screenshotUnavailable"]?["reason"]?.stringValue?.contains("ScreenCaptureKit") == true)
-    #expect(text?.contains("snapshot: mcp-compact") == true)
-    #expect(text?.contains("main/run: button \"Run\" [click]") == true)
-    #expect(text?.contains("snapshot:") == true)
-    #expect(text?.contains("snapshot:mcp-compact") == false)
+    #expect(text?.contains("\"snapshot\":\"mcp-compact\"") == true)
+    #expect(text?.contains("main/run: button \\\"Run\\\" [click]") == true)
+    #expect(text?.contains("\"format\":\"observation\"") == true)
+    #expect(text?.contains("\"windows\"") == false)
     #expect(text?.contains("Hidden Tab") == false)
 }
 
@@ -398,7 +398,7 @@ import Testing
         ])
     ))
 
-    let snapshot = response?.result?["structuredContent"]
+    let snapshot = response?.result?["structuredContent"]?["snapshot"]
     let toolbar = snapshot?["windows"]?[0]?["children"]?[1]
     let text = textContent(in: response?.result)
 
@@ -475,10 +475,10 @@ import Testing
     #expect(snapshot?["screenshot"] == nil)
     #expect(snapshot?["screenshotUnavailable"] == nil)
     #expect(imageContent(in: result) == nil)
-    #expect(text?.contains("screenText:") == true)
-    #expect(text?.contains("- \"First line\"") == true)
-    #expect(text?.contains("- \"First line\" confidence=1") == false)
-    #expect(text?.contains("- \"Second line\" confidence=0.91") == true)
+    #expect(text?.contains("\"screenText\":[") == true)
+    #expect(text?.contains("\"text\":\"First line\"") == true)
+    #expect(text?.contains("\"confidence\":1") == true)
+    #expect(text?.contains("\"text\":\"Second line\"") == true)
     #expect(text?.contains("internal-image-payload") == false)
 }
 
