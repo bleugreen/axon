@@ -76,8 +76,14 @@ import Testing
         }
     )
 
-    let export = try history.exportScript(sessionID: "swift-fixture")
+    let export = try history.exportScript(
+        sessionID: "swift-fixture",
+        arguments: fixtureArguments()
+    )
 
+    if ProcessInfo.processInfo.environment["UPDATE_SWIFT_EXPORT_FIXTURES"] == "1" {
+        try Data(export.script.utf8).write(to: fixtureURL("swift-action-history-v2.yaml"))
+    }
     let expectedYAML = try fixtureData("swift-action-history-v2.yaml")
     #expect(export.actionCount == 1)
     #expect(export.recordCount == 1)
