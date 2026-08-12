@@ -391,9 +391,16 @@ mod tests {
         let (response, stop) = dispatch(&request, &router, std::path::Path::new("/tmp/test.sock"));
 
         assert!(!stop);
-        assert_eq!(response.pointer("/result/provenance/backend"), Some(&json!("rust-axon-mac")));
+        assert_eq!(
+            response.pointer("/result/provenance/backend"),
+            Some(&json!("rust-axon-mac"))
+        );
         assert!(response.pointer("/result/provenance/processId").is_some());
-        assert!(response.pointer("/result/provenance/executablePath").is_some());
+        assert!(
+            response
+                .pointer("/result/provenance/executablePath")
+                .is_some()
+        );
     }
     #[test]
     fn ownership_lock_refuses_a_second_server() {
