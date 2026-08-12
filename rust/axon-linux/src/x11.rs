@@ -974,6 +974,12 @@ fn decode_zpixmap(
     Ok(rgba)
 }
 
+/// Screen coordinates cross the wire as 16-bit signed values, so a point outside that range is
+/// clamped rather than wrapped into a different part of the screen.
+pub(crate) fn coordinate(value: f64) -> i16 {
+    value.round().clamp(i16::MIN as f64, i16::MAX as f64) as i16
+}
+
 #[cfg(test)]
 mod screenshot_tests {
     use super::*;
@@ -1021,10 +1027,4 @@ mod screenshot_tests {
             [255, 0, 0, 255, 0, 0, 255, 255]
         );
     }
-}
-
-/// Screen coordinates cross the wire as 16-bit signed values, so a point outside that range is
-/// clamped rather than wrapped into a different part of the screen.
-pub(crate) fn coordinate(value: f64) -> i16 {
-    value.round().clamp(i16::MIN as f64, i16::MAX as f64) as i16
 }
