@@ -145,13 +145,15 @@ pub(crate) fn screenshot(window_id: u32, frame: Rect) -> Result<Screenshot, Back
         bytes,
         media_type: OBSERVATION_SCREENSHOT_MEDIA_TYPE.into(),
         width: u32::try_from(width).map_err(|_| op("capture window image", "width overflow"))?,
-        height: u32::try_from(height)
-            .map_err(|_| op("capture window image", "height overflow"))?,
+        height: u32::try_from(height).map_err(|_| op("capture window image", "height overflow"))?,
         frame,
     })
 }
 
-fn scaled_dimensions(size: (usize, usize), max_dimension: u32) -> Result<(usize, usize), BackendError> {
+fn scaled_dimensions(
+    size: (usize, usize),
+    max_dimension: u32,
+) -> Result<(usize, usize), BackendError> {
     let (width, height) = size;
     if width == 0 || height == 0 || max_dimension == 0 {
         return Err(op("resize screenshot", "image dimensions must be positive"));
@@ -161,24 +163,22 @@ fn scaled_dimensions(size: (usize, usize), max_dimension: u32) -> Result<(usize,
     if largest <= max {
         return Ok(size);
     }
-    Ok(((width * max / largest).max(1), (height * max / largest).max(1)))
+    Ok((
+        (width * max / largest).max(1),
+        (height * max / largest).max(1),
+    ))
 }
 
 fn resize(image: CGImageRef, width: usize, height: usize) -> Result<Owned, BackendError> {
-    let color_space = Owned::new(unsafe { CGColorSpaceCreateDeviceRGB() }, "create RGB color space")?;
+    let color_space = Owned::new(
+        unsafe { CGColorSpaceCreateDeviceRGB() },
+        "create RGB color space",
+    )?;
     // Premultiplied-last RGBA with 8-bit components. Passing null data asks Core Graphics to own
     // the backing allocation, whose lifetime is then tied to the context.
     let context = Owned::new(
         unsafe {
-            CGBitmapContextCreate(
-                std::ptr::null_mut(),
-                width,
-                height,
-                8,
-                0,
-                color_space.0,
-                1,
-            )
+            CGBitmapContextCreate(std::ptr::null_mut(), width, height, 8, 0, color_space.0, 1)
         },
         "create screenshot resize context",
     )?;
@@ -203,18 +203,13 @@ fn resize(image: CGImageRef, width: usize, height: usize) -> Result<Owned, Backe
 }
 
 fn encode_png(image: CGImageRef) -> Result<Vec<u8>, BackendError> {
-    let data = Owned::new(
-        unsafe { CFDataCreateMutable(null(), 0) },
-        "create PNG data",
-    )?;
+    let data = Owned::new(unsafe { CFDataCreateMutable(null(), 0) }, "create PNG data")?;
     let image_type = Owned::new(
         unsafe { CFStringCreateWithCString(null(), c"public.png".as_ptr(), 0x0800_0100) },
         "create PNG type identifier",
     )?;
     let destination = Owned::new(
-        unsafe {
-            CGImageDestinationCreateWithData(data.0.cast_mut(), image_type.0, 1, null())
-        },
+        unsafe { CGImageDestinationCreateWithData(data.0.cast_mut(), image_type.0, 1, null()) },
         "create PNG destination",
     )?;
     unsafe { CGImageDestinationAddImage(destination.0, image, null()) };
