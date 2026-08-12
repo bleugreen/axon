@@ -292,7 +292,6 @@ fn axn_round_trip_binding_and_trace_semantics() {
         calls: vec![],
         fail_at: Some(1),
         registrations: vec![],
-        registrations: vec![],
     };
     let mut runner = AxnRunner::new(&mut dispatcher).with_source("env", |source: &str| {
         Ok((source == "env://TOKEN").then(|| "s3cr3t".into()))
@@ -321,6 +320,7 @@ fn continue_on_error_preserves_trace_and_secret_is_redacted() {
     let mut dispatcher = Dispatcher {
         calls: vec![],
         fail_at: Some(1),
+        registrations: vec![],
     };
     let mut runner =
         AxnRunner::new(&mut dispatcher).with_source("env", |_: &str| Ok(Some("s3cr3t".into())));
