@@ -1189,6 +1189,19 @@ impl<
         + BackgroundPixelPointer,
 > ToolDispatcher for Router<B>
 {
+    fn register_replay_target(
+        &mut self,
+        app: &str,
+        name: &str,
+        locator: &axon_core::Locator,
+    ) -> Result<(), String> {
+        self.semantic_names.register_replay_locator(
+            axon_core::WireElementTarget { app: app.into(), name: name.into() },
+            locator.clone(),
+        );
+        Ok(())
+    }
+
     fn dispatch(&mut self, tool: &str, params: &Map<String, Value>) -> DispatchOutcome {
         let params = primitive_dispatch_params(params);
         match self.dispatch_tool(tool, &params) {
