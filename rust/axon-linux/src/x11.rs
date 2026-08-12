@@ -26,8 +26,8 @@ use x11rb::{
         xproto::{
             Atom, AtomEnum, BUTTON_PRESS_EVENT, BUTTON_RELEASE_EVENT, ButtonPressEvent,
             ClientMessageEvent, ConnectionExt as _, EventMask, ImageFormat as XImageFormat,
-            KEY_PRESS_EVENT, KEY_RELEASE_EVENT, KeyButMask, KeyPressEvent, MOTION_NOTIFY_EVENT,
-            Window,
+            ImageOrder, KEY_PRESS_EVENT, KEY_RELEASE_EVENT, KeyButMask, KeyPressEvent,
+            MOTION_NOTIFY_EVENT, Window,
         },
         xtest::{self, ConnectionExt as _},
     },
@@ -49,6 +49,16 @@ x11rb::atom_manager! {
         _NET_WM_PID,
     }
 
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct PixelLayout {
+    bits_per_pixel: u8,
+    scanline_pad: u8,
+    least_significant_byte_first: bool,
+    red_mask: u32,
+    green_mask: u32,
+    blue_mask: u32,
 }
 
 /// A connection to the session's X server, and the facts about it that decide what may be offered.
@@ -271,6 +281,40 @@ impl X11Session {
             })?;
         let geometry = self.window_geometry(window)?;
         let (width, height) = geometry.size;
+        let attributes = self
+            .connection
+            .get_window_attributes(window)
+            .map_err(|error| operation("request X11 window attributes", error))?
+            .reply()
+            .map_err(|error| operation("read X11 window attributes", error))?;
+        let depth = self
+            .connection
+            .get_geometry(window)
+            .map_err(|error| operation("request X11 window depth", error))?
+            .reply()
+            .map_err(|error| operation("read X11 window depth", error))?
+            .depth;
+        let setup = self.connection.setup();
+        let format = setup
+            .pixmap_formats
+            .iter()
+            .find(|format| format.depth == depth)
+            .ok_or_else(|| operation("decode X11 window pixels", "the window depth has no pixmap format"))?;
+        let visual = setup
+            .roots
+            .iter()
+            .flat_map(|screen| &screen.allowed_depths)
+            .flat_map(|depth| &depth.visuals)
+            .find(|visual| visual.visual_id == attributes.visual)
+            .ok_or_else(|| operation("decode X11 window pixels", "the window visual is not in the X11 setup"))?;
+        let layout = PixelLayout {
+            bits_per_pixel: format.bits_per_pixel,
+            scanline_pad: format.scanline_pad,
+            least_significant_byte_first: setup.image_byte_order == ImageOrder::LSB_FIRST,
+            red_mask: visual.red_mask,
+            green_mask: visual.green_mask,
+            blue_mask: visual.blue_mask,
+        };
         let reply = self
             .connection
             .get_image(
@@ -285,20 +329,7 @@ impl X11Session {
             .map_err(|error| operation("request X11 window pixels", error))?
             .reply()
             .map_err(|error| operation("read X11 window pixels", error))?;
-        let pixel_count = usize::from(width) * usize::from(height);
-        if reply.data.len() != pixel_count * 4 {
-            return Err(operation(
-                "decode X11 window pixels",
-                format!(
-                    "expected 4 bytes per pixel, received {} bytes for {pixel_count} pixels",
-                    reply.data.len()
-                ),
-            ));
-        }
-        let mut rgba = Vec::with_capacity(reply.data.len());
-        for pixel in reply.data.chunks_exact(4) {
-            rgba.extend_from_slice(&[pixel[2], pixel[1], pixel[0], 255]);
-        }
+        let rgba = decode_zpixmap(width, height, layout, &reply.data)?;
         let image =
             RgbaImage::from_raw(u32::from(width), u32::from(height), rgba).ok_or_else(|| {
                 operation(
