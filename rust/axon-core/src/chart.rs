@@ -316,7 +316,7 @@ impl<'a> ChartSeededResolver<'a> {
         now: u64,
     ) -> SemanticLookup {
         match self.registry.resolve_retained(target, live) {
-            RetainedSemanticLookup::Resolved(lookup) => return lookup,
+            RetainedSemanticLookup::Resolved(lookup) => return *lookup,
             RetainedSemanticLookup::NoRecord => {}
         }
 

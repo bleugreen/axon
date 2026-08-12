@@ -14,7 +14,7 @@ pub enum SemanticNameResolution {
 }
 pub(crate) enum RetainedSemanticLookup {
     NoRecord,
-    Resolved(SemanticLookup),
+    Resolved(Box<SemanticLookup>),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -438,7 +438,7 @@ impl SemanticNameRegistry {
             RetainedSemanticLookup::NoRecord => SemanticLookup::Missing {
                 target: target.clone(),
             },
-            RetainedSemanticLookup::Resolved(lookup) => lookup,
+            RetainedSemanticLookup::Resolved(lookup) => *lookup,
         }
     }
     pub(crate) fn resolve_retained(
@@ -447,9 +447,9 @@ impl SemanticNameRegistry {
         live: &Snapshot,
     ) -> RetainedSemanticLookup {
         if !app_matches(&target.app, &live.app) {
-            return RetainedSemanticLookup::Resolved(SemanticLookup::Missing {
+            return RetainedSemanticLookup::Resolved(Box::new(SemanticLookup::Missing {
                 target: target.clone(),
-            });
+            }));
         }
         let matches: Vec<_> = self
             .order
@@ -468,7 +468,7 @@ impl SemanticNameRegistry {
             .filter(|r| r.snapshot_id == newest)
             .collect();
         if latest.len() > 1 {
-            return RetainedSemanticLookup::Resolved(SemanticLookup::Ambiguous {
+            return RetainedSemanticLookup::Resolved(Box::new(SemanticLookup::Ambiguous {
                 target: target.clone(),
                 candidates: latest
                     .into_iter()
@@ -480,7 +480,7 @@ impl SemanticNameRegistry {
                         locator: r.locator.clone(),
                     })
                     .collect(),
-            });
+            }));
         }
         if latest[0].snapshot_id == live.id {
             let validation = LocatorResolver::resolve(&latest[0].locator, live);
@@ -490,14 +490,18 @@ impl SemanticNameRegistry {
                     .as_ref()
                     .is_some_and(|best| best.handle == latest[0].handle)
             {
-                return RetainedSemanticLookup::Resolved(SemanticLookup::Unique {
+                return RetainedSemanticLookup::Resolved(Box::new(SemanticLookup::Unique {
                     handle: latest[0].handle.clone(),
                     resolution: validation,
-                });
+                }));
             }
         }
         let result = LocatorResolver::resolve(&latest[0].locator, live);
-        RetainedSemanticLookup::Resolved(lookup_from_resolution(target, result, &latest[0].locator))
+        RetainedSemanticLookup::Resolved(Box::new(lookup_from_resolution(
+            target,
+            result,
+            &latest[0].locator,
+        )))
     }
 }
 pub(crate) fn lookup_from_resolution(
