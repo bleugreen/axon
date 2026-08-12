@@ -50,7 +50,20 @@ $Executable = Join-Path $InstallDirectory 'axon-win.exe'
 $Marker = Join-Path $InstallDirectory '.axon-install-complete'
 
 if ((Test-Path -LiteralPath $Marker -PathType Leaf) -and (Test-Path -LiteralPath $Executable -PathType Leaf)) {
-    Write-Host "Axon $Version is already installed at $InstallDirectory (windows/x86_64)."
+    Write-Host "Axon $Version is already installed at $InstallDirectory; reconciling daemon and PATH state."
+    & $Executable daemon install
+    if ($LASTEXITCODE -ne 0) {
+        Fail "axon-win.exe daemon install exited with code $LASTEXITCODE; review its message above and retry after correcting the reported problem"
+    }
+    $CliExecutable = Join-Path $InstallDirectory 'axon.exe'
+    if (-not (Test-Path -LiteralPath $CliExecutable -PathType Leaf)) {
+        New-Item -ItemType HardLink -Path $CliExecutable -Target $Executable | Out-Null
+    }
+    $UserPath = [Environment]::GetEnvironmentVariable('Path', 'User')
+    if (($UserPath -split ';') -notcontains $InstallDirectory) {
+        [Environment]::SetEnvironmentVariable('Path', "$InstallDirectory;$UserPath", 'User')
+    }
+    Write-Host "Axon $Version is installed and registered."
     exit 0
 }
 
@@ -113,18 +126,26 @@ try {
         Write-Host "Verified Authenticode signer: $($Signature.SignerCertificate.Subject)"
     }
 
-    New-Item -ItemType Directory -Force -Path $InstallDirectory | Out-Null
-    Copy-Item -Path (Join-Path $SourceDirectory '*') -Destination $InstallDirectory -Recurse -Force
-    if (-not (Test-Path -LiteralPath $Executable -PathType Leaf)) {
-        Fail "the installed executable is missing at $Executable"
+    $StagedInstall = "$InstallDirectory.installing"
+    if (Test-Path -LiteralPath $StagedInstall) {
+        Remove-Item -LiteralPath $StagedInstall -Recurse -Force
     }
-
-    $CliExecutable = Join-Path $InstallDirectory 'axon.exe'
+    New-Item -ItemType Directory -Path $StagedInstall | Out-Null
+    Copy-Item -Path (Join-Path $SourceDirectory '*') -Destination $StagedInstall -Recurse -Force
+    $StagedExecutable = Join-Path $StagedInstall 'axon-win.exe'
+    if (-not (Test-Path -LiteralPath $StagedExecutable -PathType Leaf)) {
+        Fail "the staged executable is missing at $StagedExecutable"
+    }
     try {
-        New-Item -ItemType HardLink -Path $CliExecutable -Target $Executable -Force | Out-Null
+        New-Item -ItemType HardLink -Path (Join-Path $StagedInstall 'axon.exe') -Target $StagedExecutable | Out-Null
     } catch {
-        Fail "could not create the axon.exe CLI link at $CliExecutable. $($_.Exception.Message)"
+        Fail "could not create the axon.exe CLI link in $StagedInstall. $($_.Exception.Message)"
     }
+    if (Test-Path -LiteralPath $InstallDirectory) {
+        Remove-Item -LiteralPath $InstallDirectory -Recurse -Force
+    }
+    Move-Item -LiteralPath $StagedInstall -Destination $InstallDirectory
+    $CliExecutable = Join-Path $InstallDirectory 'axon.exe'
 
     Write-Host "Registering the daemon from permanent path $Executable..."
     & $Executable daemon install
