@@ -371,7 +371,8 @@ impl PlatformBackend for MacBackend {
             .into_iter()
             .map(|capability| {
                 let usable = if capability == Capability::Screenshot {
-                    screenshot_restriction(accessibility_enabled, screen_recording_enabled).is_none()
+                    screenshot_restriction(accessibility_enabled, screen_recording_enabled)
+                        .is_none()
                 } else {
                     supported.contains(&capability) && accessibility_enabled
                 };
