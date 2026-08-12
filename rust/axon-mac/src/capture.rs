@@ -246,8 +246,9 @@ mod tests {
 
     #[test]
     fn scales_long_edge_without_upscaling() {
-        assert_eq!(scaled_dimensions((2560, 1600), 1280).unwrap(), (1280, 800));
-        assert_eq!(scaled_dimensions((640, 480), 1280).unwrap(), (640, 480));
-        assert_eq!(scaled_dimensions((1, 4096), 1280).unwrap(), (1, 1280));
+        let max = OBSERVATION_SCREENSHOT_MAX_DIMENSION;
+        assert_eq!(scaled_dimensions((2560, 1600), max).unwrap(), (1280, 800));
+        assert_eq!(scaled_dimensions((640, 480), max).unwrap(), (640, 480));
+        assert_eq!(scaled_dimensions((1, 4096), max).unwrap(), (1, 1280));
     }
 }

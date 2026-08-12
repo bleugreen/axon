@@ -1101,6 +1101,25 @@ delivery are likewise unimplemented rather than approximated. Extended
 observation, history, permission prompting, and drag tools fail before native
 dispatch with capability errors.
 
+Full application observations capture the first Accessibility window through
+Core Graphics' synchronous per-window image API, resize its long edge to the
+shared observation budget without upscaling, and encode it losslessly with
+ImageIO. This deliberately uses `CGWindowListCreateImage` rather than
+ScreenCaptureKit: the backend needs one already-resolved window image, while
+ScreenCaptureKit would add an Objective-C asynchronous callback bridge and
+capture-session lifecycle without improving that result. The direct framework
+FFI also preserves the backend's dependency-free native boundary. Core
+Foundation values returned under Create/Copy ownership are released exactly
+once; borrowed Accessibility array members are retained before they enter an
+owned wrapper.
+
+Screenshot health is independent and truthful: the capability is usable only
+when `CGPreflightScreenCaptureAccess` reports a Screen Recording grant, and its
+restriction names that missing grant otherwise. Capture or encoding failure is
+returned as `screenshotUnavailable` on the observation while the semantic
+`look` still succeeds. The app-list, change-check, and child-page carve-outs
+remain imageless through axon-core's shared screenshot policy.
+
 The daemon has no default endpoint. `AXON_MAC_SOCKET` must name an isolated Unix
 socket, and `/tmp/axon.sock` is rejected explicitly. This keeps development and
 conformance runs separate from the installed Swift daemon. The Swift daemon,
