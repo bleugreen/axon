@@ -107,6 +107,14 @@ pub trait PointerTargetVerifier: PlatformBackend {
         let _ = app;
         Ok(self.hit_test(point)?.is_some())
     }
+
+    #[test]
+    fn unavailable_tools_have_machine_readable_errors() {
+        let error = capability_unavailable("drag", "PointerDrag", "not-implemented");
+        assert_eq!(error.code, -32004);
+        assert_eq!(error.data.as_ref().unwrap()["kind"], "capability-unavailable");
+        assert_eq!(error.data.as_ref().unwrap()["tool"], "drag");
+    }
 }
 
 /// A target-bound pointer mechanism: input delivered to one verified window, without activating
