@@ -484,3 +484,92 @@ fn shared_look_screenshot_policy_is_byte_exact() {
     );
     assert_eq!(fixture.encoding.quality, OBSERVATION_SCREENSHOT_QUALITY);
 }
+
+
+#[test]
+fn swift_shaped_semantic_facts_cover_supported_state_vocabulary() {
+    let cases = [
+        (json!({"id":"exists","kind":"exists","target":{"app":"Example","locator":{"role":"AXButton"}}}), json!({"exists":true})),
+        (json!({"id":"window","kind":"window","target":{"app":"Example","locator":{"role":"AXWindow"}}}), json!({"exists":true})),
+        (json!({"id":"focused","kind":"focused","target":{"app":"Example","locator":{"role":"AXTextField"}},"state":{"focused":true}}), json!({"focused":true})),
+        (json!({"id":"enabled","kind":"enabled","target":{"app":"Example","locator":{"role":"AXButton"}},"state":{"enabled":{"equals":false}}}), json!({"enabled":false})),
+        (json!({"id":"value","kind":"value","target":{"app":"Example","locator":{"role":"AXTextField"}},"state":{"value":{"contains":"HELLO"}}}), json!({"value":"hello world"})),
+        (json!({"id":"selected","kind":"selected","target":{"app":"Example","locator":{"role":"AXCheckBox"}},"state":{"selected":{"exact":"1","caseSensitive":true}}}), json!({"selected":"1"})),
+    ];
+    for (fact, observed) in cases {
+        let fact: ExpectedFact = serde_json::from_value(fact).unwrap();
+        verify_expected_fact_state(&fact, observed.as_object().unwrap()).unwrap();
+    }
+}
+
+struct SemanticDispatcher {
+    states: Vec<Map<String, Value>>,
+    cursor: usize,
+    dispatched: usize,
+    fail_dispatch: bool,
+    changed_captures: Vec<Value>,
+}
+impl ToolDispatcher for SemanticDispatcher {
+    fn dispatch(&mut self, _tool: &str, _params: &Map<String, Value>) -> DispatchOutcome {
+        self.dispatched += 1;
+        DispatchOutcome { success: !self.fail_dispatch, result: json!({"dispatchOnly":self.fail_dispatch}), error: None, resolution: None }
+    }
+    fn verify(&mut self, fact: &ExpectedFact) -> Result<(), String> {
+        let state = &self.states[self.cursor.min(self.states.len() - 1)];
+        self.cursor += 1;
+        verify_expected_fact_state(fact, state)
+    }
+    fn capture_changed_baseline(&mut self, _fact: &ExpectedFact) -> Result<Value, String> {
+        Ok(self.changed_captures.first().cloned().unwrap())
+    }
+    fn verify_changed(&mut self, fact: &ExpectedFact, baseline: &Value) -> Result<(), String> {
+        let current = self.changed_captures.get(1).unwrap();
+        (current != baseline).then_some(()).ok_or_else(|| format!("fact {} did not verify: app did not change", fact.id))
+    }
+}
+
+fn semantic_doc(actions: Value) -> AxnDocument {
+    serde_json::from_value(json!({"version":2,"actions":actions})).unwrap()
+}
+
+#[test]
+fn changed_captures_before_dispatch_and_dispatch_only_can_succeed_causally() {
+    let doc = semantic_doc(json!([{
+        "id":"click","tool":"click","target":{"app":"Example","name":"button","locator":{"role":"AXButton"}},
+        "expects":[{"id":"click.changed.1","kind":"changed","target":{"app":"Example","locator":{"role":"AXWindow"}}}]
+    }]));
+    let mut dispatcher = SemanticDispatcher {
+        states: vec![Map::new()], cursor: 0, dispatched: 0, fail_dispatch: true,
+        changed_captures: vec![json!({"value":"before"}), json!({"value":"after"})],
+    };
+    let result = AxnRunner::new(&mut dispatcher).run(
+        &doc, &Map::new(),
+        RunOptions { dry_run: Some(false), continue_on_error: Some(false), healed_path: None, source_path: None },
+    ).unwrap();
+    assert!(result.success);
+    assert!(result.trace[0].success);
+    assert_eq!(dispatcher.dispatched, 1);
+}
+
+#[test]
+fn requires_reverifies_the_established_fact_before_dispatch() {
+    let fact = json!({"id":"first.value.1","kind":"value","target":{"app":"Example","locator":{"role":"AXTextField"}},"state":{"value":"ready"}});
+    let doc = semantic_doc(json!([
+        {"tool":"click","target":{"app":"Example","name":"button","locator":{"role":"AXButton"}},"expects":[fact]},
+        {"tool":"click","target":{"app":"Example","name":"button","locator":{"role":"AXButton"}},"requires":["first.value.1"]}
+    ]));
+    let mut dispatcher = SemanticDispatcher {
+        states: vec![
+            json!({"value":"ready"}).as_object().unwrap().clone(),
+            json!({"value":"stale"}).as_object().unwrap().clone(),
+        ],
+        cursor: 0, dispatched: 0, fail_dispatch: false, changed_captures: vec![],
+    };
+    let result = AxnRunner::new(&mut dispatcher).run(
+        &doc, &Map::new(),
+        RunOptions { dry_run: Some(false), continue_on_error: Some(false), healed_path: None, source_path: None },
+    ).unwrap();
+    assert!(!result.success);
+    assert_eq!(dispatcher.dispatched, 1);
+    assert!(result.trace[1].error.as_deref().unwrap().contains("expectation failed"));
+}
