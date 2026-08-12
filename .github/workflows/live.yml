@@ -521,8 +521,8 @@ jobs:
             if printf '%s' "$look" | jq -e '
               .result.isError == false
               and (.result.structuredContent.app.name | strings | length > 0)
-              and .result.structuredContent.app.screenshotUnavailable.code == "portal-authorization-required"
-              and (.result.structuredContent.app.screenshot? == null)
+              and .result.structuredContent.screenshotUnavailable.code == "portal-authorization-required"
+              and (.result.structuredContent.screenshot? == null)
               and ([.result.structuredContent.app.windows[]?.root | .. | objects | select(.role == "text box" and .value? == "0")] | length == 1)
               and ([.result.structuredContent.app.windows[]?.root | .. | objects | select(.role == "button" and .label? == "1" and (.actions | index("Click")))] | length == 1)
             ' >/dev/null 2>&1; then

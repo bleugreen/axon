@@ -636,7 +636,7 @@ function Invoke-ProbeStage {
             $response = Invoke-AxonMcp -Request $request
             $window = $response.result.structuredContent.app.windows |
                 ForEach-Object root | Where-Object role -eq 'Window' | Select-Object -First 1
-            $screenshot = $response.result.structuredContent.app.screenshot
+            $screenshot = $response.result.structuredContent.screenshot
             $screenshotOk = $null -ne $screenshot -and
                 $screenshot.mediaType -eq 'image/png' -and
                 $screenshot.base64Data.Length -gt 0 -and
