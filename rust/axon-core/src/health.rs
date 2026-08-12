@@ -319,7 +319,9 @@ impl CapabilityState {
 /// This is the one place that prose is turned into something a consumer can branch on.
 fn classify_restriction(restriction: &str) -> &'static str {
     let lowered = restriction.to_ascii_lowercase();
-    if lowered.contains("wayland") {
+    if lowered.contains("screen recording") {
+        reason::SCREEN_RECORDING_NOT_GRANTED
+    } else if lowered.contains("wayland") {
         reason::WAYLAND_RESTRICTED
     } else if lowered.contains("portal") {
         reason::PORTAL_AUTHORIZATION_REQUIRED
@@ -509,6 +511,10 @@ mod tests {
         assert_eq!(
             reason_for("screenshot"),
             reason::PORTAL_AUTHORIZATION_REQUIRED
+        );
+        assert_eq!(
+            classify_restriction("Screen Recording permission is not granted"),
+            reason::SCREEN_RECORDING_NOT_GRANTED
         );
         assert_eq!(reason_for("scroll"), reason::NOT_IMPLEMENTED);
         // The prose survives alongside the code; a person still gets the explanation.

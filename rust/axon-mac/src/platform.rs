@@ -2,6 +2,9 @@ use crate::{
     BackgroundPixelPointer, PixelDispatch, PixelDispatchError, PixelPlan, PixelTarget,
     PointerTargetVerifier, VisualObservation, VisualObservationProvider,
 };
+
+#[path = "capture.rs"]
+mod window_capture;
 use axon_core::{
     AppQuery, Application, BackendError, Capability, CapabilityInfo, KeyboardIntent, Node,
     Observation, PlatformBackend, RecordedCall, Rect, Screenshot, Snapshot, SnapshotHandle, Window,
@@ -31,6 +34,20 @@ struct CGPoint {
     x: f64,
     y: f64,
 }
+
+fn screenshot_restriction(
+    accessibility_enabled: bool,
+    screen_recording_enabled: bool,
+) -> Option<&'static str> {
+    if !accessibility_enabled {
+        Some("Accessibility permission is not granted")
+    } else if !screen_recording_enabled {
+        Some("Screen Recording permission is not granted")
+    } else {
+        None
+    }
+}
+
 #[repr(C)]
 #[derive(Clone, Copy, Default)]
 struct CGSize {
@@ -324,6 +341,8 @@ impl MacBackend {
 
 impl PlatformBackend for MacBackend {
     fn capabilities(&self) -> Result<Vec<CapabilityInfo>, BackendError> {
+        let accessibility_enabled = self.accessibility_enabled();
+        let screen_recording_enabled = window_capture::screen_capture_enabled();
         let supported = [
             Capability::Enumerate,
             Capability::Capture,
@@ -333,16 +352,26 @@ impl PlatformBackend for MacBackend {
             Capability::SetValue,
             Capability::Focus,
             Capability::Scroll,
+            Capability::Screenshot,
         ];
         Ok(Capability::ALL
             .into_iter()
             .map(|capability| {
-                let usable = supported.contains(&capability) && self.accessibility_enabled();
+                let usable = if capability == Capability::Screenshot {
+                    screenshot_restriction(accessibility_enabled, screen_recording_enabled)
+                        .is_none()
+                } else {
+                    supported.contains(&capability) && accessibility_enabled
+                };
                 CapabilityInfo {
                     capability,
                     usable,
                     restriction: (!usable).then(|| {
-                        if supported.contains(&capability) {
+                        if capability == Capability::Screenshot {
+                            screenshot_restriction(accessibility_enabled, screen_recording_enabled)
+                                .expect("an unusable screenshot capability has a restriction")
+                                .into()
+                        } else if supported.contains(&capability) {
                             "Accessibility permission is not granted".into()
                         } else {
                             "excluded from axon-mac v1".into()
@@ -462,8 +491,15 @@ impl PlatformBackend for MacBackend {
     ) -> Result<(), BackendError> {
         Err(cap(Capability::PointerInput, "drag excluded from v1"))
     }
-    fn screenshot(&mut self, _: &AppQuery) -> Result<Screenshot, BackendError> {
-        Err(cap(Capability::Screenshot, "excluded from v1"))
+    fn screenshot(&mut self, app: &AppQuery) -> Result<Screenshot, BackendError> {
+        if !window_capture::screen_capture_enabled() {
+            return Err(cap(
+                Capability::Screenshot,
+                "Screen Recording permission is not granted",
+            ));
+        }
+        let (pid, _) = self.resolve(app)?;
+        window_capture::screenshot(pid)
     }
     fn hit_test(&mut self, _: (f64, f64)) -> Result<Option<Node>, BackendError> {
         Err(cap(Capability::HitTest, "excluded from v1"))
@@ -481,12 +517,12 @@ impl PlatformBackend for MacBackend {
 impl VisualObservationProvider for MacBackend {
     fn observe_visuals(
         &mut self,
-        _: &AppQuery,
-        _: bool,
-        _: bool,
+        app: &AppQuery,
+        screenshot: bool,
+        _screen_text: bool,
     ) -> Result<VisualObservation, BackendError> {
         Ok(VisualObservation {
-            screenshot: None,
+            screenshot: screenshot.then(|| self.screenshot(app)).transpose()?,
             recognized_text: None,
         })
     }
@@ -550,5 +586,17 @@ mod tests {
                 .unwrap()
                 .usable
         );
+    }
+    #[test]
+    fn screenshot_capability_requires_both_native_permissions() {
+        assert_eq!(
+            screenshot_restriction(false, true),
+            Some("Accessibility permission is not granted")
+        );
+        assert_eq!(
+            screenshot_restriction(true, false),
+            Some("Screen Recording permission is not granted")
+        );
+        assert_eq!(screenshot_restriction(true, true), None);
     }
 }
