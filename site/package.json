@@ -1,0 +1,13 @@
+{
+  "name": "axon-site",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node build.mjs",
+    "dev": "node build.mjs --serve"
+  },
+  "dependencies": {
+    "github-slugger": "2.0.0",
+    "marked": "15.0.12"
+  }
+}

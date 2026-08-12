@@ -3,6 +3,8 @@
 .superpowers/
 dist/
 rust/target/
+site/dist/
+site/node_modules/
 
 .DS_Store
 .codex/
