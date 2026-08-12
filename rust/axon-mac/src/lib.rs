@@ -27,6 +27,18 @@ const EXCLUDED: &[(&str, &str)] = &[
     ("save", "SerializeHistory"),
     ("drag", "PointerDrag"),
     ("permit", "PermissionPrompt"),
+    ("navigate", "BrowserScripting"),
+    ("windows", "BrowserScripting"),
+    ("tabs", "BrowserScripting"),
+    ("debug.create", "DebugSession"),
+    ("debug.start", "DebugSession"),
+    ("debug.step", "DebugSession"),
+    ("debug.retry", "DebugSession"),
+    ("debug.continue", "DebugSession"),
+    ("debug.resume", "DebugSession"),
+    ("debug.runTo", "DebugSession"),
+    ("debug.setBreakpoints", "DebugSession"),
+    ("debug.stop", "DebugSession"),
 ];
 
 /// Pixel delivery is withheld in v1; this mechanism label makes that absence explicit.
@@ -905,7 +917,8 @@ impl<
                     let satisfied = observed.as_deref().is_some_and(|value| {
                         params.get("equals").and_then(Value::as_str).is_some_and(|expected| value == expected)
                             || params.get("contains").and_then(Value::as_str).is_some_and(|expected| value.contains(expected))
-                            || params.get("matches").and_then(Value::as_str).is_some_and(|expected| value == expected)
+                            || params.get("matches").and_then(Value::as_str)
+                                .is_some_and(|pattern| regex::Regex::new(pattern).is_ok_and(|regex| regex.is_match(value)))
                     });
                     if satisfied {
                         return Ok(json!({"wait":{"success":true,"status":"satisfied","elapsedMs":started.elapsed().as_millis(),"lastObserved":{"value":observed},"resolution":resolution}}));

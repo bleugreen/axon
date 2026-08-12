@@ -225,7 +225,7 @@ fn dispatch(
             let report = DaemonReport {
                 version: version.clone(),
                 platform: HealthPlatform::Macos,
-                ready: trusted,
+                ready: trusted && session.interactive && session.graphical,
                 process_id,
                 endpoint: endpoint.display().to_string(),
                 provenance: Some(DaemonProvenance { backend: "rust-axon-mac".into(), process_id, executable_path, version }),
