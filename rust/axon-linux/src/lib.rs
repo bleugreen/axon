@@ -1242,7 +1242,11 @@ mod tests {
             Ok(())
         }
         fn screenshot(&mut self, _: &AppQuery) -> Result<Screenshot, BackendError> {
-            unreachable!()
+            Err(BackendError::Capability {
+                capability: Capability::Screenshot,
+                reason: "requires desktop portal authorization".into(),
+                diagnostic: None,
+            })
         }
         fn hit_test(&mut self, _: (f64, f64)) -> Result<Option<Node>, BackendError> {
             Ok(None)
@@ -1400,6 +1404,26 @@ mod tests {
     }
     fn request(method: &str, params: Value) -> JsonRpcRequest {
         JsonRpcRequest::new(Some(JsonRpcId::Integer(1)), method, Some(params))
+    }
+
+    #[test]
+    fn look_defaults_to_honest_screenshot_absence_and_opt_out_omits_the_claim() {
+        let mut default_router = Router::new(backend(vec![], None));
+        let response = default_router.request(request("look", json!({"app":"App"}))).unwrap();
+        let JsonRpcResponse::Success(success) = response else { panic!() };
+        assert_eq!(
+            success.result["screenshotUnavailable"]["code"],
+            "portal-authorization-required"
+        );
+        assert!(success.result.get("screenshot").is_none());
+
+        let mut opted_out_router = Router::new(backend(vec![], None));
+        let response = opted_out_router
+            .request(request("look", json!({"app":"App","screenshot":false})))
+            .unwrap();
+        let JsonRpcResponse::Success(success) = response else { panic!() };
+        assert!(success.result.get("screenshotUnavailable").is_none());
+        assert!(success.result.get("screenshot").is_none());
     }
     #[test]
     fn unimplemented_tools_stay_json_rpc_errors_rather_than_refusals() {

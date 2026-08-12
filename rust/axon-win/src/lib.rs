@@ -1479,6 +1479,29 @@ mod tests {
         assert_eq!(*router.backend.clicks.borrow(), 1);
     }
     #[test]
+    fn look_defaults_to_screenshot_and_explicit_false_opts_out() {
+        let default_backend = backend(vec![], None);
+        let default_captures = default_backend.visual_captures.clone();
+        let mut default_router = Router::new(default_backend);
+        let response = default_router
+            .request(request("look", json!({"app":"App"})))
+            .unwrap();
+        let JsonRpcResponse::Success(success) = response else { panic!() };
+        assert_eq!(success.result["screenshot"]["mediaType"], "image/png");
+        assert_eq!(*default_captures.borrow(), 1);
+
+        let opted_out_backend = backend(vec![], None);
+        let opted_out_captures = opted_out_backend.visual_captures.clone();
+        let mut opted_out_router = Router::new(opted_out_backend);
+        let response = opted_out_router
+            .request(request("look", json!({"app":"App","screenshot":false})))
+            .unwrap();
+        let JsonRpcResponse::Success(success) = response else { panic!() };
+        assert!(success.result.get("screenshot").is_none());
+        assert_eq!(*opted_out_captures.borrow(), 0);
+    }
+
+    #[test]
     fn look_screenshot_and_text_share_one_capture_and_use_canonical_keys() {
         let mut backend = backend(vec![], None);
         backend.recognized = vec![recognized("Save", 100.0)];
