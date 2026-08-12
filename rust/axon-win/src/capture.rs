@@ -316,16 +316,18 @@ fn physical_capture_frame(bounds: RECT, content_size: (i32, i32)) -> Result<Rect
 }
 
 pub(crate) fn screenshot(captured: &CapturedBitmap) -> Result<Screenshot, BackendError> {
+    let bitmap = bitmap_for_ocr(
+        &captured.bitmap,
+        axon_core::OBSERVATION_SCREENSHOT_MAX_DIMENSION,
+    )?;
     let width = u32::try_from(
-        captured
-            .bitmap
+        bitmap
             .PixelWidth()
             .map_err(|e| operation("read screenshot bitmap width", e))?,
     )
     .map_err(|_| op("encode PNG", "screenshot width is negative"))?;
     let height = u32::try_from(
-        captured
-            .bitmap
+        bitmap
             .PixelHeight()
             .map_err(|e| operation("read screenshot bitmap height", e))?,
     )
@@ -339,7 +341,7 @@ pub(crate) fn screenshot(captured: &CapturedBitmap) -> Result<Screenshot, Backen
     .and_then(|operation| operation.join())
     .map_err(|e| operation("create PNG encoder", e))?;
     encoder
-        .SetSoftwareBitmap(&captured.bitmap)
+        .SetSoftwareBitmap(&bitmap)
         .map_err(|e| operation("set PNG software bitmap", e))?;
     encoder
         .FlushAsync()
