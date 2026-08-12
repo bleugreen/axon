@@ -1,0 +1,42 @@
+{
+  "structuredContent": {
+    "app": "Example",
+    "format": "observation",
+    "pid": 7,
+    "screenshot": {
+      "base64Data": "fixture-image",
+      "height": 80,
+      "mediaType": "image/png",
+      "width": 120
+    },
+    "snapshot": "fixture-1",
+    "tree": "main/run: button \"Run\" [click]"
+  },
+  "result": {
+    "content": [
+      {
+        "text": "{\"app\":\"Example\",\"format\":\"observation\",\"pid\":7,\"screenshot\":{\"contentTransport\":\"mcp_image\",\"height\":80,\"mediaType\":\"image/png\",\"width\":120},\"snapshot\":\"fixture-1\",\"tree\":\"main/run: button \\\"Run\\\" [click]\"}",
+        "type": "text"
+      },
+      {
+        "data": "fixture-image",
+        "mimeType": "image/png",
+        "type": "image"
+      }
+    ],
+    "isError": false,
+    "structuredContent": {
+      "app": "Example",
+      "format": "observation",
+      "pid": 7,
+      "screenshot": {
+        "contentTransport": "mcp_image",
+        "height": 80,
+        "mediaType": "image/png",
+        "width": 120
+      },
+      "snapshot": "fixture-1",
+      "tree": "main/run: button \"Run\" [click]"
+    }
+  }
+}

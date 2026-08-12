@@ -193,10 +193,10 @@ jobs:
               look="$candidate"
               if printf '%s' "$look" | jq -e '
                 .result.isError == false
-                and (.result.structuredContent.snapshot.app | strings | length > 0)
+                and (.result.structuredContent.app | strings | length > 0)
                 and ([.result.content[] | select(.type == "image" and .mimeType == "image/png" and (.data | length > 0))] | length == 1)
-                and ([.result.structuredContent.snapshot.tree | split("\n")[] | select(test(": button \"All Clear\" \\[click\\]"))] | length == 1)
-                and ([.result.structuredContent.snapshot.tree | split("\n")[] | select(test(": button \"1\" \\[click\\]"))] | length == 1)
+                and ([.result.structuredContent.tree | split("\n")[] | select(test(": button \"All Clear\" \\[click\\]"))] | length == 1)
+                and ([.result.structuredContent.tree | split("\n")[] | select(test(": button \"1\" \\[click\\]"))] | length == 1)
               ' >/dev/null; then
                 ready=true
                 break
@@ -211,7 +211,7 @@ jobs:
             if [[ -n "$look" ]]; then
               printf '%s\n' "$look" | jq '{
                 isError: .result.isError,
-                snapshot: (.result.structuredContent.snapshot | {app, tree: (.tree | split("\n") | map(select(test(": button "))) | .[0:20])}),
+                observation: (.result.structuredContent | {app, tree: (.tree | split("\n") | map(select(test(": button "))) | .[0:20])}),
                 error: (.result.structuredContent | {code, message, error})
               }'
             elif [[ -n "$look_error" ]]; then
@@ -219,9 +219,9 @@ jobs:
             fi
             exit 1
           fi
-          retained_app="$(printf '%s' "$look" | jq -r '.result.structuredContent.snapshot.app')"
-          clear_name="$(printf '%s' "$look" | jq -r '[.result.structuredContent.snapshot.tree | split("\n")[] | select(test(": button \"All Clear\" \\[click\\]")) | capture("^\\s*(?<name>.+): button").name][0]')"
-          one_name="$(printf '%s' "$look" | jq -r '[.result.structuredContent.snapshot.tree | split("\n")[] | select(test(": button \"1\" \\[click\\]")) | capture("^\\s*(?<name>.+): button").name][0]')"
+          retained_app="$(printf '%s' "$look" | jq -r '.result.structuredContent.app')"
+          clear_name="$(printf '%s' "$look" | jq -r '[.result.structuredContent.tree | split("\n")[] | select(test(": button \"All Clear\" \\[click\\]")) | capture("^\\s*(?<name>.+): button").name][0]')"
+          one_name="$(printf '%s' "$look" | jq -r '[.result.structuredContent.tree | split("\n")[] | select(test(": button \"1\" \\[click\\]")) | capture("^\\s*(?<name>.+): button").name][0]')"
           echo 'Calculator All Clear and digit 1 buttons have retained app-scoped semantic names'
 
           clear_invoked="$(jq -cn --arg app "$retained_app" --arg name "$clear_name" '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"invoke","arguments":{"target":{"app":$app,"name":$name},"name":"AXPress"}}}' | "$cli" mcp)"
@@ -246,7 +246,7 @@ jobs:
           for _ in {1..20}; do
             if candidate="$(printf '%s\n' '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"look","arguments":{"app":"Calculator"}}}' | "$cli" mcp 2>&1)"; then
               after="$candidate"
-              if printf '%s' "$after" | jq -e '.result.isError == false and (.result.structuredContent.snapshot.tree | test(": text \"[^\"]*1[^\"]*\""))' >/dev/null; then
+              if printf '%s' "$after" | jq -e '.result.isError == false and (.result.structuredContent.tree | test(": text \"[^\"]*1[^\"]*\""))' >/dev/null; then
                 verified=true
                 break
               fi
@@ -260,7 +260,7 @@ jobs:
             if [[ -n "$after" ]]; then
               printf '%s\n' "$after" | jq '{
                 isError: .result.isError,
-                display: [.result.structuredContent.snapshot.tree | split("\n")[] | select(test(": text "))][0:20],
+                display: [.result.structuredContent.tree | split("\n")[] | select(test(": text "))][0:20],
                 error: (.result.structuredContent | {code, message, error})
               }'
             elif [[ -n "$after_error" ]]; then

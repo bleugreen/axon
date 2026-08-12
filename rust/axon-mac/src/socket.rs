@@ -243,7 +243,7 @@ pub fn mcp() -> io::Result<()> {
                             json!({"jsonrpc":"2.0","id":id,"result":{"content":[{"type":"text","text":error["message"].as_str().unwrap_or("Axon error")}],"structuredContent":error,"isError":true}})
                         } else {
                             let result = response.get("result").cloned().unwrap_or(Value::Null);
-                            json!({"jsonrpc":"2.0","id":id,"result":{"content":[{"type":"text","text":serde_json::to_string(&result).unwrap()}],"structuredContent":result,"isError":false}})
+                            mcp_success_response(id, result)
                         }
                     }
                     Err(error) => {
@@ -260,6 +260,9 @@ pub fn mcp() -> io::Result<()> {
     }
     Ok(())
 }
+fn mcp_success_response(id: Value, result: Value) -> Value {
+    json!({"jsonrpc":"2.0","id":id,"result":axon_core::mcp_tool_result(result, false)})
+}
 fn tools() -> Vec<Value> {
     ["look","find","click","type","keyboard","invoke","scroll","run"].into_iter()
         .map(|name| json!({"name":name,"description":format!("Axon macOS {name}"),"inputSchema":{"type":"object","additionalProperties":true}})).collect()
@@ -268,6 +271,17 @@ fn tools() -> Vec<Value> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn facade_matches_shared_observation_envelope() {
+        let fixture: Value = serde_json::from_str(include_str!(
+            "../../../schema/fixtures/mcp-look-observation-envelope.json"
+        ))
+        .unwrap();
+        assert_eq!(
+            mcp_success_response(json!(1), fixture["structuredContent"].clone())["result"],
+            fixture["result"]
+        );
+    }
     #[test]
     fn endpoint_is_explicit_and_rejects_installed_socket() {
         unsafe { std::env::set_var(SOCKET_ENV, "/tmp/axon.sock") };

@@ -981,12 +981,30 @@ mod pipe {
             )
         } else {
             let result = response.get("result").cloned().unwrap_or(Value::Null);
-            Ok(
-                json!({"jsonrpc":"2.0","id":id,"result":{"content":[{"type":"text","text":serde_json::to_string(&result).unwrap()}],"structuredContent":result,"isError":false}}),
-            )
+            Ok(success_response(id, result))
         }
+    }
+    fn success_response(id: Value, result: Value) -> Value {
+        json!({"jsonrpc":"2.0","id":id,"result":axon_core::mcp_tool_result(result, false)})
     }
     fn tool_list() -> Value {
         Value::Array(["look","find","click","type","keyboard","invoke","scroll","run"].into_iter().map(|name|json!({"name":name,"description":format!("Axon Windows {name} tool"),"inputSchema":{"type":"object","additionalProperties":true}})).collect())
+    }
+
+    #[cfg(test)]
+    mod facade_tests {
+        use super::*;
+
+        #[test]
+        fn facade_matches_shared_observation_envelope() {
+            let fixture: Value = serde_json::from_str(include_str!(
+                "../../../schema/fixtures/mcp-look-observation-envelope.json"
+            ))
+            .unwrap();
+            assert_eq!(
+                success_response(json!(1), fixture["structuredContent"].clone())["result"],
+                fixture["result"]
+            );
+        }
     }
 }

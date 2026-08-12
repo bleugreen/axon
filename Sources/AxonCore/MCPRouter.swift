@@ -124,17 +124,10 @@ public struct MCPRouter {
             frames: Self.bool("frames", in: arguments) ?? false,
             maxDepth: Self.int("depth", in: arguments).map { max(0, $0) }
         )
-        let content = MCPContent.normalize(.object(["snapshot": observation]))
-        return JSONRPCResponse(id: id, result: [
-            "content": .array([
-                .object([
-                    "type": .string("text"),
-                    "text": .string(formatter.text(from: content.structured["snapshot"] ?? observation))
-                ])
-            ] + content.images),
-            "structuredContent": content.structured,
-            "isError": .bool(false)
-        ])
+        return JSONRPCResponse(id: id, result: MCPContent.toolResult(
+            structuredContent: observation,
+            isError: false
+        ))
     }
 
     private func appListObservationResult(
@@ -246,9 +239,10 @@ private extension JSONRPCError {
             "message": .string(message)
         ])
     }
+
 }
 
-private struct MCPContent {
+struct MCPContent {
     let structured: JSONValue
     let images: [JSONValue]
 
@@ -257,11 +251,27 @@ private struct MCPContent {
         let structured = value.redactingMCPImagePayloads(into: &images)
         return MCPContent(structured: structured, images: images)
     }
+
+    static func toolResult(structuredContent: JSONValue, isError: Bool) -> [String: JSONValue] {
+        let content = normalize(structuredContent)
+        return [
+            "content": .array([
+                .object([
+                    "type": .string("text"),
+                    "text": .string(content.structured.compactJSONString)
+                ])
+            ] + content.images),
+            "structuredContent": content.structured,
+            "isError": .bool(isError)
+        ]
+    }
 }
 
 private extension JSONValue {
     var compactJSONString: String {
-        let data = (try? JSONEncoder().encode(self)) ?? Data("null".utf8)
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
+        let data = (try? encoder.encode(self)) ?? Data("null".utf8)
         return String(decoding: data, as: UTF8.self)
     }
 

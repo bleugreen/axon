@@ -637,9 +637,13 @@ function Invoke-ProbeStage {
             $window = $response.result.structuredContent.app.windows |
                 ForEach-Object root | Where-Object role -eq 'Window' | Select-Object -First 1
             $screenshot = $response.result.structuredContent.screenshot
+            $image = @($response.result.content | Where-Object {
+                $_.type -eq 'image' -and $_.mimeType -eq 'image/png' -and $_.data.Length -gt 0
+            })
             $screenshotOk = $null -ne $screenshot -and
                 $screenshot.mediaType -eq 'image/png' -and
-                $screenshot.base64Data.Length -gt 0 -and
+                $screenshot.contentTransport -eq 'mcp_image' -and
+                $image.Count -eq 1 -and
                 [Math]::Max([int]$screenshot.width, [int]$screenshot.height) -le 1280
             if ($response.result.isError -eq $false -and $null -ne $window -and $screenshotOk) {
                 $verified = @{ response = $response; window = $window; app = $app.name }
