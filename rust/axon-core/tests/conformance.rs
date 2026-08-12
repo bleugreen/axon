@@ -13,7 +13,7 @@ struct LocatorFixture {
 fn v2_replay_registers_locator_and_strips_recording_metadata() {
     let doc = AxnCodec::parse(include_str!("../fixtures/swift-action-history-v2.yaml")).unwrap();
     let mut dispatcher = Dispatcher { calls: vec![], fail_at: None, registrations: vec![] };
-    AxnRunner::new(&mut dispatcher).run(&doc, &Map::new(), RunOptions { dry_run: None, continue_on_error: None }).unwrap();
+    AxnRunner::new(&mut dispatcher).run(&doc, &serde_json::from_value(json!({"recipient":"test@example.com"})).unwrap(), RunOptions { dry_run: None, continue_on_error: None }).unwrap();
     assert_eq!(dispatcher.registrations.len(), 1);
     assert_eq!(dispatcher.registrations[0].0, "Example");
     assert_eq!(dispatcher.registrations[0].1, "submit-button");
@@ -560,6 +560,7 @@ fn requires_reverifies_the_established_fact_before_dispatch() {
     ]));
     let mut dispatcher = SemanticDispatcher {
         states: vec![
+            json!({"value":"ready"}).as_object().unwrap().clone(),
             json!({"value":"ready"}).as_object().unwrap().clone(),
             json!({"value":"stale"}).as_object().unwrap().clone(),
         ],
