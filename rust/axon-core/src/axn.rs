@@ -16,6 +16,11 @@ pub struct AxnDocument {
     pub flags: Map<String, Value>,
 }
 
+fn same_path(left: &str, right: &str) -> bool {
+    let absolute = |path: &str| { let path = std::path::PathBuf::from(path); if path.is_absolute() { path } else { std::env::current_dir().unwrap_or_default().join(path) } };
+    std::fs::canonicalize(left).unwrap_or_else(|_| absolute(left)) == std::fs::canonicalize(right).unwrap_or_else(|_| absolute(right))
+}
+
 fn default_version() -> u32 { 1 }
 fn deserialize_version<'de, D: serde::Deserializer<'de>>(d: D) -> Result<u32, D::Error> {
     #[derive(Deserialize)] #[serde(untagged)] enum V { N(u32), S(String) }
@@ -273,13 +278,17 @@ impl<'a, D: ToolDispatcher> AxnRunner<'a, D> {
     ) -> Result<RunResult, AxnError> {
         validate_replay_contract(doc)?;
         let bindings = self.bind(&doc.arguments, arg_values)?;
+        let active_secrets: Vec<String> = bindings.values().filter(|(_, secret)| *secret).map(|(value, _)| value.clone()).collect();
         let dry_run = options
             .dry_run
             .unwrap_or_else(|| document_flag(doc, "dryRun"));
         let continue_on_error = options
             .continue_on_error
             .unwrap_or_else(|| document_flag(doc, "continueOnError"));
+        let healed_path = options.healed_path.clone();
+        let source_path = options.source_path.clone();
         let mut trace = Vec::new();
+        let mut heal_events = Vec::new();
         let mut facts = HashSet::new();
         let mut success = true;
         for (index, action) in doc.actions.iter().enumerate() {
@@ -293,6 +302,7 @@ impl<'a, D: ToolDispatcher> AxnRunner<'a, D> {
                     result: None,
                     error: Some(e),
                     resolution: None,
+                    heal: None,
                 });
                 success = false;
                 if !continue_on_error {
@@ -333,6 +343,13 @@ impl<'a, D: ToolDispatcher> AxnRunner<'a, D> {
             } else {
                 None
             };
+            let heal = if dry_run { None } else { outcome.resolution.as_ref().and_then(|resolution| {
+                healing_event(action, index, resolution, &active_secrets, |proposal, minimum| {
+                    action.params.get("target").and_then(Value::as_object).and_then(|t| t.get("app")).and_then(Value::as_str)
+                        .is_some_and(|app| self.dispatcher.verify_replay_locator(app, proposal, minimum))
+                })
+            }) };
+            if let Some(event) = &heal { heal_events.push(event.clone()); }
             let action_success = outcome.success && verification_error.is_none();
             let entry = TraceEntry {
                 index,
@@ -351,6 +368,7 @@ impl<'a, D: ToolDispatcher> AxnRunner<'a, D> {
                     })
                     .or_else(|| (!outcome.success).then(|| "action failed".into()))),
                 resolution: outcome.resolution,
+                heal,
             };
             if entry.success && !dry_run {
                 facts.extend(action.expects.iter().map(|f| f.id.clone()))
@@ -363,11 +381,23 @@ impl<'a, D: ToolDispatcher> AxnRunner<'a, D> {
                 break;
             }
         }
+        let written_healed_path = if !dry_run && heal_events.iter().any(|e| e.status == LocatorHealStatus::Proposed) {
+            if let Some(path) = healed_path {
+                if source_path.as_ref().is_some_and(|source| same_path(source, &path)) {
+                    return Err(AxnError::Invalid("healedPath must differ from the source path".into()));
+                }
+                std::fs::write(&path, reviewed_yaml(doc, &heal_events)?).map_err(|e| AxnError::Invalid(format!("could not write healed file: {e}")))?;
+                Some(path)
+            } else { None }
+        } else { None };
+        let heal = (!heal_events.is_empty()).then(|| HealingSummary { count: heal_events.len(), events: heal_events });
         Ok(RunResult {
             success,
             dry_run,
             continue_on_error,
             trace,
+            heal,
+            healed_path: written_healed_path,
         })
     }
     fn bind(
