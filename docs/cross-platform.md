@@ -1120,11 +1120,14 @@ returned as `screenshotUnavailable` on the observation while the semantic
 `look` still succeeds. The app-list, change-check, and child-page carve-outs
 remain imageless through axon-core's shared screenshot policy.
 
-The daemon has no default endpoint. `AXON_MAC_SOCKET` must name an isolated Unix
-socket, and `/tmp/axon.sock` is rejected explicitly. This keeps development and
-conformance runs separate from the installed Swift daemon. The Swift daemon,
-LaunchAgent, registration, live macOS workflow, recorder, editor, and extended
-capabilities remain canonical and unchanged until a deliberate cutover.
+The daemon resolves the same production endpoint as every Swift client and the
+LaunchAgent: `AXON_SOCKET_PATH`, defaulting to `/tmp/axon.sock`. Development,
+conformance, and bench probes retain the higher-priority `AXON_MAC_SOCKET`
+private-endpoint override so branch builds never need to repoint an installed daemon.
+The server owns a lifetime `flock`, reclaims only stale socket nodes, and serves
+connections concurrently through one serialized native-backend worker. Health and
+shutdown bypass that worker so a long replay or wait cannot hide daemon liveness.
+The registered Swift daemon remains unchanged until the deliberate cutover stage.
 
 The durable bglab-mac development identity is packaged by
 `scripts/package-macos-rust-bench` at `~/AxonBench/AxonMacDev.app`, with the
