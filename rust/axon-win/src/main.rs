@@ -47,22 +47,6 @@ impl StartupLog {
         }
     }
 
-    #[cfg(test)]
-    mod tests {
-        use super::*;
-
-        #[test]
-        fn facade_matches_shared_observation_envelope() {
-            let fixture: Value = serde_json::from_str(include_str!(
-                "../../../schema/fixtures/mcp-look-observation-envelope.json"
-            ))
-            .unwrap();
-            assert_eq!(
-                success_response(json!(1), fixture["structuredContent"].clone())["result"],
-                fixture["result"]
-            );
-        }
-    }
 }
 
 #[cfg(windows)]
@@ -1006,5 +990,22 @@ mod pipe {
     }
     fn tool_list() -> Value {
         Value::Array(["look","find","click","type","keyboard","invoke","scroll","run"].into_iter().map(|name|json!({"name":name,"description":format!("Axon Windows {name} tool"),"inputSchema":{"type":"object","additionalProperties":true}})).collect())
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn facade_matches_shared_observation_envelope() {
+            let fixture: Value = serde_json::from_str(include_str!(
+                "../../../schema/fixtures/mcp-look-observation-envelope.json"
+            ))
+            .unwrap();
+            assert_eq!(
+                success_response(json!(1), fixture["structuredContent"].clone())["result"],
+                fixture["result"]
+            );
+        }
     }
 }
