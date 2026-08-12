@@ -1,5 +1,7 @@
 # Embedding Axon
 
+This guide is for developers building on Axon: products that bundle and manage the service as part of their own experience.
+
 This is the contract a consumer relies on when it bundles Axon with something else. Cairn's
 executor is the first such consumer, but nothing here is specific to it: Cairn uses the same
 facade, the same lifecycle verbs, and the same status document as any other client.

@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Axon is a background service for local UI automation. This document describes the canonical macOS implementation; the Windows and Linux siblings and what is proven on each platform live in [Cross-platform Axon design](cross-platform.md). Axon should let an agent inspect and operate arbitrary apps through the platform's accessibility API without binding workflows to fragile screen coordinates or transient tree indexes.
+Axon is a background service for local UI automation. This document describes the canonical macOS implementation; the Windows and Linux siblings and what is proven on each platform live in [Cross-platform internals](cross-platform-internals.md). Axon should let an agent inspect and operate arbitrary apps through the platform's accessibility API without binding workflows to fragile screen coordinates or transient tree indexes.
 
 The immediate target is an MCP-facing service with primitives similar to Computer Use:
 
