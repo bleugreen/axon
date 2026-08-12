@@ -140,7 +140,14 @@ public final class ActionHistoryStore: @unchecked Sendable {
         return recordsBySession[sessionID] ?? []
     }
 
-    public func exportScript(sessionID: String, includeReads: Bool = false, from: String? = nil, to: String? = nil) throws -> ActionHistoryExport {
+    public func exportScript(
+        sessionID: String,
+        includeReads: Bool = false,
+        from: String? = nil,
+        to: String? = nil,
+        arguments: [AxnArgument] = []
+    ) throws -> ActionHistoryExport {
+        let arguments = try AxnArgument.validated(arguments)
         let records = try slicedRecords(sessionID: sessionID, from: from, to: to)
         // Gathered across the whole export before any step is compiled: an echo of typed text can
         // surface a step or two later, and every one of these strings is a parameterization
@@ -159,10 +166,14 @@ public final class ActionHistoryStore: @unchecked Sendable {
             ordinal += 1
             return object
         }
-        let script = try AxnDocumentCodec.yamlString(from: .object([
+        var document: [String: JSONValue] = [
             "version": .int(2),
             "actions": .array(actions.map(JSONValue.object))
-        ]))
+        ]
+        if !arguments.isEmpty {
+            document["args"] = .array(arguments.map(\.jsonValue))
+        }
+        let script = try AxnDocumentCodec.yamlString(from: .object(document))
         return ActionHistoryExport(script: script, actionCount: actions.count, recordCount: records.count)
     }
 

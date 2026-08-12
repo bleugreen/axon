@@ -60,7 +60,11 @@ public struct RecordedUserEventGroup: Equatable, Sendable {
 public struct UserRecordingTranslator {
     public init() {}
 
-    public func axnDocument(from groups: [RecordedUserEventGroup]) throws -> JSONValue {
+    public func axnDocument(
+        from groups: [RecordedUserEventGroup],
+        arguments: [AxnArgument] = []
+    ) throws -> JSONValue {
+        let arguments = try AxnArgument.validated(arguments)
         var actions: [JSONValue] = []
         var lastValueFactID: String?
         var guardFactIDs = Set<String>()
@@ -149,10 +153,14 @@ public struct UserRecordingTranslator {
             actionNumber += 1
         }
 
-        return .object([
+        var document: [String: JSONValue] = [
             "version": .int(2),
             "actions": .array(prunedUnrequiredGuardFacts(in: actions, guardFactIDs: guardFactIDs))
-        ])
+        ]
+        if !arguments.isEmpty {
+            document["args"] = .array(arguments.map(\.jsonValue))
+        }
+        return .object(document)
     }
 
     private func inputStrings(for action: RecordedUserAction) -> [String] {
@@ -226,8 +234,11 @@ public struct UserRecordingTranslator {
         }
     }
 
-    public func yaml(from groups: [RecordedUserEventGroup]) throws -> String {
-        let axnDocument = try axnDocument(from: groups)
+    public func yaml(
+        from groups: [RecordedUserEventGroup],
+        arguments: [AxnArgument] = []
+    ) throws -> String {
+        let axnDocument = try axnDocument(from: groups, arguments: arguments)
         return try AxnDocumentCodec.yamlString(from: axnDocument)
     }
 
