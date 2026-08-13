@@ -15,6 +15,41 @@ pub enum LookObservationKind {
     ChildPage,
 }
 
+pub fn format_snapshot(snapshot: &Snapshot, options: &LookDisplayOptions) -> Value {
+    let mut value = serde_json::to_value(snapshot).expect("snapshot serialization cannot fail");
+    fn format_node(node: &mut Map<String, Value>, depth: usize, options: &LookDisplayOptions) {
+        if !options.frames { node.remove("frame"); }
+        if depth == 0 || !options.tree { node.remove("children"); return; }
+        if let Some(children) = node.get_mut("children").and_then(Value::as_array_mut) {
+            for child in children { if let Some(child) = child.as_object_mut() { format_node(child, depth - 1, options); } }
+        }
+    }
+    let depth = options.depth.map(|depth| depth.saturating_add(1)).unwrap_or(usize::MAX);
+    if let Some(windows) = value.pointer_mut("/app/windows").and_then(Value::as_array_mut) {
+        for window in windows { if let Some(root) = window.get_mut("root").and_then(Value::as_object_mut) { format_node(root, depth, options); } }
+    }
+    if options.format == LookFormat::Debug {
+        let mut envelope = Map::new(); envelope.insert("format".into(), Value::String("debug".into())); envelope.insert("observation".into(), value); Value::Object(envelope)
+    } else { value }
+}
+
+pub fn format_child_page(capture: &crate::ChildPageCapture, rendered: &Snapshot, options: &LookDisplayOptions) -> Value {
+    let mut tree = format_snapshot(rendered, options);
+    if options.format == LookFormat::Debug { tree = tree.get("observation").cloned().unwrap_or(Value::Null); }
+    let next_offset = capture.total.and_then(|total| {
+        let next = capture.offset.saturating_add(capture.children.len()); (next < total).then_some(next)
+    });
+    serde_json::json!({
+        "snapshot": capture.snapshot,
+        "parent": capture.parent,
+        "offset": capture.offset,
+        "limit": capture.limit,
+        "total": capture.total,
+        "nextOffset": next_offset,
+        "tree": tree,
+    })
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum LookFormat { #[default] Observation, Debug }
 

@@ -386,6 +386,12 @@ impl SemanticResolutionContext {
         self.process_id
     }
 
+    /// Backend-owned retained evidence for operations that can execute against the observed node
+    /// without recapturing its whole application.
+    pub fn recorded_handle(&self) -> Option<&SnapshotHandle> {
+        self.recorded_handle.as_ref()
+    }
+
     pub fn resolve(&self, live: &Snapshot) -> SemanticLookup {
         if self
             .process_id
