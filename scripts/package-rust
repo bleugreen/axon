@@ -38,11 +38,13 @@ case "$CRATE" in
   axon-win)
     TARGET="windows-x86_64"
     BINARY="axon-win.exe"
+    EXTRA_BINARIES=("axon-win-daemon.exe")
     EXPECTED_HOST="windows"
     ;;
   axon-linux)
     TARGET="linux-x86_64"
     BINARY="axon-linux"
+    EXTRA_BINARIES=()
     EXPECTED_HOST="linux"
     ;;
   *)
@@ -81,7 +83,6 @@ if [[ "$HOST" != "$EXPECTED_HOST" ]]; then
   printf '%s must be packaged on %s; this host is %s\n' "$CRATE" "$EXPECTED_HOST" "$HOST" >&2
   exit 1
 fi
-
 STAGING="$DIST_DIR/$CRATE-$VERSION-$TARGET"
 # Kept beside the staging directory rather than inside it, so provenance never ships in the archive.
 STAMP="$DIST_DIR/.$(basename "$STAGING").stage"
@@ -108,6 +109,10 @@ if [[ "$DO_STAGE" == 1 ]]; then
   (cd rust && cargo build --release --locked -p "$CRATE")
   cp "rust/target/release/$BINARY" "$STAGING/$BINARY"
   chmod 755 "$STAGING/$BINARY"
+  for EXTRA_BINARY in "${EXTRA_BINARIES[@]}"; do
+    cp "rust/target/release/$EXTRA_BINARY" "$STAGING/$EXTRA_BINARY"
+    chmod 755 "$STAGING/$EXTRA_BINARY"
+  done
 
   # The unit template ships with the binary: `daemon install` renders it, so a consumer who wants
   # to inspect what will be registered before installing can read it out of the archive.
@@ -128,6 +133,12 @@ if [[ ! -f "$STAGING/$BINARY" ]]; then
   printf '%s not found; run scripts/package-rust %s --stage-only first\n' "$STAGING/$BINARY" "$CRATE" >&2
   exit 1
 fi
+for EXTRA_BINARY in "${EXTRA_BINARIES[@]}"; do
+  if [[ ! -f "$STAGING/$EXTRA_BINARY" ]]; then
+    printf '%s not found; run scripts/package-rust %s --stage-only first\n' "$STAGING/$EXTRA_BINARY" "$CRATE" >&2
+    exit 1
+  fi
+done
 
 if [[ ! -f "$STAMP" || "$(cat "$STAMP")" != "$(stage_identity)" ]]; then
   printf 'staging directory %s was not built from this checkout; re-run scripts/package-rust %s --stage-only\n' \

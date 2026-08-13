@@ -5,6 +5,11 @@
 //! tested on any host rather than only on the one machine that could ever exercise them. Only the
 //! calls that touch Task Scheduler and the named pipe live behind the target gate in `main.rs`.
 
+use std::{
+    io,
+    path::{Path, PathBuf},
+};
+
 use axon_core::{
     CapabilityInfo, CapabilityState, DaemonReport, HealthPlatform, HealthReport, NotRunningHealth,
     RegistrationHealth, RegistrationMechanism, SessionHealth, reason,
@@ -22,7 +27,51 @@ const INTERACTIVE_WINDOW_STATION: &str = "WinSta0";
 /// Quoted because `Program Files` is the expected install location and an unquoted path with a
 /// space registers a task that tries to run `C:\Program`.
 pub fn task_action(executable: &str) -> String {
-    format!("\"{executable}\" serve")
+    format!("\"{executable}\"")
+}
+
+fn decode_xml_text(value: &str) -> String {
+    value
+        .replace("&quot;", "\"")
+        .replace("&apos;", "'")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&amp;", "&")
+}
+
+/// Derives and validates the windowless daemon beside the lifecycle CLI.
+pub fn daemon_sibling(cli: &Path) -> io::Result<PathBuf> {
+    let parent = cli.parent().ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "lifecycle executable has no parent directory",
+        )
+    })?;
+    let daemon = parent.join("axon-win-daemon.exe");
+    if !daemon.is_file() {
+        return Err(io::Error::new(
+            io::ErrorKind::NotFound,
+            format!(
+                "windowless daemon executable is missing: {}",
+                daemon.display()
+            ),
+        ));
+    }
+
+    Ok(daemon)
+}
+
+pub const LEGACY_MIGRATION: &str = "the existing registration was created by an older elevated installer and remains usable. Open Administrator PowerShell, run the currently installed `axon daemon uninstall` to remove the legacy task, close it, then rerun `irm https://axn.dev/install.ps1 | iex` in ordinary PowerShell";
+
+pub fn scheduler_error(operation: &str, existed: bool, error: io::Error) -> io::Error {
+    if existed && error.raw_os_error() == Some(5) {
+        io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            format!("{operation} was denied: {LEGACY_MIGRATION}"),
+        )
+    } else {
+        error
+    }
 }
 
 /// Reads back the executable a registered task points at.
@@ -34,7 +83,7 @@ pub fn registration_from_task_xml(xml: &str) -> RegistrationHealth {
     match element_text(xml, "Command") {
         Some(command) => RegistrationHealth::present(
             RegistrationMechanism::ScheduledTask,
-            command.trim().trim_matches('"'),
+            decode_xml_text(command.trim().trim_matches('"')),
         ),
         None => RegistrationHealth::absent(RegistrationMechanism::ScheduledTask),
     }
@@ -207,15 +256,14 @@ mod tests {
 
     const TASK_XML: &str = r#"<?xml version="1.0" encoding="UTF-16"?>
 <Task><Actions Context="Author"><Exec>
-<Command>"C:\Program Files\Axon\axon-win.exe"</Command>
-<Arguments>serve</Arguments>
+<Command>"C:\Program Files\Axon\axon-win-daemon.exe"</Command>
 </Exec></Actions></Task>"#;
 
     #[test]
     fn scheduled_task_action_quotes_executable_paths() {
         assert_eq!(
-            task_action(r"C:\Program Files\Axon\axon-win.exe"),
-            r#""C:\Program Files\Axon\axon-win.exe" serve"#
+            task_action(r"C:\Program Files\Axon\axon-win-daemon.exe"),
+            r#""C:\Program Files\Axon\axon-win-daemon.exe""#
         );
     }
 
@@ -227,7 +275,19 @@ mod tests {
         assert_eq!(registration.mechanism, RegistrationMechanism::ScheduledTask);
         assert_eq!(
             registration.path.as_deref(),
-            Some(r"C:\Program Files\Axon\axon-win.exe")
+            Some(r"C:\Program Files\Axon\axon-win-daemon.exe")
+        );
+    }
+
+    #[test]
+    fn registration_decodes_task_scheduler_xml_entities() {
+        let registration = registration_from_task_xml(
+            r#"<Task><Actions><Exec><Command>C:\Users\A&amp;B\axon-win-daemon.exe</Command></Exec></Actions></Task>"#,
+        );
+
+        assert_eq!(
+            registration.path.as_deref(),
+            Some(r"C:\Users\A&B\axon-win-daemon.exe")
         );
     }
 
@@ -313,5 +373,28 @@ mod tests {
             Some(reason::DAEMON_NOT_RUNNING)
         );
         assert_eq!(report.capabilities.len(), Capability::ALL.len());
+    }
+
+    #[test]
+    fn daemon_path_is_the_cli_sibling() {
+        let root = std::env::temp_dir().join(format!("axon-win-lifecycle-{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let daemon = root.join("axon-win-daemon.exe");
+        std::fs::write(&daemon, b"daemon").unwrap();
+        assert_eq!(daemon_sibling(&root.join("axon-win.exe")).unwrap(), daemon);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn missing_daemon_is_rejected_before_registration() {
+        let error = daemon_sibling(Path::new(r"C:\Axon\axon-win.exe")).unwrap_err();
+        assert_eq!(error.kind(), io::ErrorKind::NotFound);
+    }
+
+    #[test]
+    fn access_denied_on_an_existing_task_is_a_migration_error() {
+        let error = scheduler_error("replacement", true, io::Error::from_raw_os_error(5));
+        assert_eq!(error.kind(), io::ErrorKind::PermissionDenied);
+        assert!(error.to_string().contains("older elevated installer"));
     }
 }

@@ -25,7 +25,10 @@ const docs = [
 
 // cross-platform.md links to this contract. It is rendered but deliberately omitted from the
 // primary navigation so the requested documentation set remains focused.
-const supportingDocs = [['platform-spec', 'Platform Contract']];
+const supportingDocs = [
+  ['platform-spec', 'Platform Contract'],
+  ['cross-platform-internals', 'Cross-platform internals'],
+];
 
 const escapeHtml = (value) => String(value)
   .replaceAll('&', '&amp;')
@@ -172,7 +175,7 @@ function home(version) {
         <div><p class="kicker">Install Axon ${escapeHtml(version)}</p><h2>Get started.</h2></div>
         <div class="commands">
           ${shellBlock('curl -fsSL https://axn.dev/install.sh | sh', 'macOS / Linux · shell')}
-          ${shellBlock('irm https://axn.dev/install.ps1 | iex', 'Windows · administrator PowerShell')}
+          ${shellBlock('irm https://axn.dev/install.ps1 | iex', 'Windows · PowerShell')}
           ${shellBlock('brew install --cask bleugreen/tap/axon', 'macOS · Homebrew')}
         </div>
       </section>

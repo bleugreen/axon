@@ -11,7 +11,13 @@ use axon_core::{
 };
 use serde_json::{Map, Value, json};
 
+#[cfg(windows)]
+pub mod daemon;
 pub mod lifecycle;
+#[cfg(windows)]
+pub mod pipe;
+#[cfg(windows)]
+pub mod scheduler;
 
 #[cfg(windows)]
 mod platform;

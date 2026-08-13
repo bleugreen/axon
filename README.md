@@ -2,7 +2,7 @@
 
 Axon is a local accessibility service that gives agents a typed, composable path into running apps on macOS, Windows, and Linux. It is the connective layer between an agent's intent and an app's UI — semantic locators over coordinates, a flat set of primitive actions, honest results, and recordable sessions that replay as plain text files.
 
-On macOS it runs as a menu bar service; on Windows and Linux the sibling Rust daemons (`axon-win`, `axon-linux`) serve the same surface. Each exposes a small JSON-RPC command surface over local IPC and provides an MCP stdio facade for agent clients. What is proven to work where — separated into Supported, Supported with limits, and Experimental tiers — is recorded in the [cross-platform support matrix](docs/cross-platform.md#support-matrix). The core loop is:
+On macOS it runs as a menu bar service. Windows installs the `axon-win` CLI beside a windowless `axon-win-daemon` process, while Linux uses the `axon-linux` daemon. Each exposes a small JSON-RPC command surface over local IPC and provides an MCP stdio facade for agent clients. What is proven to work where — separated into Supported, Supported with limits, and Experimental tiers — is recorded in the [cross-platform support matrix](docs/cross-platform.md#support-matrix). The core loop is:
 
 1. look at app state
 2. find an honest target
@@ -17,11 +17,13 @@ macOS or Linux:
 curl -fsSL https://axn.dev/install.sh | sh
 ```
 
-Administrator PowerShell (open PowerShell with **Run as administrator**):
+Windows PowerShell:
 
 ```powershell
 irm https://axn.dev/install.ps1 | iex
 ```
+
+The Windows install and daemon lifecycle are per-user and do not require Administrator access.
 
 Or install on macOS with Homebrew:
 
