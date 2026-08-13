@@ -243,18 +243,15 @@ Three exclusions apply to every candidate. A candidate that trips one is dropped
 silently — an action with nothing safe to say is saved with no `expects` and
 stays a valid, unverified step.
 
-**Never assert a parameterized value or a downstream echo of one.** A candidate
+**Do not derive tautological parameter assertions automatically.** A candidate
 is dropped when its string equals, contains, or is contained by any input string
-(`value`, `text`, `key`) the saved workflow carries — not only the step's own,
-because an echo often surfaces a step or two later, as when a click opens a
-window titled after text typed earlier. This covers both the direct case — a
-`type` asserting back exactly what it typed, which the user is expected to
-replace with `{{a_parameter}}` — and the downstream case, where a preview label
-or window title elsewhere quotes the typed text. Parameter references are
-only substituted in `value`, `text`, and `key`; `expects` is not a substitutable
-field, and `run` rejects a file that puts a reference there. So an assertion
-built from an input is either a literal that goes stale the first time the
-parameter changes, or a hard rejection of the whole workflow.
+(`value`, `text`, `key`) the saved workflow carries, including downstream echoes.
+This recording-time exclusion prevents a typed value from being treated as proof
+of the action that typed it. Authored and exported workflows may nevertheless use
+parameter references inside `value`, `text`, or `key` expectation fields. Replay
+resolves those references before baseline capture or verification and carries
+secret taint separately, so credentials cannot enter traces, errors, resolution
+evidence, or healing proposals.
 
 **Never assert a clicked target's own label.** A candidate is dropped when its
 string already appears as the `title`, `value`, `description`, or `identifier`
