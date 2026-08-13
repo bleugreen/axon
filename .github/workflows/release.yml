@@ -193,13 +193,13 @@ jobs:
           tenant-id: ${{ secrets.AZURE_TENANT_ID }}
           subscription-id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
 
-      - name: Sign axon-win.exe
+      - name: Sign Windows executables
         uses: azure/artifact-signing-action@v2
         with:
           endpoint: ${{ vars.AZURE_SIGNING_ENDPOINT }}
           signing-account-name: ${{ vars.AZURE_SIGNING_ACCOUNT }}
           certificate-profile-name: ${{ vars.AZURE_SIGNING_PROFILE }}
-          files: ${{ github.workspace }}\dist\axon-win-${{ needs.version.outputs.version }}-windows-x86_64\axon-win.exe
+          files: ${{ github.workspace }}\dist\axon-win-${{ needs.version.outputs.version }}-windows-x86_64\*.exe
           file-digest: SHA256
           # Artifact Signing certificates are short-lived by design, so a signature is only valid
           # beyond a few days if it is timestamped.
@@ -212,7 +212,7 @@ jobs:
           exclude-environment-credential: true
           exclude-azure-cli-credential: false
 
-      - name: Verify the packaged daemon reports the release version
+      - name: Verify the packaged CLI reports the release version
         env:
           VERSION: ${{ needs.version.outputs.version }}
         run: |
@@ -228,7 +228,7 @@ jobs:
 
       # Verified from inside the archive rather than from the staging directory, because the archive
       # is what a consumer downloads and Windows is what evaluates the signature on it.
-      - name: Verify the archived binary carries a trusted signature
+      - name: Verify the archived binaries carry trusted signatures
         shell: pwsh
         env:
           VERSION: ${{ needs.version.outputs.version }}
@@ -239,19 +239,26 @@ jobs:
           Remove-Item -Recurse -Force $extracted -ErrorAction Ignore
           Expand-Archive -Path "dist/$name.zip" -DestinationPath $extracted
 
-          $signature = Get-AuthenticodeSignature -FilePath (Join-Path $extracted "$name\axon-win.exe")
-          Write-Host "status:    $($signature.Status)"
-          Write-Host "signer:    $($signature.SignerCertificate.Subject)"
-          Write-Host "timestamp: $($signature.TimeStamperCertificate.Subject)"
+          foreach ($binary in @('axon-win.exe', 'axon-win-daemon.exe')) {
+            $path = Join-Path $extracted "$name\$binary"
+            if (-not (Test-Path -LiteralPath $path -PathType Leaf)) {
+              Write-Host "::error::archive is missing $binary"
+              exit 1
+            }
+            $signature = Get-AuthenticodeSignature -FilePath $path
+            Write-Host "$binary status:    $($signature.Status)"
+            Write-Host "$binary signer:    $($signature.SignerCertificate.Subject)"
+            Write-Host "$binary timestamp: $($signature.TimeStamperCertificate.Subject)"
 
-          if ($signature.Status -ne 'Valid') {
-            Write-Host "::error::archived axon-win.exe is not validly signed: $($signature.Status) - $($signature.StatusMessage)"
-            exit 1
-          }
-          # An untimestamped signature expires with the certificate, which for this service is days.
-          if ($null -eq $signature.TimeStamperCertificate) {
-            Write-Host '::error::archived axon-win.exe is signed but not timestamped'
-            exit 1
+            if ($signature.Status -ne 'Valid') {
+              Write-Host "::error::archived $binary is not validly signed: $($signature.Status) - $($signature.StatusMessage)"
+              exit 1
+            }
+            # An untimestamped signature expires with the certificate, which for this service is days.
+            if ($null -eq $signature.TimeStamperCertificate) {
+              Write-Host "::error::archived $binary is signed but not timestamped"
+              exit 1
+            }
           }
 
       - uses: actions/upload-artifact@v4

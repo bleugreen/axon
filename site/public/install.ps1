@@ -24,12 +24,6 @@ if ($Architecture -ne 'AMD64') {
     Fail "unsupported platform windows/$($Architecture.ToLowerInvariant()); release binaries exist only for macos/aarch64, linux/x86_64, and windows/x86_64"
 }
 
-$Identity = [System.Security.Principal.WindowsIdentity]::GetCurrent()
-$Principal = New-Object System.Security.Principal.WindowsPrincipal($Identity)
-if (-not $Principal.IsInRole([System.Security.Principal.WindowsBuiltInRole]::Administrator)) {
-    Fail "installing Axon registers its daemon with Task Scheduler, which needs an elevated shell. Open PowerShell with 'Run as administrator' and rerun: irm https://axn.dev/install.ps1 | iex"
-}
-
 $Pinned = -not [string]::IsNullOrWhiteSpace($Version)
 if ($Pinned) {
     $Version = $Version.Trim().TrimStart('v')
@@ -53,9 +47,12 @@ $ContentDirectory = "axon-win-$Version-windows-x86_64"
 $InstallRoot = Join-Path $env:LOCALAPPDATA 'Axon'
 $InstallDirectory = Join-Path $InstallRoot $Version
 $Executable = Join-Path $InstallDirectory 'axon-win.exe'
+$DaemonExecutable = Join-Path $InstallDirectory 'axon-win-daemon.exe'
 $Marker = Join-Path $InstallDirectory '.axon-install-complete'
 
-if ((Test-Path -LiteralPath $Marker -PathType Leaf) -and (Test-Path -LiteralPath $Executable -PathType Leaf)) {
+if ((Test-Path -LiteralPath $Marker -PathType Leaf) -and
+    (Test-Path -LiteralPath $Executable -PathType Leaf) -and
+    (Test-Path -LiteralPath $DaemonExecutable -PathType Leaf)) {
     Write-Host "Axon $Version is already installed at $InstallDirectory; reconciling daemon and PATH state."
     & $Executable daemon install
     if ($LASTEXITCODE -ne 0) {
@@ -114,12 +111,17 @@ try {
     }
     $SourceDirectory = Join-Path $ExtractDirectory $ContentDirectory
     $SourceExecutable = Join-Path $SourceDirectory 'axon-win.exe'
-    if (-not (Test-Path -LiteralPath $SourceExecutable -PathType Leaf)) {
-        Fail "$Archive did not contain the expected executable $ContentDirectory\axon-win.exe"
+    $SourceDaemonExecutable = Join-Path $SourceDirectory 'axon-win-daemon.exe'
+    foreach ($ExpectedExecutable in @($SourceExecutable, $SourceDaemonExecutable)) {
+        if (-not (Test-Path -LiteralPath $ExpectedExecutable -PathType Leaf)) {
+            Fail "$Archive did not contain the expected executable $ContentDirectory\$([System.IO.Path]::GetFileName($ExpectedExecutable)); the incomplete package was not installed or registered"
+        }
     }
 
-    $Signature = Get-AuthenticodeSignature -LiteralPath $SourceExecutable
-    if ($Signature.Status -ne [System.Management.Automation.SignatureStatus]::Valid) {
+    foreach ($SignedExecutable in @($SourceExecutable, $SourceDaemonExecutable)) {
+      $Signature = Get-AuthenticodeSignature -LiteralPath $SignedExecutable
+      $BinaryName = [System.IO.Path]::GetFileName($SignedExecutable)
+      if ($Signature.Status -ne [System.Management.Automation.SignatureStatus]::Valid) {
         $ReleaseVersion = $null
         $SigningStart = [version]'0.3.0'
         $IsUnsignedLegacyPin = $Pinned -and
@@ -127,12 +129,13 @@ try {
             $ReleaseVersion -lt $SigningStart -and
             $Signature.Status -eq [System.Management.Automation.SignatureStatus]::NotSigned
         if ($IsUnsignedLegacyPin) {
-            Write-Warning "Axon $Version predates the Windows signing pipeline and carries no Authenticode signature; its SHA-256 checksum is valid, but Windows cannot verify its publisher."
+            Write-Warning "Axon $Version predates the Windows signing pipeline and $BinaryName carries no Authenticode signature; its SHA-256 checksum is valid, but Windows cannot verify its publisher."
         } else {
-            Fail "Authenticode verification failed for axon-win.exe: $($Signature.Status) - $($Signature.StatusMessage). Use a signed release or verify that the download was not modified"
+            Fail "Authenticode verification failed for $BinaryName: $($Signature.Status) - $($Signature.StatusMessage). The package was not installed or registered; use a signed release or verify that the download was not modified"
         }
-    } else {
-        Write-Host "Verified Authenticode signer: $($Signature.SignerCertificate.Subject)"
+      } else {
+          Write-Host "Verified Authenticode signer for $BinaryName: $($Signature.SignerCertificate.Subject)"
+      }
     }
 
     $StagedInstall = "$InstallDirectory.installing"
@@ -142,8 +145,11 @@ try {
     New-Item -ItemType Directory -Path $StagedInstall | Out-Null
     Copy-Item -Path (Join-Path $SourceDirectory '*') -Destination $StagedInstall -Recurse -Force
     $StagedExecutable = Join-Path $StagedInstall 'axon-win.exe'
-    if (-not (Test-Path -LiteralPath $StagedExecutable -PathType Leaf)) {
-        Fail "the staged executable is missing at $StagedExecutable"
+    $StagedDaemonExecutable = Join-Path $StagedInstall 'axon-win-daemon.exe'
+    foreach ($StagedBinary in @($StagedExecutable, $StagedDaemonExecutable)) {
+        if (-not (Test-Path -LiteralPath $StagedBinary -PathType Leaf)) {
+            Fail "the staged executable is missing at $StagedBinary; the incomplete package was not installed or registered"
+        }
     }
     try {
         New-Item -ItemType HardLink -Path (Join-Path $StagedInstall 'axon.exe') -Target $StagedExecutable | Out-Null

@@ -25,7 +25,7 @@ Axon is most complete at semantic actions such as pressing a button or setting a
 
 ### Windows
 
-Window capture and semantic inspection are supported in an interactive desktop session. Background pointer delivery is deliberately narrow, and Axon refuses actions when it cannot prove a safe target-bound mechanism. Global keyboard delivery is not available.
+Window capture and semantic inspection are supported in an interactive desktop session. Axon installs an unelevated, per-user scheduled task that launches a dedicated windowless daemon; the command-line interface remains a separate console executable. Background pointer delivery is deliberately narrow, and Axon refuses actions when it cannot prove a safe target-bound mechanism. Global keyboard delivery is not available.
 
 ### Linux
 

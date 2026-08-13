@@ -217,8 +217,9 @@ session on macOS, an interactive `ONLOGON` scheduled task on Windows, and a
 systemd user unit bound to `graphical-session.target` on Linux.
 
 None of the three copies a binary anywhere, so there is exactly one
-registration truth and callers must invoke from a permanent path. Windows and
-Linux register the *invoking* executable; macOS registers the enclosing
+registration truth and callers must invoke from a permanent path. Windows
+derives and registers the windowless daemon beside the invoking CLI, Linux
+registers the *invoking* executable, and macOS registers the enclosing
 `Axon.app` when there is one, because that is the only way a privacy grant
 binds to the bundle identity instead of to a path that changes every release.
 All three treat a successful authenticated health round trip as the readiness
@@ -297,12 +298,14 @@ events with a close conceptual fit to AX.
   Windows-native access controls and lifecycle management.
 - The implemented Windows daemon uses `\\.\pipe\axon-v1` instead of `AF_UNIX`.
   Named pipes allow the interactive-session process to reject remote clients. At
-  startup, `axon-win serve` reads the user SID from its process token and installs
+  startup, `axon-win-daemon.exe` reads the user SID from its process token and installs
   a protected DACL granting pipe access only to that SID; it does not rely on the
-  process default security descriptor. `axon-win daemon install` registers an
-  interactive `ONLOGON` scheduled task for the current user pointing at the
-  invoking executable, and starts it; this is the canonical installation path
-  because Task Scheduler launches `serve` in the logged-in desktop session even
+  process default security descriptor. `axon-win.exe daemon install` uses the
+  Task Scheduler COM API to register an interactive logon task for the current
+  user, with an `InteractiveToken` principal, limited run level, and
+  `IgnoreNew` multiple-instance policy. Its Exec action names the permanent
+  sibling `axon-win-daemon.exe`, and starts it; this is the canonical installation path
+  because Task Scheduler launches the daemon in the logged-in desktop session even
   when the command is issued over an SSH session-0 shell. `axon-win daemon restart`
   sends the authenticated `shutdown` RPC and starts the registered task again
   without rewriting it, so a restart issued from a build directory cannot repoint
@@ -314,8 +317,9 @@ events with a close conceptual fit to AX.
   for an absent daemon. `axon-win daemon uninstall` stops the daemon and removes
   the task. All three commands are scriptable and `install`/`restart` wait until
   the daemon answers a health request before returning.
-  Short-lived `axon-win mcp` processes connect to that pipe.
-- `serve` creates the user-restricted pipe before initializing COM and UI
+  Registration health reports the daemon path held by Task Scheduler. Short-lived
+  `axon-win.exe mcp` processes connect to that pipe, preserving console stdin and stdout.
+- The windowless daemon creates the user-restricted pipe before initializing COM and UI
   Automation, making the stalled stage observable, but lifecycle readiness still
   requires a successful health RPC after initialization. Backend startup is
   bounded to 30 seconds so a hung native initialization fails loudly instead of
@@ -326,6 +330,12 @@ events with a close conceptual fit to AX.
   serve; contexts where Windows rejects changing it emit a warning and continue.
   Lifecycle shutdown RPCs are bounded as well; restart asks Task Scheduler to end
   an unresponsive half-started task before relaunching it.
+- Administrator-created registrations from older installers remain runnable but
+  cannot be replaced or deleted by a normal user token. Install and uninstall
+  report that migration condition without mutating the old task: the user removes
+  it once with the currently installed CLI in Administrator PowerShell, then
+  reruns the installer in ordinary PowerShell. New registrations and every
+  steady-state lifecycle operation are per-user and unelevated.
 - Run the session-1 integration probes from a logged-in desktop with exactly:
   `axon-win probe value <app-query>`, `axon-win probe events <app-query> [seconds]`,
   and `axon-win probe timeout [app-query] [milliseconds]`. Each command emits JSON;

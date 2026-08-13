@@ -195,7 +195,9 @@ $ParkStopTimeoutSeconds = 1
 # park for a stop -- is the behaviour under test.
 
 $ExpectedVersion = (Get-Content (Join-Path $RepositoryRoot 'VERSION')).Trim()
-$DesktopInstallPath = 'C:\Users\mitch\AppData\Local\Axon\0.2.1\axon-win-0.2.1-windows-x86_64\axon-win.exe'
+$DesktopInstallDirectory = 'C:\Users\mitch\AppData\Local\Axon\0.4.0\axon-win-0.4.0-windows-x86_64'
+$DesktopInstallPath = Join-Path $DesktopInstallDirectory 'axon-win-daemon.exe'
+$DesktopCliPath = Join-Path $DesktopInstallDirectory 'axon-win.exe'
 $DesktopPid = 4388
 $ProbePid = 12592
 
@@ -402,7 +404,7 @@ function Start-DesktopDaemonTask {
 }
 
 function Register-ProbeTask {
-    $script:Machine.Log.Add('register-probe-task')
+    $script:Machine.Log.Add("register-probe-task [$ProbeDaemonExecutable]")
     $script:Machine.ProbeTaskRegistered = $true
 }
 
@@ -414,9 +416,9 @@ function Unregister-ProbeTask {
 function Start-ProbeTask {
     $script:Machine.Log.Add('start-probe-task')
     if ($script:Machine.ProbeTaskStartsNothing) { return }
-    Add-FakeProcess -ProcessId $ProbePid -ExecutablePath $ProbeExecutable
+    Add-FakeProcess -ProcessId $ProbePid -ExecutablePath $ProbeDaemonExecutable
     if ($script:Machine.ProbeTaskStartsTwice) {
-        Add-FakeProcess -ProcessId ($ProbePid + 1) -ExecutablePath $ProbeExecutable
+        Add-FakeProcess -ProcessId ($ProbePid + 1) -ExecutablePath $ProbeDaemonExecutable
     }
     $serving = if ($null -ne $script:Machine.ServingProcessId) { $script:Machine.ServingProcessId } else { $ProbePid }
     $script:Machine.Health = New-FakeHealth -ProcessId $serving
@@ -624,6 +626,7 @@ Test-Scenario 'build: a clean machine builds, copies, and proves the copy runs' 
     Check 'it builds' (Test-Did 'cargo-build')
     Check 'it copies the build to the probe path' (Test-Did 'copy-probe-executable')
     Check 'it runs the fresh binary once' (Test-Did 'axon version')
+    Check 'the version command uses the CLI' (Test-Did "axon version \[$([regex]::Escape($ProbeCliExecutable))\]")
     Check 'it reports the first-execution cost' (Test-Said 'ran it for the first time')
     Check 'it never stops this desktop' (-not (Test-Did 'axon shutdown'))
 }
@@ -631,7 +634,7 @@ Test-Scenario 'build: a clean machine builds, copies, and proves the copy runs' 
 Test-Scenario 'build: leftovers from a killed job go before anything is built' {
     # A daemon a killed job left behind holds its image against the checkout and would answer the
     # pipe for every assertion the probe stage makes.
-    Add-FakeProcess -ProcessId 5150 -ExecutablePath $ProbeExecutable
+    Add-FakeProcess -ProcessId 5150 -ExecutablePath $ProbeDaemonExecutable
     $script:Machine.ProbeTaskRegistered = $true
     $result = Invoke-StageUnderTest -Name 'build'
     Check 'the stage succeeds' (-not $result.Failed) $result.Error
@@ -642,7 +645,7 @@ Test-Scenario 'build: leftovers from a killed job go before anything is built' {
 }
 
 Test-Scenario 'build: a quarantined build fails before this desktop is touched' {
-    $script:Machine.Quarantined = @($ProbeExecutable)
+    $script:Machine.Quarantined = @($ProbeCliExecutable)
     $result = Invoke-StageUnderTest -Name 'build'
     Check 'the stage fails' $result.Failed
     Check 'it names the real reason' ($result.Error -match 'virus') $result.Error
@@ -658,7 +661,7 @@ Test-Scenario 'build: a version the checkout does not expect fails the stage' {
 }
 
 Test-Scenario 'build: a desktop registration inside a probe directory is refused, not swept' {
-    $script:Machine.DesktopRegistration = $ProbeExecutable
+    $script:Machine.DesktopRegistration = $ProbeDaemonExecutable
     Start-FakeDesktopDaemon
     $result = Invoke-StageUnderTest -Name 'build'
     Check 'the stage fails' $result.Failed
@@ -671,7 +674,7 @@ Test-Scenario 'build: a desktop registration inside a probe directory is refused
 # ---------------------------------------------------------------------------------------------
 
 Test-Scenario 'park: a desktop registration inside a probe directory is refused' {
-    $script:Machine.DesktopRegistration = $ProbeExecutable
+    $script:Machine.DesktopRegistration = $ProbeDaemonExecutable
     Start-FakeDesktopDaemon
     $result = Invoke-StageUnderTest -Name 'park'
     Check 'the stage fails' $result.Failed
@@ -736,7 +739,7 @@ Test-Scenario 'park: a daemon slower than the shutdown request is a slow park, n
     $script:Machine.LateExitAfterRequests = 1
     $result = Invoke-StageUnderTest -Name 'park'
     Check 'the stage succeeds' (-not $result.Failed) $result.Error
-    Check 'it asked once and then waited' ((Get-Count "axon shutdown [$ProbeExecutable]") -eq 1) "asked $(Get-Count "axon shutdown [$ProbeExecutable]") time(s)"
+    Check 'it asked once and then waited' ((Get-Count "axon shutdown [$ProbeCliExecutable]") -eq 1) "asked $(Get-Count "axon shutdown [$ProbeCliExecutable]") time(s)"
     Check 'it says the exit outran the request' (Test-Said 'later than the request itself waited')
     Check 'the daemon really is gone' (@($script:Machine.Processes | Where-Object { $_.ProcessId -eq $DesktopPid }).Count -eq 0)
     Check 'the pipe is free' ($script:Machine.Health.daemon.running -eq $false)
@@ -753,7 +756,7 @@ Test-Scenario 'park: a request that finds no pipe is not the process this stage 
     $script:Machine.LateExitAfterRequests = 2
     $result = Invoke-StageUnderTest -Name 'park'
     Check 'the stage succeeds' (-not $result.Failed) $result.Error
-    Check 'it asked twice' ((Get-Count "axon shutdown [$ProbeExecutable]") -eq 2) "asked $(Get-Count "axon shutdown [$ProbeExecutable]") time(s)"
+    Check 'it asked twice' ((Get-Count "axon shutdown [$ProbeCliExecutable]") -eq 2) "asked $(Get-Count "axon shutdown [$ProbeCliExecutable]") time(s)"
     Check 'it did not take the second request for an answer about the process' (Test-Said 'found no daemon left to stop')
     Check 'it waited for the process instead' (Test-Said 'later than the request itself waited')
     Check 'the process really is gone' (@($script:Machine.Processes | Where-Object { $_.ProcessId -eq $DesktopPid }).Count -eq 0)
@@ -770,7 +773,7 @@ Test-Scenario 'park: a daemon whose health document names no process id is waite
     $script:Machine.LateExitAfterRequests = 1
     $result = Invoke-StageUnderTest -Name 'park'
     Check 'the stage succeeds' (-not $result.Failed) $result.Error
-    Check 'it asked once' ((Get-Count "axon shutdown [$ProbeExecutable]") -eq 1) "asked $(Get-Count "axon shutdown [$ProbeExecutable]") time(s)"
+    Check 'it asked once' ((Get-Count "axon shutdown [$ProbeCliExecutable]") -eq 1) "asked $(Get-Count "axon shutdown [$ProbeCliExecutable]") time(s)"
     Check 'it does not report the failed request as a success' (Test-Said 'though the request that asked for it reported otherwise')
     Check 'the pipe is free' ($script:Machine.Health.daemon.running -eq $false)
     Check 'it recorded the pid it did not have as none' ($null -eq $script:Machine.ParkState.daemonProcessId)
@@ -786,7 +789,7 @@ Test-Scenario 'park: a daemon that never exits fails the stage, having already r
     Check 'the stage fails' $result.Failed
     Check 'it names the stop' ($result.Error -match "could not stop this desktop's daemon") $result.Error
     Check 'it says the daemon is still running' ($result.Error -match 'ended with it still running') $result.Error
-    Check 'it spent the whole retry budget and no more' ((Get-Count "axon shutdown [$ProbeExecutable]") -eq $ParkStopAttempts) "asked $(Get-Count "axon shutdown [$ProbeExecutable]") time(s)"
+    Check 'it spent the whole retry budget and no more' ((Get-Count "axon shutdown [$ProbeCliExecutable]") -eq $ParkStopAttempts) "asked $(Get-Count "axon shutdown [$ProbeCliExecutable]") time(s)"
     Check 'it killed nothing' (-not (Test-Did 'stop-process'))
     Check 'the restore still knows what is owed' ($script:Machine.ParkState.daemonWasRunning -eq $true)
 }
@@ -802,7 +805,7 @@ Test-Scenario 'park: a daemon still answering after the stop is named rather tha
         param([string] $Executable, [string[]] $Arguments)
         $result = & $original -Executable $Executable -Arguments $Arguments
         if (($Arguments -join ' ') -eq 'shutdown') {
-            Add-FakeProcess -ProcessId 7777 -ExecutablePath $ProbeExecutable
+            Add-FakeProcess -ProcessId 7777 -ExecutablePath $ProbeDaemonExecutable
             $script:Machine.Health = New-FakeHealth -ProcessId 7777
         }
         $result
@@ -845,7 +848,7 @@ Test-Scenario 'probe: the daemon it started is the one it reports on' {
     Check 'it proved authorship' (Test-Said "pid $ProbePid\) is serving")
     Check 'it read a real window' (Test-Said 'root=Window')
     Check 'it removed its own registration afterwards' ($script:Machine.ProbeTaskRegistered -eq $false)
-    Check 'it left no probe daemon behind' (@($script:Machine.Processes | Where-Object { $_.ExecutablePath -eq $ProbeExecutable }).Count -eq 0)
+    Check 'it left no probe daemon behind' (@($script:Machine.Processes | Where-Object { $_.ExecutablePath -eq $ProbeDaemonExecutable }).Count -eq 0)
 }
 
 Test-Scenario 'probe: another daemon answering the pipe fails the stage' {
@@ -953,15 +956,14 @@ Test-Scenario 'probe: an app-list request that errors fails the stage' {
     Check 'it names the request' ($result.Error -match 'app-list look request failed') $result.Error
 }
 
-Test-Scenario "probe: the daemon's own console window is not evidence about a desktop" {
+Test-Scenario "probe: a stale path-shaped daemon entry is not evidence about a desktop" {
     Set-ParkedMachine
     $script:Machine.McpResponder = {
         param($Request)
         if ($Request -notmatch '"app"') {
-            # Task Scheduler runs `serve` as a console process, so the daemon under test is itself
-            # an application in this list. A desktop with nothing else running looks exactly like
-            # this, and must not pass.
-            return @{ result = @{ isError = $false; structuredContent = @{ apps = @(@{ name = $ProbeExecutable }) } } } |
+            # A stale console-host entry can still name the daemon path. A desktop with nothing else
+            # running must not pass merely because enumeration returned that lane-owned process.
+            return @{ result = @{ isError = $false; structuredContent = @{ apps = @(@{ name = $ProbeDaemonExecutable }) } } } |
                 ConvertTo-Json -Depth 10 | ConvertFrom-Json -Depth 100
         }
         @{
@@ -982,7 +984,7 @@ Test-Scenario "probe: the daemon's own console window is not evidence about a de
 
 Test-Scenario 'probe: a registration that moved during the run fails the stage' {
     Set-ParkedMachine
-    $script:Machine.DesktopRegistration = 'C:\ProgramData\Axon\live\axon-win.exe'
+    $script:Machine.DesktopRegistration = 'C:\ProgramData\Axon\live\axon-win-daemon.exe'
     $result = Invoke-StageUnderTest -Name 'probe'
     Check 'the stage fails' $result.Failed
     Check 'it says the lane must never repoint' ($result.Error -match 'must never repoint') $result.Error
@@ -1037,10 +1039,11 @@ Test-Scenario 'restore: a quarantined build still gives the desktop its daemon b
     # The 2026-08-08 failure, in the shape that matters: the binary this lane built is gone, and the
     # machine must still end the job with its own daemon serving.
     Set-ParkedMachine
-    $script:Machine.Quarantined = @($ProbeExecutable)
+    $script:Machine.Quarantined = @($ProbeCliExecutable)
     $result = Invoke-StageUnderTest -Name 'restore'
     Check 'the stage succeeds' (-not $result.Failed) $result.Error
     Check 'it fell back to Task Scheduler' (Test-Did 'start-desktop-task')
+    Check 'health falls back to the CLI beside the registered daemon' (Test-Did "axon status --json \[$([regex]::Escape($DesktopCliPath))\]")
     Check 'it says why' (Test-Said 'through Task Scheduler instead')
     Check 'the daemon is answering' ($script:Machine.Health.daemon.running -eq $true)
     Check 'the registration is untouched' ($script:Machine.Health.registration.path -eq $DesktopInstallPath)
@@ -1127,7 +1130,7 @@ Test-Scenario 'restore: a daemon answering from somewhere else is not this deskt
         # swept, and bound the pipe immediately afterwards. The restored task then loses the bind
         # and dies while the orphan answers this step's health check -- which is why an answer alone
         # is not the verdict.
-        Add-FakeProcess -ProcessId 7777 -ExecutablePath $ProbeExecutable
+        Add-FakeProcess -ProcessId 7777 -ExecutablePath $ProbeDaemonExecutable
         $script:Machine.Health = New-FakeHealth -ProcessId 7777
     }
     $result = Invoke-StageUnderTest -Name 'restore'
@@ -1137,7 +1140,7 @@ Test-Scenario 'restore: a daemon answering from somewhere else is not this deskt
 
 Test-Scenario 'restore: a registration that moved is a damaged machine even with a daemon answering' {
     Set-ParkedMachine
-    $script:Machine.DesktopRegistration = 'C:\ProgramData\Axon\live\axon-win.exe'
+    $script:Machine.DesktopRegistration = 'C:\ProgramData\Axon\live\axon-win-daemon.exe'
     $result = Invoke-StageUnderTest -Name 'restore'
     Check 'the stage fails' $result.Failed
     Check 'it names both paths' ($result.Error -match 'now points at') $result.Error
@@ -1187,7 +1190,7 @@ Test-Scenario 'restore: a sweep that cannot finish still gives the desktop its d
     # propagate would end the job with this desktop stopped and a message about the leftover that
     # never mentions it.
     Set-ParkedMachine
-    Add-FakeProcess -ProcessId 5150 -ExecutablePath $ProbeExecutable
+    Add-FakeProcess -ProcessId 5150 -ExecutablePath $ProbeDaemonExecutable
     $script:Machine.StopProcessFails = $true
     $result = Invoke-StageUnderTest -Name 'restore'
     Check 'the stage still fails, because a leftover breaks the next checkout' $result.Failed
@@ -1200,11 +1203,11 @@ Test-Scenario 'restore: a sweep that cannot finish still gives the desktop its d
 Test-Scenario 'restore: the probe registration goes before the desktop task is started' {
     Set-ParkedMachine
     $script:Machine.ProbeTaskRegistered = $true
-    Add-FakeProcess -ProcessId $ProbePid -ExecutablePath $ProbeExecutable
+    Add-FakeProcess -ProcessId $ProbePid -ExecutablePath $ProbeDaemonExecutable
     $result = Invoke-StageUnderTest -Name 'restore'
     Check 'the stage succeeds' (-not $result.Failed) $result.Error
     Check 'the probe task is gone' ($script:Machine.ProbeTaskRegistered -eq $false)
-    Check 'the probe daemon is gone' (@($script:Machine.Processes | Where-Object { $_.ExecutablePath -eq $ProbeExecutable }).Count -eq 0)
+    Check 'the probe daemon is gone' (@($script:Machine.Processes | Where-Object { $_.ExecutablePath -eq $ProbeDaemonExecutable }).Count -eq 0)
     Test-Order -First 'stop-process' -Then 'axon daemon restart'
     Test-Order -First 'unregister-probe-task' -Then 'axon daemon restart'
 }

@@ -816,7 +816,7 @@ jobs:
           }
 
           function Get-LiveProbeDaemons {
-            @(Get-CimInstance Win32_Process -Filter "Name = 'axon-win.exe'" |
+            @(Get-CimInstance Win32_Process -Filter "Name = 'axon-win.exe' OR Name = 'axon-win-daemon.exe'" |
               Where-Object {
                 $path = $_.ExecutablePath
                 $null -ne $path -and (

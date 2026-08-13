@@ -5,54 +5,13 @@ fn main() {
 }
 
 #[cfg(windows)]
-#[derive(Clone)]
-struct StartupLog {
-    started: std::time::Instant,
-    path: std::path::PathBuf,
-}
-
-#[cfg(windows)]
-impl StartupLog {
-    fn new() -> Self {
-        let root = std::env::var_os("ProgramData")
-            .map(std::path::PathBuf::from)
-            .unwrap_or_else(|| std::path::PathBuf::from(r"C:\ProgramData"));
-        Self {
-            started: std::time::Instant::now(),
-            path: root.join("Axon").join("axon-win-startup.log"),
-        }
-    }
-
-    fn stage(&self, stage: &str) {
-        use std::io::Write;
-        let unix_ms = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_millis();
-        let line = format!(
-            "timestamp_unix_ms={unix_ms} elapsed_ms={} pid={} {stage}\n",
-            self.started.elapsed().as_millis(),
-            std::process::id()
-        );
-        eprint!("{line}");
-        if let Some(parent) = self.path.parent() {
-            let _ = std::fs::create_dir_all(parent);
-        }
-        if let Ok(mut file) = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&self.path)
-        {
-            let _ = file.write_all(line.as_bytes());
-        }
-    }
-}
-
-#[cfg(windows)]
 mod lifecycle {
-    use super::pipe;
     use axon_core::{RegistrationHealth, ephemeral_path_warning, exit_code};
-    use axon_win::lifecycle::{TASK_NAME, registration_from_task_xml, task_action};
+    use axon_win::pipe;
+    use axon_win::{
+        lifecycle::{TASK_NAME, daemon_sibling, registration_from_task_xml, scheduler_error},
+        scheduler,
+    };
     use std::{env, io, process::Command, time::Duration};
 
     const SYNCHRONIZE: u32 = 0x0010_0000;
@@ -69,8 +28,8 @@ mod lifecycle {
     pub fn run(mut args: impl Iterator<Item = String>) -> Result<i32, Box<dyn std::error::Error>> {
         match args.next().as_deref() {
             Some("install") => {
-                stop_if_running()?;
                 let executable = register()?;
+                stop_if_running()?;
                 let report = start()?;
                 println!("registered {TASK_NAME:?} -> {executable}");
                 println!(
@@ -98,8 +57,8 @@ mod lifecycle {
                 );
             }
             Some("uninstall") => {
-                stop_if_running()?;
                 delete()?;
+                stop_if_running()?;
                 println!("unregistered {TASK_NAME:?}");
             }
             other => {
@@ -113,34 +72,23 @@ mod lifecycle {
         Ok(exit_code::SUCCESS)
     }
 
-    /// Registers the invoking executable and returns the path that was registered.
-    ///
-    /// Idempotent through `/f`, which replaces an existing task rather than failing, so a consumer
-    /// can run install on every deploy without checking first.
+    /// Registers the permanent sibling daemon and returns the path Task Scheduler holds.
     fn register() -> io::Result<String> {
-        let executable = env::current_exe()?
+        let daemon = daemon_sibling(&env::current_exe()?)?;
+        let daemon = daemon
             .canonicalize()
-            .unwrap_or(env::current_exe()?)
+            .unwrap_or(daemon)
             .display()
             .to_string();
-        // `\\?\` is what canonicalize returns on Windows and Task Scheduler will not run it.
-        let executable = executable
-            .strip_prefix(r"\\?\")
-            .unwrap_or(&executable)
-            .to_owned();
-        if let Some(warning) = ephemeral_path_warning(&executable) {
+        // Extended-length paths are filesystem syntax, not valid Task Scheduler actions.
+        let daemon = daemon.strip_prefix(r"\\?\").unwrap_or(&daemon).to_owned();
+        if let Some(warning) = ephemeral_path_warning(&daemon) {
             eprintln!("axon-win: warning: {warning}");
         }
-        let user = command_output("whoami", &[])?;
-        let action = task_action(&executable);
-        command(
-            "schtasks",
-            &[
-                "/create", "/tn", TASK_NAME, "/tr", &action, "/sc", "ONLOGON", "/ru", &user, "/it",
-                "/f",
-            ],
-        )?;
-        Ok(executable)
+        let existed = registration().registered;
+        scheduler::register(TASK_NAME, &daemon)
+            .map_err(|error| scheduler_error("scheduled-task replacement", existed, error))?;
+        Ok(daemon)
     }
 
     /// The registration as Task Scheduler holds it, for health documents.
@@ -201,16 +149,12 @@ mod lifecycle {
     }
 
     fn delete() -> io::Result<()> {
-        let output = Command::new("schtasks")
-            .args(["/delete", "/tn", TASK_NAME, "/f"])
-            .output()?;
-        if output.status.success()
-            || String::from_utf8_lossy(&output.stderr).contains("cannot find")
-        {
-            Ok(())
-        } else {
-            Err(command_error("schtasks", &output))
+        let existed = registration().registered;
+        if !existed {
+            return Ok(());
         }
+        scheduler::delete(TASK_NAME)
+            .map_err(|error| scheduler_error("scheduled-task deletion", true, error))
     }
 
     fn command(program: &str, args: &[&str]) -> io::Result<()> {
@@ -269,18 +213,17 @@ const USAGE: &str = "\
 usage: axon-win <command>
 
 embedding lifecycle:
-  daemon install    register this executable to start at logon, then wait for health
+  daemon install    register the sibling daemon executable at logon, then wait for health
   daemon uninstall  stop the daemon and remove the registration
   daemon restart    restart the registered daemon and wait for health
   shutdown          stop the running daemon, leaving the registration in place
   status [--json]   describe daemon, registration, session, permissions, capabilities
   version           print the product version
 
-`daemon install` registers the path of the executable you invoked, so run it from a permanent
-location. Installing from a build directory registers a path that disappears.
+`daemon install` registers axon-win-daemon.exe beside this executable, so both must be in a
+permanent installation directory.
 
 other commands:
-  serve             run the UI Automation daemon on the local named pipe
   mcp               run an MCP stdio facade backed by the daemon pipe
   probe             run a session-1 integration probe
 
@@ -299,23 +242,9 @@ every answer is a false negative.
 #[cfg(windows)]
 fn windows_main() -> Result<i32, Box<dyn std::error::Error>> {
     use axon_core::exit_code;
-    use axon_win::{IntegrationProbe, Router, WindowsBackend};
-    let command = std::env::args().nth(1).unwrap_or_else(|| "serve".into());
+    use axon_win::{IntegrationProbe, pipe};
+    let command = std::env::args().nth(1).unwrap_or_else(|| "help".into());
     match command.as_str() {
-        "serve" => {
-            let startup = StartupLog::new();
-            startup.stage("process startup");
-            let backend_log = startup.clone();
-            startup.stage("pipe bind: begin");
-            pipe::serve(
-                move || {
-                    WindowsBackend::start_with_logger(move |stage| backend_log.stage(stage))
-                        .map(Router::new)
-                        .map_err(Into::into)
-                },
-                || startup.stage("pipe bind: complete"),
-            )?;
-        }
         "mcp" => pipe::mcp()?,
         "shutdown" => status::shutdown()?,
         "daemon" => return lifecycle::run(std::env::args().skip(2)),
@@ -342,9 +271,10 @@ use axon_win::lifecycle::current_session;
 
 #[cfg(windows)]
 mod status {
-    use super::{current_session, lifecycle, pipe};
+    use super::{current_session, lifecycle};
     use axon_core::{HealthReport, exit_code};
     use axon_win::lifecycle::{incompatible, not_running};
+    use axon_win::pipe;
     use std::io;
 
     pub fn run(args: &[String]) -> Result<i32, Box<dyn std::error::Error>> {
@@ -446,634 +376,5 @@ mod status {
                 unusable.join(", ")
             }
         );
-    }
-}
-
-#[cfg(windows)]
-mod pipe {
-    use axon_core::{JsonRpcId, JsonRpcRequest, ToolBackend, backend_tools, validate_tools_call};
-    use axon_win::{Router, WindowsBackend, parse_request};
-    use serde_json::{Value, json};
-    use std::{
-        ffi::c_void,
-        fs::OpenOptions,
-        io::{self, BufRead, BufReader, Write},
-        ptr,
-        sync::{Arc, mpsc},
-        thread,
-        time::{Duration, Instant},
-    };
-
-    #[repr(C)]
-    struct SecurityAttributes {
-        length: u32,
-        descriptor: *mut c_void,
-        inherit_handle: i32,
-    }
-    #[repr(C)]
-    struct SidAndAttributes {
-        sid: *mut c_void,
-        attributes: u32,
-    }
-
-    const PIPE: &str = r"\\.\pipe\axon-v1";
-    const PIPE_WIDE: &[u16] = &[
-        92, 92, 46, 92, 112, 105, 112, 101, 92, 97, 120, 111, 110, 45, 118, 49, 0,
-    ];
-    const INVALID_HANDLE_VALUE: isize = -1;
-    const PIPE_ACCESS_DUPLEX: u32 = 3;
-    const PIPE_TYPE_BYTE: u32 = 0;
-    const PIPE_READMODE_BYTE: u32 = 0;
-    const PIPE_WAIT: u32 = 0;
-    const PIPE_REJECT_REMOTE_CLIENTS: u32 = 8;
-
-    #[link(name = "kernel32")]
-    unsafe extern "system" {
-        fn CreateNamedPipeW(
-            name: *const u16,
-            open_mode: u32,
-            pipe_mode: u32,
-            max_instances: u32,
-            out_size: u32,
-            in_size: u32,
-            timeout: u32,
-            security: *const c_void,
-        ) -> isize;
-        fn ConnectNamedPipe(pipe: isize, overlapped: *mut c_void) -> i32;
-        fn DisconnectNamedPipe(pipe: isize) -> i32;
-        fn CloseHandle(handle: isize) -> i32;
-        fn ReadFile(
-            handle: isize,
-            buffer: *mut c_void,
-            len: u32,
-            read: *mut u32,
-            overlapped: *mut c_void,
-        ) -> i32;
-        fn WriteFile(
-            handle: isize,
-            buffer: *const c_void,
-            len: u32,
-            written: *mut u32,
-            overlapped: *mut c_void,
-        ) -> i32;
-        fn LocalFree(memory: *mut c_void) -> *mut c_void;
-    }
-    #[link(name = "advapi32")]
-    unsafe extern "system" {
-        fn GetTokenInformation(
-            token: isize,
-            class: u32,
-            info: *mut c_void,
-            len: u32,
-            needed: *mut u32,
-        ) -> i32;
-        fn ConvertSidToStringSidW(sid: *mut c_void, string_sid: *mut *mut u16) -> i32;
-        fn ConvertStringSecurityDescriptorToSecurityDescriptorW(
-            text: *const u16,
-            revision: u32,
-            descriptor: *mut *mut c_void,
-            size: *mut u32,
-        ) -> i32;
-    }
-
-    struct PipeSecurity {
-        attributes: SecurityAttributes,
-        sid_string: *mut u16,
-    }
-    impl PipeSecurity {
-        fn current_user() -> io::Result<Self> {
-            const TOKEN_USER: u32 = 1;
-            const TOKEN: isize = -4; // GetCurrentProcessToken pseudo-handle.
-            let mut needed = 0;
-            unsafe { GetTokenInformation(TOKEN, TOKEN_USER, ptr::null_mut(), 0, &mut needed) };
-            if needed == 0 {
-                return Err(io::Error::last_os_error());
-            }
-            let mut token_user = vec![0u8; needed as usize];
-            if unsafe {
-                GetTokenInformation(
-                    TOKEN,
-                    TOKEN_USER,
-                    token_user.as_mut_ptr().cast(),
-                    needed,
-                    &mut needed,
-                )
-            } == 0
-            {
-                return Err(io::Error::last_os_error());
-            }
-            let sid = unsafe { (*(token_user.as_ptr() as *const SidAndAttributes)).sid };
-            let mut sid_string = ptr::null_mut();
-            if unsafe { ConvertSidToStringSidW(sid, &mut sid_string) } == 0 {
-                return Err(io::Error::last_os_error());
-            }
-            let sid_len = unsafe { (0..).find(|&i| *sid_string.add(i) == 0).unwrap() };
-            let sid_text = unsafe {
-                String::from_utf16_lossy(std::slice::from_raw_parts(sid_string, sid_len))
-            };
-            // Protected DACL: only the process token's user SID receives generic-all.
-            let sddl: Vec<u16> = format!("D:P(A;;GA;;;{sid_text})\0")
-                .encode_utf16()
-                .collect();
-            let mut descriptor = ptr::null_mut();
-            if unsafe {
-                ConvertStringSecurityDescriptorToSecurityDescriptorW(
-                    sddl.as_ptr(),
-                    1,
-                    &mut descriptor,
-                    ptr::null_mut(),
-                )
-            } == 0
-            {
-                unsafe {
-                    LocalFree(sid_string.cast());
-                }
-                return Err(io::Error::last_os_error());
-            }
-            Ok(Self {
-                attributes: SecurityAttributes {
-                    length: std::mem::size_of::<SecurityAttributes>() as u32,
-                    descriptor,
-                    inherit_handle: 0,
-                },
-                sid_string,
-            })
-        }
-    }
-    impl Drop for PipeSecurity {
-        fn drop(&mut self) {
-            unsafe {
-                LocalFree(self.attributes.descriptor);
-                LocalFree(self.sid_string.cast());
-            };
-        }
-    }
-
-    pub fn serve(
-        start_backend: impl FnOnce() -> Result<Router<WindowsBackend>, Box<dyn std::error::Error>>,
-        on_bound: impl FnOnce(),
-    ) -> Result<(), Box<dyn std::error::Error>> {
-        let mut security = PipeSecurity::current_user()?;
-        let mut on_bound = Some(on_bound);
-        let mut start_backend = Some(start_backend);
-        let mut router = None;
-        loop {
-            let handle = unsafe {
-                CreateNamedPipeW(
-                    PIPE_WIDE.as_ptr(),
-                    PIPE_ACCESS_DUPLEX,
-                    PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT | PIPE_REJECT_REMOTE_CLIENTS,
-                    1,
-                    1024 * 1024,
-                    1024 * 1024,
-                    0,
-                    (&mut security.attributes as *mut SecurityAttributes).cast(),
-                )
-            };
-            if handle == INVALID_HANDLE_VALUE {
-                return Err(io::Error::last_os_error().into());
-            }
-            if let Some(on_bound) = on_bound.take() {
-                on_bound();
-            }
-            if let Some(start_backend) = start_backend.take() {
-                router = Some(start_backend()?);
-            }
-            let connected = unsafe { ConnectNamedPipe(handle, ptr::null_mut()) } != 0
-                || io::Error::last_os_error().raw_os_error() == Some(535);
-            if connected {
-                let shutdown = connection(
-                    handle,
-                    router
-                        .as_mut()
-                        .expect("backend initializes after the first pipe bind"),
-                )
-                .unwrap_or(false);
-                unsafe {
-                    DisconnectNamedPipe(handle);
-                    CloseHandle(handle);
-                }
-                if shutdown {
-                    return Ok(());
-                }
-                continue;
-            }
-            unsafe {
-                DisconnectNamedPipe(handle);
-                CloseHandle(handle);
-            }
-        }
-    }
-
-    fn connection(handle: isize, router: &mut Router<WindowsBackend>) -> io::Result<bool> {
-        let mut pending = Vec::new();
-        let mut buf = [0u8; 8192];
-        loop {
-            let mut n = 0;
-            if unsafe {
-                ReadFile(
-                    handle,
-                    buf.as_mut_ptr().cast(),
-                    buf.len() as u32,
-                    &mut n,
-                    ptr::null_mut(),
-                )
-            } == 0
-                || n == 0
-            {
-                return Ok(false);
-            }
-            pending.extend_from_slice(&buf[..n as usize]);
-            while let Some(pos) = pending.iter().position(|b| *b == b'\n') {
-                let line = pending.drain(..=pos).collect::<Vec<_>>();
-                let line = String::from_utf8_lossy(&line);
-                let parsed = parse_request(line.trim());
-                let shutdown =
-                    matches!(&parsed, Ok(req) if req.method == "shutdown" && req.id.is_some());
-                let response = match parsed {
-                    // Answering health at all means UI Automation finished initializing, because
-                    // the router only exists after it does; the pipe binds earlier so a stalled
-                    // startup stays observable, and a request arriving in that window is refused
-                    // rather than answered as ready.
-                    Ok(req) if req.method == "health" => req.id.map(|id| {
-                        let capabilities = router.capabilities().unwrap_or_default();
-                        axon_core::JsonRpcResponse::success(
-                            id,
-                            serde_json::to_value(axon_win::lifecycle::daemon_report(
-                                std::process::id(),
-                                &capabilities,
-                                super::current_session(),
-                            ))
-                            .unwrap_or(Value::Null),
-                        )
-                    }),
-                    Ok(req) if shutdown => req.id.map(|id| {
-                        axon_core::JsonRpcResponse::success(
-                            id,
-                            json!({"shutdown": true, "processId": std::process::id()}),
-                        )
-                    }),
-                    Ok(req) => router.request(req),
-                    Err(e) => Some(e),
-                };
-                if let Some(response) = response {
-                    let mut out = serde_json::to_vec(&response)?;
-                    out.push(b'\n');
-                    let mut written = 0;
-                    if unsafe {
-                        WriteFile(
-                            handle,
-                            out.as_ptr().cast(),
-                            out.len() as u32,
-                            &mut written,
-                            ptr::null_mut(),
-                        )
-                    } == 0
-                    {
-                        return Err(io::Error::last_os_error());
-                    }
-                }
-                if shutdown {
-                    return Ok(true);
-                }
-            }
-        }
-    }
-
-    pub fn shutdown() -> io::Result<u32> {
-        let (tx, rx) = mpsc::sync_channel(1);
-        thread::spawn(move || {
-            let _ = tx.send(shutdown_rpc());
-        });
-        rx.recv_timeout(Duration::from_secs(35)).map_err(|error| {
-            io::Error::new(
-                io::ErrorKind::TimedOut,
-                format!("daemon shutdown RPC timed out: {error}"),
-            )
-        })?
-    }
-
-    fn shutdown_rpc() -> io::Result<u32> {
-        let response = send_rpc(&JsonRpcRequest::new(
-            Some(JsonRpcId::Integer(1)),
-            "shutdown",
-            Some(json!({})),
-        ))?;
-        response
-            .pointer("/result/processId")
-            .and_then(Value::as_u64)
-            .and_then(|value| u32::try_from(value).ok())
-            .ok_or_else(|| io::Error::other(format!("daemon rejected shutdown: {response}")))
-    }
-
-    /// Waits for a successful health round trip.
-    ///
-    /// A pipe that exists proves only that some process created it, which is exactly what a
-    /// half-started daemon leaves behind. Answering is the readiness contract.
-    pub fn wait_until_ready(timeout: Duration) -> io::Result<axon_core::DaemonReport> {
-        wait_until_ready_with(timeout, Arc::new(daemon_health))
-    }
-
-    fn wait_until_ready_with<T: Send + 'static>(
-        timeout: Duration,
-        health: Arc<dyn Fn() -> io::Result<T> + Send + Sync>,
-    ) -> io::Result<T> {
-        let start = Instant::now();
-        loop {
-            let Some(remaining) = timeout.checked_sub(start.elapsed()) else {
-                return Err(io::Error::new(
-                    io::ErrorKind::TimedOut,
-                    "daemon did not become ready to serve requests",
-                ));
-            };
-            let (tx, rx) = mpsc::sync_channel(1);
-            let health = Arc::clone(&health);
-            thread::spawn(move || {
-                let _ = tx.send(health());
-            });
-            match rx.recv_timeout(remaining) {
-                Ok(Ok(value)) => return Ok(value),
-                Ok(Err(_)) => thread::sleep(Duration::from_millis(50).min(remaining)),
-                Err(mpsc::RecvTimeoutError::Timeout) => {
-                    return Err(io::Error::new(
-                        io::ErrorKind::TimedOut,
-                        "daemon did not become ready to serve requests",
-                    ));
-                }
-                Err(mpsc::RecvTimeoutError::Disconnected) => {
-                    return Err(io::Error::other("daemon health check worker stopped"));
-                }
-            }
-        }
-    }
-
-    #[cfg(test)]
-    mod tests {
-        use super::*;
-        use std::sync::atomic::{AtomicUsize, Ordering};
-
-        #[test]
-        fn readiness_requires_a_successful_health_response() {
-            let attempts = Arc::new(AtomicUsize::new(0));
-            let observed = Arc::clone(&attempts);
-            wait_until_ready_with(
-                Duration::from_secs(1),
-                Arc::new(move || {
-                    if observed.fetch_add(1, Ordering::SeqCst) == 0 {
-                        Err(io::Error::other("not ready"))
-                    } else {
-                        Ok(())
-                    }
-                }),
-            )
-            .unwrap();
-            assert_eq!(attempts.load(Ordering::SeqCst), 2);
-        }
-
-        #[test]
-        fn readiness_deadline_bounds_a_silent_health_check() {
-            let started = Instant::now();
-            let error = wait_until_ready_with(
-                Duration::from_millis(25),
-                Arc::new(|| {
-                    thread::sleep(Duration::from_secs(1));
-                    Ok(())
-                }),
-            )
-            .unwrap_err();
-            assert_eq!(error.kind(), io::ErrorKind::TimedOut);
-            assert!(started.elapsed() < Duration::from_millis(250));
-        }
-
-        #[test]
-        fn readiness_refuses_a_daemon_that_answers_without_being_ready() {
-            // The AXN-45 distinction, kept: a pipe that answers is not the same as a backend that
-            // finished starting, and only the second one may satisfy a lifecycle command.
-            let unready = json!({"result": {
-                "version": "0.1.7", "platform": "windows", "ready": false, "processId": 1,
-                "endpoint": r"\\.\pipe\axon-v1",
-                "session": {"interactive": true, "graphical": true},
-                "permissions": [], "capabilities": []
-            }});
-            let report: axon_core::DaemonReport =
-                serde_json::from_value(unready["result"].clone()).unwrap();
-
-            assert!(!report.ready);
-        }
-    }
-
-    /// Asks the running daemon to describe itself.
-    pub fn daemon_health() -> io::Result<axon_core::DaemonReport> {
-        let response = send_rpc(&JsonRpcRequest::new(
-            Some(JsonRpcId::Integer(1)),
-            "health",
-            Some(json!({})),
-        ))?;
-        let result = response
-            .get("result")
-            .cloned()
-            .ok_or_else(|| io::Error::other(format!("daemon rejected health check: {response}")))?;
-        // InvalidData rather than a generic error: a daemon that answers unintelligibly is a
-        // running daemon of another version, and the caller reports that differently from silence.
-        let report: axon_core::DaemonReport = serde_json::from_value(result)
-            .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
-        if report.ready {
-            Ok(report)
-        } else {
-            Err(io::Error::other("daemon is not ready to serve requests"))
-        }
-    }
-
-    pub fn is_daemon_absent(error: &io::Error) -> bool {
-        matches!(error.raw_os_error(), Some(2 | 3))
-    }
-
-    pub fn is_unresponsive_daemon(error: &io::Error) -> bool {
-        matches!(
-            error.kind(),
-            io::ErrorKind::TimedOut
-                | io::ErrorKind::BrokenPipe
-                | io::ErrorKind::UnexpectedEof
-                | io::ErrorKind::ConnectionAborted
-                | io::ErrorKind::ConnectionReset
-        )
-    }
-
-    fn send_rpc(request: &JsonRpcRequest) -> io::Result<Value> {
-        let start = Instant::now();
-        let mut stream = loop {
-            match OpenOptions::new().read(true).write(true).open(PIPE) {
-                Ok(stream) => break stream,
-                Err(error)
-                    if error.raw_os_error() == Some(231)
-                        && start.elapsed() < Duration::from_secs(10) =>
-                {
-                    thread::sleep(Duration::from_millis(50));
-                }
-                Err(error) => return Err(error),
-            }
-        };
-        writeln!(stream, "{}", serde_json::to_string(request)?)?;
-        stream.flush()?;
-        let mut reader = BufReader::new(stream);
-        let mut line = String::new();
-        reader.read_line(&mut line)?;
-        Ok(serde_json::from_str(&line)?)
-    }
-
-    pub fn mcp() -> io::Result<()> {
-        let stdin = io::stdin();
-        let mut stdout = io::stdout();
-        for line in stdin.lock().lines() {
-            let line = line?;
-            let input: Value = match serde_json::from_str(&line) {
-                Ok(v) => v,
-                Err(e) => {
-                    writeln!(
-                        stdout,
-                        "{}",
-                        json!({"jsonrpc":"2.0","id":null,"error":{"code":-32700,"message":e.to_string()}})
-                    )?;
-                    continue;
-                }
-            };
-            let id = input.get("id").cloned().unwrap_or(Value::Null);
-            let method = input.get("method").and_then(Value::as_str).unwrap_or("");
-            let output = match method {
-                "initialize" => {
-                    json!({"jsonrpc":"2.0","id":id,"result":{"protocolVersion":"2025-06-18","capabilities":{"tools":{}},"serverInfo":{"name":"axon-win","version":env!("CARGO_PKG_VERSION")}}})
-                }
-                "tools/list" => tool_list_response(id, backend_tools(ToolBackend::Windows)),
-                "tools/call" => forward(&input)?,
-                _ => {
-                    if input.get("id").is_none() {
-                        continue;
-                    } else {
-                        json!({"jsonrpc":"2.0","id":id,"error":{"code":-32601,"message":format!("unknown MCP method {method}")}})
-                    }
-                }
-            };
-            writeln!(stdout, "{output}")?;
-            stdout.flush()?;
-        }
-        Ok(())
-    }
-    fn forward(input: &Value) -> io::Result<Value> {
-        let id = input.get("id").cloned().unwrap_or(Value::Null);
-        let call = match validate_tools_call(ToolBackend::Windows, input.get("params").cloned()) {
-            Ok(call) => call,
-            Err(error) => {
-                return Ok(json!({"jsonrpc":"2.0","id":id,"error":error}));
-            }
-        };
-        let rpc = JsonRpcRequest::new(
-            Some(JsonRpcId::Integer(1)),
-            call.socket_method,
-            Some(call.arguments),
-        );
-        let response = send_rpc(&rpc)?;
-        if let Some(error) = response.get("error") {
-            Ok(
-                json!({"jsonrpc":"2.0","id":id,"result":{"content":[{"type":"text","text":error.get("message").and_then(Value::as_str).unwrap_or("Axon error")}],"structuredContent":error,"isError":true}}),
-            )
-        } else {
-            let result = response.get("result").cloned().unwrap_or(Value::Null);
-            Ok(success_response(id, result))
-        }
-    }
-    fn success_response(id: Value, result: Value) -> Value {
-        json!({"jsonrpc":"2.0","id":id,"result":axon_core::mcp_tool_result(result, false)})
-    }
-    fn tool_list_response(id: Value, tools: Result<Vec<Value>, axon_core::JsonRpcError>) -> Value {
-        match tools {
-            Ok(tools) => json!({"jsonrpc":"2.0","id":id,"result":{"tools":tools}}),
-            Err(error) => json!({"jsonrpc":"2.0","id":id,"error":error}),
-        }
-    }
-
-    #[cfg(test)]
-    mod facade_tests {
-        use super::*;
-
-        #[test]
-        fn facade_lists_the_shared_windows_tools() {
-            let response = tool_list_response(json!(1), backend_tools(ToolBackend::Windows));
-            let tools = &response["result"]["tools"];
-            let names = tools
-                .as_array()
-                .unwrap()
-                .iter()
-                .map(|tool| tool["name"].as_str().unwrap())
-                .collect::<Vec<_>>();
-            assert_eq!(
-                names,
-                [
-                    "look", "find", "run", "click", "type", "keyboard", "scroll", "invoke"
-                ]
-            );
-            assert_eq!(tools[0]["inputSchema"]["additionalProperties"], false);
-        }
-
-        #[test]
-        fn tools_list_serializes_artifact_failures_as_internal_errors() {
-            let response = tool_list_response(
-                json!(4),
-                Err(axon_core::JsonRpcError {
-                    code: -32603,
-                    message: "invalid embedded artifact".into(),
-                    data: None,
-                }),
-            );
-            assert_eq!(response["id"], 4);
-            assert_eq!(response["error"]["code"], -32603);
-        }
-
-        #[test]
-        fn facade_rejects_precisely_malformed_calls() {
-            for (params, path) in [
-                (
-                    json!({"name": "type", "arguments": {
-                        "target": {"app": 42, "name": "Field"}, "value": "x"
-                    }}),
-                    "params.arguments.target.app",
-                ),
-                (
-                    json!({"name": "click", "arguments": {
-                        "target": {"app": "Notes", "name": "Save", "bogus": true}
-                    }}),
-                    "params.arguments.target.bogus",
-                ),
-                (
-                    json!({"name": "click", "arguments": {
-                        "app": "Notes", "name": "Save"
-                    }}),
-                    "params.arguments.target",
-                ),
-                (
-                    json!({"name": "not-a-tool", "arguments": {}}),
-                    "params.name",
-                ),
-                (json!({"name": 7, "arguments": {}}), "params.name"),
-                (json!({"name": "look", "arguments": []}), "params.arguments"),
-            ] {
-                let call = json!({"jsonrpc": "2.0", "id": 7, "params": params});
-                let response = forward(&call).unwrap();
-                assert_eq!(response["id"], 7);
-                assert_eq!(response["error"]["code"], -32602);
-                assert_eq!(response["error"]["data"]["path"], path);
-            }
-        }
-
-        #[test]
-        fn facade_matches_shared_observation_envelope() {
-            let fixture: Value = serde_json::from_str(include_str!(
-                "../../../schema/fixtures/mcp-look-observation-envelope.json"
-            ))
-            .unwrap();
-            assert_eq!(
-                success_response(json!(1), fixture["structuredContent"].clone())["result"],
-                fixture["result"]
-            );
-        }
     }
 }

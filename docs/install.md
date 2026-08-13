@@ -18,15 +18,26 @@ curl -fsSL https://axn.dev/install.sh | sh
 
 ### Windows
 
-Open PowerShell with **Run as administrator**, then run:
+Open an ordinary PowerShell window, then run:
 
 ```powershell
 irm https://axn.dev/install.ps1 | iex
 ```
 
-Administrator access is required because the installer registers the Axon daemon with Windows Task Scheduler.
+The installer registers a per-user Task Scheduler entry and both steady-state install and uninstall run without Administrator access. The archive contains the `axon-win.exe` command-line interface and its sibling `axon-win-daemon.exe`, which runs without opening a console window. Both executables must be present and validly signed before the installer changes the registration.
 
 The installers verify the release checksum, install into a permanent versioned directory, register the daemon from that location, and put its CLI on `PATH`. Pin a release with `AXON_VERSION=0.3.1` on macOS or Linux. In PowerShell, set `$env:AXON_VERSION = '0.3.1'` before running the installer.
+
+#### Upgrading an older elevated Windows install
+
+Windows releases installed by the older Administrator-only installer have an elevated scheduled task that an ordinary shell can use but cannot replace or remove. If the installer identifies that legacy registration, it leaves the working task unchanged and prints the one-time migration sequence:
+
+1. Open PowerShell with **Run as administrator**.
+2. Run the currently installed `axon daemon uninstall`.
+3. Close the Administrator window.
+4. Run `irm https://axn.dev/install.ps1 | iex` in ordinary PowerShell.
+
+After that migration, future installs, upgrades, restarts, and uninstalls remain per-user and unelevated.
 
 ### Homebrew on macOS
 

@@ -31,6 +31,7 @@ windows = { version = "0.62.2", default-features = false, features = [
     "Win32_System_Ole",
     "Win32_System_Pipes",
     "Win32_System_SystemServices",
+    "Win32_System_TaskScheduler",
     "Win32_System_Threading",
     "Win32_System_WinRT_Direct3D11",
     "Win32_System_WinRT_Graphics_Capture",
@@ -45,3 +46,6 @@ windows-core = "0.62.2"
 [[bin]]
 name = "axon-win"
 path = "src/main.rs"
+[[bin]]
+name = "axon-win-daemon"
+path = "src/bin/axon-win-daemon.rs"
