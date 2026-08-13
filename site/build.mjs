@@ -148,7 +148,7 @@ function home(version) {
         <span>look</span><i>→</i><span>find</span><i>→</i><span>act</span><i>→</i><span>replay</span>
       </section>
       <section class="guarantees">
-        <div class="section-heading"><h2>General purpose computer automation for agents</h2></div>
+        <div class="section-heading"><h2>General-purpose automation for agents</h2></div>
         <div class="guarantee-grid">${guarantees.map(([number, title, copy]) => `<article><span>${number}</span><h3>${title}</h3><p>${copy}</p></article>`).join('')}</div>
       </section>
       <section class="artifact">
