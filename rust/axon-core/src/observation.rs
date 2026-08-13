@@ -24,7 +24,7 @@ pub fn format_snapshot(snapshot: &Snapshot, options: &LookDisplayOptions) -> Val
             for child in children { if let Some(child) = child.as_object_mut() { format_node(child, depth - 1, options); } }
         }
     }
-    let depth = options.depth.map(|depth| depth.saturating_add(1)).unwrap_or(usize::MAX);
+    let depth = options.depth.unwrap_or(usize::MAX);
     if let Some(windows) = value.pointer_mut("/app/windows").and_then(Value::as_array_mut) {
         for window in windows { if let Some(root) = window.get_mut("root").and_then(Value::as_object_mut) { format_node(root, depth, options); } }
     }
@@ -131,6 +131,34 @@ impl LookRequest {
             frames: params.get("frames").and_then(Value::as_bool).unwrap_or(true), format,
         }, screenshot: params.get("screenshot").and_then(Value::as_bool),
         screen_text: params.get("screenText").and_then(Value::as_bool).unwrap_or(false) })
+    }
+
+    #[test]
+    fn typed_modes_apply_page_defaults_and_reject_irrelevant_controls() {
+        let page = LookRequest::decode(serde_json::json!({"target":{"app":"Editor","name":"list"}}).as_object().unwrap()).unwrap();
+        assert!(matches!(page.mode, LookMode::ChildPage { offset: 0, limit: Some(24), direct: false, .. }));
+        let all = LookRequest::decode(serde_json::json!({"target":{"app":"Editor","name":"list"},"all":true,"limit":0}).as_object().unwrap()).unwrap();
+        assert!(matches!(all.mode, LookMode::ChildPage { limit: None, .. }));
+        let clamped = LookRequest::decode(serde_json::json!({"target":{"app":"Editor","name":"list"},"limit":100}).as_object().unwrap()).unwrap();
+        assert!(matches!(clamped.mode, LookMode::ChildPage { limit: Some(24), .. }));
+        assert!(LookRequest::decode(serde_json::json!({"app":{"name":"Editor"},"offset":1}).as_object().unwrap()).is_err());
+        assert!(LookRequest::decode(serde_json::json!({"format":"xml"}).as_object().unwrap()).is_err());
+    }
+
+    #[test]
+    fn formatting_hides_frames_and_descendants_without_rewriting_truncation() {
+        let mut snapshot = super::since_tests::snapshot();
+        let root = &mut snapshot.app.windows[0].root;
+        root.frame = Some(crate::Rect::default());
+        root.child_count = Some(3);
+        root.truncation_reason = Some("provider withheld 2 unpublished references".into());
+        root.children.push(root.clone());
+        let value = format_snapshot(&snapshot, &LookDisplayOptions { depth: Some(0), tree: true, frames: false, format: LookFormat::Observation });
+        let rendered = value.pointer("/app/windows/0/root").unwrap();
+        assert!(rendered.get("frame").is_none());
+        assert!(rendered.get("children").is_none());
+        assert_eq!(rendered.get("childCount"), Some(&serde_json::json!(3)));
+        assert_eq!(rendered.get("truncationReason"), Some(&serde_json::json!("provider withheld 2 unpublished references")));
     }
 }
 
@@ -393,11 +421,11 @@ mod tests {
 }
 
 #[cfg(test)]
-mod since_tests {
+pub(crate) mod since_tests {
     use super::*;
     use crate::{Application, Node, Window};
 
-    fn snapshot() -> Snapshot {
+    pub(crate) fn snapshot() -> Snapshot {
         Snapshot {
             id: SnapshotId("fixture-1".into()),
             app: Application {
