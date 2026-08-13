@@ -39,7 +39,7 @@ public enum ToolTargetKind: String, CaseIterable, Sendable {
         case .semanticName:
             return "Semantic element target object with required app and name fields. Run look first to observe canonical names."
         case .point:
-            return "Point target object: { point: { x, y, coordinateSpace } } or { x, y, coordinateSpace }. coordinateSpace is screen, window, or screenshot; window and screenshot points require app when no top-level app is provided. Raw points dispatch without element identity or occlusion verification; use a semantic name when fail-closed target validation is required."
+            return "Point target object: { point: { x, y, coordinateSpace } } or { x, y, coordinateSpace }. screen and window coordinates are logical macOS points, matching Accessibility frames and dispatched CGEvent locations. screenshot coordinates are pixels in the returned encoded image after Retina capture and any downscaling; Axon converts them by the encoded-image-to-window size ratios, never by assuming a fixed 2x scale. window and screenshot points require app when no top-level app is provided. Raw points dispatch without element identity or occlusion verification; use a semantic name when fail-closed target validation is required."
         case .textLocation:
             return "Text location target object: { location: { app, text, source? } }. Resolves visible text to a click/drag/scroll point using AX text or screenshot OCR without callers providing coordinates."
         }
@@ -475,7 +475,7 @@ public enum ToolSurfaceSchema {
         "properties": .object([
             "x": scalarSchema(type: "number", description: "Horizontal coordinate."),
             "y": scalarSchema(type: "number", description: "Vertical coordinate."),
-            "coordinateSpace": enumStringSchema(values: ["screen", "window", "screenshot"], description: "Coordinate space. Defaults to screen."),
+            "coordinateSpace": enumStringSchema(values: ["screen", "window", "screenshot"], description: "Coordinate space. Defaults to screen. screen and window use logical macOS points; screenshot uses returned encoded-image pixels."),
             "space": enumStringSchema(values: ["screen", "window", "screenshot"], description: "Legacy alias for coordinateSpace."),
             "app": scalarSchema(type: "string", description: "App that owns a window or screenshot coordinate.")
         ]),

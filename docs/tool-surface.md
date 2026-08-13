@@ -253,8 +253,15 @@ target:
 `click` accepts semantic-name targets, point targets, and text locations.
 `drag` accepts the same pointer target vocabulary for `from` and `to`. Point
 coordinates may explicitly use `screen`, `window`, or `screenshot` coordinate
-spaces; legacy point payloads without `coordinateSpace` remain screen points for
-wire compatibility. Semantic-name-derived pointer events are hit-tested
+spaces. `screen` and `window` coordinates are logical macOS points, the same units
+used by Accessibility frames and dispatched `CGEvent` locations. `screenshot`
+coordinates are pixels in the encoded image returned by `look`, after Retina
+capture and any downscaling. Axon converts screenshot pixels using the encoded
+image-to-window ratios independently on each axis; callers must not assume a
+fixed 2x scale. For example, the center of a 1280 by 720 encoded image is
+`{x: 640, y: 360, coordinateSpace: "screenshot"}` regardless of the window's
+logical size. Legacy point payloads without `coordinateSpace` remain logical
+screen points for wire compatibility. Semantic-name-derived pointer events are hit-tested
 again immediately before dispatch and fail closed if the intended element moved,
 is occluded, or cannot be resolved. Explicit point targets carry no intended
 element identity, so they dispatch as unverified coordinates; use an app-scoped
