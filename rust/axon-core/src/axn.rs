@@ -547,9 +547,12 @@ pub struct AxnRunner<'a, D: ToolDispatcher> {
 }
 impl<'a, D: ToolDispatcher> AxnRunner<'a, D> {
     pub fn new(dispatcher: &'a mut D) -> Self {
+        let mut sources: HashMap<String, Box<dyn ArgumentSourceResolver + 'a>> = HashMap::new();
+        sources.insert("env".into(), Box::new(resolve_environment_source));
+        sources.insert("op".into(), Box::new(resolve_one_password_source));
         Self {
             dispatcher,
-            sources: HashMap::new(),
+            sources,
             healed_output: None,
         }
     }
@@ -863,17 +866,47 @@ impl<'a, D: ToolDispatcher> AxnRunner<'a, D> {
 }
 fn render_arg(kind: &ArgumentType, v: &Value) -> Option<String> {
     match kind {
-        ArgumentType::Number => v.as_f64().map(|n| {
-            if n.fract() == 0.0 {
-                format!("{}", n as i64)
-            } else {
-                n.to_string()
-            }
-        }),
+        ArgumentType::Number => match v {
+            Value::Number(n) => Some(n.to_string()),
+            Value::String(s) if s.parse::<f64>().is_ok() => Some(s.clone()),
+            _ => None,
+        },
         ArgumentType::Email => v.as_str().filter(|s| valid_email(s)).map(str::to_owned),
         ArgumentType::Date => v.as_str().filter(|s| valid_date(s)).map(str::to_owned),
-        _ => v.as_str().map(str::to_owned),
+        _ => scalar_string(v),
     }
+}
+fn scalar_string(value: &Value) -> Option<String> {
+    match value {
+        Value::String(value) => Some(value.clone()),
+        Value::Number(value) => Some(value.to_string()),
+        Value::Bool(value) => Some(value.to_string()),
+        _ => None,
+    }
+}
+fn resolve_environment_source(source: &str) -> Result<Option<String>, String> {
+    let name = source
+        .strip_prefix("env://")
+        .unwrap_or_default()
+        .trim_matches('/');
+    if name.is_empty() {
+        return Err("env source requires a variable name".into());
+    }
+    Ok(std::env::var(name).ok())
+}
+fn resolve_one_password_source(source: &str) -> Result<Option<String>, String> {
+    let output = std::process::Command::new("op")
+        .args(["read", source])
+        .output()
+        .map_err(|error| format!("could not run op read: {error}"))?;
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).trim().to_owned());
+    }
+    Ok(Some(
+        String::from_utf8_lossy(&output.stdout)
+            .trim_end()
+            .to_owned(),
+    ))
 }
 fn substitute_map(
     map: &Map<String, Value>,
