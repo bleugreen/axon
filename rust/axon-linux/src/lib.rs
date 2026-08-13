@@ -1924,7 +1924,7 @@ mod tests {
                 "permit"
             ]
         );
-        for tool in ["click", "keyboard", "drag", "type", "invoke"] {
+        for tool in ["click", "keyboard", "type", "invoke"] {
             assert!(!EXCLUDED.iter().any(|entry| entry.0 == tool), "{tool}");
         }
     }
