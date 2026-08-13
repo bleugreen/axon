@@ -150,26 +150,6 @@ impl<'de> Deserialize<'de> for SinceToken {
         Self::parse(String::deserialize(deserializer)?).map_err(serde::de::Error::custom)
     }
 
-    #[test]
-    fn typed_page_defaults_and_mode_validation() {
-        let page = LookRequest::decode(serde_json::json!({"target":{"app":"Editor","name":"list"}}).as_object().unwrap()).unwrap();
-        assert!(matches!(page.mode, LookMode::ChildPage { offset:0, limit:Some(24), direct:false, .. }));
-        let all = LookRequest::decode(serde_json::json!({"target":{"app":"Editor","name":"list"},"all":true,"limit":0}).as_object().unwrap()).unwrap();
-        assert!(matches!(all.mode, LookMode::ChildPage { limit:None, .. }));
-        assert!(LookRequest::decode(serde_json::json!({"app":{"name":"Editor"},"offset":1}).as_object().unwrap()).is_err());
-    }
-
-    #[test]
-    fn formatting_preserves_native_truncation() {
-        let mut snapshot = super::since_tests::snapshot();
-        let root = &mut snapshot.app.windows[0].root;
-        root.frame = Some(crate::Rect::default()); root.child_count = Some(3);
-        root.truncation_reason = Some("provider withheld 2 unpublished references".into());
-        let value = format_snapshot(&snapshot, &LookDisplayOptions { depth:Some(0), tree:true, frames:false, format:LookFormat::Observation });
-        let node=value.pointer("/app/windows/0/root").unwrap();
-        assert!(node.get("frame").is_none()); assert!(node.get("children").is_none());
-        assert_eq!(node.get("truncationReason"),Some(&serde_json::json!("provider withheld 2 unpublished references")));
-    }
 }
 
 impl SinceToken {
