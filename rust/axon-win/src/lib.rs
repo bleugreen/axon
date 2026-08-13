@@ -2439,12 +2439,17 @@ mod tests {
     fn delta_scroll_reports_position_verification_and_goal_success() {
         let backend = backend(vec![node("save")], None);
         let mut router = Router::new(backend);
-        router.snapshot = Some(router.backend.snapshot.clone());
+        let name = router
+            .register_snapshot(&router.backend.snapshot.clone())
+            .into_iter()
+            .find(|name| name.label == "save")
+            .unwrap()
+            .name;
 
         let response = router
             .request(request(
                 "scroll",
-                json!({"target": {"location": {"app": "App", "text": "save"}}, "deltaY": -120.0}),
+                json!({"target": {"app": "App", "name": name}, "deltaY": -120.0}),
             ))
             .unwrap();
         let JsonRpcResponse::Success(success) = &response else { panic!("{response:?}") };
@@ -2463,12 +2468,17 @@ mod tests {
     fn bring_into_view_names_its_distinct_mechanism_and_stays_unverified() {
         let backend = backend(vec![node("save")], None);
         let mut router = Router::new(backend);
-        router.snapshot = Some(router.backend.snapshot.clone());
+        let name = router
+            .register_snapshot(&router.backend.snapshot.clone())
+            .into_iter()
+            .find(|name| name.label == "save")
+            .unwrap()
+            .name;
 
         let response = router
             .request(request(
                 "scroll",
-                json!({"target": {"location": {"app": "App", "text": "save"}}, "deltaX": 0.0, "deltaY": 0.0}),
+                json!({"target": {"app": "App", "name": name}, "deltaX": 0.0, "deltaY": 0.0}),
             ))
             .unwrap();
         let JsonRpcResponse::Success(success) = &response else { panic!("{response:?}") };
