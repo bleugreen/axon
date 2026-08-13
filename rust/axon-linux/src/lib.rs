@@ -351,9 +351,10 @@ impl<B: PointerTargetVerifier + BackgroundPixelInput> Router<B> {
                 self.dispatch_resolved_click(handle, resolution, policy)
             }
             "type" => {
+                // `value` is the sole public spelling. Validate it before resolving the target so
+                // private aliases and malformed calls cannot cause native observation.
+                let value = required_str(params, "value")?;
                 let (handle, resolution) = self.resolve(params)?;
-                let value =
-                    required_str(params, "value").or_else(|_| required_str(params, "text"))?;
                 // Setting an editable value through AT-SPI needs no focus, and taking focus would
                 // make this a foreground action wearing a semantic name.
                 self.backend
@@ -464,8 +465,10 @@ impl<B: PointerTargetVerifier + BackgroundPixelInput> Router<B> {
                 ))
             }
             "invoke" => {
-                let (handle, resolution) = self.resolve(params)?;
+                // The action name is distinct from target.name and is required by the canonical
+                // schema. Check it before target resolution or any backend work.
                 let action = required_str(params, "name")?;
+                let (handle, resolution) = self.resolve(params)?;
                 self.backend
                     .invoke(&handle, action)
                     .map_err(backend_error)?;
@@ -1393,6 +1396,7 @@ mod tests {
         value: Rc<RefCell<Option<String>>>,
         clicks: Rc<RefCell<usize>>,
         scrolls: Rc<RefCell<usize>>,
+        invokes: Rc<RefCell<Vec<String>>>,
         keystrokes: Rc<RefCell<usize>>,
         focuses: Rc<RefCell<usize>>,
         /// Where the real pointer sits. A click moves it, which is why the transaction restores it.
@@ -1507,7 +1511,8 @@ mod tests {
             self.capture_queries.borrow_mut().push(query.clone());
             Ok(self.snapshot.clone())
         }
-        fn invoke(&mut self, _: &SnapshotHandle, _: &str) -> Result<(), BackendError> {
+        fn invoke(&mut self, _: &SnapshotHandle, action: &str) -> Result<(), BackendError> {
+            self.invokes.borrow_mut().push(action.into());
             Ok(())
         }
         fn read_value(&self, _: &SnapshotHandle) -> Result<Option<String>, BackendError> {
@@ -1670,6 +1675,7 @@ mod tests {
             value: Rc::new(RefCell::new(value.map(str::to_owned))),
             clicks: Rc::new(RefCell::new(0)),
             scrolls: Rc::new(RefCell::new(0)),
+            invokes: Rc::new(RefCell::new(vec![])),
             keystrokes: Rc::new(RefCell::new(0)),
             focuses: Rc::new(RefCell::new(0)),
             pointer: Rc::new(RefCell::new(POINTER_ORIGIN)),
@@ -1734,6 +1740,61 @@ mod tests {
         )
         .unwrap()
         .unwrap()
+    }
+
+    #[test]
+    fn canonical_type_and_invoke_arguments_route_without_private_aliases() {
+        use axon_core::{ToolBackend, validate_tool_arguments};
+
+        let backend = backend(vec![node("Field"), node("Button")], Some("before"));
+        let value = backend.value.clone();
+        let invokes = backend.invokes.clone();
+        let captures = backend.capture_queries.clone();
+        let mut router = Router::new(backend);
+        let names = router.register_snapshot(&router.backend.snapshot.clone());
+        let field = names.iter().find(|name| name.label == "Field").unwrap();
+        let button = names.iter().find(|name| name.label == "Button").unwrap();
+
+        let type_args = validate_tool_arguments(
+            ToolBackend::Linux,
+            "type",
+            json!({"target":{"app":"App","name":field.name},"value":"after"}),
+        )
+        .unwrap();
+        let response = router.request(request("type", type_args)).unwrap();
+        assert!(matches!(response, JsonRpcResponse::Success(_)));
+        assert_eq!(value.borrow().as_deref(), Some("after"));
+
+        let invoke_args = validate_tool_arguments(
+            ToolBackend::Linux,
+            "invoke",
+            json!({"target":{"app":"App","name":button.name},"name":"Invoke"}),
+        )
+        .unwrap();
+        let response = router.request(request("invoke", invoke_args)).unwrap();
+        assert!(matches!(response, JsonRpcResponse::Success(_)));
+        assert_eq!(invokes.borrow().as_slice(), ["Invoke"]);
+
+        let captures_before = captures.borrow().len();
+        for (method, params) in [
+            (
+                "type",
+                json!({"target":{"app":"App","name":field.name},"text":"alias"}),
+            ),
+            (
+                "invoke",
+                json!({"target":{"app":"App","name":button.name},"action":"Invoke"}),
+            ),
+        ] {
+            let response = router.request(request(method, params)).unwrap();
+            let JsonRpcResponse::Failure(failure) = response else {
+                panic!("{method} private alias must be rejected")
+            };
+            assert_eq!(failure.error.code, -32602, "{method}");
+        }
+        assert_eq!(captures.borrow().len(), captures_before);
+        assert_eq!(value.borrow().as_deref(), Some("after"));
+        assert_eq!(invokes.borrow().as_slice(), ["Invoke"]);
     }
 
     #[test]
@@ -1847,7 +1908,13 @@ mod tests {
         assert_eq!(*scrolls.borrow(), 0);
         assert_eq!(
             EXCLUDED.iter().map(|entry| entry.0).collect::<Vec<_>>(),
-            ["save", "scroll", "wait_for_value", "wait_for_stability", "permit"]
+            [
+                "save",
+                "scroll",
+                "wait_for_value",
+                "wait_for_stability",
+                "permit"
+            ]
         );
         for tool in ["click", "keyboard", "drag", "type", "invoke"] {
             assert!(!EXCLUDED.iter().any(|entry| entry.0 == tool), "{tool}");
