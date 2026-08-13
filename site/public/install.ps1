@@ -13,6 +13,30 @@ function Fail([string]$Message) {
     throw "Axon install failed: $Message"
 }
 
+function Complete-CurrentJunction([string]$CurrentDirectory, [string]$StagedCurrent) {
+    $ExistingCurrent = Get-Item -LiteralPath $CurrentDirectory -Force -ErrorAction SilentlyContinue
+    if ($null -ne $ExistingCurrent) {
+        Remove-Item -LiteralPath $CurrentDirectory -Force
+    }
+    Move-Item -LiteralPath $StagedCurrent -Destination $CurrentDirectory
+}
+
+function New-StagedCurrentJunction([string]$CurrentDirectory, [string]$InstallDirectory) {
+    $InstallRoot = Split-Path -Parent $CurrentDirectory
+    $StagedCurrent = Join-Path $InstallRoot ('.current-' + [guid]::NewGuid().ToString('N'))
+    try {
+        New-Item -ItemType Junction -Path $StagedCurrent -Target $InstallDirectory | Out-Null
+        $ExistingCurrent = Get-Item -LiteralPath $CurrentDirectory -Force -ErrorAction SilentlyContinue
+        if ($null -ne $ExistingCurrent -and -not ($ExistingCurrent.Attributes -band [System.IO.FileAttributes]::ReparsePoint)) {
+            Fail "stable install path $CurrentDirectory exists and is not a junction; move it aside and rerun the installer"
+        }
+        return $StagedCurrent
+    } catch {
+        Remove-Item -LiteralPath $StagedCurrent -Force -ErrorAction SilentlyContinue
+        Fail "could not update stable install path $CurrentDirectory. $($_.Exception.Message)"
+    }
+}
+
 if ($env:OS -ne 'Windows_NT') {
     Fail "unsupported platform; install.ps1 supports only windows/x86_64"
 }
@@ -46,6 +70,7 @@ $Archive = "axon-win-$Version-windows-x86_64.zip"
 $ContentDirectory = "axon-win-$Version-windows-x86_64"
 $InstallRoot = Join-Path $env:LOCALAPPDATA 'Axon'
 $InstallDirectory = Join-Path $InstallRoot $Version
+$CurrentDirectory = Join-Path $InstallRoot 'current'
 $Executable = Join-Path $InstallDirectory 'axon-win.exe'
 $DaemonExecutable = Join-Path $InstallDirectory 'axon-win-daemon.exe'
 $Marker = Join-Path $InstallDirectory '.axon-install-complete'
@@ -54,22 +79,29 @@ if ((Test-Path -LiteralPath $Marker -PathType Leaf) -and
     (Test-Path -LiteralPath $Executable -PathType Leaf) -and
     (Test-Path -LiteralPath $DaemonExecutable -PathType Leaf)) {
     Write-Host "Axon $Version is already installed at $InstallDirectory; reconciling daemon and PATH state."
+    $StagedCurrent = New-StagedCurrentJunction $CurrentDirectory $InstallDirectory
     & $Executable daemon install
     if ($LASTEXITCODE -ne 0) {
+        Remove-Item -LiteralPath $StagedCurrent -Force -ErrorAction SilentlyContinue
         Fail "axon-win.exe daemon install exited with code $LASTEXITCODE; review its message above and retry after correcting the reported problem"
     }
     $CliExecutable = Join-Path $InstallDirectory 'axon.exe'
     if (-not (Test-Path -LiteralPath $CliExecutable -PathType Leaf)) {
         New-Item -ItemType HardLink -Path $CliExecutable -Target $Executable | Out-Null
     }
+    Complete-CurrentJunction $CurrentDirectory $StagedCurrent
+
     $UserPath = [Environment]::GetEnvironmentVariable('Path', 'User')
     $PathEntries = @($UserPath -split ';' | Where-Object {
         -not [string]::IsNullOrWhiteSpace($_) -and
         -not $_.TrimEnd('\').StartsWith($InstallRoot.TrimEnd('\') + '\', [System.StringComparison]::OrdinalIgnoreCase)
     })
-    $NewUserPath = (@($InstallDirectory) + $PathEntries) -join ';'
+    $NewUserPath = (@($CurrentDirectory) + $PathEntries) -join ';'
     [Environment]::SetEnvironmentVariable('Path', $NewUserPath, 'User')
     Write-Host "Axon $Version is installed and registered."
+    Write-Host "`nRegister Axon with an MCP client:"
+    Write-Host "  claude mcp add axon -- '$CurrentDirectory\axon.exe' mcp"
+    Write-Host "  codex mcp add axon -- '$CurrentDirectory\axon.exe' mcp"
     exit 0
 }
 
@@ -215,30 +247,34 @@ try {
     Move-Item -LiteralPath $StagedInstall -Destination $InstallDirectory
     $CliExecutable = Join-Path $InstallDirectory 'axon.exe'
 
+    $StagedCurrent = New-StagedCurrentJunction $CurrentDirectory $InstallDirectory
     Write-Host "Registering the daemon from permanent path $Executable..."
     & $Executable daemon install
     if ($LASTEXITCODE -ne 0) {
+        Remove-Item -LiteralPath $StagedCurrent -Force -ErrorAction SilentlyContinue
         Fail "axon-win.exe daemon install exited with code $LASTEXITCODE; review its message above and retry after correcting the reported problem"
     }
+
+    Complete-CurrentJunction $CurrentDirectory $StagedCurrent
 
     $UserPath = [Environment]::GetEnvironmentVariable('Path', 'User')
     $PathEntries = @($UserPath -split ';' | Where-Object {
         -not [string]::IsNullOrWhiteSpace($_) -and
         -not $_.TrimEnd('\').StartsWith($InstallRoot.TrimEnd('\') + '\', [System.StringComparison]::OrdinalIgnoreCase)
     })
-    $NewUserPath = (@($InstallDirectory) + $PathEntries) -join ';'
+    $NewUserPath = (@($CurrentDirectory) + $PathEntries) -join ';'
     [Environment]::SetEnvironmentVariable('Path', $NewUserPath, 'User')
-    if (($env:Path -split ';') -notcontains $InstallDirectory) {
-        $env:Path = "$InstallDirectory;$env:Path"
+    if (($env:Path -split ';') -notcontains $CurrentDirectory) {
+        $env:Path = "$CurrentDirectory;$env:Path"
     }
     Set-Content -LiteralPath $Marker -Value $Version -NoNewline
 
     Write-Host "`nAxon $Version installed successfully."
     Write-Host "CLI: $CliExecutable -> $Executable"
-    Write-Host 'The versioned install directory was added to your user PATH; open a new terminal to use axon.'
+    Write-Host "The stable install directory $CurrentDirectory was added to your user PATH; open a new terminal to use axon."
     Write-Host "`nRegister Axon with an MCP client:"
-    Write-Host '  claude mcp add axon -- axon mcp'
-    Write-Host '  codex mcp add axon -- axon mcp'
+    Write-Host "  claude mcp add axon -- '$CurrentDirectory\axon.exe' mcp"
+    Write-Host "  codex mcp add axon -- '$CurrentDirectory\axon.exe' mcp"
 } finally {
     Remove-Item -LiteralPath $TempDirectory -Recurse -Force -ErrorAction SilentlyContinue
 }
