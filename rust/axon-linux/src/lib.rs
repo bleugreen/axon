@@ -1913,7 +1913,11 @@ mod tests {
         assert_eq!(
             EXCLUDED.iter().map(|entry| entry.0).collect::<Vec<_>>(),
             [
+                "navigate",
+                "windows",
+                "tabs",
                 "save",
+                "drag",
                 "scroll",
                 "wait_for_value",
                 "wait_for_stability",
