@@ -2437,8 +2437,14 @@ mod tests {
 
     #[test]
     fn delta_scroll_reports_position_verification_and_goal_success() {
-~~*~~
-"text": "save"}}, "deltaY": -120.0}),
+        let backend = backend(vec![node("save")], None);
+        let mut router = Router::new(backend);
+        router.snapshot = Some(router.backend.snapshot.clone());
+
+        let response = router
+            .request(request(
+                "scroll",
+                json!({"target": {"location": {"app": "App", "text": "save"}}, "deltaY": -120.0}),
             ))
             .unwrap();
         let result = action_result(&response);
@@ -2454,8 +2460,14 @@ mod tests {
 
     #[test]
     fn bring_into_view_names_its_distinct_mechanism_and_stays_unverified() {
-~~*~~
-"text": "save"}}, "deltaX": 0.0, "deltaY": 0.0}),
+        let backend = backend(vec![node("save")], None);
+        let mut router = Router::new(backend);
+        router.snapshot = Some(router.backend.snapshot.clone());
+
+        let response = router
+            .request(request(
+                "scroll",
+                json!({"target": {"location": {"app": "App", "text": "save"}}, "deltaX": 0.0, "deltaY": 0.0}),
             ))
             .unwrap();
         let result = action_result(&response);
