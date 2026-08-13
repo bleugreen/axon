@@ -892,12 +892,14 @@ impl<B: PointerTargetVerifier + BackgroundPixelInput> Router<B> {
                 let names = self.register_snapshot(&snapshot);
                 let rendered = axon_core::render_semantic_names(&snapshot, &names);
                 self.snapshot = Some(snapshot);
-                Ok(axon_core::format_child_page(
-                    &page,
-                    &target,
-                    &rendered,
-                    &request.display,
-                ))
+                Ok(json!({
+                    "children": axon_core::format_child_page(
+                        &page,
+                        &target,
+                        &rendered,
+                        &request.display,
+                    )
+                }))
             }
             axon_core::LookMode::ChangeCheck { .. } => Err(rpc_error(
                 -32602,

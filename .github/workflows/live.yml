@@ -233,7 +233,7 @@ jobs:
           if ! printf '%s' "$shallow" | jq -e '
             .result.isError == false
             and ([.result.content[] | select(.type == "image")] | length == 0)
-            and (.result.structuredContent.tree | split("\n") | all((startswith("  ") or test(": window ")))) 
+            and (.result.structuredContent.tree | split("\n") | all((startswith("  ") or test(": window "))))
           ' >/dev/null; then
             echo '::error::Calculator shallow look did not honor childDepth, depth, frames, and screenshot controls'
             printf '%s\n' "$shallow" | jq .

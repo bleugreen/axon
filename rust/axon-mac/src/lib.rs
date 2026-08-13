@@ -955,12 +955,14 @@ impl<
             let names = self.register_snapshot(&snapshot);
             let rendered = axon_core::render_semantic_names(&snapshot, &names);
             self.snapshot = Some(snapshot);
-            return Ok(axon_core::format_child_page(
-                &page,
-                target,
-                &rendered,
-                &request.display,
-            ));
+            return Ok(json!({
+                "children": axon_core::format_child_page(
+                    &page,
+                    target,
+                    &rendered,
+                    &request.display,
+                )
+            }));
         }
         if let axon_core::LookMode::AppList { all } = &request.mode {
             if *all {
