@@ -6,7 +6,8 @@ cd "$ROOT"
 ARTIFACT="schema/tool-surface-v1.json"
 TMP="$(mktemp "${TMPDIR:-/tmp}/tool-surface-v1.XXXXXX.json")"
 trap 'rm -f "$TMP"' EXIT
-swift run --quiet tool-surface-exporter "$TMP"
+GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null \
+  swift run --disable-sandbox --quiet tool-surface-exporter "$TMP"
 if [[ "${1:-}" == "--write" ]]; then
   cp "$TMP" "$ARTIFACT"
   printf 'wrote %s\n' "$ARTIFACT"
