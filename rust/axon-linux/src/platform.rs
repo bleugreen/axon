@@ -188,39 +188,6 @@ fn input_restriction(facts: SessionFacts) -> Option<&'static str> {
         return Some(WAYLAND_SESSION);
     }
 
-    #[test]
-    fn child_pages_select_the_direct_range_before_traversal() {
-        let (page, offset, limit) = child_page(vec![0, 1, 2, 3, 4], 2, Some(2));
-        assert_eq!(page, [2, 3]);
-        assert_eq!(offset, 2);
-        assert_eq!(limit, 2);
-
-        let (rest, offset, limit) = child_page(vec![0, 1, 2], 1, None);
-        assert_eq!(rest, [1, 2]);
-        assert_eq!(offset, 1);
-        assert_eq!(limit, 2);
-
-        let (empty, offset, limit) = child_page(vec![0, 1], 9, None);
-        assert!(empty.is_empty());
-        assert_eq!(offset, 2);
-        assert_eq!(limit, 0);
-    }
-
-    #[test]
-    fn a_page_total_is_authoritative_only_without_provider_holes() {
-        let (published, dropped) = published(vec![
-            real("/org/a11y/atspi/accessible/1"),
-            null(),
-            real("/org/a11y/atspi/accessible/2"),
-        ]);
-        assert_eq!((dropped == 0).then_some(published.len()), None);
-
-        let (published, dropped) = published(vec![
-            real("/org/a11y/atspi/accessible/1"),
-            real("/org/a11y/atspi/accessible/2"),
-        ]);
-        assert_eq!((dropped == 0).then_some(published.len()), Some(2));
-    }
     if !facts.x_display {
         return Some(NO_X_DISPLAY);
     }
@@ -1757,6 +1724,46 @@ mod tests {
 
     fn null() -> ObjectRefOwned {
         ObjectRefOwned::new(ObjectRef::Null)
+    }
+
+    #[test]
+    fn child_pages_select_the_direct_range_before_traversal() {
+        let (page, offset, limit) = child_page(vec![0, 1, 2, 3, 4], 2, Some(2));
+        assert_eq!(page, [2, 3]);
+        assert_eq!(offset, 2);
+        assert_eq!(limit, 2);
+
+        let (rest, offset, limit) = child_page(vec![0, 1, 2], 1, None);
+        assert_eq!(rest, [1, 2]);
+        assert_eq!(offset, 1);
+        assert_eq!(limit, 2);
+
+        let (empty, offset, limit) = child_page(vec![0, 1], 9, None);
+        assert!(empty.is_empty());
+        assert_eq!(offset, 2);
+        assert_eq!(limit, 0);
+    }
+
+    #[test]
+    fn a_page_total_is_authoritative_only_without_provider_holes() {
+        let (published_children, dropped) = published(vec![
+            real("/org/a11y/atspi/accessible/1"),
+            null(),
+            real("/org/a11y/atspi/accessible/2"),
+        ]);
+        assert_eq!(
+            (dropped == 0).then_some(published_children.len()),
+            None
+        );
+
+        let (published_children, dropped) = published(vec![
+            real("/org/a11y/atspi/accessible/1"),
+            real("/org/a11y/atspi/accessible/2"),
+        ]);
+        assert_eq!(
+            (dropped == 0).then_some(published_children.len()),
+            Some(2)
+        );
     }
 
     #[test]

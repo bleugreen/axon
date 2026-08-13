@@ -53,7 +53,7 @@ $ProbeScript = (Resolve-Path $ProbeScript).Path
 # ---------------------------------------------------------------------------------------------
 
 $StubbedSeams = @(
-    'Write-Note', 'Wait-Tick', 'Test-ProcessIsRunning', 'Get-AxonProcess', 'Stop-ProcessById',
+    'Write-Note', 'Wait-Tick', 'Test-ProcessIsRunning', 'Get-AxonProcess', 'Test-EdgeIsRunning', 'Stop-ProcessById',
     'Get-DesktopRegistrationPath', 'Get-DesktopTaskState', 'Start-DesktopDaemonTask', 'Register-ProbeTask',
     'Unregister-ProbeTask', 'Start-ProbeTask', 'Invoke-Axon', 'Invoke-AxonMcp', 'Get-ExpectedVersion',
     'Invoke-CargoBuild', 'Copy-ProbeExecutable', 'Read-ParkState', 'Write-ParkState', 'Clear-ParkState'
@@ -360,6 +360,10 @@ function Test-ProcessIsRunning {
 
 function Get-AxonProcess {
     @($script:Machine.Processes)
+}
+
+function Test-EdgeIsRunning {
+    $true
 }
 
 function Stop-ProcessById {

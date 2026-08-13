@@ -111,6 +111,10 @@ function Write-Note {
     Write-Host $Message
 }
 
+function Test-EdgeIsRunning {
+    [bool] (Get-Process msedge -ErrorAction SilentlyContinue)
+}
+
 function Wait-Tick {
     Start-Sleep -Milliseconds 250
 }
@@ -622,7 +626,7 @@ function Invoke-ProbeStage {
         Write-Note "status ok: version=$($status.version) ready=$($status.daemon.ready) capabilities=$($status.capabilities.Count) registration=$($status.registration.path)"
 
         $listRequest = '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"look","arguments":{}}}'
-        if (-not (Get-Process msedge -ErrorAction SilentlyContinue)) {
+        if (-not (Test-EdgeIsRunning)) {
             $edgeCommand = Get-Command msedge.exe -ErrorAction Stop
             $edge = Start-Process -FilePath $edgeCommand.Source -ArgumentList @(
                 '--new-window',
