@@ -252,6 +252,7 @@ function Reset-Machine {
         CapabilityCount = 15
         CapabilityWithoutReason = $false
         McpIsError = $false
+        ScrollCalls = 0
         StopProcessFails = $false
         # Pids the process table still lists but that are no longer alive. Real, not contrived: the
         # discovery loop reads a CIM snapshot, so a daemon can be found by image path and then be
@@ -492,6 +493,24 @@ function Invoke-AxonMcp {
 
     $script:Machine.Log.Add('mcp')
     if ($null -ne $script:Machine.McpResponder) { return & $script:Machine.McpResponder $Request }
+    if ($Request -match '"name":"scroll"') {
+        $script:Machine.ScrollCalls += 1
+        $before = if ($script:Machine.ScrollCalls -eq 1) { 0.0 } else { 100.0 }
+        return @{
+            result = @{
+                isError = $false
+                structuredContent = @{
+                    success = ($script:Machine.ScrollCalls -eq 1)
+                    dispatch = @{ success = $true; mechanism = 'UIA ScrollPattern.Scroll' }
+                    verification = @{
+                        verified = ($script:Machine.ScrollCalls -eq 1)
+                        before = @{ horizontalPercent = -1.0; verticalPercent = $before }
+                        after = @{ horizontalPercent = -1.0; verticalPercent = 100.0 }
+                    }
+                }
+            }
+        } | ConvertTo-Json -Depth 10 | ConvertFrom-Json -Depth 100
+    }
     if ($Request -match '"target"') {
         return @{
             result = @{
