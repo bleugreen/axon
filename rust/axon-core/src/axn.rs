@@ -1,5 +1,6 @@
 use crate::{
-    Confidence, LocatorHealEvent, LocatorHealStatus, TargetResolution, healing_event, reviewed_yaml,
+    Confidence, LocatorHealEvent, LocatorHealStatus, TargetResolution, healing_event,
+    redact_target_resolution, reviewed_yaml,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -189,14 +190,36 @@ fn valid_email(value: &str) -> bool {
 }
 fn valid_date(value: &str) -> bool {
     let b = value.as_bytes();
-    b.len() >= 10
+    if !(b.len() == 10
         && b[4] == b'-'
         && b[7] == b'-'
         && b[..4]
             .iter()
             .chain(&b[5..7])
             .chain(&b[8..10])
-            .all(u8::is_ascii_digit)
+            .all(u8::is_ascii_digit))
+    {
+        return false;
+    }
+    let year = value[..4].parse::<u32>().unwrap();
+    let month = value[5..7].parse::<usize>().unwrap();
+    let day = value[8..10].parse::<u32>().unwrap();
+    let leap = year.is_multiple_of(4) && (!year.is_multiple_of(100) || year.is_multiple_of(400));
+    let days = [
+        31,
+        28 + u32::from(leap),
+        31,
+        30,
+        31,
+        30,
+        31,
+        31,
+        30,
+        31,
+        30,
+        31,
+    ];
+    year != 0 && month != 0 && month <= 12 && day != 0 && day <= days[month - 1]
 }
 fn contains_reference(value: &Value) -> bool {
     match value {
@@ -757,7 +780,9 @@ impl<'a, D: ToolDispatcher> AxnRunner<'a, D> {
                         }
                     })
                     .or_else(|| (!outcome.success).then(|| "action failed".into()))),
-                resolution: outcome.resolution,
+                resolution: outcome
+                    .resolution
+                    .map(|resolution| redact_target_resolution(&resolution, &active_secrets)),
                 heal,
             };
             if entry.success {

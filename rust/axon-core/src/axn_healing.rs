@@ -24,6 +24,31 @@ pub struct TargetResolution {
     pub observed_locator: Option<Value>,
 }
 
+/// Remove active secret values from every free-form resolution field before it enters a trace.
+pub fn redact_target_resolution(
+    resolution: &TargetResolution,
+    secrets: &[String],
+) -> TargetResolution {
+    TargetResolution {
+        status: resolution.status,
+        confidence: resolution.confidence,
+        path: resolution.path.clone(),
+        context: resolution.context.clone(),
+        candidates: redact_values(&resolution.candidates, secrets),
+        reasons: resolution
+            .reasons
+            .iter()
+            .map(|reason| redact(&Value::String(reason.clone()), secrets))
+            .filter_map(|value| value.as_str().map(str::to_owned))
+            .collect(),
+        evidence: redact_values(&resolution.evidence, secrets),
+        observed_locator: resolution
+            .observed_locator
+            .as_ref()
+            .map(|locator| redact(locator, secrets)),
+    }
+}
+
 /// Convert the locator engine's internal result into the compact, cross-language replay contract.
 ///
 /// The locator attached to the recording is the expected evidence. The observed locator is rebuilt
