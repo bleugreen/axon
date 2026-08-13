@@ -22,6 +22,17 @@ fn internal(message: &str) -> JsonRpcError {
         message: "Internal error: invalid embedded tool surface artifact".into(),
         data: Some(json!({"reason": message})),
     }
+
+    #[test]
+    fn any_of_reports_the_branch_matching_the_callers_object_shape() {
+        let error = validate_tool_arguments(
+            ToolBackend::Windows,
+            "click",
+            json!({"target":{"app":"Notes","name":"Save","bogus":true}}),
+        )
+        .unwrap_err();
+        assert_eq!(error.data.unwrap()["path"], "params.arguments.target.bogus");
+    }
 }
 
 impl ToolBackend {
@@ -460,16 +471,29 @@ fn validate_branches(
     let successes = results.iter().filter(|result| result.is_ok()).count();
     if successes == 0 {
         if !exactly_one
-            && let Some(error) = results
-                .into_iter()
-                .filter_map(Result::err)
-                .max_by_key(|error| {
-                    error
-                        .data
-                        .as_ref()
-                        .and_then(|data| data["path"].as_str())
-                        .map_or(0, str::len)
+            && let Some(error) = branches
+                .iter()
+                .zip(results)
+                .filter_map(|(branch, result)| {
+                    result.err().map(|error| {
+                        let recognized = value.as_object().map_or(0, |object| {
+                            branch
+                                .get("properties")
+                                .and_then(Value::as_object)
+                                .map_or(0, |properties| {
+                                    object.keys().filter(|key| properties.contains_key(*key)).count()
+                                })
+                        });
+                        let path_length = error
+                            .data
+                            .as_ref()
+                            .and_then(|data| data["path"].as_str())
+                            .map_or(0, str::len);
+                        ((recognized, path_length), error)
+                    })
                 })
+                .max_by_key(|(score, _)| *score)
+                .map(|(_, error)| error)
         {
             return Err(error);
         }

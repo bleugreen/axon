@@ -251,7 +251,7 @@ public enum ToolSurfaceSpec {
                 deliveryPolicyParameter
             ],
             cliUsage: "axon click [--foreground] <target-json>"
-        , availability: [.swift, .mac, .windows]),
+        , availability: .all),
         ToolSpec(
             name: "type",
             description: "Fill a writable field by setting AXValue directly on a target, avoiding focus and keystroke timing races.",
@@ -273,7 +273,7 @@ public enum ToolSurfaceSpec {
             ],
             cliUsage: "axon keyboard [--app app] [--foreground] (--text text | --key keystroke)",
             exactlyOneOf: ["text", "key"]
-        , availability: [.swift, .mac, .windows]),
+        , availability: .all),
         ToolSpec(
             name: "scroll",
             description: "Scroll an accessibility surface by resolving an offscreen descendant and requesting AXScrollToVisible.",

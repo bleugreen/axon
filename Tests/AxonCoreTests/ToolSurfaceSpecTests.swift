@@ -64,7 +64,7 @@ private func availableToolNames(for facade: ToolFacade) -> [String] {
         "look", "find", "run", "click", "type", "keyboard", "scroll", "invoke"
     ])
     #expect(availableToolNames(for: .linux) == [
-        "look", "find", "run", "type", "scroll", "invoke"
+        "look", "find", "run", "click", "type", "keyboard", "scroll", "invoke"
     ])
 }
 
