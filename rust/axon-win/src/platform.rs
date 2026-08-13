@@ -1961,14 +1961,14 @@ impl Drop for ForegroundTimeoutRestore {
 }
 
 fn set_foreground_lock_timeout(value: u32) -> windows::core::Result<()> {
-    // SPI_SETFOREGROUNDLOCKTIMEOUT takes the new DWORD value in pvParam, not uiParam.
-    // A zero value is therefore represented by null, while nonzero values are pointer-sized
-    // integers. Passing the original value as uiParam silently restored zero instead.
+    // SPI_SETFOREGROUNDLOCKTIMEOUT reads a DWORD through pvParam. Passing the numeric value as
+    // either uiParam or a pointer address can report success while leaving the setting at zero.
+    let mut value = value;
     unsafe {
         SystemParametersInfoW(
             SPI_SETFOREGROUNDLOCKTIMEOUT,
             0,
-            (value != 0).then_some(value as usize as *mut std::ffi::c_void),
+            Some((&mut value as *mut u32).cast()),
             SPIF_SENDCHANGE,
         )
     }

@@ -828,9 +828,13 @@ function Read-ForegroundTimeout {
     } finally { [Runtime.InteropServices.Marshal]::FreeHGlobal(`$memory) }
 }
 `$before = Read-ForegroundTimeout
-if (-not [AxonForegroundTimeoutRepair]::SystemParametersInfo(0x2001, 0, [IntPtr][uint64]$value, 2)) {
-    throw "SPI_SETFOREGROUNDLOCKTIMEOUT failed: `$([Runtime.InteropServices.Marshal]::GetLastWin32Error())"
-}
+`$valueMemory = [Runtime.InteropServices.Marshal]::AllocHGlobal(4)
+try {
+    [Runtime.InteropServices.Marshal]::WriteInt32(`$valueMemory, [int]$value)
+    if (-not [AxonForegroundTimeoutRepair]::SystemParametersInfo(0x2001, 0, `$valueMemory, 2)) {
+        throw "SPI_SETFOREGROUNDLOCKTIMEOUT failed: `$([Runtime.InteropServices.Marshal]::GetLastWin32Error())"
+    }
+} finally { [Runtime.InteropServices.Marshal]::FreeHGlobal(`$valueMemory) }
 `$after = Read-ForegroundTimeout
 @{ before = `$before; after = `$after } | ConvertTo-Json -Compress | Set-Content -LiteralPath '$escapedTemporaryPath' -Encoding utf8
 Move-Item -LiteralPath '$escapedTemporaryPath' -Destination '$escapedResultPath' -Force
