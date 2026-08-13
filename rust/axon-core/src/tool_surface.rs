@@ -62,7 +62,10 @@ pub fn backend_tools(backend: ToolBackend) -> Result<Vec<Value>, JsonRpcError> {
         .iter()
         .filter(|tool| available(tool, backend))
         .map(|tool| {
-            let mut entry = tool.as_object().expect("artifact tool entry must be object").clone();
+            let mut entry = tool
+                .as_object()
+                .expect("artifact tool entry must be object")
+                .clone();
             entry.remove("availability");
             entry.remove("socketMethod");
             Value::Object(entry)
@@ -93,7 +96,8 @@ pub fn validate_tools_call(
     backend: ToolBackend,
     params: Option<Value>,
 ) -> Result<ValidatedToolCall, JsonRpcError> {
-    let params = params.ok_or_else(|| invalid("params", "missing required object", Some("object")))?;
+    let params =
+        params.ok_or_else(|| invalid("params", "missing required object", Some("object")))?;
     let object = params
         .as_object()
         .ok_or_else(|| invalid("params", "expected object", Some("object")))?;
@@ -123,7 +127,13 @@ fn find_tool(backend: ToolBackend, name: &str) -> Result<&'static Value, JsonRpc
         .expect("checked above")
         .iter()
         .find(|tool| tool["name"].as_str() == Some(name) && available(tool, backend))
-        .ok_or_else(|| invalid("params.name", &format!("unknown or unavailable tool {name:?}"), None))
+        .ok_or_else(|| {
+            invalid(
+                "params.name",
+                &format!("unknown or unavailable tool {name:?}"),
+                None,
+            )
+        })
 }
 
 fn available(tool: &Value, backend: ToolBackend) -> bool {
@@ -135,8 +145,16 @@ fn check_schema_vocabulary(schema: &Value, path: &str) -> Result<(), String> {
         .as_object()
         .ok_or_else(|| format!("{path} must be an object"))?;
     const ALLOWED: &[&str] = &[
-        "type", "description", "default", "properties", "required",
-        "additionalProperties", "anyOf", "oneOf", "items", "enum",
+        "type",
+        "description",
+        "default",
+        "properties",
+        "required",
+        "additionalProperties",
+        "anyOf",
+        "oneOf",
+        "items",
+        "enum",
     ];
     for key in object.keys() {
         if !ALLOWED.contains(&key.as_str()) {
@@ -182,10 +200,20 @@ fn validate_value(schema: &Value, value: &Value, path: &str) -> Result<(), JsonR
         Some("boolean") => value.is_boolean(),
         Some("integer") => value.as_i64().is_some() || value.as_u64().is_some(),
         Some("number") => value.is_number(),
-        Some(other) => return Err(invalid(path, &format!("unsupported schema type {other}"), None)),
+        Some(other) => {
+            return Err(invalid(
+                path,
+                &format!("unsupported schema type {other}"),
+                None,
+            ));
+        }
     };
     if !type_matches {
-        return Err(invalid(path, &format!("expected {}", expected.unwrap()), expected));
+        return Err(invalid(
+            path,
+            &format!("expected {}", expected.unwrap()),
+            expected,
+        ));
     }
     if let Some(object) = value.as_object() {
         validate_object(schema, object, path)?;
@@ -198,12 +226,20 @@ fn validate_value(schema: &Value, value: &Value, path: &str) -> Result<(), JsonR
     Ok(())
 }
 
-fn validate_object(schema: &Value, object: &Map<String, Value>, path: &str) -> Result<(), JsonRpcError> {
+fn validate_object(
+    schema: &Value,
+    object: &Map<String, Value>,
+    path: &str,
+) -> Result<(), JsonRpcError> {
     let properties = schema.get("properties").and_then(Value::as_object);
     if let Some(required) = schema.get("required").and_then(Value::as_array) {
         for name in required.iter().filter_map(Value::as_str) {
             if !object.contains_key(name) {
-                return Err(invalid(&format!("{path}.{name}"), "missing required field", None));
+                return Err(invalid(
+                    &format!("{path}.{name}"),
+                    "missing required field",
+                    None,
+                ));
             }
         }
     }
@@ -248,7 +284,9 @@ fn validate_branches(
                 .into_iter()
                 .filter_map(Result::err)
                 .max_by_key(|error| {
-                    error.data.as_ref()
+                    error
+                        .data
+                        .as_ref()
                         .and_then(|data| data["path"].as_str())
                         .map_or(0, str::len)
                 })
@@ -259,15 +297,20 @@ fn validate_branches(
         return Err(invalid(path, "did not match any schema alternative", None));
     }
     if exactly_one && successes != 1 {
-        return Err(invalid(path, "expected exactly one schema alternative", None));
+        return Err(invalid(
+            path,
+            "expected exactly one schema alternative",
+            None,
+        ));
     }
     Ok(())
 }
 
 fn apply_defaults(schema: &Value, value: &mut Value) {
-    if let (Some(properties), Some(object)) =
-        (schema.get("properties").and_then(Value::as_object), value.as_object_mut())
-    {
+    if let (Some(properties), Some(object)) = (
+        schema.get("properties").and_then(Value::as_object),
+        value.as_object_mut(),
+    ) {
         for (name, child_schema) in properties {
             if !object.contains_key(name) {
                 if let Some(default) = child_schema.get("default") {
@@ -298,15 +341,40 @@ mod tests {
     use super::*;
 
     fn names(backend: ToolBackend) -> Vec<String> {
-        backend_tools(backend).unwrap().iter()
-            .map(|tool| tool["name"].as_str().unwrap().to_string()).collect()
+        backend_tools(backend)
+            .unwrap()
+            .iter()
+            .map(|tool| tool["name"].as_str().unwrap().to_string())
+            .collect()
     }
 
     #[test]
     fn backend_tool_sets_are_ordered() {
-        assert_eq!(names(ToolBackend::Mac), ["look", "find", "wait_for_value", "wait_for_stability", "run", "click", "type", "keyboard", "scroll", "invoke"]);
-        assert_eq!(names(ToolBackend::Windows), ["look", "find", "run", "click", "type", "keyboard", "scroll", "invoke"]);
-        assert_eq!(names(ToolBackend::Linux), ["look", "find", "run", "type", "scroll", "invoke"]);
+        assert_eq!(
+            names(ToolBackend::Mac),
+            [
+                "look",
+                "find",
+                "wait_for_value",
+                "wait_for_stability",
+                "run",
+                "click",
+                "type",
+                "keyboard",
+                "scroll",
+                "invoke"
+            ]
+        );
+        assert_eq!(
+            names(ToolBackend::Windows),
+            [
+                "look", "find", "run", "click", "type", "keyboard", "scroll", "invoke"
+            ]
+        );
+        assert_eq!(
+            names(ToolBackend::Linux),
+            ["look", "find", "run", "type", "scroll", "invoke"]
+        );
     }
 
     #[test]
@@ -315,16 +383,20 @@ mod tests {
         assert_eq!(value["screenshot"], true);
         assert_eq!(value["offset"], 0);
         assert_eq!(value["frames"], false);
-        let error = validate_tool_arguments(ToolBackend::Linux, "look", json!({"screenshot": "false"})).unwrap_err();
+        let error =
+            validate_tool_arguments(ToolBackend::Linux, "look", json!({"screenshot": "false"}))
+                .unwrap_err();
         assert_eq!(error.code, -32602);
         assert_eq!(error.data.unwrap()["path"], "params.arguments.screenshot");
     }
 
     #[test]
     fn rejects_wrong_integer_and_unknown_fields() {
-        let error = validate_tool_arguments(ToolBackend::Mac, "look", json!({"depth": "2"})).unwrap_err();
+        let error =
+            validate_tool_arguments(ToolBackend::Mac, "look", json!({"depth": "2"})).unwrap_err();
         assert_eq!(error.data.unwrap()["path"], "params.arguments.depth");
-        let error = validate_tool_arguments(ToolBackend::Mac, "look", json!({"bogus": true})).unwrap_err();
+        let error =
+            validate_tool_arguments(ToolBackend::Mac, "look", json!({"bogus": true})).unwrap_err();
         assert_eq!(error.data.unwrap()["path"], "params.arguments.bogus");
     }
 
@@ -332,22 +404,40 @@ mod tests {
     fn rejects_missing_and_malformed_nested_targets() {
         let error = validate_tool_arguments(ToolBackend::Windows, "click", json!({})).unwrap_err();
         assert_eq!(error.data.unwrap()["path"], "params.arguments.target");
-        let error = validate_tool_arguments(ToolBackend::Windows, "type", json!({
-            "target": {"app": 42, "name": "Field"}, "value": "x"
-        })).unwrap_err();
+        let error = validate_tool_arguments(
+            ToolBackend::Windows,
+            "type",
+            json!({
+                "target": {"app": 42, "name": "Field"}, "value": "x"
+            }),
+        )
+        .unwrap_err();
         assert!(error.message.contains("params.arguments.target"));
-        let error = validate_tool_arguments(ToolBackend::Windows, "type", json!({
-            "target": {"app": "Notes"}, "value": "x"
-        })).unwrap_err();
+        let error = validate_tool_arguments(
+            ToolBackend::Windows,
+            "type",
+            json!({
+                "target": {"app": "Notes"}, "value": "x"
+            }),
+        )
+        .unwrap_err();
         assert!(error.message.contains("params.arguments.target"));
     }
 
     #[test]
     fn rejects_flat_target_shorthand_and_bad_call_params() {
-        let error = validate_tool_arguments(ToolBackend::Windows, "click", json!({
-            "app": "Notes", "name": "Save"
-        })).unwrap_err();
-        assert!(error.message.contains("params.arguments.target") || error.message.contains("params.arguments.app"));
+        let error = validate_tool_arguments(
+            ToolBackend::Windows,
+            "click",
+            json!({
+                "app": "Notes", "name": "Save"
+            }),
+        )
+        .unwrap_err();
+        assert!(
+            error.message.contains("params.arguments.target")
+                || error.message.contains("params.arguments.app")
+        );
         let error = validate_tools_call(ToolBackend::Linux, Some(json!({"name": 3}))).unwrap_err();
         assert_eq!(error.data.unwrap()["path"], "params.name");
     }

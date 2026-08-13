@@ -461,6 +461,7 @@ public enum ToolSurfaceSchema {
             "x": scalarSchema(type: "number", description: "Horizontal coordinate."),
             "y": scalarSchema(type: "number", description: "Vertical coordinate."),
             "coordinateSpace": enumStringSchema(values: ["screen", "window", "screenshot"], description: "Coordinate space. Defaults to screen."),
+            "space": enumStringSchema(values: ["screen", "window", "screenshot"], description: "Legacy alias for coordinateSpace."),
             "app": scalarSchema(type: "string", description: "App that owns a window or screenshot coordinate.")
         ]),
         "required": .array([.string("x"), .string("y")]), "additionalProperties": .bool(false)

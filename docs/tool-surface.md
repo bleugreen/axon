@@ -46,6 +46,12 @@ For platform-specific limits, see [Cross-platform support](cross-platform.md).
 
 ## Protocol reference
 
+The Swift-owned contract in `Sources/AxonCore/ToolSurfaceSpec.swift` is exported as the
+versioned `schema/tool-surface-v1.json` artifact. Swift and Rust MCP facades consume that
+single ordered contract and filter its explicit platform availability; runtime health remains
+the authority for whether an advertised operation is currently usable. Run
+`scripts/check-tool-surface` to detect generated-artifact drift, or pass `--write` to regenerate it.
+
 ### See what an app exposes
 
 `look()` lists regular running UI apps by default. Use `all: true` or
