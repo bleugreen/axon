@@ -125,7 +125,7 @@ pub fn backend_tools(backend: ToolBackend) -> Result<Vec<Value>, JsonRpcError> {
         .get("tools")
         .and_then(Value::as_array)
         .ok_or_else(|| internal("validated artifact lost tools array"))?;
-    Ok(tools
+    tools
         .iter()
         .filter(|tool| available(tool, backend))
         .map(|tool| {
@@ -137,7 +137,7 @@ pub fn backend_tools(backend: ToolBackend) -> Result<Vec<Value>, JsonRpcError> {
             entry.remove("socketMethod");
             Ok(Value::Object(entry))
         })
-        .collect())
+        .collect()
 }
 
 pub fn validate_tool_arguments(
