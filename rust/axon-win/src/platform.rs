@@ -1821,7 +1821,7 @@ fn probe_foreground(args: &[String]) -> Result<serde_json::Value, BackendError> 
         ));
     }
     let cursor_before = pixel::cursor();
-    let foreground_lock_timeout = foreground_lock_timeout()?;
+    let original_foreground_lock_timeout = foreground_lock_timeout()?;
     let mut results = Vec::new();
     for strategy in strategies {
         if pixel::foreground_window() != prior {
@@ -1863,7 +1863,7 @@ fn probe_foreground(args: &[String]) -> Result<serde_json::Value, BackendError> 
             send_alt_unlock();
         }
         let _timeout_restore = if strategy == HandBackStrategy::ForegroundLockTimeout {
-            Some(ForegroundTimeoutRestore::zero(foreground_lock_timeout)?)
+            Some(ForegroundTimeoutRestore::zero(original_foreground_lock_timeout)?)
         } else {
             None
         };
@@ -1890,11 +1890,11 @@ fn probe_foreground(args: &[String]) -> Result<serde_json::Value, BackendError> 
         drop(_timeout_restore);
         if strategy == HandBackStrategy::ForegroundLockTimeout {
             let restored = foreground_lock_timeout()?;
-            if restored != foreground_lock_timeout {
+            if restored != original_foreground_lock_timeout {
                 return Err(op(
                     "probe",
                     format!(
-                        "foreground lock timeout was {foreground_lock_timeout} before strategy H but {restored} after cleanup"
+                        "foreground lock timeout was {original_foreground_lock_timeout} before strategy H but {restored} after cleanup"
                     ),
                 ));
             }
@@ -1918,7 +1918,7 @@ fn probe_foreground(args: &[String]) -> Result<serde_json::Value, BackendError> 
     Ok(serde_json::json!({
         "probe": "foreground-handback-sweep", "app": app, "identity": identity,
         "priorForegroundWindow": format!("0x{:08X}", pixel::bits(prior)),
-        "priorForegroundProcess": prior_pid, "foregroundLockTimeoutMs": foreground_lock_timeout,
+        "priorForegroundProcess": prior_pid, "foregroundLockTimeoutMs": original_foreground_lock_timeout,
         "results": results,
     }))
 }
