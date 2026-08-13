@@ -1,5 +1,5 @@
 use crate::{
-    AncestorLocator, Locator, LocatorResolver, ResolutionStatus, RetainedSemanticLookup,
+    AncestorLocator, Locator, LocatorResolver, ResolutionStatus, RetainedSemanticSelection,
     SemanticCandidate, SemanticElementName, SemanticLookup, SemanticNameDeriver,
     SemanticNameRegistry, Snapshot, TextMatcher, WireElementTarget, locator as runtime_locator,
     lookup_from_resolution, walk_context,
@@ -346,9 +346,18 @@ impl<'a> ChartSeededResolver<'a> {
         current_app_version: Option<&str>,
         now: u64,
     ) -> SemanticLookup {
-        match self.registry.resolve_retained(target, live) {
-            RetainedSemanticLookup::Resolved(lookup) => return *lookup,
-            RetainedSemanticLookup::NoRecord => {}
+        match self.registry.select_retained(target) {
+            RetainedSemanticSelection::Selected(crate::SemanticSelection::Selected(context)) => {
+                return context.resolve(live);
+            }
+            RetainedSemanticSelection::Selected(crate::SemanticSelection::Missing { target }) => {
+                return SemanticLookup::Missing { target };
+            }
+            RetainedSemanticSelection::Selected(crate::SemanticSelection::Ambiguous {
+                target,
+                candidates,
+            }) => return SemanticLookup::Ambiguous { target, candidates },
+            RetainedSemanticSelection::NoRecord => {}
         }
 
         if !app_matches_identity(&target.app, live, app_identity) {
