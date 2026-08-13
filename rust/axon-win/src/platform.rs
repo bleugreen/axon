@@ -1005,6 +1005,12 @@ impl UiaState {
         let cache = self.capture_cache_request()?;
         let parent_element = unsafe { element.BuildUpdatedCache(&cache) }
             .map_err(|e| operation("cache child page parent", e))?;
+        self.elements.clear();
+        let mut parent_count = 0;
+        let mut parent = self.capture_node(&parent_element, &cache, 0, 0, &mut parent_count)?;
+        // Intentional paging is represented by offset/limit/total, never as native truncation.
+        parent.truncation_reason = None;
+        self.elements.truncate(1);
         let condition = unsafe { self.automation.CreateTrueCondition() }
             .map_err(|e| operation("create child page condition", e))?;
         let child_array =
@@ -1025,9 +1031,6 @@ impl UiaState {
             let child = unsafe { child_array.GetElement(index as i32) }
                 .map_err(|e| operation("read child page element", e))?;
             children.push(self.capture_node(&child, &cache, 0, max_depth, &mut count)?);
-        }
-        if start > 0 || end < total {
-            parent.truncation_reason = Some("childPage".into());
         }
         let mut retained_root = parent.clone();
         retained_root.children = children.clone();

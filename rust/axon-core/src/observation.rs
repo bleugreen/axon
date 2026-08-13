@@ -127,8 +127,8 @@ impl LookRequest {
             (_, _, Some(_)) => return Err(LookRequestError("since requires app and cannot be combined with target".into())),
         };
         Ok(Self { mode, display: LookDisplayOptions {
-            depth, tree: params.get("tree").and_then(Value::as_bool).unwrap_or(true),
-            frames: params.get("frames").and_then(Value::as_bool).unwrap_or(true), format,
+            depth, tree: params.get("tree").and_then(Value::as_bool).unwrap_or(format != LookFormat::Debug),
+            frames: params.get("frames").and_then(Value::as_bool).unwrap_or(false), format,
         }, screenshot: params.get("screenshot").and_then(Value::as_bool),
         screen_text: params.get("screenText").and_then(Value::as_bool).unwrap_or(false) })
     }
