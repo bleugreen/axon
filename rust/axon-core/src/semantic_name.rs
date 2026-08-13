@@ -973,18 +973,29 @@ mod tests {
     #[test]
     fn replay_evidence_is_pinned_and_legacy_duplicates_are_ambiguous() {
         let mut registry = SemanticNameRegistry::default();
-        let target = target("App", "save".into());
-        let locator = locator(&button("Save", Some("save")), &[], None);
-        registry.register_replay_locator_for_process(target.clone(), locator.clone(), Some(41));
-        let SemanticSelection::Selected(context) = registry.select(&target) else {
+        let replay_target = target("App", "save".into());
+        let evidence = locator(&button("Save", Some("save")), &[], None);
+        registry.register_replay_locator_for_process(
+            replay_target.clone(),
+            evidence.clone(),
+            Some(41),
+        );
+        let SemanticSelection::Selected(context) = registry.select(&replay_target) else {
             panic!("single replay record was not selected");
         };
         assert_eq!(context.process_id(), Some(41));
 
-        registry.register_replay_locator_for_process(target.clone(), locator, Some(42));
-        assert!(matches!(registry.select(&target), SemanticSelection::Ambiguous { .. }));
+        registry.register_replay_locator_for_process(replay_target.clone(), evidence, Some(42));
+        assert!(matches!(
+            registry.select(&replay_target),
+            SemanticSelection::Ambiguous { .. }
+        ));
         let pid_target = target("pid:41", "save".into());
-        registry.register_replay_locator_for_process(pid_target.clone(), locator(&button("Save", Some("save")), &[], None), Some(41));
+        registry.register_replay_locator_for_process(
+            pid_target.clone(),
+            locator(&button("Save", Some("save")), &[], None),
+            Some(41),
+        );
         let SemanticSelection::Selected(context) = registry.select(&pid_target) else {
             panic!("PID replay record was not selected");
         };
