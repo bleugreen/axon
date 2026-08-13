@@ -451,9 +451,7 @@ mod status {
 
 #[cfg(windows)]
 mod pipe {
-    use axon_core::{
-        JsonRpcId, JsonRpcRequest, ToolBackend, backend_tools, validate_tools_call,
-    };
+    use axon_core::{JsonRpcId, JsonRpcRequest, ToolBackend, backend_tools, validate_tools_call};
     use axon_win::{Router, WindowsBackend, parse_request};
     use serde_json::{Value, json};
     use std::{
@@ -968,11 +966,7 @@ mod pipe {
                 return Ok(json!({"jsonrpc":"2.0","id":id,"error":error}));
             }
         };
-        let rpc = JsonRpcRequest::new(
-            Some(JsonRpcId::Integer(1)),
-            call.name,
-            Some(call.arguments),
-        );
+        let rpc = JsonRpcRequest::new(Some(JsonRpcId::Integer(1)), call.name, Some(call.arguments));
         let response = send_rpc(&rpc)?;
         if let Some(error) = response.get("error") {
             Ok(
@@ -1008,7 +1002,9 @@ mod pipe {
                 .collect::<Vec<_>>();
             assert_eq!(
                 names,
-                ["look", "find", "run", "click", "type", "keyboard", "scroll", "invoke"]
+                [
+                    "look", "find", "run", "click", "type", "keyboard", "scroll", "invoke"
+                ]
             );
             assert_eq!(tools[0]["inputSchema"]["additionalProperties"], false);
         }
@@ -1016,25 +1012,34 @@ mod pipe {
         #[test]
         fn facade_rejects_precisely_malformed_calls() {
             for (params, path) in [
-                (json!({"name": "type", "arguments": {
-                    "target": {"app": 42, "name": "Field"}, "value": "x"
-                }}), "params.arguments.target.app"),
-                (json!({"name": "click", "arguments": {
-                    "target": {"app": "Notes", "name": "Save", "bogus": true}
-                }}), "params.arguments.target.bogus"),
-                (json!({"name": "click", "arguments": {
-                    "app": "Notes", "name": "Save"
-                }}), "params.arguments.target"),
-                (json!({"name": "not-a-tool", "arguments": {}}), "params.name"),
+                (
+                    json!({"name": "type", "arguments": {
+                        "target": {"app": 42, "name": "Field"}, "value": "x"
+                    }}),
+                    "params.arguments.target.app",
+                ),
+                (
+                    json!({"name": "click", "arguments": {
+                        "target": {"app": "Notes", "name": "Save", "bogus": true}
+                    }}),
+                    "params.arguments.target.bogus",
+                ),
+                (
+                    json!({"name": "click", "arguments": {
+                        "app": "Notes", "name": "Save"
+                    }}),
+                    "params.arguments.target",
+                ),
+                (
+                    json!({"name": "not-a-tool", "arguments": {}}),
+                    "params.name",
+                ),
                 (json!({"name": 7, "arguments": {}}), "params.name"),
                 (json!({"name": "look", "arguments": []}), "params.arguments"),
             ] {
                 let call = json!({"jsonrpc": "2.0", "id": 7, "params": params});
-                let error = validate_tools_call(
-                    ToolBackend::Windows,
-                    call.get("params").cloned(),
-                )
-                .unwrap_err();
+                let error = validate_tools_call(ToolBackend::Windows, call.get("params").cloned())
+                    .unwrap_err();
                 let response = json!({"jsonrpc":"2.0","id":call["id"],"error":error});
                 assert_eq!(response["error"]["code"], -32602);
                 assert_eq!(response["error"]["data"]["path"], path);
