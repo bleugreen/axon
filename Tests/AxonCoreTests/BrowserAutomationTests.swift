@@ -10,6 +10,16 @@ import Testing
     #expect(throws: BrowserAutomationError.self) { try AppleScriptBrowserAutomation.validatedURL("https://example.com/\nnext") }
 }
 
+@Test func invalidNavigationInputDoesNotCrossAutomationPermissionBoundary() {
+    let authorizer = AppleEventAuthorizerStub(results: [])
+    let browser = AppleScriptBrowserAutomation(authorizer: authorizer, isRunning: { _ in true })
+
+    #expect(throws: BrowserAutomationError.invalidURL("an absolute http or https URL is required")) {
+        try browser.navigate(app: "Safari", url: "file:///tmp/private")
+    }
+    #expect(authorizer.requests.isEmpty)
+}
+
 private final class AppleEventAuthorizerStub: AppleEventAuthorizing {
     private var results: [OSStatus]
     var requests: [Bool] = []

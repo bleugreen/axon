@@ -1117,9 +1117,10 @@ The Swift daemon sends Safari and Google Chrome events directly through
 `NSAppleScript.executeAndReturnError`; it does not launch `osascript`. Before each browser operation,
 `BrowserAutomation.swift` calls `AEDeterminePermissionToAutomateTarget` for that browser's bundle
 identifier, first without prompting and then, only for a not-yet-determined grant, with prompting
-enabled. The sender remains `Axon.app/Contents/MacOS/Axon`, registered in launchd's `gui/<uid>`
-domain with `LimitLoadToSessionType=Aqua`. This bundle-keyed responsible process and the daemon
-bundle's `NSAppleEventsUsageDescription` are both required for the normal consent flow.
+enabled. The intended sender is `Axon.app/Contents/MacOS/Axon`, registered in launchd's `gui/<uid>`
+domain with `LimitLoadToSessionType=Aqua`; the daemon bundle also carries
+`NSAppleEventsUsageDescription`. The coordinated bglab-mac trial must still verify that this context
+presents the prompt and that macOS attributes and persists the grant as expected.
 
 Apple Events TCC evidence must be attributed by client bundle identifier, indirect target bundle
 identifier, and the code-signing requirement stored in the row. A path or PID alone is not identity.

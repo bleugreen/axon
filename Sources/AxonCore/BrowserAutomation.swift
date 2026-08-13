@@ -128,8 +128,8 @@ public final class AppleScriptBrowserAutomation: BrowserAutomationServing {
     }
 
     public func navigate(app: String, url: String) throws -> BrowserNavigationResult {
-        let browser = try resolve(app)
         let validatedURL = try Self.validatedURL(url)
+        let browser = try resolve(app)
         let tabExpression = browser == .safari ? "current tab of front window" : "active tab of front window"
         let source = """
         tell application id "\(browser.rawValue)"
