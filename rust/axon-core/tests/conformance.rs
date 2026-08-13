@@ -95,9 +95,19 @@ fn ambiguous_fact_is_not_established_for_a_later_requires_clause() {
         .unwrap();
 
     assert!(!result.success);
-    assert_eq!(dispatcher.dispatched, 1, "requires must fail before the later dispatch");
-    assert!(result.trace[0].error.as_deref().unwrap().contains("Ambiguous"));
-    assert!(result.trace[1].error.as_deref().unwrap().contains("Ambiguous"));
+    assert_eq!(
+        dispatcher.dispatched, 1,
+        "requires must fail before the later dispatch"
+    );
+    assert!(
+        result.trace[0]
+            .error
+            .as_deref()
+            .unwrap()
+            .contains("Ambiguous")
+    );
+    let require_error = result.trace[1].error.as_deref().unwrap();
+    assert!(require_error.contains("required fact is unavailable"), "{require_error}");
 }
 
 #[test]
@@ -868,7 +878,10 @@ fn transport_failure_cannot_be_rescued_by_a_verifying_postcondition() {
 
     assert!(!result.success);
     assert!(!result.trace[0].success);
-    assert_eq!(result.trace[0].error.as_deref(), Some("transport unavailable"));
+    assert_eq!(
+        result.trace[0].error.as_deref(),
+        Some("transport unavailable")
+    );
     assert_eq!(dispatcher.changed_cursor, 1);
 }
 
