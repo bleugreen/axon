@@ -33,15 +33,20 @@ pub fn format_snapshot(snapshot: &Snapshot, options: &LookDisplayOptions) -> Val
     } else { value }
 }
 
-pub fn format_child_page(capture: &crate::ChildPageCapture, rendered: &Snapshot, options: &LookDisplayOptions) -> Value {
+pub fn format_child_page(capture: &crate::ChildPageCapture, parent: &WireElementTarget, rendered: &Snapshot, options: &LookDisplayOptions) -> Value {
     let mut tree = format_snapshot(rendered, options);
     if options.format == LookFormat::Debug { tree = tree.get("observation").cloned().unwrap_or(Value::Null); }
+    let tree = tree.pointer("/app/windows/0/root/children")
+        .cloned()
+        .map(|children| serde_json::to_string(&children).expect("rendered children serialize"))
+        .unwrap_or_default();
     let next_offset = capture.total.and_then(|total| {
         let next = capture.offset.saturating_add(capture.children.len()); (next < total).then_some(next)
     });
     serde_json::json!({
+        "format": "children",
         "snapshot": capture.snapshot,
-        "parent": capture.parent,
+        "parent": parent,
         "offset": capture.offset,
         "limit": capture.limit,
         "total": capture.total,

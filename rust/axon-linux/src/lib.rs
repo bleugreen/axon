@@ -833,7 +833,7 @@ impl<B: PointerTargetVerifier + BackgroundPixelInput> Router<B> {
                 let mut parent=page.parent.clone(); parent.children=page.children.clone();
                 let snapshot=Snapshot { id:page.snapshot.clone(), app:axon_core::Application { name:target.app.clone(), process_id:context.process_id(), identifier:None, windows:vec![axon_core::Window{title:None,root:parent}] } };
                 let names=self.register_snapshot(&snapshot); let rendered=axon_core::render_semantic_names(&snapshot,&names);
-                self.snapshot=Some(snapshot); Ok(axon_core::format_child_page(&page,&rendered,&request.display))
+                self.snapshot=Some(snapshot); Ok(axon_core::format_child_page(&page,&target,&rendered,&request.display))
             }
             axon_core::LookMode::ChangeCheck { .. } => Err(rpc_error(-32602, "since change checks are unavailable on this backend")),
             axon_core::LookMode::FullApp { app, child_depth } => {

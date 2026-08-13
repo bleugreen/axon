@@ -775,11 +775,7 @@ impl UiaState {
         let cache = self.capture_cache_request()?;
         let capture_root = unsafe { capture_root.BuildUpdatedCache(&cache) }
             .map_err(|e| operation("cache capture root", e))?;
-        self.elements.clear();
-        let mut parent_count = 0;
-        let mut parent = self.capture_node(&parent_element, &cache, 0, 0, &mut parent_count)?;
-        parent.children.clear();
-        let mut count = 1;
+        let mut count = 0;
         let max_depth = bounds.child_depth.unwrap_or(MAX_DEPTH).min(MAX_DEPTH);
         let root = self.capture_node(&capture_root, &cache, 0, max_depth, &mut count)?;
         let title = unsafe { window.CurrentName() }.ok().map(|x| x.to_string());
