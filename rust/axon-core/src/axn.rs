@@ -794,7 +794,7 @@ impl<'a, D: ToolDispatcher> AxnRunner<'a, D> {
         } else {
             None
         };
-        let heal = (!heal_events.is_empty()).then(|| HealingSummary {
+        let heal = (!heal_events.is_empty()).then_some(HealingSummary {
             count: heal_events.len(),
             events: heal_events,
         });
@@ -930,12 +930,13 @@ fn substitute_map(
         }
     }
     for key in ["value", "text", "key"] {
-        if let Some(value) = out.get(key) {
-            if !value.is_string() && contains_reference(value) {
-                return Err(AxnError::Invalid(format!(
-                    "parameter references are only supported in string value fields: actions[{action_index}].{key}"
-                )));
-            }
+        if let Some(value) = out.get(key)
+            && !value.is_string()
+            && contains_reference(value)
+        {
+            return Err(AxnError::Invalid(format!(
+                "parameter references are only supported in string value fields: actions[{action_index}].{key}"
+            )));
         }
         if let Some(Value::String(s)) = out.get(key) {
             let (next, secret) = substitute_string(s, bindings)?;

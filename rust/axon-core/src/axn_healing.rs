@@ -335,7 +335,7 @@ mod tests {
             actions: vec![action()],
             flags: Map::new(),
         };
-        let revised = revise(&doc, &[proposed.clone()]);
+        let revised = revise(&doc, std::slice::from_ref(&proposed));
         assert_eq!(revised.actions[0].params["target"]["locator"], proposal);
         assert_eq!(
             revised.actions[0].params["target"]["recording"],
@@ -449,14 +449,13 @@ pub fn healing_event(
     }
     for item in &resolution.evidence {
         let Some(o) = item.as_object() else { continue };
-        if o.get("outcome").and_then(Value::as_str) == Some("unevaluated") {
-            if let Some((field, original)) = o
+        if o.get("outcome").and_then(Value::as_str) == Some("unevaluated")
+            && let Some((field, original)) = o
                 .get("field")
                 .and_then(Value::as_str)
                 .and_then(|f| recorded.get(f).map(|v| (f, v)))
-            {
-                proposal.insert(field.into(), original.clone());
-            }
+        {
+            proposal.insert(field.into(), original.clone());
         }
     }
     let proposal = Value::Object(proposal);
