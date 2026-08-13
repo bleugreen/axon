@@ -11,7 +11,8 @@ let package = Package(
         .executable(name: "axon", targets: ["AxonCLI"]),
         .executable(name: "AxonDaemonApp", targets: ["AxonDaemonApp"]),
         .executable(name: "AxonEditorApp", targets: ["AxonEditorApp"]),
-        .library(name: "AxonCore", targets: ["AxonCore"])
+        .library(name: "AxonCore", targets: ["AxonCore"]),
+        .executable(name: "tool-surface-exporter", targets: ["ToolSurfaceExporter"])
     ],
     dependencies: [
         .package(url: "https://github.com/jpsim/Yams.git", from: "6.0.1")
@@ -22,6 +23,10 @@ let package = Package(
             dependencies: [
                 .product(name: "Yams", package: "Yams")
             ]
+        ),
+        .executableTarget(
+            name: "ToolSurfaceExporter",
+            dependencies: ["AxonCore"]
         ),
         .executableTarget(
             name: "AxonCLI",
