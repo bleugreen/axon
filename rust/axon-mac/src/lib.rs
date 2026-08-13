@@ -589,6 +589,13 @@ impl<
                 {
                     return self.click_text_location(&location.clone(), policy);
                 }
+                if params.get("target").is_some_and(pointer_target_is_point) {
+                    return Err(capability_unavailable(
+                        "click",
+                        "point-target",
+                        "not-implemented",
+                    ));
+                }
                 let (handle, resolution) = self.resolve(params)?;
                 self.backend
                     .invoke(&handle, "AXPress")
@@ -601,8 +608,7 @@ impl<
             }
             "type" => {
                 let (handle, resolution) = self.resolve(params)?;
-                let value =
-                    required_str(params, "value").or_else(|_| required_str(params, "text"))?;
+                let value = required_str(params, "value")?;
                 // AXValue is target-bound and does not require global keyboard input.
                 self.backend
                     .set_value(&handle, value)
@@ -667,11 +673,8 @@ impl<
                 )
             }
             "invoke" => {
+                let action = required_str(params, "name")?;
                 let (handle, resolution) = self.resolve(params)?;
-                let action = params
-                    .get("action")
-                    .and_then(Value::as_str)
-                    .unwrap_or("AXPress");
                 self.backend
                     .invoke(&handle, action)
                     .map_err(backend_error)?;
@@ -682,15 +685,33 @@ impl<
                 ))
             }
             "scroll" => {
-                let (handle, resolution) = self.resolve(params)?;
-                let dx = params.get("deltaX").and_then(Value::as_f64).unwrap_or(0.0);
-                let dy = params.get("deltaY").and_then(Value::as_f64).unwrap_or(0.0);
+                // These defaults mirror the generated public schema. Any amount or directional
+                // request is unsupported by AXScrollToVisible and must be refused before target
+                // resolution can capture an application or call another native API.
+                let dx = number_param(params, "deltaX", 0.0)?;
+                let dy = number_param(params, "deltaY", -120.0)?;
                 if dx != 0.0 || dy != 0.0 {
-                    return Err(rpc_error(
-                        -32004,
-                        "directional or amount scrolling has no semantic AX implementation in v1",
+                    return Err(capability_unavailable(
+                        "scroll",
+                        "directional-scroll",
+                        "not-implemented",
                     ));
                 }
+                let Some(target) = params.get("target") else {
+                    return Err(capability_unavailable(
+                        "scroll",
+                        "semantic-target",
+                        "not-implemented",
+                    ));
+                };
+                if pointer_target_is_point(target) || target.get("location").is_some() {
+                    return Err(capability_unavailable(
+                        "scroll",
+                        "non-semantic-target",
+                        "not-implemented",
+                    ));
+                }
+                let (handle, resolution) = self.resolve(params)?;
                 self.backend
                     .scroll(&handle, (dx, dy))
                     .map_err(backend_error)?;
@@ -1188,7 +1209,7 @@ impl<
             10,
             timeout.as_millis().max(100) as u64,
         )?;
-        let stable_for = bounded_ms(params, "stableMs", 500, 0, 60_000)?;
+        let stable_for = bounded_ms(params, "stableMs", 300, 0, 10_000)?;
         let condition = params
             .get("condition")
             .and_then(Value::as_str)
@@ -1497,6 +1518,24 @@ fn required_str<'a>(p: &'a Map<String, Value>, key: &str) -> Result<&'a str, Jso
     p.get(key)
         .and_then(Value::as_str)
         .ok_or_else(|| rpc_error(-32602, format!("missing string parameter {key}")))
+}
+
+fn number_param(
+    params: &Map<String, Value>,
+    key: &str,
+    default: f64,
+) -> Result<f64, JsonRpcError> {
+    match params.get(key) {
+        None => Ok(default),
+        Some(value) => value
+            .as_f64()
+            .ok_or_else(|| rpc_error(-32602, format!("{key} must be a number"))),
+    }
+}
+
+fn pointer_target_is_point(target: &Value) -> bool {
+    target.get("point").is_some()
+        || (target.get("x").is_some() && target.get("y").is_some())
 }
 /// Stamps the four stable delivery fields onto an action result.
 fn delivered(mut result: Value, policy: DeliveryPolicy, rung: DeliveryRung) -> Value {

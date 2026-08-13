@@ -452,6 +452,23 @@ mod tests {
         assert_eq!(response["error"]["data"]["path"], "params.arguments.bogus");
     }
     #[test]
+    fn facade_rejects_schema_excluded_scroll_without_contacting_daemon() {
+        let mut contacted = false;
+        let response = mcp_response_with_request(
+            &json!({"jsonrpc":"2.0","id":11,"method":"tools/call","params":{"name":"scroll","arguments":{"target":{"app":"App","name":"List"},"deltaY":-120}}}),
+            |_| {
+                contacted = true;
+                unreachable!("schema-excluded tools must not reach the daemon")
+            },
+        )
+        .unwrap()
+        .unwrap();
+
+        assert!(!contacted);
+        assert_eq!(response["error"]["code"], -32602);
+        assert_eq!(response["error"]["data"]["path"], "params.name");
+    }
+    #[test]
     fn facade_rejects_malformed_call_params_with_the_offending_key() {
         let response = mcp_response_with_request(
             &json!({"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":3}}),
