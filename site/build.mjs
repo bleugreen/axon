@@ -131,7 +131,7 @@ function page({ title, description, body, docsPage = false, docsSlug }) {
 function home(version) {
   const guarantees = [
     ['01', 'Semantic targets', 'Address a button by its role, label, window, and surrounding context.'],
-    ['02', 'Same interface everywhere', 'Use the same small tool surface on macOS, Windows, and Linux. One interface works the same on every OS.'],
+    ['02', 'Same interface everywhere', 'The same small tool surface works on macOS, Windows, and Linux.'],
     ['03', 'Replayable work', 'Save sessions as plain-text .axn files. Read them, edit them, share them, and run them again.'],
   ];
   return page({
