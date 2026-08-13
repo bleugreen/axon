@@ -85,6 +85,10 @@ pub struct Node {
     pub frame: Option<Rect>,
     #[serde(default)]
     pub editable: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub focused: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enabled: Option<bool>,
     #[serde(default)]
     pub children: Vec<Node>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
