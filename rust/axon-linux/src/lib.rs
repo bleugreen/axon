@@ -838,7 +838,7 @@ impl<B: PointerTargetVerifier + BackgroundPixelInput> Router<B> {
             axon_core::LookMode::ChangeCheck { .. } => Err(rpc_error(-32602, "since change checks are unavailable on this backend")),
             axon_core::LookMode::FullApp { app, child_depth } => {
                 if request.screen_text {
-                    return Err(capability_unavailable("look", "screenText", "not-implemented"));
+                    return Err(rpc_error(-32602, "screenText is unavailable on this backend"));
                 }
                 let snapshot=self.backend.capture_bounded(&app,axon_core::CaptureBounds{child_depth}).map_err(backend_error)?;
                 let names=self.register_snapshot(&snapshot); let rendered=axon_core::render_semantic_names(&snapshot,&names);
