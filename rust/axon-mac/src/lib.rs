@@ -1286,17 +1286,16 @@ impl<
             .cloned()
             .unwrap_or_default();
         observed.insert("exists".into(), Value::Bool(true));
-        if matches!(axon_core::expected_fact_kind(fact)?, "value" | "selected") {
-            if let Some(value) = self
+        if matches!(axon_core::expected_fact_kind(fact)?, "value" | "selected")
+            && let Some(value) = self
                 .backend
                 .read_value(&handle)
                 .map_err(|error| error.to_string())?
-            {
-                observed.insert(
-                    axon_core::expected_fact_kind(fact)?.into(),
-                    Value::String(value),
-                );
-            }
+        {
+            observed.insert(
+                axon_core::expected_fact_kind(fact)?.into(),
+                Value::String(value),
+            );
         }
         axon_core::verify_expected_fact_state(fact, &observed)
     }
