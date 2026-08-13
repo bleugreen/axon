@@ -56,6 +56,8 @@ import Testing
     #expect(tool(named: "wait_for_value", in: tools)?["inputSchema"]?["properties"]?["target"]?["anyOf"]?[0]?["type"] == .string("object"))
     #expect(tool(named: "wait_for_value", in: tools)?["inputSchema"]?["properties"]?["target"]?["anyOf"]?[0]?["additionalProperties"] == .bool(false))
 }
+
+@Test func mcpLookChildrenReturnsOnlyRequestedChildListObservation() {
     let handler = MCPRecordingCommandHandler(result: [
         "children": .object([
             "snapshot": .string("s12"),
