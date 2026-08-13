@@ -1,6 +1,7 @@
 use crate::{
     BackgroundPixelPointer, PixelDispatch, PixelDispatchError, PixelPlan, PixelTarget,
-    PointerTargetVerifier, VisualObservation, VisualObservationProvider,
+    PointerTargetVerifier, ScrollDispatch, VisualObservation, VisualObservationProvider,
+    WindowsScrollProvider,
 };
 use axon_core::{
     AppQuery, Application, BackendError, Capability, CapabilityInfo, CaptureBounds,
@@ -36,17 +37,19 @@ use windows::{
                 IUIAutomationEventHandler, IUIAutomationEventHandler_Impl,
                 IUIAutomationFocusChangedEventHandler, IUIAutomationFocusChangedEventHandler_Impl,
                 IUIAutomationInvokePattern, IUIAutomationScrollItemPattern,
-                IUIAutomationStructureChangedEventHandler,
+                IUIAutomationScrollPattern, IUIAutomationStructureChangedEventHandler,
                 IUIAutomationStructureChangedEventHandler_Impl, IUIAutomationValuePattern,
-                StructureChangeType, TreeScope_Children, TreeScope_Descendants, TreeScope_Element,
-                UIA_AutomationIdPropertyId, UIA_BoundingRectanglePropertyId,
-                UIA_ButtonControlTypeId, UIA_CheckBoxControlTypeId, UIA_ComboBoxControlTypeId,
-                UIA_ControlTypePropertyId, UIA_CustomControlTypeId, UIA_DocumentControlTypeId,
-                UIA_EditControlTypeId, UIA_GroupControlTypeId, UIA_HyperlinkControlTypeId,
-                UIA_ImageControlTypeId, UIA_InvokePatternId, UIA_ListControlTypeId,
-                UIA_ListItemControlTypeId, UIA_MenuControlTypeId, UIA_MenuItemControlTypeId,
-                UIA_NamePropertyId, UIA_PaneControlTypeId, UIA_ProgressBarControlTypeId,
-                UIA_RadioButtonControlTypeId, UIA_ScrollBarControlTypeId, UIA_ScrollItemPatternId,
+                ScrollAmount, ScrollAmount_NoAmount, ScrollAmount_SmallDecrement,
+                ScrollAmount_SmallIncrement, StructureChangeType, TreeScope_Children,
+                TreeScope_Descendants, TreeScope_Element, UIA_AutomationIdPropertyId,
+                UIA_BoundingRectanglePropertyId, UIA_ButtonControlTypeId,
+                UIA_CheckBoxControlTypeId, UIA_ComboBoxControlTypeId, UIA_ControlTypePropertyId,
+                UIA_CustomControlTypeId, UIA_DocumentControlTypeId, UIA_EditControlTypeId,
+                UIA_GroupControlTypeId, UIA_HyperlinkControlTypeId, UIA_ImageControlTypeId,
+                UIA_InvokePatternId, UIA_ListControlTypeId, UIA_ListItemControlTypeId,
+                UIA_MenuControlTypeId, UIA_MenuItemControlTypeId, UIA_NamePropertyId,
+                UIA_PaneControlTypeId, UIA_ProgressBarControlTypeId, UIA_RadioButtonControlTypeId,
+                UIA_ScrollBarControlTypeId, UIA_ScrollItemPatternId, UIA_ScrollPatternId,
                 UIA_SliderControlTypeId, UIA_TabControlTypeId, UIA_TabItemControlTypeId,
                 UIA_Text_TextChangedEventId, UIA_TextControlTypeId, UIA_ThumbControlTypeId,
                 UIA_ToolBarControlTypeId, UIA_ToolTipControlTypeId, UIA_TreeControlTypeId,
@@ -78,6 +81,35 @@ fn child_page_range(total: usize, offset: usize, limit: Option<usize>) -> (usize
         .saturating_add(requested.min(MAX_NODES.saturating_sub(1)))
         .min(total);
     (start, end)
+}
+
+fn scroll_amount(delta: f64) -> ScrollAmount {
+    if delta < 0.0 {
+        ScrollAmount_SmallIncrement
+    } else if delta > 0.0 {
+        ScrollAmount_SmallDecrement
+    } else {
+        ScrollAmount_NoAmount
+    }
+}
+
+fn scroll_steps(delta: (f64, f64)) -> (usize, usize) {
+    let steps = |amount: f64| {
+        if amount == 0.0 {
+            0
+        } else {
+            (amount.abs() / 120.0).ceil().clamp(1.0, 100.0) as usize
+        }
+    };
+    (steps(delta.0), steps(delta.1))
+}
+
+fn scroll_position(pattern: &IUIAutomationScrollPattern) -> Result<(f64, f64), BackendError> {
+    let horizontal = unsafe { pattern.CurrentHorizontalScrollPercent() }
+        .map_err(|e| operation("read horizontal scroll percent", e))?;
+    let vertical = unsafe { pattern.CurrentVerticalScrollPercent() }
+        .map_err(|e| operation("read vertical scroll percent", e))?;
+    Ok((horizontal, vertical))
 }
 
 enum Command {
@@ -120,7 +152,11 @@ enum Command {
         mpsc::Sender<Result<(), BackendError>>,
     ),
     Focus(SnapshotHandle, mpsc::Sender<Result<(), BackendError>>),
-    Scroll(SnapshotHandle, mpsc::Sender<Result<(), BackendError>>),
+    Scroll(
+        SnapshotHandle,
+        (f64, f64),
+        mpsc::Sender<Result<ScrollDispatch, BackendError>>,
+    ),
     Hit((f64, f64), mpsc::Sender<Result<Option<Node>, BackendError>>),
     VerifyPointerTarget(
         SnapshotHandle,
@@ -193,7 +229,7 @@ fn normalize_virtual_desktop_point(
 
 #[cfg(test)]
 mod tests {
-    use super::{child_page_range, normalize_virtual_desktop_point};
+    use super::{child_page_range, normalize_virtual_desktop_point, scroll_steps};
 
     #[test]
     fn virtual_desktop_normalization_accounts_for_negative_origin_and_endpoints() {
@@ -236,6 +272,13 @@ mod tests {
             child_page_range(super::MAX_NODES + 10, 0, None),
             (0, super::MAX_NODES - 1)
         );
+    }
+
+    #[test]
+    fn delta_magnitude_becomes_bounded_semantic_scroll_steps() {
+        assert_eq!(scroll_steps((0.0, -120.0)), (0, 1));
+        assert_eq!(scroll_steps((240.0, -121.0)), (2, 2));
+        assert_eq!(scroll_steps((0.0, -100_000.0)), (0, 100));
     }
 }
 
@@ -556,13 +599,8 @@ impl UiaState {
                         unsafe { e.SetFocus() }.map_err(|e| operation("set focus", e))
                     }));
             }
-            Command::Scroll(h, tx) => {
-                let _ = tx.send(self.element(&h).and_then(|e| {
-                    let p: IUIAutomationScrollItemPattern =
-                        unsafe { e.GetCurrentPatternAs(UIA_ScrollItemPatternId) }
-                            .map_err(|e| operation("get ScrollItemPattern", e))?;
-                    unsafe { p.ScrollIntoView() }.map_err(|e| operation("scroll into view", e))
-                }));
+            Command::Scroll(h, delta, tx) => {
+                let _ = tx.send(self.element(&h).and_then(|e| self.scroll_element(e, delta)));
             }
             Command::PlanPixelClick(handle, point, tx) => {
                 let _ = tx.send(self.plan_pixel_click(&handle, point));
@@ -581,6 +619,74 @@ impl UiaState {
     ///
     /// One walk shared by every check that has to answer "is what is at this point still the thing
     /// we resolved": the OCR frame check, and the pixel rung's revalidation.
+    fn scroll_element(
+        &self,
+        element: IUIAutomationElement,
+        delta: (f64, f64),
+    ) -> Result<ScrollDispatch, BackendError> {
+        if delta == (0.0, 0.0) {
+            let pattern: IUIAutomationScrollItemPattern =
+                unsafe { element.GetCurrentPatternAs(UIA_ScrollItemPatternId) }
+                    .map_err(|e| operation("get ScrollItemPattern", e))?;
+            unsafe { pattern.ScrollIntoView() }.map_err(|e| operation("scroll into view", e))?;
+            return Ok(ScrollDispatch {
+                mechanism: "UIA ScrollItemPattern.ScrollIntoView",
+                verification: serde_json::json!({
+                    "verified": false,
+                    "reason": "bring-into-view has no readable target-position postcondition"
+                }),
+            });
+        }
+
+        let walker = unsafe { self.automation.ControlViewWalker() }
+            .map_err(|e| operation("get UIA control walker", e))?;
+        let mut current = Some(element);
+        for _ in 0..pixel::MAX_ANCESTRY {
+            let candidate = current.take().expect("scroll ancestor exists");
+            if let Ok(pattern) = unsafe {
+                candidate.GetCurrentPatternAs::<IUIAutomationScrollPattern>(UIA_ScrollPatternId)
+            } {
+                let horizontal = unsafe { pattern.CurrentHorizontallyScrollable() }
+                    .map(bool::from)
+                    .unwrap_or(false);
+                let vertical = unsafe { pattern.CurrentVerticallyScrollable() }
+                    .map(bool::from)
+                    .unwrap_or(false);
+                if (delta.0 == 0.0 || horizontal) && (delta.1 == 0.0 || vertical) {
+                    let before = scroll_position(&pattern)?;
+                    let (horizontal_steps, vertical_steps) = scroll_steps(delta);
+                    for _ in 0..horizontal_steps {
+                        unsafe { pattern.Scroll(scroll_amount(delta.0), ScrollAmount_NoAmount) }
+                            .map_err(|e| operation("scroll horizontally with ScrollPattern", e))?;
+                    }
+                    for _ in 0..vertical_steps {
+                        unsafe { pattern.Scroll(ScrollAmount_NoAmount, scroll_amount(delta.1)) }
+                            .map_err(|e| operation("scroll vertically with ScrollPattern", e))?;
+                    }
+                    let after = scroll_position(&pattern)?;
+                    let changed = before != after;
+                    return Ok(ScrollDispatch {
+                        mechanism: "UIA ScrollPattern.Scroll",
+                        verification: serde_json::json!({
+                            "verified": changed,
+                            "reason": (!changed).then_some("the scroll position did not change"),
+                            "before": {"horizontalPercent": before.0, "verticalPercent": before.1},
+                            "after": {"horizontalPercent": after.0, "verticalPercent": after.1}
+                        }),
+                    });
+                }
+            }
+            current = unsafe { walker.GetParentElement(&candidate) }.ok();
+            if current.is_none() {
+                break;
+            }
+        }
+        Err(cap(
+            Capability::Scroll,
+            "no scrollable UI Automation ancestor supports every requested delta axis",
+        ))
+    }
+
     fn contains(
         &self,
         ancestor: &IUIAutomationElement,
@@ -1138,7 +1244,8 @@ impl PlatformBackend for WindowsBackend {
         self.call(|tx| Command::Focus(h.clone(), tx))
     }
     fn scroll(&mut self, h: &SnapshotHandle, _: (f64, f64)) -> Result<(), BackendError> {
-        self.call(|tx| Command::Scroll(h.clone(), tx))
+        self.call(|tx| Command::Scroll(h.clone(), (0.0, 0.0), tx))
+            .map(|_| ())
     }
     fn pointer_click(&mut self, p: (f64, f64)) -> Result<(), BackendError> {
         send_click(p)
@@ -2172,5 +2279,15 @@ mod msaa {
                 release(out);
             }
         }
+    }
+}
+
+impl WindowsScrollProvider for WindowsBackend {
+    fn scroll_windows(
+        &mut self,
+        h: &SnapshotHandle,
+        delta: (f64, f64),
+    ) -> Result<ScrollDispatch, BackendError> {
+        self.call(|tx| Command::Scroll(h.clone(), delta, tx))
     }
 }
