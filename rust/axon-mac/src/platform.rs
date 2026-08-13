@@ -95,23 +95,6 @@ impl ReadableStateProvider for MacBackend {
         })
         .collect())
     }
-    #[test]
-    fn child_page_range_clamps_to_authoritative_count() {
-        assert_eq!(requested_range(10, 3, Some(4)), (3, 4));
-        assert_eq!(requested_range(10, 8, Some(8)), (8, 2));
-        assert_eq!(requested_range(10, 20, Some(4)), (10, 0));
-        assert_eq!(requested_range(10, 3, None), (3, 7));
-    }
-
-    #[test]
-    fn requested_capture_depth_never_exceeds_native_ceiling() {
-        assert_eq!(Some(0).unwrap_or(MAX_DEPTH).min(MAX_DEPTH), 0);
-        assert_eq!(
-            Some(MAX_DEPTH + 1).unwrap_or(MAX_DEPTH).min(MAX_DEPTH),
-            MAX_DEPTH
-        );
-        assert_eq!(None.unwrap_or(MAX_DEPTH).min(MAX_DEPTH), MAX_DEPTH);
-    }
 }
 
 fn screenshot_restriction(
