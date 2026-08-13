@@ -631,7 +631,7 @@ function Invoke-ProbeStage {
             $edge = Start-Process -FilePath $edgeCommand.Source -ArgumentList @(
                 '--new-window',
                 '--no-first-run',
-                'data:text/html,<main><h1>Axon paging probe</h1><button>One</button><button>Two</button><button>Three</button></main>'
+                'data:text/html,<main><h1>Axon paging and scroll probe</h1><button>One</button><button>Two</button><button>Three</button><div style="height:4000px"></div><p>Bottom</p></main>'
             ) -PassThru
             Wait-Tick
             Wait-Tick
@@ -684,6 +684,44 @@ function Invoke-ProbeStage {
         if ([string]::IsNullOrWhiteSpace($parentName)) {
             throw 'the Edge window root did not expose a reusable semantic name'
         }
+
+        # A large delta deterministically reaches the bottom while still exercising the same bounded
+        # ScrollPattern increments as ordinary wheel-sized requests. Position readback is the action's
+        # postcondition: the first request must move, while repeating it at the edge must remain a
+        # dispatch-only result rather than claiming goal success.
+        $scrollArguments = @{
+            target = @{ app = $verified.app; name = $parentName }
+            deltaY = -100000
+        }
+        $scrollRequest = @{
+            jsonrpc = '2.0'
+            id = 90
+            method = 'tools/call'
+            params = @{ name = 'scroll'; arguments = $scrollArguments }
+        } | ConvertTo-Json -Compress -Depth 10
+        $moved = Invoke-AxonMcp -Request $scrollRequest
+        $movedAction = $moved.result.structuredContent
+        if ($moved.result.isError -ne $false -or
+            $movedAction.dispatch.mechanism -ne 'UIA ScrollPattern.Scroll' -or
+            $movedAction.success -ne $true -or
+            $movedAction.verification.verified -ne $true -or
+            $movedAction.verification.before.verticalPercent -eq $movedAction.verification.after.verticalPercent) {
+            throw "Edge delta scroll did not produce verified ScrollPattern movement: $($moved | ConvertTo-Json -Compress -Depth 20)"
+        }
+        Write-Note "Edge delta scroll response=$($movedAction | ConvertTo-Json -Compress -Depth 20)"
+
+        $unchanged = Invoke-AxonMcp -Request $scrollRequest
+        $unchangedAction = $unchanged.result.structuredContent
+        if ($unchanged.result.isError -ne $false -or
+            $unchangedAction.dispatch.mechanism -ne 'UIA ScrollPattern.Scroll' -or
+            $unchangedAction.dispatch.success -ne $true -or
+            $unchangedAction.success -ne $false -or
+            $unchangedAction.verification.verified -ne $false -or
+            $unchangedAction.verification.before.verticalPercent -ne $unchangedAction.verification.after.verticalPercent) {
+            throw "Edge unchanged-position scroll claimed goal success or lost dispatch evidence: $($unchanged | ConvertTo-Json -Compress -Depth 20)"
+        }
+        Write-Note "Edge unchanged-position response=$($unchangedAction | ConvertTo-Json -Compress -Depth 20)"
+
         $offset = 0
         $seen = 0
         $pageNumber = 0
