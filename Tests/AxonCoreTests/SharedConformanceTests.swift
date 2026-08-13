@@ -2,6 +2,21 @@ import Foundation
 import Testing
 @testable import AxonCore
 
+@Test func sharedLookApplicationsEnvelopeIsByteExact() throws {
+    let fixtureURL = URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent()
+        .appendingPathComponent("../../schema/fixtures/look-applications-envelope.json")
+        .standardizedFileURL
+    let expected = try String(contentsOf: fixtureURL, encoding: .utf8)
+        .trimmingCharacters(in: .whitespacesAndNewlines)
+    let response = CommandRouter(listApps: { [] }).handle(JSONRPCRequest(
+        id: .string("apps"),
+        method: "look"
+    ))
+
+    #expect(response.result.map(JSONValue.object)?.compactJSONString == expected)
+}
+
 @Test func sharedMCPObservationEnvelopeIsByteExact() throws {
     let fixtureURL = URL(fileURLWithPath: #filePath)
         .deletingLastPathComponent()

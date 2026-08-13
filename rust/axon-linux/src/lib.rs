@@ -79,6 +79,10 @@ pub struct Router<B> {
     semantic_names: SemanticNameRegistry,
 }
 
+fn application_enumeration<T: serde::Serialize>(apps: Vec<T>) -> Value {
+    json!({"apps": apps})
+}
+
 /// Replay targets may carry recording-only locator evidence. Native tool decoding receives only
 /// the primitive semantic target; the shared runner remains responsible for registering the
 /// attached locator before crossing this boundary.
@@ -804,12 +808,11 @@ impl<B: PointerTargetVerifier + BackgroundPixelInput> Router<B> {
 
     fn look(&mut self, params: &Map<String, Value>) -> Result<Value, JsonRpcError> {
         if params.get("app").is_none() {
-            return serde_json::to_value(
+            return Ok(application_enumeration(
                 self.backend
                     .enumerate_applications()
                     .map_err(backend_error)?,
-            )
-            .map_err(internal_error);
+            ));
         }
         let app = app_query(params);
         let snapshot = self.backend.capture(&app).map_err(backend_error)?;
@@ -1524,6 +1527,24 @@ mod tests {
     }
     fn request(method: &str, params: Value) -> JsonRpcRequest {
         JsonRpcRequest::new(Some(JsonRpcId::Integer(1)), method, Some(params))
+    }
+
+    #[test]
+    fn look_application_enumeration_matches_shared_envelope() {
+        let mut router = Router::new(backend(vec![], None));
+        let response = router.request(request("look", json!({}))).unwrap();
+        let JsonRpcResponse::Success(success) = response else {
+            panic!("look application enumeration must succeed")
+        };
+        let expected =
+            include_str!("../../../schema/fixtures/look-applications-envelope.json").trim();
+        assert_eq!(serde_json::to_string(&success.result).unwrap(), expected);
+        let mcp = axon_core::mcp_tool_result(success.result, false);
+        assert!(mcp["structuredContent"].is_object());
+        assert_eq!(
+            serde_json::to_string(&mcp["structuredContent"]).unwrap(),
+            expected
+        );
     }
 
     #[test]
