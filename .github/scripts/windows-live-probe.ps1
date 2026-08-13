@@ -685,6 +685,42 @@ function Invoke-ProbeStage {
             throw 'the Edge window root did not expose a reusable semantic name'
         }
 
+        $offset = 0
+        $seen = 0
+        $pageNumber = 0
+        do {
+            $pageNumber += 1
+            $pageRequest = @{
+                jsonrpc = '2.0'
+                id = 100 + $pageNumber
+                method = 'tools/call'
+                params = @{
+                    name = 'look'
+                    arguments = @{
+                        target = @{ app = $verified.app; name = $parentName }
+                        offset = $offset
+                        limit = 1
+                        direct = $true
+                    }
+                }
+            } | ConvertTo-Json -Compress -Depth 10
+            $page = Invoke-AxonMcp -Request $pageRequest
+            if ($page.result.isError -ne $false) { throw "Edge child page $pageNumber failed" }
+            $children = $page.result.structuredContent.children
+            $payloadBytes = [Text.Encoding]::UTF8.GetByteCount(($page | ConvertTo-Json -Compress -Depth 100))
+            Write-Note "Edge paging page=$pageNumber offset=$($children.offset) limit=$($children.limit) total=$($children.total) nextOffset=$($children.nextOffset) payloadBytes=$payloadBytes"
+            if ([int]$children.offset -ne [int]$offset -or [int]$children.limit -gt 1) {
+                throw "Edge child page $pageNumber did not honor offset/limit: requested offset=$offset limit=1; returned offset=$($children.offset) limit=$($children.limit)"
+            }
+            $next = $children.nextOffset
+            if ($null -ne $next -and $next -le $offset) { throw 'Edge paging did not advance' }
+            $seen += [Math]::Min([int]$children.limit, [Math]::Max(0, [int]$children.total - $offset))
+            $offset = $next
+        } while ($null -ne $offset)
+        if ($seen -ne [int]$children.total) {
+            throw "Edge paging covered $seen children but reported total $($children.total)"
+        }
+
         # A large delta deterministically reaches the bottom while still exercising the same bounded
         # ScrollPattern increments as ordinary wheel-sized requests. Position readback is the action's
         # postcondition: the first request must move, while repeating it at the edge must remain a
@@ -722,41 +758,6 @@ function Invoke-ProbeStage {
         }
         Write-Note "Edge unchanged-position response=$($unchangedAction | ConvertTo-Json -Compress -Depth 20)"
 
-        $offset = 0
-        $seen = 0
-        $pageNumber = 0
-        do {
-            $pageNumber += 1
-            $pageRequest = @{
-                jsonrpc = '2.0'
-                id = 100 + $pageNumber
-                method = 'tools/call'
-                params = @{
-                    name = 'look'
-                    arguments = @{
-                        target = @{ app = $verified.app; name = $parentName }
-                        offset = $offset
-                        limit = 1
-                        direct = $true
-                    }
-                }
-            } | ConvertTo-Json -Compress -Depth 10
-            $page = Invoke-AxonMcp -Request $pageRequest
-            if ($page.result.isError -ne $false) { throw "Edge child page $pageNumber failed" }
-            $children = $page.result.structuredContent.children
-            $payloadBytes = [Text.Encoding]::UTF8.GetByteCount(($page | ConvertTo-Json -Compress -Depth 100))
-            Write-Note "Edge paging page=$pageNumber offset=$($children.offset) limit=$($children.limit) total=$($children.total) nextOffset=$($children.nextOffset) payloadBytes=$payloadBytes"
-            if ([int]$children.offset -ne [int]$offset -or [int]$children.limit -gt 1) {
-                throw "Edge child page $pageNumber did not honor offset/limit: requested offset=$offset limit=1; returned offset=$($children.offset) limit=$($children.limit)"
-            }
-            $next = $children.nextOffset
-            if ($null -ne $next -and $next -le $offset) { throw 'Edge paging did not advance' }
-            $seen += [Math]::Min([int]$children.limit, [Math]::Max(0, [int]$children.total - $offset))
-            $offset = $next
-        } while ($null -ne $offset)
-        if ($seen -ne [int]$children.total) {
-            throw "Edge paging covered $seen children but reported total $($children.total)"
-        }
     }
     catch {
         # Held rather than propagated, because a throw from the `finally` below would supersede it.
