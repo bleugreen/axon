@@ -20,6 +20,12 @@ import Testing
     let look = ToolSurfaceSpec.tools.first { $0.name == "look" }
     #expect(look?.params.first { $0.name == "screenshot" }?.defaultValue == .bool(true))
     #expect(tool(named: "look", in: tools)?["inputSchema"]?["properties"]?["screenshot"]?["default"] == .bool(true))
+    #expect(tool(named: "look", in: tools)?["inputSchema"]?["properties"]?["format"]?["enum"] == .array([
+        .string("observation"), .string("debug")
+    ]))
+    for name in ["offset", "limit", "childDepth", "depth"] {
+        #expect(tool(named: "look", in: tools)?["inputSchema"]?["properties"]?[name]?["minimum"] == .int(0))
+    }
     #expect(tool(named: "keyboard", in: tools)?["inputSchema"]?["additionalProperties"] == .bool(false))
 }
 

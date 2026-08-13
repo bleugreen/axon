@@ -23,6 +23,20 @@ fn internal(message: &str) -> JsonRpcError {
         message: "Internal error: invalid embedded tool surface artifact".into(),
         data: Some(json!({"reason": message})),
     }
+    if let (Some(minimum), Some(number)) = (
+        schema.get("minimum").and_then(Value::as_f64),
+        value.as_f64(),
+    ) && number < minimum {
+        return Err(invalid(path, &format!("must be at least {minimum}"), expected));
+    }
+    if let Some(minimum) = object.get("minimum") {
+        if !minimum.is_number() {
+            return Err(format!("{path}.minimum must be a number"));
+        }
+        if !matches!(object.get("type").and_then(Value::as_str), Some("integer" | "number")) {
+            return Err(format!("{path}.minimum requires a numeric type"));
+        }
+    }
 }
 
 impl ToolBackend {
@@ -258,6 +272,7 @@ fn check_schema_vocabulary(schema: &Value, path: &str) -> Result<(), String> {
         "oneOf",
         "items",
         "enum",
+        "minimum",
     ];
     for key in object.keys() {
         if !ALLOWED.contains(&key.as_str()) {

@@ -2,6 +2,29 @@ import Foundation
 import Testing
 @testable import AxonCore
 
+private struct SharedLookRequestControls: Decodable {
+    struct Format: Decodable {
+        let acceptedValues: [String]
+    }
+    let format: Format
+    let nonnegative: [String]
+}
+
+@Test func sharedLookRequestControlsMatchGeneratedSchema() throws {
+    let fixtureURL = URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent()
+        .appendingPathComponent("../../schema/fixtures/look-request-controls.json")
+        .standardizedFileURL
+    let fixture = try JSONDecoder().decode(SharedLookRequestControls.self, from: Data(contentsOf: fixtureURL))
+    let look = try #require(ToolSurfaceSchema.mcpToolJSONValues().first { $0["name"] == .string("look") })
+    let properties = try #require(look["inputSchema"]?["properties"])
+
+    #expect(properties["format"]?["enum"] == .array(fixture.format.acceptedValues.map(JSONValue.string)))
+    for name in fixture.nonnegative {
+        #expect(properties[name]?["minimum"] == .int(0), Comment(rawValue: name))
+    }
+}
+
 @Test func sharedLookApplicationsEnvelopeIsByteExact() throws {
     let fixtureURL = URL(fileURLWithPath: #filePath)
         .deletingLastPathComponent()

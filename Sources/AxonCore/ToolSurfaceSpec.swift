@@ -97,12 +97,16 @@ public struct ToolParameterSpec: Equatable, Sendable {
     public let required: Bool
     public let defaultValue: JSONValue?
     public let description: String
+    public let acceptedValues: [String]?
+    public let minimum: Int?
 
     public init(
         _ name: String,
         _ type: ToolParameterType,
         required: Bool = false,
         default defaultValue: JSONValue? = nil,
+        acceptedValues: [String]? = nil,
+        minimum: Int? = nil,
         description: String
     ) {
         self.name = name
@@ -110,6 +114,8 @@ public struct ToolParameterSpec: Equatable, Sendable {
         self.required = required
         self.defaultValue = defaultValue
         self.description = description
+        self.acceptedValues = acceptedValues
+        self.minimum = minimum
     }
 }
 
@@ -157,13 +163,13 @@ public enum ToolSurfaceSpec {
                 ToolParameterSpec("screenshot", .boolean, default: .bool(true), description: "Include a downscaled window screenshot with a full app observation. Defaults to true; since change checks and semantic-target child pages are always imageless."),
                 ToolParameterSpec("screenText", .boolean, default: .bool(false), description: "OCR visible text from the app window screenshot and include it as organized screenText. Defaults to false."),
                 ToolParameterSpec("tree", .boolean, description: "Include the nested AX tree for app observations. Defaults to true for observation format and false for debug format."),
-                ToolParameterSpec("offset", .integer, default: .int(0), description: "Zero-based child offset for a semantic target. Defaults to 0."),
-                ToolParameterSpec("limit", .integer, description: "Maximum children for a semantic target. Defaults to Axon's sibling page size."),
+                ToolParameterSpec("offset", .integer, default: .int(0), minimum: 0, description: "Zero-based, nonnegative child offset for a semantic target. Defaults to 0."),
+                ToolParameterSpec("limit", .integer, minimum: 0, description: "Nonnegative maximum children for a semantic target. Defaults to Axon's sibling page size; 0 requests all remaining children when all is true."),
                 ToolParameterSpec("direct", .boolean, default: .bool(false), description: "For semantic targets, return only direct children without recursively capturing descendants."),
-                ToolParameterSpec("childDepth", .integer, description: "Initial child depth for app observations. Use 0 to retain top-level windows only and page children by semantic target."),
-                ToolParameterSpec("depth", .integer, description: "Maximum tree depth to display for app observations, with windows at depth 0."),
+                ToolParameterSpec("childDepth", .integer, minimum: 0, description: "Nonnegative initial child depth for app observations. Use 0 to retain top-level windows only and page children by semantic target."),
+                ToolParameterSpec("depth", .integer, minimum: 0, description: "Nonnegative maximum tree depth to display for app observations, with windows at depth 0."),
                 ToolParameterSpec("all", .boolean, description: "For no-target app lists, include all running processes. For direct semantic child requests, include all direct children."),
-                ToolParameterSpec("format", .string, description: "Defaults to observation. Use debug only when diagnosing Axon internals."),
+                ToolParameterSpec("format", .string, acceptedValues: ["observation", "debug"], description: "Output format: observation or debug. Defaults to observation; use debug only when diagnosing Axon internals."),
                 ToolParameterSpec("frames", .boolean, default: .bool(false), description: "Include frames in observation output. Defaults to false.")
             ],
             cliUsage: "axon look [app | target-json] [--since snapshot-id] [--no-screenshot] [--screen-text] [--frames] [--json] [--details] [--debug] [--no-tree] [--offset n] [--limit n] [--depth n]"
@@ -409,7 +415,7 @@ public enum ToolSurfaceSchema {
     }
 
     private static func schema(for param: ToolParameterSpec) -> JSONValue {
-        let base: JSONValue
+        var base: JSONValue
         switch param.type {
         case .string: base = scalarSchema(type: "string", description: param.description)
         case .boolean: base = scalarSchema(type: "boolean", description: param.description)
@@ -426,6 +432,15 @@ public enum ToolSurfaceSchema {
             base = .object(["type": .string("object"), "description": .string(param.description),
                             "additionalProperties": .bool(true)])
         case let .target(kinds): base = targetSchema(kinds: kinds, description: param.description)
+        }
+        if case var .object(object) = base {
+            if let acceptedValues = param.acceptedValues {
+                object["enum"] = .array(acceptedValues.map(JSONValue.string))
+            }
+            if let minimum = param.minimum {
+                object["minimum"] = .int(minimum)
+            }
+            base = .object(object)
         }
         guard let defaultValue = param.defaultValue, case var .object(object) = base else { return base }
         object["default"] = defaultValue
