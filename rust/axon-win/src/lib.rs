@@ -2621,7 +2621,10 @@ mod tests {
         let mut router = Router::new(backend);
 
         for (method, params) in [
-            ("invoke", json!({"target": {"app": "App", "name": "root"}})),
+            (
+                "invoke",
+                json!({"target": {"app": "App", "name": "root"}, "name": "Invoke"}),
+            ),
             (
                 "type",
                 json!({"target": {"app": "App", "name": "root"}, "value": "after"}),
@@ -2687,6 +2690,7 @@ mod tests {
         let mut router = Router::new(backend);
         let actions = json!([{
             "tool": "invoke",
+            "name": "Invoke",
             "target": {"app": "App", "name": "missing", "locator": {"role": "definitely-missing"}}
         }]);
 

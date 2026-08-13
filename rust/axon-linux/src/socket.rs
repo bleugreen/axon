@@ -469,7 +469,7 @@ mod tests {
         assert_eq!(response["error"]["data"]["path"], "params.name");
         assert_eq!(
             response["error"]["message"],
-            "params.name: unknown or unavailable tool \"scroll\""
+            "Invalid params at params.name: unknown or unavailable tool \"scroll\""
         );
     }
     #[test]
