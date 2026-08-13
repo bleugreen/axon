@@ -128,11 +128,14 @@ pub fn backend_tools(backend: ToolBackend) -> Result<Vec<Value>, JsonRpcError> {
     Ok(tools
         .iter()
         .filter(|tool| available(tool, backend))
-        .filter_map(|tool| {
-            let mut entry = tool.as_object()?.clone();
+        .map(|tool| {
+            let mut entry = tool
+                .as_object()
+                .ok_or_else(|| internal("validated artifact contains a non-object tool"))?
+                .clone();
             entry.remove("availability");
             entry.remove("socketMethod");
-            Some(Value::Object(entry))
+            Ok(Value::Object(entry))
         })
         .collect())
 }
@@ -285,6 +288,8 @@ fn check_schema_vocabulary(schema: &Value, path: &str) -> Result<(), String> {
             if allowed[..index].contains(value) {
                 return Err(format!("{path}.enum contains duplicate values"));
             }
+            validate_value(schema, value, path)
+                .map_err(|error| format!("{path}.enum[{index}] is invalid: {}", error.message))?;
         }
     }
     let object_only = ["properties", "required", "additionalProperties"];
@@ -313,6 +318,9 @@ fn validate_value(schema: &Value, value: &Value, path: &str) -> Result<(), JsonR
     }
     if let Some(branches) = schema.get("anyOf").and_then(Value::as_array) {
         validate_branches(branches, value, path, false)?;
+    }
+    if let Some(branches) = schema.get("oneOf").and_then(Value::as_array) {
+        validate_branches(branches, value, path, true)?;
     }
     let expected = schema.get("type").and_then(Value::as_str);
     let type_matches = match expected {
@@ -383,9 +391,6 @@ fn validate_object(
                 validate_value(child_schema, child, &format!("{path}.{name}"))?;
             }
         }
-    }
-    if let Some(branches) = schema.get("oneOf").and_then(Value::as_array) {
-        validate_branches(branches, &Value::Object(object.clone()), path, true)?;
     }
     Ok(())
 }
