@@ -451,7 +451,9 @@ mod status {
 
 #[cfg(windows)]
 mod pipe {
-    use axon_core::{JsonRpcId, JsonRpcRequest};
+    use axon_core::{
+        JsonRpcId, JsonRpcRequest, ToolBackend, backend_tools, validate_tools_call,
+    };
     use axon_win::{Router, WindowsBackend, parse_request};
     use serde_json::{Value, json};
     use std::{
@@ -959,22 +961,19 @@ mod pipe {
         Ok(())
     }
     fn forward(input: &Value) -> io::Result<Value> {
-        let params = input
-            .get("params")
-            .and_then(Value::as_object)
-            .ok_or_else(|| {
-                io::Error::new(io::ErrorKind::InvalidInput, "tools/call requires params")
-            })?;
-        let name = params.get("name").and_then(Value::as_str).ok_or_else(|| {
-            io::Error::new(io::ErrorKind::InvalidInput, "tools/call requires name")
-        })?;
-        let arguments = params
-            .get("arguments")
-            .cloned()
-            .unwrap_or_else(|| json!({}));
-        let rpc = JsonRpcRequest::new(Some(JsonRpcId::Integer(1)), name, Some(arguments));
-        let response = send_rpc(&rpc)?;
         let id = input.get("id").cloned().unwrap_or(Value::Null);
+        let call = match validate_tools_call(ToolBackend::Windows, input.get("params").cloned()) {
+            Ok(call) => call,
+            Err(error) => {
+                return Ok(json!({"jsonrpc":"2.0","id":id,"error":error}));
+            }
+        };
+        let rpc = JsonRpcRequest::new(
+            Some(JsonRpcId::Integer(1)),
+            call.name,
+            Some(call.arguments),
+        );
+        let response = send_rpc(&rpc)?;
         if let Some(error) = response.get("error") {
             Ok(
                 json!({"jsonrpc":"2.0","id":id,"result":{"content":[{"type":"text","text":error.get("message").and_then(Value::as_str).unwrap_or("Axon error")}],"structuredContent":error,"isError":true}}),
@@ -988,12 +987,59 @@ mod pipe {
         json!({"jsonrpc":"2.0","id":id,"result":axon_core::mcp_tool_result(result, false)})
     }
     fn tool_list() -> Value {
-        Value::Array(["look","find","click","type","keyboard","invoke","scroll","run"].into_iter().map(|name|json!({"name":name,"description":format!("Axon Windows {name} tool"),"inputSchema":{"type":"object","additionalProperties":true}})).collect())
+        Value::Array(
+            backend_tools(ToolBackend::Windows)
+                .expect("embedded Windows tool surface must be valid"),
+        )
     }
 
     #[cfg(test)]
     mod facade_tests {
         use super::*;
+
+        #[test]
+        fn facade_lists_the_shared_windows_tools() {
+            let tools = tool_list();
+            let names = tools
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|tool| tool["name"].as_str().unwrap())
+                .collect::<Vec<_>>();
+            assert_eq!(
+                names,
+                ["look", "find", "run", "click", "type", "keyboard", "scroll", "invoke"]
+            );
+            assert_eq!(tools[0]["inputSchema"]["additionalProperties"], false);
+        }
+
+        #[test]
+        fn facade_rejects_precisely_malformed_calls() {
+            for (params, path) in [
+                (json!({"name": "type", "arguments": {
+                    "target": {"app": 42, "name": "Field"}, "value": "x"
+                }}), "params.arguments.target.app"),
+                (json!({"name": "click", "arguments": {
+                    "target": {"app": "Notes", "name": "Save", "bogus": true}
+                }}), "params.arguments.target.bogus"),
+                (json!({"name": "click", "arguments": {
+                    "app": "Notes", "name": "Save"
+                }}), "params.arguments.target"),
+                (json!({"name": "not-a-tool", "arguments": {}}), "params.name"),
+                (json!({"name": 7, "arguments": {}}), "params.name"),
+                (json!({"name": "look", "arguments": []}), "params.arguments"),
+            ] {
+                let call = json!({"jsonrpc": "2.0", "id": 7, "params": params});
+                let error = validate_tools_call(
+                    ToolBackend::Windows,
+                    call.get("params").cloned(),
+                )
+                .unwrap_err();
+                let response = json!({"jsonrpc":"2.0","id":call["id"],"error":error});
+                assert_eq!(response["error"]["code"], -32602);
+                assert_eq!(response["error"]["data"]["path"], path);
+            }
+        }
 
         #[test]
         fn facade_matches_shared_observation_envelope() {
