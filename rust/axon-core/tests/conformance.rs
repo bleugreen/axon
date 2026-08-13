@@ -717,10 +717,12 @@ fn expanded_swift_fixture_prepares_every_parameter_type_without_dispatch() {
         result.trace[1].result,
         Some(Value::String("<redacted: contains-secret>".into()))
     );
-    assert!(result
-        .trace
-        .iter()
-        .all(|entry| serde_json::to_string(entry).unwrap().find("fixture-secret").is_none()));
+    assert!(result.trace.iter().all(|entry| {
+        serde_json::to_string(entry)
+            .unwrap()
+            .find("fixture-secret")
+            .is_none()
+    }));
 }
 
 #[test]

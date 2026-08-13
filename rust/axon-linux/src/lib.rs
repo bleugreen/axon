@@ -2284,7 +2284,12 @@ mod tests {
             panic!("v1 replay unexpectedly succeeded")
         };
         assert_eq!(failure.error.code, -32602);
-        assert!(failure.error.message.contains("version 1 targets are obsolete"));
+        assert!(
+            failure
+                .error
+                .message
+                .contains("version 1 targets are obsolete")
+        );
     }
 
     /// The pixel rung's router half: which rung an action takes, what a refusal names, and what a
