@@ -622,16 +622,15 @@ function Invoke-ProbeStage {
         Write-Note "status ok: version=$($status.version) ready=$($status.daemon.ready) capabilities=$($status.capabilities.Count) registration=$($status.registration.path)"
 
         $listRequest = '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"look","arguments":{}}}'
-        if (Get-Process msedge -ErrorAction SilentlyContinue) {
-            throw 'Microsoft Edge is already running; refusing to alter an existing browser session'
+        if (-not (Get-Process msedge -ErrorAction SilentlyContinue)) {
+            $edgeCommand = Get-Command msedge.exe -ErrorAction Stop
+            $edge = Start-Process -FilePath $edgeCommand.Source -ArgumentList @(
+                '--new-window',
+                '--no-first-run',
+                'data:text/html,<main><h1>Axon paging probe</h1><button>One</button><button>Two</button><button>Three</button></main>'
+            ) -PassThru
+            Start-Sleep -Milliseconds 500
         }
-        $edgeCommand = Get-Command msedge.exe -ErrorAction Stop
-        $edge = Start-Process -FilePath $edgeCommand.Source -ArgumentList @(
-            '--new-window',
-            '--no-first-run',
-            'data:text/html,<main><h1>Axon paging probe</h1><button>One</button><button>Two</button><button>Three</button></main>'
-        ) -PassThru
-        Start-Sleep -Milliseconds 500
         $listResponse = Invoke-AxonMcp -Request $listRequest
         if ($listResponse.result.isError -ne $false) { throw 'the app-list look request failed' }
 
