@@ -834,11 +834,16 @@ private struct PrimitiveActionCommandHandler {
         case "click":
             return actionResponse(id: request.id) {
                 let params = try CommandRouterRequestSupport.paramsObject(in: request)
-                let policy = try ToolParamDecoder(toolName: "click", params: params).deliveryPolicy()
+                let decoder = ToolParamDecoder(toolName: "click", params: params)
+                let policy = try decoder.deliveryPolicy()
+                let app = try decoder.string("app")
                 let target = try CommandRouterRequestSupport.requiredToolTarget("target", in: params, acceptedKinds: .pointer)
                 switch target {
                 case let .point(point):
-                    return try services.actions.clickPoint(point, policy)
+                    return try services.actions.clickPoint(
+                        screenPoint(for: point, defaultApp: app, fieldName: "target"),
+                        policy
+                    )
                 case let .textLocation(location):
                     let resolution = try resolveTextLocationTarget(location)
                     return try withLocationResolution(
