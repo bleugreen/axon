@@ -9,6 +9,22 @@ import Testing
     #expect(throws: BrowserAutomationError.self) { try AppleScriptBrowserAutomation.validatedURL("https://example.com/\nnext") }
 }
 
+@Test func tabsReturnsApplicationScriptingShapeWithoutClaimingAXAuthority() {
+    let browser = BrowserAutomationStub()
+    browser.tabResults = [BrowserTab(
+        id: "window:1:tab:2", windowID: "window:1", windowIndex: 1, index: 2,
+        title: "Example", url: "https://example.com", active: true
+    )]
+    let response = CommandRouter(browserAutomation: browser).handle(JSONRPCRequest(
+        id: .string("tabs"), method: "tabs", params: .object(["app": .string("Safari")])
+    ))
+
+    #expect(response.error == nil)
+    #expect(response.result?["authority"] == .string("application_scripting"))
+    #expect(response.result?["tabs"]?[0]?["id"] == .string("window:1:tab:2"))
+    #expect(response.result?["crossCheck"]?["status"] == .string("unavailable"))
+}
+
 @Test func windowCrossCheckConsumesDuplicateTitlesOnlyOnce() {
     let browser = BrowserAutomationStub()
     browser.windowResults = [
@@ -75,12 +91,37 @@ import Testing
     ))
     #expect(invalid.error?.code == -32602)
 
-    browser.error = .permissionRequired("Safari")
+    browser.error = .automationNotGranted(app: "Safari", authorization: .denied, status: -1743)
     let denied = CommandRouter(browserAutomation: browser).handle(JSONRPCRequest(
         id: .int(2), method: "windows", params: .object(["app": .string("Safari")])
     ))
     #expect(denied.error?.code == -32603)
     #expect(denied.error?.message.contains("Privacy & Security > Automation") == true)
+    #expect(denied.error?.data?["capability"] == .string("browserAutomation"))
+    #expect(denied.error?.data?["reason"] == .string("automation-not-granted"))
+    #expect(denied.error?.data?["app"] == .string("Safari"))
+    #expect(denied.error?.data?["authorization"] == .string("denied"))
+    #expect(denied.error?.data?["nativeStatus"] == .int(-1743))
+}
+
+@Test func automationDenialContractIsSharedByEveryBrowserVerbAndRoundTrips() throws {
+    let browser = BrowserAutomationStub()
+    browser.error = .automationNotGranted(app: "Google Chrome", authorization: .notDetermined, status: -1744)
+    let router = CommandRouter(browserAutomation: browser)
+    let requests = [
+        JSONRPCRequest(id: .int(1), method: "navigate", params: .object(["app": .string("Chrome"), "url": .string("https://example.com")])),
+        JSONRPCRequest(id: .int(2), method: "windows", params: .object(["app": .string("Chrome")])),
+        JSONRPCRequest(id: .int(3), method: "tabs", params: .object(["app": .string("Chrome")]))
+    ]
+
+    for request in requests {
+        let response = router.handle(request)
+        #expect(response.error?.code == -32603)
+        #expect(response.error?.data?["reason"] == .string("automation-not-granted"))
+        #expect(response.error?.data?["authorization"] == .string("notDetermined"))
+        let encoded = try JSONEncoder().encode(response)
+        #expect(try JSONDecoder().decode(JSONRPCResponse.self, from: encoded) == response)
+    }
 }
 
 private final class BrowserAutomationStub: BrowserAutomationServing {
