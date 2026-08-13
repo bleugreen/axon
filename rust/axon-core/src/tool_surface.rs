@@ -422,6 +422,26 @@ mod tests {
     }
 
     #[test]
+    fn enforces_cross_field_alternatives_after_property_validation() {
+        let normalized =
+            validate_tool_arguments(ToolBackend::Windows, "keyboard", json!({"text": "hello"}))
+                .unwrap();
+        assert_eq!(normalized["deliveryPolicy"], "backgroundOnly");
+
+        for arguments in [json!({}), json!({"text": "x", "key": "Return"})] {
+            let error =
+                validate_tool_arguments(ToolBackend::Windows, "keyboard", arguments).unwrap_err();
+            assert_eq!(error.code, -32602);
+            assert_eq!(error.data.unwrap()["path"], "params.arguments");
+        }
+
+        let error =
+            validate_tool_arguments(ToolBackend::Windows, "keyboard", json!({"text": false}))
+                .unwrap_err();
+        assert_eq!(error.data.unwrap()["path"], "params.arguments.text");
+    }
+
+    #[test]
     fn rejects_flat_target_shorthand_and_bad_call_params() {
         let error = validate_tool_arguments(
             ToolBackend::Windows,
