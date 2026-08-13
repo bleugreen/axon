@@ -23,6 +23,13 @@ The matrix below is the current user-facing contract. Detailed evidence, backend
 
 Axon is most complete at semantic actions such as pressing a button or setting a field value. Pointer, keyboard, and screenshot paths exist but remain experimental until they have live end-to-end verification.
 
+Browser `navigate`, `windows`, and `tabs` use Apple Events in addition to Accessibility. The first
+request for a browser can therefore show macOS's Automation consent prompt. Grants are per browser:
+allowing Axon to control Safari does not allow it to control Google Chrome. A rejected or unavailable
+grant returns JSON-RPC `-32603` with structured reason `automation-not-granted`, the target app, and
+an authorization state of `denied` or `notDetermined`. Axon does not collapse these independent
+target grants into the global health document.
+
 ### Windows
 
 Window capture and semantic inspection are supported in an interactive desktop session. Axon installs an unelevated, per-user scheduled task that launches a dedicated windowless daemon; the command-line interface remains a separate console executable. Background pointer delivery is deliberately narrow, and Axon refuses actions when it cannot prove a safe target-bound mechanism. Global keyboard delivery is not available.
