@@ -135,9 +135,9 @@ function page({ title, description, body, docsPage = false, docsSlug }) {
 
 function home(version) {
   const guarantees = [
-    ['01', 'Semantic targets', 'Address a button by its role, label, window, and surrounding context.'],
-    ['02', 'One interface everywhere', 'The same small tool surface works on macOS, Windows, and Linux.'],
-    ['03', 'Replayable work', 'Save sessions as plain-text .axn files. Read them, edit them, share them, and run them again.'],
+    ['Semantic targets', 'Address a button by its role, label, window, and surrounding context.'],
+    ['One interface everywhere', 'The same small tool surface works on macOS, Windows, and Linux.'],
+    ['Replayable work', 'Save sessions as plain-text .axn files. Read them, edit them, share them, and run them again.'],
   ];
   return page({
     title: 'Axon — local UI access for agents',
@@ -145,15 +145,15 @@ function home(version) {
     body: `<main>
       <section class="hero">
         <h1>Let the computer <em>use</em> the computer.</h1>
-        <p>Axon turns the OS accessibility layer into a small, consistent tool surface for agents on macOS, Windows, and Linux.</p>
+        <p>Axon provides a small, consistent tool surface over the OS accessibility layers in macOS, Windows, and Linux.</p>
         <div class="hero-actions"><a class="button primary" href="/docs/install/">Get started</a><a class="button" href="/docs/tool-surface/">Explore the tools</a></div>
       </section>
       <section class="loop" aria-label="Axon's core loop">
-        <span>look</span><i>→</i><span>find</span><i>→</i><span>act</span><i>→</i><span>replay</span>
+        <span>look</span><i>→</i><span>act</span><i>→</i><span>replay</span>
       </section>
       <section class="guarantees">
         <div class="section-heading"><h2>General-purpose automation for agents</h2></div>
-        <div class="guarantee-grid">${guarantees.map(([number, title, copy]) => `<article><span>${number}</span><h3>${title}</h3><p>${copy}</p></article>`).join('')}</div>
+        <div class="guarantee-grid">${guarantees.map(([title, copy]) => `<article><h3>${title}</h3><p>${copy}</p></article>`).join('')}</div>
       </section>
       <section class="artifact">
         <div><p class="kicker">The unit of memory</p><h2>A route becomes a reflex.</h2><p>A <code>.axn</code> file is an ordered sequence of tool calls you can inspect, edit, share, and run again.</p><a href="/docs/axn/">Read about the file format →</a></div>

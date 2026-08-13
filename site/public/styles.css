@@ -142,8 +142,7 @@ main > section {
 }
 .guarantee-grid article + article { padding-left: 22px; }
 .guarantee-grid article:last-child { border-right: 0; }
-.guarantee-grid span { color: var(--faint); font: 12px var(--mono); }
-.guarantee-grid h3 { margin: 42px 0 11px; font-size: 18px; font-weight: 650; }
+.guarantee-grid h3 { margin: 0 0 11px; font-size: 18px; font-weight: 650; }
 .guarantee-grid p,
 .artifact p,
 .install p { color: var(--muted); font-size: 14px; }
@@ -416,7 +415,6 @@ footer {
     border-bottom: 1px solid var(--line);
   }
   .guarantee-grid article + article { padding-left: 0; }
-  .guarantee-grid h3 { margin-top: 20px; }
   .artifact {
     padding: 72px 20px;
     gap: 38px;
