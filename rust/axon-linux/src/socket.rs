@@ -452,44 +452,24 @@ mod tests {
         assert_eq!(response["error"]["data"]["path"], "params.arguments.bogus");
     }
     #[test]
-    fn facade_preserves_structured_scroll_refusal_from_daemon() {
-        let mut contacts = 0;
+    fn facade_rejects_unadvertised_scroll_without_contacting_daemon() {
+        let mut contacted = false;
         let response = mcp_response_with_request(
             &json!({"jsonrpc":"2.0","id":11,"method":"tools/call","params":{"name":"scroll","arguments":{"target":{"app":"App","name":"List"},"deltaY":-120}}}),
-            |rpc| {
-                contacts += 1;
-                let forwarded: Value = serde_json::from_str(rpc).unwrap();
-                assert_eq!(forwarded["method"], "scroll");
-                Ok(json!({
-                    "jsonrpc":"2.0",
-                    "id":1,
-                    "error":{
-                        "code":-32004,
-                        "message":"tool scroll requires unavailable capability Scroll",
-                        "data":{
-                            "kind":"capability-unavailable",
-                            "tool":"scroll",
-                            "capability":"Scroll",
-                            "reason":"not-implemented"
-                        }
-                    }
-                })
-                .to_string())
+            |_| {
+                contacted = true;
+                unreachable!("unadvertised tools must not reach the daemon")
             },
         )
         .unwrap()
         .unwrap();
 
-        assert_eq!(contacts, 1);
-        assert_eq!(response["result"]["isError"], true);
+        assert!(!contacted);
+        assert_eq!(response["error"]["code"], -32602);
+        assert_eq!(response["error"]["data"]["path"], "params.name");
         assert_eq!(
-            response["result"]["structuredContent"]["data"],
-            json!({
-                "kind":"capability-unavailable",
-                "tool":"scroll",
-                "capability":"Scroll",
-                "reason":"not-implemented"
-            })
+            response["error"]["message"],
+            "params.name: unknown or unavailable tool \"scroll\""
         );
     }
     #[test]
