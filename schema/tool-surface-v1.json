@@ -437,7 +437,7 @@
     },
     {
       "availability" : {
-        "linux" : false,
+        "linux" : true,
         "mac" : true,
         "swift" : true,
         "windows" : true
@@ -707,7 +707,7 @@
     },
     {
       "availability" : {
-        "linux" : false,
+        "linux" : true,
         "mac" : true,
         "swift" : true,
         "windows" : true
