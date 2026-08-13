@@ -1002,7 +1002,7 @@ Test-Scenario "probe: a stale path-shaped daemon entry is not evidence about a d
     }
     $result = Invoke-StageUnderTest -Name 'probe'
     Check 'the stage fails' $result.Failed
-    Check 'it says what it looked at' ($result.Error -match 'no Window root with a downscaled PNG from any application this lane did not start') $result.Error
+    Check 'it says what it looked at' ($result.Error -match 'no accessibility root with a downscaled PNG from Edge') $result.Error
 }
 
 Test-Scenario 'probe: a registration that moved during the run fails the stage' {
