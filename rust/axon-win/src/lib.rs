@@ -1011,6 +1011,9 @@ impl<
         let primitive_params = primitive_dispatch_params(params);
         match self.dispatch_tool(tool, &primitive_params) {
             Ok(mut result) => {
+                let dispatched_without_semantic_verification =
+                    result.get("dispatchSuccess").and_then(Value::as_bool) == Some(true)
+                        && result.get("success").and_then(Value::as_bool) == Some(false);
                 let resolution = axon_core::replay_target_resolution(
                     params,
                     &self.semantic_names,
@@ -1024,6 +1027,7 @@ impl<
                         .get("success")
                         .and_then(Value::as_bool)
                         .unwrap_or(true),
+                    dispatched_without_semantic_verification,
                     resolution,
                     result,
                     error: None,
@@ -1031,6 +1035,7 @@ impl<
             }
             Err(error) => DispatchOutcome {
                 success: false,
+                dispatched_without_semantic_verification: false,
                 resolution: axon_core::replay_target_resolution(
                     params,
                     &self.semantic_names,

@@ -381,6 +381,13 @@ where
 #[serde(rename_all = "camelCase")]
 pub struct DispatchOutcome {
     pub success: bool,
+    /// The native action was delivered, but its semantic effect was not verified.
+    ///
+    /// This is the only unsuccessful outcome that replay may promote using declared
+    /// postconditions. Transport, capability, target-resolution, and refusal failures
+    /// must leave it false.
+    #[serde(default)]
+    pub dispatched_without_semantic_verification: bool,
     #[serde(default)]
     pub result: Value,
     #[serde(default)]
@@ -744,6 +751,7 @@ impl<'a, D: ToolDispatcher> AxnRunner<'a, D> {
                 }
                 DispatchOutcome {
                     success: true,
+                    dispatched_without_semantic_verification: false,
                     result: Value::Object(shown),
                     error: None,
                     resolution: None,
@@ -751,7 +759,8 @@ impl<'a, D: ToolDispatcher> AxnRunner<'a, D> {
             } else {
                 self.dispatcher.dispatch(&action.tool, &params)
             };
-            let can_verify_dispatch_only = !outcome.success && causal_transition;
+            let can_verify_dispatch_only =
+                outcome.dispatched_without_semantic_verification && causal_transition;
             let verification_error = if (outcome.success || can_verify_dispatch_only) && !dry_run {
                 action
                     .expects

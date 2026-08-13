@@ -388,6 +388,7 @@ impl ToolDispatcher for Dispatcher {
         if self.fail_at == Some(index) {
             DispatchOutcome {
                 success: false,
+                dispatched_without_semantic_verification: false,
                 result: Value::Null,
                 error: Some("boom".into()),
                 resolution: None,
@@ -395,6 +396,7 @@ impl ToolDispatcher for Dispatcher {
         } else {
             DispatchOutcome {
                 success: true,
+                dispatched_without_semantic_verification: false,
                 result: json!({"ok":true}),
                 error: None,
                 resolution: None,
@@ -655,6 +657,7 @@ impl ToolDispatcher for SemanticDispatcher {
         self.dispatched += 1;
         DispatchOutcome {
             success: !self.fail_dispatch,
+            dispatched_without_semantic_verification: self.fail_dispatch,
             result: json!({"dispatchOnly":self.fail_dispatch,"action":{"success":!self.fail_dispatch,"semanticSuccess":false,"semanticStatus":"unverified"}}),
             error: None,
             resolution: None,
