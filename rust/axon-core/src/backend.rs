@@ -91,6 +91,7 @@ pub enum BackendError {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct AppQuery {
+    pub process_id: Option<crate::ProcessId>,
     pub name: Option<String>,
     pub identifier: Option<String>,
 }

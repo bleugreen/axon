@@ -275,6 +275,7 @@ mod since_tests {
         Snapshot {
             id: SnapshotId("fixture-1".into()),
             app: Application {
+                process_id: None,
                 name: "Fixture".into(),
                 identifier: Some("fixture.app".into()),
                 windows: vec![Window {

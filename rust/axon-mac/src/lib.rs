@@ -329,6 +329,7 @@ impl<
             return Err(rpc_error(-32602, "location app must not be empty"));
         }
         let app = AppQuery {
+            process_id: None,
             name: Some(target.app.clone()),
             identifier: None,
         };
@@ -1146,6 +1147,7 @@ impl<
         let live = self
             .backend
             .capture(&AppQuery {
+                process_id: None,
                 name: Some(target.app.clone()),
                 identifier: None,
             })
@@ -1273,6 +1275,7 @@ impl<
         let snapshot = self
             .backend
             .capture(&AppQuery {
+                process_id: None,
                 name: Some(app),
                 identifier: None,
             })
@@ -1307,6 +1310,7 @@ impl<
         let snapshot = self
             .backend
             .capture(&AppQuery {
+                process_id: None,
                 name: Some(app),
                 identifier: None,
             })
@@ -1340,6 +1344,7 @@ fn bounded_ms(
 
 fn app_query(params: &Map<String, Value>) -> AppQuery {
     AppQuery {
+        process_id: None,
         name: params.get("app").and_then(Value::as_str).map(str::to_owned),
         identifier: params
             .get("identifier")
@@ -1682,6 +1687,7 @@ mod tests {
     #[test]
     fn rust_facade_keeps_app_inside_structured_result() {
         let app = axon_core::Application {
+            process_id: None,
             name: "Calculator".into(),
             identifier: Some("42".into()),
             windows: Vec::new(),

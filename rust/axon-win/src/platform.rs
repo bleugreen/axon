@@ -712,8 +712,9 @@ impl UiaState {
             .filter_map(|e| {
                 let name = unsafe { e.CurrentName() }.ok()?.to_string();
                 (!name.is_empty()).then(|| Application {
+                    process_id: unsafe { e.CurrentProcessId() }.ok(),
                     name,
-                    identifier: unsafe { e.CurrentProcessId() }.ok().map(|x| x.to_string()),
+                    identifier: None,
                     windows: vec![],
                 })
             })
@@ -741,10 +742,9 @@ impl UiaState {
         let root = self.capture_node(&capture_root, &cache, 0, &mut count)?;
         let title = unsafe { window.CurrentName() }.ok().map(|x| x.to_string());
         let snapshot = Snapshot::new(Application {
+            process_id: unsafe { window.CurrentProcessId() }.ok(),
             name: title.clone().unwrap_or_else(|| query.clone()),
-            identifier: unsafe { window.CurrentProcessId() }
-                .ok()
-                .map(|x| x.to_string()),
+            identifier: None,
             windows: vec![Window { title, root }],
         });
         self.snapshot = Some(snapshot.clone());
@@ -759,8 +759,13 @@ impl UiaState {
             .name
             .as_ref()
             .or(q.identifier.as_ref())
-            .ok_or_else(|| op(operation, "app name or identifier is required"))?
-            .to_lowercase();
+            .map(|value| value.to_lowercase());
+        if q.process_id.is_none() && query.is_none() {
+            return Err(op(
+                operation,
+                "app name, identifier, or process id is required",
+            ));
+        }
         let window = self
             .top_level()?
             .into_iter()
@@ -769,13 +774,21 @@ impl UiaState {
                     .unwrap_or_default()
                     .to_string()
                     .to_lowercase();
-                let pid = unsafe { element.CurrentProcessId() }
-                    .unwrap_or_default()
-                    .to_string();
-                name == query || name.contains(&query) || pid == query
+                let pid = unsafe { element.CurrentProcessId() }.unwrap_or_default();
+                q.process_id.map_or_else(
+                    || {
+                        query
+                            .as_deref()
+                            .is_some_and(|query| name == query || name.contains(query))
+                    },
+                    |wanted| wanted == pid,
+                )
             })
-            .ok_or_else(|| op(operation, format!("no top-level window matches {query:?}")))?;
-        Ok((window, query))
+            .ok_or_else(|| op(operation, format!("no top-level window matches {q:?}")))?;
+        Ok((
+            window,
+            query.unwrap_or_else(|| q.process_id.unwrap().to_string()),
+        ))
     }
     fn capture_graphics(
         &self,
@@ -1312,6 +1325,7 @@ fn probe_pixel_click(args: &[String]) -> Result<serde_json::Value, BackendError>
         backend.allow_unverified_pixel_classes(true)?;
     }
     let query = AppQuery {
+        process_id: None,
         name: Some(app.clone()),
         identifier: None,
     };
@@ -1421,6 +1435,7 @@ fn probe_foreground(args: &[String]) -> Result<serde_json::Value, BackendError> 
     let app = required_probe_arg(args, 1, "app-query")?.to_string();
     let mut backend = WindowsBackend::start()?;
     let query = AppQuery {
+        process_id: None,
         name: Some(app.clone()),
         identifier: None,
     };

@@ -202,6 +202,7 @@ mod tests {
         Snapshot {
             id: SnapshotId("live".into()),
             app: Application {
+                process_id: None,
                 name: "Editor".into(),
                 identifier: None,
                 windows: vec![Window {

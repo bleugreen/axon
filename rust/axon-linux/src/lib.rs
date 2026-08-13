@@ -903,6 +903,7 @@ impl<B: PointerTargetVerifier + BackgroundPixelInput> Router<B> {
         let live = self
             .backend
             .capture(&AppQuery {
+                process_id: None,
                 name: Some(target.app.clone()),
                 identifier: None,
             })
@@ -1044,6 +1045,7 @@ impl<B: PointerTargetVerifier + BackgroundPixelInput> ToolDispatcher for Router<
         let snapshot = self
             .backend
             .capture(&AppQuery {
+                process_id: None,
                 name: Some(app),
                 identifier: None,
             })
@@ -1078,6 +1080,7 @@ impl<B: PointerTargetVerifier + BackgroundPixelInput> ToolDispatcher for Router<
         let snapshot = self
             .backend
             .capture(&AppQuery {
+                process_id: None,
                 name: Some(app),
                 identifier: None,
             })
@@ -1101,6 +1104,7 @@ fn flattened(snapshot: &Snapshot) -> impl Iterator<Item = &axon_core::Node> {
 }
 fn app_query(params: &Map<String, Value>) -> AppQuery {
     AppQuery {
+        process_id: None,
         name: params.get("app").and_then(Value::as_str).map(str::to_owned),
         identifier: params
             .get("identifier")
@@ -1468,6 +1472,7 @@ mod tests {
         };
         FakeBackend {
             snapshot: Snapshot::new(Application {
+                process_id: None,
                 name: "App".into(),
                 identifier: Some(APP_IDENTITY.into()),
                 windows: vec![Window { title: None, root }],
@@ -1929,6 +1934,7 @@ mod tests {
                 |backend| {
                     backend.keyboard(
                         &AppQuery {
+                            process_id: None,
                             name: Some("App".into()),
                             identifier: None,
                         },

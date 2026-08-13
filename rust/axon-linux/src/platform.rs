@@ -1014,6 +1014,7 @@ impl Actor {
     /// Every application on the bus — or, when there are none and the session explains why, that
     /// explanation. A caller wondering where their applications went reaches this before capture.
     async fn enumerate(&self) -> Result<Vec<Application>, BackendError> {
+        let identities = self.identities().await?;
         let mut out = Vec::new();
         for object in self.roots().await? {
             let proxy = timeout(
@@ -1022,9 +1023,14 @@ impl Actor {
             )
             .await?;
             let name = timeout("application name", proxy.name()).await?;
+            let identifier = identity(&object);
+            let process_id = identities
+                .iter()
+                .find(|candidate| candidate.identity == identifier)
+                .map(|candidate| candidate.process_id);
             out.push(Application {
-                name,
-                identifier: Some(identity(&object)),
+                process_id: name,
+                identifier: Some(identifier),
                 windows: vec![],
             });
         }
@@ -1068,6 +1074,11 @@ impl Actor {
     }
     /// `Ok(None)` is "nothing matched", which is a different answer from a failure to look.
     async fn select(&self, q: &AppQuery) -> Result<Option<(ObjectRefOwned, String)>, BackendError> {
+        let identities = if q.process_id.is_some() {
+            self.identities().await?
+        } else {
+            Vec::new()
+        };
         let mut partial = None;
         for object in self.roots().await? {
             let proxy = timeout(
@@ -1076,6 +1087,12 @@ impl Actor {
             )
             .await?;
             let name = timeout("application name", proxy.name()).await?;
+            let object_identity = identity(&object);
+            let process_match = q.process_id.is_some_and(|wanted| {
+                identities.iter().any(|candidate| {
+                    candidate.identity == object_identity && candidate.process_id == wanted
+                })
+            });
             let id_match = q
                 .identifier
                 .as_deref()
@@ -1084,10 +1101,13 @@ impl Actor {
                 .name
                 .as_deref()
                 .is_some_and(|n| name.eq_ignore_ascii_case(n));
-            if id_match || exact {
+            if q.process_id
+                .map_or(process_match || id_match || exact, |_| process_match)
+            {
                 return Ok(Some((object, name)));
             }
-            if partial.is_none()
+            if q.process_id.is_none()
+                && partial.is_none()
                 && q.name
                     .as_deref()
                     .is_some_and(|n| name.to_lowercase().contains(&n.to_lowercase()))
@@ -1102,6 +1122,12 @@ impl Actor {
             return Err(no_application_matched(self.accessibility_enabled().await));
         };
         let identifier = identity(&root);
+        let process_id = self
+            .identities()
+            .await?
+            .into_iter()
+            .find(|candidate| candidate.identity == identifier)
+            .map(|candidate| candidate.process_id);
         if !self.activated.contains(&identifier) && self.wake_provider(&root).await {
             self.activated.insert(identifier.clone());
         }
@@ -1110,7 +1136,7 @@ impl Actor {
         let mut remaining = MAX_NODES;
         let node = self.node(root, 0, &mut remaining, &mut refs).await?;
         let snapshot = Snapshot::new(Application {
-            name,
+            process_id: name,
             identifier,
             windows: vec![Window {
                 title: node.name.clone(),
