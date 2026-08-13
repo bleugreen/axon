@@ -1001,7 +1001,7 @@ fn substitute_expected_facts(
         .iter()
         .map(|fact| {
             let mut value = Value::Object(fact.fields.clone());
-            substitute_fact_value(&mut value, bindings, action_index, "expects")?;
+            substitute_fact_value(&mut value, bindings, action_index, "expects", false)?;
             Ok(ExpectedFact {
                 id: fact.id.clone(),
                 fields: value.as_object().cloned().unwrap_or_default(),
@@ -1015,23 +1015,18 @@ fn substitute_fact_value(
     bindings: &HashMap<String, (String, bool)>,
     action_index: usize,
     path: &str,
+    reference_field: bool,
 ) -> Result<(), AxnError> {
     match value {
         Value::Object(fields) => {
             for (key, child) in fields {
-                let child_path = format!("{path}.{key}");
-                if matches!(key.as_str(), "value" | "text" | "key") {
-                    if let Value::String(template) = child {
-                        let (resolved, _) = substitute_string(template, bindings)?;
-                        *child = Value::String(resolved);
-                    } else if contains_reference(child) {
-                        return Err(AxnError::Invalid(format!(
-                            "parameter references are only supported in string value fields: actions[{action_index}].{child_path}"
-                        )));
-                    }
-                } else {
-                    substitute_fact_value(child, bindings, action_index, &child_path)?;
-                }
+                substitute_fact_value(
+                    child,
+                    bindings,
+                    action_index,
+                    &format!("{path}.{key}"),
+                    reference_field || matches!(key.as_str(), "value" | "text" | "key"),
+                )?;
             }
         }
         Value::Array(values) => {
@@ -1041,13 +1036,18 @@ fn substitute_fact_value(
                     bindings,
                     action_index,
                     &format!("{path}[{offset}]"),
+                    reference_field,
                 )?;
             }
         }
-        Value::String(_) if contains_reference(value) => {
-            return Err(AxnError::Invalid(format!(
-                "parameter references are only supported in string value fields: actions[{action_index}].{path}"
-            )));
+        Value::String(template) if contains_reference(&Value::String(template.clone())) => {
+            if !reference_field {
+                return Err(AxnError::Invalid(format!(
+                    "parameter references are only supported in string value fields: actions[{action_index}].{path}"
+                )));
+            }
+            let (resolved, _) = substitute_string(template, bindings)?;
+            *value = Value::String(resolved);
         }
         _ => {}
     }
