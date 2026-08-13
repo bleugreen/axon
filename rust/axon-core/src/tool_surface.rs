@@ -22,17 +22,6 @@ fn internal(message: &str) -> JsonRpcError {
         message: "Internal error: invalid embedded tool surface artifact".into(),
         data: Some(json!({"reason": message})),
     }
-
-    #[test]
-    fn any_of_reports_the_branch_matching_the_callers_object_shape() {
-        let error = validate_tool_arguments(
-            ToolBackend::Windows,
-            "click",
-            json!({"target":{"app":"Notes","name":"Save","bogus":true}}),
-        )
-        .unwrap_err();
-        assert_eq!(error.data.unwrap()["path"], "params.arguments.target.bogus");
-    }
 }
 
 impl ToolBackend {
@@ -707,6 +696,17 @@ mod tests {
             })
         );
         assert_eq!(normalized["deliveryPolicy"], "backgroundOnly");
+    }
+
+    #[test]
+    fn any_of_reports_the_branch_matching_the_callers_object_shape() {
+        let error = validate_tool_arguments(
+            ToolBackend::Windows,
+            "click",
+            json!({"target":{"app":"Notes","name":"Save","bogus":true}}),
+        )
+        .unwrap_err();
+        assert_eq!(error.data.unwrap()["path"], "params.arguments.target.bogus");
     }
 
     #[test]
