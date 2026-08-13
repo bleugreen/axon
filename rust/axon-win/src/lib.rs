@@ -1089,7 +1089,7 @@ impl<
                 identifier: None,
             })
             .map_err(|error| error.to_string())?;
-        serde_json::to_value(snapshot.app).map_err(|error| error.to_string())
+        axon_core::changed_snapshot_baseline(&snapshot)
     }
     fn verify_changed(&mut self, fact: &ExpectedFact, baseline: &Value) -> Result<(), String> {
         let current = self.capture_changed_baseline(fact)?;

@@ -19,6 +19,10 @@ pub struct AxnDocument {
     pub flags: Map<String, Value>,
 }
 
+pub fn changed_snapshot_baseline(snapshot: &crate::Snapshot) -> Result<Value, String> {
+    serde_json::to_value(crate::SnapshotSummary::from(snapshot)).map_err(|error| error.to_string())
+}
+
 pub fn expected_fact_target(fact: &ExpectedFact) -> Result<(String, crate::Locator), String> {
     let target = fact
         .fields

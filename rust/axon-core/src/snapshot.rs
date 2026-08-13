@@ -120,6 +120,53 @@ pub struct Snapshot {
     pub app: Application,
 }
 
+/// Stable observable state used to decide whether an action changed an application.
+///
+/// A snapshot ID identifies a capture, not application state, so it is deliberately absent. The
+/// summary otherwise preserves application identity, window metadata, and every observed node.
+/// This is the Rust counterpart to Swift's `SnapshotSummary`, extended to the node tree because
+/// the cross-platform observation model can expose ordinary control changes directly.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SnapshotSummary {
+    pub app: SnapshotAppIdentity,
+    pub windows: Vec<SnapshotWindowSummary>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SnapshotAppIdentity {
+    pub name: String,
+    pub identifier: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SnapshotWindowSummary {
+    pub title: Option<String>,
+    pub root: Node,
+}
+
+impl From<&Snapshot> for SnapshotSummary {
+    fn from(snapshot: &Snapshot) -> Self {
+        Self {
+            app: SnapshotAppIdentity {
+                name: snapshot.app.name.clone(),
+                identifier: snapshot.app.identifier.clone(),
+            },
+            windows: snapshot
+                .app
+                .windows
+                .iter()
+                .map(|window| SnapshotWindowSummary {
+                    title: window.title.clone(),
+                    root: window.root.clone(),
+                })
+                .collect(),
+        }
+    }
+}
+
 impl Snapshot {
     pub fn new(app: Application) -> Self {
         Self {
