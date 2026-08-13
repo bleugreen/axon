@@ -1,4 +1,4 @@
-# axn.dev
+# axon
 
 The website is a static build with no browser-side JavaScript. From this directory:
 
