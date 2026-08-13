@@ -23,12 +23,6 @@ fn internal(message: &str) -> JsonRpcError {
         message: "Internal error: invalid embedded tool surface artifact".into(),
         data: Some(json!({"reason": message})),
     }
-    if let (Some(minimum), Some(number)) = (
-        schema.get("minimum").and_then(Value::as_f64),
-        value.as_f64(),
-    ) && number < minimum {
-        return Err(invalid(path, &format!("must be at least {minimum}"), expected));
-    }
 }
 
 impl ToolBackend {
@@ -416,6 +410,12 @@ fn validate_value(schema: &Value, value: &Value, path: &str) -> Result<(), JsonR
             &format!("expected {}", expected.unwrap()),
             expected,
         ));
+    }
+    if let (Some(minimum), Some(number)) = (
+        schema.get("minimum").and_then(Value::as_f64),
+        value.as_f64(),
+    ) && number < minimum {
+        return Err(invalid(path, &format!("must be at least {minimum}"), expected));
     }
     if let Some(object) = value.as_object() {
         validate_object(schema, object, path)?;
