@@ -1531,10 +1531,19 @@ mod tests {
 
     #[test]
     fn look_application_enumeration_matches_shared_envelope() {
+        let mut router = Router::new(backend(vec![], None));
+        let response = router.request(request("look", json!({}))).unwrap();
+        let JsonRpcResponse::Success(success) = response else {
+            panic!("look application enumeration must succeed")
+        };
+        let expected = include_str!("../../../schema/fixtures/look-applications-envelope.json").trim();
         assert_eq!(
-            serde_json::to_string(&application_enumeration(Vec::<Value>::new())).unwrap(),
-            include_str!("../../../schema/fixtures/look-applications-envelope.json").trim()
+            serde_json::to_string(&success.result).unwrap(),
+            expected
         );
+        let mcp = axon_core::mcp_tool_result(success.result, false);
+        assert!(mcp["structuredContent"].is_object());
+        assert_eq!(serde_json::to_string(&mcp["structuredContent"]).unwrap(), expected);
     }
 
     #[test]

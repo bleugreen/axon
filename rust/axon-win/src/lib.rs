@@ -1504,6 +1504,17 @@ mod tests {
     }
     #[test]
     fn look_application_enumeration_matches_shared_envelope() {
+        let mut router = Router::new(backend(vec![], None));
+        let response = router.request(request("look", json!({}))).unwrap();
+        let JsonRpcResponse::Success(success) = response else {
+            panic!("look application enumeration must succeed")
+        };
+        assert!(success.result.is_object());
+        assert!(success.result["apps"].is_array());
+        let mcp = axon_core::mcp_tool_result(success.result, false);
+        assert!(mcp["structuredContent"].is_object());
+        assert!(mcp["structuredContent"]["apps"].is_array());
+
         assert_eq!(
             serde_json::to_string(&application_enumeration(Vec::<Value>::new())).unwrap(),
             include_str!("../../../schema/fixtures/look-applications-envelope.json").trim()
