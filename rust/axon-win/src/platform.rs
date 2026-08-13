@@ -3,9 +3,10 @@ use crate::{
     PointerTargetVerifier, VisualObservation, VisualObservationProvider,
 };
 use axon_core::{
-    AppQuery, Application, BackendError, Capability, CapabilityInfo, ForegroundTarget,
-    KeyboardIntent, Node, Observation, PlatformBackend, RecognizedText, RecordedCall, Rect,
-    Screenshot, Snapshot, SnapshotHandle, TextRecognitionProvider, Window, dispatch_in_foreground,
+    AppQuery, Application, BackendError, Capability, CapabilityInfo, CaptureBounds,
+    ChildPageCapture, ChildPageRequest, ForegroundTarget, KeyboardIntent, Node, Observation,
+    PlatformBackend, RecognizedText, RecordedCall, Rect, Screenshot, Snapshot, SnapshotHandle,
+    TextRecognitionProvider, Window, dispatch_in_foreground,
 };
 
 #[path = "capture.rs"]
@@ -72,7 +73,16 @@ const MAX_NODES: usize = 2_000;
 
 enum Command {
     Enumerate(mpsc::Sender<Result<Vec<Application>, BackendError>>),
-    Capture(AppQuery, mpsc::Sender<Result<Snapshot, BackendError>>),
+    Capture(
+        AppQuery,
+        CaptureBounds,
+        mpsc::Sender<Result<Snapshot, BackendError>>,
+    ),
+    CaptureChildPage(
+        SnapshotHandle,
+        ChildPageRequest,
+        mpsc::Sender<Result<ChildPageCapture, BackendError>>,
+    ),
     Screenshot(AppQuery, mpsc::Sender<Result<Screenshot, BackendError>>),
     RecognizeText(
         AppQuery,
@@ -144,6 +154,61 @@ impl TextRecognitionProvider for WindowsBackend {
                     confidence: None,
                 })
                 .collect()
+        })
+    }
+    fn capture_child_page(
+        &mut self,
+        target: &SnapshotHandle,
+        request: ChildPageRequest,
+    ) -> Result<ChildPageCapture, BackendError> {
+        let element = self.element(target)?;
+        let snapshot = self
+            .snapshot
+            .as_ref()
+            .expect("element resolution requires an active snapshot")
+            .id
+            .clone();
+        let cache = self.capture_cache_request()?;
+        let parent_element = unsafe { element.BuildUpdatedCache(&cache) }
+            .map_err(|e| operation("cache child page parent", e))?;
+        let condition = unsafe { self.automation.CreateTrueCondition() }
+            .map_err(|e| operation("create child page condition", e))?;
+        let child_array = unsafe {
+            parent_element.FindAllBuildCache(TreeScope_Children, &condition, &cache)
+        }
+        .map_err(|e| operation("enumerate child page", e))?;
+        let total = unsafe { child_array.Length() }
+            .map_err(|e| operation("read child page total", e))?
+            .max(0) as usize;
+        let (start, end) = child_page_range(total, request.offset, request.limit);
+        let mut count = 0;
+        let max_depth = if request.include_descendants {
+            MAX_DEPTH
+        } else {
+            0
+        };
+        let mut children = Vec::with_capacity(end - start);
+        for index in start..end {
+            if count >= MAX_NODES {
+                break;
+            }
+            let child = unsafe { child_array.GetElement(index as i32) }
+                .map_err(|e| operation("read child page element", e))?;
+            children.push(self.capture_node(&child, &cache, 0, max_depth, &mut count)?);
+        }
+        let mut parent_count = 0;
+        let mut parent = self.capture_node(&parent_element, &cache, 0, 0, &mut parent_count)?;
+        parent.children.clear();
+        if start > 0 || end < total {
+            parent.truncation_reason = Some("childPage".into());
+        }
+        Ok(ChildPageCapture {
+            snapshot,
+            parent,
+            offset: start,
+            limit: end - start,
+            total: Some(total),
+            children,
         })
     }
 }
@@ -404,8 +469,11 @@ impl UiaState {
             Command::Enumerate(tx) => {
                 let _ = tx.send(self.enumerate());
             }
-            Command::Capture(q, tx) => {
-                let _ = tx.send(self.capture(q));
+            Command::Capture(q, bounds, tx) => {
+                let _ = tx.send(self.capture(q, bounds));
+            }
+            Command::CaptureChildPage(target, request, tx) => {
+                let _ = tx.send(self.capture_child_page(&target, request));
             }
             Command::Screenshot(q, tx) => {
                 let _ = tx.send(
@@ -720,7 +788,7 @@ impl UiaState {
             })
             .collect())
     }
-    fn capture(&mut self, q: AppQuery) -> Result<Snapshot, BackendError> {
+    fn capture(&mut self, q: AppQuery, bounds: CaptureBounds) -> Result<Snapshot, BackendError> {
         let (window, query) = self.find_window(&q, "capture")?;
         if let Ok(hwnd) = unsafe { window.CurrentNativeWindowHandle() } {
             msaa::activate(hwnd.0 as isize);
@@ -739,7 +807,8 @@ impl UiaState {
         let capture_root = unsafe { capture_root.BuildUpdatedCache(&cache) }
             .map_err(|e| operation("cache capture root", e))?;
         let mut count = 0;
-        let root = self.capture_node(&capture_root, &cache, 0, &mut count)?;
+        let max_depth = bounds.child_depth.unwrap_or(MAX_DEPTH).min(MAX_DEPTH);
+        let root = self.capture_node(&capture_root, &cache, 0, max_depth, &mut count)?;
         let title = unsafe { window.CurrentName() }.ok().map(|x| x.to_string());
         let snapshot = Snapshot::new(Application {
             process_id: automation_process_id(&window),
@@ -859,6 +928,7 @@ impl UiaState {
         e: &IUIAutomationElement,
         cache: &IUIAutomationCacheRequest,
         depth: usize,
+        max_depth: usize,
         count: &mut usize,
     ) -> Result<Node, BackendError> {
         *count += 1;
@@ -892,11 +962,9 @@ impl UiaState {
             .map_err(|e| operation("read cached child count", e))?
             .max(0) as usize;
         for index in 0..child_count {
-            let c = unsafe { child_array.GetElement(index as i32) }
-                .map_err(|e| operation("read cached child", e))?;
-            if depth >= MAX_DEPTH || children.len() >= MAX_CHILDREN || *count >= MAX_NODES {
+            if depth >= max_depth || children.len() >= MAX_CHILDREN || *count >= MAX_NODES {
                 trunc.get_or_insert_with(|| {
-                    (if depth >= MAX_DEPTH {
+                    (if depth >= max_depth {
                         "maxDepth"
                     } else if *count >= MAX_NODES {
                         "maxNodes"
@@ -906,7 +974,9 @@ impl UiaState {
                     .into()
                 });
             } else {
-                children.push(self.capture_node(&c, cache, depth + 1, count)?);
+                let c = unsafe { child_array.GetElement(index as i32) }
+                    .map_err(|e| operation("read cached child", e))?;
+                children.push(self.capture_node(&c, cache, depth + 1, max_depth, count)?);
             }
         }
         let r = unsafe { e.CachedBoundingRectangle() }.ok();
@@ -1009,7 +1079,21 @@ impl PlatformBackend for WindowsBackend {
         self.call(Command::Enumerate)
     }
     fn capture(&mut self, q: &AppQuery) -> Result<Snapshot, BackendError> {
-        self.call(|tx| Command::Capture(q.clone(), tx))
+        self.capture_bounded(q, CaptureBounds::default())
+    }
+    fn capture_bounded(
+        &mut self,
+        q: &AppQuery,
+        bounds: CaptureBounds,
+    ) -> Result<Snapshot, BackendError> {
+        self.call(|tx| Command::Capture(q.clone(), bounds, tx))
+    }
+    fn capture_child_page(
+        &mut self,
+        target: &SnapshotHandle,
+        request: ChildPageRequest,
+    ) -> Result<ChildPageCapture, BackendError> {
+        self.call(|tx| Command::CaptureChildPage(target.clone(), request, tx))
     }
     fn invoke(&mut self, h: &SnapshotHandle, _: &str) -> Result<(), BackendError> {
         self.call(|tx| Command::Invoke(h.clone(), tx))
