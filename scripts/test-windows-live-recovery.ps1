@@ -492,8 +492,27 @@ function Invoke-AxonMcp {
 
     $script:Machine.Log.Add('mcp')
     if ($null -ne $script:Machine.McpResponder) { return & $script:Machine.McpResponder $Request }
+    if ($Request -match '"target"') {
+        return @{
+            result = @{
+                isError = $false
+                structuredContent = @{
+                    children = @{
+                        format = 'children'
+                        snapshot = 'snapshot-page'
+                        parent = @{ app = 'Microsoft Edge'; name = 'edge-root' }
+                        offset = 0
+                        limit = 1
+                        total = 1
+                        nextOffset = $null
+                        tree = '[]'
+                    }
+                }
+            }
+        } | ConvertTo-Json -Depth 10 | ConvertFrom-Json -Depth 100
+    }
     if ($Request -notmatch '"app"') {
-        return @{ result = @{ isError = $script:Machine.McpIsError; structuredContent = @{ apps = @(@{ name = 'Notepad'; identifier = 4242 }) } } } |
+        return @{ result = @{ isError = $script:Machine.McpIsError; structuredContent = @{ apps = @(@{ name = 'Microsoft Edge'; identifier = 4242 }) } } } |
             ConvertTo-Json -Depth 10 | ConvertFrom-Json -Depth 100
     }
     @{
@@ -505,7 +524,7 @@ function Invoke-AxonMcp {
             )
             structuredContent = @{
                 id = 'snapshot-1'
-                app = @{ windows = @(@{ root = @{ role = 'Window' } }) }
+                app = @{ windows = @(@{ root = @{ role = 'Window'; name = 'edge-root' } }) }
                 screenshot = @{ mediaType = 'image/png'; contentTransport = 'mcp_image'; width = 800; height = 600 }
             }
         }
