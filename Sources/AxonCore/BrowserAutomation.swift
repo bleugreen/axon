@@ -13,9 +13,7 @@ protocol AppleEventAuthorizing {
 
 struct SystemAppleEventAuthorizer: AppleEventAuthorizing {
     func determinePermission(bundleIdentifier: String, askUserIfNeeded: Bool) -> OSStatus {
-        guard let target = NSAppleEventDescriptor(bundleIdentifier: bundleIdentifier) else {
-            return OSStatus(paramErr)
-        }
+        let target = NSAppleEventDescriptor(bundleIdentifier: bundleIdentifier)
         return AEDeterminePermissionToAutomateTarget(
             target.aeDesc,
             AEEventClass(typeWildCard),
