@@ -721,10 +721,32 @@ function Invoke-ProbeStage {
             throw "Edge paging covered $seen children but reported total $($children.total)"
         }
 
-        # A large delta deterministically reaches the bottom while still exercising the same bounded
-        # ScrollPattern increments as ordinary wheel-sized requests. Position readback is the action's
-        # postcondition: the first request must move, while repeating it at the edge must remain a
-        # dispatch-only result rather than claiming goal success.
+        # The interactive desktop survives between jobs, including Edge's scroll position. First
+        # drive the document to the top without requiring movement, then use a large opposite delta
+        # to deterministically reach the bottom while still exercising the same bounded ScrollPattern
+        # increments as ordinary wheel-sized requests. Position readback is the action's postcondition:
+        # that request must move, while repeating it at the edge must remain a dispatch-only result
+        # rather than claiming goal success.
+        $resetScrollArguments = @{
+            target = @{ app = $verified.app; name = $parentName }
+            deltaY = 100000
+        }
+        $resetScrollRequest = @{
+            jsonrpc = '2.0'
+            id = 89
+            method = 'tools/call'
+            params = @{ name = 'scroll'; arguments = $resetScrollArguments }
+        } | ConvertTo-Json -Compress -Depth 10
+        $reset = Invoke-AxonMcp -Request $resetScrollRequest
+        $resetAction = $reset.result.structuredContent
+        if ($reset.result.isError -ne $false -or
+            $resetAction.dispatch.mechanism -ne 'UIA ScrollPattern.Scroll' -or
+            $resetAction.dispatch.success -ne $true -or
+            $resetAction.verification.after.verticalPercent -ne 0.0) {
+            throw "Edge scroll-position reset did not reach the top through ScrollPattern: $($reset | ConvertTo-Json -Compress -Depth 20)"
+        }
+        Write-Note "Edge scroll-position reset response=$($resetAction | ConvertTo-Json -Compress -Depth 20)"
+
         $scrollArguments = @{
             target = @{ app = $verified.app; name = $parentName }
             deltaY = -100000

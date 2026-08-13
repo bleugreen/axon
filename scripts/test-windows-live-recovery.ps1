@@ -495,17 +495,20 @@ function Invoke-AxonMcp {
     if ($null -ne $script:Machine.McpResponder) { return & $script:Machine.McpResponder $Request }
     if ($Request -match '"name":"scroll"') {
         $script:Machine.ScrollCalls += 1
-        $before = if ($script:Machine.ScrollCalls -eq 1) { 0.0 } else { 100.0 }
+        $isReset = $script:Machine.ScrollCalls -eq 1
+        $isMovement = $script:Machine.ScrollCalls -eq 2
+        $before = if ($isReset) { 50.0 } elseif ($isMovement) { 0.0 } else { 100.0 }
+        $after = if ($isReset) { 0.0 } else { 100.0 }
         return @{
             result = @{
                 isError = $false
                 structuredContent = @{
-                    success = ($script:Machine.ScrollCalls -eq 1)
+                    success = ($script:Machine.ScrollCalls -lt 3)
                     dispatch = @{ success = $true; mechanism = 'UIA ScrollPattern.Scroll' }
                     verification = @{
-                        verified = ($script:Machine.ScrollCalls -eq 1)
+                        verified = ($script:Machine.ScrollCalls -lt 3)
                         before = @{ horizontalPercent = -1.0; verticalPercent = $before }
-                        after = @{ horizontalPercent = -1.0; verticalPercent = 100.0 }
+                        after = @{ horizontalPercent = -1.0; verticalPercent = $after }
                     }
                 }
             }
