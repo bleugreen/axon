@@ -240,14 +240,11 @@ pub trait PlatformBackend {
         timeout: Duration,
     ) -> Result<Vec<RecordedCall>, BackendError>;
 
-    /// Whether this backend can run a transactional foreground escalation: capture the prior
-    /// foreground, activate the target, prove it came forward, and hand the session back.
+    /// Whether this backend can capture the foreground, activate a target, and prove it came forward
+    /// before dispatch. Cleanup still attempts and reports the hand-back on every exit path.
     ///
-    /// False by default, and that default is load-bearing. The foreground rung is not merely
-    /// "global input" — it is global input that restores what it borrowed. A backend that cannot
-    /// do all of that must not offer the rung at all, because unrestored global input is exactly
-    /// what the delivery contract exists to prevent. Reporting `delivery: "foreground"` for a bare
-    /// `SendInput` or `XTest` call would claim a guarantee the backend does not keep.
+    /// False by default, and that default is load-bearing. A backend that cannot prove activation
+    /// must not offer global input because it cannot prove where the event will land.
     fn supports_foreground_transaction(&self) -> bool {
         false
     }

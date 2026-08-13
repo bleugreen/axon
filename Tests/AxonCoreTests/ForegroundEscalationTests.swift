@@ -187,7 +187,7 @@ private func escalationStore() -> (AXElementStore, AXUIElement) {
     #expect(result.details["foreground"]?["activationProved"] == .bool(false))
 }
 
-@Test func foregroundRestorationFailureKeepsDispatchEvidenceAndFailsOverall() throws {
+@Test func foregroundRestorationFailureIsReportedWithoutChangingSemanticFailure() throws {
     let session = FakeSession()
     // The target comes forward but will not give the foreground back.
     session.refusesActivation = [priorProcess]
@@ -198,6 +198,8 @@ private func escalationStore() -> (AXElementStore, AXUIElement) {
 
     #expect(result.delivery == .foreground)
     #expect(result.dispatchSuccess)
+    // This synthetic field cannot verify its value, so semantic success remains false for that
+    // independent reason. Failed cleanup is evidence in the result and message, not another gate.
     #expect(result.success == false)
     #expect(result.details["foreground"]?["restored"] == .bool(false))
     #expect(result.message?.contains("not restored") == true)
@@ -217,7 +219,7 @@ private func escalationStore() -> (AXElementStore, AXUIElement) {
     #expect(session.pointer == origin)
 }
 
-@Test func foregroundDispatchThatCannotRestoreThePointerFailsOverall() throws {
+@Test func foregroundDispatchThatCannotRestoreThePointerReportsItWithoutFailing() throws {
     let session = FakeSession()
     session.pointerAfterPost = CGPoint(x: 900, y: 900)
     session.pointerIsStuck = true

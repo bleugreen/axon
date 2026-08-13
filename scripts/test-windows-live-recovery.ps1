@@ -44,6 +44,7 @@ $ErrorActionPreference = 'Stop'
 if (-not $ProbeScript) {
     $ProbeScript = Join-Path $PSScriptRoot '..\.github\scripts\windows-live-probe.ps1'
 }
+
 $ProbeScript = (Resolve-Path $ProbeScript).Path
 
 . $ProbeScript
@@ -55,7 +56,11 @@ $ProbeScript = (Resolve-Path $ProbeScript).Path
 $StubbedSeams = @(
     'Write-Note', 'Wait-Tick', 'Test-ProcessIsRunning', 'Get-AxonProcess', 'Test-EdgeIsRunning', 'Stop-ProcessById',
     'Get-DesktopRegistrationPath', 'Get-DesktopTaskState', 'Start-DesktopDaemonTask', 'Register-ProbeTask',
-    'Unregister-ProbeTask', 'Start-ProbeTask', 'Invoke-Axon', 'Invoke-AxonMcp', 'Get-ExpectedVersion',
+    'Unregister-ProbeTask', 'Start-ProbeTask', 'Register-ProbeBrowserTask', 'Unregister-ProbeBrowserTask',
+    'Start-ProbeBrowserTask', 'Register-ProbeActivationTask', 'Start-ProbeActivationTask',
+    'Wait-ForProbeActivationTask', 'Unregister-ProbeActivationTask', 'Invoke-Axon', 'Invoke-AxonMcp', 'Start-ProbeBrowser',
+    'Register-ProbeForegroundTask', 'Start-ProbeForegroundTask', 'Wait-ForProbeForegroundTask', 'Unregister-ProbeForegroundTask',
+    'Stop-ProbeBrowser', 'Invoke-HandBackSweep', 'Get-ExpectedVersion',
     'Invoke-CargoBuild', 'Copy-ProbeExecutable', 'Read-ParkState', 'Write-ParkState', 'Clear-ParkState'
 )
 
@@ -63,8 +68,8 @@ $StubbedSeams = @(
 # any other function is the census failing rather than a style note.
 $MachineCommands = @(
     'Get-ScheduledTask', 'Register-ScheduledTask', 'Unregister-ScheduledTask', 'Start-ScheduledTask',
-    'Stop-Process', 'Get-Process', 'Get-CimInstance', 'Start-Sleep', 'Copy-Item', 'Remove-Item',
-    'New-Item', 'Set-Content', 'Get-Content', 'Push-Location', 'Pop-Location', 'Write-Host',
+    'Stop-Process', 'Get-Process', 'Get-CimInstance', 'Start-Process', 'Start-Sleep', 'Copy-Item', 'Remove-Item',
+    'New-Item', 'Set-Content', 'Get-Content', 'Test-Path', 'Push-Location', 'Pop-Location', 'Write-Host',
     'Write-Warning', 'Write-Output',
     # The external equivalents, which reach the same objects without going through a cmdlet.
     'schtasks', 'taskkill', 'sc', 'reg', 'wmic', 'cargo'
@@ -103,6 +108,56 @@ if ($phantom.Count -ne 0) {
 # a real desktop during the pull-request job that runs this file.
 $probeAst = [System.Management.Automation.Language.Parser]::ParseFile($ProbeScript, [ref] $null, [ref] $null)
 $functions = $probeAst.FindAll({ param($node) $node -is [System.Management.Automation.Language.FunctionDefinitionAst] }, $true)
+
+# The stage rehearsal replaces Start-ProbeBrowser with a fake so it can never open a real desktop
+# window. Keep that fake honest by also pinning the production boundary: Edge must be scheduled with
+# the logged-in user's Interactive token, never launched directly from the SSH/session-0 shell.
+$browserRegistration = @($functions | Where-Object Name -eq 'Register-ProbeBrowserTask')
+$browserLaunch = @($functions | Where-Object Name -eq 'Start-ProbeBrowser')
+$browserCleanup = @($functions | Where-Object Name -eq 'Stop-ProbeBrowser')
+if ($browserRegistration.Count -ne 1 -or $browserLaunch.Count -ne 1 -or $browserCleanup.Count -ne 1) {
+    throw 'the Interactive Edge launch boundary is incomplete: expected exactly one registration, launch, and cleanup function'
+}
+if ($browserRegistration[0].Extent.Text -notmatch 'New-ScheduledTaskAction' -or
+    $browserRegistration[0].Extent.Text -notmatch 'New-ScheduledTaskPrincipal' -or
+    $browserRegistration[0].Extent.Text -notmatch 'LogonType Interactive' -or
+    $browserRegistration[0].Extent.Text -notmatch 'Register-ScheduledTask') {
+    throw 'the probe browser task is not registered with an Interactive scheduled-task principal'
+}
+$browserLaunchCommands = @($browserLaunch[0].Body.FindAll({ param($node) $node -is [System.Management.Automation.Language.CommandAst] }, $true) |
+    ForEach-Object { $_.GetCommandName() })
+if ($browserLaunchCommands -contains 'Start-Process' -or
+    $browserLaunch[0].Extent.Text -notmatch 'Start-ProbeBrowserTask') {
+    throw 'the probe browser must start through its Interactive task, not directly from the SSH shell'
+}
+if ($browserCleanup[0].Extent.Text -notmatch 'finally' -or
+    $browserCleanup[0].Extent.Text -notmatch 'Unregister-ProbeBrowserTask') {
+    throw 'the probe browser task is not cleanup-safe when Edge process cleanup fails'
+}
+
+$activationRegistration = @($functions | Where-Object Name -eq 'Register-ProbeActivationTask')
+$foregroundRegistration = @($functions | Where-Object Name -eq 'Register-ProbeForegroundTask')
+$handBackSweep = @($functions | Where-Object Name -eq 'Invoke-HandBackSweep')
+if ($activationRegistration.Count -ne 1 -or $foregroundRegistration.Count -ne 1 -or $handBackSweep.Count -ne 1 -or
+    $activationRegistration[0].Extent.Text -notmatch 'LogonType Interactive' -or
+    $activationRegistration[0].Extent.Text -notmatch 'AppActivate' -or
+    $foregroundRegistration[0].Extent.Text -notmatch 'LogonType Interactive' -or
+    $foregroundRegistration[0].Extent.Text -notmatch 'ProbeCliExecutable' -or
+    $foregroundRegistration[0].Extent.Text -notmatch "Arguments = 'probe foreground" -or
+    $foregroundRegistration[0].Extent.Text -match '\.ArgumentList' -or
+    $foregroundRegistration[0].Extent.Text -notmatch 'RedirectStandardOutput' -or
+    $foregroundRegistration[0].Extent.Text -notmatch 'RedirectStandardError' -or
+    $foregroundRegistration[0].Extent.Text -notmatch 'result =' -or
+    $foregroundRegistration[0].Extent.Text -match 'ConvertFrom-Json\s+-Depth' -or
+    $foregroundRegistration[0].Extent.Text -notmatch 'Move-Item' -or
+    $handBackSweep[0].Extent.Text -notmatch 'Wait-ForProbeActivationTask' -or
+    $handBackSweep[0].Extent.Text -notmatch 'Wait-ForProbeForegroundTask' -or
+    $handBackSweep[0].Extent.Text -notmatch 'finally' -or
+    $handBackSweep[0].Extent.Text -notmatch 'Unregister-ProbeActivationTask' -or
+    $handBackSweep[0].Extent.Text -notmatch 'Unregister-ProbeForegroundTask') {
+    throw 'the hand-back sweep must activate and probe through cleanup-safe Interactive tasks with atomic captured results'
+}
+
 foreach ($function in $functions) {
     if ($StubbedSeams -contains $function.Name) { continue }
     $commands = $function.Body.FindAll({ param($node) $node -is [System.Management.Automation.Language.CommandAst] }, $true)
@@ -214,6 +269,9 @@ function Reset-Machine {
         DesktopRegistration = $DesktopInstallPath
         ParkState = $null
         ProbeTaskRegistered = $false
+        ProbeBrowserTaskRegistered = $false
+        ProbeActivationTaskRegistered = $false
+        ProbeForegroundTaskRegistered = $false
         Processes = @()
         Quarantined = @()
         Health = $null
@@ -259,6 +317,9 @@ function Reset-Machine {
         # gone by the time anything asks whether it is running.
         DeadPids = @()
         McpResponder = $null
+        PageTitle = 'Axon Foreground Probe'
+        BrowserRunning = $false
+        BrowserStartFails = $false
         # Reads of the desktop task's state that report a running instance while nothing is running
         # from the registered path: an instance that has exited but has not finished, which is what
         # makes a start against it a silent no-op. Counted in reads rather than in seconds because
@@ -429,6 +490,67 @@ function Start-ProbeTask {
     $script:Machine.Health = New-FakeHealth -ProcessId $serving
 }
 
+function Register-ProbeBrowserTask {
+    param([string] $EdgeExecutable, [string] $ProfilePath)
+    $script:Machine.Log.Add("register-probe-browser-task [$EdgeExecutable] [$ProfilePath]")
+    $script:Machine.ProbeBrowserTaskRegistered = $true
+}
+
+function Unregister-ProbeBrowserTask {
+    $script:Machine.Log.Add('unregister-probe-browser-task')
+    $script:Machine.ProbeBrowserTaskRegistered = $false
+}
+
+function Start-ProbeBrowserTask {
+    $script:Machine.Log.Add('start-probe-browser-task')
+    if (-not $script:Machine.ProbeBrowserTaskRegistered) {
+        throw 'the probe browser task was not registered'
+    }
+}
+
+function Register-ProbeActivationTask {
+    param([int] $ProcessId, [string] $ResultPath)
+    $script:Machine.Log.Add("register-probe-activation-task $ProcessId")
+    $script:Machine.ProbeActivationTaskRegistered = $true
+}
+
+function Start-ProbeActivationTask {
+    $script:Machine.Log.Add('start-probe-activation-task')
+    if (-not $script:Machine.ProbeActivationTaskRegistered) { throw 'the activation task was not registered' }
+}
+
+function Wait-ForProbeActivationTask {
+    param([string] $ResultPath)
+    $script:Machine.Log.Add('wait-probe-activation-task')
+}
+
+function Unregister-ProbeActivationTask {
+    $script:Machine.Log.Add('unregister-probe-activation-task')
+    $script:Machine.ProbeActivationTaskRegistered = $false
+}
+
+function Register-ProbeForegroundTask {
+    param([int] $TargetProcessId, [string] $ResultPath)
+    $script:Machine.Log.Add("register-probe-foreground-task $TargetProcessId")
+    $script:Machine.ProbeForegroundTaskRegistered = $true
+}
+
+function Start-ProbeForegroundTask {
+    $script:Machine.Log.Add('start-probe-foreground-task')
+    if (-not $script:Machine.ProbeForegroundTaskRegistered) { throw 'the foreground probe task was not registered' }
+}
+
+function Wait-ForProbeForegroundTask {
+    param([string] $ResultPath)
+    $script:Machine.Log.Add('wait-probe-foreground-task')
+    [pscustomobject]@{ exitCode = 0; stdout = '{}'; stderr = ''; result = [pscustomobject]@{} }
+}
+
+function Unregister-ProbeForegroundTask {
+    $script:Machine.Log.Add('unregister-probe-foreground-task')
+    $script:Machine.ProbeForegroundTaskRegistered = $false
+}
+
 function Invoke-Axon {
     param([Parameter(Mandatory)][string] $Executable, [Parameter(Mandatory)][string[]] $Arguments)
 
@@ -491,9 +613,11 @@ function Invoke-Axon {
 function Invoke-AxonMcp {
     param([Parameter(Mandatory)][string] $Request)
 
-    $script:Machine.Log.Add('mcp')
-    if ($null -ne $script:Machine.McpResponder) { return & $script:Machine.McpResponder $Request }
-    if ($Request -match '"name":"scroll"') {
+    $parsed = $Request | ConvertFrom-Json -Depth 100
+    $name = $parsed.params.name
+    $script:Machine.Log.Add("mcp $name")
+
+    if ($name -eq 'scroll') {
         $script:Machine.ScrollCalls += 1
         $isReset = $script:Machine.ScrollCalls -eq 1
         $isMovement = $script:Machine.ScrollCalls -eq 2
@@ -514,7 +638,29 @@ function Invoke-AxonMcp {
             }
         } | ConvertTo-Json -Depth 10 | ConvertFrom-Json -Depth 100
     }
-    if ($Request -match '"target"') {
+
+    if ($name -eq 'keyboard' -or $name -eq 'click') {
+        if ($name -eq 'click') { $script:Machine.PageTitle = 'Axon Foreground Click Complete' }
+        $pointerRestored = if ($name -eq 'click') { $true } else { $null }
+        return @{
+            result = @{
+                isError = $false
+                structuredContent = @{
+                    success = $true
+                    delivery = 'foreground'
+                    dispatchSuccess = $true
+                    foreground = @{
+                        activationProved = $true
+                        restored = $false
+                        pointerRestored = $pointerRestored
+                        message = 'hand-back refused'
+                    }
+                }
+            }
+        } | ConvertTo-Json -Depth 10 | ConvertFrom-Json -Depth 100
+    }
+
+    if ($null -ne $parsed.params.arguments.target) {
         return @{
             result = @{
                 isError = $false
@@ -533,21 +679,54 @@ function Invoke-AxonMcp {
             }
         } | ConvertTo-Json -Depth 10 | ConvertFrom-Json -Depth 100
     }
-    if ($Request -notmatch '"app"') {
-        return @{ result = @{ isError = $script:Machine.McpIsError; structuredContent = @{ apps = @(@{ name = 'Microsoft Edge'; identifier = 4242 }) } } } |
-            ConvertTo-Json -Depth 10 | ConvertFrom-Json -Depth 100
+
+    # Scenario-specific responders predate browser acceptance and model the passive desktop look.
+    # The probe-owned browser has a stable fake pid, so its page-state reads stay on the common fake.
+    if ($null -ne $script:Machine.McpResponder -and [string]$parsed.params.arguments.app -ne '6060') {
+        return & $script:Machine.McpResponder $Request
     }
+
+    if ($null -eq $parsed.params.arguments.app) {
+        return @{
+            result = @{
+                isError = $script:Machine.McpIsError
+                structuredContent = @{
+                    apps = @(
+                        @{ name = 'Microsoft Edge'; identifier = 6060 }
+                        @{ name = 'Notepad'; identifier = 4242 }
+                        @{ name = 'Explorer'; identifier = 4343 }
+                    )
+                }
+            }
+        } | ConvertTo-Json -Depth 10 | ConvertFrom-Json -Depth 100
+    }
+
     @{
         result = @{
             isError = $false
             content = @(
-                @{ type = 'text'; text = '{}' },
+                @{ type = 'text'; text = '{}' }
                 @{ type = 'image'; mimeType = 'image/png'; data = 'cG5n' }
             )
             structuredContent = @{
                 id = 'snapshot-1'
-                app = @{ windows = @(@{ root = @{ role = 'Window'; name = 'edge-root' } }) }
-                screenshot = @{ mediaType = 'image/png'; contentTransport = 'mcp_image'; width = 800; height = 600 }
+                app = @{
+                    windows = @(
+                        @{
+                            root = @{
+                                role = 'Window'
+                                name = 'edge-root'
+                                title = $script:Machine.PageTitle
+                            }
+                        }
+                    )
+                }
+                screenshot = @{
+                    mediaType = 'image/png'
+                    contentTransport = 'mcp_image'
+                    width = 800
+                    height = 600
+                }
             }
         }
     } | ConvertTo-Json -Depth 10 | ConvertFrom-Json -Depth 100
@@ -555,6 +734,55 @@ function Invoke-AxonMcp {
 
 function Get-ExpectedVersion {
     $ExpectedVersion
+}
+
+function Start-ProbeBrowser {
+    $script:Machine.Log.Add('start-probe-browser')
+    $script:Machine.BrowserRunning = $true
+    Register-ProbeBrowserTask -EdgeExecutable 'C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe' -ProfilePath 'C:\probe-edge-profile'
+    Start-ProbeBrowserTask
+    if ($script:Machine.BrowserStartFails) {
+        # Mirrors production ownership: a helper that throws before returning cleanup state must
+        # clean its own partially launched browser and profile.
+        Stop-ProbeBrowser -Browser ([pscustomobject]@{ ProcessId = 0; ProfilePath = 'C:\probe-edge-profile' })
+        throw 'the probe-owned Edge instance produced no window-owning process'
+    }
+    [pscustomobject]@{ ProcessId = 6060; ProfilePath = 'C:\probe-edge-profile'; PageUrl = 'file:///C:/probe-edge-profile/pages/start.html' }
+}
+
+function Stop-ProbeBrowser {
+    param([Parameter(Mandatory)] $Browser)
+    $script:Machine.Log.Add("stop-probe-browser $($Browser.ProcessId)")
+    $script:Machine.BrowserRunning = $false
+    Unregister-ProbeBrowserTask
+}
+
+function Invoke-HandBackSweep {
+    param([int] $PriorProcessId, [int] $TargetProcessId)
+    try {
+        Register-ProbeActivationTask -ProcessId $PriorProcessId -ResultPath 'C:\prior-activation.json'
+        Start-ProbeActivationTask
+        Wait-ForProbeActivationTask -ResultPath 'C:\prior-activation.json'
+        Register-ProbeForegroundTask -TargetProcessId $TargetProcessId -ResultPath 'C:\foreground-sweep.json'
+        Start-ProbeForegroundTask
+        Wait-ForProbeForegroundTask -ResultPath 'C:\foreground-sweep.json' | Out-Null
+        $script:Machine.Log.Add("handback-sweep $PriorProcessId $TargetProcessId")
+        $samples = foreach ($letter in 'A','B','C','D','E','F','G','H') {
+        [pscustomobject]@{
+            strategy = $letter; measurementOnly = ($letter -eq 'H'); activationProved = $true
+            activator = @{ returnValue = $true; getLastError = 0 }
+            immediate = @{ window = '0x1'; process = $PriorProcessId }
+            after250Ms = @{ window = '0x1'; process = $PriorProcessId }
+            settled = @{ window = '0x1'; process = $PriorProcessId }
+            cursor = @{ x = 1; y = 2 }; elapsedMs = 1000
+        }
+        }
+        [pscustomobject]@{ foregroundLockTimeoutMs = 200000; priorForegroundProcess = $PriorProcessId; results = @($samples) }
+    }
+    finally {
+        Unregister-ProbeForegroundTask
+        Unregister-ProbeActivationTask
+    }
 }
 
 function Invoke-CargoBuild {
@@ -681,11 +909,14 @@ Test-Scenario 'build: leftovers from a killed job go before anything is built' {
     # pipe for every assertion the probe stage makes.
     Add-FakeProcess -ProcessId 5150 -ExecutablePath $ProbeDaemonExecutable
     $script:Machine.ProbeTaskRegistered = $true
+    $script:Machine.ProbeBrowserTaskRegistered = $true
     $result = Invoke-StageUnderTest -Name 'build'
     Check 'the stage succeeds' (-not $result.Failed) $result.Error
     Check 'the leftover task is gone' ($script:Machine.ProbeTaskRegistered -eq $false)
+    Check 'the leftover browser task is gone' ($script:Machine.ProbeBrowserTaskRegistered -eq $false)
     Check 'the leftover daemon is gone' (@($script:Machine.Processes | Where-Object { $_.ProcessId -eq 5150 }).Count -eq 0)
     Test-Order -First 'unregister-probe-task' -Then 'cargo-build'
+    Test-Order -First 'unregister-probe-browser-task' -Then 'cargo-build'
     Test-Order -First 'stop-process 5150' -Then 'cargo-build'
 }
 
@@ -892,6 +1123,24 @@ Test-Scenario 'probe: the daemon it started is the one it reports on' {
     Check 'it registered its own task' (Test-Did 'register-probe-task')
     Check 'it proved authorship' (Test-Said "pid $ProbePid\) is serving")
     Check 'it read a real window' (Test-Said 'root=Window')
+    Check 'it launched an isolated browser' (Test-Did 'start-probe-browser')
+    Check 'it launches Edge through its own Interactive-task seam' (Test-Did 'register-probe-browser-task')
+    Test-Order -First 'register-probe-browser-task' -Then 'start-probe-browser-task'
+    Check 'it measured two unrelated prior applications twice each' ((Get-Count 'handback-sweep 4242 6060') -eq 2 -and (Get-Count 'handback-sweep 4343 6060') -eq 2)
+    Check 'it reports every complete hand-back measurement' (@($script:Machine.Notes | Where-Object { $_ -match '^hand-back sweep prior=' }).Count -eq 4)
+    Check 'it activated each prior through an Interactive-task seam' ((Get-Count 'register-probe-activation-task 4242') -eq 2 -and (Get-Count 'register-probe-activation-task 4343') -eq 2)
+    Test-Order -First 'wait-probe-activation-task' -Then 'handback-sweep 4242 6060'
+    Check 'it ran every sweep through the Interactive foreground-task seam' ((Get-Count 'register-probe-foreground-task 6060') -eq 4)
+    Test-Order -First 'start-probe-foreground-task' -Then 'wait-probe-foreground-task'
+    Check 'it removed every short-lived activation task' (-not $script:Machine.ProbeActivationTaskRegistered)
+    Check 'it removed every short-lived foreground task' (-not $script:Machine.ProbeForegroundTaskRegistered)
+    Check 'it sent the keyboard sequence' ((Get-Count 'mcp keyboard') -eq 3)
+    Check 'it clicked the page-content link' ((Get-Count 'mcp click') -eq 1)
+    Check 'it verified both page states' ((Get-Count 'mcp look') -ge 3)
+    Check 'it reported restoration evidence without requiring restoration' (Test-Said '"restored":false')
+    Check 'it closed the browser' (-not $script:Machine.BrowserRunning)
+    Check 'it removed the browser task after closing Edge' ($script:Machine.ProbeBrowserTaskRegistered -eq $false)
+    Test-Order -First 'start-probe-browser' -Then 'stop-probe-browser'
     Check 'it removed its own registration afterwards' ($script:Machine.ProbeTaskRegistered -eq $false)
     Check 'it left no probe daemon behind' (@($script:Machine.Processes | Where-Object { $_.ExecutablePath -eq $ProbeDaemonExecutable }).Count -eq 0)
 }
@@ -902,6 +1151,17 @@ Test-Scenario 'probe: another daemon answering the pipe fails the stage' {
     $result = Invoke-StageUnderTest -Name 'probe'
     Check 'the stage fails' $result.Failed
     Check 'it names both pids' ($result.Error -match "served by pid 9999, not the daemon under test \(pid $ProbePid\)") $result.Error
+    Check 'it still removed its own registration' ($script:Machine.ProbeTaskRegistered -eq $false)
+}
+
+Test-Scenario 'probe: browser startup timeout cleans its partial profile and process' {
+    Set-ParkedMachine
+    $script:Machine.BrowserStartFails = $true
+    $result = Invoke-StageUnderTest -Name 'probe'
+    Check 'the stage fails with browser discovery' ($result.Failed -and $result.Error -match 'no window-owning process') $result.Error
+    Check 'startup cleaned its partial browser' (-not $script:Machine.BrowserRunning)
+    Check 'startup removed its partial browser task' (-not $script:Machine.ProbeBrowserTaskRegistered)
+    Test-Order -First 'start-probe-browser' -Then 'stop-probe-browser 0'
     Check 'it still removed its own registration' ($script:Machine.ProbeTaskRegistered -eq $false)
 }
 
@@ -1078,6 +1338,9 @@ Test-Scenario 'restore: the desktop gets its daemon back and the verdict is a he
     Check 'it reports the pid it verified' (Test-Said "answering again \(pid $DesktopPid")
     Check 'the debt is cleared' ($null -eq $script:Machine.ParkState)
     Test-Order -First 'unregister-probe-task' -Then 'axon daemon restart'
+    Test-Order -First 'unregister-probe-browser-task' -Then 'axon daemon restart'
+    Test-Order -First 'unregister-probe-foreground-task' -Then 'axon daemon restart'
+    Test-Order -First 'unregister-probe-activation-task' -Then 'axon daemon restart'
 }
 
 Test-Scenario 'restore: a quarantined build still gives the desktop its daemon back' {
@@ -1248,13 +1511,21 @@ Test-Scenario 'restore: a sweep that cannot finish still gives the desktop its d
 Test-Scenario 'restore: the probe registration goes before the desktop task is started' {
     Set-ParkedMachine
     $script:Machine.ProbeTaskRegistered = $true
+    $script:Machine.ProbeBrowserTaskRegistered = $true
+    $script:Machine.ProbeActivationTaskRegistered = $true
+    $script:Machine.ProbeForegroundTaskRegistered = $true
     Add-FakeProcess -ProcessId $ProbePid -ExecutablePath $ProbeDaemonExecutable
     $result = Invoke-StageUnderTest -Name 'restore'
     Check 'the stage succeeds' (-not $result.Failed) $result.Error
     Check 'the probe task is gone' ($script:Machine.ProbeTaskRegistered -eq $false)
+    Check 'the probe browser task is gone' ($script:Machine.ProbeBrowserTaskRegistered -eq $false)
+    Check 'the probe activation task is gone' ($script:Machine.ProbeActivationTaskRegistered -eq $false)
+    Check 'the probe foreground task is gone' ($script:Machine.ProbeForegroundTaskRegistered -eq $false)
     Check 'the probe daemon is gone' (@($script:Machine.Processes | Where-Object { $_.ExecutablePath -eq $ProbeDaemonExecutable }).Count -eq 0)
     Test-Order -First 'stop-process' -Then 'axon daemon restart'
     Test-Order -First 'unregister-probe-task' -Then 'axon daemon restart'
+    Test-Order -First 'unregister-probe-browser-task' -Then 'axon daemon restart'
+    Test-Order -First 'unregister-probe-foreground-task' -Then 'axon daemon restart'
 }
 
 # ---------------------------------------------------------------------------------------------

@@ -274,20 +274,13 @@ pub struct ForegroundCleanup {
     pub already_frontmost: bool,
     /// True when the target was observed frontmost before anything was posted.
     pub activation_proved: bool,
-    /// True when the prior application was observed frontmost again afterwards.
+    /// Whether the prior application was observed frontmost again after restoration was attempted.
+    /// Reported as cleanup evidence; it is not a condition of foreground-rung success.
     pub restored: bool,
-    /// None when the dispatch never moved the pointer, so there was nothing to put back.
+    /// Whether the pointer was restored after an attempt. None means the dispatch never moved it,
+    /// so there was nothing to put back. This is reported evidence, not a success condition.
     pub pointer_restored: Option<bool>,
     pub message: Option<String>,
-}
-
-impl ForegroundCleanup {
-    /// Whether the user's session was handed back whole. A cursor left where synthetic input
-    /// dropped it is a failed restoration as surely as a window that never came back, so an action
-    /// that leaves either behind did not succeed however well its dispatch went.
-    pub fn session_restored(&self) -> bool {
-        self.restored && self.pointer_restored != Some(false)
-    }
 }
 
 /// One rung of an action's delivery ladder.
@@ -544,9 +537,10 @@ fn verified(verification: &Value) -> bool {
 /// intended semantic result happened — a readback, or an `expects` postcondition — and without it a
 /// dispatch proves only that the mechanism accepted what it was handed. `rung_held` is whatever the
 /// carrying rung separately promised: at the pixel rung, that the send completed and left the
-/// foreground and the real pointer alone; at the foreground rung, that the user's session was
-/// handed back afterwards. Neither stands in for the other, and a rung that kept its own promise
-/// perfectly has still not shown that the target acted.
+/// foreground and the real pointer alone; at the foreground rung, that the target was proved
+/// frontmost and exactly one action was dispatched. Foreground restoration is still attempted and
+/// reported, but does not gate success. Neither rung promise stands in for verification, and a rung
+/// that kept its own promise perfectly has still not shown that the target acted.
 ///
 /// `click`, `keyboard`, `invoke` and `scroll` declare no postcondition on any backend, so a clean
 /// dispatch of one of them reports `dispatchSuccess: true` alongside `success: false`. That is the

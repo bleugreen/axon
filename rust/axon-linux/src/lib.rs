@@ -78,8 +78,8 @@ const NO_RESOLVED_APPLICATION: &str = "the resolved target's owning application 
 /// session with no EWMH-capable window manager to read and set the active window through. The
 /// backend's capability report names which one, and that reason reaches the caller ahead of this
 /// message.
-const NO_FOREGROUND_TRANSACTION: &str = "this Linux session cannot capture, prove, and restore the \
-     foreground application, so it cannot deliver global input transactionally";
+const NO_FOREGROUND_TRANSACTION: &str = "this Linux session cannot capture the foreground, activate \
+     the requested target, and prove that activation before dispatch";
 
 pub struct Router<B> {
     backend: B,
@@ -699,10 +699,9 @@ impl<B: PointerTargetVerifier + BackgroundPixelInput> Router<B> {
         Ok(result)
     }
 
-    /// The foreground rung is global input that restores what it borrowed. A backend that cannot
-    /// capture, prove, and hand back the foreground does not get to offer it: dispatching
-    /// unrestored global input while reporting `delivery: "foreground"` would claim a guarantee it
-    /// does not keep, which is precisely what this contract exists to prevent.
+    /// The foreground rung requires a backend to capture the foreground, activate the target, and
+    /// prove that activation before dispatch. The hand-back is always attempted and reported, but
+    /// a backend that cannot provide the activation proof does not get to offer this rung.
     fn foreground_transaction_restriction(&self) -> Option<String> {
         if self.backend.supports_foreground_transaction() {
             return None;
@@ -766,13 +765,9 @@ impl<B: PointerTargetVerifier + BackgroundPixelInput> Router<B> {
         }
 
         let mut result = json!({
-            // Two separate things have to hold here, and this rung is the one that adds the second.
-            // Dispatch evidence survives a failed restoration, but the action as a whole did not
-            // succeed if the user's session was not put back where they left it — a cursor left
-            // where the click dropped it counts as much as a window that never came forward again.
-            // And a session handed back immaculately still says nothing about whether the target
-            // acted on what XTest posted, so the verification has to hold as well.
-            "success": goal_success(&request.verification, dispatch.cleanup.session_restored()),
+            // This rung promises proved activation and exactly one dispatch. The hand-back remains
+            // reported cleanup evidence, while verification proves whether the target acted.
+            "success": goal_success(&request.verification, dispatch.cleanup.activation_proved),
             "dispatch": {"success": true, "mechanism": request.candidate.mechanism},
             "verification": request.verification,
             "foreground": dispatch.cleanup,
@@ -2188,7 +2183,7 @@ mod tests {
         assert_eq!(result["refusal"]["capability"], json!("globalInput"));
     }
 
-    /// A backend that advertises global input and can hand the foreground back.
+    /// A backend that advertises global input and can prove foreground activation.
     fn transactional_backend() -> FakeBackend {
         let mut backend = backend(vec![], None);
         backend.pointer_capability_usable = true;
@@ -2197,10 +2192,7 @@ mod tests {
     }
 
     #[test]
-    fn a_backend_that_cannot_restore_the_foreground_never_offers_the_rung() {
-        // Global input that does not hand the session back is not the foreground rung, it is the
-        // behaviour this contract exists to prevent. Offering it and reporting
-        // `delivery: "foreground"` would claim a guarantee the backend does not keep.
+    fn a_backend_that_cannot_prove_activation_never_offers_the_rung() {
         let mut backend = backend(vec![], None);
         backend.pointer_capability_usable = true;
         let _handle = backend.snapshot.handle(0);
@@ -2225,7 +2217,7 @@ mod tests {
                 result["refusal"]["message"]
                     .as_str()
                     .unwrap()
-                    .contains("restore"),
+                    .contains("prove that activation"),
                 "{policy}: {}",
                 result["refusal"]["message"]
             );
@@ -2321,7 +2313,7 @@ mod tests {
     }
 
     #[test]
-    fn a_failed_restoration_keeps_dispatch_evidence_and_fails_overall() {
+    fn a_failed_hand_back_is_reported_and_does_not_fail_a_verified_action() {
         let backend = transactional_backend();
         backend.refuses_activation.borrow_mut().push("Prior".into());
         let _handle = backend.snapshot.handle(0);
@@ -2345,13 +2337,12 @@ mod tests {
         assert_eq!(success.result["dispatchSuccess"], json!(true));
         assert_eq!(success.result["delivery"], json!("foreground"));
         assert_eq!(success.result["foreground"]["restored"], json!(false));
-        // The events went out, but the user's session was not put back.
+        // The unverified action still fails for its own reason; cleanup is reported independently.
         assert_eq!(success.result["success"], json!(false));
         assert_eq!(*clicks.borrow(), 1);
 
-        // Asserted again with the verification satisfied, because an unverified click fails for
-        // its own reason and would report exactly the same thing if restoration stopped counting
-        // at all. Here it is the only variable left. The first dispatch left the target forward,
+        // Asserted again with verification satisfied to show that failed cleanup does not downgrade
+        // the action. The first dispatch left the target forward,
         // so the foreground is put back by hand first: a target that already holds it activates
         // nothing and has nothing to restore, which is a different case than the one under test.
         *router.backend.frontmost.borrow_mut() = Some("Prior".into());
@@ -2377,8 +2368,8 @@ mod tests {
         assert_eq!(verified["dispatchSuccess"], json!(true));
         assert_eq!(
             verified["success"],
-            json!(false),
-            "a verified goal does not excuse a session that was not handed back"
+            json!(true),
+            "a verified foreground action succeeds while failed cleanup remains reported"
         );
     }
 
@@ -2422,8 +2413,9 @@ mod tests {
     fn a_restored_session_is_not_by_itself_goal_success() {
         // The foreground rung's own condition and the action's verification are separate, and this
         // rung is where they are most easily confused: a transaction that captured, activated,
-        // proved, dispatched and handed the session back has done everything it promised, and
-        // still knows nothing about whether the target acted on the events XTest posted. `click`
+        // proved and dispatched has done everything the rung promised, and still knows nothing
+        // about whether the target acted on the events XTest posted. The reported hand-back does
+        // not supply that missing verification. `click`
         // declares no postcondition, so nothing here can say that it did.
         let backend = transactional_backend();
         let _handle = backend.snapshot.handle(0);

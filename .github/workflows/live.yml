@@ -5,6 +5,12 @@ on:
     branches:
       - main
   workflow_dispatch:
+    inputs:
+      repair_foreground_timeout:
+        description: One-time interactive repair of the Windows runner foreground timeout
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -12,6 +18,7 @@ permissions:
 jobs:
   macos:
     name: macOS live loop
+    if: inputs.repair_foreground_timeout != true
     runs-on: [self-hosted, axon-live-mac]
     concurrency:
       group: axon-live-mac
@@ -434,6 +441,7 @@ jobs:
 
   linux:
     name: Linux live loop
+    if: inputs.repair_foreground_timeout != true
     runs-on: [self-hosted, axon-live-linux]
     concurrency:
       group: axon-live-linux
@@ -878,6 +886,17 @@ jobs:
         id: checkout
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
+      - name: Repair the Windows foreground timeout
+        if: inputs.repair_foreground_timeout == true
+        shell: pwsh
+        run: |
+          Set-Content -LiteralPath .axon-repair-foreground-timeout -Value 2147483647
+          try {
+            .github\scripts\invoke-windows-live-stage.ps1 -Stage probe
+          } finally {
+            Remove-Item -LiteralPath .axon-repair-foreground-timeout -Force -ErrorAction SilentlyContinue
+          }
+
       # Each stage is one call across the forced-command relay into the desktop user's session, and
       # they are separate steps for the same reason the Linux and macOS jobs are: a job that dies
       # after the park still owes this desktop its daemon, and a `finally` block inside a single
@@ -889,6 +908,7 @@ jobs:
       # is paid, and paying it here is what makes a quarantine cost nothing: this machine still has
       # its own daemon at that point.
       - name: Build the daemon under test
+        if: inputs.repair_foreground_timeout != true
         shell: pwsh
         run: .github\scripts\invoke-windows-live-stage.ps1 -Stage build
 
@@ -898,10 +918,12 @@ jobs:
       # answering. This stage reads the desktop's registration and never writes it: the only thing
       # borrowed is the pipe, and the restore below pays it back.
       - name: Park the desktop's Axon daemon
+        if: inputs.repair_foreground_timeout != true
         shell: pwsh
         run: .github\scripts\invoke-windows-live-stage.ps1 -Stage park
 
       - name: Serve the interactive desktop and inspect a real window
+        if: inputs.repair_foreground_timeout != true
         shell: pwsh
         run: .github\scripts\invoke-windows-live-stage.ps1 -Stage probe
 
@@ -916,6 +938,6 @@ jobs:
       # restore failed or whose runner died is paid by the next job that gets this far, and that job
       # may well be one that never reached its own park because the build stage failed.
       - name: Restore the desktop's Axon daemon
-        if: always() && steps.checkout.outcome == 'success'
+        if: always() && inputs.repair_foreground_timeout != true && steps.checkout.outcome == 'success'
         shell: pwsh
         run: .github\scripts\invoke-windows-live-stage.ps1 -Stage restore

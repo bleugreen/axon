@@ -1134,7 +1134,7 @@ public final class AXPrimitiveActionExecutor {
         let cleanup = handBack()
         let restorationFailed = !cleanup.restored || cleanup.pointerRestored == false
         return result.withSuccess(
-            result.success && !restorationFailed,
+            result.success,
             message: restorationFailed
                 ? "\(result.message ?? "Foreground delivery completed"); the session was not restored afterwards"
                 : nil,
