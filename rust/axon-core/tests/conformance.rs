@@ -107,7 +107,10 @@ fn ambiguous_fact_is_not_established_for_a_later_requires_clause() {
             .contains("Ambiguous")
     );
     let require_error = result.trace[1].error.as_deref().unwrap();
-    assert!(require_error.contains("required fact is unavailable"), "{require_error}");
+    assert!(
+        require_error.contains("required fact is unavailable"),
+        "{require_error}"
+    );
 }
 
 #[test]
