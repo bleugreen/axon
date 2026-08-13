@@ -5,8 +5,8 @@ use axon_core::{
     DeliveryOutcome, DeliveryPolicy, DeliveryRefusal, DeliveryRefusalReason, DeliveryRung,
     DeliverySelection, DispatchOutcome, ExpectedFact, ForegroundTarget, JsonRpcError, JsonRpcId,
     JsonRpcRequest, JsonRpcResponse, KeyboardIntent, PlatformBackend, Resolution, RunEnvelope,
-    RunOptions, SemanticLookup, SemanticNameRegistry, Snapshot, SnapshotHandle, ToolDispatcher,
-    dispatch_in_foreground, goal_success, select_delivery,
+    RunOptions, SemanticLookup, SemanticNameRegistry, SemanticSelection, Snapshot, SnapshotHandle,
+    ToolDispatcher, dispatch_in_foreground, goal_success, select_delivery,
 };
 use serde_json::{Map, Value, json};
 
@@ -293,6 +293,15 @@ impl<B: PointerTargetVerifier + BackgroundPixelInput> Router<B> {
             semantic_names: SemanticNameRegistry::default(),
         }
     }
+    fn register_snapshot(&mut self, snapshot: &Snapshot) -> Vec<axon_core::SemanticElementName> {
+        let live_processes = self.backend.live_process_ids().ok();
+        self.semantic_names.register_with_liveness(snapshot, |pid| {
+            live_processes
+                .as_ref()
+                .is_none_or(|processes| processes.contains(&pid))
+        })
+    }
+
     /// The backend this router drives, for the facts a daemon answers outside the tool surface.
     /// `health` is the whole of that today: the session's accessibility switch is a live reading,
     /// not a static capability, so it is asked for at the moment a health request arrives.
@@ -816,7 +825,7 @@ impl<B: PointerTargetVerifier + BackgroundPixelInput> Router<B> {
         }
         let app = app_query(params);
         let snapshot = self.backend.capture(&app).map_err(backend_error)?;
-        let names = self.semantic_names.register(&snapshot);
+        let names = self.register_snapshot(&snapshot);
         let mut value = serde_json::to_value(axon_core::render_semantic_names(&snapshot, &names))
             .map_err(internal_error)?;
         let wants_screenshot = axon_core::screenshot_requested(
@@ -896,19 +905,41 @@ impl<B: PointerTargetVerifier + BackgroundPixelInput> Router<B> {
         }
         let target: axon_core::WireElementTarget =
             serde_json::from_value(params.get("target").cloned().unwrap_or(Value::Null))
-                .map_err(|_| rpc_error(-32602, "element target must be an {app, name} object"))?;
+                .map_err(|_| rpc_error(-32602, axon_core::SEMANTIC_TARGET_GUIDANCE))?;
         let target = target
             .validate()
             .map_err(|error| rpc_error(-32602, error.to_string()))?;
+        let context = match self.semantic_names.select(&target) {
+            SemanticSelection::Selected(context) => context,
+            SemanticSelection::Missing { target } => {
+                return Err(JsonRpcError {
+                    code: -32002,
+                    message: format!("semantic name not found: {} / {}", target.app, target.name),
+                    data: Some(json!({"status":"missing","query":target})),
+                });
+            }
+            SemanticSelection::Ambiguous { target, candidates } => {
+                return Err(JsonRpcError {
+                    code: -32002,
+                    message: format!(
+                        "semantic name is ambiguous: {} / {}",
+                        target.app, target.name
+                    ),
+                    data: Some(
+                        json!({"status":"ambiguous","query":target,"candidates":candidates}),
+                    ),
+                });
+            }
+        };
         let live = self
             .backend
             .capture(&AppQuery {
-                process_id: None,
-                name: Some(target.app.clone()),
+                process_id: context.process_id(),
+                name: context.process_id().is_none().then(|| target.app.clone()),
                 identifier: None,
             })
             .map_err(backend_error)?;
-        let lookup = self.semantic_names.resolve(&target, &live);
+        let lookup = context.resolve(&live);
         self.snapshot = Some(live);
         match lookup {
             SemanticLookup::Unique { handle, resolution } => Ok((handle, resolution)),
@@ -991,12 +1022,18 @@ impl<B: PointerTargetVerifier + BackgroundPixelInput> ToolDispatcher for Router<
         name: &str,
         locator: &axon_core::Locator,
     ) -> Result<(), String> {
-        self.semantic_names.register_replay_locator(
-            axon_core::WireElementTarget {
-                app: app.into(),
-                name: name.into(),
-            },
+        let target = axon_core::WireElementTarget {
+            app: app.into(),
+            name: name.into(),
+        };
+        let process_id = match self.semantic_names.select(&target) {
+            SemanticSelection::Selected(context) => context.process_id(),
+            _ => None,
+        };
+        self.semantic_names.register_replay_locator_for_process(
+            target,
             locator.clone(),
+            process_id,
         );
         Ok(())
     }

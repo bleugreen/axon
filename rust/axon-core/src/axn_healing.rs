@@ -1,6 +1,6 @@
 use crate::{
-    AxnAction, Confidence, Locator, Resolution, ResolutionStatus, SemanticNameRegistry, SemanticResolutionContext, Snapshot,
-    TextMatcher, WireElementTarget,
+    AxnAction, Confidence, Locator, Resolution, ResolutionStatus, SemanticNameRegistry,
+    SemanticResolutionContext, Snapshot, TextMatcher, WireElementTarget,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};

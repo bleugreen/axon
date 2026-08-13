@@ -1,7 +1,7 @@
 use crate::{Application, Node, Rect, Snapshot, SnapshotHandle};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::time::Duration;
+use std::{collections::HashSet, time::Duration};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Capability {
@@ -144,6 +144,14 @@ impl KeyboardIntent<'_> {
 pub trait PlatformBackend {
     fn capabilities(&self) -> Result<Vec<CapabilityInfo>, BackendError>;
     fn enumerate_applications(&self) -> Result<Vec<Application>, BackendError>;
+    /// Runtime process identities visible when semantic evidence is registered.
+    fn live_process_ids(&self) -> Result<HashSet<crate::ProcessId>, BackendError> {
+        Ok(self
+            .enumerate_applications()?
+            .into_iter()
+            .filter_map(|application| application.process_id)
+            .collect())
+    }
     fn capture(&mut self, app: &AppQuery) -> Result<Snapshot, BackendError>;
     fn invoke(&mut self, target: &SnapshotHandle, action: &str) -> Result<(), BackendError>;
     fn read_value(&self, target: &SnapshotHandle) -> Result<Option<String>, BackendError>;
