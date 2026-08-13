@@ -623,7 +623,10 @@ impl<'a, D: ToolDispatcher> AxnRunner<'a, D> {
         let mut heal_events = Vec::new();
         let mut facts: HashMap<String, ExpectedFact> = HashMap::new();
         let mut success = true;
-        for (index, action) in doc.actions.iter().enumerate() {
+        for (index, recorded_action) in doc.actions.iter().enumerate() {
+            let mut action = recorded_action.clone();
+            action.expects = substitute_expected_facts(&action.expects, &bindings, index)?;
+            let action = &action;
             if action.tool.is_empty() && action.params.contains_key("note") {
                 continue;
             }
@@ -718,15 +721,6 @@ impl<'a, D: ToolDispatcher> AxnRunner<'a, D> {
                 self.dispatcher.dispatch(&action.tool, &params)
             };
             let can_verify_dispatch_only = !outcome.success && causal_transition;
-            let redacted = if secret_fields.is_empty() {
-                if can_verify_dispatch_only {
-                    semantically_verified_result(&action.tool, outcome.result)
-                } else {
-                    outcome.result
-                }
-            } else {
-                Value::String("<redacted: contains-secret>".into())
-            };
             let verification_error = if (outcome.success || can_verify_dispatch_only) && !dry_run {
                 action
                     .expects
@@ -737,6 +731,15 @@ impl<'a, D: ToolDispatcher> AxnRunner<'a, D> {
                     })
             } else {
                 None
+            };
+            let redacted = if secret_fields.is_empty() {
+                if can_verify_dispatch_only && verification_error.is_none() {
+                    semantically_verified_result(&action.tool, outcome.result)
+                } else {
+                    outcome.result
+                }
+            } else {
+                Value::String("<redacted: contains-secret>".into())
             };
             let heal = if dry_run {
                 None
@@ -910,7 +913,16 @@ fn render_arg(kind: &ArgumentType, v: &Value) -> Option<String> {
             _ => None,
         },
         ArgumentType::Email => v.as_str().filter(|s| valid_email(s)).map(str::to_owned),
-        ArgumentType::Date => v.as_str().filter(|s| valid_date(s)).map(str::to_owned),
+        ArgumentType::Date => v.as_str().and_then(|date| match date {
+            "today" => Some(chrono::Local::now().format("%Y-%m-%d").to_string()),
+            "yesterday" => Some(
+                (chrono::Local::now() - chrono::Duration::days(1))
+                    .format("%Y-%m-%d")
+                    .to_string(),
+            ),
+            value if valid_date(value) => Some(value.to_owned()),
+            _ => None,
+        }),
         _ => scalar_string(v),
     }
 }
@@ -978,6 +990,68 @@ fn substitute_map(
         }
     }
     Ok((out, tainted))
+}
+
+fn substitute_expected_facts(
+    facts: &[ExpectedFact],
+    bindings: &HashMap<String, (String, bool)>,
+    action_index: usize,
+) -> Result<Vec<ExpectedFact>, AxnError> {
+    facts
+        .iter()
+        .map(|fact| {
+            let mut value = Value::Object(fact.fields.clone());
+            substitute_fact_value(&mut value, bindings, action_index, "expects")?;
+            Ok(ExpectedFact {
+                id: fact.id.clone(),
+                fields: value.as_object().cloned().unwrap_or_default(),
+            })
+        })
+        .collect()
+}
+
+fn substitute_fact_value(
+    value: &mut Value,
+    bindings: &HashMap<String, (String, bool)>,
+    action_index: usize,
+    path: &str,
+) -> Result<(), AxnError> {
+    match value {
+        Value::Object(fields) => {
+            for (key, child) in fields {
+                let child_path = format!("{path}.{key}");
+                if matches!(key.as_str(), "value" | "text" | "key") {
+                    if let Value::String(template) = child {
+                        let (resolved, _) = substitute_string(template, bindings)?;
+                        *child = Value::String(resolved);
+                    } else if contains_reference(child) {
+                        return Err(AxnError::Invalid(format!(
+                            "parameter references are only supported in string value fields: actions[{action_index}].{child_path}"
+                        )));
+                    }
+                } else {
+                    substitute_fact_value(child, bindings, action_index, &child_path)?;
+                }
+            }
+        }
+        Value::Array(values) => {
+            for (offset, child) in values.iter_mut().enumerate() {
+                substitute_fact_value(
+                    child,
+                    bindings,
+                    action_index,
+                    &format!("{path}[{offset}]"),
+                )?;
+            }
+        }
+        Value::String(_) if contains_reference(value) => {
+            return Err(AxnError::Invalid(format!(
+                "parameter references are only supported in string value fields: actions[{action_index}].{path}"
+            )));
+        }
+        _ => {}
+    }
+    Ok(())
 }
 
 fn semantically_verified_result(tool: &str, mut result: Value) -> Value {

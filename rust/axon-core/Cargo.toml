@@ -10,6 +10,7 @@ serde_json = "1"
 serde_yaml = "0.9"
 thiserror = "2"
 unicode-normalization = "0.1"
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
 
 [dev-dependencies]
 pretty_assertions = "1"
