@@ -1038,9 +1038,8 @@ mod pipe {
                 (json!({"name": "look", "arguments": []}), "params.arguments"),
             ] {
                 let call = json!({"jsonrpc": "2.0", "id": 7, "params": params});
-                let error = validate_tools_call(ToolBackend::Windows, call.get("params").cloned())
-                    .unwrap_err();
-                let response = json!({"jsonrpc":"2.0","id":call["id"],"error":error});
+                let response = forward(&call).unwrap();
+                assert_eq!(response["id"], 7);
                 assert_eq!(response["error"]["code"], -32602);
                 assert_eq!(response["error"]["data"]["path"], path);
             }
