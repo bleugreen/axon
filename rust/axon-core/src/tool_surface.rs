@@ -185,9 +185,10 @@ fn validate_value(schema: &Value, value: &Value, path: &str) -> Result<(), JsonR
     {
         return Err(invalid(path, "value is not in the allowed enum", None));
     }
+    if let Some(branches) = schema.get("anyOf").and_then(Value::as_array) {
+        validate_branches(branches, value, path, false)?;
+    }
     let expected = schema.get("type").and_then(Value::as_str);
-    let type_matches = match expected {
-        None => true,
         Some("object") => value.is_object(),
         Some("array") => value.is_array(),
         Some("string") => value.is_string(),
@@ -287,6 +288,9 @@ fn validate_branches(
         {
             return Err(error);
         }
+        return Err(invalid(path, "did not match any schema alternative", None));
+    }
+    if exactly_one && successes != 1 {
         return Err(invalid(
             path,
             "expected exactly one schema alternative",
@@ -294,9 +298,6 @@ fn validate_branches(
         ));
     }
     Ok(())
-}
-
-fn apply_defaults(schema: &Value, value: &mut Value) {
     if let (Some(properties), Some(object)) = (
         schema.get("properties").and_then(Value::as_object),
         value.as_object_mut(),
@@ -307,9 +308,10 @@ fn apply_defaults(schema: &Value, value: &mut Value) {
             {
                 object.insert(name.clone(), default.clone());
             }
+            if let Some(child) = object.get_mut(name) {
+                apply_defaults(child_schema, child);
+            }
         }
-    }
-}
 
 fn invalid(path: &str, message: &str, expected: Option<&str>) -> JsonRpcError {
     JsonRpcError {
