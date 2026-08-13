@@ -88,6 +88,7 @@ impl LookRequest {
                 let limit = if all { raw_limit.filter(|n| *n > 0) } else { Some(raw_limit.unwrap_or(24).clamp(1, 24)) };
                 LookMode::ChildPage { target, offset, limit, direct }
             }
+            (Some(_), Some(_), None) => unreachable!("app/target exclusivity checked above"),
             (_, _, Some(_)) => return Err(LookRequestError("since requires app and cannot be combined with target".into())),
         };
         Ok(Self { mode, display: LookDisplayOptions {
