@@ -66,7 +66,6 @@ main > section {
   padding-right: 28px;
 }
 .hero { padding-top: 128px; padding-bottom: 118px; }
-.kicker,
 .docs-label {
   color: var(--moss);
   font: 600 13px/1.4 var(--sans);

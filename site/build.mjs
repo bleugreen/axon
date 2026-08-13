@@ -133,7 +133,7 @@ function page({ title, description, body, docsPage = false, docsSlug }) {
 </html>`;
 }
 
-function home(version) {
+function home() {
   const guarantees = [
     ['Semantic targets', 'Address a button by its role, label, window, and surrounding context.'],
     ['One interface everywhere', 'The same small tool surface works on macOS, Windows, and Linux.'],
@@ -156,7 +156,7 @@ function home(version) {
         <div class="guarantee-grid">${guarantees.map(([title, copy]) => `<article><h3>${title}</h3><p>${copy}</p></article>`).join('')}</div>
       </section>
       <section class="artifact">
-        <div><p class="kicker">The unit of memory</p><h2>A route becomes a reflex.</h2><p>A <code>.axn</code> file is an ordered sequence of tool calls you can inspect, edit, share, and run again.</p><a href="/docs/axn/">Read about the file format →</a></div>
+        <div><h2>A route becomes a reflex.</h2><p>A <code>.axn</code> file is an ordered sequence of tool calls you can inspect, edit, share, and run again.</p><a href="/docs/axn/">Read about the file format →</a></div>
         <pre aria-label="Example axn file"><code><b>version:</b> 2
 <b>actions:</b>
   - <b>tool:</b> click
@@ -169,7 +169,7 @@ function home(version) {
     <b>value:</b> Ship the honest path</code></pre>
       </section>
       <section class="install">
-        <div><p class="kicker">Install Axon ${escapeHtml(version)}</p><h2>Get started.</h2></div>
+        <div><h2>Get started.</h2></div>
         <div class="commands">
           ${shellBlock('curl -fsSL https://axn.dev/install.sh | sh', 'macOS / Linux · shell')}
           ${shellBlock('irm https://axn.dev/install.ps1 | iex', 'Windows · administrator PowerShell')}
@@ -185,8 +185,7 @@ async function build() {
   await mkdir(outputRoot, { recursive: true });
   await cp(join(siteRoot, 'public'), outputRoot, { recursive: true });
   await cp(join(repositoryRoot, 'Assets', 'AxonMark.svg'), join(outputRoot, 'axon-mark.svg'));
-  const version = (await readFile(join(repositoryRoot, 'VERSION'), 'utf8')).trim();
-  await writeFile(join(outputRoot, 'index.html'), home(version));
+  await writeFile(join(outputRoot, 'index.html'), home());
 
   for (const [slug, title] of [...docs, ...supportingDocs]) {
     const markdown = await readFile(join(docsRoot, `${slug}.md`), 'utf8');
