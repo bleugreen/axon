@@ -1536,14 +1536,15 @@ mod tests {
         let JsonRpcResponse::Success(success) = response else {
             panic!("look application enumeration must succeed")
         };
-        let expected = include_str!("../../../schema/fixtures/look-applications-envelope.json").trim();
-        assert_eq!(
-            serde_json::to_string(&success.result).unwrap(),
-            expected
-        );
+        let expected =
+            include_str!("../../../schema/fixtures/look-applications-envelope.json").trim();
+        assert_eq!(serde_json::to_string(&success.result).unwrap(), expected);
         let mcp = axon_core::mcp_tool_result(success.result, false);
         assert!(mcp["structuredContent"].is_object());
-        assert_eq!(serde_json::to_string(&mcp["structuredContent"]).unwrap(), expected);
+        assert_eq!(
+            serde_json::to_string(&mcp["structuredContent"]).unwrap(),
+            expected
+        );
     }
 
     #[test]

@@ -1429,11 +1429,177 @@ pub fn parse_request(line: &str) -> Result<JsonRpcRequest, JsonRpcResponse> {
 mod tests {
     use super::*;
 
+    struct EnumerationBackend;
+
+    impl PlatformBackend for EnumerationBackend {
+        fn capabilities(&self) -> Result<Vec<axon_core::CapabilityInfo>, axon_core::BackendError> {
+            Ok(vec![])
+        }
+        fn enumerate_applications(
+            &self,
+        ) -> Result<Vec<axon_core::Application>, axon_core::BackendError> {
+            Ok(vec![])
+        }
+        fn capture(&mut self, _: &AppQuery) -> Result<Snapshot, axon_core::BackendError> {
+            unreachable!()
+        }
+        fn invoke(&mut self, _: &SnapshotHandle, _: &str) -> Result<(), axon_core::BackendError> {
+            unreachable!()
+        }
+        fn read_value(
+            &self,
+            _: &SnapshotHandle,
+        ) -> Result<Option<String>, axon_core::BackendError> {
+            unreachable!()
+        }
+        fn set_value(
+            &mut self,
+            _: &SnapshotHandle,
+            _: &str,
+        ) -> Result<(), axon_core::BackendError> {
+            unreachable!()
+        }
+        fn focus(&mut self, _: &SnapshotHandle) -> Result<(), axon_core::BackendError> {
+            unreachable!()
+        }
+        fn scroll(
+            &mut self,
+            _: &SnapshotHandle,
+            _: (f64, f64),
+        ) -> Result<(), axon_core::BackendError> {
+            unreachable!()
+        }
+        fn observe(
+            &mut self,
+            _: &AppQuery,
+            _: Duration,
+        ) -> Result<axon_core::Observation, axon_core::BackendError> {
+            unreachable!()
+        }
+        fn wait_for_value(
+            &mut self,
+            _: &SnapshotHandle,
+            _: &Value,
+            _: Duration,
+        ) -> Result<axon_core::Observation, axon_core::BackendError> {
+            unreachable!()
+        }
+        fn pointer_click(&mut self, _: (f64, f64)) -> Result<(), axon_core::BackendError> {
+            unreachable!()
+        }
+        fn pointer_drag(
+            &mut self,
+            _: (f64, f64),
+            _: (f64, f64),
+            _: Duration,
+        ) -> Result<(), axon_core::BackendError> {
+            unreachable!()
+        }
+        fn keyboard(
+            &mut self,
+            _: &AppQuery,
+            _: KeyboardIntent<'_>,
+        ) -> Result<(), axon_core::BackendError> {
+            unreachable!()
+        }
+        fn screenshot(
+            &mut self,
+            _: &AppQuery,
+        ) -> Result<axon_core::Screenshot, axon_core::BackendError> {
+            unreachable!()
+        }
+        fn hit_test(
+            &mut self,
+            _: (f64, f64),
+        ) -> Result<Option<axon_core::Node>, axon_core::BackendError> {
+            unreachable!()
+        }
+        fn recorded_calls(&self) -> Result<Vec<axon_core::RecordedCall>, axon_core::BackendError> {
+            unreachable!()
+        }
+        fn set_recording(&mut self, _: bool) -> Result<(), axon_core::BackendError> {
+            unreachable!()
+        }
+        fn observe_global_input(
+            &mut self,
+            _: Duration,
+        ) -> Result<Vec<axon_core::RecordedCall>, axon_core::BackendError> {
+            unreachable!()
+        }
+    }
+
+    impl PointerTargetVerifier for EnumerationBackend {
+        fn verify_pointer_target(
+            &mut self,
+            _: &SnapshotHandle,
+            _: (f64, f64),
+        ) -> Result<bool, axon_core::BackendError> {
+            unreachable!()
+        }
+    }
+    impl TextRecognitionProvider for EnumerationBackend {
+        fn recognize_text(
+            &mut self,
+            _: &AppQuery,
+        ) -> Result<Vec<axon_core::RecognizedText>, axon_core::BackendError> {
+            unreachable!()
+        }
+    }
+    impl VisualObservationProvider for EnumerationBackend {
+        fn observe_visuals(
+            &mut self,
+            _: &AppQuery,
+            _: bool,
+            _: bool,
+        ) -> Result<VisualObservation, axon_core::BackendError> {
+            unreachable!()
+        }
+    }
+    impl ReadableStateProvider for EnumerationBackend {
+        fn readable_state(
+            &self,
+            _: &SnapshotHandle,
+        ) -> Result<Map<String, Value>, axon_core::BackendError> {
+            unreachable!()
+        }
+    }
+    impl BackgroundPixelPointer for EnumerationBackend {
+        fn plan_pixel_click(
+            &mut self,
+            _: &SnapshotHandle,
+            _: (f64, f64),
+        ) -> Result<PixelPlan, axon_core::BackendError> {
+            unreachable!()
+        }
+        fn dispatch_pixel_click(
+            &mut self,
+            _: &PixelTarget,
+        ) -> Result<PixelDispatch, PixelDispatchError> {
+            unreachable!()
+        }
+    }
+
     #[test]
     fn look_application_enumeration_matches_shared_envelope() {
+        let mut router = Router::new(EnumerationBackend);
+        let response = router
+            .request(JsonRpcRequest::new(
+                Some(JsonRpcId::Integer(1)),
+                "look",
+                Some(json!({})),
+            ))
+            .unwrap();
+        let JsonRpcResponse::Success(success) = response else {
+            panic!("look application enumeration must succeed")
+        };
+        let expected =
+            include_str!("../../../schema/fixtures/look-applications-envelope.json").trim();
+        assert_eq!(serde_json::to_string(&success.result).unwrap(), expected);
+        let mcp = axon_core::mcp_tool_result(success.result, false);
+        assert!(mcp["structuredContent"].is_object());
         assert_eq!(
-            serde_json::to_string(&application_enumeration(Vec::<Value>::new())).unwrap(),
-            include_str!("../../../schema/fixtures/look-applications-envelope.json").trim()
+            serde_json::to_string(&mcp["structuredContent"]).unwrap(),
+            expected
         );
     }
 
