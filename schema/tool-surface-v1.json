@@ -482,18 +482,18 @@
               },
               {
                 "additionalProperties" : false,
-                "description" : "Point target object: { point: { x, y, coordinateSpace } } or { x, y, coordinateSpace }. coordinateSpace is screen, window, or screenshot; window and screenshot points require app when no top-level app is provided. Raw points dispatch without element identity or occlusion verification; use a semantic name when fail-closed target validation is required.",
+                "description" : "Point target object: { point: { x, y, coordinateSpace } } or { x, y, coordinateSpace }. screen and window coordinates are logical macOS points, matching Accessibility frames and dispatched CGEvent locations. screenshot coordinates are pixels in the returned encoded image after Retina capture and any downscaling; Axon converts them by the encoded-image-to-window size ratios, never by assuming a fixed 2x scale. window and screenshot points require app when no top-level app is provided. Raw points dispatch without element identity or occlusion verification; use a semantic name when fail-closed target validation is required.",
                 "properties" : {
                   "point" : {
                     "additionalProperties" : false,
-                    "description" : "Point target object: { point: { x, y, coordinateSpace } } or { x, y, coordinateSpace }. coordinateSpace is screen, window, or screenshot; window and screenshot points require app when no top-level app is provided. Raw points dispatch without element identity or occlusion verification; use a semantic name when fail-closed target validation is required.",
+                    "description" : "Point target object: { point: { x, y, coordinateSpace } } or { x, y, coordinateSpace }. screen and window coordinates are logical macOS points, matching Accessibility frames and dispatched CGEvent locations. screenshot coordinates are pixels in the returned encoded image after Retina capture and any downscaling; Axon converts them by the encoded-image-to-window size ratios, never by assuming a fixed 2x scale. window and screenshot points require app when no top-level app is provided. Raw points dispatch without element identity or occlusion verification; use a semantic name when fail-closed target validation is required.",
                     "properties" : {
                       "app" : {
                         "description" : "App that owns a window or screenshot coordinate.",
                         "type" : "string"
                       },
                       "coordinateSpace" : {
-                        "description" : "Coordinate space. Defaults to screen.",
+                        "description" : "Coordinate space. Defaults to screen. screen and window use logical macOS points; screenshot uses returned encoded-image pixels.",
                         "enum" : [
                           "screen",
                           "window",
@@ -533,14 +533,14 @@
               },
               {
                 "additionalProperties" : false,
-                "description" : "Point target object: { point: { x, y, coordinateSpace } } or { x, y, coordinateSpace }. coordinateSpace is screen, window, or screenshot; window and screenshot points require app when no top-level app is provided. Raw points dispatch without element identity or occlusion verification; use a semantic name when fail-closed target validation is required.",
+                "description" : "Point target object: { point: { x, y, coordinateSpace } } or { x, y, coordinateSpace }. screen and window coordinates are logical macOS points, matching Accessibility frames and dispatched CGEvent locations. screenshot coordinates are pixels in the returned encoded image after Retina capture and any downscaling; Axon converts them by the encoded-image-to-window size ratios, never by assuming a fixed 2x scale. window and screenshot points require app when no top-level app is provided. Raw points dispatch without element identity or occlusion verification; use a semantic name when fail-closed target validation is required.",
                 "properties" : {
                   "app" : {
                     "description" : "App that owns a window or screenshot coordinate.",
                     "type" : "string"
                   },
                   "coordinateSpace" : {
-                    "description" : "Coordinate space. Defaults to screen.",
+                    "description" : "Coordinate space. Defaults to screen. screen and window use logical macOS points; screenshot uses returned encoded-image pixels.",
                     "enum" : [
                       "screen",
                       "window",
@@ -813,18 +813,18 @@
               },
               {
                 "additionalProperties" : false,
-                "description" : "Point target object: { point: { x, y, coordinateSpace } } or { x, y, coordinateSpace }. coordinateSpace is screen, window, or screenshot; window and screenshot points require app when no top-level app is provided. Raw points dispatch without element identity or occlusion verification; use a semantic name when fail-closed target validation is required.",
+                "description" : "Point target object: { point: { x, y, coordinateSpace } } or { x, y, coordinateSpace }. screen and window coordinates are logical macOS points, matching Accessibility frames and dispatched CGEvent locations. screenshot coordinates are pixels in the returned encoded image after Retina capture and any downscaling; Axon converts them by the encoded-image-to-window size ratios, never by assuming a fixed 2x scale. window and screenshot points require app when no top-level app is provided. Raw points dispatch without element identity or occlusion verification; use a semantic name when fail-closed target validation is required.",
                 "properties" : {
                   "point" : {
                     "additionalProperties" : false,
-                    "description" : "Point target object: { point: { x, y, coordinateSpace } } or { x, y, coordinateSpace }. coordinateSpace is screen, window, or screenshot; window and screenshot points require app when no top-level app is provided. Raw points dispatch without element identity or occlusion verification; use a semantic name when fail-closed target validation is required.",
+                    "description" : "Point target object: { point: { x, y, coordinateSpace } } or { x, y, coordinateSpace }. screen and window coordinates are logical macOS points, matching Accessibility frames and dispatched CGEvent locations. screenshot coordinates are pixels in the returned encoded image after Retina capture and any downscaling; Axon converts them by the encoded-image-to-window size ratios, never by assuming a fixed 2x scale. window and screenshot points require app when no top-level app is provided. Raw points dispatch without element identity or occlusion verification; use a semantic name when fail-closed target validation is required.",
                     "properties" : {
                       "app" : {
                         "description" : "App that owns a window or screenshot coordinate.",
                         "type" : "string"
                       },
                       "coordinateSpace" : {
-                        "description" : "Coordinate space. Defaults to screen.",
+                        "description" : "Coordinate space. Defaults to screen. screen and window use logical macOS points; screenshot uses returned encoded-image pixels.",
                         "enum" : [
                           "screen",
                           "window",
@@ -864,14 +864,14 @@
               },
               {
                 "additionalProperties" : false,
-                "description" : "Point target object: { point: { x, y, coordinateSpace } } or { x, y, coordinateSpace }. coordinateSpace is screen, window, or screenshot; window and screenshot points require app when no top-level app is provided. Raw points dispatch without element identity or occlusion verification; use a semantic name when fail-closed target validation is required.",
+                "description" : "Point target object: { point: { x, y, coordinateSpace } } or { x, y, coordinateSpace }. screen and window coordinates are logical macOS points, matching Accessibility frames and dispatched CGEvent locations. screenshot coordinates are pixels in the returned encoded image after Retina capture and any downscaling; Axon converts them by the encoded-image-to-window size ratios, never by assuming a fixed 2x scale. window and screenshot points require app when no top-level app is provided. Raw points dispatch without element identity or occlusion verification; use a semantic name when fail-closed target validation is required.",
                 "properties" : {
                   "app" : {
                     "description" : "App that owns a window or screenshot coordinate.",
                     "type" : "string"
                   },
                   "coordinateSpace" : {
-                    "description" : "Coordinate space. Defaults to screen.",
+                    "description" : "Coordinate space. Defaults to screen. screen and window use logical macOS points; screenshot uses returned encoded-image pixels.",
                     "enum" : [
                       "screen",
                       "window",
@@ -1041,18 +1041,18 @@
               },
               {
                 "additionalProperties" : false,
-                "description" : "Point target object: { point: { x, y, coordinateSpace } } or { x, y, coordinateSpace }. coordinateSpace is screen, window, or screenshot; window and screenshot points require app when no top-level app is provided. Raw points dispatch without element identity or occlusion verification; use a semantic name when fail-closed target validation is required.",
+                "description" : "Point target object: { point: { x, y, coordinateSpace } } or { x, y, coordinateSpace }. screen and window coordinates are logical macOS points, matching Accessibility frames and dispatched CGEvent locations. screenshot coordinates are pixels in the returned encoded image after Retina capture and any downscaling; Axon converts them by the encoded-image-to-window size ratios, never by assuming a fixed 2x scale. window and screenshot points require app when no top-level app is provided. Raw points dispatch without element identity or occlusion verification; use a semantic name when fail-closed target validation is required.",
                 "properties" : {
                   "point" : {
                     "additionalProperties" : false,
-                    "description" : "Point target object: { point: { x, y, coordinateSpace } } or { x, y, coordinateSpace }. coordinateSpace is screen, window, or screenshot; window and screenshot points require app when no top-level app is provided. Raw points dispatch without element identity or occlusion verification; use a semantic name when fail-closed target validation is required.",
+                    "description" : "Point target object: { point: { x, y, coordinateSpace } } or { x, y, coordinateSpace }. screen and window coordinates are logical macOS points, matching Accessibility frames and dispatched CGEvent locations. screenshot coordinates are pixels in the returned encoded image after Retina capture and any downscaling; Axon converts them by the encoded-image-to-window size ratios, never by assuming a fixed 2x scale. window and screenshot points require app when no top-level app is provided. Raw points dispatch without element identity or occlusion verification; use a semantic name when fail-closed target validation is required.",
                     "properties" : {
                       "app" : {
                         "description" : "App that owns a window or screenshot coordinate.",
                         "type" : "string"
                       },
                       "coordinateSpace" : {
-                        "description" : "Coordinate space. Defaults to screen.",
+                        "description" : "Coordinate space. Defaults to screen. screen and window use logical macOS points; screenshot uses returned encoded-image pixels.",
                         "enum" : [
                           "screen",
                           "window",
@@ -1092,14 +1092,14 @@
               },
               {
                 "additionalProperties" : false,
-                "description" : "Point target object: { point: { x, y, coordinateSpace } } or { x, y, coordinateSpace }. coordinateSpace is screen, window, or screenshot; window and screenshot points require app when no top-level app is provided. Raw points dispatch without element identity or occlusion verification; use a semantic name when fail-closed target validation is required.",
+                "description" : "Point target object: { point: { x, y, coordinateSpace } } or { x, y, coordinateSpace }. screen and window coordinates are logical macOS points, matching Accessibility frames and dispatched CGEvent locations. screenshot coordinates are pixels in the returned encoded image after Retina capture and any downscaling; Axon converts them by the encoded-image-to-window size ratios, never by assuming a fixed 2x scale. window and screenshot points require app when no top-level app is provided. Raw points dispatch without element identity or occlusion verification; use a semantic name when fail-closed target validation is required.",
                 "properties" : {
                   "app" : {
                     "description" : "App that owns a window or screenshot coordinate.",
                     "type" : "string"
                   },
                   "coordinateSpace" : {
-                    "description" : "Coordinate space. Defaults to screen.",
+                    "description" : "Coordinate space. Defaults to screen. screen and window use logical macOS points; screenshot uses returned encoded-image pixels.",
                     "enum" : [
                       "screen",
                       "window",
@@ -1230,18 +1230,18 @@
               },
               {
                 "additionalProperties" : false,
-                "description" : "Point target object: { point: { x, y, coordinateSpace } } or { x, y, coordinateSpace }. coordinateSpace is screen, window, or screenshot; window and screenshot points require app when no top-level app is provided. Raw points dispatch without element identity or occlusion verification; use a semantic name when fail-closed target validation is required.",
+                "description" : "Point target object: { point: { x, y, coordinateSpace } } or { x, y, coordinateSpace }. screen and window coordinates are logical macOS points, matching Accessibility frames and dispatched CGEvent locations. screenshot coordinates are pixels in the returned encoded image after Retina capture and any downscaling; Axon converts them by the encoded-image-to-window size ratios, never by assuming a fixed 2x scale. window and screenshot points require app when no top-level app is provided. Raw points dispatch without element identity or occlusion verification; use a semantic name when fail-closed target validation is required.",
                 "properties" : {
                   "point" : {
                     "additionalProperties" : false,
-                    "description" : "Point target object: { point: { x, y, coordinateSpace } } or { x, y, coordinateSpace }. coordinateSpace is screen, window, or screenshot; window and screenshot points require app when no top-level app is provided. Raw points dispatch without element identity or occlusion verification; use a semantic name when fail-closed target validation is required.",
+                    "description" : "Point target object: { point: { x, y, coordinateSpace } } or { x, y, coordinateSpace }. screen and window coordinates are logical macOS points, matching Accessibility frames and dispatched CGEvent locations. screenshot coordinates are pixels in the returned encoded image after Retina capture and any downscaling; Axon converts them by the encoded-image-to-window size ratios, never by assuming a fixed 2x scale. window and screenshot points require app when no top-level app is provided. Raw points dispatch without element identity or occlusion verification; use a semantic name when fail-closed target validation is required.",
                     "properties" : {
                       "app" : {
                         "description" : "App that owns a window or screenshot coordinate.",
                         "type" : "string"
                       },
                       "coordinateSpace" : {
-                        "description" : "Coordinate space. Defaults to screen.",
+                        "description" : "Coordinate space. Defaults to screen. screen and window use logical macOS points; screenshot uses returned encoded-image pixels.",
                         "enum" : [
                           "screen",
                           "window",
@@ -1281,14 +1281,14 @@
               },
               {
                 "additionalProperties" : false,
-                "description" : "Point target object: { point: { x, y, coordinateSpace } } or { x, y, coordinateSpace }. coordinateSpace is screen, window, or screenshot; window and screenshot points require app when no top-level app is provided. Raw points dispatch without element identity or occlusion verification; use a semantic name when fail-closed target validation is required.",
+                "description" : "Point target object: { point: { x, y, coordinateSpace } } or { x, y, coordinateSpace }. screen and window coordinates are logical macOS points, matching Accessibility frames and dispatched CGEvent locations. screenshot coordinates are pixels in the returned encoded image after Retina capture and any downscaling; Axon converts them by the encoded-image-to-window size ratios, never by assuming a fixed 2x scale. window and screenshot points require app when no top-level app is provided. Raw points dispatch without element identity or occlusion verification; use a semantic name when fail-closed target validation is required.",
                 "properties" : {
                   "app" : {
                     "description" : "App that owns a window or screenshot coordinate.",
                     "type" : "string"
                   },
                   "coordinateSpace" : {
-                    "description" : "Coordinate space. Defaults to screen.",
+                    "description" : "Coordinate space. Defaults to screen. screen and window use logical macOS points; screenshot uses returned encoded-image pixels.",
                     "enum" : [
                       "screen",
                       "window",
