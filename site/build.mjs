@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import { cp, mkdir, readFile, rm, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import { extname, join, resolve } from 'node:path';
@@ -8,6 +10,9 @@ const siteRoot = resolve(import.meta.dirname);
 const repositoryRoot = resolve(siteRoot, '..');
 const outputRoot = join(siteRoot, 'dist');
 const docsRoot = join(repositoryRoot, 'docs');
+const stylesheetHash = createHash('sha256')
+  .update(readFileSync(join(siteRoot, 'public', 'styles.css')))
+  .digest('hex').slice(0, 10);
 
 const docs = [
   ['install', 'Install'],
@@ -68,11 +73,11 @@ function renderMarkdown(source, { omitSections = [] } = {}) {
 }
 
 function internalTarget(href, currentPage) {
-  const [rawPath, fragment] = href.split('#', 2);
-  if (!rawPath && fragment) return { path: currentPage, fragment };
-  if (!rawPath.startsWith('/')) return undefined;
-  const path = rawPath.endsWith('/') ? `${rawPath}index.html` : rawPath;
-  return { path, fragment };
+  if (href.startsWith('#')) return { path: currentPage, fragment: href.slice(1) };
+  if (!href.startsWith('/')) return undefined;
+  const url = new URL(href, 'https://axn.dev');
+  const path = url.pathname.endsWith('/') ? `${url.pathname}index.html` : url.pathname;
+  return { path, fragment: url.hash.slice(1) || undefined };
 }
 
 async function validateInternalLinks() {
@@ -115,7 +120,7 @@ function page({ title, description, body, docsPage = false, docsSlug }) {
   <meta name="description" content="${escapeHtml(description)}">
   <title>${escapeHtml(title)}</title>
   <link rel="icon" href="/axon-mark.svg" type="image/svg+xml">
-  <link rel="stylesheet" href="/styles.css">
+  <link rel="stylesheet" href="/styles.css?v=${stylesheetHash}">
 </head>
 <body>
   <header class="site-header">
