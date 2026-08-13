@@ -693,7 +693,7 @@ function Invoke-ProbeStage {
                     arguments = @{
                         target = @{ app = $verified.app; name = $parentName }
                         offset = $offset
-                        limit = 5
+                        limit = 1
                         direct = $true
                     }
                 }
@@ -703,8 +703,8 @@ function Invoke-ProbeStage {
             $children = $page.result.structuredContent.children
             $payloadBytes = [Text.Encoding]::UTF8.GetByteCount(($page | ConvertTo-Json -Compress -Depth 100))
             Write-Note "Edge paging page=$pageNumber offset=$($children.offset) limit=$($children.limit) total=$($children.total) nextOffset=$($children.nextOffset) payloadBytes=$payloadBytes"
-            if ([int]$children.offset -ne [int]$offset -or [int]$children.limit -gt 5) {
-                throw "Edge child page $pageNumber did not honor offset/limit: requested offset=$offset limit=5; returned offset=$($children.offset) limit=$($children.limit)"
+            if ([int]$children.offset -ne [int]$offset -or [int]$children.limit -gt 1) {
+                throw "Edge child page $pageNumber did not honor offset/limit: requested offset=$offset limit=1; returned offset=$($children.offset) limit=$($children.limit)"
             }
             $next = $children.nextOffset
             if ($null -ne $next -and $next -le $offset) { throw 'Edge paging did not advance' }
