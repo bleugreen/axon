@@ -211,6 +211,72 @@ private func stabilitySnapshot(id: String, title: String) -> AppSnapshot {
     #expect(response.result?["action"]?["point"]?["x"] == .double(25))
 }
 
+@Test func clickRequestConvertsWindowPointToLogicalScreenPoints() {
+    let router = CommandRouter(
+        captureSnapshot: { app, screenshot in
+            #expect(app == "com.example.App")
+            #expect(screenshot == false)
+            return actionTextLocationFixtureSnapshot(labels: [])
+        },
+        actions: PrimitiveActionHandlers(clickPoint: { point, _ in
+            #expect(point == ActionPoint(x: 60, y: 80, coordinateSpace: .screen, app: "com.example.App"))
+            return PrimitiveActionResult(action: "click", target: "converted", strategy: "CGEvent", success: true)
+        })
+    )
+
+    let response = router.handle(JSONRPCRequest(id: .string("click-window-point"), method: "click", params: .object([
+        "app": .string("com.example.App"),
+        "target": .object(["point": .object([
+            "x": .int(10), "y": .int(20), "coordinateSpace": .string("window")
+        ])])
+    ])))
+
+    #expect(response.error == nil)
+}
+
+@Test func clickRequestConvertsEncodedScreenshotPixelsByWindowRatiosAndPrefersPointApp() {
+    let router = CommandRouter(
+        captureSnapshot: { app, screenshot in
+            #expect(app == "com.example.PointApp")
+            #expect(screenshot == true)
+            return actionTextLocationFixtureSnapshot(
+                labels: [],
+                screenshot: EncodedScreenshot(mediaType: "image/png", base64Data: "", width: 1_280, height: 720)
+            )
+        },
+        actions: PrimitiveActionHandlers(clickPoint: { point, _ in
+            #expect(point == ActionPoint(x: 300, y: 260, coordinateSpace: .screen, app: "com.example.PointApp"))
+            return PrimitiveActionResult(action: "click", target: "converted", strategy: "CGEvent", success: true)
+        })
+    )
+
+    let response = router.handle(JSONRPCRequest(id: .string("click-screenshot-point"), method: "click", params: .object([
+        "app": .string("com.example.TopLevelApp"),
+        "target": .object(["point": .object([
+            "app": .string("com.example.PointApp"),
+            "x": .int(640), "y": .int(360), "coordinateSpace": .string("screenshot")
+        ])])
+    ])))
+
+    #expect(response.error == nil)
+}
+
+@Test func clickRequestRejectsRelativePointWithoutApp() {
+    let router = CommandRouter(actions: PrimitiveActionHandlers(clickPoint: { _, _ in
+        Issue.record("relative point without app should fail before dispatch")
+        return PrimitiveActionResult(action: "click", target: "bad", strategy: "bad", success: true)
+    }))
+
+    let response = router.handle(JSONRPCRequest(id: .string("click-relative-no-app"), method: "click", params: .object([
+        "target": .object(["point": .object([
+            "x": .int(10), "y": .int(20), "coordinateSpace": .string("window")
+        ])])
+    ])))
+
+    #expect(response.error?.code == -32602)
+    #expect(response.error?.message == "target point coordinateSpace window requires app")
+}
+
 @Test func findRequestReturnsLocatorResolution() {
     let router = CommandRouter(
         resolveLocator: { app, locator, scrollToVisible in

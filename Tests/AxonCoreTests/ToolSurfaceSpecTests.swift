@@ -52,6 +52,9 @@ private func availableToolNames(for facade: ToolFacade) -> [String] {
         .string("screen"), .string("window"), .string("screenshot")
     ]))
     #expect(flatPoint?["additionalProperties"] == .bool(false))
+    #expect(flatPoint?["description"]?.stringValue?.contains("platform accessibility coordinate system") == true)
+    #expect(flatPoint?["description"]?.stringValue?.contains("encoded image") == true)
+    #expect(flatPoint?["properties"]?["coordinateSpace"]?["description"]?.stringValue?.contains("encoded-image pixels") == true)
 
     let textLocation = clickTarget?["anyOf"]?[3]?["properties"]?["location"]
     #expect(textLocation?["required"] == .array([.string("app"), .string("text")]))
