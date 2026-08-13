@@ -94,6 +94,9 @@ fn validate_replay_contract(doc: &AxnDocument) -> Result<(), AxnError> {
     }
     for (index, action) in doc.actions.iter().enumerate() {
         if action.tool.trim().is_empty() {
+            if action.params.contains_key("note") {
+                continue;
+            }
             return Err(AxnError::Invalid(format!("actions[{index}] requires tool")));
         }
         for key in ["target", "from", "to"] {
@@ -593,6 +596,9 @@ impl<'a, D: ToolDispatcher> AxnRunner<'a, D> {
         let mut facts: HashMap<String, ExpectedFact> = HashMap::new();
         let mut success = true;
         for (index, action) in doc.actions.iter().enumerate() {
+            if action.tool.is_empty() && action.params.contains_key("note") {
+                continue;
+            }
             if let Some(missing) = action.requires.iter().find(|id| !facts.contains_key(*id)) {
                 let e = format!("required fact is unavailable: {missing}");
                 trace.push(TraceEntry {
