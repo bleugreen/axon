@@ -527,6 +527,20 @@ impl SemanticNameRegistry {
                     })
             })
             .collect();
+        if let Some(process_id) = snapshot.app.process_id {
+            let superseded: HashSet<_> = self
+                .records
+                .iter()
+                .filter(|(_, records)| {
+                    records
+                        .first()
+                        .is_some_and(|record| record.app.process_id == Some(process_id))
+                })
+                .map(|(id, _)| id.clone())
+                .collect();
+            self.order.retain(|id| !superseded.contains(id));
+            self.records.retain(|id, _| !superseded.contains(id));
+        }
         self.order.retain(|id| id != &snapshot.id);
         self.order.push_back(snapshot.id.clone());
         self.records.insert(snapshot.id.clone(), records);
@@ -960,6 +974,37 @@ mod tests {
             panic!("old live process was discarded");
         };
         assert_eq!(by_pid.process_id(), Some(41));
+    }
+
+    #[test]
+    fn frequent_recaptures_do_not_evict_a_live_sibling_process() {
+        let mut registry = SemanticNameRegistry::new(3);
+        let sibling = with_pid(
+            snapshot("sibling", vec![button("Save", Some("sibling"))]),
+            41,
+        );
+        let name = registry
+            .register_with_liveness(&sibling, |_| true)
+            .into_iter()
+            .find(|n| n.label == "Save")
+            .unwrap()
+            .name;
+
+        for index in 0..10 {
+            let current = with_pid(
+                snapshot(
+                    &format!("current-{index}"),
+                    vec![button("Save", Some("current"))],
+                ),
+                42,
+            );
+            registry.register_with_liveness(&current, |_| true);
+        }
+
+        let SemanticSelection::Selected(context) = registry.select(&target("41", name)) else {
+            panic!("recapturing one live process evicted its live sibling");
+        };
+        assert_eq!(context.process_id(), Some(41));
     }
 
     #[test]
