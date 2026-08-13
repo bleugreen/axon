@@ -38,6 +38,7 @@ pub mod x11;
 /// names something the Linux daemon has no code path for, which stays a JSON-RPC error.
 const EXCLUDED: &[(&str, &str)] = &[
     ("save", "SerializeHistory"),
+    ("scroll", "Scroll"),
     ("wait_for_value", "WaitForValue"),
     ("wait_for_stability", "WaitForStability"),
     ("permit", "PermissionPrompt"),
@@ -326,9 +327,10 @@ impl<B: PointerTargetVerifier + BackgroundPixelInput> Router<B> {
         params: &Map<String, Value>,
     ) -> Result<Value, JsonRpcError> {
         if let Some((_, capability)) = EXCLUDED.iter().find(|(tool, _)| *tool == method) {
-            return Err(rpc_error(
-                -32004,
-                format!("tool {method} requires unavailable capability {capability}"),
+            return Err(capability_unavailable(
+                method,
+                capability,
+                "not-implemented",
             ));
         }
         // The policy is decoded before the target is resolved and before any backend call, so an
@@ -469,19 +471,6 @@ impl<B: PointerTargetVerifier + BackgroundPixelInput> Router<B> {
                     .map_err(backend_error)?;
                 Ok(delivered(
                     json!({"dispatch":{"success":true,"mechanism":"AT-SPI Action.DoAction","action":action},"verification":{"verified":false,"reason":"invoke has no declared postcondition"},"resolution":resolution}),
-                    policy,
-                    DeliveryRung::Semantic,
-                ))
-            }
-            "scroll" => {
-                let (handle, resolution) = self.resolve(params)?;
-                let dx = params.get("deltaX").and_then(Value::as_f64).unwrap_or(0.0);
-                let dy = params.get("deltaY").and_then(Value::as_f64).unwrap_or(0.0);
-                self.backend
-                    .scroll(&handle, (dx, dy))
-                    .map_err(backend_error)?;
-                Ok(delivered(
-                    json!({"dispatch":{"success":true,"mechanism":"AT-SPI Component.ScrollTo"},"verification":{"verified":false,"reason":"scroll has no declared postcondition"},"resolution":resolution}),
                     policy,
                     DeliveryRung::Semantic,
                 ))
@@ -1254,6 +1243,15 @@ fn rpc_error(code: i64, message: impl Into<String>) -> JsonRpcError {
         data: None,
     }
 }
+fn capability_unavailable(tool: &str, capability: &str, reason: &str) -> JsonRpcError {
+    JsonRpcError {
+        code: -32004,
+        message: format!("tool {tool} requires unavailable capability {capability}"),
+        data: Some(
+            json!({"kind":"capability-unavailable","tool":tool,"capability":capability,"reason":reason}),
+        ),
+    }
+}
 fn backend_error(e: axon_core::BackendError) -> JsonRpcError {
     rpc_error(-32000, e.to_string())
 }
@@ -1394,6 +1392,7 @@ mod tests {
         verified_handles: Rc<RefCell<Vec<SnapshotHandle>>>,
         value: Rc<RefCell<Option<String>>>,
         clicks: Rc<RefCell<usize>>,
+        scrolls: Rc<RefCell<usize>>,
         keystrokes: Rc<RefCell<usize>>,
         focuses: Rc<RefCell<usize>>,
         /// Where the real pointer sits. A click moves it, which is why the transaction restores it.
@@ -1523,6 +1522,7 @@ mod tests {
             Ok(())
         }
         fn scroll(&mut self, _: &SnapshotHandle, _: (f64, f64)) -> Result<(), BackendError> {
+            *self.scrolls.borrow_mut() += 1;
             Ok(())
         }
         fn observe(&mut self, _: &AppQuery, _: Duration) -> Result<Observation, BackendError> {
@@ -1669,6 +1669,7 @@ mod tests {
             verified_handles: Rc::new(RefCell::new(vec![])),
             value: Rc::new(RefCell::new(value.map(str::to_owned))),
             clicks: Rc::new(RefCell::new(0)),
+            scrolls: Rc::new(RefCell::new(0)),
             keystrokes: Rc::new(RefCell::new(0)),
             focuses: Rc::new(RefCell::new(0)),
             pointer: Rc::new(RefCell::new(POINTER_ORIGIN)),
@@ -1815,14 +1816,40 @@ mod tests {
         assert!(success.result.get("screenshot").is_none());
     }
     #[test]
-    fn unimplemented_tools_stay_json_rpc_errors_rather_than_refusals() {
+    fn unimplemented_tools_have_structured_errors_before_backend_dispatch() {
         // These are not delivery decisions: the Linux daemon has no code path for them at all, so
         // they remain transport errors instead of well-formed actions the daemon declined.
-        assert_eq!(EXCLUDED.len(), 4);
-        for tool in ["save", "wait_for_value", "wait_for_stability", "permit"] {
-            assert!(EXCLUDED.iter().any(|entry| entry.0 == tool), "{tool}");
+        let backend = backend(vec![], None);
+        let scrolls = backend.scrolls.clone();
+        let mut router = Router::new(backend);
+        for (tool, capability) in EXCLUDED {
+            let response = router
+                .request(request(
+                    tool,
+                    json!({"target":{"app":"missing","name":"missing"},"deliveryPolicy":"invalid"}),
+                ))
+                .unwrap();
+            let JsonRpcResponse::Failure(failure) = response else {
+                panic!("{tool} must be a JSON-RPC error")
+            };
+            assert_eq!(failure.error.code, -32004, "{tool}");
+            assert_eq!(
+                failure.error.data,
+                Some(json!({
+                    "kind":"capability-unavailable",
+                    "tool":tool,
+                    "capability":capability,
+                    "reason":"not-implemented"
+                })),
+                "{tool}"
+            );
         }
-        for tool in ["click", "keyboard", "drag", "type", "scroll", "invoke"] {
+        assert_eq!(*scrolls.borrow(), 0);
+        assert_eq!(
+            EXCLUDED.iter().map(|entry| entry.0).collect::<Vec<_>>(),
+            ["save", "scroll", "wait_for_value", "wait_for_stability", "permit"]
+        );
+        for tool in ["click", "keyboard", "drag", "type", "invoke"] {
             assert!(!EXCLUDED.iter().any(|entry| entry.0 == tool), "{tool}");
         }
     }
@@ -2445,10 +2472,6 @@ mod tests {
                 "type",
                 json!({"target": {"app": "App", "name": "Field"}, "value": "after"}),
             ),
-            (
-                "scroll",
-                json!({"target": {"app": "App", "name": "List"}, "deltaY": -120.0}),
-            ),
         ] {
             let response = router.request(request(method, params)).unwrap();
             let JsonRpcResponse::Failure(failure) = response else {
@@ -2477,7 +2500,7 @@ mod tests {
         let mut router = Router::new(backend);
         router.snapshot = Some(router.backend.snapshot.clone());
 
-        for method in ["click", "type", "keyboard", "scroll", "invoke", "drag"] {
+        for method in ["click", "type", "keyboard", "invoke", "drag"] {
             let response = router
                 .request(request(
                     method,
