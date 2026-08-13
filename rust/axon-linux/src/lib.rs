@@ -2396,7 +2396,7 @@ mod tests {
             panic!()
         };
         assert_eq!(error.error.code, -32602);
-        assert!(error.error.message.contains("{app, name}"));
+        assert_eq!(error.error.message, axon_core::SEMANTIC_TARGET_GUIDANCE);
         assert_eq!(*router.backend.clicks.borrow(), 0);
     }
     #[test]
