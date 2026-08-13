@@ -34,7 +34,10 @@ pub struct PreparedRun {
 }
 
 pub fn prepare_run(params: &Map<String, Value>) -> Result<PreparedRun, AxnError> {
-    let source_path = params.get("path").and_then(Value::as_str).map(str::to_owned);
+    let source_path = params
+        .get("path")
+        .and_then(Value::as_str)
+        .map(str::to_owned);
     let inline_actions = params.get("actions").and_then(Value::as_array);
     if params.contains_key("actions") && inline_actions.is_none() {
         return Err(AxnError::Invalid("actions must be an array".into()));

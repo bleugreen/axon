@@ -497,7 +497,10 @@ mod tests {
         )
         .unwrap()
         .unwrap();
-        assert_eq!(response["result"]["structuredContent"]["batch"]["dryRun"], true);
+        assert_eq!(
+            response["result"]["structuredContent"]["batch"]["dryRun"],
+            true
+        );
     }
     #[test]
     fn facade_rejects_unknown_run_keys_by_name() {

@@ -1,14 +1,13 @@
 //! Windows UI Automation backend and v1 JSON-RPC tool router.
 
 use axon_core::{
-    AppQuery, AxnRunner, Capability, DeliveryCandidate, DeliveryCapability,
-    DeliveryOutcome, DeliveryPolicy, DeliveryRefusal, DeliveryRefusalReason, DeliveryRung,
-    DeliverySelection, DispatchOutcome, ExpectedFact, ForegroundTarget, JsonRpcError, JsonRpcId,
-    JsonRpcRequest, JsonRpcResponse, KeyboardIntent, PlatformBackend, ResolutionStatus,
-    RunEnvelope, SemanticLookup, SemanticNameRegistry, SemanticSelection, Snapshot,
-    SnapshotHandle, TextLocationResolver, TextLocationSource, TextLocationTarget,
-    TextRecognitionProvider, ToolDispatcher, dispatch_in_foreground, goal_success, prepare_run,
-    select_delivery,
+    AppQuery, AxnRunner, Capability, DeliveryCandidate, DeliveryCapability, DeliveryOutcome,
+    DeliveryPolicy, DeliveryRefusal, DeliveryRefusalReason, DeliveryRung, DeliverySelection,
+    DispatchOutcome, ExpectedFact, ForegroundTarget, JsonRpcError, JsonRpcId, JsonRpcRequest,
+    JsonRpcResponse, KeyboardIntent, PlatformBackend, ResolutionStatus, RunEnvelope,
+    SemanticLookup, SemanticNameRegistry, SemanticSelection, Snapshot, SnapshotHandle,
+    TextLocationResolver, TextLocationSource, TextLocationTarget, TextRecognitionProvider,
+    ToolDispatcher, dispatch_in_foreground, goal_success, prepare_run, select_delivery,
 };
 use serde_json::{Map, Value, json};
 
@@ -2417,10 +2416,7 @@ mod tests {
         assert_eq!(*focuses.borrow(), 0);
 
         let dry = router
-            .request(request(
-                "run",
-                json!({"actions":actions,"dryRun":true}),
-            ))
+            .request(request("run", json!({"actions":actions,"dryRun":true})))
             .unwrap();
         let JsonRpcResponse::Success(dry) = dry else {
             panic!("dry-run returns a batch result")
