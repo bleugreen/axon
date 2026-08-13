@@ -64,6 +64,15 @@ pub struct Router<B> {
     snapshot: Option<Snapshot>,
     semantic_names: SemanticNameRegistry,
 }
+fn capability_unavailable(tool: &str, capability: &str, reason: &str) -> JsonRpcError {
+    JsonRpcError {
+        code: -32004,
+        message: format!("tool {tool} requires unavailable capability {capability}"),
+        data: Some(
+            json!({"kind":"capability-unavailable","tool":tool,"capability":capability,"reason":reason}),
+        ),
+    }
+}
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct ScrollDispatch {
@@ -548,9 +557,10 @@ impl<
         params: &Map<String, Value>,
     ) -> Result<Value, JsonRpcError> {
         if let Some((_, capability)) = EXCLUDED.iter().find(|(tool, _)| *tool == method) {
-            return Err(rpc_error(
-                -32004,
-                format!("tool {method} requires unavailable capability {capability}"),
+            return Err(capability_unavailable(
+                method,
+                capability,
+                "not-implemented",
             ));
         }
         // The policy is decoded before the target is resolved and before any backend call, so an
@@ -586,8 +596,7 @@ impl<
             }
             "type" => {
                 let (handle, resolution) = self.resolve(params)?;
-                let value =
-                    required_str(params, "value").or_else(|_| required_str(params, "text"))?;
+                let value = required_str(params, "value")?;
                 // UIA ValuePattern does not require focus, and calling SetFocus would make this a
                 // foreground action wearing a semantic name.
                 self.backend
@@ -653,11 +662,17 @@ impl<
                 )
             }
             "invoke" => {
+                let action = required_str(params, "name")?;
+                if action != "Invoke" {
+                    return Err(capability_unavailable(
+                        "invoke",
+                        "named-action",
+                        "not-implemented",
+                    ));
+                }
                 let (handle, resolution) = self.resolve(params)?;
-                // UIA exposes InvokePattern, not an arbitrary named-action vocabulary, so this
-                // backend performs Invoke and says so rather than claiming a name it cannot honour.
                 self.backend
-                    .invoke(&handle, "Invoke")
+                    .invoke(&handle, action)
                     .map_err(backend_error)?;
                 Ok(delivered(
                     json!({"dispatch":{"success":true,"mechanism":"UIA InvokePattern"},"verification":{"verified":false,"reason":"invoke has no declared postcondition"},"resolution":resolution}),
@@ -1726,6 +1741,13 @@ mod tests {
     fn request(method: &str, params: Value) -> JsonRpcRequest {
         JsonRpcRequest::new(Some(JsonRpcId::Integer(1)), method, Some(params))
     }
+    fn validated_params(tool: &str, arguments: Value) -> Map<String, Value> {
+        axon_core::validate_tool_arguments(axon_core::ToolBackend::Windows, tool, arguments)
+            .unwrap()
+            .as_object()
+            .unwrap()
+            .clone()
+    }
     #[test]
     fn look_application_enumeration_matches_shared_envelope() {
         let mut router = Router::new(backend(vec![], None));
@@ -1745,9 +1767,96 @@ mod tests {
         );
     }
     #[test]
-    fn excluded_tools_fail_before_backend_dispatch() {
-        assert_eq!(EXCLUDED.len(), 5);
-        assert!(EXCLUDED.iter().any(|x| x.0 == "drag"));
+    fn excluded_tools_have_structured_errors_before_backend_dispatch() {
+        let backend = backend(vec![], None);
+        let captures = backend.capture_queries.clone();
+        let mut router = Router::new(backend);
+        for (tool, capability) in EXCLUDED {
+            let response = router
+                .request(request(
+                    tool,
+                    json!({"target":{"app":"missing","name":"missing"},"deliveryPolicy":"invalid"}),
+                ))
+                .unwrap();
+            let JsonRpcResponse::Failure(failure) = response else {
+                panic!("{tool} must be a JSON-RPC error")
+            };
+            assert_eq!(failure.error.code, -32004, "{tool}");
+            assert_eq!(
+                failure.error.data,
+                Some(json!({
+                    "kind":"capability-unavailable",
+                    "tool":tool,
+                    "capability":capability,
+                    "reason":"not-implemented"
+                })),
+                "{tool}"
+            );
+        }
+        assert!(captures.borrow().is_empty());
+    }
+
+    #[test]
+    fn canonical_invoke_name_survives_validation_and_is_required_by_router() {
+        let params = validated_params(
+            "invoke",
+            json!({"target":{"app":"App","name":"root"},"name":"Invoke"}),
+        );
+        assert_eq!(required_str(&params, "name").unwrap(), "Invoke");
+
+        let backend = backend(vec![], None);
+        let captures = backend.capture_queries.clone();
+        let mut router = Router::new(backend);
+        let mut missing_name = params;
+        missing_name.remove("name");
+        let response = router
+            .request(request("invoke", Value::Object(missing_name)))
+            .unwrap();
+        let JsonRpcResponse::Failure(failure) = response else {
+            panic!("invoke without a name must fail")
+        };
+        assert_eq!(failure.error.code, -32602);
+        assert!(captures.borrow().is_empty());
+    }
+
+    #[test]
+    fn unsupported_invoke_names_refuse_before_native_dispatch() {
+        let params = validated_params(
+            "invoke",
+            json!({"target":{"app":"App","name":"root"},"name":"Expand"}),
+        );
+        let backend = backend(vec![], None);
+        let captures = backend.capture_queries.clone();
+        let mut router = Router::new(backend);
+        let response = router
+            .request(request("invoke", Value::Object(params)))
+            .unwrap();
+        let JsonRpcResponse::Failure(failure) = response else {
+            panic!("unsupported named actions must fail")
+        };
+        assert_eq!(failure.error.code, -32004);
+        assert_eq!(
+            failure.error.data,
+            Some(json!({
+                "kind":"capability-unavailable",
+                "tool":"invoke",
+                "capability":"named-action",
+                "reason":"not-implemented"
+            }))
+        );
+        assert!(captures.borrow().is_empty());
+    }
+
+    #[test]
+    fn legacy_type_text_alias_is_rejected_by_canonical_validation() {
+        let error = axon_core::validate_tool_arguments(
+            axon_core::ToolBackend::Windows,
+            "type",
+            json!({"target":{"app":"App","name":"root"},"text":"draft"}),
+        )
+        .unwrap_err();
+        assert_eq!(error.code, -32602);
+        assert_eq!(error.data.unwrap()["path"], "params.arguments.value");
     }
     #[test]
     fn invalid_json_is_parse_error() {
