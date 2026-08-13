@@ -760,10 +760,12 @@ impl<'a, D: ToolDispatcher> AxnRunner<'a, D> {
                 resolution: outcome.resolution,
                 heal,
             };
-            if entry.success && !dry_run {
-                facts.extend(action.expects.iter().map(|f| (f.id.clone(), f.clone())))
+            if entry.success {
+                if !dry_run {
+                    facts.extend(action.expects.iter().map(|f| (f.id.clone(), f.clone())));
+                }
             } else {
-                success = false
+                success = false;
             }
             let failed = !entry.success;
             trace.push(entry);

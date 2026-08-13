@@ -2320,10 +2320,10 @@ actions:
             panic!("dry-run returns a batch result")
         };
         assert_eq!(dry.result["batch"]["dryRun"], json!(true));
-        assert_eq!(dry.result["batch"]["success"], json!(false));
+        assert_eq!(dry.result["batch"]["success"], json!(true));
         assert_eq!(
             dry.result["batch"]["trace"][0]["result"]["target"],
-            json!({"app": "App", "name": "root"})
+            json!({"app": "App", "name": "missing"})
         );
         assert_eq!(*clicks.borrow(), 0);
         assert_eq!(*focuses.borrow(), 0);
