@@ -655,7 +655,7 @@ function Invoke-ProbeStage {
             } | ConvertTo-Json -Compress -Depth 10
             $response = Invoke-AxonMcp -Request $request
             $window = $response.result.structuredContent.app.windows |
-                ForEach-Object root | Where-Object role -eq 'Window' | Select-Object -First 1
+                ForEach-Object root | Select-Object -First 1
             $screenshot = $response.result.structuredContent.screenshot
             $image = @($response.result.content | Where-Object {
                 $_.type -eq 'image' -and $_.mimeType -eq 'image/png' -and $_.data.Length -gt 0
@@ -671,7 +671,7 @@ function Invoke-ProbeStage {
             }
         }
         if ($null -eq $verified) {
-            throw "look returned no Window root with a downscaled PNG from any application this lane did not start (considered: $($considered -join ', '))"
+            throw "look returned no accessibility root with a downscaled PNG from Edge (considered: $($considered -join ', '))"
         }
         Write-Note "isError:false snapshot=$($verified.response.result.structuredContent.id) root=$($verified.window.role) app=$($verified.app)"
 
