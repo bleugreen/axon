@@ -896,8 +896,8 @@ impl<
             let names=self.register_snapshot(&snapshot); let rendered=axon_core::render_semantic_names(&snapshot,&names);
             self.snapshot=Some(snapshot); return Ok(axon_core::format_child_page(&page,&rendered,&request.display));
         }
-        if let axon_core::LookMode::AppList { all } = request.mode {
-            if all { return Err(rpc_error(-32602, "all-process application listing is unavailable on this backend")); }
+        if let axon_core::LookMode::AppList { all } = &request.mode {
+            if *all { return Err(rpc_error(-32602, "all-process application listing is unavailable on this backend")); }
             return Ok(application_enumeration(
                 self.backend
                     .enumerate_applications()
