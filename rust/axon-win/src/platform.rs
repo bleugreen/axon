@@ -118,6 +118,8 @@ mod foreground_probe_tests {
         assert_eq!(foreground_probe_process_id(None, "7070").unwrap(), 7070);
         assert!(foreground_probe_process_id(None, "msedge.exe").is_err());
     }
+}
+
 fn scroll_amount(delta: f64) -> ScrollAmount {
     if delta < 0.0 {
         ScrollAmount_SmallIncrement
