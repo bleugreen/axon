@@ -684,3 +684,63 @@ fn requires_reverifies_the_established_fact_before_dispatch() {
             .contains("expectation failed")
     );
 }
+
+#[test]
+fn expanded_swift_fixture_prepares_every_parameter_type_without_dispatch() {
+    let doc = AxnCodec::parse(include_str!("../fixtures/swift-user-recording-v2.yaml")).unwrap();
+    let mut dispatcher = NoDispatch;
+    let mut runner = AxnRunner::new(&mut dispatcher)
+        .with_source("op", |source: &str| {
+            Ok((source == "op://Engineering/Axon/token").then(|| "fixture-secret".into()))
+        })
+        .with_source("env", |source: &str| {
+            Ok((source == "env://AXON_REPORT_PATH").then(|| "/tmp/report".into()))
+        });
+    let args = serde_json::from_value(json!({"recipient":"Ada"})).unwrap();
+    let result = runner
+        .run(
+            &doc,
+            &args,
+            RunOptions {
+                dry_run: Some(true),
+                continue_on_error: Some(true),
+            },
+        )
+        .unwrap();
+    assert!(result.dry_run);
+    assert_eq!(result.trace.len(), 5);
+    assert_eq!(
+        result.trace[0].result.as_ref().unwrap()["text"],
+        "Send /tmp/report/2026-08-12 to Ada <owner@example.com> after 3 tries"
+    );
+    assert_eq!(
+        result.trace[1].result.as_ref().unwrap()["value"],
+        "<redacted: contains-secret>"
+    );
+    assert!(result
+        .trace
+        .iter()
+        .all(|entry| serde_json::to_string(entry).unwrap().find("fixture-secret").is_none()));
+}
+
+#[test]
+fn notes_round_trip_but_do_not_dispatch() {
+    let doc = AxnCodec::parse(
+        "version: 2\nactions:\n- id: n001\n  note: explain this step\n  color: blue\n- tool: keyboard\n  app: Example\n  key: Return\n",
+    )
+    .unwrap();
+    assert_eq!(doc.actions[0].params["color"], "blue");
+    let mut dispatcher = NoDispatch;
+    let result = AxnRunner::new(&mut dispatcher)
+        .run(
+            &doc,
+            &Map::new(),
+            RunOptions {
+                dry_run: Some(true),
+                continue_on_error: None,
+            },
+        )
+        .unwrap();
+    assert_eq!(result.trace.len(), 1);
+    assert_eq!(result.trace[0].tool, "keyboard");
+}
