@@ -131,10 +131,10 @@ try {
         if ($IsUnsignedLegacyPin) {
             Write-Warning "Axon $Version predates the Windows signing pipeline and $BinaryName carries no Authenticode signature; its SHA-256 checksum is valid, but Windows cannot verify its publisher."
         } else {
-            Fail "Authenticode verification failed for $BinaryName: $($Signature.Status) - $($Signature.StatusMessage). The package was not installed or registered; use a signed release or verify that the download was not modified"
+            Fail "Authenticode verification failed for ${BinaryName}: $($Signature.Status) - $($Signature.StatusMessage). The package was not installed or registered; use a signed release or verify that the download was not modified"
         }
       } else {
-          Write-Host "Verified Authenticode signer for $BinaryName: $($Signature.SignerCertificate.Subject)"
+          Write-Host "Verified Authenticode signer for ${BinaryName}: $($Signature.SignerCertificate.Subject)"
       }
     }
 

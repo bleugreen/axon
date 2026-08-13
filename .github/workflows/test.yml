@@ -14,6 +14,22 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  powershell-installer:
+    name: PowerShell installer syntax
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Parse install.ps1
+        shell: pwsh
+        run: |
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile('site/public/install.ps1', [ref]$null, [ref]$errors) | Out-Null
+          if ($errors) {
+            $errors | ForEach-Object { Write-Error "$($_.Extent.StartLineNumber): $($_.Message)" }
+            exit 1
+          }
+
   version:
     name: Version agreement
     runs-on: ubuntu-latest
