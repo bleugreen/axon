@@ -12,11 +12,6 @@ pub enum SemanticNameResolution {
     Unique,
     Ambiguous,
 }
-pub(crate) enum RetainedSemanticLookup {
-    NoRecord,
-    Resolved(Box<SemanticLookup>),
-}
-
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SemanticElementName {
@@ -900,4 +895,100 @@ mod tests {
             _ => panic!("App B's newer record shadowed App A's semantic name"),
         }
     }
+    fn with_pid(mut snapshot: Snapshot, pid: crate::ProcessId) -> Snapshot {
+        snapshot.app.process_id = Some(pid);
+        snapshot
+    }
+
+    fn target(app: &str, name: String) -> WireElementTarget {
+        WireElementTarget {
+            app: app.into(),
+            name,
+        }
+    }
+
+    #[test]
+    fn pid_aliases_select_the_exact_process() {
+        let mut registry = SemanticNameRegistry::default();
+        let one = with_pid(snapshot("one", vec![button("Save", Some("one"))]), 41);
+        let name = registry.register(&one).into_iter().find(|n| n.label == "Save").unwrap().name;
+        let two = with_pid(snapshot("two", vec![button("Save", Some("two"))]), 42);
+        registry.register(&two);
+
+        for alias in ["41", "pid:41"] {
+            let SemanticSelection::Selected(context) = registry.select(&target(alias, name.clone())) else {
+                panic!("PID alias did not select evidence");
+            };
+            assert_eq!(context.process_id(), Some(41));
+        }
+    }
+
+    #[test]
+    fn live_same_identity_processes_coexist_and_name_uses_newest_process() {
+        let mut registry = SemanticNameRegistry::default();
+        let old = with_pid(snapshot("old", vec![button("Save", Some("old"))]), 41);
+        let name = registry.register_with_liveness(&old, |_| true)
+            .into_iter().find(|n| n.label == "Save").unwrap().name;
+        let new = with_pid(snapshot("new", vec![button("Save", Some("new"))]), 42);
+        registry.register_with_liveness(&new, |pid| pid == 41);
+
+        let SemanticSelection::Selected(by_name) = registry.select(&target("App", name.clone())) else {
+            panic!("name did not select newest process");
+        };
+        assert_eq!(by_name.process_id(), Some(42));
+        let SemanticSelection::Selected(by_pid) = registry.select(&target("41", name)) else {
+            panic!("old live process was discarded");
+        };
+        assert_eq!(by_pid.process_id(), Some(41));
+    }
+
+    #[test]
+    fn replacement_removes_only_proven_dead_same_identity_process() {
+        let mut registry = SemanticNameRegistry::default();
+        let old = with_pid(snapshot("old", vec![button("Save", Some("old"))]), 41);
+        let name = registry.register(&old).into_iter().find(|n| n.label == "Save").unwrap().name;
+        let mut unrelated = with_pid(snapshot("other", vec![button("Save", Some("other"))]), 99);
+        unrelated.app.name = "Other".into();
+        unrelated.app.identifier = Some("com.example.other".into());
+        let other_name = registry.register(&unrelated).into_iter().find(|n| n.label == "Save").unwrap().name;
+        let replacement = with_pid(snapshot("replacement", vec![button("Save", Some("new"))]), 42);
+        registry.register_with_liveness(&replacement, |_| false);
+
+        assert!(matches!(registry.select(&target("41", name)), SemanticSelection::Missing { .. }));
+        assert!(matches!(registry.select(&target("99", other_name)), SemanticSelection::Selected(_)));
+    }
+
+    #[test]
+    fn selected_process_refuses_a_different_live_snapshot() {
+        let mut registry = SemanticNameRegistry::default();
+        let observed = with_pid(snapshot("old", vec![button("Save", Some("save"))]), 41);
+        let name = registry.register(&observed).into_iter().find(|n| n.label == "Save").unwrap().name;
+        let SemanticSelection::Selected(context) = registry.select(&target("41", name)) else {
+            panic!("record was not selected");
+        };
+        let wrong = with_pid(snapshot("wrong", vec![button("Save", Some("save"))]), 42);
+        assert!(matches!(context.resolve(&wrong), SemanticLookup::Missing { .. }));
+    }
+
+    #[test]
+    fn replay_evidence_is_pinned_and_legacy_duplicates_are_ambiguous() {
+        let mut registry = SemanticNameRegistry::default();
+        let target = target("App", "save".into());
+        let locator = locator(&button("Save", Some("save")), &[], None);
+        registry.register_replay_locator_for_process(target.clone(), locator.clone(), Some(41));
+        let SemanticSelection::Selected(context) = registry.select(&target) else {
+            panic!("single replay record was not selected");
+        };
+        assert_eq!(context.process_id(), Some(41));
+
+        registry.register_replay_locator_for_process(target.clone(), locator, Some(42));
+        assert!(matches!(registry.select(&target), SemanticSelection::Ambiguous { .. }));
+        let pid_target = target("pid:41", "save".into());
+        registry.register_replay_locator_for_process(pid_target.clone(), locator(&button("Save", Some("save")), &[], None), Some(41));
+        let SemanticSelection::Selected(context) = registry.select(&pid_target) else {
+            panic!("PID replay record was not selected");
+        };
+        assert_eq!(context.process_id(), Some(41));
+    }
+
 }
