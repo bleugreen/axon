@@ -801,67 +801,6 @@ function Invoke-ParkStage {
 }
 
 function Invoke-ProbeStage {
-    $repairPath = Join-Path $PSScriptRoot '..\..\.axon-repair-foreground-timeout'
-    if (Test-Path -LiteralPath $repairPath) {
-        $value = [uint32](Get-Content -LiteralPath $repairPath -Raw)
-        $resultPath = Join-Path $LiveDirectory 'foreground-timeout-repair.json'
-        $temporaryPath = "$resultPath.tmp"
-        $escapedResultPath = $resultPath.Replace("'", "''")
-        $escapedTemporaryPath = $temporaryPath.Replace("'", "''")
-        $command = @"
-Add-Type -AssemblyName System.Windows.Forms
-Add-Type @'
-using System.Runtime.InteropServices;
-public static class AxonForegroundTimeoutRepair {
-    [DllImport("user32.dll", SetLastError = true, EntryPoint = "SystemParametersInfoW")]
-    public static extern bool Get(uint action, uint uiParam, ref uint value, uint flags);
-    [DllImport("user32.dll", SetLastError = true, EntryPoint = "SystemParametersInfoW")]
-    public static extern bool Set(uint action, uint uiParam, uint value, uint flags);
-}
-'@
-function Read-ForegroundTimeout {
-    [uint32]`$current = 0
-    if (-not [AxonForegroundTimeoutRepair]::Get(0x2000, 0, [ref]`$current, 0)) {
-        throw "SPI_GETFOREGROUNDLOCKTIMEOUT failed: `$([Runtime.InteropServices.Marshal]::GetLastWin32Error())"
-    }
-    `$current
-}
-`$form = [Windows.Forms.Form]::new()
-`$form.Text = 'Axon foreground timeout repair'
-`$form.TopMost = `$true
-`$form.Show()
-`$form.Activate()
-[Windows.Forms.Application]::DoEvents()
-try {
-    `$before = Read-ForegroundTimeout
-    if (-not [AxonForegroundTimeoutRepair]::Set(0x2001, 0, [uint32]$value, 0)) {
-        throw "SPI_SETFOREGROUNDLOCKTIMEOUT failed: `$([Runtime.InteropServices.Marshal]::GetLastWin32Error())"
-    }
-    `$after = Read-ForegroundTimeout
-} finally { `$form.Close() }
-@{ before = `$before; after = `$after } | ConvertTo-Json -Compress | Set-Content -LiteralPath '$escapedTemporaryPath' -Encoding utf8
-Move-Item -LiteralPath '$escapedTemporaryPath' -Destination '$escapedResultPath' -Force
-if (`$after -ne $value) { exit 1 }
-"@
-        $encodedCommand = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($command))
-        $action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument "-NoProfile -NonInteractive -EncodedCommand $encodedCommand"
-        $principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive
-        try {
-            Remove-Item -LiteralPath $resultPath, $temporaryPath -Force -ErrorAction SilentlyContinue
-            Register-ScheduledTask -TaskName $ProbeActivationTaskName -Action $action -Principal $principal -Force | Out-Null
-            Start-ScheduledTask -TaskName $ProbeActivationTaskName
-            $timer = [System.Diagnostics.Stopwatch]::StartNew()
-            while (-not (Test-Path -LiteralPath $resultPath) -and $timer.Elapsed.TotalSeconds -lt $ProcessDiscoveryTimeoutSeconds) { Wait-Tick }
-            if (-not (Test-Path -LiteralPath $resultPath)) { throw 'interactive foreground timeout repair did not report completion' }
-            $result = Get-Content -LiteralPath $resultPath -Raw | ConvertFrom-Json
-            Write-Note "foreground timeout repair before=$($result.before) after=$($result.after)"
-            if ([uint32]$result.after -ne $value) { throw "foreground timeout repair read back $($result.after), expected $value" }
-        } finally {
-            Unregister-ScheduledTask -TaskName $ProbeActivationTaskName -Confirm:$false -ErrorAction SilentlyContinue
-            Remove-Item -LiteralPath $resultPath, $temporaryPath -Force -ErrorAction SilentlyContinue
-        }
-        return
-    }
     $state = Read-ParkState
     if ($null -eq $state) {
         throw 'this desktop was never parked; refusing to start a daemon on a machine whose own may still hold the pipe'
