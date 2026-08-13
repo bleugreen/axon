@@ -1,13 +1,14 @@
 //! Windows UI Automation backend and v1 JSON-RPC tool router.
 
 use axon_core::{
-    AppQuery, AxnCodec, AxnRunner, Capability, DeliveryCandidate, DeliveryCapability,
+    AppQuery, AxnRunner, Capability, DeliveryCandidate, DeliveryCapability,
     DeliveryOutcome, DeliveryPolicy, DeliveryRefusal, DeliveryRefusalReason, DeliveryRung,
     DeliverySelection, DispatchOutcome, ExpectedFact, ForegroundTarget, JsonRpcError, JsonRpcId,
     JsonRpcRequest, JsonRpcResponse, KeyboardIntent, PlatformBackend, ResolutionStatus,
-    RunEnvelope, RunOptions, SemanticLookup, SemanticNameRegistry, SemanticSelection, Snapshot,
+    RunEnvelope, SemanticLookup, SemanticNameRegistry, SemanticSelection, Snapshot,
     SnapshotHandle, TextLocationResolver, TextLocationSource, TextLocationTarget,
-    TextRecognitionProvider, ToolDispatcher, dispatch_in_foreground, goal_success, select_delivery,
+    TextRecognitionProvider, ToolDispatcher, dispatch_in_foreground, goal_success, prepare_run,
+    select_delivery,
 };
 use serde_json::{Map, Value, json};
 
@@ -992,35 +993,13 @@ impl<
     }
 
     fn run_axn(&mut self, params: &Map<String, Value>) -> Result<Value, JsonRpcError> {
-        let source = required_str(params, "source")?;
-        let doc = AxnCodec::parse(source).map_err(|e| rpc_error(-32602, e.to_string()))?;
-        let args = params
-            .get("args")
-            .and_then(Value::as_object)
-            .cloned()
-            .unwrap_or_default();
-        let options = params
-            .get("options")
-            .cloned()
-            .map(serde_json::from_value)
-            .transpose()
-            .map_err(|e| rpc_error(-32602, e.to_string()))?
-            .unwrap_or(RunOptions {
-                dry_run: None,
-                continue_on_error: None,
-            });
+        let prepared = prepare_run(params).map_err(|e| rpc_error(-32602, e.to_string()))?;
         let mut runner = AxnRunner::new(self);
-        if let Some(healed_path) = params.get("healedPath").and_then(Value::as_str) {
-            runner = runner.with_healed_output(
-                params
-                    .get("sourcePath")
-                    .and_then(Value::as_str)
-                    .map(str::to_owned),
-                healed_path.to_owned(),
-            );
+        if let Some(healed_path) = prepared.healed_path {
+            runner = runner.with_healed_output(prepared.source_path.clone(), healed_path);
         }
         let result = runner
-            .run(&doc, &args, options)
+            .run(&prepared.document, &prepared.arg_values, prepared.options)
             .map_err(|e| rpc_error(-32602, e.to_string()))?;
         serde_json::to_value(RunEnvelope { batch: result }).map_err(internal_error)
     }

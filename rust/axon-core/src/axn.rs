@@ -5,6 +5,7 @@ use crate::{
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use std::collections::{HashMap, HashSet};
+use std::fs;
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -22,6 +23,64 @@ pub struct AxnDocument {
     pub actions: Vec<AxnAction>,
     #[serde(flatten)]
     pub flags: Map<String, Value>,
+}
+
+pub struct PreparedRun {
+    pub document: AxnDocument,
+    pub arg_values: Map<String, Value>,
+    pub options: RunOptions,
+    pub source_path: Option<String>,
+    pub healed_path: Option<String>,
+}
+
+pub fn prepare_run(params: &Map<String, Value>) -> Result<PreparedRun, AxnError> {
+    let source_path = params.get("path").and_then(Value::as_str).map(str::to_owned);
+    let inline_actions = params.get("actions").and_then(Value::as_array);
+    if params.contains_key("actions") && inline_actions.is_none() {
+        return Err(AxnError::Invalid("actions must be an array".into()));
+    }
+
+    let mut document = if let Some(path) = source_path.as_deref() {
+        let source = fs::read_to_string(path)
+            .map_err(|error| AxnError::Invalid(format!("could not read {path}: {error}")))?;
+        AxnCodec::parse(&source)?
+    } else if inline_actions.is_some() {
+        AxnDocument {
+            version: 2,
+            arguments: Vec::new(),
+            actions: Vec::new(),
+            flags: Map::new(),
+        }
+    } else {
+        return Err(AxnError::Invalid("run requires actions or path".into()));
+    };
+
+    if let Some(actions) = inline_actions {
+        for (index, action) in actions.iter().enumerate() {
+            let action = serde_json::from_value(action.clone()).map_err(|error| {
+                AxnError::Invalid(format!("actions[{index}] is invalid: {error}"))
+            })?;
+            document.actions.push(action);
+        }
+    }
+
+    Ok(PreparedRun {
+        document,
+        arg_values: params
+            .get("argValues")
+            .and_then(Value::as_object)
+            .cloned()
+            .unwrap_or_default(),
+        options: RunOptions {
+            dry_run: params.get("dryRun").and_then(Value::as_bool),
+            continue_on_error: params.get("continueOnError").and_then(Value::as_bool),
+        },
+        source_path,
+        healed_path: params
+            .get("healedPath")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
+    })
 }
 
 pub fn unique_expected_fact_candidate<'a>(
