@@ -133,11 +133,11 @@ function page({ title, description, body, docsPage = false, docsSlug }) {
 </html>`;
 }
 
-function home(version) {
+function home() {
   const guarantees = [
-    ['01', 'Semantic targets', 'Address a button by its role, label, window, and surrounding context.'],
-    ['02', 'One interface everywhere', 'The same small tool surface works on macOS, Windows, and Linux.'],
-    ['03', 'Replayable work', 'Save sessions as plain-text .axn files. Read them, edit them, share them, and run them again.'],
+    ['Semantic targets', 'Address a button by its role, label, window, and surrounding context.'],
+    ['One interface everywhere', 'The same small tool surface works on macOS, Windows, and Linux.'],
+    ['Replayable work', 'Save sessions as plain-text .axn files. Read them, edit them, share them, and run them again.'],
   ];
   return page({
     title: 'Axon — local UI access for agents',
@@ -145,18 +145,18 @@ function home(version) {
     body: `<main>
       <section class="hero">
         <h1>Let the computer <em>use</em> the computer.</h1>
-        <p>Axon turns the OS accessibility layer into a small, consistent tool surface for agents on macOS, Windows, and Linux.</p>
+        <p>Axon provides a small, consistent tool surface over the OS accessibility layers in macOS, Windows, and Linux.</p>
         <div class="hero-actions"><a class="button primary" href="/docs/install/">Get started</a><a class="button" href="/docs/tool-surface/">Explore the tools</a></div>
       </section>
       <section class="loop" aria-label="Axon's core loop">
-        <span>look</span><i>→</i><span>find</span><i>→</i><span>act</span><i>→</i><span>replay</span>
+        <span>look</span><i>→</i><span>act</span><i>→</i><span>replay</span>
       </section>
       <section class="guarantees">
         <div class="section-heading"><h2>General-purpose automation for agents</h2></div>
-        <div class="guarantee-grid">${guarantees.map(([number, title, copy]) => `<article><span>${number}</span><h3>${title}</h3><p>${copy}</p></article>`).join('')}</div>
+        <div class="guarantee-grid">${guarantees.map(([title, copy]) => `<article><h3>${title}</h3><p>${copy}</p></article>`).join('')}</div>
       </section>
       <section class="artifact">
-        <div><p class="kicker">The unit of memory</p><h2>A route becomes a reflex.</h2><p>A <code>.axn</code> file is an ordered sequence of tool calls you can inspect, edit, share, and run again.</p><a href="/docs/axn/">Read about the file format →</a></div>
+        <div><h2>A route becomes a reflex.</h2><p>A <code>.axn</code> file is an ordered sequence of tool calls you can inspect, edit, share, and run again.</p><a href="/docs/axn/">Read about the file format →</a></div>
         <pre aria-label="Example axn file"><code><b>version:</b> 2
 <b>actions:</b>
   - <b>tool:</b> click
@@ -169,7 +169,7 @@ function home(version) {
     <b>value:</b> Ship the honest path</code></pre>
       </section>
       <section class="install">
-        <div><p class="kicker">Install Axon ${escapeHtml(version)}</p><h2>Get started.</h2></div>
+        <div><h2>Get started.</h2></div>
         <div class="commands">
           ${shellBlock('curl -fsSL https://axn.dev/install.sh | sh', 'macOS / Linux · shell')}
           ${shellBlock('irm https://axn.dev/install.ps1 | iex', 'Windows · administrator PowerShell')}
@@ -185,8 +185,7 @@ async function build() {
   await mkdir(outputRoot, { recursive: true });
   await cp(join(siteRoot, 'public'), outputRoot, { recursive: true });
   await cp(join(repositoryRoot, 'Assets', 'AxonMark.svg'), join(outputRoot, 'axon-mark.svg'));
-  const version = (await readFile(join(repositoryRoot, 'VERSION'), 'utf8')).trim();
-  await writeFile(join(outputRoot, 'index.html'), home(version));
+  await writeFile(join(outputRoot, 'index.html'), home());
 
   for (const [slug, title] of [...docs, ...supportingDocs]) {
     const markdown = await readFile(join(docsRoot, `${slug}.md`), 'utf8');
