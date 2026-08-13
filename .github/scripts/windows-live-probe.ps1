@@ -804,7 +804,12 @@ function Invoke-ProbeStage {
     $repairPath = Join-Path $PSScriptRoot '..\..\.axon-repair-foreground-timeout'
     if (Test-Path -LiteralPath $repairPath) {
         $value = [uint32](Get-Content -LiteralPath $repairPath -Raw)
-        Add-Type @'
+        $resultPath = Join-Path $LiveDirectory 'foreground-timeout-repair.json'
+        $temporaryPath = "$resultPath.tmp"
+        $escapedResultPath = $resultPath.Replace("'", "''")
+        $escapedTemporaryPath = $temporaryPath.Replace("'", "''")
+        $command = @"
+Add-Type @'
 using System;
 using System.Runtime.InteropServices;
 public static class AxonForegroundTimeoutRepair {
@@ -812,24 +817,42 @@ public static class AxonForegroundTimeoutRepair {
     public static extern bool SystemParametersInfo(uint action, uint uiParam, IntPtr pvParam, uint flags);
 }
 '@
-        $read = {
-            $current = [uint32]0
-            $memory = [Runtime.InteropServices.Marshal]::AllocHGlobal(4)
-            try {
-                [Runtime.InteropServices.Marshal]::WriteInt32($memory, 0)
-                if (-not [AxonForegroundTimeoutRepair]::SystemParametersInfo(0x2000, 0, $memory, 0)) {
-                    throw "SPI_GETFOREGROUNDLOCKTIMEOUT failed: $([Runtime.InteropServices.Marshal]::GetLastWin32Error())"
-                }
-                [uint32][Runtime.InteropServices.Marshal]::ReadInt32($memory)
-            } finally { [Runtime.InteropServices.Marshal]::FreeHGlobal($memory) }
+function Read-ForegroundTimeout {
+    `$memory = [Runtime.InteropServices.Marshal]::AllocHGlobal(4)
+    try {
+        [Runtime.InteropServices.Marshal]::WriteInt32(`$memory, 0)
+        if (-not [AxonForegroundTimeoutRepair]::SystemParametersInfo(0x2000, 0, `$memory, 0)) {
+            throw "SPI_GETFOREGROUNDLOCKTIMEOUT failed: `$([Runtime.InteropServices.Marshal]::GetLastWin32Error())"
         }
-        $before = & $read
-        if (-not [AxonForegroundTimeoutRepair]::SystemParametersInfo(0x2001, 0, [IntPtr][uint64]$value, 2)) {
-            throw "SPI_SETFOREGROUNDLOCKTIMEOUT failed: $([Runtime.InteropServices.Marshal]::GetLastWin32Error())"
+        [uint32][Runtime.InteropServices.Marshal]::ReadInt32(`$memory)
+    } finally { [Runtime.InteropServices.Marshal]::FreeHGlobal(`$memory) }
+}
+`$before = Read-ForegroundTimeout
+if (-not [AxonForegroundTimeoutRepair]::SystemParametersInfo(0x2001, 0, [IntPtr][uint64]$value, 2)) {
+    throw "SPI_SETFOREGROUNDLOCKTIMEOUT failed: `$([Runtime.InteropServices.Marshal]::GetLastWin32Error())"
+}
+`$after = Read-ForegroundTimeout
+@{ before = `$before; after = `$after } | ConvertTo-Json -Compress | Set-Content -LiteralPath '$escapedTemporaryPath' -Encoding utf8
+Move-Item -LiteralPath '$escapedTemporaryPath' -Destination '$escapedResultPath' -Force
+if (`$after -ne $value) { exit 1 }
+"@
+        $encodedCommand = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($command))
+        $action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument "-NoProfile -NonInteractive -EncodedCommand $encodedCommand"
+        $principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive
+        try {
+            Remove-Item -LiteralPath $resultPath, $temporaryPath -Force -ErrorAction SilentlyContinue
+            Register-ScheduledTask -TaskName $ProbeActivationTaskName -Action $action -Principal $principal -Force | Out-Null
+            Start-ScheduledTask -TaskName $ProbeActivationTaskName
+            $timer = [System.Diagnostics.Stopwatch]::StartNew()
+            while (-not (Test-Path -LiteralPath $resultPath) -and $timer.Elapsed.TotalSeconds -lt $ProcessDiscoveryTimeoutSeconds) { Wait-Tick }
+            if (-not (Test-Path -LiteralPath $resultPath)) { throw 'interactive foreground timeout repair did not report completion' }
+            $result = Get-Content -LiteralPath $resultPath -Raw | ConvertFrom-Json
+            Write-Note "foreground timeout repair before=$($result.before) after=$($result.after)"
+            if ([uint32]$result.after -ne $value) { throw "foreground timeout repair read back $($result.after), expected $value" }
+        } finally {
+            Unregister-ScheduledTask -TaskName $ProbeActivationTaskName -Confirm:$false -ErrorAction SilentlyContinue
+            Remove-Item -LiteralPath $resultPath, $temporaryPath -Force -ErrorAction SilentlyContinue
         }
-        $after = & $read
-        Write-Note "foreground timeout repair before=$before after=$after"
-        if ($after -ne $value) { throw "foreground timeout repair read back $after, expected $value" }
         return
     }
     $state = Read-ParkState
