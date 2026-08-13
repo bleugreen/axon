@@ -1001,7 +1001,10 @@ function Invoke-ProbeStage {
                 $evidence.dispatchSuccess -ne $true -or $null -eq $evidence.foreground) {
                 throw "$($call.name) did not return frontmost foreground dispatch evidence"
             }
-            Start-Sleep -Milliseconds 250
+            # Edge's browser chrome is out of process from the page and can acknowledge the input
+            # batch before it has applied the focus/text transition. One second keeps the gesture
+            # ordered on slow interactive runners without changing the daemon transaction itself.
+            Start-Sleep -Seconds 1
         }
 
         $loadedRequest = @{ jsonrpc = '2.0'; id = 1; method = 'tools/call'; params = @{
