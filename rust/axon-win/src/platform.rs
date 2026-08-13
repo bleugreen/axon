@@ -71,6 +71,15 @@ const MAX_DEPTH: usize = 18;
 const MAX_CHILDREN: usize = 200;
 const MAX_NODES: usize = 2_000;
 
+fn child_page_range(total: usize, offset: usize, limit: Option<usize>) -> (usize, usize) {
+    let start = offset.min(total);
+    let requested = limit.unwrap_or_else(|| total.saturating_sub(start));
+    let end = start
+        .saturating_add(requested.min(MAX_NODES.saturating_sub(1)))
+        .min(total);
+    (start, end)
+}
+
 enum Command {
     Enumerate(mpsc::Sender<Result<Vec<Application>, BackendError>>),
     Capture(
@@ -156,61 +165,6 @@ impl TextRecognitionProvider for WindowsBackend {
                 .collect()
         })
     }
-    fn capture_child_page(
-        &mut self,
-        target: &SnapshotHandle,
-        request: ChildPageRequest,
-    ) -> Result<ChildPageCapture, BackendError> {
-        let element = self.element(target)?;
-        let snapshot = self
-            .snapshot
-            .as_ref()
-            .expect("element resolution requires an active snapshot")
-            .id
-            .clone();
-        let cache = self.capture_cache_request()?;
-        let parent_element = unsafe { element.BuildUpdatedCache(&cache) }
-            .map_err(|e| operation("cache child page parent", e))?;
-        let condition = unsafe { self.automation.CreateTrueCondition() }
-            .map_err(|e| operation("create child page condition", e))?;
-        let child_array = unsafe {
-            parent_element.FindAllBuildCache(TreeScope_Children, &condition, &cache)
-        }
-        .map_err(|e| operation("enumerate child page", e))?;
-        let total = unsafe { child_array.Length() }
-            .map_err(|e| operation("read child page total", e))?
-            .max(0) as usize;
-        let (start, end) = child_page_range(total, request.offset, request.limit);
-        let mut count = 0;
-        let max_depth = if request.include_descendants {
-            MAX_DEPTH
-        } else {
-            0
-        };
-        let mut children = Vec::with_capacity(end - start);
-        for index in start..end {
-            if count >= MAX_NODES {
-                break;
-            }
-            let child = unsafe { child_array.GetElement(index as i32) }
-                .map_err(|e| operation("read child page element", e))?;
-            children.push(self.capture_node(&child, &cache, 0, max_depth, &mut count)?);
-        }
-        let mut parent_count = 0;
-        let mut parent = self.capture_node(&parent_element, &cache, 0, 0, &mut parent_count)?;
-        parent.children.clear();
-        if start > 0 || end < total {
-            parent.truncation_reason = Some("childPage".into());
-        }
-        Ok(ChildPageCapture {
-            snapshot,
-            parent,
-            offset: start,
-            limit: end - start,
-            total: Some(total),
-            children,
-        })
-    }
 }
 
 impl WindowsBackend {
@@ -239,7 +193,7 @@ fn normalize_virtual_desktop_point(
 
 #[cfg(test)]
 mod tests {
-    use super::normalize_virtual_desktop_point;
+    use super::{child_page_range, normalize_virtual_desktop_point};
 
     #[test]
     fn virtual_desktop_normalization_accounts_for_negative_origin_and_endpoints() {
@@ -266,6 +220,21 @@ mod tests {
         assert_eq!(
             normalize_virtual_desktop_point((200.0, 400.0), origin, size),
             (65535, 65535)
+        );
+    }
+
+    #[test]
+    fn child_page_range_selects_before_native_capture() {
+        assert_eq!(child_page_range(10, 3, Some(4)), (3, 7));
+        assert_eq!(child_page_range(10, 8, None), (8, 10));
+        assert_eq!(child_page_range(10, 20, Some(4)), (10, 10));
+    }
+
+    #[test]
+    fn child_page_range_preserves_the_node_budget() {
+        assert_eq!(
+            child_page_range(super::MAX_NODES + 10, 0, None),
+            (0, super::MAX_NODES - 1)
         );
     }
 }
@@ -806,7 +775,11 @@ impl UiaState {
         let cache = self.capture_cache_request()?;
         let capture_root = unsafe { capture_root.BuildUpdatedCache(&cache) }
             .map_err(|e| operation("cache capture root", e))?;
-        let mut count = 0;
+        self.elements.clear();
+        let mut parent_count = 0;
+        let mut parent = self.capture_node(&parent_element, &cache, 0, 0, &mut parent_count)?;
+        parent.children.clear();
+        let mut count = 1;
         let max_depth = bounds.child_depth.unwrap_or(MAX_DEPTH).min(MAX_DEPTH);
         let root = self.capture_node(&capture_root, &cache, 0, max_depth, &mut count)?;
         let title = unsafe { window.CurrentName() }.ok().map(|x| x.to_string());
@@ -1015,6 +988,64 @@ impl UiaState {
             children,
             child_count: Some(child_count),
             truncation_reason: trunc,
+        })
+    }
+    fn capture_child_page(
+        &mut self,
+        target: &SnapshotHandle,
+        request: ChildPageRequest,
+    ) -> Result<ChildPageCapture, BackendError> {
+        let element = self.element(target)?;
+        let mut app = self
+            .snapshot
+            .as_ref()
+            .expect("element resolution requires an active snapshot")
+            .app
+            .clone();
+        let cache = self.capture_cache_request()?;
+        let parent_element = unsafe { element.BuildUpdatedCache(&cache) }
+            .map_err(|e| operation("cache child page parent", e))?;
+        let condition = unsafe { self.automation.CreateTrueCondition() }
+            .map_err(|e| operation("create child page condition", e))?;
+        let child_array =
+            unsafe { parent_element.FindAllBuildCache(TreeScope_Children, &condition, &cache) }
+                .map_err(|e| operation("enumerate child page", e))?;
+        let total = unsafe { child_array.Length() }
+            .map_err(|e| operation("read child page total", e))?
+            .max(0) as usize;
+        let (start, end) = child_page_range(total, request.offset, request.limit);
+        let mut count = 0;
+        let max_depth = if request.include_descendants {
+            MAX_DEPTH
+        } else {
+            0
+        };
+        let mut children = Vec::with_capacity(end - start);
+        for index in start..end {
+            let child = unsafe { child_array.GetElement(index as i32) }
+                .map_err(|e| operation("read child page element", e))?;
+            children.push(self.capture_node(&child, &cache, 0, max_depth, &mut count)?);
+        }
+        if start > 0 || end < total {
+            parent.truncation_reason = Some("childPage".into());
+        }
+        let mut retained_root = parent.clone();
+        retained_root.children = children.clone();
+        let title = app.windows.first().and_then(|window| window.title.clone());
+        app.windows = vec![Window {
+            title,
+            root: retained_root,
+        }];
+        let retained = Snapshot::new(app);
+        let snapshot = retained.id.clone();
+        self.snapshot = Some(retained);
+        Ok(ChildPageCapture {
+            snapshot,
+            parent,
+            offset: start,
+            limit: end - start,
+            total: Some(total),
+            children,
         })
     }
     fn element(&self, h: &SnapshotHandle) -> Result<IUIAutomationElement, BackendError> {

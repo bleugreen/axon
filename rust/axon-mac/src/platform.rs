@@ -40,9 +40,7 @@ struct CGPoint {
 fn child_count(element: AXUIElementRef) -> Option<usize> {
     let children = cfstr("AXChildren").ok()?;
     let mut count = 0;
-    let status = unsafe {
-        AXUIElementGetAttributeValueCount(element, children.0, &mut count)
-    };
+    let status = unsafe { AXUIElementGetAttributeValueCount(element, children.0, &mut count) };
     (status == 0 && count >= 0).then_some(count as usize)
 }
 
@@ -108,7 +106,10 @@ impl ReadableStateProvider for MacBackend {
     #[test]
     fn requested_capture_depth_never_exceeds_native_ceiling() {
         assert_eq!(Some(0).unwrap_or(MAX_DEPTH).min(MAX_DEPTH), 0);
-        assert_eq!(Some(MAX_DEPTH + 1).unwrap_or(MAX_DEPTH).min(MAX_DEPTH), MAX_DEPTH);
+        assert_eq!(
+            Some(MAX_DEPTH + 1).unwrap_or(MAX_DEPTH).min(MAX_DEPTH),
+            MAX_DEPTH
+        );
         assert_eq!(None.unwrap_or(MAX_DEPTH).min(MAX_DEPTH), MAX_DEPTH);
     }
 }
@@ -315,8 +316,12 @@ fn capture_node(element: Owned, depth: usize, max_depth: usize, count: &mut usiz
                 continue;
             }
             // CFArray does not transfer ownership. Each child must survive the array release.
-            let captured =
-                capture_node(Owned(unsafe { CFRetain(child) }), depth + 1, max_depth, count);
+            let captured = capture_node(
+                Owned(unsafe { CFRetain(child) }),
+                depth + 1,
+                max_depth,
+                count,
+            );
             children.push(captured.node);
             elements.extend(captured.elements);
         }
@@ -573,13 +578,13 @@ impl PlatformBackend for MacBackend {
                 if child.is_null() {
                     continue;
                 }
-                let max_depth = if request.include_descendants { MAX_DEPTH } else { 0 };
-                let captured = capture_node(
-                    Owned(unsafe { CFRetain(child) }),
-                    0,
-                    max_depth,
-                    &mut count,
-                );
+                let max_depth = if request.include_descendants {
+                    MAX_DEPTH
+                } else {
+                    0
+                };
+                let captured =
+                    capture_node(Owned(unsafe { CFRetain(child) }), 0, max_depth, &mut count);
                 children.push(captured.node);
                 all_elements.extend(captured.elements);
             }
@@ -588,12 +593,7 @@ impl PlatformBackend for MacBackend {
         self.handles = all_elements
             .into_iter()
             .enumerate()
-            .map(|(index, element)| {
-                (
-                    SnapshotHandle(format!("{}:{index}", snapshot.0)),
-                    element,
-                )
-            })
+            .map(|(index, element)| (SnapshotHandle(format!("{}:{index}", snapshot.0)), element))
             .collect();
         Ok(ChildPageCapture {
             snapshot,

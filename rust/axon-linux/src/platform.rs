@@ -20,8 +20,9 @@ use atspi::{
     },
 };
 use axon_core::{
-    AppQuery, Application, BackendError, Capability, CapabilityInfo, KeyboardIntent, Node,
-    Observation, PlatformBackend, RecordedCall, Rect, Screenshot, Snapshot, SnapshotHandle, Window,
+    AppQuery, Application, BackendError, Capability, CapabilityInfo, CaptureBounds,
+    ChildPageCapture, ChildPageRequest, KeyboardIntent, Node, Observation, PlatformBackend,
+    RecordedCall, Rect, Screenshot, Snapshot, SnapshotHandle, Window,
 };
 use std::{
     collections::{HashMap, HashSet},
@@ -93,7 +94,8 @@ enum Command {
     Enumerate(Reply<Vec<Application>>),
     Identities(Reply<Vec<AppIdentity>>),
     Identity(AppQuery, Reply<Option<String>>),
-    Capture(AppQuery, Reply<Snapshot>),
+    Capture(AppQuery, CaptureBounds, Reply<Snapshot>),
+    CaptureChildPage(SnapshotHandle, ChildPageRequest, Reply<ChildPageCapture>),
     AccessibilityEnabled(Reply<Option<bool>>),
     Invoke(SnapshotHandle, String, Reply<()>),
     Read(SnapshotHandle, Reply<Option<String>>),
@@ -101,6 +103,18 @@ enum Command {
     Focus(SnapshotHandle, Reply<()>),
     Toolkit(String, Reply<Option<pixel::Toolkit>>),
     Extents(SnapshotHandle, Reply<Option<Rect>>),
+}
+
+/// Selects the requested direct-child range before any of those children are traversed.
+fn child_page<T>(children: Vec<T>, offset: usize, limit: Option<usize>) -> (Vec<T>, usize, usize) {
+    let offset = offset.min(children.len());
+    let available = children.len() - offset;
+    let limit = limit.unwrap_or(available).min(available);
+    (
+        children.into_iter().skip(offset).take(limit).collect(),
+        offset,
+        limit,
+    )
 }
 
 /// The operation name a handle that can no longer be resolved fails under.
@@ -172,6 +186,40 @@ struct SessionFacts {
 fn input_restriction(facts: SessionFacts) -> Option<&'static str> {
     if facts.wayland {
         return Some(WAYLAND_SESSION);
+    }
+
+    #[test]
+    fn child_pages_select_the_direct_range_before_traversal() {
+        let (page, offset, limit) = child_page(vec![0, 1, 2, 3, 4], 2, Some(2));
+        assert_eq!(page, [2, 3]);
+        assert_eq!(offset, 2);
+        assert_eq!(limit, 2);
+
+        let (rest, offset, limit) = child_page(vec![0, 1, 2], 1, None);
+        assert_eq!(rest, [1, 2]);
+        assert_eq!(offset, 1);
+        assert_eq!(limit, 2);
+
+        let (empty, offset, limit) = child_page(vec![0, 1], 9, None);
+        assert!(empty.is_empty());
+        assert_eq!(offset, 2);
+        assert_eq!(limit, 0);
+    }
+
+    #[test]
+    fn a_page_total_is_authoritative_only_without_provider_holes() {
+        let (published, dropped) = published(vec![
+            real("/org/a11y/atspi/accessible/1"),
+            null(),
+            real("/org/a11y/atspi/accessible/2"),
+        ]);
+        assert_eq!((dropped == 0).then_some(published.len()), None);
+
+        let (published, dropped) = published(vec![
+            real("/org/a11y/atspi/accessible/1"),
+            real("/org/a11y/atspi/accessible/2"),
+        ]);
+        assert_eq!((dropped == 0).then_some(published.len()), Some(2));
     }
     if !facts.x_display {
         return Some(NO_X_DISPLAY);
@@ -425,7 +473,21 @@ impl PlatformBackend for LinuxBackend {
         self.ask(Command::Enumerate)
     }
     fn capture(&mut self, app: &AppQuery) -> Result<Snapshot, BackendError> {
-        self.ask(|r| Command::Capture(app.clone(), r))
+        self.capture_bounded(app, CaptureBounds::default())
+    }
+    fn capture_bounded(
+        &mut self,
+        app: &AppQuery,
+        bounds: CaptureBounds,
+    ) -> Result<Snapshot, BackendError> {
+        self.ask(|r| Command::Capture(app.clone(), bounds, r))
+    }
+    fn capture_child_page(
+        &mut self,
+        target: &SnapshotHandle,
+        request: ChildPageRequest,
+    ) -> Result<ChildPageCapture, BackendError> {
+        self.ask(|r| Command::CaptureChildPage(target.clone(), request, r))
     }
     fn invoke(&mut self, target: &SnapshotHandle, action: &str) -> Result<(), BackendError> {
         self.ask(|r| Command::Invoke(target.clone(), action.into(), r))
@@ -970,8 +1032,11 @@ impl Actor {
                 Command::Identity(q, r) => {
                     let _ = r.send(self.identity_of(&q).await);
                 }
-                Command::Capture(q, r) => {
-                    let _ = r.send(self.capture(q).await);
+                Command::Capture(q, bounds, r) => {
+                    let _ = r.send(self.capture(q, bounds).await);
+                }
+                Command::CaptureChildPage(h, request, r) => {
+                    let _ = r.send(self.capture_child_page(&h, request).await);
                 }
                 Command::AccessibilityEnabled(r) => {
                     let _ = r.send(Ok(self.accessibility_enabled().await));
@@ -1118,7 +1183,11 @@ impl Actor {
         }
         Ok(partial)
     }
-    async fn capture(&mut self, q: AppQuery) -> Result<Snapshot, BackendError> {
+    async fn capture(
+        &mut self,
+        q: AppQuery,
+        bounds: CaptureBounds,
+    ) -> Result<Snapshot, BackendError> {
         let Some((root, name)) = self.select(&q).await? else {
             return Err(no_application_matched(self.accessibility_enabled().await));
         };
@@ -1135,7 +1204,10 @@ impl Actor {
         let identifier = Some(identifier);
         let mut refs = Vec::new();
         let mut remaining = MAX_NODES;
-        let node = self.node(root, 0, &mut remaining, &mut refs).await?;
+        let max_depth = bounds.child_depth.unwrap_or(MAX_DEPTH).min(MAX_DEPTH);
+        let node = self
+            .node(root, 0, max_depth, &mut remaining, &mut refs)
+            .await?;
         let snapshot = Snapshot::new(Application {
             process_id,
             name,
@@ -1148,6 +1220,58 @@ impl Actor {
         self.retained.clear();
         self.retained.insert(snapshot.id.0.clone(), refs);
         Ok(snapshot)
+    }
+    async fn capture_child_page(
+        &mut self,
+        handle: &SnapshotHandle,
+        request: ChildPageRequest,
+    ) -> Result<ChildPageCapture, BackendError> {
+        let object = self.object(handle)?.clone();
+        let proxy = timeout(
+            "accessible proxy",
+            object.as_accessible_proxy(&self.connection),
+        )
+        .await?;
+        let answered = timeout("children", proxy.get_children()).await?;
+        let claimed = answered.len();
+        let withheld = answered.iter().filter(|child| child.is_null()).count();
+        let total = (withheld == 0).then_some(claimed);
+        let (selected, offset, limit) = child_page(answered, request.offset, request.limit);
+        let (selected, _) = published(selected);
+
+        let snapshot_id = axon_core::SnapshotId::fresh();
+        let mut refs = Vec::new();
+        let mut remaining = MAX_NODES;
+        let mut parent = self.node(object, 0, 0, &mut remaining, &mut refs).await?;
+        parent.child_count = Some(claimed - withheld);
+        parent.truncation_reason = incompleteness(false, false, withheld > 0);
+
+        let descendant_depth = if request.include_descendants {
+            MAX_DEPTH
+        } else {
+            0
+        };
+        let mut captured = Vec::with_capacity(selected.len());
+        for child in selected {
+            if remaining == 0 {
+                parent.truncation_reason = incompleteness(true, false, withheld > 0);
+                break;
+            }
+            captured.push(
+                self.node(child, 0, descendant_depth, &mut remaining, &mut refs)
+                    .await?,
+            );
+        }
+        self.retained.clear();
+        self.retained.insert(snapshot_id.0.clone(), refs);
+        Ok(ChildPageCapture {
+            snapshot: snapshot_id,
+            parent,
+            offset,
+            limit,
+            total,
+            children: captured,
+        })
     }
     /// Asks a provider that is withholding its tree to publish it, then waits boundedly for that.
     ///
@@ -1240,6 +1364,7 @@ impl Actor {
         &'a self,
         object: ObjectRefOwned,
         depth: usize,
+        max_depth: usize,
         remaining: &'a mut usize,
         refs: &'a mut Vec<ObjectRefOwned>,
     ) -> Pin<Box<dyn Future<Output = Result<Node, BackendError>> + 'a>> {
@@ -1309,7 +1434,7 @@ impl Actor {
             } else {
                 false
             };
-            let depth_limit_reached = depth >= MAX_DEPTH;
+            let depth_limit_reached = depth >= max_depth;
             let asked = !depth_limit_reached && *remaining > 0;
             let answered = if asked {
                 timeout("children", proxy.get_children())
@@ -1327,7 +1452,10 @@ impl Actor {
                 if *remaining == 0 {
                     break;
                 }
-                children.push(self.node(child, depth + 1, remaining, refs).await?);
+                children.push(
+                    self.node(child, depth + 1, max_depth, remaining, refs)
+                        .await?,
+                );
             }
             Ok(Node {
                 role,
