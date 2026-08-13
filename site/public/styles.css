@@ -66,23 +66,15 @@ main > section {
   padding-right: 28px;
 }
 .hero { padding-top: 128px; padding-bottom: 118px; }
-.eyebrow,
 .kicker,
 .docs-label {
   color: var(--moss);
   font: 600 13px/1.4 var(--sans);
   letter-spacing: .01em;
 }
-.eyebrow { display: flex; align-items: center; gap: 11px; }
-.eyebrow span {
-  width: 8px;
-  height: 8px;
-  border-radius: 50%;
-  background: var(--moss);
-}
 .hero h1 {
   max-width: 990px;
-  margin: 30px 0 30px;
+  margin: 0 0 30px;
   font-family: var(--serif);
   font-size: clamp(58px, 8.5vw, 112px);
   font-weight: 400;
