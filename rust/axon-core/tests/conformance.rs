@@ -714,8 +714,8 @@ fn expanded_swift_fixture_prepares_every_parameter_type_without_dispatch() {
         "Send /tmp/report/2026-08-12 to Ada <owner@example.com> after 3 tries"
     );
     assert_eq!(
-        result.trace[1].result.as_ref().unwrap()["value"],
-        "<redacted: contains-secret>"
+        result.trace[1].result,
+        Some(Value::String("<redacted: contains-secret>".into()))
     );
     assert!(result
         .trace
