@@ -199,9 +199,19 @@ function Register-ProbeActivationTask {
     $escapedResultPath = $ResultPath.Replace("'", "''")
     $escapedTemporaryPath = ("$ResultPath.tmp").Replace("'", "''")
     $command = @"
+Add-Type @'
+using System.Runtime.InteropServices;
+public static class AxonForegroundOwner {
+    [DllImport("user32.dll")] public static extern System.IntPtr GetForegroundWindow();
+    [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(System.IntPtr window, out uint processId);
+}
+'@
 `$shell = New-Object -ComObject WScript.Shell
 `$activated = `$shell.AppActivate($ProcessId)
-@{ processId = $ProcessId; activated = `$activated } | ConvertTo-Json -Compress | Set-Content -LiteralPath '$escapedTemporaryPath' -Encoding utf8
+Start-Sleep -Milliseconds 250
+[uint32]`$foregroundProcessId = 0
+[void][AxonForegroundOwner]::GetWindowThreadProcessId([AxonForegroundOwner]::GetForegroundWindow(), [ref]`$foregroundProcessId)
+@{ requestedProcessId = $ProcessId; foregroundProcessId = `$foregroundProcessId; activated = `$activated } | ConvertTo-Json -Compress | Set-Content -LiteralPath '$escapedTemporaryPath' -Encoding utf8
 Move-Item -LiteralPath '$escapedTemporaryPath' -Destination '$escapedResultPath' -Force
 if (-not `$activated) { exit 1 }
 "@
@@ -222,8 +232,8 @@ function Wait-ForProbeActivationTask {
     do {
         if (Test-Path -LiteralPath $ResultPath) {
             $result = Get-Content -LiteralPath $ResultPath -Raw | ConvertFrom-Json
-            if ($result.activated -eq $true) { return }
-            throw "could not foreground prior application pid $($result.processId) for the hand-back sweep"
+            if ($result.activated -eq $true -and [uint32]$result.foregroundProcessId -ne 0) { return $result }
+            throw "could not foreground prior application pid $($result.requestedProcessId) for the hand-back sweep"
         }
         $task = Get-ScheduledTask -TaskName $ProbeActivationTaskName -ErrorAction SilentlyContinue
         if ($null -eq $task) { throw 'the prior-activation task disappeared before reporting its result' }
@@ -247,14 +257,13 @@ function Invoke-HandBackSweep {
         Remove-Item -LiteralPath $activationResultPath, "$activationResultPath.tmp", $probeResultPath, "$probeResultPath.tmp" -Force -ErrorAction SilentlyContinue
         Register-ProbeActivationTask -ProcessId $PriorProcessId -ResultPath $activationResultPath
         Start-ProbeActivationTask
-        Wait-ForProbeActivationTask -ResultPath $activationResultPath
-        # Let the desktop finish publishing its new foreground state before the probe takes sample zero.
-        Start-Sleep -Milliseconds 250
+        $activation = Wait-ForProbeActivationTask -ResultPath $activationResultPath
         Register-ProbeForegroundTask -TargetProcessId $TargetProcessId -ResultPath $probeResultPath
         Start-ProbeForegroundTask
         $run = Wait-ForProbeForegroundTask -ResultPath $probeResultPath
         if ($run.exitCode -ne 0) { throw "hand-back sweep exited $($run.exitCode): $($run.stderr)" }
-        $run.result
+        $run.result | Add-Member -NotePropertyName requestedPriorProcess -NotePropertyValue ([uint32]$activation.requestedProcessId) -PassThru |
+            Add-Member -NotePropertyName activatedPriorProcess -NotePropertyValue ([uint32]$activation.foregroundProcessId) -PassThru
     }
     finally {
         Unregister-ProbeForegroundTask
@@ -983,7 +992,8 @@ function Invoke-ProbeStage {
                 Write-Note "hand-back sweep prior=$($prior.identifier) repetition=${repetition}: $serializedSweep"
                 $missing = @()
                 if ($null -eq $sweep.foregroundLockTimeoutMs) { $missing += 'foregroundLockTimeoutMs' }
-                if ([int]$sweep.priorForegroundProcess -ne [int]$prior.identifier) { $missing += 'priorForegroundProcess' }
+                if ([int]$sweep.requestedPriorProcess -ne [int]$prior.identifier) { $missing += 'requestedPriorProcess' }
+                if ([int]$sweep.priorForegroundProcess -ne [int]$sweep.activatedPriorProcess) { $missing += 'activatedPriorProcess' }
                 if (@($sweep.results).Count -ne 8) { $missing += "results[count=$(@($sweep.results).Count)]" }
                 foreach ($result in @($sweep.results)) {
                     $strategy = if ($null -eq $result.strategy) { '?' } else { [string]$result.strategy }

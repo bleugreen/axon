@@ -522,6 +522,7 @@ function Start-ProbeActivationTask {
 function Wait-ForProbeActivationTask {
     param([string] $ResultPath)
     $script:Machine.Log.Add('wait-probe-activation-task')
+    [pscustomobject]@{ requestedProcessId = 4242; foregroundProcessId = 4242; activated = $true }
 }
 
 function Unregister-ProbeActivationTask {
@@ -762,7 +763,7 @@ function Invoke-HandBackSweep {
     try {
         Register-ProbeActivationTask -ProcessId $PriorProcessId -ResultPath 'C:\prior-activation.json'
         Start-ProbeActivationTask
-        Wait-ForProbeActivationTask -ResultPath 'C:\prior-activation.json'
+        $activation = Wait-ForProbeActivationTask -ResultPath 'C:\prior-activation.json'
         Register-ProbeForegroundTask -TargetProcessId $TargetProcessId -ResultPath 'C:\foreground-sweep.json'
         Start-ProbeForegroundTask
         Wait-ForProbeForegroundTask -ResultPath 'C:\foreground-sweep.json' | Out-Null
@@ -777,7 +778,7 @@ function Invoke-HandBackSweep {
             cursor = @{ x = 1; y = 2 }; elapsedMs = 1000
         }
         }
-        [pscustomobject]@{ foregroundLockTimeoutMs = 200000; priorForegroundProcess = $PriorProcessId; results = @($samples) }
+        [pscustomobject]@{ foregroundLockTimeoutMs = 200000; requestedPriorProcess = $PriorProcessId; activatedPriorProcess = $activation.foregroundProcessId; priorForegroundProcess = $activation.foregroundProcessId; results = @($samples) }
     }
     finally {
         Unregister-ProbeForegroundTask
