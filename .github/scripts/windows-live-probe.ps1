@@ -701,11 +701,11 @@ function Invoke-ProbeStage {
             $page = Invoke-AxonMcp -Request $pageRequest
             if ($page.result.isError -ne $false) { throw "Edge child page $pageNumber failed" }
             $children = $page.result.structuredContent.children
-            if ($children.offset -ne $offset -or $children.limit -gt 5) {
-                throw "Edge child page $pageNumber did not honor offset/limit"
-            }
             $payloadBytes = [Text.Encoding]::UTF8.GetByteCount(($page | ConvertTo-Json -Compress -Depth 100))
             Write-Note "Edge paging page=$pageNumber offset=$($children.offset) limit=$($children.limit) total=$($children.total) nextOffset=$($children.nextOffset) payloadBytes=$payloadBytes"
+            if ([int]$children.offset -ne [int]$offset -or [int]$children.limit -gt 5) {
+                throw "Edge child page $pageNumber did not honor offset/limit: requested offset=$offset limit=5; returned offset=$($children.offset) limit=$($children.limit)"
+            }
             $next = $children.nextOffset
             if ($null -ne $next -and $next -le $offset) { throw 'Edge paging did not advance' }
             $seen += [Math]::Min([int]$children.limit, [Math]::Max(0, [int]$children.total - $offset))
