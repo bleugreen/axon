@@ -38,6 +38,7 @@ impl ToolBackend {
 #[derive(Clone, Debug, PartialEq)]
 pub struct ValidatedToolCall {
     pub name: String,
+    pub socket_method: String,
     pub arguments: Value,
 }
 
@@ -73,7 +74,7 @@ fn parse_artifact(source: &str) -> Result<Value, String> {
             return Err(format!("duplicate tool name {name:?}"));
         }
         required_string(tool, "description", &path)?;
-        required_string(tool, "socketMethod", &path)?;
+        required_nonempty_string(tool, "socketMethod", &path)?;
         let availability = tool
             .get("availability")
             .and_then(Value::as_object)
@@ -145,7 +146,11 @@ pub fn validate_tool_arguments(
     name: &str,
     arguments: Value,
 ) -> Result<Value, JsonRpcError> {
-    let tool = find_tool(backend, name)?;
+    let tool = find_tool(artifact()?, backend, name)?;
+    validate_tool_arguments_for(tool, arguments)
+}
+
+fn validate_tool_arguments_for(tool: &Value, arguments: Value) -> Result<Value, JsonRpcError> {
     if !arguments.is_object() {
         return Err(invalid(
             "params.arguments",
@@ -160,6 +165,23 @@ pub fn validate_tool_arguments(
 }
 
 pub fn validate_tools_call(
+    backend: ToolBackend,
+    params: Option<Value>,
+) -> Result<ValidatedToolCall, JsonRpcError> {
+    validate_tools_call_from(artifact()?, backend, params)
+}
+
+pub fn validate_tools_call_from_artifact(
+    source: &str,
+    backend: ToolBackend,
+    params: Option<Value>,
+) -> Result<ValidatedToolCall, JsonRpcError> {
+    let artifact = parse_artifact(source).map_err(|message| internal(&message))?;
+    validate_tools_call_from(&artifact, backend, params)
+}
+
+fn validate_tools_call_from(
+    artifact: &Value,
     backend: ToolBackend,
     params: Option<Value>,
 ) -> Result<ValidatedToolCall, JsonRpcError> {
@@ -182,14 +204,23 @@ pub fn validate_tools_call(
         .get("arguments")
         .cloned()
         .unwrap_or_else(|| Value::Object(Map::new()));
+    let tool = find_tool(artifact, backend, name)?;
     Ok(ValidatedToolCall {
         name: name.to_string(),
-        arguments: validate_tool_arguments(backend, name, arguments)?,
+        socket_method: tool["socketMethod"]
+            .as_str()
+            .ok_or_else(|| internal("validated artifact lost socketMethod"))?
+            .to_string(),
+        arguments: validate_tool_arguments_for(tool, arguments)?,
     })
 }
 
-fn find_tool(backend: ToolBackend, name: &str) -> Result<&'static Value, JsonRpcError> {
-    artifact()?
+fn find_tool<'a>(
+    artifact: &'a Value,
+    backend: ToolBackend,
+    name: &str,
+) -> Result<&'a Value, JsonRpcError> {
+    artifact
         .get("tools")
         .and_then(Value::as_array)
         .ok_or_else(|| internal("validated artifact lost tools array"))?
@@ -756,5 +787,28 @@ mod tests {
         let error = internal("bad artifact");
         assert_eq!(error.code, -32603);
         assert_eq!(error.data.unwrap()["reason"], "bad artifact");
+    }
+
+    #[test]
+    fn resolves_socket_method_without_changing_public_lookup_name() {
+        let mut synthetic = test_artifact(json!({
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false
+        }));
+        synthetic["tools"][0]["name"] = json!("public-name");
+        synthetic["tools"][0]["socketMethod"] = json!("private.socket.method");
+        synthetic["tools"][0]["availability"]["linux"] = json!(true);
+
+        let call = validate_tools_call_from_artifact(
+            &serde_json::to_string(&synthetic).unwrap(),
+            ToolBackend::Linux,
+            Some(json!({"name": "public-name", "arguments": {}})),
+        )
+        .unwrap();
+
+        assert_eq!(call.name, "public-name");
+        assert_eq!(call.socket_method, "private.socket.method");
+        assert_eq!(call.arguments, json!({}));
     }
 }

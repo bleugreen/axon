@@ -348,7 +348,7 @@ fn mcp_response_with_request(
         Some("initialize") => {
             json!({"jsonrpc":"2.0","id":id,"result":{"protocolVersion":"2025-03-26","capabilities":{"tools":{}},"serverInfo":{"name":"axon-linux","version":env!("CARGO_PKG_VERSION")}}})
         }
-        Some("tools/list") => json!({"jsonrpc":"2.0","id":id,"result":{"tools": tools()}}),
+        Some("tools/list") => tools_response(id, backend_tools(ToolBackend::Linux)),
         Some("tools/call") => {
             let call = match validate_tools_call(ToolBackend::Linux, value.get("params").cloned()) {
                 Ok(call) => call,
@@ -358,7 +358,7 @@ fn mcp_response_with_request(
             };
             let rpc = serde_json::to_string(&JsonRpcRequest::new(
                 Some(JsonRpcId::Integer(1)),
-                call.name,
+                call.socket_method,
                 Some(call.arguments),
             ))
             .unwrap();
@@ -384,8 +384,11 @@ fn mcp_response_with_request(
     Ok(Some(response))
 }
 
-fn tools() -> Vec<Value> {
-    backend_tools(ToolBackend::Linux).expect("embedded tool surface must be valid")
+fn tools_response(id: Value, tools: Result<Vec<Value>, axon_core::JsonRpcError>) -> Value {
+    match tools {
+        Ok(tools) => json!({"jsonrpc":"2.0","id":id,"result":{"tools":tools}}),
+        Err(error) => json!({"jsonrpc":"2.0","id":id,"error":error}),
+    }
 }
 
 #[cfg(test)]
@@ -411,12 +414,26 @@ mod tests {
     }
     #[test]
     fn facade_exposes_supported_surface() {
-        let names = tools()
+        let names = backend_tools(ToolBackend::Linux)
+            .unwrap()
             .into_iter()
             .map(|v| v["name"].as_str().unwrap().to_owned())
             .collect::<Vec<_>>();
         assert!(names.contains(&"invoke".into()));
         assert!(!names.contains(&"drag".into()));
+    }
+    #[test]
+    fn tools_list_serializes_artifact_failures_as_internal_errors() {
+        let response = tools_response(
+            json!(4),
+            Err(axon_core::JsonRpcError {
+                code: -32603,
+                message: "invalid embedded artifact".into(),
+                data: None,
+            }),
+        );
+        assert_eq!(response["id"], 4);
+        assert_eq!(response["error"]["code"], -32603);
     }
     #[test]
     fn facade_rejects_invalid_calls_before_contacting_daemon() {

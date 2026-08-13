@@ -344,7 +344,7 @@ where
             };
             let rpc = serde_json::to_string(&JsonRpcRequest::new(
                 Some(JsonRpcId::Integer(1)),
-                call.name,
+                call.socket_method,
                 Some(call.arguments),
             ))
             .unwrap();

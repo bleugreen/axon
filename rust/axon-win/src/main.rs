@@ -943,7 +943,7 @@ mod pipe {
                 "initialize" => {
                     json!({"jsonrpc":"2.0","id":id,"result":{"protocolVersion":"2025-06-18","capabilities":{"tools":{}},"serverInfo":{"name":"axon-win","version":env!("CARGO_PKG_VERSION")}}})
                 }
-                "tools/list" => json!({"jsonrpc":"2.0","id":id,"result":{"tools":tool_list()}}),
+                "tools/list" => tool_list_response(id, backend_tools(ToolBackend::Windows)),
                 "tools/call" => forward(&input)?,
                 _ => {
                     if input.get("id").is_none() {
@@ -966,7 +966,11 @@ mod pipe {
                 return Ok(json!({"jsonrpc":"2.0","id":id,"error":error}));
             }
         };
-        let rpc = JsonRpcRequest::new(Some(JsonRpcId::Integer(1)), call.name, Some(call.arguments));
+        let rpc = JsonRpcRequest::new(
+            Some(JsonRpcId::Integer(1)),
+            call.socket_method,
+            Some(call.arguments),
+        );
         let response = send_rpc(&rpc)?;
         if let Some(error) = response.get("error") {
             Ok(
@@ -980,11 +984,11 @@ mod pipe {
     fn success_response(id: Value, result: Value) -> Value {
         json!({"jsonrpc":"2.0","id":id,"result":axon_core::mcp_tool_result(result, false)})
     }
-    fn tool_list() -> Value {
-        Value::Array(
-            backend_tools(ToolBackend::Windows)
-                .expect("embedded Windows tool surface must be valid"),
-        )
+    fn tool_list_response(id: Value, tools: Result<Vec<Value>, axon_core::JsonRpcError>) -> Value {
+        match tools {
+            Ok(tools) => json!({"jsonrpc":"2.0","id":id,"result":{"tools":tools}}),
+            Err(error) => json!({"jsonrpc":"2.0","id":id,"error":error}),
+        }
     }
 
     #[cfg(test)]
@@ -993,7 +997,8 @@ mod pipe {
 
         #[test]
         fn facade_lists_the_shared_windows_tools() {
-            let tools = tool_list();
+            let response = tool_list_response(json!(1), backend_tools(ToolBackend::Windows));
+            let tools = &response["result"]["tools"];
             let names = tools
                 .as_array()
                 .unwrap()
@@ -1007,6 +1012,20 @@ mod pipe {
                 ]
             );
             assert_eq!(tools[0]["inputSchema"]["additionalProperties"], false);
+        }
+
+        #[test]
+        fn tools_list_serializes_artifact_failures_as_internal_errors() {
+            let response = tool_list_response(
+                json!(4),
+                Err(axon_core::JsonRpcError {
+                    code: -32603,
+                    message: "invalid embedded artifact".into(),
+                    data: None,
+                }),
+            );
+            assert_eq!(response["id"], 4);
+            assert_eq!(response["error"]["code"], -32603);
         }
 
         #[test]
