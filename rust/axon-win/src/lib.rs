@@ -1151,9 +1151,14 @@ fn flattened(snapshot: &Snapshot) -> impl Iterator<Item = &axon_core::Node> {
     out.into_iter()
 }
 fn app_query(params: &Map<String, Value>) -> AppQuery {
+    let app = params.get("app").and_then(Value::as_str);
+    let process_id = app.and_then(|value| value.strip_prefix("pid:").unwrap_or(value).parse().ok());
     AppQuery {
-        process_id: None,
-        name: params.get("app").and_then(Value::as_str).map(str::to_owned),
+        process_id,
+        name: process_id
+            .is_none()
+            .then(|| app.map(str::to_owned))
+            .flatten(),
         identifier: params
             .get("identifier")
             .and_then(Value::as_str)
@@ -1221,6 +1226,71 @@ mod tests {
     use std::{cell::RefCell, rc::Rc, time::Duration};
 
     #[test]
+    fn semantic_resolution_captures_selected_pid_on_first_try() {
+        let mut backend = backend(vec![node("Save")], None);
+        backend.snapshot.app.process_id = Some(4101);
+        let queries = backend.capture_queries.clone();
+        let mut router = Router::new(backend);
+        let names = router.register_snapshot(&router.backend.snapshot.clone());
+        let name = names
+            .into_iter()
+            .find(|name| name.label == "Save")
+            .unwrap()
+            .name;
+
+        let result = router.resolve(
+            json!({"target":{"app":"4101","name":name}})
+                .as_object()
+                .unwrap(),
+        );
+        assert!(result.is_ok());
+        assert_eq!(
+            queries.borrow().as_slice(),
+            &[AppQuery {
+                process_id: Some(4101),
+                name: None,
+                identifier: None,
+            }]
+        );
+    }
+
+    #[test]
+    fn name_record_recapture_stays_on_its_recorded_pid() {
+        let mut backend = backend(vec![node("Save")], None);
+        backend.snapshot.app.process_id = Some(4101);
+        backend.snapshot.app.name = "Shared".into();
+        backend.snapshot.app.identifier = Some("com.example.shared".into());
+        let queries = backend.capture_queries.clone();
+        let mut router = Router::new(backend);
+        let names = router.register_snapshot(&router.backend.snapshot.clone());
+        let name = names
+            .into_iter()
+            .find(|name| name.label == "Save")
+            .unwrap()
+            .name;
+
+        let mut newer = Snapshot::new(Application {
+            process_id: Some(4202),
+            name: "Shared".into(),
+            identifier: Some("com.example.shared".into()),
+            windows: vec![Window {
+                title: None,
+                root: node("Other"),
+            }],
+        });
+        newer.id = axon_core::SnapshotId("newer".into());
+        router.semantic_names.register(&newer);
+
+        let result = router.resolve(
+            json!({"target":{"app":"Shared","name":name}})
+                .as_object()
+                .unwrap(),
+        );
+        assert!(result.is_ok());
+        assert_eq!(queries.borrow().last().unwrap().process_id, Some(4101));
+    }
+
+    #[test]
     fn native_result_uses_structured_target_resolution() {
         let mut result = json!({"resolution":{"status":"unique"}});
         let resolution: axon_core::TargetResolution = serde_json::from_value(json!({
@@ -1257,6 +1327,7 @@ mod tests {
     #[derive(Clone)]
     struct FakeBackend {
         snapshot: Snapshot,
+        capture_queries: Rc<RefCell<Vec<AppQuery>>>,
         pointer_target_matches: bool,
         verified_handles: Rc<RefCell<Vec<SnapshotHandle>>>,
         value: Rc<RefCell<Option<String>>>,
@@ -1383,7 +1454,8 @@ mod tests {
                 .find(|running| Some(running.name.as_str()) == wanted)
                 .map(|running| running.identifier.unwrap_or(running.name)))
         }
-        fn capture(&mut self, _: &AppQuery) -> Result<Snapshot, BackendError> {
+        fn capture(&mut self, query: &AppQuery) -> Result<Snapshot, BackendError> {
+            self.capture_queries.borrow_mut().push(query.clone());
             Ok(self.snapshot.clone())
         }
         fn invoke(&mut self, _: &SnapshotHandle, _: &str) -> Result<(), BackendError> {
@@ -1495,6 +1567,7 @@ mod tests {
             ..node("root")
         };
         FakeBackend {
+            capture_queries: Rc::new(RefCell::new(vec![])),
             snapshot: Snapshot::new(Application {
                 process_id: None,
                 name: "App".into(),

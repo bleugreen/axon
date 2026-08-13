@@ -1381,9 +1381,14 @@ fn bounded_ms(
 }
 
 fn app_query(params: &Map<String, Value>) -> AppQuery {
+    let app = params.get("app").and_then(Value::as_str);
+    let process_id = app.and_then(|value| value.strip_prefix("pid:").unwrap_or(value).parse().ok());
     AppQuery {
-        process_id: None,
-        name: params.get("app").and_then(Value::as_str).map(str::to_owned),
+        process_id,
+        name: process_id
+            .is_none()
+            .then(|| app.map(str::to_owned))
+            .flatten(),
         identifier: params
             .get("identifier")
             .and_then(Value::as_str)
