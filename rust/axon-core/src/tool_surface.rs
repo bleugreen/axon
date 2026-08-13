@@ -300,6 +300,9 @@ fn validate_branches(
         ));
     }
     Ok(())
+}
+
+fn apply_defaults(schema: &Value, value: &mut Value) {
     if let (Some(properties), Some(object)) = (
         schema.get("properties").and_then(Value::as_object),
         value.as_object_mut(),
@@ -314,6 +317,8 @@ fn validate_branches(
                 apply_defaults(child_schema, child);
             }
         }
+    }
+}
 
 fn invalid(path: &str, message: &str, expected: Option<&str>) -> JsonRpcError {
     JsonRpcError {
