@@ -1312,6 +1312,8 @@ impl Actor {
                 actions,
                 frame,
                 editable,
+                focused: None,
+                enabled: None,
                 children,
                 child_count,
                 truncation_reason: incompleteness(
