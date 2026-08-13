@@ -92,12 +92,6 @@ fn scroll_amount(delta: f64) -> ScrollAmount {
         ScrollAmount_NoAmount
     }
 
-    #[test]
-    fn delta_magnitude_becomes_bounded_semantic_scroll_steps() {
-        assert_eq!(scroll_steps((0.0, -120.0)), (0, 1));
-        assert_eq!(scroll_steps((240.0, -121.0)), (2, 2));
-        assert_eq!(scroll_steps((0.0, -100_000.0)), (0, 100));
-    }
 }
 
 fn scroll_steps(delta: (f64, f64)) -> (usize, usize) {
@@ -279,6 +273,13 @@ mod tests {
             child_page_range(super::MAX_NODES + 10, 0, None),
             (0, super::MAX_NODES - 1)
         );
+    }
+
+    #[test]
+    fn delta_magnitude_becomes_bounded_semantic_scroll_steps() {
+        assert_eq!(scroll_steps((0.0, -120.0)), (0, 1));
+        assert_eq!(scroll_steps((240.0, -121.0)), (2, 2));
+        assert_eq!(scroll_steps((0.0, -100_000.0)), (0, 100));
     }
 }
 
