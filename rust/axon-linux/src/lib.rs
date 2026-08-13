@@ -105,6 +105,7 @@ fn primitive_dispatch_params(params: &Map<String, Value>) -> Map<String, Value> 
             target.retain(|field, _| field == "app" || field == "name");
         }
     }
+
     params
 }
 
@@ -1170,6 +1171,18 @@ mod tests {
         Screenshot, Window,
     };
     use std::{cell::RefCell, rc::Rc, time::Duration};
+
+    #[test]
+    fn native_result_uses_structured_target_resolution() {
+        let mut result = json!({"resolution":{"status":"unique"}});
+        let resolution: axon_core::TargetResolution = serde_json::from_value(json!({
+            "status":"ambiguous","confidence":"none","path":"fullSnapshot","context":"complete"
+        }))
+        .unwrap();
+        attach_target_resolution(&mut result, &resolution);
+        assert!(result.get("resolution").is_none());
+        assert_eq!(result["targetResolution"]["status"], "ambiguous");
+    }
 
     #[test]
     fn replay_metadata_is_stripped_from_semantic_targets_before_native_dispatch() {

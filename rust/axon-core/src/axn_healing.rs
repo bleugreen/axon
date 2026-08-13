@@ -166,10 +166,87 @@ fn evidence_item(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{Application, Node, SnapshotId, Window};
     use serde_json::json;
 
     fn action() -> AxnAction {
         serde_json::from_value(json!({"id":"submit","tool":"click","target":{"app":"Mail","name":"send","locator":{"role":"button","title":{"exact":"Send"}},"recording":{"ignored":true}}})).unwrap()
+    }
+
+    fn snapshot(nodes: Vec<Node>) -> Snapshot {
+        Snapshot {
+            id: SnapshotId("live".into()),
+            app: Application {
+                name: "Editor".into(),
+                identifier: None,
+                windows: vec![Window {
+                    title: Some("Main".into()),
+                    root: Node {
+                        role: "window".into(),
+                        children: nodes,
+                        ..node("window", None, false)
+                    },
+                }],
+            },
+        }
+    }
+
+    fn node(role: &str, value: Option<&str>, editable: bool) -> Node {
+        Node {
+            role: role.into(),
+            subrole: None,
+            name: None,
+            title: None,
+            label: None,
+            value: value.map(str::to_owned),
+            description: None,
+            identifier: None,
+            actions: vec![],
+            frame: None,
+            editable,
+            focused: None,
+            enabled: None,
+            children: vec![],
+            child_count: None,
+            truncation_reason: None,
+        }
+    }
+
+    #[test]
+    fn canonical_conversion_covers_clean_proposed_missing_and_ambiguous() {
+        let recorded: Locator =
+            serde_json::from_value(json!({"role":"button","value":{"exact":"old"}})).unwrap();
+        let clean_snapshot = snapshot(vec![node("button", Some("old"), true)]);
+        let clean_raw = crate::LocatorResolver::resolve(&recorded, &clean_snapshot);
+        let clean = canonical_target_resolution(&recorded, &clean_snapshot, &clean_raw);
+        assert_eq!(clean.status, ResolutionStatus::Unique);
+        assert_eq!(clean.evidence[1]["outcome"], "matched");
+
+        let drift_snapshot = snapshot(vec![node("button", Some("new"), true)]);
+        let drift_raw = crate::LocatorResolver::resolve(&recorded, &drift_snapshot);
+        let proposed = canonical_target_resolution(&recorded, &drift_snapshot, &drift_raw);
+        assert_eq!(proposed.status, ResolutionStatus::Unique);
+        assert_eq!(proposed.evidence[1]["outcome"], "changed");
+        assert_eq!(
+            proposed.observed_locator.as_ref().unwrap()["value"]["exact"],
+            "new"
+        );
+
+        let missing_snapshot = snapshot(vec![node("textfield", None, false)]);
+        let missing_raw = crate::LocatorResolver::resolve(&recorded, &missing_snapshot);
+        let missing = canonical_target_resolution(&recorded, &missing_snapshot, &missing_raw);
+        assert_eq!(missing.status, ResolutionStatus::Missing);
+        assert!(missing.observed_locator.is_none());
+
+        let broad: Locator = serde_json::from_value(json!({"role":"button"})).unwrap();
+        let ambiguous_snapshot = snapshot(vec![
+            node("button", None, false),
+            node("button", None, false),
+        ]);
+        let ambiguous_raw = crate::LocatorResolver::resolve(&broad, &ambiguous_snapshot);
+        let ambiguous = canonical_target_resolution(&broad, &ambiguous_snapshot, &ambiguous_raw);
+        assert_eq!(ambiguous.status, ResolutionStatus::Ambiguous);
+        assert_eq!(ambiguous.candidates.len(), 2);
     }
     fn resolution(status: ResolutionStatus, observed: Option<Value>) -> TargetResolution {
         TargetResolution {
