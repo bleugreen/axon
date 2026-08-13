@@ -267,7 +267,7 @@ struct MCPContent {
     }
 }
 
-private extension JSONValue {
+extension JSONValue {
     var compactJSONString: String {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys, .withoutEscapingSlashes]
@@ -275,6 +275,9 @@ private extension JSONValue {
         return String(decoding: data, as: UTF8.self)
     }
 
+}
+
+private extension JSONValue {
     func redactingMCPImagePayloads(into images: inout [JSONValue]) -> JSONValue {
         switch self {
         case var .object(object):
