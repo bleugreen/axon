@@ -76,6 +76,10 @@ pub struct Router<B> {
     observation_sequence: u64,
 }
 
+fn application_enumeration<T: serde::Serialize>(apps: Vec<T>) -> Value {
+    json!({"apps": apps})
+}
+
 /// Replay targets may carry recording-only locator evidence. Native tool decoding receives only
 /// the primitive semantic target; the shared runner remains responsible for registering the
 /// attached locator before crossing this boundary.
@@ -860,12 +864,11 @@ impl<
             ));
         }
         if params.get("app").is_none() {
-            return serde_json::to_value(
+            return Ok(application_enumeration(
                 self.backend
                     .enumerate_applications()
                     .map_err(backend_error)?,
-            )
-            .map_err(internal_error);
+            ));
         }
         let app = app_query(params);
         let snapshot = self.backend.capture(&app).map_err(backend_error)?;
@@ -1425,6 +1428,14 @@ pub fn parse_request(line: &str) -> Result<JsonRpcRequest, JsonRpcResponse> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn look_application_enumeration_matches_shared_envelope() {
+        assert_eq!(
+            serde_json::to_string(&application_enumeration(Vec::<Value>::new())).unwrap(),
+            include_str!("../../../schema/fixtures/look-applications-envelope.json").trim()
+        );
+    }
 
     #[test]
     fn native_result_uses_structured_target_resolution() {
