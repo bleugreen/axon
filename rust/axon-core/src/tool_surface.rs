@@ -189,6 +189,8 @@ fn validate_value(schema: &Value, value: &Value, path: &str) -> Result<(), JsonR
         validate_branches(branches, value, path, false)?;
     }
     let expected = schema.get("type").and_then(Value::as_str);
+    let type_matches = match expected {
+        None => true,
         Some("object") => value.is_object(),
         Some("array") => value.is_array(),
         Some("string") => value.is_string(),
