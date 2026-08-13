@@ -52,7 +52,7 @@ private func availableToolNames(for facade: ToolFacade) -> [String] {
         .string("screen"), .string("window"), .string("screenshot")
     ]))
     #expect(flatPoint?["additionalProperties"] == .bool(false))
-    #expect(flatPoint?["description"]?.stringValue.contains("logical macOS points") == true)
+    #expect(flatPoint?["description"]?.stringValue.contains("platform accessibility coordinate system") == true)
     #expect(flatPoint?["description"]?.stringValue.contains("encoded image") == true)
     #expect(flatPoint?["properties"]?["coordinateSpace"]?["description"]?.stringValue.contains("encoded-image pixels") == true)
 
