@@ -45,6 +45,20 @@ struct HomebrewInstallerTests {
         }
     }
 
+    @Test func defaultRunnerDrainsLargeStdoutAndStderrWhileProcessRuns() throws {
+        let byteCount = 1_048_576
+        let script = "head -c \(byteCount) /dev/zero; head -c \(byteCount) /dev/zero >&2"
+
+        let result = try HomebrewInstaller.defaultRunner(
+            URL(fileURLWithPath: "/bin/sh"),
+            ["-c", script]
+        )
+
+        #expect(result.status == 0)
+        #expect(result.stdout.utf8.count == byteCount)
+        #expect(result.stderr.utf8.count == byteCount)
+    }
+
     @Test func locateReturnsNilWhenNoCandidateExecutableExists() {
         let fileManager = FileManager()
         let url = HomebrewInstaller.locate(fileManager: fileManager)
