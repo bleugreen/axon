@@ -884,44 +884,34 @@ function Invoke-ProbeStage {
         $listResponse = Invoke-AxonMcp -Request $listRequest
         if ($listResponse.result.isError -ne $false) { throw 'the app-list look request failed' }
 
-        # The daemon is a GUI-subsystem process and should not own a visible window. Excluding both its
-        # path-shaped name and its process id keeps this assertion robust against stale console-host
-        # enumeration while requiring evidence from an application this lane did not start.
-        $verified = $null
-        $considered = @()
-        foreach ($app in @($listResponse.result.structuredContent.apps | Where-Object { $_.name -match 'Edge' })) {
-            if ($app.name -and $app.name.Equals($ProbeDaemonExecutable, [System.StringComparison]::OrdinalIgnoreCase)) {
-                continue
-            }
-            if ($null -ne $app.identifier -and $app.identifier -eq $daemonProcessId) {
-                continue
-            }
-            $considered += $app.name
-            $request = @{
-                jsonrpc = '2.0'
-                id = 1
-                method = 'tools/call'
-                params = @{ name = 'look'; arguments = @{ app = $app.name } }
-            } | ConvertTo-Json -Compress -Depth 10
-            $response = Invoke-AxonMcp -Request $request
-            $window = $response.result.structuredContent.app.windows |
-                ForEach-Object root | Select-Object -First 1
-            $screenshot = $response.result.structuredContent.screenshot
-            $image = @($response.result.content | Where-Object {
-                $_.type -eq 'image' -and $_.mimeType -eq 'image/png' -and $_.data.Length -gt 0
-            })
-            $screenshotOk = $null -ne $screenshot -and
-                $screenshot.mediaType -eq 'image/png' -and
-                $screenshot.contentTransport -eq 'mcp_image' -and
-                $image.Count -eq 1 -and
-                [Math]::Max([int]$screenshot.width, [int]$screenshot.height) -le 1280
-            if ($response.result.isError -eq $false -and $null -ne $window -and $screenshotOk) {
-                $verified = @{ response = $response; window = $window; app = $app.name }
-                break
-            }
+        # The browser discovery above proved which process owns this isolated profile's window.
+        # Keep every later semantic and foreground request pinned to that process: a name-only Edge
+        # lookup may resolve an unrelated persistent window from the interactive runner desktop.
+        $request = @{
+            jsonrpc = '2.0'
+            id = 1
+            method = 'tools/call'
+            params = @{ name = 'look'; arguments = @{ app = $browserApp } }
+        } | ConvertTo-Json -Compress -Depth 10
+        $response = Invoke-AxonMcp -Request $request
+        $window = $response.result.structuredContent.app.windows |
+            ForEach-Object root | Select-Object -First 1
+        $screenshot = $response.result.structuredContent.screenshot
+        $image = @($response.result.content | Where-Object {
+            $_.type -eq 'image' -and $_.mimeType -eq 'image/png' -and $_.data.Length -gt 0
+        })
+        $screenshotOk = $null -ne $screenshot -and
+            $screenshot.mediaType -eq 'image/png' -and
+            $screenshot.contentTransport -eq 'mcp_image' -and
+            $image.Count -eq 1 -and
+            [Math]::Max([int]$screenshot.width, [int]$screenshot.height) -le 1280
+        $verified = if ($response.result.isError -eq $false -and $null -ne $window -and $screenshotOk) {
+            @{ response = $response; window = $window; app = $browserApp }
+        } else {
+            $null
         }
         if ($null -eq $verified) {
-            throw "look returned no accessibility root with a downscaled PNG from Edge (considered: $($considered -join ', '))"
+            throw "look returned no accessibility root with a downscaled PNG from probe-owned Edge pid $browserApp"
         }
         Write-Note "isError:false snapshot=$($verified.response.result.structuredContent.id) root=$($verified.window.role) app=$($verified.app)"
 
