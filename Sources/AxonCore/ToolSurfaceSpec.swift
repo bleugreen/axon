@@ -18,12 +18,14 @@ public struct ToolFacadeSet: OptionSet, Equatable, Sendable {
     public static let all: ToolFacadeSet = [.swift, .mac, .windows, .linux]
 
     public func contains(_ facade: ToolFacade) -> Bool {
+        let mask: ToolFacadeSet
         switch facade {
-        case .swift: contains(.swift)
-        case .mac: contains(.mac)
-        case .windows: contains(.windows)
-        case .linux: contains(.linux)
+        case .swift: mask = .swift
+        case .mac: mask = .mac
+        case .windows: mask = .windows
+        case .linux: mask = .linux
         }
+        return rawValue & mask.rawValue != 0
     }
 }
 
