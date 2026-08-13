@@ -1266,8 +1266,12 @@ fn required_str<'a>(p: &'a Map<String, Value>, key: &str) -> Result<&'a str, Jso
 }
 /// Stamps the four stable delivery fields onto an action result.
 fn delivered(mut result: Value, policy: DeliveryPolicy, rung: DeliveryRung) -> Value {
+    let success = result
+        .get("verification")
+        .is_some_and(|verification| goal_success(verification, true));
     if let Some(object) = result.as_object_mut() {
         DeliveryOutcome::dispatched(policy, rung).merge_into(object);
+        object.insert("success".into(), json!(success));
     }
     result
 }
