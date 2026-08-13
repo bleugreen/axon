@@ -2447,7 +2447,8 @@ mod tests {
                 json!({"target": {"location": {"app": "App", "text": "save"}}, "deltaY": -120.0}),
             ))
             .unwrap();
-        let result = action_result(&response);
+        let JsonRpcResponse::Success(success) = &response else { panic!("{response:?}") };
+        let result = &success.result;
 
         assert_eq!(
             result["dispatch"]["mechanism"],
@@ -2470,7 +2471,8 @@ mod tests {
                 json!({"target": {"location": {"app": "App", "text": "save"}}, "deltaX": 0.0, "deltaY": 0.0}),
             ))
             .unwrap();
-        let result = action_result(&response);
+        let JsonRpcResponse::Success(success) = &response else { panic!("{response:?}") };
+        let result = &success.result;
 
         assert_eq!(
             result["dispatch"]["mechanism"],
