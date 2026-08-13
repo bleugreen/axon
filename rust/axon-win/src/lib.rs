@@ -839,75 +839,148 @@ impl<
     }
 
     fn look(&mut self, params: &Map<String, Value>) -> Result<Value, JsonRpcError> {
-        if params.get("app").is_none() {
-            return Ok(application_enumeration(
-                self.backend
-                    .enumerate_applications()
-                    .map_err(backend_error)?,
-            ));
-        }
-        let app = app_query(params);
-        let snapshot = self.backend.capture(&app).map_err(backend_error)?;
-        let names = self.register_snapshot(&snapshot);
-        let mut value = serde_json::to_value(axon_core::render_semantic_names(&snapshot, &names))
-            .map_err(internal_error)?;
-        let wants_screenshot = axon_core::screenshot_requested(
-            params.get("screenshot").and_then(Value::as_bool),
-            axon_core::LookObservationKind::FullApp,
-        );
-        let wants_screen_text = params.get("screenText").and_then(Value::as_bool) == Some(true);
-        let (visuals, screenshot_unavailable) = if wants_screenshot || wants_screen_text {
-            match self
-                .backend
-                .observe_visuals(&app, wants_screenshot, wants_screen_text)
-            {
-                Ok(visuals) => (Some(visuals), None),
-                Err(error) if wants_screenshot && !wants_screen_text => (
-                    None,
-                    Some(axon_core::ScreenshotUnavailable::from_backend_error(error)),
-                ),
-                Err(error) => return Err(backend_error(error)),
+        let request = axon_core::LookRequest::decode(params)
+            .map_err(|error| rpc_error(-32602, error.to_string()))?;
+        match request.mode.clone() {
+            axon_core::LookMode::AppList { all } => {
+                if all {
+                    return Err(rpc_error(
+                        -32602,
+                        "all-process application listing is unavailable on this backend",
+                    ));
+                }
+                Ok(application_enumeration(
+                    self.backend
+                        .enumerate_applications()
+                        .map_err(backend_error)?,
+                ))
             }
-        } else {
-            (None, None)
-        };
-        if let Some(screenshot) = visuals
-            .as_ref()
-            .and_then(|result| result.screenshot.as_ref())
-        {
-            value
-                .as_object_mut()
-                .expect("snapshots serialize as objects")
-                .insert(
-                    "screenshot".into(),
-                    json!({
-                        "mediaType": screenshot.media_type,
-                        "base64Data": base64::Engine::encode(
-                            &base64::engine::general_purpose::STANDARD,
-                            &screenshot.bytes
+            axon_core::LookMode::ChildPage {
+                target,
+                offset,
+                limit,
+                direct,
+            } => {
+                let context = match self.semantic_names.select(&target) {
+                    SemanticSelection::Selected(context) => context,
+                    SemanticSelection::Missing { target } => {
+                        return Err(JsonRpcError {
+                            code: -32002,
+                            message: format!(
+                                "semantic name not found: {} / {}",
+                                target.app, target.name
+                            ),
+                            data: Some(json!({"status":"missing","query":target})),
+                        });
+                    }
+                    SemanticSelection::Ambiguous { target, candidates } => {
+                        return Err(JsonRpcError {
+                            code: -32002,
+                            message: format!(
+                                "semantic name is ambiguous: {} / {}",
+                                target.app, target.name
+                            ),
+                            data: Some(
+                                json!({"status":"ambiguous","query":target,"candidates":candidates}),
+                            ),
+                        });
+                    }
+                };
+                let handle = context.recorded_handle().ok_or_else(|| rpc_error(-32002, "semantic target has no live retained capture; call look for its app first"))?.clone();
+                let page = self
+                    .backend
+                    .capture_child_page(
+                        &handle,
+                        axon_core::ChildPageRequest {
+                            offset,
+                            limit,
+                            include_descendants: !direct,
+                        },
+                    )
+                    .map_err(backend_error)?;
+                let mut parent = page.parent.clone();
+                parent.children = page.children.clone();
+                let snapshot = Snapshot {
+                    id: page.snapshot.clone(),
+                    app: axon_core::Application {
+                        name: target.app.clone(),
+                        process_id: context.process_id(),
+                        identifier: None,
+                        windows: vec![axon_core::Window {
+                            title: None,
+                            root: parent,
+                        }],
+                    },
+                };
+                let names = self.register_snapshot(&snapshot);
+                let rendered = axon_core::render_semantic_names(&snapshot, &names);
+                self.snapshot = Some(snapshot);
+                Ok(json!({
+                    "children": axon_core::format_child_page(
+                        &page,
+                        &target,
+                        &rendered,
+                        &request.display,
+                    )
+                }))
+            }
+            axon_core::LookMode::ChangeCheck { .. } => Err(rpc_error(
+                -32602,
+                "since change checks are unavailable on this backend",
+            )),
+            axon_core::LookMode::FullApp { app, child_depth } => {
+                let snapshot = self
+                    .backend
+                    .capture_bounded(&app, axon_core::CaptureBounds { child_depth })
+                    .map_err(backend_error)?;
+                let names = self.register_snapshot(&snapshot);
+                let rendered = axon_core::render_semantic_names(&snapshot, &names);
+                let mut value = axon_core::format_snapshot(&rendered, &request.display);
+                let wants_screenshot = axon_core::screenshot_requested(
+                    request.screenshot,
+                    axon_core::LookObservationKind::FullApp,
+                );
+                let (visuals, screenshot_unavailable) = if wants_screenshot || request.screen_text {
+                    match self
+                        .backend
+                        .observe_visuals(&app, wants_screenshot, request.screen_text)
+                    {
+                        Ok(visuals) => (Some(visuals), None),
+                        Err(error) if wants_screenshot && !request.screen_text => (
+                            None,
+                            Some(axon_core::ScreenshotUnavailable::from_backend_error(error)),
                         ),
-                        "width": screenshot.width,
-                        "height": screenshot.height
-                    }),
-                );
+                        Err(error) => return Err(backend_error(error)),
+                    }
+                } else {
+                    (None, None)
+                };
+                let object = if request.display.format == axon_core::LookFormat::Debug {
+                    value.get_mut("observation").and_then(Value::as_object_mut)
+                } else {
+                    value.as_object_mut()
+                }
+                .expect("observation serializes as object");
+                if let Some(screenshot) = visuals.as_ref().and_then(|v| v.screenshot.as_ref()) {
+                    object.insert("screenshot".into(), json!({
+                        "mediaType": screenshot.media_type,
+                        "base64Data": base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &screenshot.bytes),
+                        "width": screenshot.width, "height": screenshot.height
+                    }));
+                }
+                if let Some(text) = visuals.and_then(|v| v.recognized_text) {
+                    object.insert("screenText".into(), json!(text));
+                }
+                if let Some(unavailable) = screenshot_unavailable {
+                    object.insert(
+                        "screenshotUnavailable".into(),
+                        serde_json::to_value(unavailable).map_err(internal_error)?,
+                    );
+                }
+                self.snapshot = Some(snapshot);
+                Ok(value)
+            }
         }
-        if let Some(screen_text) = visuals.and_then(|result| result.recognized_text) {
-            value
-                .as_object_mut()
-                .expect("snapshots serialize as objects")
-                .insert("screenText".into(), json!(screen_text));
-        }
-        if let Some(unavailable) = screenshot_unavailable {
-            value
-                .as_object_mut()
-                .expect("snapshots serialize as objects")
-                .insert(
-                    "screenshotUnavailable".into(),
-                    serde_json::to_value(unavailable).map_err(internal_error)?,
-                );
-        }
-        self.snapshot = Some(snapshot);
-        Ok(value)
     }
 
     fn resolve(

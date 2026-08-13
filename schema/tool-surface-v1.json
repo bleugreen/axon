@@ -22,11 +22,13 @@
             "type" : "string"
           },
           "childDepth" : {
-            "description" : "Initial child depth for app observations. Use 0 to retain top-level windows only and page children by semantic target.",
+            "description" : "Nonnegative initial child depth for app observations. Use 0 to retain top-level windows only and page children by semantic target.",
+            "minimum" : 0,
             "type" : "integer"
           },
           "depth" : {
-            "description" : "Maximum tree depth to display for app observations, with windows at depth 0.",
+            "description" : "Nonnegative maximum tree depth to display for app observations, with windows at depth 0.",
+            "minimum" : 0,
             "type" : "integer"
           },
           "direct" : {
@@ -35,7 +37,11 @@
             "type" : "boolean"
           },
           "format" : {
-            "description" : "Defaults to observation. Use debug only when diagnosing Axon internals.",
+            "description" : "Output format: observation or debug. Defaults to observation; use debug only when diagnosing Axon internals.",
+            "enum" : [
+              "observation",
+              "debug"
+            ],
             "type" : "string"
           },
           "frames" : {
@@ -44,12 +50,14 @@
             "type" : "boolean"
           },
           "limit" : {
-            "description" : "Maximum children for a semantic target. Defaults to Axon's sibling page size.",
+            "description" : "Nonnegative maximum children for a semantic target. Defaults to Axon's sibling page size; 0 requests all remaining children when all is true.",
+            "minimum" : 0,
             "type" : "integer"
           },
           "offset" : {
             "default" : 0,
-            "description" : "Zero-based child offset for a semantic target. Defaults to 0.",
+            "description" : "Zero-based, nonnegative child offset for a semantic target. Defaults to 0.",
+            "minimum" : 0,
             "type" : "integer"
           },
           "screenText" : {

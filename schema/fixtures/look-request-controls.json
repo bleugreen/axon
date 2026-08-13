@@ -1,0 +1,14 @@
+{
+  "format": {
+    "acceptedValues": [
+      "observation",
+      "debug"
+    ]
+  },
+  "nonnegative": [
+    "offset",
+    "limit",
+    "childDepth",
+    "depth"
+  ]
+}

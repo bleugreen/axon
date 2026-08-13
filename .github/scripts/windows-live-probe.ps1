@@ -111,6 +111,10 @@ function Write-Note {
     Write-Host $Message
 }
 
+function Test-EdgeIsRunning {
+    [bool] (Get-Process msedge -ErrorAction SilentlyContinue)
+}
+
 function Wait-Tick {
     Start-Sleep -Milliseconds 250
 }
@@ -197,6 +201,7 @@ function Invoke-Axon {
     if (-not (Test-Path -LiteralPath $Executable)) {
         return [pscustomobject]@{ ExitCode = -1; Output = "$Executable does not exist" }
     }
+    $edge = $null
     try {
         $output = & $Executable @Arguments
         [pscustomobject]@{ ExitCode = $LASTEXITCODE; Output = ($output -join "`n") }
@@ -227,6 +232,9 @@ function Invoke-CargoBuild {
         if ($LASTEXITCODE -ne 0) { throw "cargo build failed with exit code $LASTEXITCODE" }
     }
     finally {
+        if ($null -ne $edge) {
+            & taskkill.exe /PID $edge.Id /T /F *> $null
+        }
         Pop-Location
     }
 }
@@ -618,6 +626,16 @@ function Invoke-ProbeStage {
         Write-Note "status ok: version=$($status.version) ready=$($status.daemon.ready) capabilities=$($status.capabilities.Count) registration=$($status.registration.path)"
 
         $listRequest = '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"look","arguments":{}}}'
+        if (-not (Test-EdgeIsRunning)) {
+            $edgeCommand = Get-Command msedge.exe -ErrorAction Stop
+            $edge = Start-Process -FilePath $edgeCommand.Source -ArgumentList @(
+                '--new-window',
+                '--no-first-run',
+                'data:text/html,<main><h1>Axon paging probe</h1><button>One</button><button>Two</button><button>Three</button></main>'
+            ) -PassThru
+            Wait-Tick
+            Wait-Tick
+        }
         $listResponse = Invoke-AxonMcp -Request $listRequest
         if ($listResponse.result.isError -ne $false) { throw 'the app-list look request failed' }
 
@@ -626,7 +644,7 @@ function Invoke-ProbeStage {
         # enumeration while requiring evidence from an application this lane did not start.
         $verified = $null
         $considered = @()
-        foreach ($app in $listResponse.result.structuredContent.apps) {
+        foreach ($app in @($listResponse.result.structuredContent.apps | Where-Object { $_.name -match 'Edge' })) {
             if ($app.name -and $app.name.Equals($ProbeDaemonExecutable, [System.StringComparison]::OrdinalIgnoreCase)) {
                 continue
             }
@@ -642,7 +660,7 @@ function Invoke-ProbeStage {
             } | ConvertTo-Json -Compress -Depth 10
             $response = Invoke-AxonMcp -Request $request
             $window = $response.result.structuredContent.app.windows |
-                ForEach-Object root | Where-Object role -eq 'Window' | Select-Object -First 1
+                ForEach-Object root | Select-Object -First 1
             $screenshot = $response.result.structuredContent.screenshot
             $image = @($response.result.content | Where-Object {
                 $_.type -eq 'image' -and $_.mimeType -eq 'image/png' -and $_.data.Length -gt 0
@@ -658,9 +676,49 @@ function Invoke-ProbeStage {
             }
         }
         if ($null -eq $verified) {
-            throw "look returned no Window root with a downscaled PNG from any application this lane did not start (considered: $($considered -join ', '))"
+            throw "look returned no accessibility root with a downscaled PNG from Edge (considered: $($considered -join ', '))"
         }
         Write-Note "isError:false snapshot=$($verified.response.result.structuredContent.id) root=$($verified.window.role) app=$($verified.app)"
+
+        $parentName = $verified.window.name
+        if ([string]::IsNullOrWhiteSpace($parentName)) {
+            throw 'the Edge window root did not expose a reusable semantic name'
+        }
+        $offset = 0
+        $seen = 0
+        $pageNumber = 0
+        do {
+            $pageNumber += 1
+            $pageRequest = @{
+                jsonrpc = '2.0'
+                id = 100 + $pageNumber
+                method = 'tools/call'
+                params = @{
+                    name = 'look'
+                    arguments = @{
+                        target = @{ app = $verified.app; name = $parentName }
+                        offset = $offset
+                        limit = 1
+                        direct = $true
+                    }
+                }
+            } | ConvertTo-Json -Compress -Depth 10
+            $page = Invoke-AxonMcp -Request $pageRequest
+            if ($page.result.isError -ne $false) { throw "Edge child page $pageNumber failed" }
+            $children = $page.result.structuredContent.children
+            $payloadBytes = [Text.Encoding]::UTF8.GetByteCount(($page | ConvertTo-Json -Compress -Depth 100))
+            Write-Note "Edge paging page=$pageNumber offset=$($children.offset) limit=$($children.limit) total=$($children.total) nextOffset=$($children.nextOffset) payloadBytes=$payloadBytes"
+            if ([int]$children.offset -ne [int]$offset -or [int]$children.limit -gt 1) {
+                throw "Edge child page $pageNumber did not honor offset/limit: requested offset=$offset limit=1; returned offset=$($children.offset) limit=$($children.limit)"
+            }
+            $next = $children.nextOffset
+            if ($null -ne $next -and $next -le $offset) { throw 'Edge paging did not advance' }
+            $seen += [Math]::Min([int]$children.limit, [Math]::Max(0, [int]$children.total - $offset))
+            $offset = $next
+        } while ($null -ne $offset)
+        if ($seen -ne [int]$children.total) {
+            throw "Edge paging covered $seen children but reported total $($children.total)"
+        }
     }
     catch {
         # Held rather than propagated, because a throw from the `finally` below would supersede it.

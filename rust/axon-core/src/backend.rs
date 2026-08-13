@@ -1,4 +1,7 @@
-use crate::{Application, Node, Rect, Snapshot, SnapshotHandle};
+use crate::{
+    Application, CaptureBounds, ChildPageCapture, ChildPageRequest, Node, Rect, Snapshot,
+    SnapshotHandle,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{collections::HashSet, time::Duration};
@@ -170,6 +173,44 @@ pub trait PlatformBackend {
             .collect())
     }
     fn capture(&mut self, app: &AppQuery) -> Result<Snapshot, BackendError>;
+    fn capture_bounded(
+        &mut self,
+        app: &AppQuery,
+        bounds: CaptureBounds,
+    ) -> Result<Snapshot, BackendError> {
+        let mut snapshot = self.capture(app)?;
+        if let Some(depth) = bounds.child_depth {
+            fn trim(node: &mut Node, remaining: usize) {
+                if remaining == 0 {
+                    if !node.children.is_empty() {
+                        node.child_count.get_or_insert(node.children.len());
+                        node.truncation_reason
+                            .get_or_insert_with(|| "depth limit reached".into());
+                        node.children.clear();
+                    }
+                } else {
+                    for child in &mut node.children {
+                        trim(child, remaining - 1);
+                    }
+                }
+            }
+            for window in &mut snapshot.app.windows {
+                trim(&mut window.root, depth);
+            }
+        }
+        Ok(snapshot)
+    }
+    fn capture_child_page(
+        &mut self,
+        _target: &SnapshotHandle,
+        _request: ChildPageRequest,
+    ) -> Result<ChildPageCapture, BackendError> {
+        Err(BackendError::Capability {
+            capability: Capability::Capture,
+            reason: "bounded child capture is unavailable".into(),
+            diagnostic: None,
+        })
+    }
     fn invoke(&mut self, target: &SnapshotHandle, action: &str) -> Result<(), BackendError>;
     fn read_value(&self, target: &SnapshotHandle) -> Result<Option<String>, BackendError>;
     fn set_value(&mut self, target: &SnapshotHandle, value: &str) -> Result<(), BackendError>;

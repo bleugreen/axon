@@ -7,8 +7,9 @@ use serde_json::{Map, Value};
 #[path = "capture.rs"]
 mod window_capture;
 use axon_core::{
-    AppQuery, Application, BackendError, Capability, CapabilityInfo, KeyboardIntent, Node,
-    Observation, PlatformBackend, RecordedCall, Rect, Screenshot, Snapshot, SnapshotHandle, Window,
+    AppQuery, Application, BackendError, Capability, CapabilityInfo, CaptureBounds,
+    ChildPageCapture, ChildPageRequest, KeyboardIntent, Node, Observation, PlatformBackend,
+    RecordedCall, Rect, Screenshot, Snapshot, SnapshotHandle, Window,
 };
 use std::{
     collections::HashMap,
@@ -34,6 +35,46 @@ const AX_VALUE_CGSIZE: i64 = 2;
 struct CGPoint {
     x: f64,
     y: f64,
+}
+
+fn child_count(element: AXUIElementRef) -> Option<usize> {
+    let children = cfstr("AXChildren").ok()?;
+    let mut count = 0;
+    let status = unsafe { AXUIElementGetAttributeValueCount(element, children.0, &mut count) };
+    (status == 0 && count >= 0).then_some(count as usize)
+}
+
+fn child_range(element: AXUIElementRef, offset: usize, limit: usize) -> Option<Owned> {
+    if limit == 0 {
+        return None;
+    }
+    let children = cfstr("AXChildren").ok()?;
+    let mut values = null();
+    let status = unsafe {
+        AXUIElementCopyAttributeValues(
+            element,
+            children.0,
+            CFRange {
+                location: offset.try_into().ok()?,
+                length: limit.try_into().ok()?,
+            },
+            &mut values,
+        )
+    };
+    (status == 0 && !values.is_null()).then(|| Owned(values))
+}
+
+fn requested_range(total: usize, offset: usize, limit: Option<usize>) -> (usize, usize) {
+    let offset = offset.min(total);
+    let available = total - offset;
+    (offset, limit.unwrap_or(available).min(available))
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct CFRange {
+    location: isize,
+    length: isize,
 }
 
 impl ReadableStateProvider for MacBackend {
@@ -83,6 +124,17 @@ unsafe extern "C" {
         element: AXUIElementRef,
         attribute: CFStringRef,
         value: *mut CFTypeRef,
+    ) -> i32;
+    fn AXUIElementGetAttributeValueCount(
+        element: AXUIElementRef,
+        attribute: CFStringRef,
+        count: *mut isize,
+    ) -> i32;
+    fn AXUIElementCopyAttributeValues(
+        element: AXUIElementRef,
+        attribute: CFStringRef,
+        range: CFRange,
+        values: *mut CFArrayRef,
     ) -> i32;
     fn AXUIElementPerformAction(element: AXUIElementRef, action: CFStringRef) -> i32;
     fn AXUIElementSetAttributeValue(
@@ -227,22 +279,16 @@ struct Captured {
     node: Node,
     elements: Vec<Owned>,
 }
-fn capture_node(element: Owned, depth: usize, count: &mut usize) -> Captured {
+fn capture_node(element: Owned, depth: usize, max_depth: usize, count: &mut usize) -> Captured {
     *count += 1;
     let role = text_attribute(element.0, "AXRole").unwrap_or_else(|| "AXUnknown".into());
-    let child_values = attribute(element.0, "AXChildren");
-    let child_count = child_values.as_ref().and_then(|v| {
-        (unsafe { CFGetTypeID(v.0) } == unsafe { CFArrayGetTypeID() })
-            .then(|| unsafe { CFArrayGetCount(v.0) as usize })
-    });
+    let child_count = child_count(element.0);
     let mut children = Vec::new();
     let mut elements = vec![element.clone()];
     let mut truncation_reason = None;
-    if depth >= MAX_DEPTH && child_count.unwrap_or(0) > 0 {
+    if depth >= max_depth && child_count.unwrap_or(0) > 0 {
         truncation_reason = Some("depth limit reached".into());
-    } else if let Some(array) =
-        child_values.filter(|v| unsafe { CFGetTypeID(v.0) } == unsafe { CFArrayGetTypeID() })
-    {
+    } else if let Some(array) = child_count.and_then(|total| child_range(element.0, 0, total)) {
         for index in 0..unsafe { CFArrayGetCount(array.0) } {
             if *count >= MAX_NODES {
                 truncation_reason = Some("node limit reached".into());
@@ -253,7 +299,12 @@ fn capture_node(element: Owned, depth: usize, count: &mut usize) -> Captured {
                 continue;
             }
             // CFArray does not transfer ownership. Each child must survive the array release.
-            let captured = capture_node(Owned(unsafe { CFRetain(child) }), depth + 1, count);
+            let captured = capture_node(
+                Owned(unsafe { CFRetain(child) }),
+                depth + 1,
+                max_depth,
+                count,
+            );
             children.push(captured.node);
             elements.extend(captured.elements);
         }
@@ -427,6 +478,13 @@ impl PlatformBackend for MacBackend {
             .collect())
     }
     fn capture(&mut self, app: &AppQuery) -> Result<Snapshot, BackendError> {
+        self.capture_bounded(app, CaptureBounds::default())
+    }
+    fn capture_bounded(
+        &mut self,
+        app: &AppQuery,
+        bounds: CaptureBounds,
+    ) -> Result<Snapshot, BackendError> {
         if !self.accessibility_enabled() {
             return Err(cap(
                 Capability::Capture,
@@ -452,7 +510,12 @@ impl PlatformBackend for MacBackend {
             if element.is_null() {
                 continue;
             }
-            let captured = capture_node(Owned(unsafe { CFRetain(element) }), 0, &mut count);
+            let captured = capture_node(
+                Owned(unsafe { CFRetain(element) }),
+                0,
+                bounds.child_depth.unwrap_or(MAX_DEPTH).min(MAX_DEPTH),
+                &mut count,
+            );
             snapshot_windows.push(Window {
                 title: captured.node.title.clone(),
                 root: captured.node,
@@ -471,6 +534,58 @@ impl PlatformBackend for MacBackend {
             .map(|(i, element)| (snapshot.handle(i), element))
             .collect();
         Ok(snapshot)
+    }
+    fn capture_child_page(
+        &mut self,
+        target: &SnapshotHandle,
+        request: ChildPageRequest,
+    ) -> Result<ChildPageCapture, BackendError> {
+        let element = Owned(unsafe { CFRetain(self.element(target)?) });
+        let total = child_count(element.0)
+            .ok_or_else(|| op("captureChildPage", "AXChildren count is unavailable"))?;
+        let (offset, limit) = requested_range(total, request.offset, request.limit);
+        let mut parent = capture_node(element.clone(), 0, 0, &mut 0).node;
+        // Paging describes the intentionally omitted direct children; it is not native truncation.
+        parent.truncation_reason = None;
+
+        let mut children = Vec::new();
+        let mut all_elements = vec![element];
+        let mut count = 1;
+        if let Some(array) = child_range(all_elements[0].0, offset, limit) {
+            for index in 0..unsafe { CFArrayGetCount(array.0) } {
+                if count >= MAX_NODES {
+                    parent.truncation_reason = Some("node limit reached".into());
+                    break;
+                }
+                let child = unsafe { CFArrayGetValueAtIndex(array.0, index) };
+                if child.is_null() {
+                    continue;
+                }
+                let max_depth = if request.include_descendants {
+                    MAX_DEPTH
+                } else {
+                    0
+                };
+                let captured =
+                    capture_node(Owned(unsafe { CFRetain(child) }), 0, max_depth, &mut count);
+                children.push(captured.node);
+                all_elements.extend(captured.elements);
+            }
+        }
+        let snapshot = axon_core::SnapshotId::fresh();
+        self.handles = all_elements
+            .into_iter()
+            .enumerate()
+            .map(|(index, element)| (SnapshotHandle(format!("{}:{index}", snapshot.0)), element))
+            .collect();
+        Ok(ChildPageCapture {
+            snapshot,
+            parent,
+            offset,
+            limit,
+            total: Some(total),
+            children,
+        })
     }
     fn invoke(&mut self, target: &SnapshotHandle, action: &str) -> Result<(), BackendError> {
         let action = cfstr(action)?;

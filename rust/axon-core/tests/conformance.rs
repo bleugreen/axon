@@ -4,6 +4,45 @@ use serde_json::{Map, Value, json};
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
+struct LookRequestControlsFixture {
+    format: LookFormatControls,
+    nonnegative: Vec<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct LookFormatControls {
+    accepted_values: Vec<String>,
+}
+
+#[test]
+fn look_request_controls_match_shared_schema_fixture() {
+    let fixture: LookRequestControlsFixture = serde_json::from_str(include_str!(
+        "../../../schema/fixtures/look-request-controls.json"
+    ))
+    .unwrap();
+    let look = backend_tools(ToolBackend::Linux)
+        .unwrap()
+        .into_iter()
+        .find(|tool| tool["name"] == "look")
+        .unwrap();
+    let properties = &look["inputSchema"]["properties"];
+
+    assert_eq!(
+        properties["format"]["enum"],
+        json!(fixture.format.accepted_values)
+    );
+    for name in fixture.nonnegative {
+        assert_eq!(properties[&name]["minimum"], 0, "{name}");
+        assert!(
+            validate_tool_arguments(ToolBackend::Linux, "look", json!({name.clone(): -1})).is_err(),
+            "{name}"
+        );
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct LocatorFixture {
     snapshot: Snapshot,
     cases: Vec<LocatorCase>,

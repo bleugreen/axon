@@ -53,7 +53,7 @@ $ProbeScript = (Resolve-Path $ProbeScript).Path
 # ---------------------------------------------------------------------------------------------
 
 $StubbedSeams = @(
-    'Write-Note', 'Wait-Tick', 'Test-ProcessIsRunning', 'Get-AxonProcess', 'Stop-ProcessById',
+    'Write-Note', 'Wait-Tick', 'Test-ProcessIsRunning', 'Get-AxonProcess', 'Test-EdgeIsRunning', 'Stop-ProcessById',
     'Get-DesktopRegistrationPath', 'Get-DesktopTaskState', 'Start-DesktopDaemonTask', 'Register-ProbeTask',
     'Unregister-ProbeTask', 'Start-ProbeTask', 'Invoke-Axon', 'Invoke-AxonMcp', 'Get-ExpectedVersion',
     'Invoke-CargoBuild', 'Copy-ProbeExecutable', 'Read-ParkState', 'Write-ParkState', 'Clear-ParkState'
@@ -362,6 +362,10 @@ function Get-AxonProcess {
     @($script:Machine.Processes)
 }
 
+function Test-EdgeIsRunning {
+    $true
+}
+
 function Stop-ProcessById {
     param([Parameter(Mandatory)][int] $ProcessId)
     $script:Machine.Log.Add("stop-process $ProcessId")
@@ -488,8 +492,27 @@ function Invoke-AxonMcp {
 
     $script:Machine.Log.Add('mcp')
     if ($null -ne $script:Machine.McpResponder) { return & $script:Machine.McpResponder $Request }
+    if ($Request -match '"target"') {
+        return @{
+            result = @{
+                isError = $false
+                structuredContent = @{
+                    children = @{
+                        format = 'children'
+                        snapshot = 'snapshot-page'
+                        parent = @{ app = 'Microsoft Edge'; name = 'edge-root' }
+                        offset = 0
+                        limit = 1
+                        total = 1
+                        nextOffset = $null
+                        tree = '[]'
+                    }
+                }
+            }
+        } | ConvertTo-Json -Depth 10 | ConvertFrom-Json -Depth 100
+    }
     if ($Request -notmatch '"app"') {
-        return @{ result = @{ isError = $script:Machine.McpIsError; structuredContent = @{ apps = @(@{ name = 'Notepad'; identifier = 4242 }) } } } |
+        return @{ result = @{ isError = $script:Machine.McpIsError; structuredContent = @{ apps = @(@{ name = 'Microsoft Edge'; identifier = 4242 }) } } } |
             ConvertTo-Json -Depth 10 | ConvertFrom-Json -Depth 100
     }
     @{
@@ -501,7 +524,7 @@ function Invoke-AxonMcp {
             )
             structuredContent = @{
                 id = 'snapshot-1'
-                app = @{ windows = @(@{ root = @{ role = 'Window' } }) }
+                app = @{ windows = @(@{ root = @{ role = 'Window'; name = 'edge-root' } }) }
                 screenshot = @{ mediaType = 'image/png'; contentTransport = 'mcp_image'; width = 800; height = 600 }
             }
         }
@@ -979,7 +1002,7 @@ Test-Scenario "probe: a stale path-shaped daemon entry is not evidence about a d
     }
     $result = Invoke-StageUnderTest -Name 'probe'
     Check 'the stage fails' $result.Failed
-    Check 'it says what it looked at' ($result.Error -match 'no Window root with a downscaled PNG from any application this lane did not start') $result.Error
+    Check 'it says what it looked at' ($result.Error -match 'no accessibility root with a downscaled PNG from Edge') $result.Error
 }
 
 Test-Scenario 'probe: a registration that moved during the run fails the stage' {
