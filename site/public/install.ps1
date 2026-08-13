@@ -157,7 +157,60 @@ try {
         Fail "could not create the axon.exe CLI link in $StagedInstall. $($_.Exception.Message)"
     }
     if (Test-Path -LiteralPath $InstallDirectory) {
-        Remove-Item -LiteralPath $InstallDirectory -Recurse -Force
+        $ExistingExecutable = Join-Path $InstallDirectory 'axon-win.exe'
+        $StoppedByLifecycle = $false
+        if (Test-Path -LiteralPath $ExistingExecutable -PathType Leaf) {
+            Write-Host "Stopping the existing Axon daemon before replacing $InstallDirectory..."
+            $LegacyMigrationMessage = $null
+            try {
+                $LifecycleOutput = @(& $ExistingExecutable daemon uninstall 2>&1)
+                $LifecycleExitCode = $LASTEXITCODE
+                $LifecycleOutput | ForEach-Object { Write-Host $_ }
+                $StoppedByLifecycle = $LifecycleExitCode -eq 0
+                if (-not $StoppedByLifecycle) {
+                    $LifecycleMessage = $LifecycleOutput -join [Environment]::NewLine
+                    # This phrase is defined by LEGACY_MIGRATION in rust/axon-win/src/lifecycle.rs.
+                    if ($LifecycleMessage -match 'existing registration was created by an older elevated installer') {
+                        $LegacyMigrationMessage = $LifecycleMessage
+                    } else {
+                        Write-Warning "The existing daemon uninstall exited with code $LifecycleExitCode; stopping processes from the install directory directly."
+                    }
+                }
+            } catch {
+                Write-Warning "The existing daemon uninstall could not run; stopping processes from the install directory directly. $($_.Exception.Message)"
+            }
+            if ($null -ne $LegacyMigrationMessage) {
+                Fail "the existing elevated daemon registration must be migrated before Axon can be replaced. $LegacyMigrationMessage"
+            }
+        }
+
+        if (-not $StoppedByLifecycle) {
+            $InstallPrefix = $InstallDirectory.TrimEnd('\') + '\'
+            Get-CimInstance Win32_Process | Where-Object {
+                -not [string]::IsNullOrWhiteSpace($_.ExecutablePath) -and
+                $_.ExecutablePath.StartsWith($InstallPrefix, [System.StringComparison]::OrdinalIgnoreCase)
+            } | ForEach-Object {
+                Write-Host "Stopping process $($_.ProcessId) from $($_.ExecutablePath)..."
+                Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue
+            }
+        }
+
+        $RemovalError = $null
+        foreach ($Attempt in 1..4) {
+            try {
+                Remove-Item -LiteralPath $InstallDirectory -Recurse -Force
+                $RemovalError = $null
+                break
+            } catch {
+                $RemovalError = $_
+                if ($Attempt -lt 4) {
+                    Start-Sleep -Seconds 1
+                }
+            }
+        }
+        if ($null -ne $RemovalError) {
+            Fail "could not remove locked install path $InstallDirectory after stopping Axon processes; close programs using files under that path and retry. $($RemovalError.Exception.Message)"
+        }
     }
     Move-Item -LiteralPath $StagedInstall -Destination $InstallDirectory
     $CliExecutable = Join-Path $InstallDirectory 'axon.exe'

@@ -61,6 +61,8 @@ pub fn daemon_sibling(cli: &Path) -> io::Result<PathBuf> {
     Ok(daemon)
 }
 
+// site/public/install.ps1 pattern-matches this message to recognize the legacy refusal; update
+// the installer if this wording changes.
 pub const LEGACY_MIGRATION: &str = "the existing registration was created by an older elevated installer and remains usable. Open Administrator PowerShell, run the currently installed `axon daemon uninstall` to remove the legacy task, close it, then rerun `irm https://axn.dev/install.ps1 | iex` in ordinary PowerShell";
 
 pub fn scheduler_error(operation: &str, existed: bool, error: io::Error) -> io::Error {
