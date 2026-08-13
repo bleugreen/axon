@@ -810,31 +810,26 @@ function Invoke-ProbeStage {
         $escapedTemporaryPath = $temporaryPath.Replace("'", "''")
         $command = @"
 Add-Type @'
-using System;
 using System.Runtime.InteropServices;
 public static class AxonForegroundTimeoutRepair {
-    [DllImport("user32.dll", SetLastError = true)]
-    public static extern bool SystemParametersInfo(uint action, uint uiParam, IntPtr pvParam, uint flags);
+    [DllImport("user32.dll", SetLastError = true, EntryPoint = "SystemParametersInfoW")]
+    public static extern bool Get(uint action, uint uiParam, ref uint value, uint flags);
+    [DllImport("user32.dll", SetLastError = true, EntryPoint = "SystemParametersInfoW")]
+    public static extern bool Set(uint action, uint uiParam, ref uint value, uint flags);
 }
 '@
 function Read-ForegroundTimeout {
-    `$memory = [Runtime.InteropServices.Marshal]::AllocHGlobal(4)
-    try {
-        [Runtime.InteropServices.Marshal]::WriteInt32(`$memory, 0)
-        if (-not [AxonForegroundTimeoutRepair]::SystemParametersInfo(0x2000, 0, `$memory, 0)) {
-            throw "SPI_GETFOREGROUNDLOCKTIMEOUT failed: `$([Runtime.InteropServices.Marshal]::GetLastWin32Error())"
-        }
-        [uint32][Runtime.InteropServices.Marshal]::ReadInt32(`$memory)
-    } finally { [Runtime.InteropServices.Marshal]::FreeHGlobal(`$memory) }
+    [uint32]`$current = 0
+    if (-not [AxonForegroundTimeoutRepair]::Get(0x2000, 0, [ref]`$current, 0)) {
+        throw "SPI_GETFOREGROUNDLOCKTIMEOUT failed: `$([Runtime.InteropServices.Marshal]::GetLastWin32Error())"
+    }
+    `$current
 }
 `$before = Read-ForegroundTimeout
-`$valueMemory = [Runtime.InteropServices.Marshal]::AllocHGlobal(4)
-try {
-    [Runtime.InteropServices.Marshal]::WriteInt32(`$valueMemory, [int]$value)
-    if (-not [AxonForegroundTimeoutRepair]::SystemParametersInfo(0x2001, 0, `$valueMemory, 2)) {
-        throw "SPI_SETFOREGROUNDLOCKTIMEOUT failed: `$([Runtime.InteropServices.Marshal]::GetLastWin32Error())"
-    }
-} finally { [Runtime.InteropServices.Marshal]::FreeHGlobal(`$valueMemory) }
+[uint32]`$requested = $value
+if (-not [AxonForegroundTimeoutRepair]::Set(0x2001, 0, [ref]`$requested, 2)) {
+    throw "SPI_SETFOREGROUNDLOCKTIMEOUT failed: `$([Runtime.InteropServices.Marshal]::GetLastWin32Error())"
+}
 `$after = Read-ForegroundTimeout
 @{ before = `$before; after = `$after } | ConvertTo-Json -Compress | Set-Content -LiteralPath '$escapedTemporaryPath' -Encoding utf8
 Move-Item -LiteralPath '$escapedTemporaryPath' -Destination '$escapedResultPath' -Force
