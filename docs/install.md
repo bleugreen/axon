@@ -28,6 +28,8 @@ The installer registers a per-user Task Scheduler entry and both steady-state in
 
 The installers verify the release checksum, install into a permanent versioned directory, register the daemon from that immutable location, and put a stable CLI entry point on `PATH`. Linux maintains `~/.local/lib/axon/current`; Windows maintains `%LOCALAPPDATA%\Axon\current` and the stable command name `axon.exe`. Upgrades repoint these aliases, so external MCP configurations do not retain an older bridge. Pin a release with `AXON_VERSION=0.3.1` on macOS or Linux. In PowerShell, set `$env:AXON_VERSION = '0.3.1'` before running the installer.
 
+On macOS, `Axon.app` and its sibling `Axon Editor.app` are one versioned unit. The daemon opens only the editor shipped beside it with the same version and bundle identities; it never falls back to an older Launch Services registration. If either application is missing or mismatched, reinstall Axon rather than copying one application independently.
+
 External MCP clients should use the stable path rather than a versioned directory. Register it from
 your shell so the home-directory variable is resolved into the absolute executable path stored by
 the client:

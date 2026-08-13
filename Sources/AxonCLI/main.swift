@@ -341,12 +341,7 @@ private func axonAppURL() -> URL? {
 
 private func axonEditorAppURL() -> URL? {
     if let daemonURL = bundledAxonAppURL() {
-        let sibling = daemonURL
-            .deletingLastPathComponent()
-            .appendingPathComponent("Axon Editor.app", isDirectory: true)
-        if FileManager.default.fileExists(atPath: sibling.path) {
-            return sibling
-        }
+        return AppBundle.pairedEditorURL(beside: daemonURL)
     }
     return NSWorkspace.shared.urlForApplication(withBundleIdentifier: axonEditorBundleIdentifier)
 }

@@ -65,6 +65,7 @@ case "$OS" in
     ARCHIVE_KIND="zip"
     CONTENT_DIR="Axon-$VERSION"
     RELATIVE_CLI="Axon.app/Contents/Resources/bin/axon"
+    RELATIVE_EDITOR="Axon Editor.app/Contents/MacOS/AxonEditor"
     ;;
   linux)
     ARCHIVE="axon-linux-$VERSION-linux-x86_64.tar.gz"
@@ -84,6 +85,9 @@ CLI="$INSTALL_DIR/$RELATIVE_CLI"
 ALREADY_INSTALLED=0
 if [ -f "$MARKER" ] && [ -x "$CLI" ]; then
   ALREADY_INSTALLED=1
+  if [ "$OS" = macos ] && [ ! -x "$INSTALL_DIR/$RELATIVE_EDITOR" ]; then
+    ALREADY_INSTALLED=0
+  fi
 fi
 
 case "$ARCHIVE_KIND" in
@@ -137,12 +141,18 @@ if [ "$ALREADY_INSTALLED" -eq 0 ]; then
   SOURCE_DIR="$EXTRACT_DIR/$CONTENT_DIR"
   [ -d "$SOURCE_DIR" ] || fail "$ARCHIVE did not contain the expected directory $CONTENT_DIR"
   [ -x "$SOURCE_DIR/$RELATIVE_CLI" ] || fail "$ARCHIVE did not contain the expected executable $RELATIVE_CLI"
+  if [ "$OS" = macos ]; then
+    [ -x "$SOURCE_DIR/$RELATIVE_EDITOR" ] || fail "$ARCHIVE did not contain the expected executable $RELATIVE_EDITOR"
+  fi
 
   STAGED_INSTALL="$INSTALL_DIR.installing"
   rm -rf "$STAGED_INSTALL" || fail "could not clear incomplete staging directory $STAGED_INSTALL"
   mkdir -p "$STAGED_INSTALL" || fail "could not create staging directory $STAGED_INSTALL"
   cp -R "$SOURCE_DIR"/. "$STAGED_INSTALL"/ || fail "could not stage Axon beside permanent install directory $INSTALL_DIR"
   [ -x "$STAGED_INSTALL/$RELATIVE_CLI" ] || fail "the staged CLI is not executable"
+  if [ "$OS" = macos ]; then
+    [ -x "$STAGED_INSTALL/$RELATIVE_EDITOR" ] || fail "the staged editor is not executable"
+  fi
   if [ -e "$INSTALL_DIR" ]; then
     rm -rf "$INSTALL_DIR" || fail "could not replace incomplete install directory $INSTALL_DIR"
   fi
