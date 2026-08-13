@@ -83,8 +83,7 @@ import Testing
         #expect(tool.name == row.0)
         #expect(tool.socketMethod == row.1)
         for facade in ToolFacade.allCases {
-            #expect(tool.availability.contains(facade) == row.2.contains(facade),
-                    Comment(rawValue: "\(tool.name) availability for \(facade.rawValue)"))
+            #expect(tool.availability.contains(facade) == row.2.contains(facade))
         }
     }
 }
