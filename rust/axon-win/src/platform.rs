@@ -712,7 +712,7 @@ impl UiaState {
             .filter_map(|e| {
                 let name = unsafe { e.CurrentName() }.ok()?.to_string();
                 (!name.is_empty()).then(|| Application {
-                    process_id: unsafe { e.CurrentProcessId() }.ok(),
+                    process_id: automation_process_id(&e),
                     name,
                     identifier: None,
                     windows: vec![],
@@ -742,7 +742,7 @@ impl UiaState {
         let root = self.capture_node(&capture_root, &cache, 0, &mut count)?;
         let title = unsafe { window.CurrentName() }.ok().map(|x| x.to_string());
         let snapshot = Snapshot::new(Application {
-            process_id: unsafe { window.CurrentProcessId() }.ok(),
+            process_id: automation_process_id(&window),
             name: title.clone().unwrap_or_else(|| query.clone()),
             identifier: None,
             windows: vec![Window { title, root }],
@@ -774,14 +774,13 @@ impl UiaState {
                     .unwrap_or_default()
                     .to_string()
                     .to_lowercase();
-                let pid = unsafe { element.CurrentProcessId() }.unwrap_or_default();
                 q.process_id.map_or_else(
                     || {
                         query
                             .as_deref()
                             .is_some_and(|query| name == query || name.contains(query))
                     },
-                    |wanted| wanted == pid,
+                    |wanted| automation_process_id(element) == Some(wanted),
                 )
             })
             .ok_or_else(|| op(operation, format!("no top-level window matches {q:?}")))?;
@@ -1522,6 +1521,12 @@ fn probe_number(value: Option<&String>, default: u64, name: &str) -> Result<u64,
             .parse()
             .map_err(|_| op("probe", format!("invalid {name} {value:?}")))
     })
+}
+
+fn automation_process_id(element: &IUIAutomationElement) -> Option<axon_core::ProcessId> {
+    unsafe { element.CurrentProcessId() }
+        .ok()
+        .and_then(|process_id| process_id.try_into().ok())
 }
 
 fn probe_window(
