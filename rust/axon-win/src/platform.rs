@@ -1863,7 +1863,9 @@ fn probe_foreground(args: &[String]) -> Result<serde_json::Value, BackendError> 
             send_alt_unlock();
         }
         let _timeout_restore = if strategy == HandBackStrategy::ForegroundLockTimeout {
-            Some(ForegroundTimeoutRestore::zero(original_foreground_lock_timeout)?)
+            Some(ForegroundTimeoutRestore::zero(
+                original_foreground_lock_timeout,
+            )?)
         } else {
             None
         };
