@@ -53,12 +53,19 @@ jobs:
         uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         with:
           path: |
-            .build
             ~/.cache/org.swift.swiftpm
             ~/.swiftpm
-          key: ${{ runner.os }}-swift-6.2-${{ hashFiles('Package.resolved') }}
+          # The dependency-only namespace must not match the immutable legacy archives that also
+          # contain .build.
+          key: ${{ runner.os }}-swiftpm-dependencies-6.2-${{ hashFiles('Package.resolved') }}
           restore-keys: |
-            ${{ runner.os }}-swift-6.2-
+            ${{ runner.os }}-swiftpm-dependencies-6.2-
+
+      # This runner retains its workspace between branches. Swift's incremental records in .build
+      # have skipped compiling changed test sources before, so no verdict may inherit them. Global
+      # SwiftPM state above still avoids downloading dependencies again; compilation starts clean.
+      - name: Remove prior Swift build state
+        run: rm -rf .build
 
       - name: Run Swift tests
         run: swift test
