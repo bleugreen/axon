@@ -1025,6 +1025,10 @@ function Invoke-ProbeStage {
                 $null -eq $evidence.foreground.restored) {
                 throw "$($call.name) did not return foreground dispatch and restoration evidence"
             }
+            # Browser chrome applies Ctrl+L and navigation asynchronously. Keep the three real input
+            # transactions distinct so the next batch cannot overtake the UI state created by the
+            # previous one on a busy interactive runner.
+            Start-Sleep -Milliseconds 250
         }
 
         $loadedRequest = @{ jsonrpc = '2.0'; id = 1; method = 'tools/call'; params = @{
