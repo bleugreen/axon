@@ -7,6 +7,7 @@ const ARTIFACT_JSON: &str = include_str!("../../../schema/tool-surface-v1.json")
 const INVALID_PARAMS: i64 = -32602;
 const INTERNAL_ERROR: i64 = -32603;
 const BACKENDS: &[&str] = &["swift", "mac", "windows", "linux"];
+const TOOLS_CALL_PROTOCOL_PARAMS: &[&str] = &["_meta"];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ToolBackend {
@@ -191,7 +192,10 @@ fn validate_tools_call_from(
         .as_object()
         .ok_or_else(|| invalid("params", "expected object", Some("object")))?;
     for key in object.keys() {
-        if key != "name" && key != "arguments" {
+        if key != "name"
+            && key != "arguments"
+            && !TOOLS_CALL_PROTOCOL_PARAMS.contains(&key.as_str())
+        {
             return Err(invalid(&format!("params.{key}"), "unknown field", None));
         }
     }
@@ -730,6 +734,51 @@ mod tests {
         );
         let error = validate_tools_call(ToolBackend::Linux, Some(json!({"name": 3}))).unwrap_err();
         assert_eq!(error.data.unwrap()["path"], "params.name");
+    }
+
+    #[test]
+    fn accepts_protocol_metadata_without_treating_it_as_tool_arguments() {
+        let call = validate_tools_call(
+            ToolBackend::Linux,
+            Some(json!({
+                "name": "look",
+                "arguments": {},
+                "_meta": {"progressToken": "p1"}
+            })),
+        )
+        .unwrap();
+
+        assert!(call.arguments.get("_meta").is_none());
+
+        let error = validate_tools_call(
+            ToolBackend::Linux,
+            Some(json!({
+                "name": "look",
+                "arguments": {"bogus": true},
+                "_meta": {"progressToken": "p1"}
+            })),
+        )
+        .unwrap_err();
+        assert_eq!(error.data.unwrap()["path"], "params.arguments.bogus");
+    }
+
+    #[test]
+    fn only_declared_protocol_fields_bypass_strict_call_envelope_validation() {
+        for field in TOOLS_CALL_PROTOCOL_PARAMS {
+            let mut params = json!({"name": "look", "arguments": {}});
+            params
+                .as_object_mut()
+                .unwrap()
+                .insert((*field).into(), json!({}));
+            validate_tools_call(ToolBackend::Linux, Some(params)).unwrap();
+        }
+
+        let error = validate_tools_call(
+            ToolBackend::Linux,
+            Some(json!({"name": "look", "arguments": {}, "futureReservedField": {}})),
+        )
+        .unwrap_err();
+        assert_eq!(error.data.unwrap()["path"], "params.futureReservedField");
     }
 
     #[test]

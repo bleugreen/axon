@@ -507,6 +507,12 @@ pub fn mcp() -> io::Result<()> {
     Ok(())
 }
 fn forward(input: &Value) -> io::Result<Value> {
+    forward_with_request(input, send_rpc)
+}
+fn forward_with_request(
+    input: &Value,
+    mut send: impl FnMut(&JsonRpcRequest) -> io::Result<Value>,
+) -> io::Result<Value> {
     let id = input.get("id").cloned().unwrap_or(Value::Null);
     let call = match validate_tools_call(ToolBackend::Windows, input.get("params").cloned()) {
         Ok(call) => call,
@@ -517,7 +523,7 @@ fn forward(input: &Value) -> io::Result<Value> {
         call.socket_method,
         Some(call.arguments),
     );
-    let response = send_rpc(&rpc)?;
+    let response = send(&rpc)?;
     if let Some(error) = response.get("error") {
         Ok(
             json!({"jsonrpc":"2.0","id":id,"result":{"content":[{"type":"text","text":error.get("message").and_then(Value::as_str).unwrap_or("Axon error")}],"structuredContent":error,"isError":true}}),
@@ -551,5 +557,18 @@ mod facade_tests {
             success_response(json!(1), fixture["structuredContent"].clone())["result"],
             fixture["result"]
         );
+    }
+    #[test]
+    fn facade_accepts_protocol_metadata_without_forwarding_it() {
+        let response = forward_with_request(
+            &json!({"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"look","arguments":{},"_meta":{"progressToken":"p1"}}}),
+            |request| {
+                let forwarded = serde_json::to_value(request).unwrap();
+                assert!(forwarded["params"].get("_meta").is_none());
+                Ok(json!({"jsonrpc":"2.0","id":1,"result":{"ok":true}}))
+            },
+        )
+        .unwrap();
+        assert_eq!(response["result"]["isError"], false);
     }
 }
