@@ -15,6 +15,7 @@ pub mod rpc;
 pub mod semantic_name;
 pub mod snapshot;
 pub mod text;
+pub mod tool_surface;
 
 pub use axn::*;
 pub use axn_healing::*;
@@ -31,3 +32,4 @@ pub use rpc::*;
 pub use semantic_name::*;
 pub use snapshot::*;
 pub use text::*;
+pub use tool_surface::*;

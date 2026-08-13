@@ -1,0 +1,354 @@
+use crate::JsonRpcError;
+use serde_json::{Map, Value, json};
+use std::collections::HashSet;
+use std::sync::OnceLock;
+
+const ARTIFACT_JSON: &str = include_str!("../../../schema/tool-surface-v1.json");
+const INVALID_PARAMS: i64 = -32602;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ToolBackend {
+    Swift,
+    Mac,
+    Windows,
+    Linux,
+}
+
+impl ToolBackend {
+    fn key(self) -> &'static str {
+        match self {
+            Self::Swift => "swift",
+            Self::Mac => "mac",
+            Self::Windows => "windows",
+            Self::Linux => "linux",
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct ValidatedToolCall {
+    pub name: String,
+    pub arguments: Value,
+}
+
+fn artifact() -> Result<&'static Value, JsonRpcError> {
+    static ARTIFACT: OnceLock<Result<Value, String>> = OnceLock::new();
+    ARTIFACT
+        .get_or_init(|| {
+            let value: Value = serde_json::from_str(ARTIFACT_JSON)
+                .map_err(|error| format!("invalid tool surface artifact: {error}"))?;
+            if value.get("formatVersion") != Some(&json!(1)) {
+                return Err("unsupported tool surface formatVersion".into());
+            }
+            let tools = value
+                .get("tools")
+                .and_then(Value::as_array)
+                .ok_or_else(|| "tool surface tools must be an array".to_string())?;
+            for tool in tools {
+                let schema = tool
+                    .get("inputSchema")
+                    .ok_or_else(|| "tool surface entry is missing inputSchema".to_string())?;
+                check_schema_vocabulary(schema, "inputSchema")?;
+            }
+            Ok(value)
+        })
+        .as_ref()
+        .map_err(|message| invalid("toolSurface", message, None))
+}
+
+pub fn backend_tools(backend: ToolBackend) -> Result<Vec<Value>, JsonRpcError> {
+    let tools = artifact()?["tools"].as_array().expect("checked above");
+    Ok(tools
+        .iter()
+        .filter(|tool| available(tool, backend))
+        .map(|tool| {
+            let mut entry = tool.as_object().expect("artifact tool entry must be object").clone();
+            entry.remove("availability");
+            entry.remove("socketMethod");
+            Value::Object(entry)
+        })
+        .collect())
+}
+
+pub fn validate_tool_arguments(
+    backend: ToolBackend,
+    name: &str,
+    arguments: Value,
+) -> Result<Value, JsonRpcError> {
+    let tool = find_tool(backend, name)?;
+    if !arguments.is_object() {
+        return Err(invalid(
+            "params.arguments",
+            "expected object",
+            Some("object"),
+        ));
+    }
+    let mut normalized = arguments;
+    validate_value(&tool["inputSchema"], &normalized, "params.arguments")?;
+    apply_defaults(&tool["inputSchema"], &mut normalized);
+    Ok(normalized)
+}
+
+pub fn validate_tools_call(
+    backend: ToolBackend,
+    params: Option<Value>,
+) -> Result<ValidatedToolCall, JsonRpcError> {
+    let params = params.ok_or_else(|| invalid("params", "missing required object", Some("object")))?;
+    let object = params
+        .as_object()
+        .ok_or_else(|| invalid("params", "expected object", Some("object")))?;
+    for key in object.keys() {
+        if key != "name" && key != "arguments" {
+            return Err(invalid(&format!("params.{key}"), "unknown field", None));
+        }
+    }
+    let name = object
+        .get("name")
+        .ok_or_else(|| invalid("params.name", "missing required field", Some("string")))?
+        .as_str()
+        .ok_or_else(|| invalid("params.name", "expected string", Some("string")))?;
+    let arguments = object
+        .get("arguments")
+        .cloned()
+        .unwrap_or_else(|| Value::Object(Map::new()));
+    Ok(ValidatedToolCall {
+        name: name.to_string(),
+        arguments: validate_tool_arguments(backend, name, arguments)?,
+    })
+}
+
+fn find_tool(backend: ToolBackend, name: &str) -> Result<&'static Value, JsonRpcError> {
+    artifact()?["tools"]
+        .as_array()
+        .expect("checked above")
+        .iter()
+        .find(|tool| tool["name"].as_str() == Some(name) && available(tool, backend))
+        .ok_or_else(|| invalid("params.name", &format!("unknown or unavailable tool {name:?}"), None))
+}
+
+fn available(tool: &Value, backend: ToolBackend) -> bool {
+    tool["availability"][backend.key()].as_bool() == Some(true)
+}
+
+fn check_schema_vocabulary(schema: &Value, path: &str) -> Result<(), String> {
+    let object = schema
+        .as_object()
+        .ok_or_else(|| format!("{path} must be an object"))?;
+    const ALLOWED: &[&str] = &[
+        "type", "description", "default", "properties", "required",
+        "additionalProperties", "anyOf", "oneOf", "items", "enum",
+    ];
+    for key in object.keys() {
+        if !ALLOWED.contains(&key.as_str()) {
+            return Err(format!("unsupported schema keyword {path}.{key}"));
+        }
+    }
+    if let Some(properties) = object.get("properties").and_then(Value::as_object) {
+        for (name, child) in properties {
+            check_schema_vocabulary(child, &format!("{path}.properties.{name}"))?;
+        }
+    }
+    if let Some(items) = object.get("items") {
+        check_schema_vocabulary(items, &format!("{path}.items"))?;
+    }
+    for keyword in ["anyOf", "oneOf"] {
+        if let Some(branches) = object.get(keyword).and_then(Value::as_array) {
+            for (index, branch) in branches.iter().enumerate() {
+                check_schema_vocabulary(branch, &format!("{path}.{keyword}[{index}]"))?;
+            }
+        }
+    }
+    Ok(())
+}
+
+fn validate_value(schema: &Value, value: &Value, path: &str) -> Result<(), JsonRpcError> {
+    if let Some(allowed) = schema.get("enum").and_then(Value::as_array) {
+        if !allowed.contains(value) {
+            return Err(invalid(path, "value is not in the allowed enum", None));
+        }
+    }
+    if let Some(branches) = schema.get("anyOf").and_then(Value::as_array) {
+        return validate_branches(branches, value, path, false);
+    }
+    if let Some(branches) = schema.get("oneOf").and_then(Value::as_array) {
+        return validate_branches(branches, value, path, true);
+    }
+    let expected = schema.get("type").and_then(Value::as_str);
+    let type_matches = match expected {
+        None => true,
+        Some("object") => value.is_object(),
+        Some("array") => value.is_array(),
+        Some("string") => value.is_string(),
+        Some("boolean") => value.is_boolean(),
+        Some("integer") => value.as_i64().is_some() || value.as_u64().is_some(),
+        Some("number") => value.is_number(),
+        Some(other) => return Err(invalid(path, &format!("unsupported schema type {other}"), None)),
+    };
+    if !type_matches {
+        return Err(invalid(path, &format!("expected {}", expected.unwrap()), expected));
+    }
+    if let Some(object) = value.as_object() {
+        validate_object(schema, object, path)?;
+    }
+    if let (Some(items), Some(values)) = (schema.get("items"), value.as_array()) {
+        for (index, item) in values.iter().enumerate() {
+            validate_value(items, item, &format!("{path}[{index}]"))?;
+        }
+    }
+    Ok(())
+}
+
+fn validate_object(schema: &Value, object: &Map<String, Value>, path: &str) -> Result<(), JsonRpcError> {
+    let properties = schema.get("properties").and_then(Value::as_object);
+    if let Some(required) = schema.get("required").and_then(Value::as_array) {
+        for name in required.iter().filter_map(Value::as_str) {
+            if !object.contains_key(name) {
+                return Err(invalid(&format!("{path}.{name}"), "missing required field", None));
+            }
+        }
+    }
+    if schema.get("additionalProperties").and_then(Value::as_bool) == Some(false) {
+        let known: HashSet<&str> = properties
+            .into_iter()
+            .flat_map(|entries| entries.keys().map(String::as_str))
+            .collect();
+        for name in object.keys() {
+            if !known.contains(name.as_str()) {
+                return Err(invalid(&format!("{path}.{name}"), "unknown field", None));
+            }
+        }
+    }
+    if let Some(properties) = properties {
+        for (name, child_schema) in properties {
+            if let Some(child) = object.get(name) {
+                validate_value(child_schema, child, &format!("{path}.{name}"))?;
+            }
+        }
+    }
+    if let Some(branches) = schema.get("oneOf").and_then(Value::as_array) {
+        validate_branches(branches, &Value::Object(object.clone()), path, true)?;
+    }
+    Ok(())
+}
+
+fn validate_branches(
+    branches: &[Value],
+    value: &Value,
+    path: &str,
+    exactly_one: bool,
+) -> Result<(), JsonRpcError> {
+    let results: Vec<_> = branches
+        .iter()
+        .map(|branch| validate_value(branch, value, path))
+        .collect();
+    let successes = results.iter().filter(|result| result.is_ok()).count();
+    if successes == 0 {
+        if !exactly_one {
+            if let Some(error) = results
+                .into_iter()
+                .filter_map(Result::err)
+                .max_by_key(|error| {
+                    error.data.as_ref()
+                        .and_then(|data| data["path"].as_str())
+                        .map_or(0, str::len)
+                })
+            {
+                return Err(error);
+            }
+        }
+        return Err(invalid(path, "did not match any schema alternative", None));
+    }
+    if exactly_one && successes != 1 {
+        return Err(invalid(path, "expected exactly one schema alternative", None));
+    }
+    Ok(())
+}
+
+fn apply_defaults(schema: &Value, value: &mut Value) {
+    if let (Some(properties), Some(object)) =
+        (schema.get("properties").and_then(Value::as_object), value.as_object_mut())
+    {
+        for (name, child_schema) in properties {
+            if !object.contains_key(name) {
+                if let Some(default) = child_schema.get("default") {
+                    object.insert(name.clone(), default.clone());
+                }
+            }
+            if let Some(child) = object.get_mut(name) {
+                apply_defaults(child_schema, child);
+            }
+        }
+    }
+}
+
+fn invalid(path: &str, message: &str, expected: Option<&str>) -> JsonRpcError {
+    JsonRpcError {
+        code: INVALID_PARAMS,
+        message: format!("Invalid params at {path}: {message}"),
+        data: Some(json!({
+            "path": path,
+            "expected": expected,
+            "reason": message,
+        })),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn names(backend: ToolBackend) -> Vec<String> {
+        backend_tools(backend).unwrap().iter()
+            .map(|tool| tool["name"].as_str().unwrap().to_string()).collect()
+    }
+
+    #[test]
+    fn backend_tool_sets_are_ordered() {
+        assert_eq!(names(ToolBackend::Mac), ["look", "find", "wait_for_value", "wait_for_stability", "run", "click", "type", "keyboard", "scroll", "invoke"]);
+        assert_eq!(names(ToolBackend::Windows), ["look", "find", "run", "click", "type", "keyboard", "scroll", "invoke"]);
+        assert_eq!(names(ToolBackend::Linux), ["look", "find", "run", "type", "scroll", "invoke"]);
+    }
+
+    #[test]
+    fn validates_before_applying_defaults() {
+        let value = validate_tool_arguments(ToolBackend::Linux, "look", json!({})).unwrap();
+        assert_eq!(value["screenshot"], true);
+        assert_eq!(value["offset"], 0);
+        assert_eq!(value["frames"], false);
+        let error = validate_tool_arguments(ToolBackend::Linux, "look", json!({"screenshot": "false"})).unwrap_err();
+        assert_eq!(error.code, -32602);
+        assert_eq!(error.data.unwrap()["path"], "params.arguments.screenshot");
+    }
+
+    #[test]
+    fn rejects_wrong_integer_and_unknown_fields() {
+        let error = validate_tool_arguments(ToolBackend::Mac, "look", json!({"depth": "2"})).unwrap_err();
+        assert_eq!(error.data.unwrap()["path"], "params.arguments.depth");
+        let error = validate_tool_arguments(ToolBackend::Mac, "look", json!({"bogus": true})).unwrap_err();
+        assert_eq!(error.data.unwrap()["path"], "params.arguments.bogus");
+    }
+
+    #[test]
+    fn rejects_missing_and_malformed_nested_targets() {
+        let error = validate_tool_arguments(ToolBackend::Windows, "click", json!({})).unwrap_err();
+        assert_eq!(error.data.unwrap()["path"], "params.arguments.target");
+        let error = validate_tool_arguments(ToolBackend::Windows, "type", json!({
+            "target": {"app": 42, "name": "Field"}, "value": "x"
+        })).unwrap_err();
+        assert!(error.message.contains("params.arguments.target"));
+        let error = validate_tool_arguments(ToolBackend::Windows, "type", json!({
+            "target": {"app": "Notes"}, "value": "x"
+        })).unwrap_err();
+        assert!(error.message.contains("params.arguments.target"));
+    }
+
+    #[test]
+    fn rejects_flat_target_shorthand_and_bad_call_params() {
+        let error = validate_tool_arguments(ToolBackend::Windows, "click", json!({
+            "app": "Notes", "name": "Save"
+        })).unwrap_err();
+        assert!(error.message.contains("params.arguments.target") || error.message.contains("params.arguments.app"));
+        let error = validate_tools_call(ToolBackend::Linux, Some(json!({"name": 3}))).unwrap_err();
+        assert_eq!(error.data.unwrap()["path"], "params.name");
+    }
+}
