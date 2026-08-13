@@ -34,6 +34,13 @@ an app-scoped semantic name, `{app, name}`. A recorded action may also carry a
 not a target. Snapshot handles such as `s1:12` are session-local cache keys and
 are never accepted from `.axn` files.
 
+Process identity is also runtime-only. A live look records the selected process ID beside its
+semantic-name evidence, and later actions select that evidence before capturing the application
+again. This keeps coexisting instances separate and pins replay resolution to the process that was
+observed, while snapshots and `.axn` files continue to persist only the application name or bundle
+identifier. Legacy replay evidence without a runtime process ID must resolve uniquely; Axon does
+not choose arbitrarily among same-identity processes.
+
 Version 1 files are rejected before the first dispatch. The error identifies the
 first action whose obsolete target requires attention. Axon does not guess a
 migration because a snapshot handle contains no durable identity; re-record the

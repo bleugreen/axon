@@ -330,6 +330,7 @@ fn look_since_response_forms_are_byte_exact() {
     let observation = Snapshot {
         id: SnapshotId("fixture-1".into()),
         app: Application {
+            process_id: None,
             name: "Fixture".into(),
             identifier: Some("fixture.app".into()),
             windows: vec![],

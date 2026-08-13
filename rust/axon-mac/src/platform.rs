@@ -334,9 +334,11 @@ impl MacBackend {
             .applications()
             .into_iter()
             .filter(|(pid, name)| {
-                app.identifier
-                    .as_deref()
-                    .is_none_or(|id| id == pid.to_string())
+                app.process_id.is_none_or(|wanted| wanted == *pid as u32)
+                    && app
+                        .identifier
+                        .as_deref()
+                        .is_none_or(|id| id == pid.to_string())
                     && app
                         .name
                         .as_deref()
@@ -417,8 +419,9 @@ impl PlatformBackend for MacBackend {
             .applications()
             .into_iter()
             .map(|(pid, name)| Application {
+                process_id: Some(pid as u32),
                 name,
-                identifier: Some(pid.to_string()),
+                identifier: None,
                 windows: Vec::new(),
             })
             .collect())
@@ -457,8 +460,9 @@ impl PlatformBackend for MacBackend {
             all_elements.extend(captured.elements);
         }
         let snapshot = Snapshot::new(Application {
+            process_id: Some(pid as u32),
             name,
-            identifier: Some(pid.to_string()),
+            identifier: None,
             windows: snapshot_windows,
         });
         self.handles = all_elements

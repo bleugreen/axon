@@ -5,8 +5,8 @@ use axon_core::{
     DeliveryOutcome, DeliveryPolicy, DeliveryRefusal, DeliveryRefusalReason, DeliveryRung,
     DeliverySelection, DispatchOutcome, ExpectedFact, ForegroundTarget, JsonRpcError, JsonRpcId,
     JsonRpcRequest, JsonRpcResponse, KeyboardIntent, PlatformBackend, Resolution, RunEnvelope,
-    RunOptions, SemanticLookup, SemanticNameRegistry, Snapshot, SnapshotHandle, ToolDispatcher,
-    dispatch_in_foreground, goal_success, select_delivery,
+    RunOptions, SemanticLookup, SemanticNameRegistry, SemanticSelection, Snapshot, SnapshotHandle,
+    ToolDispatcher, dispatch_in_foreground, goal_success, select_delivery,
 };
 use serde_json::{Map, Value, json};
 
@@ -293,6 +293,15 @@ impl<B: PointerTargetVerifier + BackgroundPixelInput> Router<B> {
             semantic_names: SemanticNameRegistry::default(),
         }
     }
+    fn register_snapshot(&mut self, snapshot: &Snapshot) -> Vec<axon_core::SemanticElementName> {
+        let live_processes = self.backend.live_process_ids().ok();
+        self.semantic_names.register_with_liveness(snapshot, |pid| {
+            live_processes
+                .as_ref()
+                .is_none_or(|processes| processes.contains(&pid))
+        })
+    }
+
     /// The backend this router drives, for the facts a daemon answers outside the tool surface.
     /// `health` is the whole of that today: the session's accessibility switch is a live reading,
     /// not a static capability, so it is asked for at the moment a health request arrives.
@@ -816,7 +825,7 @@ impl<B: PointerTargetVerifier + BackgroundPixelInput> Router<B> {
         }
         let app = app_query(params);
         let snapshot = self.backend.capture(&app).map_err(backend_error)?;
-        let names = self.semantic_names.register(&snapshot);
+        let names = self.register_snapshot(&snapshot);
         let mut value = serde_json::to_value(axon_core::render_semantic_names(&snapshot, &names))
             .map_err(internal_error)?;
         let wants_screenshot = axon_core::screenshot_requested(
@@ -896,18 +905,41 @@ impl<B: PointerTargetVerifier + BackgroundPixelInput> Router<B> {
         }
         let target: axon_core::WireElementTarget =
             serde_json::from_value(params.get("target").cloned().unwrap_or(Value::Null))
-                .map_err(|_| rpc_error(-32602, "element target must be an {app, name} object"))?;
+                .map_err(|_| rpc_error(-32602, axon_core::SEMANTIC_TARGET_GUIDANCE))?;
         let target = target
             .validate()
             .map_err(|error| rpc_error(-32602, error.to_string()))?;
+        let context = match self.semantic_names.select(&target) {
+            SemanticSelection::Selected(context) => context,
+            SemanticSelection::Missing { target } => {
+                return Err(JsonRpcError {
+                    code: -32002,
+                    message: format!("semantic name not found: {} / {}", target.app, target.name),
+                    data: Some(json!({"status":"missing","query":target})),
+                });
+            }
+            SemanticSelection::Ambiguous { target, candidates } => {
+                return Err(JsonRpcError {
+                    code: -32002,
+                    message: format!(
+                        "semantic name is ambiguous: {} / {}",
+                        target.app, target.name
+                    ),
+                    data: Some(
+                        json!({"status":"ambiguous","query":target,"candidates":candidates}),
+                    ),
+                });
+            }
+        };
         let live = self
             .backend
             .capture(&AppQuery {
-                name: Some(target.app.clone()),
+                process_id: context.process_id(),
+                name: context.process_id().is_none().then(|| target.app.clone()),
                 identifier: None,
             })
             .map_err(backend_error)?;
-        let lookup = self.semantic_names.resolve(&target, &live);
+        let lookup = context.resolve(&live);
         self.snapshot = Some(live);
         match lookup {
             SemanticLookup::Unique { handle, resolution } => Ok((handle, resolution)),
@@ -990,12 +1022,18 @@ impl<B: PointerTargetVerifier + BackgroundPixelInput> ToolDispatcher for Router<
         name: &str,
         locator: &axon_core::Locator,
     ) -> Result<(), String> {
-        self.semantic_names.register_replay_locator(
-            axon_core::WireElementTarget {
-                app: app.into(),
-                name: name.into(),
-            },
+        let target = axon_core::WireElementTarget {
+            app: app.into(),
+            name: name.into(),
+        };
+        let process_id = match self.semantic_names.select(&target) {
+            SemanticSelection::Selected(context) => context.process_id(),
+            _ => None,
+        };
+        self.semantic_names.register_replay_locator_for_process(
+            target,
             locator.clone(),
+            process_id,
         );
         Ok(())
     }
@@ -1044,6 +1082,7 @@ impl<B: PointerTargetVerifier + BackgroundPixelInput> ToolDispatcher for Router<
         let snapshot = self
             .backend
             .capture(&AppQuery {
+                process_id: None,
                 name: Some(app),
                 identifier: None,
             })
@@ -1078,6 +1117,7 @@ impl<B: PointerTargetVerifier + BackgroundPixelInput> ToolDispatcher for Router<
         let snapshot = self
             .backend
             .capture(&AppQuery {
+                process_id: None,
                 name: Some(app),
                 identifier: None,
             })
@@ -1100,8 +1140,14 @@ fn flattened(snapshot: &Snapshot) -> impl Iterator<Item = &axon_core::Node> {
     out.into_iter()
 }
 fn app_query(params: &Map<String, Value>) -> AppQuery {
+    let app = params.get("app").and_then(Value::as_str);
+    let process_id = app.and_then(|value| value.strip_prefix("pid:").unwrap_or(value).parse().ok());
     AppQuery {
-        name: params.get("app").and_then(Value::as_str).map(str::to_owned),
+        process_id,
+        name: process_id
+            .is_none()
+            .then(|| app.map(str::to_owned))
+            .flatten(),
         identifier: params
             .get("identifier")
             .and_then(Value::as_str)
@@ -1169,6 +1215,71 @@ mod tests {
     use std::{cell::RefCell, rc::Rc, time::Duration};
 
     #[test]
+    fn semantic_resolution_captures_selected_pid_on_first_try() {
+        let mut backend = backend(vec![node("Save")], None);
+        backend.snapshot.app.process_id = Some(4101);
+        let queries = backend.capture_queries.clone();
+        let mut router = Router::new(backend);
+        let names = router.register_snapshot(&router.backend.snapshot.clone());
+        let name = names
+            .into_iter()
+            .find(|name| name.label == "Save")
+            .unwrap()
+            .name;
+
+        let result = router.resolve(
+            json!({"target":{"app":"4101","name":name}})
+                .as_object()
+                .unwrap(),
+        );
+        assert!(result.is_ok());
+        assert_eq!(
+            queries.borrow().as_slice(),
+            &[AppQuery {
+                process_id: Some(4101),
+                name: None,
+                identifier: None,
+            }]
+        );
+    }
+
+    #[test]
+    fn name_record_recapture_stays_on_its_recorded_pid() {
+        let mut backend = backend(vec![node("Save")], None);
+        backend.snapshot.app.process_id = Some(4101);
+        backend.snapshot.app.name = "Shared".into();
+        backend.snapshot.app.identifier = Some("com.example.shared".into());
+        let queries = backend.capture_queries.clone();
+        let mut router = Router::new(backend);
+        let names = router.register_snapshot(&router.backend.snapshot.clone());
+        let name = names
+            .into_iter()
+            .find(|name| name.label == "Save")
+            .unwrap()
+            .name;
+
+        let mut newer = Snapshot::new(Application {
+            process_id: Some(4202),
+            name: "Shared".into(),
+            identifier: Some("com.example.shared".into()),
+            windows: vec![Window {
+                title: None,
+                root: node("Other"),
+            }],
+        });
+        newer.id = axon_core::SnapshotId("newer".into());
+        router.semantic_names.register(&newer);
+
+        let result = router.resolve(
+            json!({"target":{"app":"Shared","name":name}})
+                .as_object()
+                .unwrap(),
+        );
+        assert!(result.is_ok());
+        assert_eq!(queries.borrow().last().unwrap().process_id, Some(4101));
+    }
+
+    #[test]
     fn native_result_uses_structured_target_resolution() {
         let mut result = json!({"resolution":{"status":"unique"}});
         let resolution: axon_core::TargetResolution = serde_json::from_value(json!({
@@ -1200,6 +1311,7 @@ mod tests {
     #[derive(Clone)]
     struct FakeBackend {
         snapshot: Snapshot,
+        capture_queries: Rc<RefCell<Vec<AppQuery>>>,
         pointer_target_matches: bool,
         verified_handles: Rc<RefCell<Vec<SnapshotHandle>>>,
         value: Rc<RefCell<Option<String>>>,
@@ -1314,7 +1426,8 @@ mod tests {
         fn enumerate_applications(&self) -> Result<Vec<Application>, BackendError> {
             Ok(vec![])
         }
-        fn capture(&mut self, _: &AppQuery) -> Result<Snapshot, BackendError> {
+        fn capture(&mut self, query: &AppQuery) -> Result<Snapshot, BackendError> {
+            self.capture_queries.borrow_mut().push(query.clone());
             Ok(self.snapshot.clone())
         }
         fn invoke(&mut self, _: &SnapshotHandle, _: &str) -> Result<(), BackendError> {
@@ -1467,7 +1580,9 @@ mod tests {
             ..node("root")
         };
         FakeBackend {
+            capture_queries: Rc::new(RefCell::new(vec![])),
             snapshot: Snapshot::new(Application {
+                process_id: None,
                 name: "App".into(),
                 identifier: Some(APP_IDENTITY.into()),
                 windows: vec![Window { title: None, root }],
@@ -1929,6 +2044,7 @@ mod tests {
                 |backend| {
                     backend.keyboard(
                         &AppQuery {
+                            process_id: None,
                             name: Some("App".into()),
                             identifier: None,
                         },
@@ -2280,7 +2396,7 @@ mod tests {
             panic!()
         };
         assert_eq!(error.error.code, -32602);
-        assert!(error.error.message.contains("{app, name}"));
+        assert_eq!(error.error.message, axon_core::SEMANTIC_TARGET_GUIDANCE);
         assert_eq!(*router.backend.clicks.borrow(), 0);
     }
     #[test]

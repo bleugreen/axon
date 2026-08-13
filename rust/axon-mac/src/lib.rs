@@ -5,10 +5,11 @@ use axon_core::{
     DeliveryOutcome, DeliveryPolicy, DeliveryRefusal, DeliveryRefusalReason, DeliveryRung,
     DeliverySelection, DiffPolicy, DispatchOutcome, ExpectedFact, ForegroundTarget, JsonRpcError,
     JsonRpcId, JsonRpcRequest, JsonRpcResponse, KeyboardIntent, PlatformBackend, ResolutionStatus,
-    RunEnvelope, RunOptions, SemanticElementName, SemanticLookup, SemanticNameRegistry, SinceToken,
-    Snapshot, SnapshotHandle, TextLocationResolver, TextLocationSource, TextLocationTarget,
-    TextRecognitionProvider, ToolDispatcher, classify_semantic_diff, dispatch_in_foreground,
-    goal_success, look_since_response, select_delivery,
+    RunEnvelope, RunOptions, SemanticElementName, SemanticLookup, SemanticNameRegistry,
+    SemanticSelection, SinceToken, Snapshot, SnapshotHandle, TextLocationResolver,
+    TextLocationSource, TextLocationTarget, TextRecognitionProvider, ToolDispatcher,
+    classify_semantic_diff, dispatch_in_foreground, goal_success, look_since_response,
+    select_delivery,
 };
 use serde_json::{Map, Value, json};
 use std::{
@@ -318,6 +319,15 @@ impl<
             observation_sequence: 0,
         }
     }
+    fn register_snapshot(&mut self, snapshot: &Snapshot) -> Vec<axon_core::SemanticElementName> {
+        let live_processes = self.backend.live_process_ids().ok();
+        self.semantic_names.register_with_liveness(snapshot, |pid| {
+            live_processes
+                .as_ref()
+                .is_none_or(|processes| processes.contains(&pid))
+        })
+    }
+
     fn click_text_location(
         &mut self,
         value: &Value,
@@ -329,6 +339,7 @@ impl<
             return Err(rpc_error(-32602, "location app must not be empty"));
         }
         let app = AppQuery {
+            process_id: None,
             name: Some(target.app.clone()),
             identifier: None,
         };
@@ -872,7 +883,7 @@ impl<
         }
         let app = app_query(params);
         let snapshot = self.backend.capture(&app).map_err(backend_error)?;
-        let names = self.semantic_names.register(&snapshot);
+        let names = self.register_snapshot(&snapshot);
         self.observation_sequence += 1;
         let app_identity = snapshot
             .app
@@ -1086,13 +1097,13 @@ impl<
         }
         let started = Instant::now();
         let first = self.backend.capture(&app).map_err(backend_error)?;
-        let first_names = self.semantic_names.register(&first);
+        let first_names = self.register_snapshot(&first);
         let mut last = first.clone();
         let mut last_names = first_names.clone();
         let mut stable_since = Instant::now();
         loop {
             let snapshot = self.backend.capture(&app).map_err(backend_error)?;
-            let names = self.semantic_names.register(&snapshot);
+            let names = self.register_snapshot(&snapshot);
             let changed_from_last = !matches!(
                 classify_semantic_diff(
                     &last,
@@ -1139,18 +1150,41 @@ impl<
     ) -> Result<(SnapshotHandle, axon_core::Resolution), JsonRpcError> {
         let target: axon_core::WireElementTarget =
             serde_json::from_value(params.get("target").cloned().unwrap_or(Value::Null))
-                .map_err(|_| rpc_error(-32602, "element target must be an {app, name} object"))?;
+                .map_err(|_| rpc_error(-32602, axon_core::SEMANTIC_TARGET_GUIDANCE))?;
         let target = target
             .validate()
             .map_err(|error| rpc_error(-32602, error.to_string()))?;
+        let context = match self.semantic_names.select(&target) {
+            SemanticSelection::Selected(context) => context,
+            SemanticSelection::Missing { target } => {
+                return Err(JsonRpcError {
+                    code: -32002,
+                    message: format!("semantic name not found: {} / {}", target.app, target.name),
+                    data: Some(json!({"status":"missing","query":target})),
+                });
+            }
+            SemanticSelection::Ambiguous { target, candidates } => {
+                return Err(JsonRpcError {
+                    code: -32002,
+                    message: format!(
+                        "semantic name is ambiguous: {} / {}",
+                        target.app, target.name
+                    ),
+                    data: Some(
+                        json!({"status":"ambiguous","query":target,"candidates":candidates}),
+                    ),
+                });
+            }
+        };
         let live = self
             .backend
             .capture(&AppQuery {
-                name: Some(target.app.clone()),
+                process_id: context.process_id(),
+                name: context.process_id().is_none().then(|| target.app.clone()),
                 identifier: None,
             })
             .map_err(backend_error)?;
-        let lookup = self.semantic_names.resolve(&target, &live);
+        let lookup = context.resolve(&live);
         self.snapshot = Some(live);
         match lookup {
             SemanticLookup::Unique { handle, resolution } => Ok((handle, resolution)),
@@ -1219,12 +1253,18 @@ impl<
         name: &str,
         locator: &axon_core::Locator,
     ) -> Result<(), String> {
-        self.semantic_names.register_replay_locator(
-            axon_core::WireElementTarget {
-                app: app.into(),
-                name: name.into(),
-            },
+        let target = axon_core::WireElementTarget {
+            app: app.into(),
+            name: name.into(),
+        };
+        let process_id = match self.semantic_names.select(&target) {
+            SemanticSelection::Selected(context) => context.process_id(),
+            _ => None,
+        };
+        self.semantic_names.register_replay_locator_for_process(
+            target,
             locator.clone(),
+            process_id,
         );
         Ok(())
     }
@@ -1273,6 +1313,7 @@ impl<
         let snapshot = self
             .backend
             .capture(&AppQuery {
+                process_id: None,
                 name: Some(app),
                 identifier: None,
             })
@@ -1307,6 +1348,7 @@ impl<
         let snapshot = self
             .backend
             .capture(&AppQuery {
+                process_id: None,
                 name: Some(app),
                 identifier: None,
             })
@@ -1339,8 +1381,14 @@ fn bounded_ms(
 }
 
 fn app_query(params: &Map<String, Value>) -> AppQuery {
+    let app = params.get("app").and_then(Value::as_str);
+    let process_id = app.and_then(|value| value.strip_prefix("pid:").unwrap_or(value).parse().ok());
     AppQuery {
-        name: params.get("app").and_then(Value::as_str).map(str::to_owned),
+        process_id,
+        name: process_id
+            .is_none()
+            .then(|| app.map(str::to_owned))
+            .flatten(),
         identifier: params
             .get("identifier")
             .and_then(Value::as_str)
@@ -1682,6 +1730,7 @@ mod tests {
     #[test]
     fn rust_facade_keeps_app_inside_structured_result() {
         let app = axon_core::Application {
+            process_id: None,
             name: "Calculator".into(),
             identifier: Some("42".into()),
             windows: Vec::new(),

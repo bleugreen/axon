@@ -1,6 +1,6 @@
 use crate::{
-    AxnAction, Confidence, Locator, Resolution, ResolutionStatus, SemanticNameRegistry, Snapshot,
-    TextMatcher, WireElementTarget,
+    AxnAction, Confidence, Locator, Resolution, ResolutionStatus, SemanticNameRegistry,
+    SemanticResolutionContext, Snapshot, TextMatcher, WireElementTarget,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -102,10 +102,28 @@ pub fn replay_target_resolution(
     snapshot: Option<&Snapshot>,
 ) -> Option<TargetResolution> {
     let target: WireElementTarget = serde_json::from_value(params.get("target")?.clone()).ok()?;
-    let recorded = registry.replay_locator(&target)?;
-    let snapshot = snapshot?;
-    let resolution = crate::LocatorResolver::resolve(recorded, snapshot);
-    Some(canonical_target_resolution(recorded, snapshot, &resolution))
+    let crate::SemanticSelection::Selected(context) = registry.select(&target) else {
+        return None;
+    };
+    replay_target_resolution_for_context(&context, snapshot?)
+}
+
+pub fn replay_target_resolution_for_context(
+    context: &SemanticResolutionContext,
+    snapshot: &Snapshot,
+) -> Option<TargetResolution> {
+    if context
+        .process_id()
+        .is_some_and(|expected| snapshot.app.process_id != Some(expected))
+    {
+        return None;
+    }
+    let resolution = crate::LocatorResolver::resolve(context.locator(), snapshot);
+    Some(canonical_target_resolution(
+        context.locator(),
+        snapshot,
+        &resolution,
+    ))
 }
 
 fn locator_evidence(recorded: &Locator, node: &crate::Node) -> Vec<Value> {
@@ -202,6 +220,7 @@ mod tests {
         Snapshot {
             id: SnapshotId("live".into()),
             app: Application {
+                process_id: None,
                 name: "Editor".into(),
                 identifier: None,
                 windows: vec![Window {

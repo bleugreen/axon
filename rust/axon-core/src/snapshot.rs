@@ -104,9 +104,13 @@ pub struct Window {
     pub root: Node,
 }
 
+pub type ProcessId = u32;
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Application {
     pub name: String,
+    #[serde(skip)]
+    pub process_id: Option<ProcessId>,
     #[serde(default)]
     pub identifier: Option<String>,
     #[serde(default)]
@@ -257,5 +261,18 @@ mod summary_tests {
             SnapshotSummary::from(&before),
             SnapshotSummary::from(&after)
         );
+    }
+
+    #[test]
+    fn process_identity_is_runtime_only() {
+        let mut snapshot = snapshot("draft");
+        snapshot.app.process_id = Some(42);
+
+        let encoded = serde_json::to_value(&snapshot).unwrap();
+        assert_eq!(encoded["app"].get("process_id"), None);
+        assert_eq!(encoded["app"].get("processId"), None);
+
+        let decoded: Snapshot = serde_json::from_value(encoded).unwrap();
+        assert_eq!(decoded.app.process_id, None);
     }
 }

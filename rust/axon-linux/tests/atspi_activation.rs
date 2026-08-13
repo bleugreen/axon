@@ -351,6 +351,7 @@ impl<'a> Captured<'a> for &'a Node {
 fn capture(backend: &mut LinuxBackend, application: &str) -> Snapshot {
     backend
         .capture(&AppQuery {
+            process_id: None,
             name: Some(application.to_owned()),
             identifier: None,
         })

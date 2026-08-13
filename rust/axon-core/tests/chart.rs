@@ -67,6 +67,7 @@ fn snapshot(id: &str, children: Vec<Node>) -> Snapshot {
     Snapshot {
         id: SnapshotId(id.into()),
         app: Application {
+            process_id: None,
             name: "App".into(),
             identifier: Some("com.example.app".into()),
             windows: vec![Window {

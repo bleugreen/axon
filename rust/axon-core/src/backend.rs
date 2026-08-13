@@ -1,7 +1,7 @@
 use crate::{Application, Node, Rect, Snapshot, SnapshotHandle};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::time::Duration;
+use std::{collections::HashSet, time::Duration};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Capability {
@@ -20,6 +20,22 @@ pub enum Capability {
     HitTest,
     SerializeHistory,
     ObserveGlobalInput,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::AppQuery;
+
+    #[test]
+    fn app_query_accepts_the_legacy_serialized_shape() {
+        let query: AppQuery =
+            serde_json::from_str(r#"{"name":"Editor","identifier":"com.example.Editor"}"#).unwrap();
+        assert_eq!(query.process_id, None);
+        assert_eq!(
+            serde_json::to_value(query).unwrap(),
+            serde_json::json!({"name":"Editor","identifier":"com.example.Editor"})
+        );
+    }
 }
 
 impl Capability {
@@ -91,6 +107,8 @@ pub enum BackendError {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct AppQuery {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub process_id: Option<crate::ProcessId>,
     pub name: Option<String>,
     pub identifier: Option<String>,
 }
@@ -143,6 +161,14 @@ impl KeyboardIntent<'_> {
 pub trait PlatformBackend {
     fn capabilities(&self) -> Result<Vec<CapabilityInfo>, BackendError>;
     fn enumerate_applications(&self) -> Result<Vec<Application>, BackendError>;
+    /// Runtime process identities visible when semantic evidence is registered.
+    fn live_process_ids(&self) -> Result<HashSet<crate::ProcessId>, BackendError> {
+        Ok(self
+            .enumerate_applications()?
+            .into_iter()
+            .filter_map(|application| application.process_id)
+            .collect())
+    }
     fn capture(&mut self, app: &AppQuery) -> Result<Snapshot, BackendError>;
     fn invoke(&mut self, target: &SnapshotHandle, action: &str) -> Result<(), BackendError>;
     fn read_value(&self, target: &SnapshotHandle) -> Result<Option<String>, BackendError>;

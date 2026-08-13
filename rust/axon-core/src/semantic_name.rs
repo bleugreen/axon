@@ -12,11 +12,6 @@ pub enum SemanticNameResolution {
     Unique,
     Ambiguous,
 }
-pub(crate) enum RetainedSemanticLookup {
-    NoRecord,
-    Resolved(Box<SemanticLookup>),
-}
-
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SemanticElementName {
@@ -368,6 +363,75 @@ struct Record {
     locator: Locator,
     handle: SnapshotHandle,
 }
+
+#[derive(Clone, Debug)]
+pub struct SemanticResolutionContext {
+    target: WireElementTarget,
+    locator: Locator,
+    process_id: Option<crate::ProcessId>,
+    recorded_snapshot_id: Option<crate::SnapshotId>,
+    recorded_handle: Option<SnapshotHandle>,
+}
+
+impl SemanticResolutionContext {
+    pub fn target(&self) -> &WireElementTarget {
+        &self.target
+    }
+
+    pub fn locator(&self) -> &Locator {
+        &self.locator
+    }
+
+    pub fn process_id(&self) -> Option<crate::ProcessId> {
+        self.process_id
+    }
+
+    pub fn resolve(&self, live: &Snapshot) -> SemanticLookup {
+        if self
+            .process_id
+            .is_some_and(|expected| live.app.process_id != Some(expected))
+        {
+            return SemanticLookup::Missing {
+                target: self.target.clone(),
+            };
+        }
+        let resolution = LocatorResolver::resolve(&self.locator, live);
+        if self.recorded_snapshot_id.as_ref() == Some(&live.id)
+            && resolution.status == ResolutionStatus::Unique
+            && self.recorded_handle.as_ref().is_some_and(|handle| {
+                resolution
+                    .best
+                    .as_ref()
+                    .is_some_and(|best| &best.handle == handle)
+            })
+        {
+            return SemanticLookup::Unique {
+                handle: self.recorded_handle.clone().unwrap(),
+                resolution,
+            };
+        }
+        lookup_from_resolution(&self.target, resolution, &self.locator)
+    }
+}
+
+pub enum SemanticSelection {
+    Selected(Box<SemanticResolutionContext>),
+    Missing {
+        target: WireElementTarget,
+    },
+    Ambiguous {
+        target: WireElementTarget,
+        candidates: Vec<SemanticCandidate>,
+    },
+}
+
+pub(crate) enum RetainedSemanticSelection {
+    NoRecord,
+    Selected(SemanticSelection),
+}
+
+pub const SEMANTIC_TARGET_GUIDANCE: &str = "target semantic targets must be {app,name}; for an app observation pass the top-level app: parameter (bundle identifier, PID, or app name)";
+
 pub enum SemanticLookup {
     Unique {
         handle: SnapshotHandle,
@@ -381,11 +445,18 @@ pub enum SemanticLookup {
         candidates: Vec<SemanticCandidate>,
     },
 }
+
+#[derive(Clone)]
+struct ReplayRecord {
+    locator: Locator,
+    process_id: Option<crate::ProcessId>,
+}
+
 pub struct SemanticNameRegistry {
     max_snapshots: usize,
     order: VecDeque<crate::SnapshotId>,
     records: HashMap<crate::SnapshotId, Vec<Record>>,
-    replay_locators: HashMap<WireElementTarget, Locator>,
+    replay_locators: HashMap<WireElementTarget, Vec<ReplayRecord>>,
 }
 impl Default for SemanticNameRegistry {
     fn default() -> Self {
@@ -401,33 +472,78 @@ impl SemanticNameRegistry {
             replay_locators: HashMap::new(),
         }
     }
-    pub fn register(&mut self, s: &Snapshot) -> Vec<SemanticElementName> {
-        let names = SemanticNameDeriver::derive(s);
+
+    pub fn register(&mut self, snapshot: &Snapshot) -> Vec<SemanticElementName> {
+        self.register_with_liveness(snapshot, |_| true)
+    }
+
+    pub fn register_with_liveness(
+        &mut self,
+        snapshot: &Snapshot,
+        is_process_live: impl Fn(crate::ProcessId) -> bool,
+    ) -> Vec<SemanticElementName> {
+        if let Some(replacement_pid) = snapshot.app.process_id {
+            let identity = app_identity(&snapshot.app);
+            let stale: HashSet<_> = self
+                .records
+                .iter()
+                .filter(|(_, records)| {
+                    records.first().is_some_and(|record| {
+                        record.app.process_id.is_some_and(|pid| {
+                            pid != replacement_pid
+                                && app_identity(&record.app) == identity
+                                && !is_process_live(pid)
+                        })
+                    })
+                })
+                .map(|(id, _)| id.clone())
+                .collect();
+            self.order.retain(|id| !stale.contains(id));
+            self.records.retain(|id, _| !stale.contains(id));
+        }
+
+        let names = SemanticNameDeriver::derive(snapshot);
         let mut contexts = Vec::new();
-        for w in &s.app.windows {
-            walk_context(&w.root, &[], w.title.as_deref(), &mut contexts)
+        for window in &snapshot.app.windows {
+            walk_context(&window.root, &[], window.title.as_deref(), &mut contexts)
         }
         let records = names
             .iter()
-            .filter_map(|n| {
-                contexts.get(n.source_index).map(|(node, a, w)| Record {
-                    target: WireElementTarget {
-                        app: s.app.name.clone(),
-                        name: n.name.clone(),
-                    },
-                    app: s.app.clone(),
-                    snapshot_id: s.id.clone(),
-                    candidate_label: n.candidate_label.clone(),
-                    role: n.role.clone(),
-                    label: n.label.clone(),
-                    locator: locator(node, a, w.as_deref()),
-                    handle: s.handle(n.source_index),
-                })
+            .filter_map(|name| {
+                contexts
+                    .get(name.source_index)
+                    .map(|(node, ancestors, window)| Record {
+                        target: WireElementTarget {
+                            app: snapshot.app.name.clone(),
+                            name: name.name.clone(),
+                        },
+                        app: snapshot.app.clone(),
+                        snapshot_id: snapshot.id.clone(),
+                        candidate_label: name.candidate_label.clone(),
+                        role: name.role.clone(),
+                        label: name.label.clone(),
+                        locator: locator(node, ancestors, window.as_deref()),
+                        handle: snapshot.handle(name.source_index),
+                    })
             })
             .collect();
-        self.order.retain(|id| id != &s.id);
-        self.order.push_back(s.id.clone());
-        self.records.insert(s.id.clone(), records);
+        if let Some(process_id) = snapshot.app.process_id {
+            let superseded: HashSet<_> = self
+                .records
+                .iter()
+                .filter(|(_, records)| {
+                    records
+                        .first()
+                        .is_some_and(|record| record.app.process_id == Some(process_id))
+                })
+                .map(|(id, _)| id.clone())
+                .collect();
+            self.order.retain(|id| !superseded.contains(id));
+            self.records.retain(|id, _| !superseded.contains(id));
+        }
+        self.order.retain(|id| id != &snapshot.id);
+        self.order.push_back(snapshot.id.clone());
+        self.records.insert(snapshot.id.clone(), records);
         while self.order.len() > self.max_snapshots {
             if let Some(id) = self.order.pop_front() {
                 self.records.remove(&id);
@@ -435,93 +551,131 @@ impl SemanticNameRegistry {
         }
         names
     }
-    /// Attach recorder evidence without manufacturing a snapshot handle. Resolution still
-    /// validates the locator against the next live platform snapshot.
+
     pub fn register_replay_locator(&mut self, target: WireElementTarget, locator: Locator) {
-        self.replay_locators.insert(target, locator);
+        self.register_replay_locator_for_process(target, locator, None);
     }
+
+    pub fn register_replay_locator_for_process(
+        &mut self,
+        target: WireElementTarget,
+        locator: Locator,
+        process_id: Option<crate::ProcessId>,
+    ) {
+        let records = self.replay_locators.entry(target).or_default();
+        records.retain(|record| record.process_id != process_id);
+        records.push(ReplayRecord {
+            locator,
+            process_id,
+        });
+    }
+
     pub fn replay_locator(&self, target: &WireElementTarget) -> Option<&Locator> {
-        self.replay_locators.get(target)
+        let records = self.replay_locators.get(target)?;
+        (records.len() == 1).then(|| &records[0].locator)
+    }
+
+    pub fn select(&self, target: &WireElementTarget) -> SemanticSelection {
+        if let Some(selection) = self.select_replay(target) {
+            return selection;
+        }
+        match self.select_retained(target) {
+            RetainedSemanticSelection::NoRecord => SemanticSelection::Missing {
+                target: target.clone(),
+            },
+            RetainedSemanticSelection::Selected(selection) => selection,
+        }
+    }
+
+    fn select_replay(&self, target: &WireElementTarget) -> Option<SemanticSelection> {
+        let records = self.replay_locators.get(target)?;
+        let query_pid = parse_process_id(&target.app);
+        let matches: Vec<_> = records
+            .iter()
+            .filter(|record| query_pid.is_none_or(|pid| record.process_id == Some(pid)))
+            .collect();
+        if matches.len() != 1 {
+            return Some(SemanticSelection::Ambiguous {
+                target: target.clone(),
+                candidates: vec![],
+            });
+        }
+        let record = matches[0];
+        Some(SemanticSelection::Selected(Box::new(
+            SemanticResolutionContext {
+                target: target.clone(),
+                locator: record.locator.clone(),
+                process_id: record.process_id,
+                recorded_snapshot_id: None,
+                recorded_handle: None,
+            },
+        )))
     }
 
     pub fn resolve(&self, target: &WireElementTarget, live: &Snapshot) -> SemanticLookup {
-        if let Some(locator) = self.replay_locators.get(target) {
-            return lookup_from_resolution(
-                target,
-                LocatorResolver::resolve(locator, live),
-                locator,
-            );
-        }
-        match self.resolve_retained(target, live) {
-            RetainedSemanticLookup::NoRecord => SemanticLookup::Missing {
-                target: target.clone(),
-            },
-            RetainedSemanticLookup::Resolved(lookup) => *lookup,
+        match self.select(target) {
+            SemanticSelection::Selected(context) => context.resolve(live),
+            SemanticSelection::Missing { target } => SemanticLookup::Missing { target },
+            SemanticSelection::Ambiguous { target, candidates } => {
+                SemanticLookup::Ambiguous { target, candidates }
+            }
         }
     }
-    pub(crate) fn resolve_retained(
-        &self,
-        target: &WireElementTarget,
-        live: &Snapshot,
-    ) -> RetainedSemanticLookup {
-        if !app_matches(&target.app, &live.app) {
-            return RetainedSemanticLookup::Resolved(Box::new(SemanticLookup::Missing {
-                target: target.clone(),
-            }));
-        }
+
+    pub(crate) fn select_retained(&self, target: &WireElementTarget) -> RetainedSemanticSelection {
         let matches: Vec<_> = self
             .order
             .iter()
             .rev()
             .filter_map(|id| self.records.get(id))
             .flatten()
-            .filter(|r| app_matches(&target.app, &r.app) && r.target.name == target.name)
+            .filter(|record| {
+                app_matches(&target.app, &record.app) && record.target.name == target.name
+            })
             .collect();
         if matches.is_empty() {
-            return RetainedSemanticLookup::NoRecord;
+            return RetainedSemanticSelection::NoRecord;
         }
-        let newest = matches[0].snapshot_id.clone();
-        let latest: Vec<_> = matches
+
+        let query_pid = parse_process_id(&target.app);
+        let newest_pid = query_pid.or(matches[0].app.process_id);
+        let process_matches: Vec<_> = matches
             .into_iter()
-            .filter(|r| r.snapshot_id == newest)
+            .filter(|record| record.app.process_id == newest_pid)
+            .collect();
+        let newest = process_matches[0].snapshot_id.clone();
+        let latest: Vec<_> = process_matches
+            .into_iter()
+            .filter(|record| record.snapshot_id == newest)
             .collect();
         if latest.len() > 1 {
-            return RetainedSemanticLookup::Resolved(Box::new(SemanticLookup::Ambiguous {
+            return RetainedSemanticSelection::Selected(SemanticSelection::Ambiguous {
                 target: target.clone(),
                 candidates: latest
                     .into_iter()
-                    .map(|r| SemanticCandidate {
-                        name: r.target.name.clone(),
-                        candidate_label: r.candidate_label.clone(),
-                        role: r.role.clone(),
-                        label: r.label.clone(),
-                        locator: r.locator.clone(),
+                    .map(|record| SemanticCandidate {
+                        name: record.target.name.clone(),
+                        candidate_label: record.candidate_label.clone(),
+                        role: record.role.clone(),
+                        label: record.label.clone(),
+                        locator: record.locator.clone(),
                     })
                     .collect(),
-            }));
+            });
         }
-        if latest[0].snapshot_id == live.id {
-            let validation = LocatorResolver::resolve(&latest[0].locator, live);
-            if validation.status == ResolutionStatus::Unique
-                && validation
-                    .best
-                    .as_ref()
-                    .is_some_and(|best| best.handle == latest[0].handle)
-            {
-                return RetainedSemanticLookup::Resolved(Box::new(SemanticLookup::Unique {
-                    handle: latest[0].handle.clone(),
-                    resolution: validation,
-                }));
-            }
-        }
-        let result = LocatorResolver::resolve(&latest[0].locator, live);
-        RetainedSemanticLookup::Resolved(Box::new(lookup_from_resolution(
-            target,
-            result,
-            &latest[0].locator,
+        let record = latest[0];
+        RetainedSemanticSelection::Selected(SemanticSelection::Selected(Box::new(
+            SemanticResolutionContext {
+                target: target.clone(),
+                locator: record.locator.clone(),
+                process_id: record.app.process_id,
+                recorded_snapshot_id: Some(record.snapshot_id.clone()),
+                recorded_handle: Some(record.handle.clone()),
+            },
         )))
     }
 }
+
 pub(crate) fn lookup_from_resolution(
     target: &WireElementTarget,
     result: Resolution,
@@ -556,11 +710,26 @@ pub(crate) fn lookup_from_resolution(
         },
     }
 }
-fn app_matches(q: &str, a: &crate::Application) -> bool {
-    q.eq_ignore_ascii_case(&a.name)
-        || a.identifier
+fn parse_process_id(query: &str) -> Option<crate::ProcessId> {
+    query.strip_prefix("pid:").unwrap_or(query).parse().ok()
+}
+
+fn app_identity(app: &crate::Application) -> String {
+    app.identifier
+        .as_deref()
+        .unwrap_or(&app.name)
+        .to_ascii_lowercase()
+}
+
+fn app_matches(query: &str, app: &crate::Application) -> bool {
+    if let Some(pid) = parse_process_id(query) {
+        return app.process_id == Some(pid);
+    }
+    query.eq_ignore_ascii_case(&app.name)
+        || app
+            .identifier
             .as_deref()
-            .is_some_and(|v| q.eq_ignore_ascii_case(v))
+            .is_some_and(|identifier| query.eq_ignore_ascii_case(identifier))
 }
 fn exact(v: Option<&str>) -> Option<TextMatcher> {
     meaningful(v).map(|value| TextMatcher::Exact {
@@ -621,6 +790,7 @@ mod tests {
             id: SnapshotId(id.into()),
             app: Application {
                 name: "App".into(),
+                process_id: None,
                 identifier: Some("com.example.App".into()),
                 windows: vec![Window {
                     title: Some("Main".into()),
@@ -746,5 +916,187 @@ mod tests {
             SemanticLookup::Unique { handle, .. } => assert_eq!(handle, live_a.handle(1)),
             _ => panic!("App B's newer record shadowed App A's semantic name"),
         }
+    }
+    fn with_pid(mut snapshot: Snapshot, pid: crate::ProcessId) -> Snapshot {
+        snapshot.app.process_id = Some(pid);
+        snapshot
+    }
+
+    fn target(app: &str, name: String) -> WireElementTarget {
+        WireElementTarget {
+            app: app.into(),
+            name,
+        }
+    }
+
+    #[test]
+    fn pid_aliases_select_the_exact_process() {
+        let mut registry = SemanticNameRegistry::default();
+        let one = with_pid(snapshot("one", vec![button("Save", Some("one"))]), 41);
+        let name = registry
+            .register(&one)
+            .into_iter()
+            .find(|n| n.label == "Save")
+            .unwrap()
+            .name;
+        let two = with_pid(snapshot("two", vec![button("Save", Some("two"))]), 42);
+        registry.register(&two);
+
+        for alias in ["41", "pid:41"] {
+            let SemanticSelection::Selected(context) =
+                registry.select(&target(alias, name.clone()))
+            else {
+                panic!("PID alias did not select evidence");
+            };
+            assert_eq!(context.process_id(), Some(41));
+        }
+    }
+
+    #[test]
+    fn live_same_identity_processes_coexist_and_name_uses_newest_process() {
+        let mut registry = SemanticNameRegistry::default();
+        let old = with_pid(snapshot("old", vec![button("Save", Some("old"))]), 41);
+        let name = registry
+            .register_with_liveness(&old, |_| true)
+            .into_iter()
+            .find(|n| n.label == "Save")
+            .unwrap()
+            .name;
+        let new = with_pid(snapshot("new", vec![button("Save", Some("new"))]), 42);
+        registry.register_with_liveness(&new, |pid| pid == 41);
+
+        let SemanticSelection::Selected(by_name) = registry.select(&target("App", name.clone()))
+        else {
+            panic!("name did not select newest process");
+        };
+        assert_eq!(by_name.process_id(), Some(42));
+        let SemanticSelection::Selected(by_pid) = registry.select(&target("41", name)) else {
+            panic!("old live process was discarded");
+        };
+        assert_eq!(by_pid.process_id(), Some(41));
+    }
+
+    #[test]
+    fn frequent_recaptures_do_not_evict_a_live_sibling_process() {
+        let mut registry = SemanticNameRegistry::new(3);
+        let sibling = with_pid(
+            snapshot("sibling", vec![button("Save", Some("sibling"))]),
+            41,
+        );
+        let name = registry
+            .register_with_liveness(&sibling, |_| true)
+            .into_iter()
+            .find(|n| n.label == "Save")
+            .unwrap()
+            .name;
+
+        for index in 0..10 {
+            let current = with_pid(
+                snapshot(
+                    &format!("current-{index}"),
+                    vec![button("Save", Some("current"))],
+                ),
+                42,
+            );
+            registry.register_with_liveness(&current, |_| true);
+        }
+
+        let SemanticSelection::Selected(context) = registry.select(&target("41", name)) else {
+            panic!("recapturing one live process evicted its live sibling");
+        };
+        assert_eq!(context.process_id(), Some(41));
+    }
+
+    #[test]
+    fn replacement_removes_only_proven_dead_same_identity_process() {
+        let mut registry = SemanticNameRegistry::default();
+        let old = with_pid(snapshot("old", vec![button("Save", Some("old"))]), 41);
+        let name = registry
+            .register(&old)
+            .into_iter()
+            .find(|n| n.label == "Save")
+            .unwrap()
+            .name;
+        let mut unrelated = with_pid(snapshot("other", vec![button("Save", Some("other"))]), 99);
+        unrelated.app.name = "Other".into();
+        unrelated.app.identifier = Some("com.example.other".into());
+        let other_name = registry
+            .register(&unrelated)
+            .into_iter()
+            .find(|n| n.label == "Save")
+            .unwrap()
+            .name;
+        let replacement = with_pid(
+            snapshot("replacement", vec![button("Save", Some("new"))]),
+            42,
+        );
+        registry.register_with_liveness(&replacement, |_| false);
+
+        assert!(matches!(
+            registry.select(&target("41", name)),
+            SemanticSelection::Missing { .. }
+        ));
+        assert!(matches!(
+            registry.select(&target("99", other_name)),
+            SemanticSelection::Selected(_)
+        ));
+    }
+
+    #[test]
+    fn selected_process_refuses_a_different_live_snapshot() {
+        let mut registry = SemanticNameRegistry::default();
+        let observed = with_pid(snapshot("old", vec![button("Save", Some("save"))]), 41);
+        let name = registry
+            .register(&observed)
+            .into_iter()
+            .find(|n| n.label == "Save")
+            .unwrap()
+            .name;
+        let SemanticSelection::Selected(context) = registry.select(&target("41", name)) else {
+            panic!("record was not selected");
+        };
+        let wrong = with_pid(snapshot("wrong", vec![button("Save", Some("save"))]), 42);
+        assert!(matches!(
+            context.resolve(&wrong),
+            SemanticLookup::Missing { .. }
+        ));
+
+        let unknown = snapshot("unknown", vec![button("Save", Some("save"))]);
+        assert!(matches!(
+            context.resolve(&unknown),
+            SemanticLookup::Missing { .. }
+        ));
+    }
+
+    #[test]
+    fn replay_evidence_is_pinned_and_legacy_duplicates_are_ambiguous() {
+        let mut registry = SemanticNameRegistry::default();
+        let replay_target = target("App", "save".into());
+        let evidence = locator(&button("Save", Some("save")), &[], None);
+        registry.register_replay_locator_for_process(
+            replay_target.clone(),
+            evidence.clone(),
+            Some(41),
+        );
+        let SemanticSelection::Selected(context) = registry.select(&replay_target) else {
+            panic!("single replay record was not selected");
+        };
+        assert_eq!(context.process_id(), Some(41));
+
+        registry.register_replay_locator_for_process(replay_target.clone(), evidence, Some(42));
+        assert!(matches!(
+            registry.select(&replay_target),
+            SemanticSelection::Ambiguous { .. }
+        ));
+        let pid_target = target("pid:41", "save".into());
+        registry.register_replay_locator_for_process(
+            pid_target.clone(),
+            locator(&button("Save", Some("save")), &[], None),
+            Some(41),
+        );
+        let SemanticSelection::Selected(context) = registry.select(&pid_target) else {
+            panic!("PID replay record was not selected");
+        };
+        assert_eq!(context.process_id(), Some(41));
     }
 }
