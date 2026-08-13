@@ -22,6 +22,22 @@ pub enum Capability {
     ObserveGlobalInput,
 }
 
+#[cfg(test)]
+mod tests {
+    use super::AppQuery;
+
+    #[test]
+    fn app_query_accepts_the_legacy_serialized_shape() {
+        let query: AppQuery =
+            serde_json::from_str(r#"{"name":"Editor","identifier":"com.example.Editor"}"#).unwrap();
+        assert_eq!(query.process_id, None);
+        assert_eq!(
+            serde_json::to_value(query).unwrap(),
+            serde_json::json!({"name":"Editor","identifier":"com.example.Editor"})
+        );
+    }
+}
+
 impl Capability {
     /// The complete vocabulary in canonical order, mirrored by `knownCapabilities` in
     /// `schema/health-v1.schema.json`. Health documents report one entry per capability, so this
@@ -91,6 +107,7 @@ pub enum BackendError {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct AppQuery {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub process_id: Option<crate::ProcessId>,
     pub name: Option<String>,
     pub identifier: Option<String>,

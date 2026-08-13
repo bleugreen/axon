@@ -112,9 +112,9 @@ pub fn replay_target_resolution_for_context(
     context: &SemanticResolutionContext,
     snapshot: &Snapshot,
 ) -> Option<TargetResolution> {
-    if context.process_id().is_some()
-        && snapshot.app.process_id.is_some()
-        && context.process_id() != snapshot.app.process_id
+    if context
+        .process_id()
+        .is_some_and(|expected| snapshot.app.process_id != Some(expected))
     {
         return None;
     }

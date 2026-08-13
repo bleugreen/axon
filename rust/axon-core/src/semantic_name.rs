@@ -387,8 +387,9 @@ impl SemanticResolutionContext {
     }
 
     pub fn resolve(&self, live: &Snapshot) -> SemanticLookup {
-        if let (Some(expected), Some(actual)) = (self.process_id, live.app.process_id)
-            && expected != actual
+        if self
+            .process_id
+            .is_some_and(|expected| live.app.process_id != Some(expected))
         {
             return SemanticLookup::Missing {
                 target: self.target.clone(),
@@ -1010,6 +1011,12 @@ mod tests {
         let wrong = with_pid(snapshot("wrong", vec![button("Save", Some("save"))]), 42);
         assert!(matches!(
             context.resolve(&wrong),
+            SemanticLookup::Missing { .. }
+        ));
+
+        let unknown = snapshot("unknown", vec![button("Save", Some("save"))]);
+        assert!(matches!(
+            context.resolve(&unknown),
             SemanticLookup::Missing { .. }
         ));
     }

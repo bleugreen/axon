@@ -1029,7 +1029,8 @@ impl Actor {
                 .find(|candidate| candidate.identity == identifier)
                 .map(|candidate| candidate.process_id);
             out.push(Application {
-                process_id: name,
+                process_id,
+                name,
                 identifier: Some(identifier),
                 windows: vec![],
             });
@@ -1136,7 +1137,8 @@ impl Actor {
         let mut remaining = MAX_NODES;
         let node = self.node(root, 0, &mut remaining, &mut refs).await?;
         let snapshot = Snapshot::new(Application {
-            process_id: name,
+            process_id,
+            name,
             identifier,
             windows: vec![Window {
                 title: node.name.clone(),
