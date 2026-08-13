@@ -9,6 +9,97 @@ struct LocatorFixture {
     cases: Vec<LocatorCase>,
 }
 
+fn tied_fact_resolution() -> Resolution {
+    let candidate = Candidate {
+        index: 0,
+        handle: SnapshotHandle("snapshot:test:0".into()),
+        role: "AXButton".into(),
+        title: Some("Same".into()),
+        frame: None,
+        score: 1_000,
+        reasons: vec!["role".into()],
+    };
+    Resolution {
+        status: ResolutionStatus::Ambiguous,
+        snapshot_id: SnapshotId("snapshot:test".into()),
+        confidence: Confidence::None,
+        // Keep a tempting candidate here so this test protects the status boundary rather than
+        // relying on the resolver's current choice to suppress `best` for a tie.
+        best: Some(candidate.clone()),
+        candidates: vec![
+            candidate.clone(),
+            Candidate {
+                index: 1,
+                handle: SnapshotHandle("snapshot:test:1".into()),
+                ..candidate
+            },
+        ],
+    }
+}
+
+#[test]
+fn semantic_facts_reject_ambiguous_resolution_before_consuming_best() {
+    for kind in ["exists", "focused", "enabled", "value", "selected"] {
+        let fact: ExpectedFact = serde_json::from_value(json!({
+            "id": format!("ambiguous.{kind}"),
+            "kind": kind,
+            "target": {"app":"Example", "locator":{"role":"AXButton"}}
+        }))
+        .unwrap();
+        let error = unique_expected_fact_candidate(&fact, &tied_fact_resolution()).unwrap_err();
+        assert!(error.contains("Ambiguous"), "{kind}: {error}");
+    }
+}
+
+struct AmbiguousFactDispatcher {
+    dispatched: usize,
+}
+
+impl ToolDispatcher for AmbiguousFactDispatcher {
+    fn dispatch(&mut self, _tool: &str, _params: &Map<String, Value>) -> DispatchOutcome {
+        self.dispatched += 1;
+        DispatchOutcome {
+            success: true,
+            dispatched_without_semantic_verification: false,
+            result: json!({"action":{"success":true}}),
+            error: None,
+            resolution: None,
+        }
+    }
+
+    fn verify(&mut self, fact: &ExpectedFact) -> Result<(), String> {
+        unique_expected_fact_candidate(fact, &tied_fact_resolution()).map(|_| ())
+    }
+}
+
+#[test]
+fn ambiguous_fact_is_not_established_for_a_later_requires_clause() {
+    let fact = json!({
+        "id":"first.exists.1", "kind":"exists",
+        "target":{"app":"Example", "locator":{"role":"AXButton"}}
+    });
+    let doc = semantic_doc(json!([
+        {"tool":"click", "target":{"app":"Example","name":"button","locator":{"role":"AXButton"}}, "expects":[fact]},
+        {"tool":"click", "target":{"app":"Example","name":"button","locator":{"role":"AXButton"}}, "requires":["first.exists.1"]}
+    ]));
+    let mut dispatcher = AmbiguousFactDispatcher { dispatched: 0 };
+    let result = AxnRunner::new(&mut dispatcher)
+        .run(
+            &doc,
+            &Map::new(),
+            RunOptions {
+                dry_run: Some(false),
+                continue_on_error: Some(true),
+            },
+        )
+        .unwrap();
+
+    assert!(!result.success);
+    assert_eq!(dispatcher.dispatched, 1, "requires must fail before the later dispatch");
+    assert!(result.trace[0].error.as_deref().unwrap().contains("Ambiguous"));
+    assert!(result.trace[1].error.as_deref().unwrap().contains("Ambiguous"));
+}
+
 #[test]
 fn changed_polls_fresh_captures_until_a_delayed_transition() {
     let doc = semantic_doc(json!([{
@@ -716,6 +807,69 @@ fn changed_captures_before_dispatch_and_dispatch_only_can_succeed_causally() {
     assert!(result.success);
     assert!(result.trace[0].success);
     assert_eq!(dispatcher.dispatched, 1);
+}
+
+struct TransportFailureDispatcher {
+    changed_captures: Vec<Value>,
+    changed_cursor: usize,
+}
+
+impl ToolDispatcher for TransportFailureDispatcher {
+    fn dispatch(&mut self, _tool: &str, _params: &Map<String, Value>) -> DispatchOutcome {
+        DispatchOutcome {
+            success: false,
+            dispatched_without_semantic_verification: false,
+            result: Value::Null,
+            error: Some("transport unavailable".into()),
+            resolution: None,
+        }
+    }
+
+    fn verify(&mut self, _fact: &ExpectedFact) -> Result<(), String> {
+        Ok(())
+    }
+
+    fn capture_changed_baseline(&mut self, _fact: &ExpectedFact) -> Result<Value, String> {
+        let capture = self.changed_captures[self.changed_cursor].clone();
+        self.changed_cursor += 1;
+        Ok(capture)
+    }
+
+    fn change_poll_interval(&self) -> std::time::Duration {
+        std::time::Duration::ZERO
+    }
+
+    fn change_timeout(&self) -> std::time::Duration {
+        std::time::Duration::from_millis(20)
+    }
+}
+
+#[test]
+fn transport_failure_cannot_be_rescued_by_a_verifying_postcondition() {
+    let doc = semantic_doc(json!([{
+        "id":"click","tool":"click","target":{"app":"Example","name":"button","locator":{"role":"AXButton"}},
+        "expects":[{"id":"click.changed.1","kind":"changed","target":{"app":"Example","locator":{"role":"AXWindow"}}}]
+    }]));
+    let mut dispatcher = TransportFailureDispatcher {
+        // The second capture would prove the expectation if causal rescue were attempted.
+        changed_captures: vec![json!({"value":"before"}), json!({"value":"after"})],
+        changed_cursor: 0,
+    };
+    let result = AxnRunner::new(&mut dispatcher)
+        .run(
+            &doc,
+            &Map::new(),
+            RunOptions {
+                dry_run: Some(false),
+                continue_on_error: Some(false),
+            },
+        )
+        .unwrap();
+
+    assert!(!result.success);
+    assert!(!result.trace[0].success);
+    assert_eq!(result.trace[0].error.as_deref(), Some("transport unavailable"));
+    assert_eq!(dispatcher.changed_cursor, 1);
 }
 
 #[test]

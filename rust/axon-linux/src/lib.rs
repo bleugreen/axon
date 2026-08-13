@@ -1046,12 +1046,7 @@ impl<B: PointerTargetVerifier + BackgroundPixelInput> ToolDispatcher for Router<
             })
             .map_err(|error| error.to_string())?;
         let resolution = axon_core::LocatorResolver::resolve(&locator, &snapshot);
-        let candidate = resolution.best.ok_or_else(|| {
-            format!(
-                "fact {} locator did not resolve uniquely: {:?}",
-                fact.id, resolution.status
-            )
-        })?;
+        let candidate = axon_core::unique_expected_fact_candidate(fact, &resolution)?;
         let handle = snapshot.handle(candidate.index);
         let node = snapshot
             .node(candidate.index)

@@ -24,6 +24,24 @@ pub struct AxnDocument {
     pub flags: Map<String, Value>,
 }
 
+pub fn unique_expected_fact_candidate<'a>(
+    fact: &ExpectedFact,
+    resolution: &'a crate::Resolution,
+) -> Result<&'a crate::Candidate, String> {
+    if resolution.status != crate::ResolutionStatus::Unique {
+        return Err(format!(
+            "fact {} locator did not resolve uniquely: {:?}",
+            fact.id, resolution.status
+        ));
+    }
+    resolution.best.as_ref().ok_or_else(|| {
+        format!(
+            "fact {} locator reported unique without a best candidate",
+            fact.id
+        )
+    })
+}
+
 pub fn changed_snapshot_baseline(snapshot: &crate::Snapshot) -> Result<Value, String> {
     serde_json::to_value(crate::SnapshotSummary::from(snapshot)).map_err(|error| error.to_string())
 }
