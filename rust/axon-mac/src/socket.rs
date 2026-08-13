@@ -505,4 +505,16 @@ mod tests {
         assert_eq!(response["id"], 7);
         assert_eq!(response["result"]["structuredContent"]["clicked"], true);
     }
+    #[test]
+    fn facade_accepts_protocol_metadata_without_forwarding_it() {
+        let response = mcp_response(
+            &json!({"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"look","arguments":{},"_meta":{"progressToken":"p1"}}}),
+            |body| {
+                let forwarded: Value = serde_json::from_str(body).unwrap();
+                assert!(forwarded["params"].get("_meta").is_none());
+                Ok(json!({"jsonrpc":"2.0","id":1,"result":{"ok":true}}).to_string())
+            },
+        );
+        assert_eq!(response["result"]["isError"], false);
+    }
 }

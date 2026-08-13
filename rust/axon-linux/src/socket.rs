@@ -495,4 +495,18 @@ mod tests {
             env!("CARGO_PKG_VERSION")
         );
     }
+    #[test]
+    fn facade_accepts_protocol_metadata_without_forwarding_it() {
+        let response = mcp_response_with_request(
+            &json!({"jsonrpc":"2.0","id":10,"method":"tools/call","params":{"name":"look","arguments":{},"_meta":{"progressToken":"p1"}}}),
+            |rpc| {
+                let forwarded: Value = serde_json::from_str(rpc).unwrap();
+                assert!(forwarded["params"].get("_meta").is_none());
+                Ok(json!({"jsonrpc":"2.0","id":1,"result":{"ok":true}}).to_string())
+            },
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(response["result"]["isError"], false);
+    }
 }
