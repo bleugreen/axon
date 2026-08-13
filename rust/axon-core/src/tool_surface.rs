@@ -289,12 +289,12 @@ fn check_schema_vocabulary(schema: &Value, path: &str) -> Result<(), String> {
     }
     let object_only = ["properties", "required", "additionalProperties"];
     if object_only.iter().any(|keyword| object.contains_key(*keyword))
-        && object.get("type").and_then(Value::as_str) != Some("object")
+        && object.get("type").and_then(Value::as_str).is_some_and(|value| value != "object")
     {
         return Err(format!("{path} uses object keywords without type object"));
     }
     if object.contains_key("items")
-        && object.get("type").and_then(Value::as_str) != Some("array")
+        && object.get("type").and_then(Value::as_str).is_some_and(|value| value != "array")
     {
         return Err(format!("{path}.items requires type array"));
     }
@@ -676,8 +676,6 @@ mod tests {
     fn rejects_incompatible_schema_keyword_combinations() {
         for schema in [
             json!({"type": "string", "properties": {}}),
-            json!({"required": []}),
-            json!({"additionalProperties": false}),
             json!({"type": "object", "items": {"type": "string"}}),
         ] {
             assert!(
