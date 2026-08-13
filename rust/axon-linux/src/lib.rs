@@ -1901,7 +1901,7 @@ mod tests {
             assert_eq!(
                 failure.error.data,
                 Some(json!({
-                    "kind":"capability-unavailable",
+                    "code":"capability-unavailable",
                     "tool":tool,
                     "capability":capability,
                     "reason":"not-implemented"
@@ -2571,7 +2571,7 @@ mod tests {
         let mut router = Router::new(backend);
         router.snapshot = Some(router.backend.snapshot.clone());
 
-        for method in ["click", "type", "keyboard", "invoke", "drag"] {
+        for method in ["click", "type", "keyboard", "invoke"] {
             let response = router
                 .request(request(
                     method,

@@ -1788,7 +1788,7 @@ mod tests {
             assert_eq!(
                 failure.error.data,
                 Some(json!({
-                    "kind":"capability-unavailable",
+                    "code":"capability-unavailable",
                     "tool":tool,
                     "capability":capability,
                     "reason":"not-implemented"
@@ -1841,7 +1841,7 @@ mod tests {
         assert_eq!(
             failure.error.data,
             Some(json!({
-                "kind":"capability-unavailable",
+                "code":"capability-unavailable",
                 "tool":"invoke",
                 "capability":"named-action",
                 "reason":"not-implemented"

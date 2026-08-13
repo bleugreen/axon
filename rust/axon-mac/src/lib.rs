@@ -1901,7 +1901,7 @@ mod tests {
         let error = capability_unavailable("drag", "PointerDrag", "not-implemented");
         assert_eq!(error.code, -32004);
         assert_eq!(
-            error.data.as_ref().unwrap()["kind"],
+            error.data.as_ref().unwrap()["code"],
             "capability-unavailable"
         );
         assert_eq!(error.data.as_ref().unwrap()["tool"], "drag");
