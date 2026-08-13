@@ -4,7 +4,10 @@
 //! One connection carries exactly one line-delimited JSON-RPC request and one line-delimited
 //! response. Nothing about a connection outlives it.
 
-use axon_core::{JsonRpcId, JsonRpcRequest, health::DaemonReport};
+use axon_core::{
+    JsonRpcId, JsonRpcRequest, ToolBackend, backend_tools, health::DaemonReport,
+    validate_tools_call,
+};
 use serde_json::{Value, json};
 use std::{
     io::{self, BufRead, BufReader, Write},
@@ -331,6 +334,13 @@ pub fn mcp() -> io::Result<()> {
 }
 
 fn mcp_response(value: &Value) -> io::Result<Option<Value>> {
+    mcp_response_with_request(value, request)
+}
+
+fn mcp_response_with_request(
+    value: &Value,
+    mut send: impl FnMut(&str) -> io::Result<String>,
+) -> io::Result<Option<Value>> {
     let Some(id) = value.get("id").cloned() else {
         return Ok(None);
     };
@@ -338,18 +348,21 @@ fn mcp_response(value: &Value) -> io::Result<Option<Value>> {
         Some("initialize") => {
             json!({"jsonrpc":"2.0","id":id,"result":{"protocolVersion":"2025-03-26","capabilities":{"tools":{}},"serverInfo":{"name":"axon-linux","version":env!("CARGO_PKG_VERSION")}}})
         }
-        Some("tools/list") => json!({"jsonrpc":"2.0","id":id,"result":{"tools": tools()}}),
+        Some("tools/list") => tools_response(id, backend_tools(ToolBackend::Linux)),
         Some("tools/call") => {
-            let p = &value["params"];
-            let name = p["name"].as_str().unwrap_or("");
-            let args = p.get("arguments").cloned().unwrap_or(json!({}));
+            let call = match validate_tools_call(ToolBackend::Linux, value.get("params").cloned()) {
+                Ok(call) => call,
+                Err(error) => {
+                    return Ok(Some(json!({"jsonrpc":"2.0","id":id,"error":error})));
+                }
+            };
             let rpc = serde_json::to_string(&JsonRpcRequest::new(
                 Some(JsonRpcId::Integer(1)),
-                name,
-                Some(args),
+                call.socket_method,
+                Some(call.arguments),
             ))
             .unwrap();
-            match request(&rpc) {
+            match send(&rpc) {
                 Ok(body) => {
                     let response: Value = serde_json::from_str(&body).map_err(io::Error::other)?;
                     if let Some(error) = response.get("error") {
@@ -371,13 +384,11 @@ fn mcp_response(value: &Value) -> io::Result<Option<Value>> {
     Ok(Some(response))
 }
 
-fn tools() -> Vec<Value> {
-    ["look", "find", "invoke", "type", "scroll", "run"]
-        .into_iter()
-        .map(|name| {
-            json!({"name":name,"description":format!("Axon Linux {name}"),"inputSchema":{"type":"object","additionalProperties":true}})
-        })
-        .collect()
+fn tools_response(id: Value, tools: Result<Vec<Value>, axon_core::JsonRpcError>) -> Value {
+    match tools {
+        Ok(tools) => json!({"jsonrpc":"2.0","id":id,"result":{"tools":tools}}),
+        Err(error) => json!({"jsonrpc":"2.0","id":id,"error":error}),
+    }
 }
 
 #[cfg(test)]
@@ -403,12 +414,71 @@ mod tests {
     }
     #[test]
     fn facade_exposes_supported_surface() {
-        let names = tools()
+        let names = backend_tools(ToolBackend::Linux)
+            .unwrap()
             .into_iter()
             .map(|v| v["name"].as_str().unwrap().to_owned())
             .collect::<Vec<_>>();
         assert!(names.contains(&"invoke".into()));
         assert!(!names.contains(&"drag".into()));
+    }
+    #[test]
+    fn tools_list_serializes_artifact_failures_as_internal_errors() {
+        let response = tools_response(
+            json!(4),
+            Err(axon_core::JsonRpcError {
+                code: -32603,
+                message: "invalid embedded artifact".into(),
+                data: None,
+            }),
+        );
+        assert_eq!(response["id"], 4);
+        assert_eq!(response["error"]["code"], -32603);
+    }
+    #[test]
+    fn facade_rejects_invalid_calls_before_contacting_daemon() {
+        let mut contacted = false;
+        let response = mcp_response_with_request(
+            &json!({"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"look","arguments":{"bogus":true}}}),
+            |_| {
+                contacted = true;
+                unreachable!("invalid calls must not reach the daemon")
+            },
+        )
+        .unwrap()
+        .unwrap();
+        assert!(!contacted);
+        assert_eq!(response["error"]["code"], -32602);
+        assert_eq!(response["error"]["data"]["path"], "params.arguments.bogus");
+    }
+    #[test]
+    fn facade_rejects_malformed_call_params_with_the_offending_key() {
+        let response = mcp_response_with_request(
+            &json!({"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":3}}),
+            |_| unreachable!("invalid calls must not reach the daemon"),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(response["error"]["code"], -32602);
+        assert_eq!(response["error"]["data"]["path"], "params.name");
+    }
+    #[test]
+    fn facade_forwards_normalized_arguments_without_flattening_target() {
+        let target = json!({"app":"Notes","name":"Body"});
+        let response = mcp_response_with_request(
+            &json!({"jsonrpc":"2.0","id":9,"method":"tools/call","params":{"name":"type","arguments":{"target":target,"value":"hello"}}}),
+            |rpc| {
+                let forwarded: Value = serde_json::from_str(rpc).unwrap();
+                assert_eq!(forwarded["method"], "type");
+                assert_eq!(forwarded["params"]["target"], target);
+                assert_eq!(forwarded["params"]["deliveryPolicy"], "backgroundOnly");
+                Ok(json!({"jsonrpc":"2.0","id":1,"result":{"ok":true}}).to_string())
+            },
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(response["result"]["structuredContent"], json!({"ok":true}));
+        assert_eq!(response["result"]["isError"], false);
     }
     #[test]
     fn mcp_notifications_have_no_response() {

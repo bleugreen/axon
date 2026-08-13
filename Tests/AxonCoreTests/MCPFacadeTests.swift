@@ -46,13 +46,15 @@ import Testing
     #expect(tool(named: "look", in: tools)?["inputSchema"]?["properties"]?["sensitive"] == nil)
     #expect(tool(named: "look", in: tools)?["inputSchema"]?["properties"]?["includeScreenshot"] == nil)
     #expect(tool(named: "run", in: tools)?["inputSchema"]?["properties"]?["argValues"] != nil)
-    #expect(tool(named: "click", in: tools)?["inputSchema"]?["properties"]?["target"]?["anyOf"]?[2] != nil)
-    #expect(tool(named: "click", in: tools)?["inputSchema"]?["properties"]?["target"]?["anyOf"]?[3] == nil)
+    let clickTarget = tool(named: "click", in: tools)?["inputSchema"]?["properties"]?["target"]
+    #expect(clickTarget?["anyOf"]?[2] != nil)
+    #expect(clickTarget?["anyOf"]?[3]?["required"] == .array([.string("location")]))
+    #expect(clickTarget?["anyOf"]?[3]?["properties"]?["location"]?["required"] == .array([.string("app"), .string("text")]))
     #expect(tool(named: "invoke", in: tools)?["inputSchema"]?["properties"]?["target"]?["anyOf"]?[2] == nil)
     #expect(tool(named: "type", in: tools)?["inputSchema"]?["properties"]?["target"]?["anyOf"]?[2] == nil)
     #expect(tool(named: "wait_for_value", in: tools)?["inputSchema"]?["required"] == .array([.string("target")]))
     #expect(tool(named: "wait_for_value", in: tools)?["inputSchema"]?["properties"]?["target"]?["anyOf"]?[0]?["type"] == .string("object"))
-    #expect(tool(named: "wait_for_value", in: tools)?["inputSchema"]?["properties"]?["target"]?["anyOf"]?[0]?["additionalProperties"] == .bool(true))
+    #expect(tool(named: "wait_for_value", in: tools)?["inputSchema"]?["properties"]?["target"]?["anyOf"]?[0]?["additionalProperties"] == .bool(false))
 }
 
 @Test func mcpLookChildrenReturnsOnlyRequestedChildListObservation() {

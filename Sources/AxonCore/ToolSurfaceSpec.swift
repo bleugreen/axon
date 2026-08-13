@@ -1,5 +1,34 @@
 import Foundation
 
+public enum ToolFacade: String, CaseIterable, Sendable {
+    case swift
+    case mac
+    case windows
+    case linux
+}
+
+public struct ToolFacadeSet: OptionSet, Equatable, Sendable {
+    public let rawValue: Int
+    public init(rawValue: Int) { self.rawValue = rawValue }
+    public static let swift = ToolFacadeSet(rawValue: 1 << 0)
+    public static let mac = ToolFacadeSet(rawValue: 1 << 1)
+    public static let windows = ToolFacadeSet(rawValue: 1 << 2)
+    public static let linux = ToolFacadeSet(rawValue: 1 << 3)
+    public static let swiftOnly: ToolFacadeSet = [.swift]
+    public static let all: ToolFacadeSet = [.swift, .mac, .windows, .linux]
+
+    public func contains(_ facade: ToolFacade) -> Bool {
+        let mask: ToolFacadeSet
+        switch facade {
+        case .swift: mask = .swift
+        case .mac: mask = .mac
+        case .windows: mask = .windows
+        case .linux: mask = .linux
+        }
+        return rawValue & mask.rawValue != 0
+    }
+}
+
 public enum ToolTargetKind: String, CaseIterable, Sendable {
     case semanticName
     case point
@@ -91,6 +120,7 @@ public struct ToolSpec: Equatable, Sendable {
     public let params: [ToolParameterSpec]
     public let cliUsage: String?
     public let exactlyOneOf: [String]
+    public let availability: ToolFacadeSet
 
     public init(
         name: String,
@@ -98,7 +128,8 @@ public struct ToolSpec: Equatable, Sendable {
         description: String,
         params: [ToolParameterSpec] = [],
         cliUsage: String? = nil,
-        exactlyOneOf: [String] = []
+        exactlyOneOf: [String] = [],
+        availability: ToolFacadeSet
     ) {
         self.name = name
         self.socketMethod = socketMethod ?? name
@@ -106,6 +137,7 @@ public struct ToolSpec: Equatable, Sendable {
         self.params = params
         self.cliUsage = cliUsage
         self.exactlyOneOf = exactlyOneOf
+        self.availability = availability
     }
 
     public var requiredParamNames: [String] {
@@ -135,18 +167,18 @@ public enum ToolSurfaceSpec {
                 ToolParameterSpec("frames", .boolean, default: .bool(false), description: "Include frames in observation output. Defaults to false.")
             ],
             cliUsage: "axon look [app | target-json] [--since snapshot-id] [--no-screenshot] [--screen-text] [--frames] [--json] [--details] [--debug] [--no-tree] [--offset n] [--limit n] [--depth n]"
-        ),
+        , availability: .all),
         ToolSpec(name: "navigate", description: "Navigate the active tab of a supported browser through its application scripting dictionary and verify the URL by read-back.", params: [
             ToolParameterSpec("app", .string, required: true, description: "Safari or Google Chrome, by name or exact bundle identifier."),
             ToolParameterSpec("url", .string, required: true, description: "Absolute http or https URL, limited to 8192 bytes.")
-        ]),
+        ], availability: .swiftOnly),
         ToolSpec(name: "windows", description: "Enumerate browser windows authoritatively through the supported app's scripting dictionary and cross-check them against AX when available.", params: [
             ToolParameterSpec("app", .string, required: true, description: "Safari or Google Chrome, by name or exact bundle identifier.")
-        ]),
+        ], availability: .swiftOnly),
         ToolSpec(name: "tabs", description: "Enumerate browser tabs authoritatively through the supported app's scripting dictionary.", params: [
             ToolParameterSpec("app", .string, required: true, description: "Safari or Google Chrome, by name or exact bundle identifier."),
             ToolParameterSpec("window", .integer, description: "Optional one-based window index from windows().")
-        ]),
+        ], availability: .swiftOnly),
         ToolSpec(
             name: "find",
             description: "Resolve an AX locator against a fresh app snapshot.",
@@ -155,7 +187,7 @@ public enum ToolSurfaceSpec {
                 ToolParameterSpec("locator", .locator, required: true, description: "AX locator with role, subrole, label, title, value, description, identifier, actions, and ancestors.")
             ],
             cliUsage: "axon find <app> '<locator-json>'"
-        ),
+        , availability: .all),
         ToolSpec(
             name: "wait_for_value",
             description: "Poll readable accessibility state from an app-scoped semantic name until a contains, equals, or regex predicate holds, or a bounded timeout reports the last observed state.",
@@ -168,7 +200,7 @@ public enum ToolSurfaceSpec {
                 ToolParameterSpec("intervalMs", .integer, default: .int(100), description: "Delay between polls. Defaults to 100 ms and is capped by the remaining timeout.")
             ],
             cliUsage: "axon wait_for_value '<target-json>' (--contains text | --equals text | --matches regex) [--timeout-ms n] [--interval-ms n]"
-        ),
+        , availability: [.swift, .mac]),
         ToolSpec(
             name: "wait_for_stability",
             description: "Poll full app observations until the accessibility surface remains unchanged for a stability window or changes from its initial state; timeout returns the final observation.",
@@ -180,12 +212,12 @@ public enum ToolSurfaceSpec {
                 ToolParameterSpec("intervalMs", .integer, default: .int(100), description: "Delay between observations. At least 10 ms and capped by the remaining timeout.")
             ],
             cliUsage: "axon wait_for_stability <app> [--condition stable|changed] [--stable-ms n] [--timeout-ms n] [--interval-ms n]"
-        ),
+        , availability: [.swift, .mac]),
         ToolSpec(
             name: "permit",
             description: "Ask macOS to show the Accessibility permission prompt for the running Axon daemon identity.",
             cliUsage: "axon permit"
-        ),
+        , availability: .swiftOnly),
         ToolSpec(
             name: "run",
             description: "Run a sequence of Axon actions from inline actions, a .axn path, or a path loaded first with inline actions appended.",
@@ -198,7 +230,7 @@ public enum ToolSurfaceSpec {
                 ToolParameterSpec("healedPath", .string, description: "Write a revised copy of the .axn to this path when replay resolves through drifted locator evidence. The source file is never modified.")
             ],
             cliUsage: "axon run <path.axn> [--arg name=value] [--dry-run] [--healed-path file] [--continue-on-error]"
-        ),
+        , availability: .all),
         ToolSpec(
             name: "save",
             description: "Save recent recorded Axon calls as an editable .axn action file. Read calls are omitted unless includeReads is true.",
@@ -210,7 +242,7 @@ public enum ToolSurfaceSpec {
                 ToolParameterSpec("includeReads", .boolean, default: .bool(false), description: "Include read/context tools such as look and find. Defaults to false.")
             ],
             cliUsage: "axon save [--session id] [--from call] [--to call] [--path file.axn] [--include-reads]"
-        ),
+        , availability: .swiftOnly),
         ToolSpec(
             name: "click",
             description: "Click an app-scoped semantic element name, explicit point, or text location.",
@@ -219,7 +251,7 @@ public enum ToolSurfaceSpec {
                 deliveryPolicyParameter
             ],
             cliUsage: "axon click [--foreground] <target-json>"
-        ),
+        , availability: .all),
         ToolSpec(
             name: "type",
             description: "Fill a writable field by setting AXValue directly on a target, avoiding focus and keystroke timing races.",
@@ -229,7 +261,7 @@ public enum ToolSurfaceSpec {
                 deliveryPolicyParameter
             ],
             cliUsage: "axon type [--foreground] <target-json> <value>"
-        ),
+        , availability: .all),
         ToolSpec(
             name: "keyboard",
             description: "Post keyboard input for shortcuts, special keys, or raw text when field-level type is not the right intent.",
@@ -241,7 +273,7 @@ public enum ToolSurfaceSpec {
             ],
             cliUsage: "axon keyboard [--app app] [--foreground] (--text text | --key keystroke)",
             exactlyOneOf: ["text", "key"]
-        ),
+        , availability: .all),
         ToolSpec(
             name: "scroll",
             description: "Scroll an accessibility surface by resolving an offscreen descendant and requesting AXScrollToVisible.",
@@ -253,7 +285,7 @@ public enum ToolSurfaceSpec {
                 deliveryPolicyParameter
             ],
             cliUsage: "axon scroll [--app app] [--target target-json] [--dx n] [--dy n]"
-        ),
+        , availability: .all),
         ToolSpec(
             name: "drag",
             description: "Drag from one semantic name, explicit point, or text location to another. Pointer dispatch and verified semantic outcome are reported separately.",
@@ -266,7 +298,7 @@ public enum ToolSurfaceSpec {
                 deliveryPolicyParameter
             ],
             cliUsage: "axon drag [--app app] [--duration-ms n] [--foreground] <from-json> <to-json>"
-        ),
+        , availability: .swiftOnly),
         ToolSpec(
             name: "invoke",
             description: "Invoke a named accessibility action on an app-scoped semantic element name.",
@@ -276,7 +308,7 @@ public enum ToolSurfaceSpec {
                 deliveryPolicyParameter
             ],
             cliUsage: "axon invoke [--foreground] <target-json> <action-name>"
-        )
+        , availability: .all)
     ]
 
     /// The one public control over what an action may do to the session, shared verbatim by every
@@ -320,97 +352,177 @@ public enum ToolSurfaceSpec {
 }
 
 public enum ToolSurfaceSchema {
+    public static let artifactFormatVersion = 1
+
     public static func mcpToolJSONValues() -> [JSONValue] {
-        ToolSurfaceSpec.tools.map { tool in
-            .object([
-                "name": .string(tool.name),
-                "title": .string(tool.name),
-                "description": .string(tool.description),
-                "inputSchema": inputSchema(for: tool)
-            ])
-        }
+        ToolSurfaceSpec.tools.map(mcpToolJSONValue)
+    }
+
+    public static func normalizedArtifactJSONValue() -> JSONValue {
+        .object([
+            "formatVersion": .int(artifactFormatVersion),
+            "productVersion": .string(AxonVersion.current),
+            "tools": .array(ToolSurfaceSpec.tools.map { tool in
+                guard case var .object(entry) = mcpToolJSONValue(tool) else {
+                    preconditionFailure("MCP tool entries must be objects")
+                }
+                entry["socketMethod"] = .string(tool.socketMethod)
+                entry["availability"] = .object(Dictionary(
+                    uniqueKeysWithValues: ToolFacade.allCases.map {
+                        ($0.rawValue, .bool(tool.availability.contains($0)))
+                    }
+                ))
+                return .object(entry)
+            })
+        ])
+    }
+
+    public static func normalizedArtifactData() throws -> Data {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
+        var data = try encoder.encode(normalizedArtifactJSONValue())
+        data.append(0x0A)
+        return data
     }
 
     public static func inputSchema(for tool: ToolSpec) -> JSONValue {
         var properties: [String: JSONValue] = [:]
-        for param in tool.params {
-            properties[param.name] = schema(for: param)
-        }
+        for param in tool.params { properties[param.name] = schema(for: param) }
         var object: [String: JSONValue] = [
             "type": .string("object"),
             "properties": .object(properties),
             "additionalProperties": .bool(false)
         ]
         let required = tool.requiredParamNames
-        if !required.isEmpty {
-            object["required"] = .array(required.map(JSONValue.string))
-        }
+        if !required.isEmpty { object["required"] = .array(required.map(JSONValue.string)) }
         if !tool.exactlyOneOf.isEmpty {
-            object["oneOf"] = .array(tool.exactlyOneOf.map { name in
-                .object(["required": .array([.string(name)])])
+            object["oneOf"] = .array(tool.exactlyOneOf.map {
+                .object(["required": .array([.string($0)])])
             })
         }
         return .object(object)
     }
 
-    private static func schema(for param: ToolParameterSpec) -> JSONValue {
-        switch param.type {
-        case .string:
-            return scalarSchema(type: "string", description: param.description)
-        case .boolean:
-            return scalarSchema(type: "boolean", description: param.description)
-        case .integer:
-            return scalarSchema(type: "integer", description: param.description)
-        case .number:
-            return scalarSchema(type: "number", description: param.description)
-        case .object:
-            return .object([
-                "type": .string("object"),
-                "description": .string(param.description),
-                "additionalProperties": .bool(false)
-            ])
-        case .freeformObject:
-            return .object([
-                "type": .string("object"),
-                "description": .string(param.description),
-                "additionalProperties": .bool(true)
-            ])
-        case .array:
-            return .object([
-                "type": .string("array"),
-                "description": .string(param.description),
-                "items": .object([
-                    "type": .string("object"),
-                    "additionalProperties": .bool(true)
-                ])
-            ])
-        case .locator:
-            return .object([
-                "type": .string("object"),
-                "description": .string(param.description),
-                "additionalProperties": .bool(true)
-            ])
-        case let .target(kinds):
-            return .object([
-                "anyOf": .array(kinds.orderedKinds.map { kind in
-                    switch kind {
-                    case .semanticName, .point, .textLocation:
-                        return .object([
-                            "type": .string("object"),
-                            "description": .string(kind.schemaDescription),
-                            "additionalProperties": .bool(true)
-                        ])
-                    }
-                })
-            ])
-        }
+    private static func mcpToolJSONValue(_ tool: ToolSpec) -> JSONValue {
+        .object(["name": .string(tool.name), "title": .string(tool.name),
+                 "description": .string(tool.description), "inputSchema": inputSchema(for: tool)])
     }
 
+    private static func schema(for param: ToolParameterSpec) -> JSONValue {
+        let base: JSONValue
+        switch param.type {
+        case .string: base = scalarSchema(type: "string", description: param.description)
+        case .boolean: base = scalarSchema(type: "boolean", description: param.description)
+        case .integer: base = scalarSchema(type: "integer", description: param.description)
+        case .number: base = scalarSchema(type: "number", description: param.description)
+        case .object: base = objectSchema(description: param.description)
+        case .freeformObject:
+            base = .object(["type": .string("object"), "description": .string(param.description),
+                            "additionalProperties": .bool(true)])
+        case .array:
+            base = .object(["type": .string("array"), "description": .string(param.description),
+                            "items": .object(["type": .string("object"), "additionalProperties": .bool(true)])])
+        case .locator:
+            base = .object(["type": .string("object"), "description": .string(param.description),
+                            "additionalProperties": .bool(true)])
+        case let .target(kinds): base = targetSchema(kinds: kinds, description: param.description)
+        }
+        guard let defaultValue = param.defaultValue, case var .object(object) = base else { return base }
+        object["default"] = defaultValue
+        return .object(object)
+    }
+
+    private static func targetSchema(kinds: ToolTargetKindSet, description: String) -> JSONValue {
+        var branches: [JSONValue] = []
+        for kind in kinds.orderedKinds {
+            switch kind {
+            case .semanticName: branches.append(semanticTargetSchema)
+            case .point:
+                branches.append(wrappedPointTargetSchema)
+                branches.append(pointObjectSchema)
+            case .textLocation: branches.append(textLocationTargetSchema)
+            }
+        }
+        return .object(["description": .string(description), "anyOf": .array(branches)])
+    }
+
+    private static let semanticTargetSchema: JSONValue = .object([
+        "type": .string("object"), "description": .string(ToolTargetKind.semanticName.schemaDescription),
+        "properties": .object([
+            "app": scalarSchema(type: "string", description: "Bundle id, pid, app name, or partial app name."),
+            "name": scalarSchema(type: "string", description: "Semantic element name returned by look.")
+        ]),
+        "required": .array([.string("app"), .string("name")]), "additionalProperties": .bool(false)
+    ])
+
+    private static let pointObjectSchema: JSONValue = .object([
+        "type": .string("object"), "description": .string(ToolTargetKind.point.schemaDescription),
+        "properties": .object([
+            "x": scalarSchema(type: "number", description: "Horizontal coordinate."),
+            "y": scalarSchema(type: "number", description: "Vertical coordinate."),
+            "coordinateSpace": enumStringSchema(values: ["screen", "window", "screenshot"], description: "Coordinate space. Defaults to screen."),
+            "space": enumStringSchema(values: ["screen", "window", "screenshot"], description: "Legacy alias for coordinateSpace."),
+            "app": scalarSchema(type: "string", description: "App that owns a window or screenshot coordinate.")
+        ]),
+        "required": .array([.string("x"), .string("y")]), "additionalProperties": .bool(false)
+    ])
+
+    private static let wrappedPointTargetSchema: JSONValue = .object([
+        "type": .string("object"), "description": .string(ToolTargetKind.point.schemaDescription),
+        "properties": .object(["point": pointObjectSchema]), "required": .array([.string("point")]),
+        "additionalProperties": .bool(false)
+    ])
+
+    private static let textLocationTargetSchema: JSONValue = .object([
+        "type": .string("object"), "description": .string(ToolTargetKind.textLocation.schemaDescription),
+        "properties": .object(["location": .object([
+            "type": .string("object"),
+            "properties": .object([
+                "app": scalarSchema(type: "string", description: "App containing the visible text."),
+                "text": .object([
+                    "description": .string("Text to match exactly, or an exact/contains matcher object."),
+                    "anyOf": .array([
+                        .object(["type": .string("string")]),
+                        .object([
+                            "type": .string("object"),
+                            "properties": .object([
+                                "exact": scalarSchema(type: "string", description: "Text to match exactly."),
+                                "contains": scalarSchema(type: "string", description: "Text fragment to match."),
+                                "caseSensitive": .object(["type": .string("boolean"), "default": .bool(false),
+                                                          "description": .string("Whether matching preserves case.")])
+                            ]),
+                            "oneOf": .array([
+                                .object(["required": .array([.string("exact")])]),
+                                .object(["required": .array([.string("contains")])])
+                            ]),
+                            "additionalProperties": .bool(false)
+                        ])
+                    ])
+                ]),
+                "source": enumStringSchema(values: ["auto", "ax", "screenshot"],
+                                           description: "Text source. Defaults to auto.", defaultValue: "auto")
+            ]),
+            "required": .array([.string("app"), .string("text")]), "additionalProperties": .bool(false)
+        ])]),
+        "required": .array([.string("location")]), "additionalProperties": .bool(false)
+    ])
+
     private static func scalarSchema(type: String, description: String) -> JSONValue {
-        .object([
-            "type": .string(type),
+        .object(["type": .string(type), "description": .string(description)])
+    }
+
+    private static func enumStringSchema(values: [String], description: String, defaultValue: String? = nil) -> JSONValue {
+        var object: [String: JSONValue] = [
+            "type": .string("string"), "enum": .array(values.map(JSONValue.string)),
             "description": .string(description)
-        ])
+        ]
+        if let defaultValue { object["default"] = .string(defaultValue) }
+        return .object(object)
+    }
+
+    private static func objectSchema(description: String) -> JSONValue {
+        .object(["type": .string("object"), "description": .string(description),
+                 "additionalProperties": .bool(false)])
     }
 }
 

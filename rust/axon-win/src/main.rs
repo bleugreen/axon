@@ -451,7 +451,7 @@ mod status {
 
 #[cfg(windows)]
 mod pipe {
-    use axon_core::{JsonRpcId, JsonRpcRequest};
+    use axon_core::{JsonRpcId, JsonRpcRequest, ToolBackend, backend_tools, validate_tools_call};
     use axon_win::{Router, WindowsBackend, parse_request};
     use serde_json::{Value, json};
     use std::{
@@ -943,7 +943,7 @@ mod pipe {
                 "initialize" => {
                     json!({"jsonrpc":"2.0","id":id,"result":{"protocolVersion":"2025-06-18","capabilities":{"tools":{}},"serverInfo":{"name":"axon-win","version":env!("CARGO_PKG_VERSION")}}})
                 }
-                "tools/list" => json!({"jsonrpc":"2.0","id":id,"result":{"tools":tool_list()}}),
+                "tools/list" => tool_list_response(id, backend_tools(ToolBackend::Windows)),
                 "tools/call" => forward(&input)?,
                 _ => {
                     if input.get("id").is_none() {
@@ -959,22 +959,19 @@ mod pipe {
         Ok(())
     }
     fn forward(input: &Value) -> io::Result<Value> {
-        let params = input
-            .get("params")
-            .and_then(Value::as_object)
-            .ok_or_else(|| {
-                io::Error::new(io::ErrorKind::InvalidInput, "tools/call requires params")
-            })?;
-        let name = params.get("name").and_then(Value::as_str).ok_or_else(|| {
-            io::Error::new(io::ErrorKind::InvalidInput, "tools/call requires name")
-        })?;
-        let arguments = params
-            .get("arguments")
-            .cloned()
-            .unwrap_or_else(|| json!({}));
-        let rpc = JsonRpcRequest::new(Some(JsonRpcId::Integer(1)), name, Some(arguments));
-        let response = send_rpc(&rpc)?;
         let id = input.get("id").cloned().unwrap_or(Value::Null);
+        let call = match validate_tools_call(ToolBackend::Windows, input.get("params").cloned()) {
+            Ok(call) => call,
+            Err(error) => {
+                return Ok(json!({"jsonrpc":"2.0","id":id,"error":error}));
+            }
+        };
+        let rpc = JsonRpcRequest::new(
+            Some(JsonRpcId::Integer(1)),
+            call.socket_method,
+            Some(call.arguments),
+        );
+        let response = send_rpc(&rpc)?;
         if let Some(error) = response.get("error") {
             Ok(
                 json!({"jsonrpc":"2.0","id":id,"result":{"content":[{"type":"text","text":error.get("message").and_then(Value::as_str).unwrap_or("Axon error")}],"structuredContent":error,"isError":true}}),
@@ -987,13 +984,85 @@ mod pipe {
     fn success_response(id: Value, result: Value) -> Value {
         json!({"jsonrpc":"2.0","id":id,"result":axon_core::mcp_tool_result(result, false)})
     }
-    fn tool_list() -> Value {
-        Value::Array(["look","find","click","type","keyboard","invoke","scroll","run"].into_iter().map(|name|json!({"name":name,"description":format!("Axon Windows {name} tool"),"inputSchema":{"type":"object","additionalProperties":true}})).collect())
+    fn tool_list_response(id: Value, tools: Result<Vec<Value>, axon_core::JsonRpcError>) -> Value {
+        match tools {
+            Ok(tools) => json!({"jsonrpc":"2.0","id":id,"result":{"tools":tools}}),
+            Err(error) => json!({"jsonrpc":"2.0","id":id,"error":error}),
+        }
     }
 
     #[cfg(test)]
     mod facade_tests {
         use super::*;
+
+        #[test]
+        fn facade_lists_the_shared_windows_tools() {
+            let response = tool_list_response(json!(1), backend_tools(ToolBackend::Windows));
+            let tools = &response["result"]["tools"];
+            let names = tools
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|tool| tool["name"].as_str().unwrap())
+                .collect::<Vec<_>>();
+            assert_eq!(
+                names,
+                [
+                    "look", "find", "run", "click", "type", "keyboard", "scroll", "invoke"
+                ]
+            );
+            assert_eq!(tools[0]["inputSchema"]["additionalProperties"], false);
+        }
+
+        #[test]
+        fn tools_list_serializes_artifact_failures_as_internal_errors() {
+            let response = tool_list_response(
+                json!(4),
+                Err(axon_core::JsonRpcError {
+                    code: -32603,
+                    message: "invalid embedded artifact".into(),
+                    data: None,
+                }),
+            );
+            assert_eq!(response["id"], 4);
+            assert_eq!(response["error"]["code"], -32603);
+        }
+
+        #[test]
+        fn facade_rejects_precisely_malformed_calls() {
+            for (params, path) in [
+                (
+                    json!({"name": "type", "arguments": {
+                        "target": {"app": 42, "name": "Field"}, "value": "x"
+                    }}),
+                    "params.arguments.target.app",
+                ),
+                (
+                    json!({"name": "click", "arguments": {
+                        "target": {"app": "Notes", "name": "Save", "bogus": true}
+                    }}),
+                    "params.arguments.target.bogus",
+                ),
+                (
+                    json!({"name": "click", "arguments": {
+                        "app": "Notes", "name": "Save"
+                    }}),
+                    "params.arguments.target",
+                ),
+                (
+                    json!({"name": "not-a-tool", "arguments": {}}),
+                    "params.name",
+                ),
+                (json!({"name": 7, "arguments": {}}), "params.name"),
+                (json!({"name": "look", "arguments": []}), "params.arguments"),
+            ] {
+                let call = json!({"jsonrpc": "2.0", "id": 7, "params": params});
+                let response = forward(&call).unwrap();
+                assert_eq!(response["id"], 7);
+                assert_eq!(response["error"]["code"], -32602);
+                assert_eq!(response["error"]["data"]["path"], path);
+            }
+        }
 
         #[test]
         fn facade_matches_shared_observation_envelope() {

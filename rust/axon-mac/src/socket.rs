@@ -2,7 +2,8 @@
 use crate::{MacBackend, Router, parse_request};
 use axon_core::{
     CapabilityState, DaemonProvenance, DaemonReport, HealthPlatform, JsonRpcId, JsonRpcRequest,
-    JsonRpcResponse, PermissionState, PlatformBackend, SessionHealth, health::reason,
+    JsonRpcResponse, PermissionState, PlatformBackend, SessionHealth, ToolBackend, backend_tools,
+    health::reason, validate_tools_call,
 };
 use serde_json::{Value, json};
 use std::{
@@ -314,62 +315,67 @@ pub fn mcp() -> io::Result<()> {
     let mut stdout = io::stdout();
     for line in stdin.lock().lines() {
         let value: Value = serde_json::from_str(&line?).map_err(io::Error::other)?;
-        let Some(id) = value.get("id").cloned() else {
+        if value.get("id").is_none() {
             continue;
-        };
-        let response = match value.get("method").and_then(Value::as_str) {
-            Some("initialize") => {
-                json!({"jsonrpc":"2.0","id":id,"result":{"protocolVersion":"2025-03-26","capabilities":{"tools":{}},"serverInfo":{"name":"axon-mac","version":env!("CARGO_PKG_VERSION")}}})
-            }
-            Some("tools/list") => json!({"jsonrpc":"2.0","id":id,"result":{"tools":tools()}}),
-            Some("tools/call") => {
-                let name = value
-                    .pointer("/params/name")
-                    .and_then(Value::as_str)
-                    .unwrap_or("");
-                let args = value
-                    .pointer("/params/arguments")
-                    .cloned()
-                    .unwrap_or_else(|| json!({}));
-                let rpc = serde_json::to_string(&JsonRpcRequest::new(
-                    Some(JsonRpcId::Integer(1)),
-                    name,
-                    Some(args),
-                ))
-                .unwrap();
-                match request(&rpc) {
-                    Ok(body) => {
-                        let response: Value =
-                            serde_json::from_str(&body).map_err(io::Error::other)?;
-                        if let Some(error) = response.get("error") {
-                            json!({"jsonrpc":"2.0","id":id,"result":{"content":[{"type":"text","text":error["message"].as_str().unwrap_or("Axon error")}],"structuredContent":error,"isError":true}})
-                        } else {
-                            let result = response.get("result").cloned().unwrap_or(Value::Null);
-                            mcp_success_response(id, result)
-                        }
-                    }
-                    Err(error) => {
-                        json!({"jsonrpc":"2.0","id":id,"error":{"code":-32000,"message":error.to_string()}})
-                    }
-                }
-            }
-            _ => {
-                json!({"jsonrpc":"2.0","id":id,"error":{"code":-32601,"message":"method not found"}})
-            }
-        };
+        }
+        let response = mcp_response(&value, request);
         writeln!(stdout, "{}", serde_json::to_string(&response).unwrap())?;
         stdout.flush()?;
     }
     Ok(())
 }
+fn mcp_response<F>(value: &Value, mut forward: F) -> Value
+where
+    F: FnMut(&str) -> io::Result<String>,
+{
+    let id = value.get("id").cloned().unwrap_or(Value::Null);
+    match value.get("method").and_then(Value::as_str) {
+        Some("initialize") => {
+            json!({"jsonrpc":"2.0","id":id,"result":{"protocolVersion":"2025-03-26","capabilities":{"tools":{}},"serverInfo":{"name":"axon-mac","version":env!("CARGO_PKG_VERSION")}}})
+        }
+        Some("tools/list") => match backend_tools(ToolBackend::Mac) {
+            Ok(tools) => json!({"jsonrpc":"2.0","id":id,"result":{"tools":tools}}),
+            Err(error) => json!({"jsonrpc":"2.0","id":id,"error":error}),
+        },
+        Some("tools/call") => {
+            let call = match validate_tools_call(ToolBackend::Mac, value.get("params").cloned()) {
+                Ok(call) => call,
+                Err(error) => return json!({"jsonrpc":"2.0","id":id,"error":error}),
+            };
+            let rpc = serde_json::to_string(&JsonRpcRequest::new(
+                Some(JsonRpcId::Integer(1)),
+                call.socket_method,
+                Some(call.arguments),
+            ))
+            .unwrap();
+            match forward(&rpc) {
+                Ok(body) => {
+                    let response: Value = match serde_json::from_str(&body) {
+                        Ok(response) => response,
+                        Err(error) => {
+                            return json!({"jsonrpc":"2.0","id":id,"error":{"code":-32000,"message":error.to_string()}});
+                        }
+                    };
+                    if let Some(error) = response.get("error") {
+                        json!({"jsonrpc":"2.0","id":id,"result":{"content":[{"type":"text","text":error["message"].as_str().unwrap_or("Axon error")}],"structuredContent":error,"isError":true}})
+                    } else {
+                        let result = response.get("result").cloned().unwrap_or(Value::Null);
+                        mcp_success_response(id, result)
+                    }
+                }
+                Err(error) => {
+                    json!({"jsonrpc":"2.0","id":id,"error":{"code":-32000,"message":error.to_string()}})
+                }
+            }
+        }
+        _ => {
+            json!({"jsonrpc":"2.0","id":id,"error":{"code":-32601,"message":"method not found"}})
+        }
+    }
+}
 fn mcp_success_response(id: Value, result: Value) -> Value {
     json!({"jsonrpc":"2.0","id":id,"result":axon_core::mcp_tool_result(result, false)})
 }
-fn tools() -> Vec<Value> {
-    ["look","find","wait_for_value","wait_for_stability","click","type","keyboard","invoke","scroll","run"].into_iter()
-        .map(|name| json!({"name":name,"description":format!("Axon macOS {name}"),"inputSchema":{"type":"object","additionalProperties":true}})).collect()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -443,9 +449,14 @@ mod tests {
         assert!(writeln!(server, "response").is_err());
     }
     #[test]
-    fn facade_is_exact_v1_surface() {
-        let names = tools()
-            .into_iter()
+    fn facade_lists_shared_mac_surface() {
+        let response = mcp_response(
+            &json!({"jsonrpc":"2.0","id":1,"method":"tools/list"}),
+            |_| panic!("tools/list must not contact the daemon"),
+        );
+        let tools = response["result"]["tools"].as_array().unwrap();
+        let names = tools
+            .iter()
             .map(|v| v["name"].as_str().unwrap().to_owned())
             .collect::<Vec<_>>();
         assert_eq!(
@@ -455,13 +466,43 @@ mod tests {
                 "find",
                 "wait_for_value",
                 "wait_for_stability",
+                "run",
                 "click",
                 "type",
                 "keyboard",
-                "invoke",
                 "scroll",
-                "run"
+                "invoke"
             ]
         );
+        assert_eq!(tools[0]["inputSchema"]["additionalProperties"], false);
+    }
+    #[test]
+    fn malformed_calls_are_protocol_errors_without_daemon_forwarding() {
+        for params in [
+            json!({"name": 3}),
+            json!({"name":"look","arguments":{"depth":"2"}}),
+            json!({"name":"click","arguments":{"target":{"app":"Notes"}}}),
+        ] {
+            let response = mcp_response(
+                &json!({"jsonrpc":"2.0","id":1,"method":"tools/call","params":params}),
+                |_| panic!("invalid calls must not contact the daemon"),
+            );
+            assert_eq!(response["error"]["code"], -32602);
+        }
+    }
+    #[test]
+    fn nested_target_is_forwarded_unchanged() {
+        let target = json!({"app":"Notes","name":"Save"});
+        let response = mcp_response(
+            &json!({"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"click","arguments":{"target":target}}}),
+            |body| {
+                let forwarded: Value = serde_json::from_str(body).unwrap();
+                assert_eq!(forwarded["method"], "click");
+                assert_eq!(forwarded["params"]["target"], target);
+                Ok(json!({"jsonrpc":"2.0","id":1,"result":{"clicked":true}}).to_string())
+            },
+        );
+        assert_eq!(response["id"], 7);
+        assert_eq!(response["result"]["structuredContent"]["clicked"], true);
     }
 }

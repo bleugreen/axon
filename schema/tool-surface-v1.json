@@ -1,0 +1,1458 @@
+{
+  "formatVersion" : 1,
+  "productVersion" : "0.3.1",
+  "tools" : [
+    {
+      "availability" : {
+        "linux" : true,
+        "mac" : true,
+        "swift" : true,
+        "windows" : true
+      },
+      "description" : "Observe Axon's current surface: no app lists apps, app captures state, a semantic target pages children, and since returns a change check.",
+      "inputSchema" : {
+        "additionalProperties" : false,
+        "properties" : {
+          "all" : {
+            "description" : "For no-target app lists, include all running processes. For direct semantic child requests, include all direct children.",
+            "type" : "boolean"
+          },
+          "app" : {
+            "description" : "Bundle id, pid, app name, or partial app name. Omit with target to list apps.",
+            "type" : "string"
+          },
+          "childDepth" : {
+            "description" : "Initial child depth for app observations. Use 0 to retain top-level windows only and page children by semantic target.",
+            "type" : "integer"
+          },
+          "depth" : {
+            "description" : "Maximum tree depth to display for app observations, with windows at depth 0.",
+            "type" : "integer"
+          },
+          "direct" : {
+            "default" : false,
+            "description" : "For semantic targets, return only direct children without recursively capturing descendants.",
+            "type" : "boolean"
+          },
+          "format" : {
+            "description" : "Defaults to observation. Use debug only when diagnosing Axon internals.",
+            "type" : "string"
+          },
+          "frames" : {
+            "default" : false,
+            "description" : "Include frames in observation output. Defaults to false.",
+            "type" : "boolean"
+          },
+          "limit" : {
+            "description" : "Maximum children for a semantic target. Defaults to Axon's sibling page size.",
+            "type" : "integer"
+          },
+          "offset" : {
+            "default" : 0,
+            "description" : "Zero-based child offset for a semantic target. Defaults to 0.",
+            "type" : "integer"
+          },
+          "screenText" : {
+            "default" : false,
+            "description" : "OCR visible text from the app window screenshot and include it as organized screenText. Defaults to false.",
+            "type" : "boolean"
+          },
+          "screenshot" : {
+            "default" : true,
+            "description" : "Include a downscaled window screenshot with a full app observation. Defaults to true; since change checks and semantic-target child pages are always imageless.",
+            "type" : "boolean"
+          },
+          "since" : {
+            "description" : "Snapshot id from a prior look response. Returns a coarse change check instead of a tree.",
+            "type" : "string"
+          },
+          "target" : {
+            "anyOf" : [
+              {
+                "additionalProperties" : false,
+                "description" : "Semantic element target object with required app and name fields. Run look first to observe canonical names.",
+                "properties" : {
+                  "app" : {
+                    "description" : "Bundle id, pid, app name, or partial app name.",
+                    "type" : "string"
+                  },
+                  "name" : {
+                    "description" : "Semantic element name returned by look.",
+                    "type" : "string"
+                  }
+                },
+                "required" : [
+                  "app",
+                  "name"
+                ],
+                "type" : "object"
+              }
+            ],
+            "description" : "App-scoped semantic name returned by a prior look; pages that element's children."
+          },
+          "tree" : {
+            "description" : "Include the nested AX tree for app observations. Defaults to true for observation format and false for debug format.",
+            "type" : "boolean"
+          }
+        },
+        "type" : "object"
+      },
+      "name" : "look",
+      "socketMethod" : "look",
+      "title" : "look"
+    },
+    {
+      "availability" : {
+        "linux" : false,
+        "mac" : false,
+        "swift" : true,
+        "windows" : false
+      },
+      "description" : "Navigate the active tab of a supported browser through its application scripting dictionary and verify the URL by read-back.",
+      "inputSchema" : {
+        "additionalProperties" : false,
+        "properties" : {
+          "app" : {
+            "description" : "Safari or Google Chrome, by name or exact bundle identifier.",
+            "type" : "string"
+          },
+          "url" : {
+            "description" : "Absolute http or https URL, limited to 8192 bytes.",
+            "type" : "string"
+          }
+        },
+        "required" : [
+          "app",
+          "url"
+        ],
+        "type" : "object"
+      },
+      "name" : "navigate",
+      "socketMethod" : "navigate",
+      "title" : "navigate"
+    },
+    {
+      "availability" : {
+        "linux" : false,
+        "mac" : false,
+        "swift" : true,
+        "windows" : false
+      },
+      "description" : "Enumerate browser windows authoritatively through the supported app's scripting dictionary and cross-check them against AX when available.",
+      "inputSchema" : {
+        "additionalProperties" : false,
+        "properties" : {
+          "app" : {
+            "description" : "Safari or Google Chrome, by name or exact bundle identifier.",
+            "type" : "string"
+          }
+        },
+        "required" : [
+          "app"
+        ],
+        "type" : "object"
+      },
+      "name" : "windows",
+      "socketMethod" : "windows",
+      "title" : "windows"
+    },
+    {
+      "availability" : {
+        "linux" : false,
+        "mac" : false,
+        "swift" : true,
+        "windows" : false
+      },
+      "description" : "Enumerate browser tabs authoritatively through the supported app's scripting dictionary.",
+      "inputSchema" : {
+        "additionalProperties" : false,
+        "properties" : {
+          "app" : {
+            "description" : "Safari or Google Chrome, by name or exact bundle identifier.",
+            "type" : "string"
+          },
+          "window" : {
+            "description" : "Optional one-based window index from windows().",
+            "type" : "integer"
+          }
+        },
+        "required" : [
+          "app"
+        ],
+        "type" : "object"
+      },
+      "name" : "tabs",
+      "socketMethod" : "tabs",
+      "title" : "tabs"
+    },
+    {
+      "availability" : {
+        "linux" : true,
+        "mac" : true,
+        "swift" : true,
+        "windows" : true
+      },
+      "description" : "Resolve an AX locator against a fresh app snapshot.",
+      "inputSchema" : {
+        "additionalProperties" : false,
+        "properties" : {
+          "app" : {
+            "description" : "Bundle id, pid, exact app name, or partial app name.",
+            "type" : "string"
+          },
+          "locator" : {
+            "additionalProperties" : true,
+            "description" : "AX locator with role, subrole, label, title, value, description, identifier, actions, and ancestors.",
+            "type" : "object"
+          }
+        },
+        "required" : [
+          "app",
+          "locator"
+        ],
+        "type" : "object"
+      },
+      "name" : "find",
+      "socketMethod" : "find",
+      "title" : "find"
+    },
+    {
+      "availability" : {
+        "linux" : false,
+        "mac" : true,
+        "swift" : true,
+        "windows" : false
+      },
+      "description" : "Poll readable accessibility state from an app-scoped semantic name until a contains, equals, or regex predicate holds, or a bounded timeout reports the last observed state.",
+      "inputSchema" : {
+        "additionalProperties" : false,
+        "properties" : {
+          "contains" : {
+            "description" : "Succeed when any readable field contains this text.",
+            "type" : "string"
+          },
+          "equals" : {
+            "description" : "Succeed when any readable field exactly equals this text.",
+            "type" : "string"
+          },
+          "intervalMs" : {
+            "default" : 100,
+            "description" : "Delay between polls. Defaults to 100 ms and is capped by the remaining timeout.",
+            "type" : "integer"
+          },
+          "matches" : {
+            "description" : "Succeed when any readable field matches this regular expression.",
+            "type" : "string"
+          },
+          "target" : {
+            "anyOf" : [
+              {
+                "additionalProperties" : false,
+                "description" : "Semantic element target object with required app and name fields. Run look first to observe canonical names.",
+                "properties" : {
+                  "app" : {
+                    "description" : "Bundle id, pid, app name, or partial app name.",
+                    "type" : "string"
+                  },
+                  "name" : {
+                    "description" : "Semantic element name returned by look.",
+                    "type" : "string"
+                  }
+                },
+                "required" : [
+                  "app",
+                  "name"
+                ],
+                "type" : "object"
+              }
+            ],
+            "description" : "App-scoped semantic name target returned by look."
+          },
+          "timeoutMs" : {
+            "default" : 5000,
+            "description" : "Maximum time to poll before returning a failed timeout result. Defaults to 5000 ms and is capped at 60000 ms.",
+            "type" : "integer"
+          }
+        },
+        "required" : [
+          "target"
+        ],
+        "type" : "object"
+      },
+      "name" : "wait_for_value",
+      "socketMethod" : "wait_for_value",
+      "title" : "wait_for_value"
+    },
+    {
+      "availability" : {
+        "linux" : false,
+        "mac" : true,
+        "swift" : true,
+        "windows" : false
+      },
+      "description" : "Poll full app observations until the accessibility surface remains unchanged for a stability window or changes from its initial state; timeout returns the final observation.",
+      "inputSchema" : {
+        "additionalProperties" : false,
+        "properties" : {
+          "app" : {
+            "description" : "Bundle id, pid, exact app name, or partial app name.",
+            "type" : "string"
+          },
+          "condition" : {
+            "default" : "stable",
+            "description" : "stable waits for an unchanged stability window; changed waits for an observable app, tree, or focus change.",
+            "type" : "string"
+          },
+          "intervalMs" : {
+            "default" : 100,
+            "description" : "Delay between observations. At least 10 ms and capped by the remaining timeout.",
+            "type" : "integer"
+          },
+          "stableMs" : {
+            "default" : 300,
+            "description" : "Required unchanged duration for the stable condition. Defaults to 300 ms and is capped at 10000 ms.",
+            "type" : "integer"
+          },
+          "timeoutMs" : {
+            "default" : 5000,
+            "description" : "Maximum wait. Defaults to 5000 ms and is capped at 60000 ms.",
+            "type" : "integer"
+          }
+        },
+        "required" : [
+          "app"
+        ],
+        "type" : "object"
+      },
+      "name" : "wait_for_stability",
+      "socketMethod" : "wait_for_stability",
+      "title" : "wait_for_stability"
+    },
+    {
+      "availability" : {
+        "linux" : false,
+        "mac" : false,
+        "swift" : true,
+        "windows" : false
+      },
+      "description" : "Ask macOS to show the Accessibility permission prompt for the running Axon daemon identity.",
+      "inputSchema" : {
+        "additionalProperties" : false,
+        "properties" : {
+
+        },
+        "type" : "object"
+      },
+      "name" : "permit",
+      "socketMethod" : "permit",
+      "title" : "permit"
+    },
+    {
+      "availability" : {
+        "linux" : true,
+        "mac" : true,
+        "swift" : true,
+        "windows" : true
+      },
+      "description" : "Run a sequence of Axon actions from inline actions, a .axn path, or a path loaded first with inline actions appended.",
+      "inputSchema" : {
+        "additionalProperties" : false,
+        "properties" : {
+          "actions" : {
+            "description" : "Ordered action objects, each with a tool field and that tool's normal arguments.",
+            "items" : {
+              "additionalProperties" : true,
+              "type" : "object"
+            },
+            "type" : "array"
+          },
+          "argValues" : {
+            "additionalProperties" : true,
+            "description" : "Caller-supplied .axn argument values keyed by declared arg name. Valid only for args without a declared source.",
+            "type" : "object"
+          },
+          "continueOnError" : {
+            "default" : false,
+            "description" : "Continue after an action fails. Defaults to false.",
+            "type" : "boolean"
+          },
+          "dryRun" : {
+            "description" : "Trace the run without dispatching actions.",
+            "type" : "boolean"
+          },
+          "healedPath" : {
+            "description" : "Write a revised copy of the .axn to this path when replay resolves through drifted locator evidence. The source file is never modified.",
+            "type" : "string"
+          },
+          "path" : {
+            "description" : "Local .axn file path for the Axon daemon to read.",
+            "type" : "string"
+          }
+        },
+        "type" : "object"
+      },
+      "name" : "run",
+      "socketMethod" : "run",
+      "title" : "run"
+    },
+    {
+      "availability" : {
+        "linux" : false,
+        "mac" : false,
+        "swift" : true,
+        "windows" : false
+      },
+      "description" : "Save recent recorded Axon calls as an editable .axn action file. Read calls are omitted unless includeReads is true.",
+      "inputSchema" : {
+        "additionalProperties" : false,
+        "properties" : {
+          "from" : {
+            "description" : "Optional starting call id, inclusive.",
+            "type" : "string"
+          },
+          "includeReads" : {
+            "default" : false,
+            "description" : "Include read/context tools such as look and find. Defaults to false.",
+            "type" : "boolean"
+          },
+          "path" : {
+            "description" : "Optional local path to write the .axn file.",
+            "type" : "string"
+          },
+          "sessionId" : {
+            "default" : "default",
+            "description" : "History session to export. Defaults to the daemon's default session.",
+            "type" : "string"
+          },
+          "to" : {
+            "description" : "Optional ending call id, inclusive.",
+            "type" : "string"
+          }
+        },
+        "type" : "object"
+      },
+      "name" : "save",
+      "socketMethod" : "save",
+      "title" : "save"
+    },
+    {
+      "availability" : {
+        "linux" : true,
+        "mac" : true,
+        "swift" : true,
+        "windows" : true
+      },
+      "description" : "Click an app-scoped semantic element name, explicit point, or text location.",
+      "inputSchema" : {
+        "additionalProperties" : false,
+        "properties" : {
+          "deliveryPolicy" : {
+            "default" : "backgroundOnly",
+            "description" : "backgroundOnly (default) forbids activation, focus changes, real pointer movement, global keyboard input, and the clipboard, and returns a structured refusal instead. foregroundPermitted allows this one action to escalate; it is never inherited by later actions.",
+            "type" : "string"
+          },
+          "target" : {
+            "anyOf" : [
+              {
+                "additionalProperties" : false,
+                "description" : "Semantic element target object with required app and name fields. Run look first to observe canonical names.",
+                "properties" : {
+                  "app" : {
+                    "description" : "Bundle id, pid, app name, or partial app name.",
+                    "type" : "string"
+                  },
+                  "name" : {
+                    "description" : "Semantic element name returned by look.",
+                    "type" : "string"
+                  }
+                },
+                "required" : [
+                  "app",
+                  "name"
+                ],
+                "type" : "object"
+              },
+              {
+                "additionalProperties" : false,
+                "description" : "Point target object: { point: { x, y, coordinateSpace } } or { x, y, coordinateSpace }. coordinateSpace is screen, window, or screenshot; window and screenshot points require app when no top-level app is provided. Raw points dispatch without element identity or occlusion verification; use a semantic name when fail-closed target validation is required.",
+                "properties" : {
+                  "point" : {
+                    "additionalProperties" : false,
+                    "description" : "Point target object: { point: { x, y, coordinateSpace } } or { x, y, coordinateSpace }. coordinateSpace is screen, window, or screenshot; window and screenshot points require app when no top-level app is provided. Raw points dispatch without element identity or occlusion verification; use a semantic name when fail-closed target validation is required.",
+                    "properties" : {
+                      "app" : {
+                        "description" : "App that owns a window or screenshot coordinate.",
+                        "type" : "string"
+                      },
+                      "coordinateSpace" : {
+                        "description" : "Coordinate space. Defaults to screen.",
+                        "enum" : [
+                          "screen",
+                          "window",
+                          "screenshot"
+                        ],
+                        "type" : "string"
+                      },
+                      "space" : {
+                        "description" : "Legacy alias for coordinateSpace.",
+                        "enum" : [
+                          "screen",
+                          "window",
+                          "screenshot"
+                        ],
+                        "type" : "string"
+                      },
+                      "x" : {
+                        "description" : "Horizontal coordinate.",
+                        "type" : "number"
+                      },
+                      "y" : {
+                        "description" : "Vertical coordinate.",
+                        "type" : "number"
+                      }
+                    },
+                    "required" : [
+                      "x",
+                      "y"
+                    ],
+                    "type" : "object"
+                  }
+                },
+                "required" : [
+                  "point"
+                ],
+                "type" : "object"
+              },
+              {
+                "additionalProperties" : false,
+                "description" : "Point target object: { point: { x, y, coordinateSpace } } or { x, y, coordinateSpace }. coordinateSpace is screen, window, or screenshot; window and screenshot points require app when no top-level app is provided. Raw points dispatch without element identity or occlusion verification; use a semantic name when fail-closed target validation is required.",
+                "properties" : {
+                  "app" : {
+                    "description" : "App that owns a window or screenshot coordinate.",
+                    "type" : "string"
+                  },
+                  "coordinateSpace" : {
+                    "description" : "Coordinate space. Defaults to screen.",
+                    "enum" : [
+                      "screen",
+                      "window",
+                      "screenshot"
+                    ],
+                    "type" : "string"
+                  },
+                  "space" : {
+                    "description" : "Legacy alias for coordinateSpace.",
+                    "enum" : [
+                      "screen",
+                      "window",
+                      "screenshot"
+                    ],
+                    "type" : "string"
+                  },
+                  "x" : {
+                    "description" : "Horizontal coordinate.",
+                    "type" : "number"
+                  },
+                  "y" : {
+                    "description" : "Vertical coordinate.",
+                    "type" : "number"
+                  }
+                },
+                "required" : [
+                  "x",
+                  "y"
+                ],
+                "type" : "object"
+              },
+              {
+                "additionalProperties" : false,
+                "description" : "Text location target object: { location: { app, text, source? } }. Resolves visible text to a click/drag/scroll point using AX text or screenshot OCR without callers providing coordinates.",
+                "properties" : {
+                  "location" : {
+                    "additionalProperties" : false,
+                    "properties" : {
+                      "app" : {
+                        "description" : "App containing the visible text.",
+                        "type" : "string"
+                      },
+                      "source" : {
+                        "default" : "auto",
+                        "description" : "Text source. Defaults to auto.",
+                        "enum" : [
+                          "auto",
+                          "ax",
+                          "screenshot"
+                        ],
+                        "type" : "string"
+                      },
+                      "text" : {
+                        "anyOf" : [
+                          {
+                            "type" : "string"
+                          },
+                          {
+                            "additionalProperties" : false,
+                            "oneOf" : [
+                              {
+                                "required" : [
+                                  "exact"
+                                ]
+                              },
+                              {
+                                "required" : [
+                                  "contains"
+                                ]
+                              }
+                            ],
+                            "properties" : {
+                              "caseSensitive" : {
+                                "default" : false,
+                                "description" : "Whether matching preserves case.",
+                                "type" : "boolean"
+                              },
+                              "contains" : {
+                                "description" : "Text fragment to match.",
+                                "type" : "string"
+                              },
+                              "exact" : {
+                                "description" : "Text to match exactly.",
+                                "type" : "string"
+                              }
+                            },
+                            "type" : "object"
+                          }
+                        ],
+                        "description" : "Text to match exactly, or an exact/contains matcher object."
+                      }
+                    },
+                    "required" : [
+                      "app",
+                      "text"
+                    ],
+                    "type" : "object"
+                  }
+                },
+                "required" : [
+                  "location"
+                ],
+                "type" : "object"
+              }
+            ],
+            "description" : "Target to click."
+          }
+        },
+        "required" : [
+          "target"
+        ],
+        "type" : "object"
+      },
+      "name" : "click",
+      "socketMethod" : "click",
+      "title" : "click"
+    },
+    {
+      "availability" : {
+        "linux" : true,
+        "mac" : true,
+        "swift" : true,
+        "windows" : true
+      },
+      "description" : "Fill a writable field by setting AXValue directly on a target, avoiding focus and keystroke timing races.",
+      "inputSchema" : {
+        "additionalProperties" : false,
+        "properties" : {
+          "deliveryPolicy" : {
+            "default" : "backgroundOnly",
+            "description" : "backgroundOnly (default) forbids activation, focus changes, real pointer movement, global keyboard input, and the clipboard, and returns a structured refusal instead. foregroundPermitted allows this one action to escalate; it is never inherited by later actions.",
+            "type" : "string"
+          },
+          "target" : {
+            "anyOf" : [
+              {
+                "additionalProperties" : false,
+                "description" : "Semantic element target object with required app and name fields. Run look first to observe canonical names.",
+                "properties" : {
+                  "app" : {
+                    "description" : "Bundle id, pid, app name, or partial app name.",
+                    "type" : "string"
+                  },
+                  "name" : {
+                    "description" : "Semantic element name returned by look.",
+                    "type" : "string"
+                  }
+                },
+                "required" : [
+                  "app",
+                  "name"
+                ],
+                "type" : "object"
+              }
+            ],
+            "description" : "App-scoped semantic name target for the writable field."
+          },
+          "value" : {
+            "description" : "New string value.",
+            "type" : "string"
+          }
+        },
+        "required" : [
+          "target",
+          "value"
+        ],
+        "type" : "object"
+      },
+      "name" : "type",
+      "socketMethod" : "type",
+      "title" : "type"
+    },
+    {
+      "availability" : {
+        "linux" : true,
+        "mac" : true,
+        "swift" : true,
+        "windows" : true
+      },
+      "description" : "Post keyboard input for shortcuts, special keys, or raw text when field-level type is not the right intent.",
+      "inputSchema" : {
+        "additionalProperties" : false,
+        "oneOf" : [
+          {
+            "required" : [
+              "text"
+            ]
+          },
+          {
+            "required" : [
+              "key"
+            ]
+          }
+        ],
+        "properties" : {
+          "app" : {
+            "description" : "Application that receives the input. Required for background delivery; without it only foregroundPermitted can reach the frontmost app.",
+            "type" : "string"
+          },
+          "deliveryPolicy" : {
+            "default" : "backgroundOnly",
+            "description" : "backgroundOnly (default) forbids activation, focus changes, real pointer movement, global keyboard input, and the clipboard, and returns a structured refusal instead. foregroundPermitted allows this one action to escalate; it is never inherited by later actions.",
+            "type" : "string"
+          },
+          "key" : {
+            "description" : "Recognized key or keystroke, for example End, Return, or cmd+shift+p. Unknown names are rejected.",
+            "type" : "string"
+          },
+          "text" : {
+            "description" : "Arbitrary text to enter exactly as provided.",
+            "type" : "string"
+          }
+        },
+        "type" : "object"
+      },
+      "name" : "keyboard",
+      "socketMethod" : "keyboard",
+      "title" : "keyboard"
+    },
+    {
+      "availability" : {
+        "linux" : true,
+        "mac" : true,
+        "swift" : true,
+        "windows" : true
+      },
+      "description" : "Scroll an accessibility surface by resolving an offscreen descendant and requesting AXScrollToVisible.",
+      "inputSchema" : {
+        "additionalProperties" : false,
+        "properties" : {
+          "app" : {
+            "description" : "Optional app used to resolve a scroll surface without activating it.",
+            "type" : "string"
+          },
+          "deliveryPolicy" : {
+            "default" : "backgroundOnly",
+            "description" : "backgroundOnly (default) forbids activation, focus changes, real pointer movement, global keyboard input, and the clipboard, and returns a structured refusal instead. foregroundPermitted allows this one action to escalate; it is never inherited by later actions.",
+            "type" : "string"
+          },
+          "deltaX" : {
+            "default" : 0,
+            "description" : "Horizontal scroll delta in pixels. Defaults to 0.",
+            "type" : "number"
+          },
+          "deltaY" : {
+            "default" : -120,
+            "description" : "Vertical scroll delta in pixels. Defaults to -120.",
+            "type" : "number"
+          },
+          "target" : {
+            "anyOf" : [
+              {
+                "additionalProperties" : false,
+                "description" : "Semantic element target object with required app and name fields. Run look first to observe canonical names.",
+                "properties" : {
+                  "app" : {
+                    "description" : "Bundle id, pid, app name, or partial app name.",
+                    "type" : "string"
+                  },
+                  "name" : {
+                    "description" : "Semantic element name returned by look.",
+                    "type" : "string"
+                  }
+                },
+                "required" : [
+                  "app",
+                  "name"
+                ],
+                "type" : "object"
+              },
+              {
+                "additionalProperties" : false,
+                "description" : "Point target object: { point: { x, y, coordinateSpace } } or { x, y, coordinateSpace }. coordinateSpace is screen, window, or screenshot; window and screenshot points require app when no top-level app is provided. Raw points dispatch without element identity or occlusion verification; use a semantic name when fail-closed target validation is required.",
+                "properties" : {
+                  "point" : {
+                    "additionalProperties" : false,
+                    "description" : "Point target object: { point: { x, y, coordinateSpace } } or { x, y, coordinateSpace }. coordinateSpace is screen, window, or screenshot; window and screenshot points require app when no top-level app is provided. Raw points dispatch without element identity or occlusion verification; use a semantic name when fail-closed target validation is required.",
+                    "properties" : {
+                      "app" : {
+                        "description" : "App that owns a window or screenshot coordinate.",
+                        "type" : "string"
+                      },
+                      "coordinateSpace" : {
+                        "description" : "Coordinate space. Defaults to screen.",
+                        "enum" : [
+                          "screen",
+                          "window",
+                          "screenshot"
+                        ],
+                        "type" : "string"
+                      },
+                      "space" : {
+                        "description" : "Legacy alias for coordinateSpace.",
+                        "enum" : [
+                          "screen",
+                          "window",
+                          "screenshot"
+                        ],
+                        "type" : "string"
+                      },
+                      "x" : {
+                        "description" : "Horizontal coordinate.",
+                        "type" : "number"
+                      },
+                      "y" : {
+                        "description" : "Vertical coordinate.",
+                        "type" : "number"
+                      }
+                    },
+                    "required" : [
+                      "x",
+                      "y"
+                    ],
+                    "type" : "object"
+                  }
+                },
+                "required" : [
+                  "point"
+                ],
+                "type" : "object"
+              },
+              {
+                "additionalProperties" : false,
+                "description" : "Point target object: { point: { x, y, coordinateSpace } } or { x, y, coordinateSpace }. coordinateSpace is screen, window, or screenshot; window and screenshot points require app when no top-level app is provided. Raw points dispatch without element identity or occlusion verification; use a semantic name when fail-closed target validation is required.",
+                "properties" : {
+                  "app" : {
+                    "description" : "App that owns a window or screenshot coordinate.",
+                    "type" : "string"
+                  },
+                  "coordinateSpace" : {
+                    "description" : "Coordinate space. Defaults to screen.",
+                    "enum" : [
+                      "screen",
+                      "window",
+                      "screenshot"
+                    ],
+                    "type" : "string"
+                  },
+                  "space" : {
+                    "description" : "Legacy alias for coordinateSpace.",
+                    "enum" : [
+                      "screen",
+                      "window",
+                      "screenshot"
+                    ],
+                    "type" : "string"
+                  },
+                  "x" : {
+                    "description" : "Horizontal coordinate.",
+                    "type" : "number"
+                  },
+                  "y" : {
+                    "description" : "Vertical coordinate.",
+                    "type" : "number"
+                  }
+                },
+                "required" : [
+                  "x",
+                  "y"
+                ],
+                "type" : "object"
+              },
+              {
+                "additionalProperties" : false,
+                "description" : "Text location target object: { location: { app, text, source? } }. Resolves visible text to a click/drag/scroll point using AX text or screenshot OCR without callers providing coordinates.",
+                "properties" : {
+                  "location" : {
+                    "additionalProperties" : false,
+                    "properties" : {
+                      "app" : {
+                        "description" : "App containing the visible text.",
+                        "type" : "string"
+                      },
+                      "source" : {
+                        "default" : "auto",
+                        "description" : "Text source. Defaults to auto.",
+                        "enum" : [
+                          "auto",
+                          "ax",
+                          "screenshot"
+                        ],
+                        "type" : "string"
+                      },
+                      "text" : {
+                        "anyOf" : [
+                          {
+                            "type" : "string"
+                          },
+                          {
+                            "additionalProperties" : false,
+                            "oneOf" : [
+                              {
+                                "required" : [
+                                  "exact"
+                                ]
+                              },
+                              {
+                                "required" : [
+                                  "contains"
+                                ]
+                              }
+                            ],
+                            "properties" : {
+                              "caseSensitive" : {
+                                "default" : false,
+                                "description" : "Whether matching preserves case.",
+                                "type" : "boolean"
+                              },
+                              "contains" : {
+                                "description" : "Text fragment to match.",
+                                "type" : "string"
+                              },
+                              "exact" : {
+                                "description" : "Text to match exactly.",
+                                "type" : "string"
+                              }
+                            },
+                            "type" : "object"
+                          }
+                        ],
+                        "description" : "Text to match exactly, or an exact/contains matcher object."
+                      }
+                    },
+                    "required" : [
+                      "app",
+                      "text"
+                    ],
+                    "type" : "object"
+                  }
+                },
+                "required" : [
+                  "location"
+                ],
+                "type" : "object"
+              }
+            ],
+            "description" : "Optional target to scroll or resolve into view."
+          }
+        },
+        "type" : "object"
+      },
+      "name" : "scroll",
+      "socketMethod" : "scroll",
+      "title" : "scroll"
+    },
+    {
+      "availability" : {
+        "linux" : false,
+        "mac" : false,
+        "swift" : true,
+        "windows" : false
+      },
+      "description" : "Drag from one semantic name, explicit point, or text location to another. Pointer dispatch and verified semantic outcome are reported separately.",
+      "inputSchema" : {
+        "additionalProperties" : false,
+        "properties" : {
+          "app" : {
+            "description" : "Application that owns the drag. Required for background delivery; also the app foregroundPermitted activates and restores.",
+            "type" : "string"
+          },
+          "deliveryPolicy" : {
+            "default" : "backgroundOnly",
+            "description" : "backgroundOnly (default) forbids activation, focus changes, real pointer movement, global keyboard input, and the clipboard, and returns a structured refusal instead. foregroundPermitted allows this one action to escalate; it is never inherited by later actions.",
+            "type" : "string"
+          },
+          "durationMs" : {
+            "description" : "Optional drag duration in milliseconds. The pointer path still emits threshold and intermediate drag events.",
+            "type" : "integer"
+          },
+          "expects" : {
+            "description" : "Optional post-action facts used by run to verify semantic success. Direct drag calls without a verified postcondition report an unverified semantic outcome.",
+            "items" : {
+              "additionalProperties" : true,
+              "type" : "object"
+            },
+            "type" : "array"
+          },
+          "from" : {
+            "anyOf" : [
+              {
+                "additionalProperties" : false,
+                "description" : "Semantic element target object with required app and name fields. Run look first to observe canonical names.",
+                "properties" : {
+                  "app" : {
+                    "description" : "Bundle id, pid, app name, or partial app name.",
+                    "type" : "string"
+                  },
+                  "name" : {
+                    "description" : "Semantic element name returned by look.",
+                    "type" : "string"
+                  }
+                },
+                "required" : [
+                  "app",
+                  "name"
+                ],
+                "type" : "object"
+              },
+              {
+                "additionalProperties" : false,
+                "description" : "Point target object: { point: { x, y, coordinateSpace } } or { x, y, coordinateSpace }. coordinateSpace is screen, window, or screenshot; window and screenshot points require app when no top-level app is provided. Raw points dispatch without element identity or occlusion verification; use a semantic name when fail-closed target validation is required.",
+                "properties" : {
+                  "point" : {
+                    "additionalProperties" : false,
+                    "description" : "Point target object: { point: { x, y, coordinateSpace } } or { x, y, coordinateSpace }. coordinateSpace is screen, window, or screenshot; window and screenshot points require app when no top-level app is provided. Raw points dispatch without element identity or occlusion verification; use a semantic name when fail-closed target validation is required.",
+                    "properties" : {
+                      "app" : {
+                        "description" : "App that owns a window or screenshot coordinate.",
+                        "type" : "string"
+                      },
+                      "coordinateSpace" : {
+                        "description" : "Coordinate space. Defaults to screen.",
+                        "enum" : [
+                          "screen",
+                          "window",
+                          "screenshot"
+                        ],
+                        "type" : "string"
+                      },
+                      "space" : {
+                        "description" : "Legacy alias for coordinateSpace.",
+                        "enum" : [
+                          "screen",
+                          "window",
+                          "screenshot"
+                        ],
+                        "type" : "string"
+                      },
+                      "x" : {
+                        "description" : "Horizontal coordinate.",
+                        "type" : "number"
+                      },
+                      "y" : {
+                        "description" : "Vertical coordinate.",
+                        "type" : "number"
+                      }
+                    },
+                    "required" : [
+                      "x",
+                      "y"
+                    ],
+                    "type" : "object"
+                  }
+                },
+                "required" : [
+                  "point"
+                ],
+                "type" : "object"
+              },
+              {
+                "additionalProperties" : false,
+                "description" : "Point target object: { point: { x, y, coordinateSpace } } or { x, y, coordinateSpace }. coordinateSpace is screen, window, or screenshot; window and screenshot points require app when no top-level app is provided. Raw points dispatch without element identity or occlusion verification; use a semantic name when fail-closed target validation is required.",
+                "properties" : {
+                  "app" : {
+                    "description" : "App that owns a window or screenshot coordinate.",
+                    "type" : "string"
+                  },
+                  "coordinateSpace" : {
+                    "description" : "Coordinate space. Defaults to screen.",
+                    "enum" : [
+                      "screen",
+                      "window",
+                      "screenshot"
+                    ],
+                    "type" : "string"
+                  },
+                  "space" : {
+                    "description" : "Legacy alias for coordinateSpace.",
+                    "enum" : [
+                      "screen",
+                      "window",
+                      "screenshot"
+                    ],
+                    "type" : "string"
+                  },
+                  "x" : {
+                    "description" : "Horizontal coordinate.",
+                    "type" : "number"
+                  },
+                  "y" : {
+                    "description" : "Vertical coordinate.",
+                    "type" : "number"
+                  }
+                },
+                "required" : [
+                  "x",
+                  "y"
+                ],
+                "type" : "object"
+              },
+              {
+                "additionalProperties" : false,
+                "description" : "Text location target object: { location: { app, text, source? } }. Resolves visible text to a click/drag/scroll point using AX text or screenshot OCR without callers providing coordinates.",
+                "properties" : {
+                  "location" : {
+                    "additionalProperties" : false,
+                    "properties" : {
+                      "app" : {
+                        "description" : "App containing the visible text.",
+                        "type" : "string"
+                      },
+                      "source" : {
+                        "default" : "auto",
+                        "description" : "Text source. Defaults to auto.",
+                        "enum" : [
+                          "auto",
+                          "ax",
+                          "screenshot"
+                        ],
+                        "type" : "string"
+                      },
+                      "text" : {
+                        "anyOf" : [
+                          {
+                            "type" : "string"
+                          },
+                          {
+                            "additionalProperties" : false,
+                            "oneOf" : [
+                              {
+                                "required" : [
+                                  "exact"
+                                ]
+                              },
+                              {
+                                "required" : [
+                                  "contains"
+                                ]
+                              }
+                            ],
+                            "properties" : {
+                              "caseSensitive" : {
+                                "default" : false,
+                                "description" : "Whether matching preserves case.",
+                                "type" : "boolean"
+                              },
+                              "contains" : {
+                                "description" : "Text fragment to match.",
+                                "type" : "string"
+                              },
+                              "exact" : {
+                                "description" : "Text to match exactly.",
+                                "type" : "string"
+                              }
+                            },
+                            "type" : "object"
+                          }
+                        ],
+                        "description" : "Text to match exactly, or an exact/contains matcher object."
+                      }
+                    },
+                    "required" : [
+                      "app",
+                      "text"
+                    ],
+                    "type" : "object"
+                  }
+                },
+                "required" : [
+                  "location"
+                ],
+                "type" : "object"
+              }
+            ],
+            "description" : "Starting semantic name, point, or text location."
+          },
+          "to" : {
+            "anyOf" : [
+              {
+                "additionalProperties" : false,
+                "description" : "Semantic element target object with required app and name fields. Run look first to observe canonical names.",
+                "properties" : {
+                  "app" : {
+                    "description" : "Bundle id, pid, app name, or partial app name.",
+                    "type" : "string"
+                  },
+                  "name" : {
+                    "description" : "Semantic element name returned by look.",
+                    "type" : "string"
+                  }
+                },
+                "required" : [
+                  "app",
+                  "name"
+                ],
+                "type" : "object"
+              },
+              {
+                "additionalProperties" : false,
+                "description" : "Point target object: { point: { x, y, coordinateSpace } } or { x, y, coordinateSpace }. coordinateSpace is screen, window, or screenshot; window and screenshot points require app when no top-level app is provided. Raw points dispatch without element identity or occlusion verification; use a semantic name when fail-closed target validation is required.",
+                "properties" : {
+                  "point" : {
+                    "additionalProperties" : false,
+                    "description" : "Point target object: { point: { x, y, coordinateSpace } } or { x, y, coordinateSpace }. coordinateSpace is screen, window, or screenshot; window and screenshot points require app when no top-level app is provided. Raw points dispatch without element identity or occlusion verification; use a semantic name when fail-closed target validation is required.",
+                    "properties" : {
+                      "app" : {
+                        "description" : "App that owns a window or screenshot coordinate.",
+                        "type" : "string"
+                      },
+                      "coordinateSpace" : {
+                        "description" : "Coordinate space. Defaults to screen.",
+                        "enum" : [
+                          "screen",
+                          "window",
+                          "screenshot"
+                        ],
+                        "type" : "string"
+                      },
+                      "space" : {
+                        "description" : "Legacy alias for coordinateSpace.",
+                        "enum" : [
+                          "screen",
+                          "window",
+                          "screenshot"
+                        ],
+                        "type" : "string"
+                      },
+                      "x" : {
+                        "description" : "Horizontal coordinate.",
+                        "type" : "number"
+                      },
+                      "y" : {
+                        "description" : "Vertical coordinate.",
+                        "type" : "number"
+                      }
+                    },
+                    "required" : [
+                      "x",
+                      "y"
+                    ],
+                    "type" : "object"
+                  }
+                },
+                "required" : [
+                  "point"
+                ],
+                "type" : "object"
+              },
+              {
+                "additionalProperties" : false,
+                "description" : "Point target object: { point: { x, y, coordinateSpace } } or { x, y, coordinateSpace }. coordinateSpace is screen, window, or screenshot; window and screenshot points require app when no top-level app is provided. Raw points dispatch without element identity or occlusion verification; use a semantic name when fail-closed target validation is required.",
+                "properties" : {
+                  "app" : {
+                    "description" : "App that owns a window or screenshot coordinate.",
+                    "type" : "string"
+                  },
+                  "coordinateSpace" : {
+                    "description" : "Coordinate space. Defaults to screen.",
+                    "enum" : [
+                      "screen",
+                      "window",
+                      "screenshot"
+                    ],
+                    "type" : "string"
+                  },
+                  "space" : {
+                    "description" : "Legacy alias for coordinateSpace.",
+                    "enum" : [
+                      "screen",
+                      "window",
+                      "screenshot"
+                    ],
+                    "type" : "string"
+                  },
+                  "x" : {
+                    "description" : "Horizontal coordinate.",
+                    "type" : "number"
+                  },
+                  "y" : {
+                    "description" : "Vertical coordinate.",
+                    "type" : "number"
+                  }
+                },
+                "required" : [
+                  "x",
+                  "y"
+                ],
+                "type" : "object"
+              },
+              {
+                "additionalProperties" : false,
+                "description" : "Text location target object: { location: { app, text, source? } }. Resolves visible text to a click/drag/scroll point using AX text or screenshot OCR without callers providing coordinates.",
+                "properties" : {
+                  "location" : {
+                    "additionalProperties" : false,
+                    "properties" : {
+                      "app" : {
+                        "description" : "App containing the visible text.",
+                        "type" : "string"
+                      },
+                      "source" : {
+                        "default" : "auto",
+                        "description" : "Text source. Defaults to auto.",
+                        "enum" : [
+                          "auto",
+                          "ax",
+                          "screenshot"
+                        ],
+                        "type" : "string"
+                      },
+                      "text" : {
+                        "anyOf" : [
+                          {
+                            "type" : "string"
+                          },
+                          {
+                            "additionalProperties" : false,
+                            "oneOf" : [
+                              {
+                                "required" : [
+                                  "exact"
+                                ]
+                              },
+                              {
+                                "required" : [
+                                  "contains"
+                                ]
+                              }
+                            ],
+                            "properties" : {
+                              "caseSensitive" : {
+                                "default" : false,
+                                "description" : "Whether matching preserves case.",
+                                "type" : "boolean"
+                              },
+                              "contains" : {
+                                "description" : "Text fragment to match.",
+                                "type" : "string"
+                              },
+                              "exact" : {
+                                "description" : "Text to match exactly.",
+                                "type" : "string"
+                              }
+                            },
+                            "type" : "object"
+                          }
+                        ],
+                        "description" : "Text to match exactly, or an exact/contains matcher object."
+                      }
+                    },
+                    "required" : [
+                      "app",
+                      "text"
+                    ],
+                    "type" : "object"
+                  }
+                },
+                "required" : [
+                  "location"
+                ],
+                "type" : "object"
+              }
+            ],
+            "description" : "Ending semantic name, point, or text location."
+          }
+        },
+        "required" : [
+          "from",
+          "to"
+        ],
+        "type" : "object"
+      },
+      "name" : "drag",
+      "socketMethod" : "drag",
+      "title" : "drag"
+    },
+    {
+      "availability" : {
+        "linux" : true,
+        "mac" : true,
+        "swift" : true,
+        "windows" : true
+      },
+      "description" : "Invoke a named accessibility action on an app-scoped semantic element name.",
+      "inputSchema" : {
+        "additionalProperties" : false,
+        "properties" : {
+          "deliveryPolicy" : {
+            "default" : "backgroundOnly",
+            "description" : "backgroundOnly (default) forbids activation, focus changes, real pointer movement, global keyboard input, and the clipboard, and returns a structured refusal instead. foregroundPermitted allows this one action to escalate; it is never inherited by later actions.",
+            "type" : "string"
+          },
+          "name" : {
+            "description" : "Accessibility action name, for example AXPress or AXShowMenu.",
+            "type" : "string"
+          },
+          "target" : {
+            "anyOf" : [
+              {
+                "additionalProperties" : false,
+                "description" : "Semantic element target object with required app and name fields. Run look first to observe canonical names.",
+                "properties" : {
+                  "app" : {
+                    "description" : "Bundle id, pid, app name, or partial app name.",
+                    "type" : "string"
+                  },
+                  "name" : {
+                    "description" : "Semantic element name returned by look.",
+                    "type" : "string"
+                  }
+                },
+                "required" : [
+                  "app",
+                  "name"
+                ],
+                "type" : "object"
+              }
+            ],
+            "description" : "App-scoped semantic name target."
+          }
+        },
+        "required" : [
+          "target",
+          "name"
+        ],
+        "type" : "object"
+      },
+      "name" : "invoke",
+      "socketMethod" : "invoke",
+      "title" : "invoke"
+    }
+  ]
+}

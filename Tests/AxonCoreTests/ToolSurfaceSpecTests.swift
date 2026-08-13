@@ -19,6 +19,59 @@ import Testing
     #expect(tool(named: "keyboard", in: tools)?["inputSchema"]?["oneOf"]?[1]?["required"] == .array([.string("key")]))
     let look = ToolSurfaceSpec.tools.first { $0.name == "look" }
     #expect(look?.params.first { $0.name == "screenshot" }?.defaultValue == .bool(true))
+    #expect(tool(named: "look", in: tools)?["inputSchema"]?["properties"]?["screenshot"]?["default"] == .bool(true))
+    #expect(tool(named: "keyboard", in: tools)?["inputSchema"]?["additionalProperties"] == .bool(false))
+}
+
+private func availableToolNames(for facade: ToolFacade) -> [String] {
+    ToolSurfaceSpec.tools.filter { $0.availability.contains(facade) }.map(\.name)
+}
+
+@Test func toolSurfaceDeclaresExactNestedTargetSchemas() throws {
+    let tools = ToolSurfaceSchema.mcpToolJSONValues()
+    let clickTarget = tool(named: "click", in: tools)?["inputSchema"]?["properties"]?["target"]
+    let semantic = clickTarget?["anyOf"]?[0]
+    #expect(semantic?["properties"]?["app"]?["type"] == .string("string"))
+    #expect(semantic?["properties"]?["name"]?["type"] == .string("string"))
+    #expect(semantic?["required"] == .array([.string("app"), .string("name")]))
+    #expect(semantic?["additionalProperties"] == .bool(false))
+
+    let wrappedPoint = clickTarget?["anyOf"]?[1]
+    #expect(wrappedPoint?["required"] == .array([.string("point")]))
+    #expect(wrappedPoint?["properties"]?["point"]?["required"] == .array([.string("x"), .string("y")]))
+    #expect(wrappedPoint?["properties"]?["point"]?["additionalProperties"] == .bool(false))
+
+    let flatPoint = clickTarget?["anyOf"]?[2]
+    #expect(flatPoint?["properties"]?["coordinateSpace"]?["enum"] == .array([
+        .string("screen"), .string("window"), .string("screenshot")
+    ]))
+    #expect(flatPoint?["additionalProperties"] == .bool(false))
+
+    let textLocation = clickTarget?["anyOf"]?[3]?["properties"]?["location"]
+    #expect(textLocation?["required"] == .array([.string("app"), .string("text")]))
+    #expect(textLocation?["properties"]?["source"]?["default"] == .string("auto"))
+    #expect(textLocation?["additionalProperties"] == .bool(false))
+}
+
+@Test func toolSurfaceDeclaresFacadeAvailability() throws {
+    let all = ToolSurfaceSpec.tools
+    #expect(all.allSatisfy { $0.availability.contains(.swift) })
+    #expect(availableToolNames(for: .mac) == [
+        "look", "find", "wait_for_value", "wait_for_stability", "run", "click", "type",
+        "keyboard", "scroll", "invoke"
+    ])
+    #expect(availableToolNames(for: .windows) == [
+        "look", "find", "run", "click", "type", "keyboard", "scroll", "invoke"
+    ])
+    #expect(availableToolNames(for: .linux) == [
+        "look", "find", "run", "click", "type", "keyboard", "scroll", "invoke"
+    ])
+}
+
+@Test func checkedInToolSurfaceArtifactMatchesGeneratedBytes() throws {
+    let artifactURL = URL(fileURLWithPath: FileManager.default.currentDirectoryPath)
+        .appendingPathComponent("schema/tool-surface-v1.json")
+    #expect(try Data(contentsOf: artifactURL) == ToolSurfaceSchema.normalizedArtifactData())
 }
 
 @Test func toolSurfaceDocsSignatureBlockMatchesSpec() throws {
