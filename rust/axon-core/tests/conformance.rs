@@ -34,7 +34,7 @@ fn look_request_controls_match_shared_schema_fixture() {
         assert!(validate_tool_arguments(
             ToolBackend::Linux,
             "look",
-            json!({name: -1})
+            json!({name.clone(): -1})
         )
         .is_err(), "{name}");
     }
