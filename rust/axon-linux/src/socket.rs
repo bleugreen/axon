@@ -337,7 +337,7 @@ fn mcp_response(value: &Value) -> io::Result<Option<Value>> {
     mcp_response_with_request(value, request)
 }
 
-fn mcp_response_with_request(
+pub(crate) fn mcp_response_with_request(
     value: &Value,
     mut send: impl FnMut(&str) -> io::Result<String>,
 ) -> io::Result<Option<Value>> {

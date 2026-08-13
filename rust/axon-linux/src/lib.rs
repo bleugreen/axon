@@ -1,12 +1,12 @@
 //! Linux AT-SPI backend and v1 JSON-RPC tool router.
 
 use axon_core::{
-    AppQuery, AxnCodec, AxnRunner, Capability, DeliveryCandidate, DeliveryCapability,
-    DeliveryOutcome, DeliveryPolicy, DeliveryRefusal, DeliveryRefusalReason, DeliveryRung,
-    DeliverySelection, DispatchOutcome, ExpectedFact, ForegroundTarget, JsonRpcError, JsonRpcId,
-    JsonRpcRequest, JsonRpcResponse, KeyboardIntent, PlatformBackend, Resolution, RunEnvelope,
-    RunOptions, SemanticLookup, SemanticNameRegistry, SemanticSelection, Snapshot, SnapshotHandle,
-    ToolDispatcher, dispatch_in_foreground, goal_success, select_delivery,
+    AppQuery, AxnRunner, Capability, DeliveryCandidate, DeliveryCapability, DeliveryOutcome,
+    DeliveryPolicy, DeliveryRefusal, DeliveryRefusalReason, DeliveryRung, DeliverySelection,
+    DispatchOutcome, ExpectedFact, ForegroundTarget, JsonRpcError, JsonRpcId, JsonRpcRequest,
+    JsonRpcResponse, KeyboardIntent, PlatformBackend, Resolution, RunEnvelope, SemanticLookup,
+    SemanticNameRegistry, SemanticSelection, Snapshot, SnapshotHandle, ToolDispatcher,
+    dispatch_in_foreground, goal_success, prepare_run, select_delivery,
 };
 use serde_json::{Map, Value, json};
 
@@ -981,35 +981,13 @@ impl<B: PointerTargetVerifier + BackgroundPixelInput> Router<B> {
     }
 
     fn run_axn(&mut self, params: &Map<String, Value>) -> Result<Value, JsonRpcError> {
-        let source = required_str(params, "source")?;
-        let doc = AxnCodec::parse(source).map_err(|e| rpc_error(-32602, e.to_string()))?;
-        let args = params
-            .get("args")
-            .and_then(Value::as_object)
-            .cloned()
-            .unwrap_or_default();
-        let options = params
-            .get("options")
-            .cloned()
-            .map(serde_json::from_value)
-            .transpose()
-            .map_err(|e| rpc_error(-32602, e.to_string()))?
-            .unwrap_or(RunOptions {
-                dry_run: None,
-                continue_on_error: None,
-            });
+        let prepared = prepare_run(params).map_err(|e| rpc_error(-32602, e.to_string()))?;
         let mut runner = AxnRunner::new(self);
-        if let Some(healed_path) = params.get("healedPath").and_then(Value::as_str) {
-            runner = runner.with_healed_output(
-                params
-                    .get("sourcePath")
-                    .and_then(Value::as_str)
-                    .map(str::to_owned),
-                healed_path.to_owned(),
-            );
+        if let Some(healed_path) = prepared.healed_path {
+            runner = runner.with_healed_output(prepared.source_path.clone(), healed_path);
         }
         let result = runner
-            .run(&doc, &args, options)
+            .run(&prepared.document, &prepared.arg_values, prepared.options)
             .map_err(|e| rpc_error(-32602, e.to_string()))?;
         serde_json::to_value(RunEnvelope { batch: result }).map_err(internal_error)
     }
@@ -1642,6 +1620,55 @@ mod tests {
     }
     fn request(method: &str, params: Value) -> JsonRpcRequest {
         JsonRpcRequest::new(Some(JsonRpcId::Integer(1)), method, Some(params))
+    }
+
+    fn call_through_mcp(router: &mut Router<FakeBackend>, arguments: Value) -> Value {
+        crate::socket::mcp_response_with_request(
+            &json!({"jsonrpc":"2.0","id":10,"method":"tools/call","params":{"name":"run","arguments":arguments}}),
+            |rpc| {
+                let request: JsonRpcRequest = serde_json::from_str(rpc).unwrap();
+                let response = router.request(request).unwrap();
+                Ok(serde_json::to_string(&response).unwrap())
+            },
+        )
+        .unwrap()
+        .unwrap()
+    }
+
+    #[test]
+    fn mcp_run_validation_and_router_share_the_canonical_wire_shape() {
+        let backend = backend(vec![], Some("before"));
+        let value = backend.value.clone();
+        let mut router = Router::new(backend);
+        router.snapshot = Some(router.backend.snapshot.clone());
+        let actions = json!([{"tool":"type","target":{"x":10.0,"y":10.0},"value":"after"}]);
+
+        let executed = call_through_mcp(&mut router, json!({"actions":actions}));
+        let batch = &executed["result"]["structuredContent"]["batch"];
+        assert_eq!(batch["success"], true);
+        assert_eq!(batch["trace"].as_array().unwrap().len(), 1);
+        assert_eq!(value.borrow().as_deref(), Some("after"));
+
+        *value.borrow_mut() = Some("before".into());
+        let dry = call_through_mcp(&mut router, json!({"actions":actions,"dryRun":true}));
+        assert_eq!(dry["result"]["structuredContent"]["batch"]["dryRun"], true);
+        assert_eq!(
+            dry["result"]["structuredContent"]["batch"]["trace"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(value.borrow().as_deref(), Some("before"));
+
+        let unknown = crate::socket::mcp_response_with_request(
+            &json!({"jsonrpc":"2.0","id":11,"method":"tools/call","params":{"name":"run","arguments":{"actions":[],"source":"invented"}}}),
+            |_| unreachable!("unknown run keys must not reach the router"),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(unknown["error"]["code"], -32602);
+        assert_eq!(unknown["error"]["data"]["path"], "params.arguments.source");
     }
 
     #[test]
@@ -2404,12 +2431,16 @@ mod tests {
         let backend = backend(vec![], Some("ready now"));
         let handle = backend.snapshot.handle(0).0;
         let mut router = Router::new(backend);
-        let source = format!(
-            "version: 1\nactions:\n- tool: invoke\n  target: {handle}\n  expects:\n  - id: ready\n    kind: value\n    target: {handle}\n"
-        );
+        let path = std::env::temp_dir().join(format!("axon-v1-{}.axn", std::process::id()));
+        std::fs::write(
+            &path,
+            format!("version: 1\nactions:\n- tool: invoke\n  target: {handle}\n  expects:\n  - id: ready\n    kind: value\n    target: {handle}\n"),
+        )
+        .unwrap();
         let response = router
-            .request(request("run", json!({"source":source})))
+            .request(request("run", json!({"path":path})))
             .unwrap();
+        std::fs::remove_file(path).unwrap();
         let JsonRpcResponse::Failure(failure) = response else {
             panic!("v1 replay unexpectedly succeeded")
         };
