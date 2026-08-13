@@ -996,16 +996,19 @@ impl<B: PointerTargetVerifier + BackgroundPixelInput> ToolDispatcher for Router<
         let params = primitive_dispatch_params(params);
         match self.dispatch_tool(tool, &params) {
             Ok(result) => DispatchOutcome {
-                success: true,
+                success: result
+                    .get("success")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(true),
+                resolution: target_resolution(&result),
                 result,
                 error: None,
-                resolution: None,
             },
             Err(error) => DispatchOutcome {
                 success: false,
+                resolution: error.data.as_ref().and_then(target_resolution),
                 result: Value::Null,
                 error: Some(error.message),
-                resolution: None,
             },
         }
     }
