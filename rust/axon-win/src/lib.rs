@@ -65,6 +65,21 @@ pub struct Router<B> {
     semantic_names: SemanticNameRegistry,
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub struct ScrollDispatch {
+    pub mechanism: &'static str,
+    pub verification: Value,
+}
+
+/// Reports the native Windows scroll mechanism and any position readback.
+pub trait WindowsScrollProvider: PlatformBackend {
+    fn scroll_windows(
+        &mut self,
+        target: &SnapshotHandle,
+        delta: (f64, f64),
+    ) -> Result<ScrollDispatch, axon_core::BackendError>;
+}
+
 fn application_enumeration<T: serde::Serialize>(apps: Vec<T>) -> Value {
     json!({"apps": apps})
 }
@@ -280,7 +295,8 @@ impl<
     B: PointerTargetVerifier
         + TextRecognitionProvider
         + VisualObservationProvider
-        + BackgroundPixelPointer,
+        + BackgroundPixelPointer
+        + WindowsScrollProvider,
 > Router<B>
 {
     /// What the backend can do, for health documents.
@@ -653,11 +669,12 @@ impl<
                 let (handle, resolution) = self.resolve(params)?;
                 let dx = params.get("deltaX").and_then(Value::as_f64).unwrap_or(0.0);
                 let dy = params.get("deltaY").and_then(Value::as_f64).unwrap_or(0.0);
-                self.backend
-                    .scroll(&handle, (dx, dy))
+                let scroll = self
+                    .backend
+                    .scroll_windows(&handle, (dx, dy))
                     .map_err(backend_error)?;
                 Ok(delivered(
-                    json!({"dispatch":{"success":true,"mechanism":"UIA ScrollItemPattern"},"verification":{"verified":false,"reason":"scroll has no declared postcondition"},"resolution":resolution}),
+                    json!({"dispatch":{"success":true,"mechanism":scroll.mechanism},"verification":scroll.verification,"resolution":resolution}),
                     policy,
                     DeliveryRung::Semantic,
                 ))
@@ -1081,7 +1098,8 @@ impl<
     B: PointerTargetVerifier
         + TextRecognitionProvider
         + VisualObservationProvider
-        + BackgroundPixelPointer,
+        + BackgroundPixelPointer
+        + WindowsScrollProvider,
 > ToolDispatcher for Router<B>
 {
     fn register_replay_target(
@@ -1431,6 +1449,30 @@ mod tests {
             outcome
         }
     }
+    impl WindowsScrollProvider for FakeBackend {
+        fn scroll_windows(
+            &mut self,
+            _: &SnapshotHandle,
+            delta: (f64, f64),
+        ) -> Result<ScrollDispatch, BackendError> {
+            Ok(if delta == (0.0, 0.0) {
+                ScrollDispatch {
+                    mechanism: "UIA ScrollItemPattern.ScrollIntoView",
+                    verification: json!({"verified":false,"reason":"bring-into-view has no readable target-position postcondition"}),
+                }
+            } else {
+                ScrollDispatch {
+                    mechanism: "UIA ScrollPattern.Scroll",
+                    verification: json!({
+                        "verified": true,
+                        "before": {"horizontalPercent": 0.0, "verticalPercent": 0.0},
+                        "after": {"horizontalPercent": delta.0.abs(), "verticalPercent": delta.1.abs()}
+                    }),
+                }
+            })
+        }
+    }
+
     impl PointerTargetVerifier for FakeBackend {
         fn verify_pointer_target(
             &mut self,
@@ -2391,6 +2433,51 @@ mod tests {
             assert_eq!(result["dispatchSuccess"], json!(false), "{policy}");
         }
         assert_eq!(*clicks.borrow(), 0);
+    }
+
+    #[test]
+    fn delta_scroll_reports_position_verification_and_goal_success() {
+        let backend = backend(vec![], None);
+        let mut router = Router::new(backend);
+        router.snapshot = Some(router.backend.snapshot.clone());
+
+        let response = router
+            .request(request(
+                "scroll",
+                json!({"target": {"location": {"app": "App", "text": "root"}}, "deltaY": -120.0}),
+            ))
+            .unwrap();
+        let result = action_result(&response);
+
+        assert_eq!(
+            result["dispatch"]["mechanism"],
+            json!("UIA ScrollPattern.Scroll")
+        );
+        assert_eq!(result["dispatchSuccess"], json!(true));
+        assert_eq!(result["verification"]["verified"], json!(true));
+        assert_eq!(result["success"], json!(true));
+    }
+
+    #[test]
+    fn bring_into_view_names_its_distinct_mechanism_and_stays_unverified() {
+        let backend = backend(vec![], None);
+        let mut router = Router::new(backend);
+        router.snapshot = Some(router.backend.snapshot.clone());
+
+        let response = router
+            .request(request(
+                "scroll",
+                json!({"target": {"location": {"app": "App", "text": "root"}}, "deltaX": 0.0, "deltaY": 0.0}),
+            ))
+            .unwrap();
+        let result = action_result(&response);
+
+        assert_eq!(
+            result["dispatch"]["mechanism"],
+            json!("UIA ScrollItemPattern.ScrollIntoView")
+        );
+        assert_eq!(result["verification"]["verified"], json!(false));
+        assert_eq!(result["success"], json!(false));
     }
 
     #[test]
