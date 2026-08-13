@@ -1751,19 +1751,13 @@ mod tests {
             null(),
             real("/org/a11y/atspi/accessible/2"),
         ]);
-        assert_eq!(
-            (dropped == 0).then_some(published_children.len()),
-            None
-        );
+        assert_eq!((dropped == 0).then_some(published_children.len()), None);
 
         let (published_children, dropped) = published(vec![
             real("/org/a11y/atspi/accessible/1"),
             real("/org/a11y/atspi/accessible/2"),
         ]);
-        assert_eq!(
-            (dropped == 0).then_some(published_children.len()),
-            Some(2)
-        );
+        assert_eq!((dropped == 0).then_some(published_children.len()), Some(2));
     }
 
     #[test]

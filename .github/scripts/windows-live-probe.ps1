@@ -633,7 +633,8 @@ function Invoke-ProbeStage {
                 '--no-first-run',
                 'data:text/html,<main><h1>Axon paging probe</h1><button>One</button><button>Two</button><button>Three</button></main>'
             ) -PassThru
-            Start-Sleep -Milliseconds 500
+            Wait-Tick
+            Wait-Tick
         }
         $listResponse = Invoke-AxonMcp -Request $listRequest
         if ($listResponse.result.isError -ne $false) { throw 'the app-list look request failed' }
