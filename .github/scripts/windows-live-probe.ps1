@@ -959,25 +959,48 @@ function Invoke-ProbeStage {
         # but it is not repeated in the standing acceptance run. Its completed 2x2 measurement chose
         # HeldAttachment; requiring arbitrary persistent desktop applications to foreground on every
         # build would test runner state rather than the adopted transaction.
+        $aimedCall = @{ name = 'keyboard'; arguments = @{
+            app = $browserApp; key = 'ctrl+l'; deliveryPolicy = 'foregroundPermitted'
+        } }
+        $request = @{ jsonrpc = '2.0'; id = 1; method = 'tools/call'; params = $aimedCall } |
+            ConvertTo-Json -Compress -Depth 10
+        $response = Invoke-AxonMcp -Request $request
+        $evidence = $response.result.structuredContent
+        Write-Note "foreground acceptance aimed keyboard: $($evidence | ConvertTo-Json -Compress -Depth 20)"
+        if ($response.result.isError -ne $false -or $evidence.delivery -ne 'foreground' -or
+            $evidence.dispatchSuccess -ne $true -or $evidence.foreground.activationProved -ne $true -or
+            $null -eq $evidence.foreground.restored) {
+            throw 'aimed keyboard did not activate the target and return foreground dispatch/restoration evidence'
+        }
+
+        # Each aimed action is a complete transaction and therefore restores before returning. Edge
+        # intentionally drops address-bar focus across that deactivation. Put the proved PID back in
+        # front once, then exercise the frontmost form for the indivisible Ctrl+L/text/Return gesture.
+        $activationResultPath = Join-Path $LiveDirectory 'keyboard-activation.json'
+        Register-ProbeActivationTask -ProcessId ([int]$browser.ProcessId) -ResultPath $activationResultPath
+        try {
+            Start-ProbeActivationTask
+            [void](Wait-ForProbeActivationTask -ResultPath $activationResultPath)
+        }
+        finally {
+            Unregister-ProbeActivationTask
+            Remove-Item -LiteralPath $activationResultPath, "$activationResultPath.tmp" -Force -ErrorAction SilentlyContinue
+        }
         $foregroundCalls = @(
-            @{ name = 'keyboard'; arguments = @{ app = $browserApp; key = 'ctrl+l'; deliveryPolicy = 'foregroundPermitted' } },
-            @{ name = 'keyboard'; arguments = @{ app = $browserApp; text = $browser.PageUrl; deliveryPolicy = 'foregroundPermitted' } },
-            @{ name = 'keyboard'; arguments = @{ app = $browserApp; key = 'Return'; deliveryPolicy = 'foregroundPermitted' } }
+            @{ name = 'keyboard'; arguments = @{ key = 'ctrl+l'; deliveryPolicy = 'foregroundPermitted' } },
+            @{ name = 'keyboard'; arguments = @{ text = $browser.PageUrl; deliveryPolicy = 'foregroundPermitted' } },
+            @{ name = 'keyboard'; arguments = @{ key = 'Return'; deliveryPolicy = 'foregroundPermitted' } }
         )
         foreach ($call in $foregroundCalls) {
             $request = @{ jsonrpc = '2.0'; id = 1; method = 'tools/call'; params = $call } |
                 ConvertTo-Json -Compress -Depth 10
             $response = Invoke-AxonMcp -Request $request
             $evidence = $response.result.structuredContent
-            Write-Note "foreground acceptance $($call.name): $($evidence | ConvertTo-Json -Compress -Depth 20)"
+            Write-Note "foreground acceptance frontmost keyboard: $($evidence | ConvertTo-Json -Compress -Depth 20)"
             if ($response.result.isError -ne $false -or $evidence.delivery -ne 'foreground' -or
-                $evidence.dispatchSuccess -ne $true -or $null -eq $evidence.foreground -or
-                $null -eq $evidence.foreground.restored) {
-                throw "$($call.name) did not return foreground dispatch and restoration evidence"
+                $evidence.dispatchSuccess -ne $true -or $null -eq $evidence.foreground) {
+                throw "$($call.name) did not return frontmost foreground dispatch evidence"
             }
-            # Browser chrome applies Ctrl+L and navigation asynchronously. Keep the three real input
-            # transactions distinct so the next batch cannot overtake the UI state created by the
-            # previous one on a busy interactive runner.
             Start-Sleep -Milliseconds 250
         }
 
