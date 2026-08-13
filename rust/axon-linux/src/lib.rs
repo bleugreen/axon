@@ -110,23 +110,6 @@ fn primitive_dispatch_params(params: &Map<String, Value>) -> Map<String, Value> 
         }
     }
 
-    #[test]
-    fn look_refuses_all_process_listing_instead_of_ignoring_it() {
-        let mut router = Router::new(backend(vec![], None));
-        let response = router
-            .request(request("look", json!({"all":true})))
-            .unwrap();
-        let JsonRpcResponse::Error(error) = response else {
-            panic!("all-process listing must fail until the backend implements it")
-        };
-        assert!(
-            error
-                .error
-                .message
-                .contains("all-process application listing")
-        );
-    }
-
     params
 }
 
@@ -1316,6 +1299,23 @@ mod tests {
                 name: None,
                 identifier: None,
             }]
+        );
+    }
+
+    #[test]
+    fn look_refuses_all_process_listing_instead_of_ignoring_it() {
+        let mut router = Router::new(backend(vec![], None));
+        let response = router
+            .request(request("look", json!({"all":true})))
+            .unwrap();
+        let JsonRpcResponse::Failure(failure) = response else {
+            panic!("all-process listing must fail until the backend implements it")
+        };
+        assert!(
+            failure
+                .error
+                .message
+                .contains("all-process application listing")
         );
     }
 
