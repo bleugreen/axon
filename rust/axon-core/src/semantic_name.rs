@@ -440,10 +440,17 @@ impl SemanticNameRegistry {
     pub fn register_replay_locator(&mut self, target: WireElementTarget, locator: Locator) {
         self.replay_locators.insert(target, locator);
     }
+    pub fn replay_locator(&self, target: &WireElementTarget) -> Option<&Locator> {
+        self.replay_locators.get(target)
+    }
 
     pub fn resolve(&self, target: &WireElementTarget, live: &Snapshot) -> SemanticLookup {
         if let Some(locator) = self.replay_locators.get(target) {
-            return lookup_from_resolution(target, LocatorResolver::resolve(locator, live), locator);
+            return lookup_from_resolution(
+                target,
+                LocatorResolver::resolve(locator, live),
+                locator,
+            );
         }
         match self.resolve_retained(target, live) {
             RetainedSemanticLookup::NoRecord => SemanticLookup::Missing {

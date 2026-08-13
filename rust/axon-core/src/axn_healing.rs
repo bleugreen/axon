@@ -1,4 +1,7 @@
-use crate::{AxnAction, Confidence, ResolutionStatus};
+use crate::{
+    AxnAction, Confidence, Locator, Resolution, ResolutionStatus, SemanticNameRegistry, Snapshot,
+    TextMatcher, WireElementTarget,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
@@ -10,7 +13,7 @@ pub struct TargetResolution {
     #[serde(default = "default_path")]
     pub path: String,
     #[serde(default)]
-    pub context_complete: bool,
+    pub context: String,
     #[serde(default)]
     pub candidates: Vec<Value>,
     #[serde(default)]
@@ -19,6 +22,145 @@ pub struct TargetResolution {
     pub evidence: Vec<Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub observed_locator: Option<Value>,
+}
+
+/// Convert the locator engine's internal result into the compact, cross-language replay contract.
+///
+/// The locator attached to the recording is the expected evidence. The observed locator is rebuilt
+/// from the live snapshot rather than copied from that recording, so mutable fields can produce a
+/// healing proposal.
+pub fn canonical_target_resolution(
+    recorded: &Locator,
+    snapshot: &Snapshot,
+    resolution: &Resolution,
+) -> TargetResolution {
+    let observed_locator = resolution
+        .best
+        .as_ref()
+        .and_then(|candidate| snapshot.node(candidate.index))
+        .and_then(|node| serde_json::to_value(crate::semantic_name::locator(node, &[], None)).ok());
+    let evidence = resolution
+        .best
+        .as_ref()
+        .and_then(|candidate| snapshot.node(candidate.index))
+        .map(|node| locator_evidence(recorded, node))
+        .unwrap_or_default();
+    TargetResolution {
+        status: resolution.status,
+        confidence: resolution.confidence,
+        path: "fullSnapshot".into(),
+        context: "complete".into(),
+        candidates: if resolution.status == ResolutionStatus::Ambiguous {
+            resolution
+                .candidates
+                .iter()
+                .filter_map(|candidate| serde_json::to_value(candidate).ok())
+                .collect()
+        } else {
+            vec![]
+        },
+        reasons: resolution
+            .best
+            .as_ref()
+            .map(|candidate| candidate.reasons.clone())
+            .unwrap_or_default(),
+        evidence,
+        observed_locator,
+    }
+}
+
+/// Resolve the recorder-attached locator against the live snapshot and return the canonical wire
+/// result. Native routers use this for both successful actions and JSON-RPC failures.
+pub fn replay_target_resolution(
+    params: &Map<String, Value>,
+    registry: &SemanticNameRegistry,
+    snapshot: Option<&Snapshot>,
+) -> Option<TargetResolution> {
+    let target: WireElementTarget = serde_json::from_value(params.get("target")?.clone()).ok()?;
+    let recorded = registry.replay_locator(&target)?;
+    let snapshot = snapshot?;
+    let resolution = crate::LocatorResolver::resolve(recorded, snapshot);
+    Some(canonical_target_resolution(recorded, snapshot, &resolution))
+}
+
+fn locator_evidence(recorded: &Locator, node: &crate::Node) -> Vec<Value> {
+    let mut evidence = Vec::new();
+    evidence_item(
+        &mut evidence,
+        "role",
+        recorded.role.as_deref(),
+        Some(&node.role),
+    );
+    evidence_item(
+        &mut evidence,
+        "subrole",
+        recorded.subrole.as_deref(),
+        node.subrole.as_deref(),
+    );
+    matcher_evidence(
+        &mut evidence,
+        "title",
+        recorded.title.as_ref(),
+        node.title.as_deref(),
+    );
+    matcher_evidence(
+        &mut evidence,
+        "label",
+        recorded.label.as_ref(),
+        node.label.as_deref(),
+    );
+    matcher_evidence(
+        &mut evidence,
+        "value",
+        recorded.value.as_ref(),
+        node.value.as_deref(),
+    );
+    matcher_evidence(
+        &mut evidence,
+        "description",
+        recorded.description.as_ref(),
+        node.description.as_deref(),
+    );
+    matcher_evidence(
+        &mut evidence,
+        "identifier",
+        recorded.identifier.as_ref(),
+        node.identifier.as_deref(),
+    );
+    evidence
+}
+
+fn matcher_evidence(
+    evidence: &mut Vec<Value>,
+    field: &str,
+    expected: Option<&TextMatcher>,
+    actual: Option<&str>,
+) {
+    let Some(expected) = expected else { return };
+    let rendered = match expected {
+        TextMatcher::Exact { value, .. } | TextMatcher::Contains { value, .. } => value,
+    };
+    evidence_item(evidence, field, Some(rendered), actual);
+}
+
+fn evidence_item(
+    evidence: &mut Vec<Value>,
+    field: &str,
+    expected: Option<&str>,
+    actual: Option<&str>,
+) {
+    let Some(expected) = expected else { return };
+    let outcome = if actual == Some(expected) {
+        "matched"
+    } else {
+        "changed"
+    };
+    evidence.push(serde_json::json!({
+        "field": field,
+        "outcome": outcome,
+        "expected": expected,
+        "actual": actual,
+    }));
 }
 
 #[cfg(test)]
@@ -34,7 +176,7 @@ mod tests {
             status,
             confidence: Confidence::High,
             path: "fullSnapshot".into(),
-            context_complete: true,
+            context: "complete".into(),
             candidates: vec![],
             reasons: vec![],
             evidence: vec![json!({"field":"title","outcome":"changed"})],

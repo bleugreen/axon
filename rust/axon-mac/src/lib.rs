@@ -79,11 +79,15 @@ pub struct Router<B> {
 /// Replay targets may carry recording-only locator evidence. Native tool decoding receives only
 /// the primitive semantic target; the shared runner remains responsible for registering the
 /// attached locator before crossing this boundary.
-fn target_resolution(value: &Value) -> Option<axon_core::TargetResolution> {
-    let value = value
-        .get("targetResolution")
-        .or_else(|| value.get("action")?.get("targetResolution"))?;
-    serde_json::from_value(value.clone()).ok()
+fn attach_target_resolution(result: &mut Value, resolution: &axon_core::TargetResolution) {
+    let Some(object) = result.as_object_mut() else {
+        return;
+    };
+    object.remove("resolution");
+    object.insert(
+        "targetResolution".into(),
+        serde_json::to_value(resolution).expect("target resolution serializes"),
+    );
 }
 
 fn primitive_dispatch_params(params: &Map<String, Value>) -> Map<String, Value> {
@@ -1222,20 +1226,34 @@ impl<
     }
 
     fn dispatch(&mut self, tool: &str, params: &Map<String, Value>) -> DispatchOutcome {
-        let params = primitive_dispatch_params(params);
-        match self.dispatch_tool(tool, &params) {
-            Ok(result) => DispatchOutcome {
-                success: result
-                    .get("success")
-                    .and_then(Value::as_bool)
-                    .unwrap_or(true),
-                resolution: target_resolution(&result),
-                result,
-                error: None,
-            },
+        let primitive_params = primitive_dispatch_params(params);
+        match self.dispatch_tool(tool, &primitive_params) {
+            Ok(mut result) => {
+                let resolution = axon_core::replay_target_resolution(
+                    params,
+                    &self.semantic_names,
+                    self.snapshot.as_ref(),
+                );
+                if let Some(resolution) = &resolution {
+                    attach_target_resolution(&mut result, resolution);
+                }
+                DispatchOutcome {
+                    success: result
+                        .get("success")
+                        .and_then(Value::as_bool)
+                        .unwrap_or(true),
+                    resolution,
+                    result,
+                    error: None,
+                }
+            }
             Err(error) => DispatchOutcome {
                 success: false,
-                resolution: error.data.as_ref().and_then(target_resolution),
+                resolution: axon_core::replay_target_resolution(
+                    params,
+                    &self.semantic_names,
+                    self.snapshot.as_ref(),
+                ),
                 result: Value::Null,
                 error: Some(error.message),
             },

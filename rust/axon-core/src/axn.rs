@@ -962,7 +962,9 @@ fn semantically_verified_result(tool: &str, mut result: Value) -> Value {
         .unwrap_or_default();
     action.insert(
         "message".into(),
-        Value::String(format!("{method} semantic outcome verified by postcondition")),
+        Value::String(format!(
+            "{method} semantic outcome verified by postcondition"
+        )),
     );
     action.insert("refusal".into(), Value::Null);
     result
