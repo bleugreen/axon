@@ -36,6 +36,11 @@ jobs:
           fi
           security unlock-keychain -p "$KEYCHAIN_PASSWORD" ~/Library/Keychains/login.keychain-db
 
+      # Checkout does not remove ignored files from this reused workspace. A prior branch's Swift
+      # incremental records can otherwise make the package build omit changed sources.
+      - name: Remove prior Swift build state
+        run: rm -rf .build
+
       - name: Build the signed app
         env:
           AXON_CODESIGN_IDENTITY: 2A1FE6185D48E55E22FA9DB390B452D2E06AD665
