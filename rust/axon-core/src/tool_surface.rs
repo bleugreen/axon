@@ -466,12 +466,15 @@ fn validate_branches(
                 .filter_map(|(branch, result)| {
                     result.err().map(|error| {
                         let recognized = value.as_object().map_or(0, |object| {
-                            branch
-                                .get("properties")
-                                .and_then(Value::as_object)
-                                .map_or(0, |properties| {
-                                    object.keys().filter(|key| properties.contains_key(*key)).count()
-                                })
+                            branch.get("properties").and_then(Value::as_object).map_or(
+                                0,
+                                |properties| {
+                                    object
+                                        .keys()
+                                        .filter(|key| properties.contains_key(*key))
+                                        .count()
+                                },
+                            )
                         });
                         let path_length = error
                             .data
