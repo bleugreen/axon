@@ -1,5 +1,6 @@
-use crate::{BackendError, DiffClassification, SemanticDiff, Snapshot, SnapshotId};
+use crate::{AppQuery, BackendError, DiffClassification, SemanticDiff, Snapshot, SnapshotId, WireElementTarget};
 use serde::{Deserialize, Deserializer, Serialize};
+use serde_json::{Map, Value};
 
 /// The canonical image budget for every public `look` surface.
 pub const OBSERVATION_SCREENSHOT_MAX_DIMENSION: u32 = 1280;
@@ -12,6 +13,95 @@ pub enum LookObservationKind {
     FullApp,
     ChangeCheck,
     ChildPage,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum LookFormat { #[default] Observation, Debug }
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct LookDisplayOptions {
+    pub depth: Option<usize>,
+    pub tree: bool,
+    pub frames: bool,
+    pub format: LookFormat,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum LookMode {
+    AppList { all: bool },
+    FullApp { app: AppQuery, child_depth: Option<usize> },
+    ChildPage { target: WireElementTarget, offset: usize, limit: Option<usize>, direct: bool },
+    ChangeCheck { app: AppQuery, since: SinceToken, child_depth: Option<usize> },
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct LookRequest {
+    pub mode: LookMode,
+    pub display: LookDisplayOptions,
+    pub screenshot: Option<bool>,
+    pub screen_text: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+#[error("invalid look request: {0}")]
+pub struct LookRequestError(pub String);
+
+impl LookRequest {
+    pub fn decode(params: &Map<String, Value>) -> Result<Self, LookRequestError> {
+        fn number(params: &Map<String, Value>, key: &str) -> Result<Option<usize>, LookRequestError> {
+            params.get(key).map(|v| v.as_u64().and_then(|n| usize::try_from(n).ok())
+                .ok_or_else(|| LookRequestError(format!("{key} must be a nonnegative integer")))).transpose()
+        }
+        let app = params.get("app").map(|v| serde_json::from_value::<AppQuery>(v.clone())
+            .map_err(|e| LookRequestError(format!("app: {e}")))).transpose()?;
+        let target = params.get("target").map(|v| serde_json::from_value::<WireElementTarget>(v.clone())
+            .map_err(|e| LookRequestError(format!("target: {e}")))
+            .and_then(|t| t.validate().map_err(|e| LookRequestError(e.to_string())))).transpose()?;
+        let since = params.get("since").map(|v| v.as_str().ok_or_else(|| LookRequestError("since must be a string".into()))
+            .and_then(|v| SinceToken::parse(v).map_err(|e| LookRequestError(e.to_string())))).transpose()?;
+        if app.is_some() && target.is_some() { return Err(LookRequestError("app and target are mutually exclusive".into())); }
+        let all = params.get("all").and_then(Value::as_bool).unwrap_or(false);
+        let direct = params.get("direct").and_then(Value::as_bool).unwrap_or(false);
+        let offset = number(params, "offset")?.unwrap_or(0);
+        let raw_limit = number(params, "limit")?;
+        let child_depth = number(params, "childDepth")?;
+        let depth = number(params, "depth")?;
+        let format = match params.get("format").and_then(Value::as_str).unwrap_or("observation") {
+            "observation" => LookFormat::Observation, "debug" => LookFormat::Debug,
+            value => return Err(LookRequestError(format!("unsupported format {value:?}"))),
+        };
+        let mode = match (app, target, since) {
+            (None, None, None) => {
+                reject(params, &["offset","limit","direct","childDepth","depth","tree","frames","since"], "application list")?;
+                LookMode::AppList { all: all || format == LookFormat::Debug }
+            }
+            (Some(app), None, None) => {
+                reject(params, &["offset","limit","direct","all"], "full application observation")?;
+                LookMode::FullApp { app, child_depth }
+            }
+            (Some(app), None, Some(since)) => {
+                reject(params, &["offset","limit","direct","all"], "change check")?;
+                LookMode::ChangeCheck { app, since, child_depth }
+            }
+            (None, Some(target), None) => {
+                reject(params, &["childDepth","since","screenshot","screenText"], "child page")?;
+                let limit = if all { raw_limit.filter(|n| *n > 0) } else { Some(raw_limit.unwrap_or(24).clamp(1, 24)) };
+                LookMode::ChildPage { target, offset, limit, direct }
+            }
+            (_, _, Some(_)) => return Err(LookRequestError("since requires app and cannot be combined with target".into())),
+        };
+        Ok(Self { mode, display: LookDisplayOptions {
+            depth, tree: params.get("tree").and_then(Value::as_bool).unwrap_or(true),
+            frames: params.get("frames").and_then(Value::as_bool).unwrap_or(true), format,
+        }, screenshot: params.get("screenshot").and_then(Value::as_bool),
+        screen_text: params.get("screenText").and_then(Value::as_bool).unwrap_or(false) })
+    }
+}
+
+fn reject(params: &Map<String, Value>, keys: &[&str], mode: &str) -> Result<(), LookRequestError> {
+    if let Some(key) = keys.iter().find(|key| params.contains_key(**key)) {
+        Err(LookRequestError(format!("{key} has no meaning for {mode}")))
+    } else { Ok(()) }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize)]

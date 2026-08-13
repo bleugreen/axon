@@ -16,6 +16,32 @@ impl SnapshotId {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct CaptureBounds {
+    /// Maximum descendant depth below each top-level window. `None` uses the backend ceiling.
+    pub child_depth: Option<usize>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ChildPageRequest {
+    pub offset: usize,
+    pub limit: Option<usize>,
+    pub include_descendants: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ChildPageCapture {
+    pub snapshot: SnapshotId,
+    pub parent: Node,
+    pub offset: usize,
+    pub limit: usize,
+    /// `None` means the provider could not authoritatively enumerate the direct-child range.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub total: Option<usize>,
+    pub children: Vec<Node>,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct SnapshotHandle(pub String);
