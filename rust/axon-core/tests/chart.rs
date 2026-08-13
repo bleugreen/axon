@@ -23,6 +23,8 @@ fn node(title: &str, id: Option<&str>) -> Node {
             height: 4567.8,
         }),
         editable: false,
+            focused: None,
+            enabled: None,
         children: vec![],
         child_count: None,
         truncation_reason: None,

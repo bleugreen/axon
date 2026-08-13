@@ -640,6 +640,8 @@ mod tests {
             actions: vec![],
             frame: None,
             editable: false,
+            focused: None,
+            enabled: None,
             children: vec![],
             child_count: None,
             truncation_reason: None,

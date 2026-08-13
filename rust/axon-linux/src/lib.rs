@@ -1427,6 +1427,8 @@ mod tests {
                 height: 20.0,
             }),
             editable: false,
+            focused: None,
+            enabled: None,
             children: vec![],
             child_count: Some(0),
             truncation_reason: None,
