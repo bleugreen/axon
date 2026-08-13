@@ -487,7 +487,7 @@ function Invoke-AxonMcp {
     $script:Machine.Log.Add('mcp')
     if ($null -ne $script:Machine.McpResponder) { return & $script:Machine.McpResponder $Request }
     if ($Request -notmatch '"app"') {
-        return @{ result = @{ isError = $script:Machine.McpIsError; structuredContent = @(@{ name = 'Notepad'; identifier = 4242 }) } } |
+        return @{ result = @{ isError = $script:Machine.McpIsError; structuredContent = @{ apps = @(@{ name = 'Notepad'; identifier = 4242 }) } } } |
             ConvertTo-Json -Depth 10 | ConvertFrom-Json -Depth 100
     }
     @{
@@ -961,7 +961,7 @@ Test-Scenario "probe: the daemon's own console window is not evidence about a de
             # Task Scheduler runs `serve` as a console process, so the daemon under test is itself
             # an application in this list. A desktop with nothing else running looks exactly like
             # this, and must not pass.
-            return @{ result = @{ isError = $false; structuredContent = @(@{ name = $ProbeExecutable }) } } |
+            return @{ result = @{ isError = $false; structuredContent = @{ apps = @(@{ name = $ProbeExecutable }) } } } |
                 ConvertTo-Json -Depth 10 | ConvertFrom-Json -Depth 100
         }
         @{
