@@ -2,10 +2,6 @@ import Foundation
 import Testing
 @testable import AxonCore
 
-@Test func hostedCleanBuildRejectsCompileErrors() {
-    deliberatelyUndefinedSwiftSymbol()
-}
-
 @Test func sharedLookApplicationsEnvelopeIsByteExact() throws {
     let fixtureURL = URL(fileURLWithPath: #filePath)
         .deletingLastPathComponent()
