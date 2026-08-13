@@ -955,60 +955,10 @@ function Invoke-ProbeStage {
         if ($seen -ne [int]$children.total) {
             throw "Edge paging covered $seen children but reported total $($children.total)"
         }
-        $handBackCandidates = @($listResponse.result.structuredContent.apps | Where-Object {
-            $null -ne $_.identifier -and [int]$_.identifier -ne $daemonProcessId -and
-                [int]$_.identifier -ne [int]$browser.ProcessId
-        })
-        $measuredPriorCount = 0
-        foreach ($prior in $handBackCandidates) {
-            if ($measuredPriorCount -eq 2) { break }
-            $priorSweeps = @()
-            try {
-                foreach ($repetition in 1..2) {
-                    $priorSweeps += Invoke-HandBackSweep -PriorProcessId ([int]$prior.identifier) -TargetProcessId ([int]$browser.ProcessId)
-                }
-            }
-            catch {
-                Write-Note "hand-back sweep skipped prior pid $($prior.identifier): $_"
-                continue
-            }
-            for ($index = 0; $index -lt $priorSweeps.Count; $index++) {
-                $repetition = $index + 1
-                $sweep = $priorSweeps[$index]
-                $serializedSweep = $sweep | ConvertTo-Json -Compress -Depth 20
-                # Preserve the measurement even when its schema is incomplete. Validation used to run
-                # first, which turned the first real malformed result into an opaque failure and forced
-                # another live desktop run merely to discover which field was absent.
-                Write-Note "hand-back sweep prior=$($prior.identifier) repetition=${repetition}: $serializedSweep"
-                $missing = @()
-                if ($null -eq $sweep.foregroundLockTimeoutMs) { $missing += 'foregroundLockTimeoutMs' }
-                if ([int]$sweep.requestedPriorProcess -ne [int]$prior.identifier) { $missing += 'requestedPriorProcess' }
-                if ([int]$sweep.activatedPriorProcess -eq 0) { $missing += 'activatedPriorProcess' }
-                if ([int]$sweep.priorForegroundProcess -eq 0) { $missing += 'priorForegroundProcess' }
-                if ([int]$sweep.priorForegroundProcess -eq [int]$browser.ProcessId) { $missing += 'priorForegroundProcess[target]' }
-                if (@($sweep.results).Count -ne 8) { $missing += "results[count=$(@($sweep.results).Count)]" }
-                foreach ($result in @($sweep.results)) {
-                    $strategy = if ($null -eq $result.strategy) { '?' } else { [string]$result.strategy }
-                    foreach ($field in 'activator.returnValue','activator.getLastError','immediate.window','after250Ms.window','settled.window','cursor','elapsedMs') {
-                        $value = $result
-                        foreach ($part in $field.Split('.')) { $value = $value.$part }
-                        if ($null -eq $value) { $missing += "$strategy.$field" }
-                    }
-                    if ($result.activationProved -ne $true) { $missing += "$strategy.activationProved" }
-                }
-                if (@($sweep.results | Where-Object strategy -eq 'H' | Where-Object measurementOnly -eq $true).Count -ne 1) {
-                    $missing += 'H.measurementOnly'
-                }
-                if ($missing.Count -ne 0) {
-                    throw "hand-back sweep evidence was incomplete for prior pid $($prior.identifier), repetition $repetition (missing: $($missing -join ', '))"
-                }
-            }
-            $measuredPriorCount++
-        }
-        if ($measuredPriorCount -ne 2) {
-            throw "the hand-back sweep requires two foregroundable unrelated prior applications; measured $measuredPriorCount"
-        }
-
+        # The A-H hand-back experiment remains available through `probe foreground-handback-sweep`,
+        # but it is not repeated in the standing acceptance run. Its completed 2x2 measurement chose
+        # HeldAttachment; requiring arbitrary persistent desktop applications to foreground on every
+        # build would test runner state rather than the adopted transaction.
         $foregroundCalls = @(
             @{ name = 'keyboard'; arguments = @{ app = $browserApp; key = 'ctrl+l'; deliveryPolicy = 'foregroundPermitted' } },
             @{ name = 'keyboard'; arguments = @{ app = $browserApp; text = $browser.PageUrl; deliveryPolicy = 'foregroundPermitted' } },
