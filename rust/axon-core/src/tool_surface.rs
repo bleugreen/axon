@@ -44,9 +44,7 @@ pub struct ValidatedToolCall {
 fn artifact() -> Result<&'static Value, JsonRpcError> {
     static ARTIFACT: OnceLock<Result<Value, String>> = OnceLock::new();
     ARTIFACT
-        .get_or_init(|| {
-            parse_artifact(ARTIFACT_JSON)
-        })
+        .get_or_init(|| parse_artifact(ARTIFACT_JSON))
         .as_ref()
         .map_err(|message| internal(message))
 }
@@ -81,7 +79,9 @@ fn parse_artifact(source: &str) -> Result<Value, String> {
             .and_then(Value::as_object)
             .ok_or_else(|| format!("{path}.availability must be an object"))?;
         if availability.len() != BACKENDS.len() {
-            return Err(format!("{path}.availability must contain exactly swift, mac, windows, and linux"));
+            return Err(format!(
+                "{path}.availability must contain exactly swift, mac, windows, and linux"
+            ));
         }
         for backend in BACKENDS {
             if !availability.get(*backend).is_some_and(Value::is_boolean) {
@@ -242,9 +242,14 @@ fn check_schema_vocabulary(schema: &Value, path: &str) -> Result<(), String> {
             return Err(format!("{path}.type has unsupported value {schema_type:?}"));
         }
     }
-    let properties = object.get("properties").map(|value| {
-        value.as_object().ok_or_else(|| format!("{path}.properties must be an object"))
-    }).transpose()?;
+    let properties = object
+        .get("properties")
+        .map(|value| {
+            value
+                .as_object()
+                .ok_or_else(|| format!("{path}.properties must be an object"))
+        })
+        .transpose()?;
     if let Some(properties) = properties {
         for (name, child) in properties {
             check_schema_vocabulary(child, &format!("{path}.properties.{name}"))?;
@@ -254,10 +259,14 @@ fn check_schema_vocabulary(schema: &Value, path: &str) -> Result<(), String> {
         check_schema_vocabulary(items, &format!("{path}.items"))?;
     }
     if let Some(required) = object.get("required") {
-        let required = required.as_array().ok_or_else(|| format!("{path}.required must be an array"))?;
+        let required = required
+            .as_array()
+            .ok_or_else(|| format!("{path}.required must be an array"))?;
         let mut names = HashSet::new();
         for (index, name) in required.iter().enumerate() {
-            let name = name.as_str().ok_or_else(|| format!("{path}.required[{index}] must be a string"))?;
+            let name = name
+                .as_str()
+                .ok_or_else(|| format!("{path}.required[{index}] must be a string"))?;
             if !names.insert(name) {
                 return Err(format!("{path}.required contains duplicate {name:?}"));
             }
@@ -270,7 +279,9 @@ fn check_schema_vocabulary(schema: &Value, path: &str) -> Result<(), String> {
     }
     for keyword in ["anyOf", "oneOf"] {
         if let Some(branches) = object.get(keyword) {
-            let branches = branches.as_array().ok_or_else(|| format!("{path}.{keyword} must be an array"))?;
+            let branches = branches
+                .as_array()
+                .ok_or_else(|| format!("{path}.{keyword} must be an array"))?;
             if branches.is_empty() {
                 return Err(format!("{path}.{keyword} must not be empty"));
             }
@@ -280,7 +291,9 @@ fn check_schema_vocabulary(schema: &Value, path: &str) -> Result<(), String> {
         }
     }
     if let Some(allowed) = object.get("enum") {
-        let allowed = allowed.as_array().ok_or_else(|| format!("{path}.enum must be an array"))?;
+        let allowed = allowed
+            .as_array()
+            .ok_or_else(|| format!("{path}.enum must be an array"))?;
         if allowed.is_empty() {
             return Err(format!("{path}.enum must not be empty"));
         }
@@ -293,13 +306,21 @@ fn check_schema_vocabulary(schema: &Value, path: &str) -> Result<(), String> {
         }
     }
     let object_only = ["properties", "required", "additionalProperties"];
-    if object_only.iter().any(|keyword| object.contains_key(*keyword))
-        && object.get("type").and_then(Value::as_str).is_some_and(|value| value != "object")
+    if object_only
+        .iter()
+        .any(|keyword| object.contains_key(*keyword))
+        && object
+            .get("type")
+            .and_then(Value::as_str)
+            .is_some_and(|value| value != "object")
     {
         return Err(format!("{path} uses object keywords without type object"));
     }
     if object.contains_key("items")
-        && object.get("type").and_then(Value::as_str).is_some_and(|value| value != "array")
+        && object
+            .get("type")
+            .and_then(Value::as_str)
+            .is_some_and(|value| value != "array")
     {
         return Err(format!("{path}.items requires type array"));
     }
@@ -616,12 +637,9 @@ mod tests {
                 "text": {"contains": "Save"}
             }
         });
-        let normalized = validate_tool_arguments(
-            ToolBackend::Windows,
-            "click",
-            json!({"target": target}),
-        )
-        .unwrap();
+        let normalized =
+            validate_tool_arguments(ToolBackend::Windows, "click", json!({"target": target}))
+                .unwrap();
 
         assert_eq!(
             normalized["target"],
