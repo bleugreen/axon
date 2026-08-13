@@ -127,12 +127,6 @@ main > section {
 }
 .loop i { color: #aaa396; font-style: normal; }
 .guarantees { padding-top: 116px; padding-bottom: 126px; }
-.section-heading {
-  display: grid;
-  grid-template-columns: 1fr 2fr;
-  align-items: start;
-}
-.section-heading > p { margin: 10px 0 0; color: var(--moss); font-size: 13px; font-weight: 600; }
 .section-heading h2,
 .artifact h2,
 .install h2 {
@@ -146,7 +140,7 @@ main > section {
 .guarantee-grid {
   margin-top: 76px;
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(3, 1fr);
   border-top: 1px solid var(--line);
 }
 .guarantee-grid article {
@@ -378,8 +372,7 @@ footer {
 @media (max-width: 780px) {
   .site-header, footer { padding-left: 20px; padding-right: 20px; }
   .hero { padding-top: 82px; padding-bottom: 84px; }
-  .section-heading, .artifact, .install { grid-template-columns: 1fr; }
-  .section-heading { gap: 22px; }
+  .artifact, .install { grid-template-columns: 1fr; }
   .guarantee-grid { grid-template-columns: 1fr 1fr; }
   .guarantee-grid article:nth-child(2) { border-right: 0; }
   .artifact { gap: 52px; }
@@ -416,7 +409,6 @@ footer {
   .hero > p { font-size: 17px; line-height: 1.55; }
   .hero-actions { margin-top: 30px; }
   .guarantees { padding-top: 68px; padding-bottom: 72px; }
-  .section-heading { gap: 16px; }
   .section-heading h2, .artifact h2, .install h2 {
     font-size: 42px;
     line-height: 1.06;

@@ -131,9 +131,8 @@ function page({ title, description, body, docsPage = false, docsSlug }) {
 function home(version) {
   const guarantees = [
     ['01', 'Semantic targets', 'Address a button by its role, label, window, and surrounding context.'],
-    ['02', 'Honest results', 'Dispatch and outcome are separate facts. A click that changed nothing does not quietly report success.'],
+    ['02', 'Same interface everywhere', 'Use the same small tool surface on macOS, Windows, and Linux. One interface works the same on every OS.'],
     ['03', 'Replayable work', 'Save sessions as plain-text .axn files. Read them, edit them, share them, and run them again.'],
-    ['04', 'Local by design', 'One visible service over local inter-process communication. Nothing hosted, gated, or proprietary.'],
   ];
   return page({
     title: 'Axon — local UI access for agents',
@@ -146,10 +145,10 @@ function home(version) {
         <div class="hero-actions"><a class="button primary" href="/docs/install/">Get started</a><a class="button" href="/docs/tool-surface/">Explore the tools</a></div>
       </section>
       <section class="loop" aria-label="Axon's core loop">
-        <span>look</span><i>→</i><span>find</span><i>→</i><span>act</span><i>→</i><span>record</span>
+        <span>look</span><i>→</i><span>find</span><i>→</i><span>act</span><i>→</i><span>replay</span>
       </section>
       <section class="guarantees">
-        <div class="section-heading"><p>What Axon guarantees</p><h2>Automation that can explain itself.</h2></div>
+        <div class="section-heading"><h2>General purpose computer automation for agents</h2></div>
         <div class="guarantee-grid">${guarantees.map(([number, title, copy]) => `<article><span>${number}</span><h3>${title}</h3><p>${copy}</p></article>`).join('')}</div>
       </section>
       <section class="artifact">
