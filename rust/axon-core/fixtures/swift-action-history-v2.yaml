@@ -1,0 +1,28 @@
+version: 2
+args:
+- name: recipient
+  type: string
+- name: api_token
+  type: secret
+  source: op://Engineering/Axon/token
+- name: report_date
+  type: date
+  default: '2026-08-12'
+- name: recipient_email
+  type: email
+  default: owner@example.com
+- name: retry_count
+  type: number
+  default: 3
+- name: report_path
+  type: path
+  source: env://AXON_REPORT_PATH
+actions:
+- id: a001
+  tool: click
+  target:
+    app: Example
+    locator:
+      role: AXButton
+      title: Submit
+    name: submit-button

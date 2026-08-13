@@ -1,0 +1,128 @@
+{
+  "actions" : [
+    {
+      "app" : "Example",
+      "id" : "a001",
+      "text" : "Send {{report_path}}/{{report_date}} to {{recipient}} <{{recipient_email}}> after {{retry_count}} tries",
+      "tool" : "keyboard"
+    },
+    {
+      "expects" : [
+        {
+          "id" : "a002.value.0",
+          "kind" : "value",
+          "state" : {
+            "value" : {
+              "contains" : "{{api_token}}"
+            }
+          },
+          "target" : {
+            "app" : "Example",
+            "locator" : {
+              "identifier" : "search",
+              "role" : "AXTextField",
+              "title" : "Search"
+            },
+            "name" : "clean-search-field"
+          }
+        }
+      ],
+      "id" : "a002",
+      "target" : {
+        "app" : "Example",
+        "locator" : {
+          "identifier" : "search",
+          "role" : "AXTextField",
+          "title" : "Search"
+        },
+        "name" : "clean-search-field"
+      },
+      "tool" : "type",
+      "value" : "{{api_token}}"
+    },
+    {
+      "app" : "Example",
+      "expects" : [
+        {
+          "id" : "a003.changed.0",
+          "kind" : "changed",
+          "target" : {
+            "app" : "Example"
+          }
+        }
+      ],
+      "id" : "a003",
+      "key" : "Return",
+      "requires" : [
+        "a002.value.0"
+      ],
+      "tool" : "keyboard"
+    },
+    {
+      "expects" : [
+        {
+          "id" : "a004.changed.0",
+          "kind" : "changed",
+          "target" : {
+            "app" : "Example"
+          }
+        }
+      ],
+      "id" : "a004",
+      "target" : {
+        "app" : "Example",
+        "locator" : {
+          "identifier" : "submit-v1",
+          "role" : "AXButton",
+          "title" : "Submit report"
+        },
+        "name" : "proposed-submit-button"
+      },
+      "tool" : "click"
+    },
+    {
+      "id" : "a005",
+      "target" : {
+        "app" : "Example",
+        "locator" : {
+          "role" : "AXButton",
+          "title" : "Open"
+        },
+        "name" : "halted-row-action"
+      },
+      "tool" : "click"
+    }
+  ],
+  "args" : [
+    {
+      "name" : "recipient",
+      "type" : "string"
+    },
+    {
+      "name" : "api_token",
+      "source" : "op://Engineering/Axon/token",
+      "type" : "secret"
+    },
+    {
+      "default" : "2026-08-12",
+      "name" : "report_date",
+      "type" : "date"
+    },
+    {
+      "default" : "owner@example.com",
+      "name" : "recipient_email",
+      "type" : "email"
+    },
+    {
+      "default" : 3,
+      "name" : "retry_count",
+      "type" : "number"
+    },
+    {
+      "name" : "report_path",
+      "source" : "env://AXON_REPORT_PATH",
+      "type" : "path"
+    }
+  ],
+  "version" : 2
+}

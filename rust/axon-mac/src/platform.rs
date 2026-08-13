@@ -108,6 +108,8 @@ unsafe extern "C" {
     ) -> u8;
     fn CFGetTypeID(value: CFTypeRef) -> usize;
     fn CFStringGetTypeID() -> usize;
+    fn CFBooleanGetTypeID() -> usize;
+    fn CFBooleanGetValue(value: CFTypeRef) -> bool;
     fn CFArrayGetTypeID() -> usize;
     fn CFArrayGetCount(array: CFArrayRef) -> isize;
     fn CFArrayGetValueAtIndex(array: CFArrayRef, index: isize) -> *const c_void;
@@ -180,6 +182,12 @@ fn string_value(value: CFTypeRef) -> Option<String> {
 }
 fn text_attribute(element: AXUIElementRef, name: &str) -> Option<String> {
     attribute(element, name).and_then(|v| string_value(v.0))
+}
+fn bool_attribute(element: AXUIElementRef, name: &str) -> Option<bool> {
+    attribute(element, name).and_then(|value| {
+        (unsafe { CFGetTypeID(value.0) } == unsafe { CFBooleanGetTypeID() })
+            .then(|| unsafe { CFBooleanGetValue(value.0) })
+    })
 }
 fn frame(element: AXUIElementRef) -> Option<Rect> {
     let position = attribute(element, "AXPosition")?;
@@ -263,6 +271,8 @@ fn capture_node(element: Owned, depth: usize, count: &mut usize) -> Captured {
             actions: inferred_actions(&role),
             frame: frame(element.0),
             editable: editable(&role),
+            focused: bool_attribute(element.0, "AXFocused"),
+            enabled: bool_attribute(element.0, "AXEnabled"),
             children,
             child_count,
             truncation_reason,

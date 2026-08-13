@@ -85,6 +85,10 @@ pub struct Node {
     pub frame: Option<Rect>,
     #[serde(default)]
     pub editable: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub focused: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub enabled: Option<bool>,
     #[serde(default)]
     pub children: Vec<Node>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -116,6 +120,53 @@ pub struct Snapshot {
     pub app: Application,
 }
 
+/// Stable observable state used to decide whether an action changed an application.
+///
+/// A snapshot ID identifies a capture, not application state, so it is deliberately absent. The
+/// summary otherwise preserves application identity, window metadata, and every observed node.
+/// This is the Rust counterpart to Swift's `SnapshotSummary`, extended to the node tree because
+/// the cross-platform observation model can expose ordinary control changes directly.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SnapshotSummary {
+    pub app: SnapshotAppIdentity,
+    pub windows: Vec<SnapshotWindowSummary>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SnapshotAppIdentity {
+    pub name: String,
+    pub identifier: Option<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SnapshotWindowSummary {
+    pub title: Option<String>,
+    pub root: Node,
+}
+
+impl From<&Snapshot> for SnapshotSummary {
+    fn from(snapshot: &Snapshot) -> Self {
+        Self {
+            app: SnapshotAppIdentity {
+                name: snapshot.app.name.clone(),
+                identifier: snapshot.app.identifier.clone(),
+            },
+            windows: snapshot
+                .app
+                .windows
+                .iter()
+                .map(|window| SnapshotWindowSummary {
+                    title: window.title.clone(),
+                    root: window.root.clone(),
+                })
+                .collect(),
+        }
+    }
+}
+
 impl Snapshot {
     pub fn new(app: Application) -> Self {
         Self {
@@ -125,6 +176,19 @@ impl Snapshot {
     }
     pub fn handle(&self, index: usize) -> SnapshotHandle {
         SnapshotHandle(format!("{}:{index}", self.id.0))
+    }
+    pub fn node(&self, index: usize) -> Option<&Node> {
+        fn add<'a>(node: &'a Node, nodes: &mut Vec<&'a Node>) {
+            nodes.push(node);
+            for child in &node.children {
+                add(child, nodes);
+            }
+        }
+        let mut nodes = Vec::new();
+        for window in &self.app.windows {
+            add(&window.root, &mut nodes);
+        }
+        nodes.get(index).copied()
     }
     pub fn index_for_handle(&self, handle: &SnapshotHandle) -> Result<usize, HandleError> {
         let (snapshot, index) = handle.0.split_once(':').ok_or(HandleError::Malformed)?;
@@ -147,4 +211,51 @@ pub enum HandleError {
         expected: SnapshotId,
         actual: String,
     },
+}
+
+#[cfg(test)]
+mod summary_tests {
+    use super::*;
+    use serde_json::json;
+
+    fn snapshot(value: &str) -> Snapshot {
+        serde_json::from_value(json!({
+            "id": "capture-id",
+            "app": {
+                "name": "Editor",
+                "identifier": "com.example.Editor",
+                "windows": [{
+                    "title": "Document",
+                    "root": {
+                        "role": "window",
+                        "children": [{"role": "textField", "value": value}]
+                    }
+                }]
+            }
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn snapshot_summary_ignores_capture_identity_for_identical_observations() {
+        let first = snapshot("draft");
+        let mut second = first.clone();
+        second.id = SnapshotId("another-capture-id".into());
+
+        assert_eq!(
+            SnapshotSummary::from(&first),
+            SnapshotSummary::from(&second)
+        );
+    }
+
+    #[test]
+    fn snapshot_summary_detects_ordinary_control_changes() {
+        let before = snapshot("draft");
+        let after = snapshot("saved");
+
+        assert_ne!(
+            SnapshotSummary::from(&before),
+            SnapshotSummary::from(&after)
+        );
+    }
 }

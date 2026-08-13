@@ -1,0 +1,81 @@
+version: 2
+args:
+- name: recipient
+  type: string
+- name: api_token
+  type: secret
+  source: op://Engineering/Axon/token
+- name: report_date
+  type: date
+  default: '2026-08-12'
+- name: recipient_email
+  type: email
+  default: owner@example.com
+- name: retry_count
+  type: number
+  default: 3
+- name: report_path
+  type: path
+  source: env://AXON_REPORT_PATH
+actions:
+- id: a001
+  tool: keyboard
+  app: Example
+  text: Send {{report_path}}/{{report_date}} to {{recipient}} <{{recipient_email}}>
+    after {{retry_count}} tries
+- id: a002
+  tool: type
+  target:
+    app: Example
+    locator:
+      identifier: search
+      role: AXTextField
+      title: Search
+    name: clean-search-field
+  value: '{{api_token}}'
+  expects:
+  - id: a002.value.0
+    kind: value
+    state:
+      value:
+        contains: '{{api_token}}'
+    target:
+      app: Example
+      locator:
+        identifier: search
+        role: AXTextField
+        title: Search
+      name: clean-search-field
+- id: a003
+  tool: keyboard
+  app: Example
+  key: Return
+  requires:
+  - a002.value.0
+  expects:
+  - id: a003.changed.0
+    kind: changed
+    target:
+      app: Example
+- id: a004
+  tool: click
+  target:
+    app: Example
+    locator:
+      identifier: submit-v1
+      role: AXButton
+      title: Submit report
+    name: proposed-submit-button
+  expects:
+  - id: a004.changed.0
+    kind: changed
+    target:
+      app: Example
+- id: a005
+  tool: click
+  target:
+    app: Example
+    locator:
+      role: AXButton
+      title: Open
+    name: halted-row-action

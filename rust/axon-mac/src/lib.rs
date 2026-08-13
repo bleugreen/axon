@@ -75,6 +75,36 @@ pub struct Router<B> {
     observations: HashMap<String, (Snapshot, Vec<SemanticElementName>)>,
     observation_sequence: u64,
 }
+
+/// Replay targets may carry recording-only locator evidence. Native tool decoding receives only
+/// the primitive semantic target; the shared runner remains responsible for registering the
+/// attached locator before crossing this boundary.
+fn attach_target_resolution(result: &mut Value, resolution: &axon_core::TargetResolution) {
+    let Some(object) = result.as_object_mut() else {
+        return;
+    };
+    object.remove("resolution");
+    object.insert(
+        "targetResolution".into(),
+        serde_json::to_value(resolution).expect("target resolution serializes"),
+    );
+}
+
+fn primitive_dispatch_params(params: &Map<String, Value>) -> Map<String, Value> {
+    let mut params = params.clone();
+    for key in ["target", "from", "to"] {
+        let Some(Value::Object(target)) = params.get_mut(key) else {
+            continue;
+        };
+        if target.get("app").and_then(Value::as_str).is_some()
+            && target.get("name").and_then(Value::as_str).is_some()
+        {
+            target.retain(|field, _| field == "app" || field == "name");
+        }
+    }
+
+    params
+}
 pub trait ReadableStateProvider {
     fn readable_state(
         &self,
@@ -1156,6 +1186,15 @@ impl<
                 continue_on_error: None,
             });
         let mut runner = AxnRunner::new(self);
+        if let Some(healed_path) = params.get("healedPath").and_then(Value::as_str) {
+            runner = runner.with_healed_output(
+                params
+                    .get("sourcePath")
+                    .and_then(Value::as_str)
+                    .map(str::to_owned),
+                healed_path.to_owned(),
+            );
+        }
         let result = runner
             .run(&doc, &args, options)
             .map_err(|e| rpc_error(-32602, e.to_string()))?;
@@ -1171,61 +1210,105 @@ impl<
         + BackgroundPixelPointer,
 > ToolDispatcher for Router<B>
 {
-    fn dispatch(&mut self, tool: &str, params: &Map<String, Value>) -> DispatchOutcome {
-        match self.dispatch_tool(tool, params) {
-            Ok(result) => DispatchOutcome {
-                success: result
-                    .get("success")
-                    .and_then(Value::as_bool)
-                    .unwrap_or(true),
-                result,
-                error: None,
-                resolution: None,
+    fn register_replay_target(
+        &mut self,
+        app: &str,
+        name: &str,
+        locator: &axon_core::Locator,
+    ) -> Result<(), String> {
+        self.semantic_names.register_replay_locator(
+            axon_core::WireElementTarget {
+                app: app.into(),
+                name: name.into(),
             },
+            locator.clone(),
+        );
+        Ok(())
+    }
+
+    fn dispatch(&mut self, tool: &str, params: &Map<String, Value>) -> DispatchOutcome {
+        let primitive_params = primitive_dispatch_params(params);
+        match self.dispatch_tool(tool, &primitive_params) {
+            Ok(mut result) => {
+                let dispatched_without_semantic_verification =
+                    result.get("dispatchSuccess").and_then(Value::as_bool) == Some(true)
+                        && result.get("success").and_then(Value::as_bool) == Some(false);
+                let resolution = axon_core::replay_target_resolution(
+                    params,
+                    &self.semantic_names,
+                    self.snapshot.as_ref(),
+                );
+                if let Some(resolution) = &resolution {
+                    attach_target_resolution(&mut result, resolution);
+                }
+                DispatchOutcome {
+                    success: result
+                        .get("success")
+                        .and_then(Value::as_bool)
+                        .unwrap_or(true),
+                    dispatched_without_semantic_verification,
+                    resolution,
+                    result,
+                    error: None,
+                }
+            }
             Err(error) => DispatchOutcome {
                 success: false,
+                dispatched_without_semantic_verification: false,
+                resolution: axon_core::replay_target_resolution(
+                    params,
+                    &self.semantic_names,
+                    self.snapshot.as_ref(),
+                ),
                 result: Value::Null,
                 error: Some(error.message),
-                resolution: None,
             },
         }
     }
     fn verify(&mut self, fact: &ExpectedFact) -> Result<(), String> {
-        if fact.fields.get("kind").and_then(Value::as_str) != Some("value") {
-            return Err(format!("unsupported expected fact kind for {}", fact.id));
-        }
-        let target = fact
-            .fields
-            .get("target")
-            .and_then(Value::as_str)
-            .ok_or_else(|| format!("expected fact {} requires a target handle", fact.id))?;
-        let observed = self
+        let (app, locator) = axon_core::expected_fact_target(fact)?;
+        let snapshot = self
             .backend
-            .read_value(&SnapshotHandle(target.into()))
-            .map_err(|e| e.to_string())?
-            .ok_or_else(|| format!("expected fact {} observed no value", fact.id))?;
-        if let Some(expected) = fact.fields.get("equals").and_then(Value::as_str) {
-            if observed != expected {
-                return Err(format!(
-                    "expected fact {} failed: expected {expected:?}, observed {observed:?}",
-                    fact.id
-                ));
-            }
-            return Ok(());
+            .capture(&AppQuery {
+                name: Some(app),
+                identifier: None,
+            })
+            .map_err(|error| error.to_string())?;
+        let resolution = axon_core::LocatorResolver::resolve(&locator, &snapshot);
+        let candidate = axon_core::unique_expected_fact_candidate(fact, &resolution)?;
+        let handle = snapshot.handle(candidate.index);
+        let node = snapshot
+            .node(candidate.index)
+            .ok_or_else(|| format!("fact {} resolved outside snapshot", fact.id))?;
+        let mut observed = serde_json::to_value(node)
+            .map_err(|error| error.to_string())?
+            .as_object()
+            .cloned()
+            .unwrap_or_default();
+        observed.insert("exists".into(), Value::Bool(true));
+        if matches!(axon_core::expected_fact_kind(fact)?, "value" | "selected")
+            && let Some(value) = self
+                .backend
+                .read_value(&handle)
+                .map_err(|error| error.to_string())?
+        {
+            observed.insert(
+                axon_core::expected_fact_kind(fact)?.into(),
+                Value::String(value),
+            );
         }
-        if let Some(expected) = fact.fields.get("contains").and_then(Value::as_str) {
-            if !observed.contains(expected) {
-                return Err(format!(
-                    "expected fact {} failed: {observed:?} does not contain {expected:?}",
-                    fact.id
-                ));
-            }
-            return Ok(());
-        }
-        Err(format!(
-            "expected value fact {} requires equals or contains",
-            fact.id
-        ))
+        axon_core::verify_expected_fact_state(fact, &observed)
+    }
+    fn capture_changed_baseline(&mut self, fact: &ExpectedFact) -> Result<Value, String> {
+        let app = axon_core::expected_fact_app(fact)?;
+        let snapshot = self
+            .backend
+            .capture(&AppQuery {
+                name: Some(app),
+                identifier: None,
+            })
+            .map_err(|error| error.to_string())?;
+        axon_core::changed_snapshot_baseline(&snapshot)
     }
 }
 
@@ -1342,6 +1425,35 @@ pub fn parse_request(line: &str) -> Result<JsonRpcRequest, JsonRpcResponse> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn native_result_uses_structured_target_resolution() {
+        let mut result = json!({"resolution":{"status":"unique"}});
+        let resolution: axon_core::TargetResolution = serde_json::from_value(json!({
+            "status":"missing","confidence":"none","path":"fullSnapshot","context":"complete"
+        }))
+        .unwrap();
+        attach_target_resolution(&mut result, &resolution);
+        assert!(result.get("resolution").is_none());
+        assert_eq!(result["targetResolution"]["status"], "missing");
+    }
+
+    #[test]
+    fn replay_metadata_is_stripped_from_semantic_targets_before_native_dispatch() {
+        let params = json!({
+            "target": {"app":"Notes", "name":"save", "locator":{"role":"button"}, "recordedAt":12},
+            "from": {"x":1, "y":2, "recordedAt":12},
+            "value": "draft"
+        })
+        .as_object()
+        .unwrap()
+        .clone();
+
+        let primitive = primitive_dispatch_params(&params);
+        assert_eq!(primitive["target"], json!({"app":"Notes", "name":"save"}));
+        assert_eq!(primitive["from"], params["from"]);
+        assert_eq!(primitive["value"], "draft");
+    }
 
     #[test]
     fn excluded_tools_are_capability_errors_before_dispatch() {

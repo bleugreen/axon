@@ -1,6 +1,7 @@
 //! Platform-neutral models and execution machinery shared by Axon backends.
 
 pub mod axn;
+pub mod axn_healing;
 pub mod backend;
 pub mod chart;
 pub mod delivery;
@@ -16,6 +17,7 @@ pub mod snapshot;
 pub mod text;
 
 pub use axn::*;
+pub use axn_healing::*;
 pub use backend::*;
 pub use chart::*;
 pub use delivery::*;

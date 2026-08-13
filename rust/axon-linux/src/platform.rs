@@ -6,7 +6,7 @@ use crate::{
     x11::{X11Session, coordinate},
 };
 use atspi::{
-    CoordType, ObjectRefOwned,
+    CoordType, ObjectRefOwned, State,
     proxy::{
         accessible::{AccessibleProxy, ObjectRefExt},
         bus::BusProxy,
@@ -1235,6 +1235,7 @@ impl Actor {
                 .await
                 .ok()
                 .filter(|s| !s.is_empty());
+            let state = timeout("state", proxy.get_state()).await.ok();
             let proxies = timeout("interfaces", proxy.proxies()).await.ok();
             let actions = if let Some(p) = &proxies {
                 match timeout("action interface", p.action()).await {
@@ -1312,6 +1313,8 @@ impl Actor {
                 actions,
                 frame,
                 editable,
+                focused: state.map(|state| state.contains(State::Focused)),
+                enabled: state.map(|state| state.contains(State::Enabled)),
                 children,
                 child_count,
                 truncation_reason: incompleteness(
