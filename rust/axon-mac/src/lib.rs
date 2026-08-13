@@ -1310,12 +1310,6 @@ impl<
             .map_err(|error| error.to_string())?;
         axon_core::changed_snapshot_baseline(&snapshot)
     }
-    fn verify_changed(&mut self, fact: &ExpectedFact, baseline: &Value) -> Result<(), String> {
-        let current = self.capture_changed_baseline(fact)?;
-        (current != *baseline)
-            .then_some(())
-            .ok_or_else(|| format!("fact {} did not verify: app did not change", fact.id))
-    }
 }
 
 fn bounded_ms(

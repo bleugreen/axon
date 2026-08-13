@@ -5,6 +5,11 @@ use crate::{
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use std::collections::{HashMap, HashSet};
+use std::thread;
+use std::time::{Duration, Instant};
+
+pub const CHANGE_POLL_INTERVAL: Duration = Duration::from_millis(100);
+pub const CHANGE_TIMEOUT: Duration = Duration::from_millis(5_000);
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -399,8 +404,30 @@ pub trait ToolDispatcher {
     fn capture_changed_baseline(&mut self, fact: &ExpectedFact) -> Result<Value, String> {
         Err(format!("changed fact {} is unsupported", fact.id))
     }
-    fn verify_changed(&mut self, fact: &ExpectedFact, _baseline: &Value) -> Result<(), String> {
-        Err(format!("changed fact {} is unsupported", fact.id))
+    fn change_poll_interval(&self) -> Duration {
+        CHANGE_POLL_INTERVAL
+    }
+    fn change_timeout(&self) -> Duration {
+        CHANGE_TIMEOUT
+    }
+    fn verify_changed(&mut self, fact: &ExpectedFact, baseline: &Value) -> Result<(), String> {
+        let deadline = Instant::now() + self.change_timeout();
+        loop {
+            let current = self.capture_changed_baseline(fact)?;
+            if current != *baseline {
+                return Ok(());
+            }
+            if Instant::now() > deadline {
+                return Err(format!(
+                    "fact {} did not verify: app did not change",
+                    fact.id
+                ));
+            }
+            let interval = self.change_poll_interval();
+            if !interval.is_zero() {
+                thread::sleep(interval);
+            }
+        }
     }
     fn verify_replay_locator(
         &mut self,
@@ -650,9 +677,13 @@ impl<'a, D: ToolDispatcher> AxnRunner<'a, D> {
                 }
             }
             if let Some(error) = action.requires.iter().find_map(|id| {
-                facts
-                    .get(id)
-                    .and_then(|fact| self.dispatcher.verify(fact).err())
+                facts.get(id).and_then(|fact| {
+                    // `changed` records a transition already observed after its action. Unlike
+                    // state facts, it is durable causal evidence and has no valid fresh baseline.
+                    (expected_fact_kind(fact).ok() != Some("changed"))
+                        .then(|| self.dispatcher.verify(fact).err())
+                        .flatten()
+                })
             }) {
                 trace.push(TraceEntry {
                     index,

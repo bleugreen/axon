@@ -10,6 +10,67 @@ struct LocatorFixture {
 }
 
 #[test]
+fn changed_polls_fresh_captures_until_a_delayed_transition() {
+    let doc = semantic_doc(json!([{
+        "tool":"click","target":{"app":"Example","name":"button","locator":{"role":"AXButton"}},
+        "expects":[{"id":"click.changed.1","kind":"changed","target":{"app":"Example","locator":{"role":"AXWindow"}}}]
+    }]));
+    let mut dispatcher = SemanticDispatcher {
+        states: vec![Map::new()],
+        cursor: 0,
+        dispatched: 0,
+        fail_dispatch: false,
+        changed_captures: vec![
+            json!({"value":"before"}),
+            json!({"value":"before"}),
+            json!({"value":"after"}),
+        ],
+        changed_cursor: 0,
+    };
+    let result = AxnRunner::new(&mut dispatcher)
+        .run(
+            &doc,
+            &Map::new(),
+            RunOptions {
+                dry_run: Some(false),
+                continue_on_error: Some(false),
+            },
+        )
+        .unwrap();
+    assert!(result.success);
+    assert_eq!(dispatcher.changed_cursor, 3);
+}
+
+#[test]
+fn established_changed_fact_can_satisfy_a_later_requirement() {
+    let doc = semantic_doc(json!([
+        {"tool":"click","target":{"app":"Example","name":"first","locator":{"role":"AXButton"}},"expects":[{"id":"first.changed.1","kind":"changed","target":{"app":"Example","locator":{"role":"AXWindow"}}}]},
+        {"tool":"click","target":{"app":"Example","name":"second","locator":{"role":"AXButton"}},"requires":["first.changed.1"]}
+    ]));
+    let mut dispatcher = SemanticDispatcher {
+        states: vec![Map::new()],
+        cursor: 0,
+        dispatched: 0,
+        fail_dispatch: false,
+        changed_captures: vec![json!({"value":"before"}), json!({"value":"after"})],
+        changed_cursor: 0,
+    };
+    let result = AxnRunner::new(&mut dispatcher)
+        .run(
+            &doc,
+            &Map::new(),
+            RunOptions {
+                dry_run: Some(false),
+                continue_on_error: Some(false),
+            },
+        )
+        .unwrap();
+    assert!(result.success);
+    assert_eq!(dispatcher.dispatched, 2);
+    assert_eq!(dispatcher.changed_cursor, 2);
+}
+
+#[test]
 fn v2_replay_registers_locator_and_strips_recording_metadata() {
     let doc = AxnCodec::parse(include_str!("../fixtures/swift-action-history-v2.yaml")).unwrap();
     let mut dispatcher = Dispatcher {
@@ -587,6 +648,7 @@ struct SemanticDispatcher {
     dispatched: usize,
     fail_dispatch: bool,
     changed_captures: Vec<Value>,
+    changed_cursor: usize,
 }
 impl ToolDispatcher for SemanticDispatcher {
     fn dispatch(&mut self, _tool: &str, _params: &Map<String, Value>) -> DispatchOutcome {
@@ -604,13 +666,19 @@ impl ToolDispatcher for SemanticDispatcher {
         verify_expected_fact_state(fact, state)
     }
     fn capture_changed_baseline(&mut self, _fact: &ExpectedFact) -> Result<Value, String> {
-        Ok(self.changed_captures.first().cloned().unwrap())
+        let capture = self
+            .changed_captures
+            .get(self.changed_cursor.min(self.changed_captures.len() - 1))
+            .cloned()
+            .unwrap();
+        self.changed_cursor += 1;
+        Ok(capture)
     }
-    fn verify_changed(&mut self, fact: &ExpectedFact, baseline: &Value) -> Result<(), String> {
-        let current = self.changed_captures.get(1).unwrap();
-        (current != baseline)
-            .then_some(())
-            .ok_or_else(|| format!("fact {} did not verify: app did not change", fact.id))
+    fn change_poll_interval(&self) -> std::time::Duration {
+        std::time::Duration::ZERO
+    }
+    fn change_timeout(&self) -> std::time::Duration {
+        std::time::Duration::from_millis(20)
     }
 }
 
@@ -630,6 +698,7 @@ fn changed_captures_before_dispatch_and_dispatch_only_can_succeed_causally() {
         dispatched: 0,
         fail_dispatch: true,
         changed_captures: vec![json!({"value":"before"}), json!({"value":"after"})],
+        changed_cursor: 0,
     };
     let result = AxnRunner::new(&mut dispatcher)
         .run(
@@ -663,6 +732,7 @@ fn requires_reverifies_the_established_fact_before_dispatch() {
         dispatched: 0,
         fail_dispatch: false,
         changed_captures: vec![],
+        changed_cursor: 0,
     };
     let result = AxnRunner::new(&mut dispatcher)
         .run(
@@ -748,6 +818,7 @@ fn expected_fact_references_resolve_and_failed_causal_facts_stay_unverified() {
         dispatched: 0,
         fail_dispatch: false,
         changed_captures: vec![],
+        changed_cursor: 0,
     };
     let args = serde_json::from_value(json!({"api_token":"fixture-secret"})).unwrap();
     let result = AxnRunner::new(&mut dispatcher)
@@ -778,6 +849,7 @@ fn expected_fact_references_resolve_and_failed_causal_facts_stay_unverified() {
         dispatched: 0,
         fail_dispatch: false,
         changed_captures: vec![],
+        changed_cursor: 0,
     };
     let mut mismatch_doc = doc.clone();
     mismatch_doc.actions[0].expects[0].fields["state"]["value"] = json!({"equals":"{{api_token}}"});
@@ -816,6 +888,7 @@ fn expected_fact_references_resolve_and_failed_causal_facts_stay_unverified() {
         dispatched: 0,
         fail_dispatch: true,
         changed_captures: vec![],
+        changed_cursor: 0,
     };
     let failed = AxnRunner::new(&mut failed_dispatcher)
         .run(
