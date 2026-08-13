@@ -809,13 +809,14 @@ function Invoke-ProbeStage {
         $escapedResultPath = $resultPath.Replace("'", "''")
         $escapedTemporaryPath = $temporaryPath.Replace("'", "''")
         $command = @"
+Add-Type -AssemblyName System.Windows.Forms
 Add-Type @'
 using System.Runtime.InteropServices;
 public static class AxonForegroundTimeoutRepair {
     [DllImport("user32.dll", SetLastError = true, EntryPoint = "SystemParametersInfoW")]
     public static extern bool Get(uint action, uint uiParam, ref uint value, uint flags);
     [DllImport("user32.dll", SetLastError = true, EntryPoint = "SystemParametersInfoW")]
-    public static extern bool Set(uint action, uint uiParam, ref uint value, uint flags);
+    public static extern bool Set(uint action, uint uiParam, uint value, uint flags);
 }
 '@
 function Read-ForegroundTimeout {
@@ -825,12 +826,19 @@ function Read-ForegroundTimeout {
     }
     `$current
 }
-`$before = Read-ForegroundTimeout
-[uint32]`$requested = $value
-if (-not [AxonForegroundTimeoutRepair]::Set(0x2001, 0, [ref]`$requested, 2)) {
-    throw "SPI_SETFOREGROUNDLOCKTIMEOUT failed: `$([Runtime.InteropServices.Marshal]::GetLastWin32Error())"
-}
-`$after = Read-ForegroundTimeout
+`$form = [Windows.Forms.Form]::new()
+`$form.Text = 'Axon foreground timeout repair'
+`$form.TopMost = `$true
+`$form.Show()
+`$form.Activate()
+[Windows.Forms.Application]::DoEvents()
+try {
+    `$before = Read-ForegroundTimeout
+    if (-not [AxonForegroundTimeoutRepair]::Set(0x2001, 0, [uint32]$value, 0)) {
+        throw "SPI_SETFOREGROUNDLOCKTIMEOUT failed: `$([Runtime.InteropServices.Marshal]::GetLastWin32Error())"
+    }
+    `$after = Read-ForegroundTimeout
+} finally { `$form.Close() }
 @{ before = `$before; after = `$after } | ConvertTo-Json -Compress | Set-Content -LiteralPath '$escapedTemporaryPath' -Encoding utf8
 Move-Item -LiteralPath '$escapedTemporaryPath' -Destination '$escapedResultPath' -Force
 if (`$after -ne $value) { exit 1 }

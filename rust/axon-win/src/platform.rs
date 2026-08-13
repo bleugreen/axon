@@ -1961,14 +1961,13 @@ impl Drop for ForegroundTimeoutRestore {
 }
 
 fn set_foreground_lock_timeout(value: u32) -> windows::core::Result<()> {
-    // SPI_SETFOREGROUNDLOCKTIMEOUT reads a DWORD through pvParam. Passing the numeric value as
-    // either uiParam or a pointer address can report success while leaving the setting at zero.
-    let mut value = value;
+    // Unlike the corresponding GET action, SPI_SETFOREGROUNDLOCKTIMEOUT interprets pvParam itself
+    // as the DWORD value. The caller must also be eligible to change the foreground window.
     unsafe {
         SystemParametersInfoW(
             SPI_SETFOREGROUNDLOCKTIMEOUT,
             0,
-            Some((&mut value as *mut u32).cast()),
+            (value != 0).then_some(value as usize as *mut std::ffi::c_void),
             SPIF_SENDCHANGE,
         )
     }
