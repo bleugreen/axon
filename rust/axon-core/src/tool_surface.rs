@@ -5,6 +5,8 @@ use std::sync::OnceLock;
 
 const ARTIFACT_JSON: &str = include_str!("../../../schema/tool-surface-v1.json");
 const INVALID_PARAMS: i64 = -32602;
+const INTERNAL_ERROR: i64 = -32603;
+const BACKENDS: &[&str] = &["swift", "mac", "windows", "linux"];
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ToolBackend {
@@ -12,6 +14,14 @@ pub enum ToolBackend {
     Mac,
     Windows,
     Linux,
+}
+
+fn internal(message: &str) -> JsonRpcError {
+    JsonRpcError {
+        code: INTERNAL_ERROR,
+        message: "Internal error: invalid embedded tool surface artifact".into(),
+        data: Some(json!({"reason": message})),
+    }
 }
 
 impl ToolBackend {
@@ -35,40 +45,94 @@ fn artifact() -> Result<&'static Value, JsonRpcError> {
     static ARTIFACT: OnceLock<Result<Value, String>> = OnceLock::new();
     ARTIFACT
         .get_or_init(|| {
-            let value: Value = serde_json::from_str(ARTIFACT_JSON)
-                .map_err(|error| format!("invalid tool surface artifact: {error}"))?;
-            if value.get("formatVersion") != Some(&json!(1)) {
-                return Err("unsupported tool surface formatVersion".into());
-            }
-            let tools = value
-                .get("tools")
-                .and_then(Value::as_array)
-                .ok_or_else(|| "tool surface tools must be an array".to_string())?;
-            for tool in tools {
-                let schema = tool
-                    .get("inputSchema")
-                    .ok_or_else(|| "tool surface entry is missing inputSchema".to_string())?;
-                check_schema_vocabulary(schema, "inputSchema")?;
-            }
-            Ok(value)
+            parse_artifact(ARTIFACT_JSON)
         })
         .as_ref()
-        .map_err(|message| invalid("toolSurface", message, None))
+        .map_err(|message| internal(message))
+}
+
+fn parse_artifact(source: &str) -> Result<Value, String> {
+    let value: Value = serde_json::from_str(source)
+        .map_err(|error| format!("invalid tool surface artifact: {error}"))?;
+    let root = value
+        .as_object()
+        .ok_or_else(|| "tool surface artifact must be an object".to_string())?;
+    if root.get("formatVersion") != Some(&json!(1)) {
+        return Err("unsupported tool surface formatVersion".into());
+    }
+    let tools = root
+        .get("tools")
+        .and_then(Value::as_array)
+        .ok_or_else(|| "tool surface tools must be an array".to_string())?;
+    let mut names = HashSet::new();
+    for (index, tool) in tools.iter().enumerate() {
+        let path = format!("tools[{index}]");
+        let tool = tool
+            .as_object()
+            .ok_or_else(|| format!("{path} must be an object"))?;
+        let name = required_nonempty_string(tool, "name", &path)?;
+        if !names.insert(name) {
+            return Err(format!("duplicate tool name {name:?}"));
+        }
+        required_string(tool, "description", &path)?;
+        required_string(tool, "socketMethod", &path)?;
+        let availability = tool
+            .get("availability")
+            .and_then(Value::as_object)
+            .ok_or_else(|| format!("{path}.availability must be an object"))?;
+        if availability.len() != BACKENDS.len() {
+            return Err(format!("{path}.availability must contain exactly swift, mac, windows, and linux"));
+        }
+        for backend in BACKENDS {
+            if !availability.get(*backend).is_some_and(Value::is_boolean) {
+                return Err(format!("{path}.availability.{backend} must be a boolean"));
+            }
+        }
+        let schema = tool
+            .get("inputSchema")
+            .ok_or_else(|| format!("{path} is missing inputSchema"))?;
+        check_schema_vocabulary(schema, &format!("{path}.inputSchema"))?;
+    }
+    Ok(value)
+}
+
+fn required_string<'a>(
+    object: &'a Map<String, Value>,
+    key: &str,
+    path: &str,
+) -> Result<&'a str, String> {
+    object
+        .get(key)
+        .and_then(Value::as_str)
+        .ok_or_else(|| format!("{path}.{key} must be a string"))
+}
+
+fn required_nonempty_string<'a>(
+    object: &'a Map<String, Value>,
+    key: &str,
+    path: &str,
+) -> Result<&'a str, String> {
+    let value = required_string(object, key, path)?;
+    if value.is_empty() {
+        Err(format!("{path}.{key} must not be empty"))
+    } else {
+        Ok(value)
+    }
 }
 
 pub fn backend_tools(backend: ToolBackend) -> Result<Vec<Value>, JsonRpcError> {
-    let tools = artifact()?["tools"].as_array().expect("checked above");
+    let tools = artifact()?
+        .get("tools")
+        .and_then(Value::as_array)
+        .ok_or_else(|| internal("validated artifact lost tools array"))?;
     Ok(tools
         .iter()
         .filter(|tool| available(tool, backend))
-        .map(|tool| {
-            let mut entry = tool
-                .as_object()
-                .expect("artifact tool entry must be object")
-                .clone();
+        .filter_map(|tool| {
+            let mut entry = tool.as_object()?.clone();
             entry.remove("availability");
             entry.remove("socketMethod");
-            Value::Object(entry)
+            Some(Value::Object(entry))
         })
         .collect())
 }
@@ -122,9 +186,10 @@ pub fn validate_tools_call(
 }
 
 fn find_tool(backend: ToolBackend, name: &str) -> Result<&'static Value, JsonRpcError> {
-    artifact()?["tools"]
-        .as_array()
-        .expect("checked above")
+    artifact()?
+        .get("tools")
+        .and_then(Value::as_array)
+        .ok_or_else(|| internal("validated artifact lost tools array"))?
         .iter()
         .find(|tool| tool["name"].as_str() == Some(name) && available(tool, backend))
         .ok_or_else(|| {
@@ -161,7 +226,23 @@ fn check_schema_vocabulary(schema: &Value, path: &str) -> Result<(), String> {
             return Err(format!("unsupported schema keyword {path}.{key}"));
         }
     }
-    if let Some(properties) = object.get("properties").and_then(Value::as_object) {
+    if let Some(description) = object.get("description")
+        && !description.is_string()
+    {
+        return Err(format!("{path}.description must be a string"));
+    }
+    if let Some(schema_type) = object.get("type") {
+        let schema_type = schema_type
+            .as_str()
+            .ok_or_else(|| format!("{path}.type must be a string"))?;
+        if !["object", "array", "string", "boolean", "integer", "number"].contains(&schema_type) {
+            return Err(format!("{path}.type has unsupported value {schema_type:?}"));
+        }
+    }
+    let properties = object.get("properties").map(|value| {
+        value.as_object().ok_or_else(|| format!("{path}.properties must be an object"))
+    }).transpose()?;
+    if let Some(properties) = properties {
         for (name, child) in properties {
             check_schema_vocabulary(child, &format!("{path}.properties.{name}"))?;
         }
@@ -169,12 +250,57 @@ fn check_schema_vocabulary(schema: &Value, path: &str) -> Result<(), String> {
     if let Some(items) = object.get("items") {
         check_schema_vocabulary(items, &format!("{path}.items"))?;
     }
+    if let Some(required) = object.get("required") {
+        let required = required.as_array().ok_or_else(|| format!("{path}.required must be an array"))?;
+        let mut names = HashSet::new();
+        for (index, name) in required.iter().enumerate() {
+            let name = name.as_str().ok_or_else(|| format!("{path}.required[{index}] must be a string"))?;
+            if !names.insert(name) {
+                return Err(format!("{path}.required contains duplicate {name:?}"));
+            }
+        }
+    }
+    if let Some(additional) = object.get("additionalProperties")
+        && !additional.is_boolean()
+    {
+        return Err(format!("{path}.additionalProperties must be a boolean"));
+    }
     for keyword in ["anyOf", "oneOf"] {
-        if let Some(branches) = object.get(keyword).and_then(Value::as_array) {
+        if let Some(branches) = object.get(keyword) {
+            let branches = branches.as_array().ok_or_else(|| format!("{path}.{keyword} must be an array"))?;
+            if branches.is_empty() {
+                return Err(format!("{path}.{keyword} must not be empty"));
+            }
             for (index, branch) in branches.iter().enumerate() {
                 check_schema_vocabulary(branch, &format!("{path}.{keyword}[{index}]"))?;
             }
         }
+    }
+    if let Some(allowed) = object.get("enum") {
+        let allowed = allowed.as_array().ok_or_else(|| format!("{path}.enum must be an array"))?;
+        if allowed.is_empty() {
+            return Err(format!("{path}.enum must not be empty"));
+        }
+        for (index, value) in allowed.iter().enumerate() {
+            if allowed[..index].contains(value) {
+                return Err(format!("{path}.enum contains duplicate values"));
+            }
+        }
+    }
+    let object_only = ["properties", "required", "additionalProperties"];
+    if object_only.iter().any(|keyword| object.contains_key(*keyword))
+        && object.get("type").and_then(Value::as_str) != Some("object")
+    {
+        return Err(format!("{path} uses object keywords without type object"));
+    }
+    if object.contains_key("items")
+        && object.get("type").and_then(Value::as_str) != Some("array")
+    {
+        return Err(format!("{path}.items requires type array"));
+    }
+    if let Some(default) = object.get("default") {
+        validate_value(schema, default, path)
+            .map_err(|error| format!("{path}.default is invalid: {}", error.message))?;
     }
     Ok(())
 }
