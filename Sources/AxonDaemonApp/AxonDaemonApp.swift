@@ -9,7 +9,7 @@ final class AxonDaemonAppDelegate: NSObject, NSApplicationDelegate, @unchecked S
         case idle
         case checking
         case upToDate(version: String)
-        case available(ReleaseUpdate)
+        case available(ReleaseUpdate, brewManaged: Bool)
         case installing(version: String)
         case failed(String)
     }
@@ -152,7 +152,7 @@ final class AxonDaemonAppDelegate: NSObject, NSApplicationDelegate, @unchecked S
             menu.addItem(disabledItem("Checking for Updates..."))
         case let .upToDate(version):
             menu.addItem(disabledItem("Up to Date (\(version))"))
-        case let .available(update):
+        case let .available(update, _):
             menu.addItem(menuItem(title: "Update to \(update.latestVersion)...", action: #selector(performAvailableUpdate)))
         case let .installing(version):
             menu.addItem(disabledItem("Installing \(version)..."))
@@ -185,7 +185,15 @@ final class AxonDaemonAppDelegate: NSObject, NSApplicationDelegate, @unchecked S
         Task { @MainActor in
             do {
                 let update = try await updateChecker.check(currentVersion: currentVersion())
-                updateMenuState = update.isUpdateAvailable ? .available(update) : .upToDate(version: update.currentVersion)
+                if update.isUpdateAvailable {
+                    let installer = homebrewInstaller
+                    let brewManaged = await Task.detached(priority: .utility) {
+                        (try? installer?.isCaskInstalled(name: Self.homebrewCaskName)) ?? false
+                    }.value
+                    updateMenuState = .available(update, brewManaged: brewManaged)
+                } else {
+                    updateMenuState = .upToDate(version: update.currentVersion)
+                }
             } catch {
                 updateMenuState = .failed(String(describing: error))
             }
@@ -194,13 +202,11 @@ final class AxonDaemonAppDelegate: NSObject, NSApplicationDelegate, @unchecked S
     }
 
     @objc private func performAvailableUpdate() {
-        guard case let .available(update) = updateMenuState else {
+        guard case let .available(update, brewManaged) = updateMenuState else {
             return
         }
 
-        let installer = homebrewInstaller
-        let brewManaged = (try? installer?.isCaskInstalled(name: Self.homebrewCaskName)) ?? false
-        guard let installer, brewManaged else {
+        guard let installer = homebrewInstaller, brewManaged else {
             NSWorkspace.shared.open(update.releaseURL)
             return
         }
@@ -232,7 +238,7 @@ final class AxonDaemonAppDelegate: NSObject, NSApplicationDelegate, @unchecked S
             }
             NSApp.terminate(nil)
         case let .failure(error):
-            updateMenuState = .available(update)
+            updateMenuState = .available(update, brewManaged: true)
             installMenu()
             showAlert(title: "Update Failed", message: String(describing: error))
         }

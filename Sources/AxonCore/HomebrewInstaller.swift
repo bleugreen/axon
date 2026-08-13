@@ -83,16 +83,27 @@ public struct HomebrewInstaller: Sendable {
         env["PATH"] = (extraPaths + [existing]).joined(separator: ":")
         process.environment = env
 
-        let stdoutPipe = Pipe()
-        let stderrPipe = Pipe()
-        process.standardOutput = stdoutPipe
-        process.standardError = stderrPipe
+        let captureDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("axon-homebrew-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: captureDirectory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: captureDirectory) }
+
+        let stdoutURL = captureDirectory.appendingPathComponent("stdout")
+        let stderrURL = captureDirectory.appendingPathComponent("stderr")
+        FileManager.default.createFile(atPath: stdoutURL.path, contents: nil)
+        FileManager.default.createFile(atPath: stderrURL.path, contents: nil)
+        let stdoutHandle = try FileHandle(forWritingTo: stdoutURL)
+        let stderrHandle = try FileHandle(forWritingTo: stderrURL)
+        process.standardOutput = stdoutHandle
+        process.standardError = stderrHandle
 
         try process.run()
         process.waitUntilExit()
+        try stdoutHandle.close()
+        try stderrHandle.close()
 
-        let stdoutData = (try? stdoutPipe.fileHandleForReading.readToEnd()) ?? Data()
-        let stderrData = (try? stderrPipe.fileHandleForReading.readToEnd()) ?? Data()
+        let stdoutData = try Data(contentsOf: stdoutURL)
+        let stderrData = try Data(contentsOf: stderrURL)
 
         return HomebrewInstaller.ProcessResult(
             status: process.terminationStatus,
