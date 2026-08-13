@@ -26,7 +26,22 @@ irm https://axn.dev/install.ps1 | iex
 
 The installer registers a per-user Task Scheduler entry and both steady-state install and uninstall run without Administrator access. The archive contains the `axon-win.exe` command-line interface and its sibling `axon-win-daemon.exe`, which runs without opening a console window. Both executables must be present and validly signed before the installer changes the registration.
 
-The installers verify the release checksum, install into a permanent versioned directory, register the daemon from that location, and put its CLI on `PATH`. Pin a release with `AXON_VERSION=0.3.1` on macOS or Linux. In PowerShell, set `$env:AXON_VERSION = '0.3.1'` before running the installer.
+The installers verify the release checksum, install into a permanent versioned directory, register the daemon from that immutable location, and put a stable CLI entry point on `PATH`. Linux maintains `~/.local/lib/axon/current`; Windows maintains `%LOCALAPPDATA%\Axon\current` and the stable command name `axon.exe`. Upgrades repoint these aliases, so external MCP configurations do not retain an older bridge. Pin a release with `AXON_VERSION=0.3.1` on macOS or Linux. In PowerShell, set `$env:AXON_VERSION = '0.3.1'` before running the installer.
+
+External MCP clients should use the stable path rather than a versioned directory. Register it from
+your shell so the home-directory variable is resolved into the absolute executable path stored by
+the client:
+
+```sh
+claude mcp add axon -- "$HOME/.local/lib/axon/current/axon-linux" mcp
+```
+
+```powershell
+$axon = Join-Path $env:LOCALAPPDATA 'Axon\current\axon.exe'
+claude mcp add axon -- $axon mcp
+```
+
+The installer prints the corresponding Claude and Codex commands with the resolved path.
 
 #### Upgrading an older elevated Windows install
 

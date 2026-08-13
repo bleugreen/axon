@@ -34,9 +34,13 @@ target grants into the global health document.
 
 Window capture and semantic inspection are supported in an interactive desktop session. Axon installs an unelevated, per-user scheduled task that launches a dedicated windowless daemon; the command-line interface remains a separate console executable. Background pointer delivery is deliberately narrow, and Axon refuses actions when it cannot prove a safe target-bound mechanism. Global keyboard delivery is not available.
 
+External MCP clients should launch the resolved absolute form of `%LOCALAPPDATA%\Axon\current\axon.exe mcp`; the installer prints ready-to-run registration commands. The installer updates this stable path on every release while daemon registration continues to name the immutable versioned executable.
+
 ### Linux
 
 Semantic access uses AT-SPI. On X11, some toolkits accept target-bound pointer and keyboard events while others do not, so Axon names those refusals at runtime. On Wayland, synthetic pointer and keyboard input is refused rather than silently becoming global input.
+
+External MCP clients should launch the resolved absolute form of `~/.local/lib/axon/current/axon-linux mcp`; the installer prints ready-to-run registration commands. The installer atomically repoints this symlink on upgrade while systemd continues to name the immutable versioned executable.
 
 Across Linux backends, delta scrolling, drag, change observation, and session recording are not yet available. Chromium-family apps also require the desktop accessibility switch to be enabled before they appear on the AT-SPI bus.
 

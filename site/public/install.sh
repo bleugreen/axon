@@ -75,6 +75,7 @@ case "$OS" in
 esac
 
 INSTALL_DIR="$HOME/.local/lib/axon/$VERSION"
+INSTALL_ROOT="$HOME/.local/lib/axon"
 BIN_DIR="$HOME/.local/bin"
 LINK_PATH="$BIN_DIR/axon"
 MARKER="$INSTALL_DIR/.axon-install-complete"
@@ -151,21 +152,40 @@ else
   printf 'Axon %s is already installed at %s; reconciling daemon and PATH state.\n' "$VERSION" "$INSTALL_DIR"
 fi
 
-printf 'Registering the daemon from permanent path %s...\n' "$CLI"
-"$CLI" daemon install
-
 mkdir -p "$BIN_DIR" || fail "could not create PATH directory $BIN_DIR"
-ln -sfn "$CLI" "$LINK_PATH" || fail "could not link $LINK_PATH to $CLI"
+if [ "$OS" = linux ]; then
+  CURRENT_LINK="$INSTALL_ROOT/current"
+  STAGED_CURRENT="$INSTALL_ROOT/.current.$$.installing"
+  rm -f "$STAGED_CURRENT"
+  if [ -e "$CURRENT_LINK" ] && [ ! -L "$CURRENT_LINK" ]; then
+    fail "stable install path $CURRENT_LINK exists and is not a symlink; move it aside and rerun the installer"
+  fi
+  ln -s "$INSTALL_DIR" "$STAGED_CURRENT" || fail "could not stage stable install link $STAGED_CURRENT"
+  STABLE_CLI="$CURRENT_LINK/$RELATIVE_CLI"
+else
+  # Axon.app is already a stable external identity on macOS.
+  STABLE_CLI="$CLI"
+fi
+
+printf 'Registering the daemon from permanent path %s...\n' "$CLI"
+if ! "$CLI" daemon install; then
+  [ "$OS" != linux ] || rm -f "$STAGED_CURRENT"
+  fail "daemon registration failed; the stable client path was not changed"
+fi
+if [ "$OS" = linux ]; then
+  mv -fT "$STAGED_CURRENT" "$CURRENT_LINK" || fail "could not update stable install link $CURRENT_LINK"
+fi
+ln -sfn "$STABLE_CLI" "$LINK_PATH" || fail "could not link $LINK_PATH to $STABLE_CLI"
 
 printf '\nAxon %s installed successfully.\n' "$VERSION"
-printf 'CLI: %s -> %s\n' "$LINK_PATH" "$CLI"
+printf 'CLI: %s -> %s\n' "$LINK_PATH" "$STABLE_CLI"
 case ":${PATH:-}:" in
   *":$BIN_DIR:"*) ;;
   *) printf 'Add %s to PATH, then open a new shell.\n' "$BIN_DIR" ;;
 esac
 printf '\nRegister Axon with an MCP client:\n'
-printf '  claude mcp add axon -- axon mcp\n'
-printf '  codex mcp add axon -- axon mcp\n'
+printf "  claude mcp add axon -- '%s' mcp\n" "$STABLE_CLI"
+printf "  codex mcp add axon -- '%s' mcp\n" "$STABLE_CLI"
 if [ "$OS" = macos ]; then
   printf '\nApprove Axon.app in System Settings -> Privacy & Security -> Accessibility.\n'
 fi

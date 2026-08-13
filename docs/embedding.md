@@ -68,9 +68,12 @@ confirm that the binary it installed is the one that is running.
 uses, and it is the only one covered by compatibility expectations.
 
 ```sh
-axon mcp            # macOS
-axon-win.exe mcp    # Windows
-axon-linux mcp      # Linux
+axon mcp                                           # macOS
+"$HOME/.local/lib/axon/current/axon-linux" mcp     # Linux
+```
+
+```powershell
+& (Join-Path $env:LOCALAPPDATA 'Axon\current\axon.exe') mcp  # Windows
 ```
 
 The facade is a short-lived process that forwards to the long-lived daemon over local IPC. It is
@@ -148,6 +151,22 @@ and decides whether the next upgrade needs a human in System Settings.
 
 Windows and Linux have no equivalent per-application grant, and register the invoking executable
 with `serve`.
+
+The release installers keep external client paths separate from that registration truth. Windows
+maintains `%LOCALAPPDATA%\Axon\current` as a junction to the active versioned directory and includes
+an `axon.exe` hard link to the signed `axon-win.exe`; Linux maintains
+`~/.local/lib/axon/current` as a symlink. MCP configurations must use the resolved absolute form of
+those stable paths; `%LOCALAPPDATA%` and `~` are shell notation, not portable process-launch
+expansion. An upgrade
+repoints the alias while Task Scheduler or systemd continues to record the immutable versioned
+daemon path, so clients and daemon advance together without making registration mutable.
+
+The installer owns this alias because it owns the versioned directories the alias selects. The
+`daemon install` command deliberately does not move it: that command only registers the immutable
+install it was invoked from. A consumer that provisions release archives without Axon's installers
+must therefore create or atomically repoint `current` itself after daemon readiness succeeds. The
+alias must expose `axon.exe` on Windows (a hard link or copy of `axon-win.exe`) and `axon-linux` on
+Linux.
 
 ### Install from a permanent path
 
