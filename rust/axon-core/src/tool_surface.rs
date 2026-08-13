@@ -29,14 +29,6 @@ fn internal(message: &str) -> JsonRpcError {
     ) && number < minimum {
         return Err(invalid(path, &format!("must be at least {minimum}"), expected));
     }
-    if let Some(minimum) = object.get("minimum") {
-        if !minimum.is_number() {
-            return Err(format!("{path}.minimum must be a number"));
-        }
-        if !matches!(object.get("type").and_then(Value::as_str), Some("integer" | "number")) {
-            return Err(format!("{path}.minimum requires a numeric type"));
-        }
-    }
 }
 
 impl ToolBackend {
@@ -377,6 +369,14 @@ fn check_schema_vocabulary(schema: &Value, path: &str) -> Result<(), String> {
     if let Some(default) = object.get("default") {
         validate_value(schema, default, path)
             .map_err(|error| format!("{path}.default is invalid: {}", error.message))?;
+    }
+    if let Some(minimum) = object.get("minimum") {
+        if !minimum.is_number() {
+            return Err(format!("{path}.minimum must be a number"));
+        }
+        if !matches!(object.get("type").and_then(Value::as_str), Some("integer" | "number")) {
+            return Err(format!("{path}.minimum requires a numeric type"));
+        }
     }
     Ok(())
 }
