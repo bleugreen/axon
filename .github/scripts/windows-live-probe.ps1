@@ -619,7 +619,7 @@ function Invoke-ProbeStage {
         # reported against the console host's process rather than the daemon's.
         $verified = $null
         $considered = @()
-        foreach ($app in $listResponse.result.structuredContent) {
+        foreach ($app in $listResponse.result.structuredContent.apps) {
             if ($app.name -and $app.name.Equals($ProbeExecutable, [System.StringComparison]::OrdinalIgnoreCase)) {
                 continue
             }
