@@ -76,6 +76,14 @@ pub struct Router<B> {
     observation_sequence: u64,
 }
 
+fn observation_object(value: &mut Value, format: axon_core::LookFormat) -> Option<&mut Map<String, Value>> {
+    if format == axon_core::LookFormat::Debug {
+        value.get_mut("observation").and_then(Value::as_object_mut)
+    } else {
+        value.as_object_mut()
+    }
+}
+
 fn application_enumeration<T: serde::Serialize>(apps: Vec<T>) -> Value {
     json!({"apps": apps})
 }
