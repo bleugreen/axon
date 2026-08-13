@@ -213,7 +213,6 @@ pub enum HandleError {
     },
 }
 
-
 #[cfg(test)]
 mod summary_tests {
     use super::*;
@@ -243,7 +242,10 @@ mod summary_tests {
         let mut second = first.clone();
         second.id = SnapshotId("another-capture-id".into());
 
-        assert_eq!(SnapshotSummary::from(&first), SnapshotSummary::from(&second));
+        assert_eq!(
+            SnapshotSummary::from(&first),
+            SnapshotSummary::from(&second)
+        );
     }
 
     #[test]
@@ -251,6 +253,9 @@ mod summary_tests {
         let before = snapshot("draft");
         let after = snapshot("saved");
 
-        assert_ne!(SnapshotSummary::from(&before), SnapshotSummary::from(&after));
+        assert_ne!(
+            SnapshotSummary::from(&before),
+            SnapshotSummary::from(&after)
+        );
     }
 }

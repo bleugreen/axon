@@ -593,7 +593,7 @@ impl ToolDispatcher for SemanticDispatcher {
         self.dispatched += 1;
         DispatchOutcome {
             success: !self.fail_dispatch,
-            result: json!({"dispatchOnly":self.fail_dispatch}),
+            result: json!({"dispatchOnly":self.fail_dispatch,"action":{"success":!self.fail_dispatch,"semanticSuccess":false,"semanticStatus":"unverified"}}),
             error: None,
             resolution: None,
         }
@@ -723,6 +723,117 @@ fn expanded_swift_fixture_prepares_every_parameter_type_without_dispatch() {
             .find("fixture-secret")
             .is_none()
     }));
+}
+
+#[test]
+fn expected_fact_references_resolve_and_failed_causal_facts_stay_unverified() {
+    let doc: AxnDocument = serde_json::from_value(json!({
+        "version": 2,
+        "args": [{"name":"api_token","type":"secret"}],
+        "actions": [{
+            "tool":"write_value",
+            "target":{"app":"Example","name":"field","locator":{"role":"AXTextField"}},
+            "value":"{{api_token}}",
+            "expects":[{"id":"secret.value","kind":"value","target":{"app":"Example","locator":{"role":"AXTextField"}},"state":{"value":{"contains":"{{api_token}}"}}}]
+        }]
+    })).unwrap();
+    let mut dispatcher = SemanticDispatcher {
+        states: vec![
+            json!({"value":"prefix fixture-secret suffix"})
+                .as_object()
+                .unwrap()
+                .clone(),
+        ],
+        cursor: 0,
+        dispatched: 0,
+        fail_dispatch: false,
+        changed_captures: vec![],
+    };
+    let args = serde_json::from_value(json!({"api_token":"fixture-secret"})).unwrap();
+    let result = AxnRunner::new(&mut dispatcher)
+        .run(
+            &doc,
+            &args,
+            RunOptions {
+                dry_run: None,
+                continue_on_error: None,
+            },
+        )
+        .unwrap();
+    assert!(result.success);
+    assert!(
+        !serde_json::to_string(&result)
+            .unwrap()
+            .contains("fixture-secret")
+    );
+
+    let failed_doc = semantic_doc(json!([{
+        "tool":"click",
+        "target":{"app":"Example","name":"button","locator":{"role":"AXButton"}},
+        "expects":[{"id":"value","kind":"value","target":{"app":"Example","locator":{"role":"AXTextField"}},"state":{"value":"after"}}]
+    }]));
+    let mut failed_dispatcher = SemanticDispatcher {
+        states: vec![
+            json!({"value":"before"}).as_object().unwrap().clone(),
+            json!({"value":"before"}).as_object().unwrap().clone(),
+        ],
+        cursor: 0,
+        dispatched: 0,
+        fail_dispatch: true,
+        changed_captures: vec![],
+    };
+    let failed = AxnRunner::new(&mut failed_dispatcher)
+        .run(
+            &failed_doc,
+            &Map::new(),
+            RunOptions {
+                dry_run: None,
+                continue_on_error: None,
+            },
+        )
+        .unwrap();
+    assert!(!failed.success);
+    assert_eq!(
+        failed.trace[0].result.as_ref().unwrap()["action"]["success"],
+        false
+    );
+    assert_eq!(
+        failed.trace[0].result.as_ref().unwrap()["action"]["semanticStatus"],
+        "unverified"
+    );
+}
+
+#[test]
+fn relative_dates_match_swift_coercion() {
+    let doc: AxnDocument = serde_json::from_value(json!({
+        "version":2,
+        "args":[{"name":"run_date","type":"date"}],
+        "actions":[{"tool":"keyboard","text":"{{run_date}}"}]
+    }))
+    .unwrap();
+    for (input, expected) in [
+        ("today", chrono::Local::now().format("%Y-%m-%d").to_string()),
+        (
+            "yesterday",
+            (chrono::Local::now() - chrono::Duration::days(1))
+                .format("%Y-%m-%d")
+                .to_string(),
+        ),
+    ] {
+        let mut dispatcher = NoDispatch;
+        let args = serde_json::from_value(json!({"run_date":input})).unwrap();
+        let result = AxnRunner::new(&mut dispatcher)
+            .run(
+                &doc,
+                &args,
+                RunOptions {
+                    dry_run: Some(true),
+                    continue_on_error: None,
+                },
+            )
+            .unwrap();
+        assert_eq!(result.trace[0].result.as_ref().unwrap()["text"], expected);
+    }
 }
 
 #[test]
