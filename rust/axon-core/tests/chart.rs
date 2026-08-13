@@ -83,6 +83,8 @@ fn snapshot(id: &str, children: Vec<Node>) -> Snapshot {
                     actions: vec![],
                     frame: None,
                     editable: false,
+                    focused: None,
+                    enabled: None,
                     children,
                     child_count: None,
                     truncation_reason: None,
