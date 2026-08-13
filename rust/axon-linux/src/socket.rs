@@ -337,7 +337,7 @@ fn mcp_response(value: &Value) -> io::Result<Option<Value>> {
     mcp_response_with_request(value, request)
 }
 
-fn mcp_response_with_request(
+pub(crate) fn mcp_response_with_request(
     value: &Value,
     mut send: impl FnMut(&str) -> io::Result<String>,
 ) -> io::Result<Option<Value>> {
@@ -479,39 +479,6 @@ mod tests {
         .unwrap();
         assert_eq!(response["result"]["structuredContent"], json!({"ok":true}));
         assert_eq!(response["result"]["isError"], false);
-    }
-    #[test]
-    fn facade_forwards_canonical_run_arguments_to_the_router() {
-        let actions = json!([{"tool":"keyboard","app":"Notes","text":"escape"}]);
-        let response = mcp_response_with_request(
-            &json!({"jsonrpc":"2.0","id":10,"method":"tools/call","params":{"name":"run","arguments":{"actions":actions,"dryRun":true}}}),
-            |rpc| {
-                let forwarded: Value = serde_json::from_str(rpc).unwrap();
-                assert_eq!(forwarded["method"], "run");
-                assert_eq!(forwarded["params"]["actions"], actions);
-                assert_eq!(forwarded["params"]["dryRun"], true);
-                assert!(forwarded["params"].get("source").is_none());
-                assert!(forwarded["params"].get("options").is_none());
-                Ok(json!({"jsonrpc":"2.0","id":1,"result":{"batch":{"success":true,"dryRun":true,"continueOnError":false,"trace":[]}}}).to_string())
-            },
-        )
-        .unwrap()
-        .unwrap();
-        assert_eq!(
-            response["result"]["structuredContent"]["batch"]["dryRun"],
-            true
-        );
-    }
-    #[test]
-    fn facade_rejects_unknown_run_keys_by_name() {
-        let response = mcp_response_with_request(
-            &json!({"jsonrpc":"2.0","id":11,"method":"tools/call","params":{"name":"run","arguments":{"actions":[],"source":"invented"}}}),
-            |_| unreachable!("unknown run keys must not reach the daemon"),
-        )
-        .unwrap()
-        .unwrap();
-        assert_eq!(response["error"]["code"], -32602);
-        assert_eq!(response["error"]["data"]["path"], "params.arguments.source");
     }
     #[test]
     fn mcp_notifications_have_no_response() {

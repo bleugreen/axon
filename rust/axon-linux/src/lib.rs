@@ -1622,6 +1622,55 @@ mod tests {
         JsonRpcRequest::new(Some(JsonRpcId::Integer(1)), method, Some(params))
     }
 
+    fn call_through_mcp(router: &mut Router<FakeBackend>, arguments: Value) -> Value {
+        crate::socket::mcp_response_with_request(
+            &json!({"jsonrpc":"2.0","id":10,"method":"tools/call","params":{"name":"run","arguments":arguments}}),
+            |rpc| {
+                let request: JsonRpcRequest = serde_json::from_str(rpc).unwrap();
+                let response = router.request(request).unwrap();
+                Ok(serde_json::to_string(&response).unwrap())
+            },
+        )
+        .unwrap()
+        .unwrap()
+    }
+
+    #[test]
+    fn mcp_run_validation_and_router_share_the_canonical_wire_shape() {
+        let backend = backend(vec![], Some("before"));
+        let value = backend.value.clone();
+        let mut router = Router::new(backend);
+        router.snapshot = Some(router.backend.snapshot.clone());
+        let actions = json!([{"tool":"type","target":{"x":10.0,"y":10.0},"value":"after"}]);
+
+        let executed = call_through_mcp(&mut router, json!({"actions":actions}));
+        let batch = &executed["result"]["structuredContent"]["batch"];
+        assert_eq!(batch["success"], true);
+        assert_eq!(batch["trace"].as_array().unwrap().len(), 1);
+        assert_eq!(value.borrow().as_deref(), Some("after"));
+
+        *value.borrow_mut() = Some("before".into());
+        let dry = call_through_mcp(&mut router, json!({"actions":actions,"dryRun":true}));
+        assert_eq!(dry["result"]["structuredContent"]["batch"]["dryRun"], true);
+        assert_eq!(
+            dry["result"]["structuredContent"]["batch"]["trace"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(value.borrow().as_deref(), Some("before"));
+
+        let unknown = crate::socket::mcp_response_with_request(
+            &json!({"jsonrpc":"2.0","id":11,"method":"tools/call","params":{"name":"run","arguments":{"actions":[],"source":"invented"}}}),
+            |_| unreachable!("unknown run keys must not reach the router"),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(unknown["error"]["code"], -32602);
+        assert_eq!(unknown["error"]["data"]["path"], "params.arguments.source");
+    }
+
     #[test]
     fn look_application_enumeration_matches_shared_envelope() {
         let mut router = Router::new(backend(vec![], None));
