@@ -684,9 +684,9 @@ impl<
                 ))
             }
             "scroll" => {
+                let dx = number_param(params, "deltaX", 0.0)?;
+                let dy = number_param(params, "deltaY", -120.0)?;
                 let (handle, resolution) = self.resolve(params)?;
-                let dx = params.get("deltaX").and_then(Value::as_f64).unwrap_or(0.0);
-                let dy = params.get("deltaY").and_then(Value::as_f64).unwrap_or(0.0);
                 let scroll = self
                     .backend
                     .scroll_windows(&handle, (dx, dy))
@@ -1277,6 +1277,15 @@ fn keyboard_intent(params: &Map<String, Value>) -> Result<KeyboardIntent<'_>, Js
         )),
     }
 }
+fn number_param(params: &Map<String, Value>, key: &str, default: f64) -> Result<f64, JsonRpcError> {
+    match params.get(key) {
+        None => Ok(default),
+        Some(value) => value
+            .as_f64()
+            .ok_or_else(|| rpc_error(-32602, format!("{key} must be a number"))),
+    }
+}
+
 fn required_str<'a>(p: &'a Map<String, Value>, key: &str) -> Result<&'a str, JsonRpcError> {
     p.get(key)
         .and_then(Value::as_str)
@@ -2553,6 +2562,46 @@ mod tests {
             assert_eq!(result["dispatchSuccess"], json!(false), "{policy}");
         }
         assert_eq!(*clicks.borrow(), 0);
+    }
+
+    #[test]
+    fn scroll_uses_canonical_defaults_and_rejects_malformed_deltas_before_capture() {
+        let backend = backend(vec![node("save")], None);
+        let captures = backend.capture_queries.clone();
+        let mut router = Router::new(backend);
+        let name = router
+            .register_snapshot(&router.backend.snapshot.clone())
+            .into_iter()
+            .find(|name| name.label == "save")
+            .unwrap()
+            .name;
+
+        let malformed = router
+            .request(request(
+                "scroll",
+                json!({"target": {"app": "App", "name": name}, "deltaY": "down"}),
+            ))
+            .unwrap();
+        let JsonRpcResponse::Failure(error) = malformed else {
+            panic!("malformed delta must fail")
+        };
+        assert_eq!(error.error.code, -32602);
+        assert!(error.error.message.contains("deltaY must be a number"));
+        assert!(captures.borrow().is_empty());
+
+        let defaulted = router
+            .request(request(
+                "scroll",
+                json!({"target": {"app": "App", "name": name}}),
+            ))
+            .unwrap();
+        let JsonRpcResponse::Success(success) = defaulted else {
+            panic!("canonical defaults must route")
+        };
+        assert_eq!(
+            success.result["dispatch"]["mechanism"],
+            json!("UIA ScrollPattern.Scroll")
+        );
     }
 
     #[test]
