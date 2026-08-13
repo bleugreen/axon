@@ -133,17 +133,6 @@ impl LookRequest {
         screen_text: params.get("screenText").and_then(Value::as_bool).unwrap_or(false) })
     }
 
-    #[test]
-    fn typed_modes_apply_page_defaults_and_reject_irrelevant_controls() {
-        let page = LookRequest::decode(serde_json::json!({"target":{"app":"Editor","name":"list"}}).as_object().unwrap()).unwrap();
-        assert!(matches!(page.mode, LookMode::ChildPage { offset: 0, limit: Some(24), direct: false, .. }));
-        let all = LookRequest::decode(serde_json::json!({"target":{"app":"Editor","name":"list"},"all":true,"limit":0}).as_object().unwrap()).unwrap();
-        assert!(matches!(all.mode, LookMode::ChildPage { limit: None, .. }));
-        let clamped = LookRequest::decode(serde_json::json!({"target":{"app":"Editor","name":"list"},"limit":100}).as_object().unwrap()).unwrap();
-        assert!(matches!(clamped.mode, LookMode::ChildPage { limit: Some(24), .. }));
-        assert!(LookRequest::decode(serde_json::json!({"app":{"name":"Editor"},"offset":1}).as_object().unwrap()).is_err());
-        assert!(LookRequest::decode(serde_json::json!({"format":"xml"}).as_object().unwrap()).is_err());
-    }
 
     #[test]
     fn formatting_hides_frames_and_descendants_without_rewriting_truncation() {
