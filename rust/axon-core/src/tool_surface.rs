@@ -188,9 +188,6 @@ fn validate_value(schema: &Value, value: &Value, path: &str) -> Result<(), JsonR
     if let Some(branches) = schema.get("anyOf").and_then(Value::as_array) {
         return validate_branches(branches, value, path, false);
     }
-    if let Some(branches) = schema.get("oneOf").and_then(Value::as_array) {
-        return validate_branches(branches, value, path, true);
-    }
     let expected = schema.get("type").and_then(Value::as_str);
     let type_matches = match expected {
         None => true,
@@ -412,7 +409,7 @@ mod tests {
             }),
         )
         .unwrap_err();
-        assert!(error.message.contains("params.arguments.target"));
+        assert_eq!(error.data.unwrap()["path"], "params.arguments.target.app");
         let error = validate_tool_arguments(
             ToolBackend::Windows,
             "type",
@@ -421,7 +418,7 @@ mod tests {
             }),
         )
         .unwrap_err();
-        assert!(error.message.contains("params.arguments.target"));
+        assert_eq!(error.data.unwrap()["path"], "params.arguments.target.name");
     }
 
     #[test]

@@ -493,6 +493,15 @@
                         ],
                         "type" : "string"
                       },
+                      "space" : {
+                        "description" : "Legacy alias for coordinateSpace.",
+                        "enum" : [
+                          "screen",
+                          "window",
+                          "screenshot"
+                        ],
+                        "type" : "string"
+                      },
                       "x" : {
                         "description" : "Horizontal coordinate.",
                         "type" : "number"
@@ -524,6 +533,15 @@
                   },
                   "coordinateSpace" : {
                     "description" : "Coordinate space. Defaults to screen.",
+                    "enum" : [
+                      "screen",
+                      "window",
+                      "screenshot"
+                    ],
+                    "type" : "string"
+                  },
+                  "space" : {
+                    "description" : "Legacy alias for coordinateSpace.",
                     "enum" : [
                       "screen",
                       "window",
@@ -806,6 +824,15 @@
                         ],
                         "type" : "string"
                       },
+                      "space" : {
+                        "description" : "Legacy alias for coordinateSpace.",
+                        "enum" : [
+                          "screen",
+                          "window",
+                          "screenshot"
+                        ],
+                        "type" : "string"
+                      },
                       "x" : {
                         "description" : "Horizontal coordinate.",
                         "type" : "number"
@@ -837,6 +864,15 @@
                   },
                   "coordinateSpace" : {
                     "description" : "Coordinate space. Defaults to screen.",
+                    "enum" : [
+                      "screen",
+                      "window",
+                      "screenshot"
+                    ],
+                    "type" : "string"
+                  },
+                  "space" : {
+                    "description" : "Legacy alias for coordinateSpace.",
                     "enum" : [
                       "screen",
                       "window",
@@ -1016,6 +1052,15 @@
                         ],
                         "type" : "string"
                       },
+                      "space" : {
+                        "description" : "Legacy alias for coordinateSpace.",
+                        "enum" : [
+                          "screen",
+                          "window",
+                          "screenshot"
+                        ],
+                        "type" : "string"
+                      },
                       "x" : {
                         "description" : "Horizontal coordinate.",
                         "type" : "number"
@@ -1047,6 +1092,15 @@
                   },
                   "coordinateSpace" : {
                     "description" : "Coordinate space. Defaults to screen.",
+                    "enum" : [
+                      "screen",
+                      "window",
+                      "screenshot"
+                    ],
+                    "type" : "string"
+                  },
+                  "space" : {
+                    "description" : "Legacy alias for coordinateSpace.",
                     "enum" : [
                       "screen",
                       "window",
@@ -1187,6 +1241,15 @@
                         ],
                         "type" : "string"
                       },
+                      "space" : {
+                        "description" : "Legacy alias for coordinateSpace.",
+                        "enum" : [
+                          "screen",
+                          "window",
+                          "screenshot"
+                        ],
+                        "type" : "string"
+                      },
                       "x" : {
                         "description" : "Horizontal coordinate.",
                         "type" : "number"
@@ -1218,6 +1281,15 @@
                   },
                   "coordinateSpace" : {
                     "description" : "Coordinate space. Defaults to screen.",
+                    "enum" : [
+                      "screen",
+                      "window",
+                      "screenshot"
+                    ],
+                    "type" : "string"
+                  },
+                  "space" : {
+                    "description" : "Legacy alias for coordinateSpace.",
                     "enum" : [
                       "screen",
                       "window",
