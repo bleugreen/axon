@@ -1266,7 +1266,10 @@ fn required_str<'a>(p: &'a Map<String, Value>, key: &str) -> Result<&'a str, Jso
 }
 /// Stamps the four stable delivery fields onto an action result.
 fn delivered(mut result: Value, policy: DeliveryPolicy, rung: DeliveryRung) -> Value {
-    let rung_held = result.get("success").and_then(Value::as_bool).unwrap_or(true);
+    let rung_held = result
+        .get("success")
+        .and_then(Value::as_bool)
+        .unwrap_or(true);
     let success = result
         .get("verification")
         .is_some_and(|verification| goal_success(verification, rung_held));
@@ -2457,7 +2460,9 @@ mod tests {
                 json!({"target": {"app": "App", "name": name}, "deltaY": -120.0}),
             ))
             .unwrap();
-        let JsonRpcResponse::Success(success) = &response else { panic!("{response:?}") };
+        let JsonRpcResponse::Success(success) = &response else {
+            panic!("{response:?}")
+        };
         let result = &success.result;
 
         assert_eq!(
@@ -2486,7 +2491,9 @@ mod tests {
                 json!({"target": {"app": "App", "name": name}, "deltaX": 0.0, "deltaY": 0.0}),
             ))
             .unwrap();
-        let JsonRpcResponse::Success(success) = &response else { panic!("{response:?}") };
+        let JsonRpcResponse::Success(success) = &response else {
+            panic!("{response:?}")
+        };
         let result = &success.result;
 
         assert_eq!(

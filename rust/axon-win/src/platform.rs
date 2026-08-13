@@ -91,7 +91,6 @@ fn scroll_amount(delta: f64) -> ScrollAmount {
     } else {
         ScrollAmount_NoAmount
     }
-
 }
 
 fn scroll_steps(delta: (f64, f64)) -> (usize, usize) {
