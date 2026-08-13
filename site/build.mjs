@@ -148,7 +148,7 @@ function home() {
     body: `<main>
       <section class="hero">
         <h1>Let the computer <em>use</em> the computer.</h1>
-        <p>Axon provides a small, consistent tool surface over the OS accessibility layers in macOS, Windows, and Linux.</p>
+        <p>Axon turns the accessibility layer into a lightweight toolset for agents on macOS, Windows, and Linux.</p>
         <div class="hero-actions"><a class="button primary" href="/docs/install/">Get started</a><a class="button" href="/docs/tool-surface/">Explore the tools</a></div>
       </section>
       <section class="loop" aria-label="Axon's core loop">
