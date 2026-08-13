@@ -37,21 +37,19 @@ use windows::{
                 IUIAutomationEventHandler, IUIAutomationEventHandler_Impl,
                 IUIAutomationFocusChangedEventHandler, IUIAutomationFocusChangedEventHandler_Impl,
                 IUIAutomationInvokePattern, IUIAutomationScrollItemPattern,
-                IUIAutomationScrollPattern,
-                IUIAutomationStructureChangedEventHandler,
+                IUIAutomationScrollPattern, IUIAutomationStructureChangedEventHandler,
                 IUIAutomationStructureChangedEventHandler_Impl, IUIAutomationValuePattern,
                 ScrollAmount, ScrollAmount_NoAmount, ScrollAmount_SmallDecrement,
                 ScrollAmount_SmallIncrement, StructureChangeType, TreeScope_Children,
-                TreeScope_Descendants, TreeScope_Element,
-                UIA_AutomationIdPropertyId, UIA_BoundingRectanglePropertyId,
-                UIA_ButtonControlTypeId, UIA_CheckBoxControlTypeId, UIA_ComboBoxControlTypeId,
-                UIA_ControlTypePropertyId, UIA_CustomControlTypeId, UIA_DocumentControlTypeId,
-                UIA_EditControlTypeId, UIA_GroupControlTypeId, UIA_HyperlinkControlTypeId,
-                UIA_ImageControlTypeId, UIA_InvokePatternId, UIA_ListControlTypeId,
-                UIA_ListItemControlTypeId, UIA_MenuControlTypeId, UIA_MenuItemControlTypeId,
-                UIA_NamePropertyId, UIA_PaneControlTypeId, UIA_ProgressBarControlTypeId,
-                UIA_RadioButtonControlTypeId, UIA_ScrollBarControlTypeId, UIA_ScrollItemPatternId,
-                UIA_ScrollPatternId,
+                TreeScope_Descendants, TreeScope_Element, UIA_AutomationIdPropertyId,
+                UIA_BoundingRectanglePropertyId, UIA_ButtonControlTypeId,
+                UIA_CheckBoxControlTypeId, UIA_ComboBoxControlTypeId, UIA_ControlTypePropertyId,
+                UIA_CustomControlTypeId, UIA_DocumentControlTypeId, UIA_EditControlTypeId,
+                UIA_GroupControlTypeId, UIA_HyperlinkControlTypeId, UIA_ImageControlTypeId,
+                UIA_InvokePatternId, UIA_ListControlTypeId, UIA_ListItemControlTypeId,
+                UIA_MenuControlTypeId, UIA_MenuItemControlTypeId, UIA_NamePropertyId,
+                UIA_PaneControlTypeId, UIA_ProgressBarControlTypeId, UIA_RadioButtonControlTypeId,
+                UIA_ScrollBarControlTypeId, UIA_ScrollItemPatternId, UIA_ScrollPatternId,
                 UIA_SliderControlTypeId, UIA_TabControlTypeId, UIA_TabItemControlTypeId,
                 UIA_Text_TextChangedEventId, UIA_TextControlTypeId, UIA_ThumbControlTypeId,
                 UIA_ToolBarControlTypeId, UIA_ToolTipControlTypeId, UIA_TreeControlTypeId,
@@ -649,9 +647,11 @@ impl UiaState {
                 candidate.GetCurrentPatternAs::<IUIAutomationScrollPattern>(UIA_ScrollPatternId)
             } {
                 let horizontal = unsafe { pattern.CurrentHorizontallyScrollable() }
-                    .map(bool::from).unwrap_or(false);
+                    .map(bool::from)
+                    .unwrap_or(false);
                 let vertical = unsafe { pattern.CurrentVerticallyScrollable() }
-                    .map(bool::from).unwrap_or(false);
+                    .map(bool::from)
+                    .unwrap_or(false);
                 if (delta.0 == 0.0 || horizontal) && (delta.1 == 0.0 || vertical) {
                     let before = scroll_position(&pattern)?;
                     let (horizontal_steps, vertical_steps) = scroll_steps(delta);
@@ -677,7 +677,9 @@ impl UiaState {
                 }
             }
             current = unsafe { walker.GetParentElement(&candidate) }.ok();
-            if current.is_none() { break; }
+            if current.is_none() {
+                break;
+            }
         }
         Err(cap(
             Capability::Scroll,
