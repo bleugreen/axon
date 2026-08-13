@@ -480,6 +480,25 @@ fn invalid(path: &str, message: &str, expected: Option<&str>) -> JsonRpcError {
 mod tests {
     use super::*;
 
+    fn test_artifact(schema: Value) -> Value {
+        json!({
+            "formatVersion": 1,
+            "tools": [{
+                "name": "test",
+                "description": "Test tool",
+                "socketMethod": "test",
+                "availability": {
+                    "swift": true, "mac": true, "windows": false, "linux": false
+                },
+                "inputSchema": schema
+            }]
+        })
+    }
+
+    fn parse_value(value: &Value) -> Result<Value, String> {
+        parse_artifact(&serde_json::to_string(value).unwrap())
+    }
+
     fn names(backend: ToolBackend) -> Vec<String> {
         backend_tools(backend)
             .unwrap()
@@ -628,5 +647,92 @@ mod tests {
         );
         let error = validate_tools_call(ToolBackend::Linux, Some(json!({"name": 3}))).unwrap_err();
         assert_eq!(error.data.unwrap()["path"], "params.name");
+    }
+
+    #[test]
+    fn rejects_malformed_supported_schema_keywords_at_initialization() {
+        let malformed = [
+            json!({"type": 3}),
+            json!({"type": "object", "required": "name"}),
+            json!({"type": "object", "required": ["name", 3]}),
+            json!({"type": "object", "additionalProperties": "false"}),
+            json!({"anyOf": {}}),
+            json!({"oneOf": []}),
+            json!({"type": "object", "properties": []}),
+            json!({"type": "array", "items": []}),
+            json!({"enum": "x"}),
+            json!({"enum": []}),
+            json!({"type": "string", "default": false}),
+        ];
+        for schema in malformed {
+            assert!(
+                parse_value(&test_artifact(schema.clone())).is_err(),
+                "accepted malformed schema {schema}"
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_incompatible_schema_keyword_combinations() {
+        for schema in [
+            json!({"type": "string", "properties": {}}),
+            json!({"required": []}),
+            json!({"additionalProperties": false}),
+            json!({"type": "object", "items": {"type": "string"}}),
+        ] {
+            assert!(
+                parse_value(&test_artifact(schema.clone())).is_err(),
+                "accepted incompatible schema {schema}"
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_malformed_tool_envelopes_at_initialization() {
+        let valid = test_artifact(json!({
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false
+        }));
+        let mut cases = vec![json!({"formatVersion": 1, "tools": [false]})];
+
+        for (field, value) in [
+            ("name", json!("")),
+            ("name", json!(3)),
+            ("description", json!(false)),
+            ("socketMethod", json!(null)),
+            ("inputSchema", json!([])),
+        ] {
+            let mut artifact = valid.clone();
+            artifact["tools"][0][field] = value;
+            cases.push(artifact);
+        }
+        let mut incomplete = valid.clone();
+        incomplete["tools"][0]["availability"]
+            .as_object_mut()
+            .unwrap()
+            .remove("linux");
+        cases.push(incomplete);
+        let mut non_boolean = valid.clone();
+        non_boolean["tools"][0]["availability"]["linux"] = json!("false");
+        cases.push(non_boolean);
+        let mut duplicate = valid.clone();
+        let second = duplicate["tools"][0].clone();
+        duplicate["tools"].as_array_mut().unwrap().push(second);
+        cases.push(duplicate);
+
+        for artifact in cases {
+            assert!(
+                parse_value(&artifact).is_err(),
+                "accepted malformed artifact {artifact}"
+            );
+        }
+    }
+
+    #[test]
+    fn artifact_defects_use_internal_error_class() {
+        let error = internal("bad artifact");
+        assert_eq!(error.code, -32603);
+        assert_eq!(error.data.unwrap()["reason"], "bad artifact");
     }
 }
