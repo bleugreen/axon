@@ -2270,73 +2270,21 @@ mod tests {
         assert_eq!(*router.backend.clicks.borrow(), 0);
     }
     #[test]
-    fn axn_value_facts_drive_expects_requires_dry_run_and_continue_on_error() {
+    fn axn_v1_handle_facts_are_rejected_at_the_public_run_boundary() {
         let backend = backend(vec![], Some("ready now"));
         let handle = backend.snapshot.handle(0).0;
-        let mut router = Router::new(backend.clone());
-        router.snapshot = Some(backend.snapshot.clone());
+        let mut router = Router::new(backend);
         let source = format!(
-            r#"version: 1
-actions:
-  - id: pass
-    tool: invoke
-    target: {handle}
-    name: Invoke
-    expects:
-      - id: ready
-        kind: value
-        target: {handle}
-        contains: ready
-  - tool: invoke
-    target: {handle}
-    name: Invoke
-    name: Invoke
-    requires: [ready]
-    expects:
-      - id: exact
-        kind: value
-        target: {handle}
-        equals: wrong
-  - tool: invoke
-    target: {handle}
-"#
+            "version: 1\nactions:\n- tool: invoke\n  target: {handle}\n  expects:\n  - id: ready\n    kind: value\n    target: {handle}\n"
         );
         let response = router
-            .request(request(
-                "run",
-                json!({"source":source,"options":{"continueOnError":true}}),
-            ))
+            .request(request("run", json!({"source":source})))
             .unwrap();
-        let JsonRpcResponse::Success(success) = response else {
-            panic!()
+        let JsonRpcResponse::Failure(failure) = response else {
+            panic!("v1 replay unexpectedly succeeded")
         };
-        let batch = &success.result["batch"];
-        assert!(!batch["success"].as_bool().unwrap());
-        assert_eq!(batch["trace"].as_array().unwrap().len(), 3);
-        assert!(
-            batch["trace"][0]["error"]
-                .as_str()
-                .unwrap()
-                .contains("{app, name}")
-        );
-
-        let dry = router
-            .request(request(
-                "run",
-                json!({"source":source,"options":{"dryRun":true}}),
-            ))
-            .unwrap();
-        let JsonRpcResponse::Success(dry) = dry else {
-            panic!()
-        };
-        assert!(dry.result["batch"]["dryRun"].as_bool().unwrap());
-        assert!(!dry.result["batch"]["success"].as_bool().unwrap());
-        assert!(
-            dry.result["batch"]["trace"][1]["error"]
-                .as_str()
-                .unwrap()
-                .contains("required fact")
-        );
+        assert_eq!(failure.error.code, -32602);
+        assert!(failure.error.message.contains("version 1 targets are obsolete"));
     }
 
     /// The pixel rung's router half: which rung an action takes, what a refusal names, and what a
