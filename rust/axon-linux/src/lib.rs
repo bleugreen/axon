@@ -816,41 +816,134 @@ impl<B: PointerTargetVerifier + BackgroundPixelInput> Router<B> {
     }
 
     fn look(&mut self, params: &Map<String, Value>) -> Result<Value, JsonRpcError> {
-        let request = axon_core::LookRequest::decode(params).map_err(|e| rpc_error(-32602, e.to_string()))?;
+        let request =
+            axon_core::LookRequest::decode(params).map_err(|e| rpc_error(-32602, e.to_string()))?;
         match request.mode.clone() {
             axon_core::LookMode::AppList { all } => {
-                if all { return Err(rpc_error(-32602, "all-process application listing is unavailable on this backend")); }
-                Ok(application_enumeration(self.backend.enumerate_applications().map_err(backend_error)?))
-            },
-            axon_core::LookMode::ChildPage { target, offset, limit, direct } => {
+                if all {
+                    return Err(rpc_error(
+                        -32602,
+                        "all-process application listing is unavailable on this backend",
+                    ));
+                }
+                Ok(application_enumeration(
+                    self.backend
+                        .enumerate_applications()
+                        .map_err(backend_error)?,
+                ))
+            }
+            axon_core::LookMode::ChildPage {
+                target,
+                offset,
+                limit,
+                direct,
+            } => {
                 let context = match self.semantic_names.select(&target) {
                     SemanticSelection::Selected(context) => context,
-                    SemanticSelection::Missing { target } => return Err(JsonRpcError { code:-32002, message:format!("semantic name not found: {} / {}",target.app,target.name), data:Some(json!({"status":"missing","query":target})) }),
-                    SemanticSelection::Ambiguous { target, candidates } => return Err(JsonRpcError { code:-32002, message:format!("semantic name is ambiguous: {} / {}",target.app,target.name), data:Some(json!({"status":"ambiguous","query":target,"candidates":candidates})) }),
+                    SemanticSelection::Missing { target } => {
+                        return Err(JsonRpcError {
+                            code: -32002,
+                            message: format!(
+                                "semantic name not found: {} / {}",
+                                target.app, target.name
+                            ),
+                            data: Some(json!({"status":"missing","query":target})),
+                        });
+                    }
+                    SemanticSelection::Ambiguous { target, candidates } => {
+                        return Err(JsonRpcError {
+                            code: -32002,
+                            message: format!(
+                                "semantic name is ambiguous: {} / {}",
+                                target.app, target.name
+                            ),
+                            data: Some(
+                                json!({"status":"ambiguous","query":target,"candidates":candidates}),
+                            ),
+                        });
+                    }
                 };
                 let handle = context.recorded_handle().ok_or_else(|| rpc_error(-32002, "semantic target has no live retained capture; call look for its app first"))?.clone();
-                let page = self.backend.capture_child_page(&handle, axon_core::ChildPageRequest { offset, limit, include_descendants: !direct }).map_err(backend_error)?;
-                let mut parent=page.parent.clone(); parent.children=page.children.clone();
-                let snapshot=Snapshot { id:page.snapshot.clone(), app:axon_core::Application { name:target.app.clone(), process_id:context.process_id(), identifier:None, windows:vec![axon_core::Window{title:None,root:parent}] } };
-                let names=self.register_snapshot(&snapshot); let rendered=axon_core::render_semantic_names(&snapshot,&names);
-                self.snapshot=Some(snapshot); Ok(axon_core::format_child_page(&page,&target,&rendered,&request.display))
+                let page = self
+                    .backend
+                    .capture_child_page(
+                        &handle,
+                        axon_core::ChildPageRequest {
+                            offset,
+                            limit,
+                            include_descendants: !direct,
+                        },
+                    )
+                    .map_err(backend_error)?;
+                let mut parent = page.parent.clone();
+                parent.children = page.children.clone();
+                let snapshot = Snapshot {
+                    id: page.snapshot.clone(),
+                    app: axon_core::Application {
+                        name: target.app.clone(),
+                        process_id: context.process_id(),
+                        identifier: None,
+                        windows: vec![axon_core::Window {
+                            title: None,
+                            root: parent,
+                        }],
+                    },
+                };
+                let names = self.register_snapshot(&snapshot);
+                let rendered = axon_core::render_semantic_names(&snapshot, &names);
+                self.snapshot = Some(snapshot);
+                Ok(axon_core::format_child_page(
+                    &page,
+                    &target,
+                    &rendered,
+                    &request.display,
+                ))
             }
-            axon_core::LookMode::ChangeCheck { .. } => Err(rpc_error(-32602, "since change checks are unavailable on this backend")),
+            axon_core::LookMode::ChangeCheck { .. } => Err(rpc_error(
+                -32602,
+                "since change checks are unavailable on this backend",
+            )),
             axon_core::LookMode::FullApp { app, child_depth } => {
                 if request.screen_text {
-                    return Err(rpc_error(-32602, "screenText is unavailable on this backend"));
+                    return Err(rpc_error(
+                        -32602,
+                        "screenText is unavailable on this backend",
+                    ));
                 }
-                let snapshot=self.backend.capture_bounded(&app,axon_core::CaptureBounds{child_depth}).map_err(backend_error)?;
-                let names=self.register_snapshot(&snapshot); let rendered=axon_core::render_semantic_names(&snapshot,&names);
-                let mut value=axon_core::format_snapshot(&rendered,&request.display);
-                if axon_core::screenshot_requested(request.screenshot,axon_core::LookObservationKind::FullApp) {
-                    let object=if request.display.format==axon_core::LookFormat::Debug { value.get_mut("observation").and_then(Value::as_object_mut) } else { value.as_object_mut() }.expect("observation object");
+                let snapshot = self
+                    .backend
+                    .capture_bounded(&app, axon_core::CaptureBounds { child_depth })
+                    .map_err(backend_error)?;
+                let names = self.register_snapshot(&snapshot);
+                let rendered = axon_core::render_semantic_names(&snapshot, &names);
+                let mut value = axon_core::format_snapshot(&rendered, &request.display);
+                if axon_core::screenshot_requested(
+                    request.screenshot,
+                    axon_core::LookObservationKind::FullApp,
+                ) {
+                    let object = if request.display.format == axon_core::LookFormat::Debug {
+                        value.get_mut("observation").and_then(Value::as_object_mut)
+                    } else {
+                        value.as_object_mut()
+                    }
+                    .expect("observation object");
                     match self.backend.screenshot(&app) {
-                        Ok(s)=>{object.insert("screenshot".into(),json!({"mediaType":s.media_type,"base64Data":base64::Engine::encode(&base64::engine::general_purpose::STANDARD,&s.bytes),"width":s.width,"height":s.height}));}
-                        Err(e)=>{object.insert("screenshotUnavailable".into(),serde_json::to_value(axon_core::ScreenshotUnavailable::from_backend_error(e)).map_err(internal_error)?);}
+                        Ok(s) => {
+                            object.insert("screenshot".into(),json!({"mediaType":s.media_type,"base64Data":base64::Engine::encode(&base64::engine::general_purpose::STANDARD,&s.bytes),"width":s.width,"height":s.height}));
+                        }
+                        Err(e) => {
+                            object.insert(
+                                "screenshotUnavailable".into(),
+                                serde_json::to_value(
+                                    axon_core::ScreenshotUnavailable::from_backend_error(e),
+                                )
+                                .map_err(internal_error)?,
+                            );
+                        }
                     }
                 }
-                self.snapshot=Some(snapshot); Ok(value)
+                self.snapshot = Some(snapshot);
+                Ok(value)
             }
         }
     }

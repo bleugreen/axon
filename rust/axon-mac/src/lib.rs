@@ -76,7 +76,10 @@ pub struct Router<B> {
     observation_sequence: u64,
 }
 
-fn observation_object(value: &mut Value, format: axon_core::LookFormat) -> Option<&mut Map<String, Value>> {
+fn observation_object(
+    value: &mut Value,
+    format: axon_core::LookFormat,
+) -> Option<&mut Map<String, Value>> {
     if format == axon_core::LookFormat::Debug {
         value.get_mut("observation").and_then(Value::as_object_mut)
     } else {
@@ -883,21 +886,89 @@ impl<
                 "not-implemented",
             ));
         }
-        if let axon_core::LookMode::ChildPage { target, offset, limit, direct } = &request.mode {
+        if let axon_core::LookMode::ChildPage {
+            target,
+            offset,
+            limit,
+            direct,
+        } = &request.mode
+        {
             let context = match self.semantic_names.select(target) {
                 SemanticSelection::Selected(context) => context,
-                SemanticSelection::Missing { target } => return Err(JsonRpcError { code:-32002, message:format!("semantic name not found: {} / {}",target.app,target.name), data:Some(json!({"status":"missing","query":target})) }),
-                SemanticSelection::Ambiguous { target, candidates } => return Err(JsonRpcError { code:-32002, message:format!("semantic name is ambiguous: {} / {}",target.app,target.name), data:Some(json!({"status":"ambiguous","query":target,"candidates":candidates})) }),
+                SemanticSelection::Missing { target } => {
+                    return Err(JsonRpcError {
+                        code: -32002,
+                        message: format!(
+                            "semantic name not found: {} / {}",
+                            target.app, target.name
+                        ),
+                        data: Some(json!({"status":"missing","query":target})),
+                    });
+                }
+                SemanticSelection::Ambiguous { target, candidates } => {
+                    return Err(JsonRpcError {
+                        code: -32002,
+                        message: format!(
+                            "semantic name is ambiguous: {} / {}",
+                            target.app, target.name
+                        ),
+                        data: Some(
+                            json!({"status":"ambiguous","query":target,"candidates":candidates}),
+                        ),
+                    });
+                }
             };
-            let handle=context.recorded_handle().ok_or_else(|| rpc_error(-32002,"semantic target has no live retained capture; call look for its app first"))?.clone();
-            let page=self.backend.capture_child_page(&handle,axon_core::ChildPageRequest{offset:*offset,limit:*limit,include_descendants:!*direct}).map_err(backend_error)?;
-            let mut parent=page.parent.clone(); parent.children=page.children.clone();
-            let snapshot=Snapshot{id:page.snapshot.clone(),app:axon_core::Application{name:target.app.clone(),process_id:context.process_id(),identifier:None,windows:vec![axon_core::Window{title:None,root:parent}]}};
-            let names=self.register_snapshot(&snapshot); let rendered=axon_core::render_semantic_names(&snapshot,&names);
-            self.snapshot=Some(snapshot); return Ok(axon_core::format_child_page(&page,target,&rendered,&request.display));
+            let handle = context
+                .recorded_handle()
+                .ok_or_else(|| {
+                    rpc_error(
+                        -32002,
+                        "semantic target has no live retained capture; call look for its app first",
+                    )
+                })?
+                .clone();
+            let page = self
+                .backend
+                .capture_child_page(
+                    &handle,
+                    axon_core::ChildPageRequest {
+                        offset: *offset,
+                        limit: *limit,
+                        include_descendants: !*direct,
+                    },
+                )
+                .map_err(backend_error)?;
+            let mut parent = page.parent.clone();
+            parent.children = page.children.clone();
+            let snapshot = Snapshot {
+                id: page.snapshot.clone(),
+                app: axon_core::Application {
+                    name: target.app.clone(),
+                    process_id: context.process_id(),
+                    identifier: None,
+                    windows: vec![axon_core::Window {
+                        title: None,
+                        root: parent,
+                    }],
+                },
+            };
+            let names = self.register_snapshot(&snapshot);
+            let rendered = axon_core::render_semantic_names(&snapshot, &names);
+            self.snapshot = Some(snapshot);
+            return Ok(axon_core::format_child_page(
+                &page,
+                target,
+                &rendered,
+                &request.display,
+            ));
         }
         if let axon_core::LookMode::AppList { all } = &request.mode {
-            if *all { return Err(rpc_error(-32602, "all-process application listing is unavailable on this backend")); }
+            if *all {
+                return Err(rpc_error(
+                    -32602,
+                    "all-process application listing is unavailable on this backend",
+                ));
+            }
             return Ok(application_enumeration(
                 self.backend
                     .enumerate_applications()
@@ -905,10 +976,16 @@ impl<
             ));
         }
         let (app, child_depth) = match &request.mode {
-            axon_core::LookMode::FullApp { app, child_depth } | axon_core::LookMode::ChangeCheck { app, child_depth, .. } => (app.clone(), *child_depth),
+            axon_core::LookMode::FullApp { app, child_depth }
+            | axon_core::LookMode::ChangeCheck {
+                app, child_depth, ..
+            } => (app.clone(), *child_depth),
             _ => unreachable!(),
         };
-        let snapshot = self.backend.capture_bounded(&app, axon_core::CaptureBounds { child_depth }).map_err(backend_error)?;
+        let snapshot = self
+            .backend
+            .capture_bounded(&app, axon_core::CaptureBounds { child_depth })
+            .map_err(backend_error)?;
         let names = self.register_snapshot(&snapshot);
         self.observation_sequence += 1;
         let app_identity = snapshot

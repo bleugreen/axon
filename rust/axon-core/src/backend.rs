@@ -1,4 +1,7 @@
-use crate::{Application, CaptureBounds, ChildPageCapture, ChildPageRequest, Node, Rect, Snapshot, SnapshotHandle};
+use crate::{
+    Application, CaptureBounds, ChildPageCapture, ChildPageRequest, Node, Rect, Snapshot,
+    SnapshotHandle,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{collections::HashSet, time::Duration};
@@ -186,10 +189,14 @@ pub trait PlatformBackend {
                         node.children.clear();
                     }
                 } else {
-                    for child in &mut node.children { trim(child, remaining - 1); }
+                    for child in &mut node.children {
+                        trim(child, remaining - 1);
+                    }
                 }
             }
-            for window in &mut snapshot.app.windows { trim(&mut window.root, depth); }
+            for window in &mut snapshot.app.windows {
+                trim(&mut window.root, depth);
+            }
         }
         Ok(snapshot)
     }

@@ -368,7 +368,10 @@ fn check_schema_vocabulary(schema: &Value, path: &str) -> Result<(), String> {
         if !minimum.is_number() {
             return Err(format!("{path}.minimum must be a number"));
         }
-        if !matches!(object.get("type").and_then(Value::as_str), Some("integer" | "number")) {
+        if !matches!(
+            object.get("type").and_then(Value::as_str),
+            Some("integer" | "number")
+        ) {
             return Err(format!("{path}.minimum requires a numeric type"));
         }
     }
@@ -414,8 +417,13 @@ fn validate_value(schema: &Value, value: &Value, path: &str) -> Result<(), JsonR
     if let (Some(minimum), Some(number)) = (
         schema.get("minimum").and_then(Value::as_f64),
         value.as_f64(),
-    ) && number < minimum {
-        return Err(invalid(path, &format!("must be at least {minimum}"), expected));
+    ) && number < minimum
+    {
+        return Err(invalid(
+            path,
+            &format!("must be at least {minimum}"),
+            expected,
+        ));
     }
     if let Some(object) = value.as_object() {
         validate_object(schema, object, path)?;

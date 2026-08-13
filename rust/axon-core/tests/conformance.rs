@@ -28,15 +28,16 @@ fn look_request_controls_match_shared_schema_fixture() {
         .unwrap();
     let properties = &look["inputSchema"]["properties"];
 
-    assert_eq!(properties["format"]["enum"], json!(fixture.format.accepted_values));
+    assert_eq!(
+        properties["format"]["enum"],
+        json!(fixture.format.accepted_values)
+    );
     for name in fixture.nonnegative {
         assert_eq!(properties[&name]["minimum"], 0, "{name}");
-        assert!(validate_tool_arguments(
-            ToolBackend::Linux,
-            "look",
-            json!({name.clone(): -1})
-        )
-        .is_err(), "{name}");
+        assert!(
+            validate_tool_arguments(ToolBackend::Linux, "look", json!({name.clone(): -1})).is_err(),
+            "{name}"
+        );
     }
 }
 
