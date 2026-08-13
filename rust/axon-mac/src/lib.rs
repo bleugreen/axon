@@ -79,6 +79,13 @@ pub struct Router<B> {
 /// Replay targets may carry recording-only locator evidence. Native tool decoding receives only
 /// the primitive semantic target; the shared runner remains responsible for registering the
 /// attached locator before crossing this boundary.
+fn target_resolution(value: &Value) -> Option<axon_core::TargetResolution> {
+    let value = value
+        .get("targetResolution")
+        .or_else(|| value.get("action")?.get("targetResolution"))?;
+    serde_json::from_value(value.clone()).ok()
+}
+
 fn primitive_dispatch_params(params: &Map<String, Value>) -> Map<String, Value> {
     let mut params = params.clone();
     for key in ["target", "from", "to"] {
