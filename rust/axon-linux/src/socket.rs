@@ -452,21 +452,45 @@ mod tests {
         assert_eq!(response["error"]["data"]["path"], "params.arguments.bogus");
     }
     #[test]
-    fn facade_rejects_schema_excluded_scroll_without_contacting_daemon() {
-        let mut contacted = false;
+    fn facade_preserves_structured_scroll_refusal_from_daemon() {
+        let mut contacts = 0;
         let response = mcp_response_with_request(
             &json!({"jsonrpc":"2.0","id":11,"method":"tools/call","params":{"name":"scroll","arguments":{"target":{"app":"App","name":"List"},"deltaY":-120}}}),
-            |_| {
-                contacted = true;
-                unreachable!("schema-excluded tools must not reach the daemon")
+            |rpc| {
+                contacts += 1;
+                let forwarded: Value = serde_json::from_str(rpc).unwrap();
+                assert_eq!(forwarded["method"], "scroll");
+                Ok(json!({
+                    "jsonrpc":"2.0",
+                    "id":1,
+                    "error":{
+                        "code":-32004,
+                        "message":"tool scroll requires unavailable capability Scroll",
+                        "data":{
+                            "kind":"capability-unavailable",
+                            "tool":"scroll",
+                            "capability":"Scroll",
+                            "reason":"not-implemented"
+                        }
+                    }
+                })
+                .to_string())
             },
         )
         .unwrap()
         .unwrap();
 
-        assert!(!contacted);
-        assert_eq!(response["error"]["code"], -32602);
-        assert_eq!(response["error"]["data"]["path"], "params.name");
+        assert_eq!(contacts, 1);
+        assert_eq!(response["result"]["isError"], true);
+        assert_eq!(
+            response["result"]["structuredContent"]["data"],
+            json!({
+                "kind":"capability-unavailable",
+                "tool":"scroll",
+                "capability":"Scroll",
+                "reason":"not-implemented"
+            })
+        );
     }
     #[test]
     fn facade_rejects_malformed_call_params_with_the_offending_key() {

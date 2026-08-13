@@ -1520,11 +1520,7 @@ fn required_str<'a>(p: &'a Map<String, Value>, key: &str) -> Result<&'a str, Jso
         .ok_or_else(|| rpc_error(-32602, format!("missing string parameter {key}")))
 }
 
-fn number_param(
-    params: &Map<String, Value>,
-    key: &str,
-    default: f64,
-) -> Result<f64, JsonRpcError> {
+fn number_param(params: &Map<String, Value>, key: &str, default: f64) -> Result<f64, JsonRpcError> {
     match params.get(key) {
         None => Ok(default),
         Some(value) => value
@@ -1534,8 +1530,7 @@ fn number_param(
 }
 
 fn pointer_target_is_point(target: &Value) -> bool {
-    target.get("point").is_some()
-        || (target.get("x").is_some() && target.get("y").is_some())
+    target.get("point").is_some() || (target.get("x").is_some() && target.get("y").is_some())
 }
 /// Stamps the four stable delivery fields onto an action result.
 fn delivered(mut result: Value, policy: DeliveryPolicy, rung: DeliveryRung) -> Value {
@@ -1796,6 +1791,101 @@ mod tests {
         assert_eq!(primitive["target"], json!({"app":"Notes", "name":"save"}));
         assert_eq!(primitive["from"], params["from"]);
         assert_eq!(primitive["value"], "draft");
+    }
+
+    fn validated_params(tool: &str, arguments: Value) -> Map<String, Value> {
+        axon_core::validate_tool_arguments(axon_core::ToolBackend::Mac, tool, arguments)
+            .unwrap()
+            .as_object()
+            .unwrap()
+            .clone()
+    }
+
+    fn router_error(
+        router: &mut Router<EnumerationBackend>,
+        tool: &str,
+        params: Map<String, Value>,
+    ) -> JsonRpcError {
+        let response = router
+            .request(JsonRpcRequest::new(
+                Some(JsonRpcId::Integer(1)),
+                tool,
+                Some(Value::Object(params)),
+            ))
+            .unwrap();
+        let JsonRpcResponse::Failure(failure) = response else {
+            panic!("{tool} must refuse before native dispatch")
+        };
+        failure.error
+    }
+
+    #[test]
+    fn canonical_invoke_name_survives_validation_and_is_required_by_router() {
+        let params = validated_params(
+            "invoke",
+            json!({"target":{"app":"Notes","name":"Save"},"name":"AXShowMenu"}),
+        );
+        assert_eq!(required_str(&params, "name").unwrap(), "AXShowMenu");
+
+        let mut missing_name = params;
+        missing_name.remove("name");
+        let error = router_error(&mut Router::new(EnumerationBackend), "invoke", missing_name);
+        assert_eq!(error.code, -32602);
+    }
+
+    #[test]
+    fn legacy_type_text_alias_is_rejected_by_canonical_validation() {
+        let error = axon_core::validate_tool_arguments(
+            axon_core::ToolBackend::Mac,
+            "type",
+            json!({"target":{"app":"Notes","name":"Body"},"text":"draft"}),
+        )
+        .unwrap_err();
+        assert_eq!(error.code, -32602);
+        assert_eq!(error.data.unwrap()["path"], "params.arguments.value");
+    }
+
+    #[test]
+    fn screen_text_and_unsupported_click_forms_refuse_before_dispatch() {
+        let screen_text = validated_params("look", json!({"app":"Notes","screenText":true}));
+        let error = router_error(&mut Router::new(EnumerationBackend), "look", screen_text);
+        assert_eq!(error.code, -32004);
+        assert_eq!(error.data.as_ref().unwrap()["capability"], "screenText");
+
+        for target in [
+            json!({"point":{"x":10,"y":20}}),
+            json!({"x":10,"y":20,"coordinateSpace":"screen"}),
+        ] {
+            let params = validated_params("click", json!({"target":target}));
+            let error = router_error(&mut Router::new(EnumerationBackend), "click", params);
+            assert_eq!(error.code, -32004);
+            assert_eq!(error.data.as_ref().unwrap()["capability"], "point-target");
+            assert_eq!(error.data.as_ref().unwrap()["reason"], "not-implemented");
+        }
+    }
+
+    #[test]
+    fn canonical_scroll_defaults_and_unsupported_forms_refuse_before_dispatch() {
+        let defaulted = validated_params("scroll", json!({"target":{"app":"Notes","name":"List"}}));
+        assert_eq!(defaulted["deltaX"], 0);
+        assert_eq!(defaulted["deltaY"], -120);
+        let error = router_error(&mut Router::new(EnumerationBackend), "scroll", defaulted);
+        assert_eq!(error.code, -32004);
+        assert_eq!(
+            error.data.as_ref().unwrap()["capability"],
+            "directional-scroll"
+        );
+
+        for arguments in [
+            json!({"app":"Notes","deltaX":0,"deltaY":0}),
+            json!({"target":{"point":{"x":10,"y":20}},"deltaX":0,"deltaY":0}),
+            json!({"target":{"location":{"app":"Notes","text":"Bottom"}},"deltaX":0,"deltaY":0}),
+        ] {
+            let params = validated_params("scroll", arguments);
+            let error = router_error(&mut Router::new(EnumerationBackend), "scroll", params);
+            assert_eq!(error.code, -32004);
+            assert_eq!(error.data.as_ref().unwrap()["reason"], "not-implemented");
+        }
     }
 
     #[test]
