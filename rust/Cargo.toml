@@ -5,6 +5,6 @@ resolver = "2"
 # The product version, kept in step with the repository-root VERSION file by
 # scripts/check-version. Product crates inherit it with `version.workspace = true`.
 [workspace.package]
-version = "0.3.2"
+version = "0.3.3"
 edition = "2024"
 publish = false
