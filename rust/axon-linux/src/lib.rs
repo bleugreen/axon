@@ -37,7 +37,11 @@ pub mod x11;
 /// Tools this backend does not implement at all. These are not delivery decisions: the request
 /// names something the Linux daemon has no code path for, which stays a JSON-RPC error.
 const EXCLUDED: &[(&str, &str)] = &[
+    ("navigate", "BrowserScripting"),
+    ("windows", "BrowserScripting"),
+    ("tabs", "BrowserScripting"),
     ("save", "SerializeHistory"),
+    ("drag", "PointerDrag"),
     ("scroll", "Scroll"),
     ("wait_for_value", "WaitForValue"),
     ("wait_for_stability", "WaitForStability"),
@@ -1251,7 +1255,7 @@ fn capability_unavailable(tool: &str, capability: &str, reason: &str) -> JsonRpc
         code: -32004,
         message: format!("tool {tool} requires unavailable capability {capability}"),
         data: Some(
-            json!({"kind":"capability-unavailable","tool":tool,"capability":capability,"reason":reason}),
+            json!({"code":"capability-unavailable","tool":tool,"capability":capability,"reason":reason}),
         ),
     }
 }

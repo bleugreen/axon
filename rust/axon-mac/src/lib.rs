@@ -607,8 +607,8 @@ impl<
                 ))
             }
             "type" => {
-                let (handle, resolution) = self.resolve(params)?;
                 let value = required_str(params, "value")?;
+                let (handle, resolution) = self.resolve(params)?;
                 // AXValue is target-bound and does not require global keyboard input.
                 self.backend
                     .set_value(&handle, value)
@@ -1573,7 +1573,7 @@ fn capability_unavailable(tool: &str, capability: &str, reason: &str) -> JsonRpc
         code: -32004,
         message: format!("tool {tool} requires unavailable capability {capability}"),
         data: Some(
-            json!({"kind":"capability-unavailable","tool":tool,"capability":capability,"reason":reason}),
+            json!({"code":"capability-unavailable","tool":tool,"capability":capability,"reason":reason}),
         ),
     }
 }

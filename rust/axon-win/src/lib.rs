@@ -27,6 +27,9 @@ pub use platform::{IntegrationProbe, WindowsBackend};
 /// Tools this backend does not implement at all. These are not delivery decisions: the request
 /// names something the Windows daemon has no code path for, which stays a JSON-RPC error.
 const EXCLUDED: &[(&str, &str)] = &[
+    ("navigate", "BrowserScripting"),
+    ("windows", "BrowserScripting"),
+    ("tabs", "BrowserScripting"),
     ("save", "SerializeHistory"),
     ("drag", "PointerDrag"),
     ("wait_for_value", "WaitForValue"),
@@ -69,7 +72,7 @@ fn capability_unavailable(tool: &str, capability: &str, reason: &str) -> JsonRpc
         code: -32004,
         message: format!("tool {tool} requires unavailable capability {capability}"),
         data: Some(
-            json!({"kind":"capability-unavailable","tool":tool,"capability":capability,"reason":reason}),
+            json!({"code":"capability-unavailable","tool":tool,"capability":capability,"reason":reason}),
         ),
     }
 }
@@ -595,8 +598,8 @@ impl<
                 )
             }
             "type" => {
-                let (handle, resolution) = self.resolve(params)?;
                 let value = required_str(params, "value")?;
+                let (handle, resolution) = self.resolve(params)?;
                 // UIA ValuePattern does not require focus, and calling SetFocus would make this a
                 // foreground action wearing a semantic name.
                 self.backend
