@@ -993,7 +993,9 @@ function Invoke-ProbeStage {
                 $missing = @()
                 if ($null -eq $sweep.foregroundLockTimeoutMs) { $missing += 'foregroundLockTimeoutMs' }
                 if ([int]$sweep.requestedPriorProcess -ne [int]$prior.identifier) { $missing += 'requestedPriorProcess' }
-                if ([int]$sweep.priorForegroundProcess -ne [int]$sweep.activatedPriorProcess) { $missing += 'activatedPriorProcess' }
+                if ([int]$sweep.activatedPriorProcess -eq 0) { $missing += 'activatedPriorProcess' }
+                if ([int]$sweep.priorForegroundProcess -eq 0) { $missing += 'priorForegroundProcess' }
+                if ([int]$sweep.priorForegroundProcess -eq [int]$browser.ProcessId) { $missing += 'priorForegroundProcess[target]' }
                 if (@($sweep.results).Count -ne 8) { $missing += "results[count=$(@($sweep.results).Count)]" }
                 foreach ($result in @($sweep.results)) {
                     $strategy = if ($null -eq $result.strategy) { '?' } else { [string]$result.strategy }
