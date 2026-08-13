@@ -2382,12 +2382,16 @@ mod tests {
         let backend = backend(vec![], Some("ready now"));
         let handle = backend.snapshot.handle(0).0;
         let mut router = Router::new(backend);
-        let source = format!(
-            "version: 1\nactions:\n- tool: invoke\n  target: {handle}\n  expects:\n  - id: ready\n    kind: value\n    target: {handle}\n"
-        );
+        let path = std::env::temp_dir().join(format!("axon-v1-{}.axn", std::process::id()));
+        std::fs::write(
+            &path,
+            format!("version: 1\nactions:\n- tool: invoke\n  target: {handle}\n  expects:\n  - id: ready\n    kind: value\n    target: {handle}\n"),
+        )
+        .unwrap();
         let response = router
-            .request(request("run", json!({"source":source})))
+            .request(request("run", json!({"path":path})))
             .unwrap();
+        std::fs::remove_file(path).unwrap();
         let JsonRpcResponse::Failure(failure) = response else {
             panic!("v1 replay unexpectedly succeeded")
         };

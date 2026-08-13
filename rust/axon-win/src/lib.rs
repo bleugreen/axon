@@ -2393,18 +2393,13 @@ mod tests {
         let clicks = backend.clicks.clone();
         let focuses = backend.focuses.clone();
         let mut router = Router::new(backend);
-        let source = r#"version: 2
-actions:
-  - tool: invoke
-    target:
-      app: App
-      name: missing
-      locator:
-        role: definitely-missing
-"#;
+        let actions = json!([{
+            "tool": "invoke",
+            "target": {"app": "App", "name": "missing", "locator": {"role": "definitely-missing"}}
+        }]);
 
         let response = router
-            .request(request("run", json!({"source": source})))
+            .request(request("run", json!({"actions": actions})))
             .unwrap();
         let JsonRpcResponse::Success(success) = response else {
             panic!("the .axn run itself returns a batch result")
@@ -2424,7 +2419,7 @@ actions:
         let dry = router
             .request(request(
                 "run",
-                json!({"source":source,"options":{"dryRun":true}}),
+                json!({"actions":actions,"dryRun":true}),
             ))
             .unwrap();
         let JsonRpcResponse::Success(dry) = dry else {
