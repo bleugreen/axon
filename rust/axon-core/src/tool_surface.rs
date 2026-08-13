@@ -667,6 +667,7 @@ mod tests {
             json!({"type": "array", "items": []}),
             json!({"enum": "x"}),
             json!({"enum": []}),
+            json!({"type": "string", "enum": [3]}),
             json!({"type": "string", "default": false}),
         ];
         for schema in malformed {
