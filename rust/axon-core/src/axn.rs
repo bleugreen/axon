@@ -281,6 +281,7 @@ pub enum ArgumentType {
 pub struct AxnAction {
     #[serde(default)]
     pub id: Option<String>,
+    #[serde(default)]
     pub tool: String,
     #[serde(default)]
     pub requires: Vec<String>,
