@@ -415,7 +415,7 @@ impl SemanticResolutionContext {
 }
 
 pub enum SemanticSelection {
-    Selected(SemanticResolutionContext),
+    Selected(Box<SemanticResolutionContext>),
     Missing {
         target: WireElementTarget,
     },
@@ -587,13 +587,15 @@ impl SemanticNameRegistry {
             });
         }
         let record = matches[0];
-        Some(SemanticSelection::Selected(SemanticResolutionContext {
-            target: target.clone(),
-            locator: record.locator.clone(),
-            process_id: record.process_id,
-            recorded_snapshot_id: None,
-            recorded_handle: None,
-        }))
+        Some(SemanticSelection::Selected(Box::new(
+            SemanticResolutionContext {
+                target: target.clone(),
+                locator: record.locator.clone(),
+                process_id: record.process_id,
+                recorded_snapshot_id: None,
+                recorded_handle: None,
+            },
+        )))
     }
 
     pub fn resolve(&self, target: &WireElementTarget, live: &Snapshot) -> SemanticLookup {
@@ -648,7 +650,7 @@ impl SemanticNameRegistry {
             });
         }
         let record = latest[0];
-        RetainedSemanticSelection::Selected(SemanticSelection::Selected(
+        RetainedSemanticSelection::Selected(SemanticSelection::Selected(Box::new(
             SemanticResolutionContext {
                 target: target.clone(),
                 locator: record.locator.clone(),
@@ -656,7 +658,7 @@ impl SemanticNameRegistry {
                 recorded_snapshot_id: Some(record.snapshot_id.clone()),
                 recorded_handle: Some(record.handle.clone()),
             },
-        ))
+        )))
     }
 }
 
