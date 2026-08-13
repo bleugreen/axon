@@ -180,13 +180,10 @@ fn check_schema_vocabulary(schema: &Value, path: &str) -> Result<(), String> {
 }
 
 fn validate_value(schema: &Value, value: &Value, path: &str) -> Result<(), JsonRpcError> {
-    if let Some(allowed) = schema.get("enum").and_then(Value::as_array) {
-        if !allowed.contains(value) {
-            return Err(invalid(path, "value is not in the allowed enum", None));
-        }
-    }
-    if let Some(branches) = schema.get("anyOf").and_then(Value::as_array) {
-        return validate_branches(branches, value, path, false);
+    if let Some(allowed) = schema.get("enum").and_then(Value::as_array)
+        && !allowed.contains(value)
+    {
+        return Err(invalid(path, "value is not in the allowed enum", None));
     }
     let expected = schema.get("type").and_then(Value::as_str);
     let type_matches = match expected {
@@ -276,8 +273,8 @@ fn validate_branches(
         .collect();
     let successes = results.iter().filter(|result| result.is_ok()).count();
     if successes == 0 {
-        if !exactly_one {
-            if let Some(error) = results
+        if !exactly_one
+            && let Some(error) = results
                 .into_iter()
                 .filter_map(Result::err)
                 .max_by_key(|error| {
@@ -287,13 +284,9 @@ fn validate_branches(
                         .and_then(|data| data["path"].as_str())
                         .map_or(0, str::len)
                 })
-            {
-                return Err(error);
-            }
+        {
+            return Err(error);
         }
-        return Err(invalid(path, "did not match any schema alternative", None));
-    }
-    if exactly_one && successes != 1 {
         return Err(invalid(
             path,
             "expected exactly one schema alternative",
@@ -309,13 +302,10 @@ fn apply_defaults(schema: &Value, value: &mut Value) {
         value.as_object_mut(),
     ) {
         for (name, child_schema) in properties {
-            if !object.contains_key(name) {
-                if let Some(default) = child_schema.get("default") {
-                    object.insert(name.clone(), default.clone());
-                }
-            }
-            if let Some(child) = object.get_mut(name) {
-                apply_defaults(child_schema, child);
+            if !object.contains_key(name)
+                && let Some(default) = child_schema.get("default")
+            {
+                object.insert(name.clone(), default.clone());
             }
         }
     }
