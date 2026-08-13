@@ -243,10 +243,10 @@ jobs:
           child_page="$(jq -cn --arg app "$retained_app" --arg name "$clear_name" '{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"look","arguments":{"target":{"app":$app,"name":$name},"offset":0,"limit":1,"direct":true}}}' | "$cli" mcp)"
           if ! printf '%s' "$child_page" | jq -e '
             .result.isError == false
-            and .result.structuredContent.format == "children"
-            and .result.structuredContent.offset == 0
-            and .result.structuredContent.limit == 1
-            and .result.structuredContent.total >= 0
+            and .result.structuredContent.children.format == "children"
+            and .result.structuredContent.children.offset == 0
+            and .result.structuredContent.children.limit == 1
+            and .result.structuredContent.children.total >= 0
             and ([.result.content[] | select(.type == "image")] | length == 0)
           ' >/dev/null; then
             echo '::error::Calculator semantic child page did not expose bounded imageless metadata'

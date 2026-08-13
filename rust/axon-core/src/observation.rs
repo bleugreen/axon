@@ -298,7 +298,19 @@ impl LookRequest {
 }
 
 fn reject(params: &Map<String, Value>, keys: &[&str], mode: &str) -> Result<(), LookRequestError> {
-    if let Some(key) = keys.iter().find(|key| params.contains_key(**key)) {
+    fn is_schema_default(key: &str, value: &Value) -> bool {
+        match key {
+            "offset" => value.as_u64() == Some(0),
+            "direct" | "frames" | "screenText" => value.as_bool() == Some(false),
+            "screenshot" => value.as_bool() == Some(true),
+            _ => false,
+        }
+    }
+    if let Some(key) = keys.iter().find(|key| {
+        params
+            .get(**key)
+            .is_some_and(|value| !is_schema_default(key, value))
+    }) {
         Err(LookRequestError(format!("{key} has no meaning for {mode}")))
     } else {
         Ok(())
