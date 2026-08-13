@@ -767,6 +767,41 @@ fn expected_fact_references_resolve_and_failed_causal_facts_stay_unverified() {
             .contains("fixture-secret")
     );
 
+    let mut mismatch_dispatcher = SemanticDispatcher {
+        states: vec![
+            json!({"value":"prefix fixture-secret suffix"})
+                .as_object()
+                .unwrap()
+                .clone(),
+        ],
+        cursor: 0,
+        dispatched: 0,
+        fail_dispatch: false,
+        changed_captures: vec![],
+    };
+    let mut mismatch_doc = doc.clone();
+    mismatch_doc.actions[0].expects[0].fields["state"]["value"] = json!({"equals":"{{api_token}}"});
+    let mismatch = AxnRunner::new(&mut mismatch_dispatcher)
+        .run(
+            &mismatch_doc,
+            &args,
+            RunOptions {
+                dry_run: None,
+                continue_on_error: None,
+            },
+        )
+        .unwrap();
+    assert!(!mismatch.success);
+    assert_eq!(
+        mismatch.trace[0].error.as_deref(),
+        Some("<redacted: contains-secret>")
+    );
+    assert!(
+        !serde_json::to_string(&mismatch)
+            .unwrap()
+            .contains("fixture-secret")
+    );
+
     let failed_doc = semantic_doc(json!([{
         "tool":"click",
         "target":{"app":"Example","name":"button","locator":{"role":"AXButton"}},

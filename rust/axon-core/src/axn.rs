@@ -660,7 +660,7 @@ impl<'a, D: ToolDispatcher> AxnRunner<'a, D> {
                     success: false,
                     action_id: action.id.clone(),
                     result: None,
-                    error: Some(error),
+                    error: Some(redact_error(error, &active_secrets)),
                     resolution: None,
                     heal: None,
                 });
@@ -776,17 +776,19 @@ impl<'a, D: ToolDispatcher> AxnRunner<'a, D> {
                 success: action_success,
                 action_id: action.id.clone(),
                 result: (!redacted.is_null()).then_some(redacted),
-                error: verification_error.or((!can_verify_dispatch_only)
-                    .then_some(outcome.error)
-                    .flatten()
-                    .map(|e| {
-                        if secret_fields.is_empty() {
-                            e
-                        } else {
-                            "<redacted: contains-secret>".into()
-                        }
-                    })
-                    .or_else(|| (!outcome.success).then(|| "action failed".into()))),
+                error: verification_error
+                    .map(|error| redact_error(error, &active_secrets))
+                    .or((!can_verify_dispatch_only)
+                        .then_some(outcome.error)
+                        .flatten()
+                        .map(|e| {
+                            if secret_fields.is_empty() {
+                                e
+                            } else {
+                                "<redacted: contains-secret>".into()
+                            }
+                        })
+                        .or_else(|| (!outcome.success).then(|| "action failed".into()))),
                 resolution: outcome
                     .resolution
                     .map(|resolution| redact_target_resolution(&resolution, &active_secrets)),
@@ -1052,6 +1054,17 @@ fn substitute_fact_value(
         _ => {}
     }
     Ok(())
+}
+
+fn redact_error(error: String, secrets: &[String]) -> String {
+    if secrets
+        .iter()
+        .any(|secret| !secret.is_empty() && error.contains(secret))
+    {
+        "<redacted: contains-secret>".into()
+    } else {
+        error
+    }
 }
 
 fn semantically_verified_result(tool: &str, mut result: Value) -> Value {
