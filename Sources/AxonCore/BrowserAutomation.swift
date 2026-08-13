@@ -7,6 +7,34 @@ public enum BrowserAutomationAuthorization: String, Equatable, Sendable {
     case notDetermined
 }
 
+struct AppleEventAuthorizationService {
+    let authorizer: any AppleEventAuthorizing
+
+    func authorize(bundleIdentifier: String, appName: String) throws {
+        let initial = authorizer.determinePermission(bundleIdentifier: bundleIdentifier, askUserIfNeeded: false)
+        switch initial {
+        case noErr:
+            return
+        case OSStatus(errAEEventWouldRequireUserConsent):
+            let prompted = authorizer.determinePermission(bundleIdentifier: bundleIdentifier, askUserIfNeeded: true)
+            switch prompted {
+            case noErr:
+                return
+            case OSStatus(errAEEventNotPermitted):
+                throw BrowserAutomationError.automationNotGranted(app: appName, authorization: .denied, status: prompted)
+            case OSStatus(errAEEventWouldRequireUserConsent):
+                throw BrowserAutomationError.automationNotGranted(app: appName, authorization: .notDetermined, status: prompted)
+            default:
+                throw BrowserAutomationError.authorizationFailed(app: appName, status: prompted)
+            }
+        case OSStatus(errAEEventNotPermitted):
+            throw BrowserAutomationError.automationNotGranted(app: appName, authorization: .denied, status: initial)
+        default:
+            throw BrowserAutomationError.authorizationFailed(app: appName, status: initial)
+        }
+    }
+}
+
 protocol AppleEventAuthorizing {
     func determinePermission(bundleIdentifier: String, askUserIfNeeded: Bool) -> OSStatus
 }
@@ -180,27 +208,10 @@ public final class AppleScriptBrowserAutomation: BrowserAutomationServing {
     }
 
     private func authorize(_ browser: Browser) throws {
-        let initial = authorizer.determinePermission(bundleIdentifier: browser.rawValue, askUserIfNeeded: false)
-        switch initial {
-        case noErr:
-            return
-        case OSStatus(errAEEventWouldRequireUserConsent):
-            let prompted = authorizer.determinePermission(bundleIdentifier: browser.rawValue, askUserIfNeeded: true)
-            switch prompted {
-            case noErr:
-                return
-            case OSStatus(errAEEventNotPermitted):
-                throw BrowserAutomationError.automationNotGranted(app: browser.name, authorization: .denied, status: prompted)
-            case OSStatus(errAEEventWouldRequireUserConsent):
-                throw BrowserAutomationError.automationNotGranted(app: browser.name, authorization: .notDetermined, status: prompted)
-            default:
-                throw BrowserAutomationError.authorizationFailed(app: browser.name, status: prompted)
-            }
-        case OSStatus(errAEEventNotPermitted):
-            throw BrowserAutomationError.automationNotGranted(app: browser.name, authorization: .denied, status: initial)
-        default:
-            throw BrowserAutomationError.authorizationFailed(app: browser.name, status: initial)
-        }
+        try AppleEventAuthorizationService(authorizer: authorizer).authorize(
+            bundleIdentifier: browser.rawValue,
+            appName: browser.name
+        )
     }
 
     static func validatedURL(_ raw: String) throws -> String {

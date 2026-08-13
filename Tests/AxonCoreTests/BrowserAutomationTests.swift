@@ -1,4 +1,5 @@
 import Foundation
+import ApplicationServices
 import Testing
 @testable import AxonCore
 
@@ -7,6 +8,46 @@ import Testing
     #expect(throws: BrowserAutomationError.self) { try AppleScriptBrowserAutomation.validatedURL("file:///tmp/private") }
     #expect(throws: BrowserAutomationError.self) { try AppleScriptBrowserAutomation.validatedURL("javascript:alert(1)") }
     #expect(throws: BrowserAutomationError.self) { try AppleScriptBrowserAutomation.validatedURL("https://example.com/\nnext") }
+}
+
+private final class AppleEventAuthorizerStub: AppleEventAuthorizing {
+    private var results: [OSStatus]
+    var requests: [Bool] = []
+    var bundleIdentifiers: [String] = []
+
+    init(results: [OSStatus]) { self.results = results }
+
+    func determinePermission(bundleIdentifier: String, askUserIfNeeded: Bool) -> OSStatus {
+        bundleIdentifiers.append(bundleIdentifier)
+        requests.append(askUserIfNeeded)
+        return results.removeFirst()
+    }
+}
+
+@Test func appleEventAuthorizationPreflightsBeforePromptingAndPromptsOnlyWhenNeeded() throws {
+    let alreadyGranted = AppleEventAuthorizerStub(results: [noErr])
+    try AppleEventAuthorizationService(authorizer: alreadyGranted).authorize(bundleIdentifier: "com.apple.Safari", appName: "Safari")
+    #expect(alreadyGranted.requests == [false])
+
+    let firstUse = AppleEventAuthorizerStub(results: [OSStatus(errAEEventWouldRequireUserConsent), noErr])
+    try AppleEventAuthorizationService(authorizer: firstUse).authorize(bundleIdentifier: "com.apple.Safari", appName: "Safari")
+    #expect(firstUse.requests == [false, true])
+    #expect(firstUse.bundleIdentifiers == ["com.apple.Safari", "com.apple.Safari"])
+}
+
+@Test func appleEventAuthorizationClassifiesDeniedUndeterminedAndUnexpectedStatuses() {
+    let cases: [([OSStatus], BrowserAutomationError)] = [
+        ([OSStatus(errAEEventNotPermitted)], .automationNotGranted(app: "Safari", authorization: .denied, status: OSStatus(errAEEventNotPermitted))),
+        ([OSStatus(errAEEventWouldRequireUserConsent), OSStatus(errAEEventNotPermitted)], .automationNotGranted(app: "Safari", authorization: .denied, status: OSStatus(errAEEventNotPermitted))),
+        ([OSStatus(errAEEventWouldRequireUserConsent), OSStatus(errAEEventWouldRequireUserConsent)], .automationNotGranted(app: "Safari", authorization: .notDetermined, status: OSStatus(errAEEventWouldRequireUserConsent))),
+        ([-50], .authorizationFailed(app: "Safari", status: -50))
+    ]
+    for (results, expected) in cases {
+        let authorizer = AppleEventAuthorizerStub(results: results)
+        #expect(throws: expected) {
+            try AppleEventAuthorizationService(authorizer: authorizer).authorize(bundleIdentifier: "com.apple.Safari", appName: "Safari")
+        }
+    }
 }
 
 @Test func tabsReturnsApplicationScriptingShapeWithoutClaimingAXAuthority() {
