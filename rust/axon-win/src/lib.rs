@@ -842,9 +842,10 @@ impl<
         let request = axon_core::LookRequest::decode(params)
             .map_err(|error| rpc_error(-32602, error.to_string()))?;
         match request.mode.clone() {
-            axon_core::LookMode::AppList { all: _ } => Ok(application_enumeration(
-                self.backend.enumerate_applications().map_err(backend_error)?,
-            )),
+            axon_core::LookMode::AppList { all } => {
+                if all { return Err(rpc_error(-32602, "all-process application listing is unavailable on this backend")); }
+                Ok(application_enumeration(self.backend.enumerate_applications().map_err(backend_error)?))
+            }
             axon_core::LookMode::ChildPage { target, offset, limit, direct } => {
                 let context = match self.semantic_names.select(&target) {
                     SemanticSelection::Selected(context) => context,
