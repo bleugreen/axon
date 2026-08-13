@@ -21,9 +21,9 @@ Static availability is not a claim that every runtime environment works. Permiss
 | tool (socket method) | Swift daemon | Rust macOS | Windows | Linux |
 | --- | --- | --- | --- | --- |
 | `look` (`look`) | **I/A S** AX snapshot, screenshot, OCR | **P/A M** AX capture; OCR/screen-text and some observation forms are bounded [P-M-LOOK] | **P/A W** UIA capture and window image; session/elevation gates [P-W-LOOK] | **P/A L** AT-SPI capture; screenshots are X11-only, Wayland refused; XWayland remains Wayland-governed [P-L-LOOK] |
-| `navigate` (`navigate`) | **I/A S** browser Application Scripting | **N/— M** [N-M] | **N/— W** [N-W-UNKNOWN] | **N/— L** [N-L-UNKNOWN] |
-| `windows` (`windows`) | **I/A S** browser Application Scripting plus AX cross-check | **N/— M** [N-M] | **N/— W** [N-W-UNKNOWN] | **N/— L** [N-L-UNKNOWN] |
-| `tabs` (`tabs`) | **I/A S** browser Application Scripting | **N/— M** [N-M] | **N/— W** [N-W-UNKNOWN] | **N/— L** [N-L-UNKNOWN] |
+| `navigate` (`navigate`) | **I/A S** browser Application Scripting | **N/— M** [N-M] | **N/— W** [N-W] | **N/— L** [N-L] |
+| `windows` (`windows`) | **I/A S** browser Application Scripting plus AX cross-check | **N/— M** [N-M] | **N/— W** [N-W] | **N/— L** [N-L] |
+| `tabs` (`tabs`) | **I/A S** browser Application Scripting | **N/— M** [N-M] | **N/— W** [N-W] | **N/— L** [N-L] |
 | `find` (`find`) | **I/A S** fresh AX locator resolution | **I/A M** shared locator over AX capture | **I/A W** shared locator over UIA capture | **I/A L** shared locator over AT-SPI capture |
 | `wait_for_value` (`wait_for_value`) | **I/A S** bounded AX polling | **I/A M** bounded AX polling | **N/— W** [N-W] | **N/— L** [N-L] |
 | `wait_for_stability` (`wait_for_stability`) | **I/A S** bounded observation polling | **I/A M** bounded AX polling | **N/— W** [N-W] | **N/— L** [N-L] |
@@ -34,7 +34,7 @@ Static availability is not a claim that every runtime environment works. Permiss
 | `type` (`type`) | **I/A S** AXValue | **I/A M** AXValue | **I/A W** UIA ValuePattern | **I/A L** AT-SPI EditableText |
 | `keyboard` (`keyboard`) | **P/A S** Core Graphics; permission/foreground gates [P-S-KEY] | **P/A M** bounded foreground Core Graphics ladder [P-M-KEY] | **P/A W** bounded foreground/global-input ladder; interactive-session and target proof required [P-W-KEY] | **P/A L** measured X11/toolkit ladder; Chromium and multi-window limits; all Wayland/XWayland refused [P-L-INPUT] |
 | `scroll` (`scroll`) | **I/A S** semantic scroll and native input paths | **P/A M** AXScrollToVisible only; directional/amount forms refuse [P-M-SCROLL] | **P/A W** UIA ScrollPattern with bounded fallback [P-W-SCROLL] | **N/— L** AT-SPI has no portable delta-scroll operation [N-L] |
-| `drag` (`drag`) | **I/A S** native pointer gesture with restoration accounting | **N/— M** [N-M] | **N/— W** [N-W] | **N/— L** [N-L-UNKNOWN] |
+| `drag` (`drag`) | **I/A S** native pointer gesture with restoration accounting | **N/— M** [N-M] | **N/— W** [N-W] | **N/— L** [N-L] |
 | `invoke` (`invoke`) | **I/A S** named AX action | **I/A M** named AX action | **P/A W** UIA InvokePattern only [P-W-INVOKE] | **I/A L** named AT-SPI action |
 
 ### Keyed refusal evidence
@@ -56,10 +56,8 @@ Locations below are stable source files rather than line numbers. A “success r
 | P-L-LOOK | `look_refuses_all_process_listing_instead_of_ignoring_it` and `look_defaults_to_honest_screenshot_absence_and_opt_out_omits_the_claim` prove explicit bounded results. Unsupported listing is `-32004`/`not-implemented`; screenshot absence is a named runtime result. | `rust/axon-linux/src/lib.rs` (`Router::look`); `rust/axon-linux/src/platform.rs`/`x11.rs`. | X11 screenshot eligibility differs from Wayland/XWayland; `wayland-restricted`, `no-graphical-session`, and `accessibility-disabled` are health/session reasons. |
 | P-L-INPUT | `click_refuses_without_a_backend_call_and_names_the_missing_mechanism` and `keyboard_refuses_without_a_backend_call`: success refusal, reason `noDeliveryCandidate`, capability `globalInput`, `dispatchSuccess:false`; click counter remains zero. `wayland_withholds_global_input_however_complete_the_x11_session_looks` proves XWayland does not bypass the gate. | `rust/axon-linux/src/lib.rs` delivery selection; `rust/axon-linux/src/platform.rs`, `pixel.rs`, and `x11.rs` own native dispatch. | `reports_wayland_restrictions_explicitly` names `wayland-restricted`; no graphical session, no window manager, no XTEST, toolkit acceptance, target binding, and restoration are separate runtime facts. |
 | N-M | `excluded_tools_are_capability_errors_before_dispatch` covers `navigate`, `windows`, `tabs`, `permit`, `save`, and `drag`: `-32004`, capability-specific data, reason `not-implemented`. | `rust/axon-mac/src/lib.rs` `EXCLUDED` guard runs before the method match; no backend route exists. Backend stubs in `platform.rs` also return capability errors rather than native dispatch. | Runtime health is irrelevant: these tools are statically absent even in a healthy session. |
-| N-W | `excluded_tools_have_structured_errors_before_backend_dispatch` covers `wait_for_value`, `wait_for_stability`, `permit`, `save`, and `drag`: `-32004`, capability-specific data, reason `not-implemented`; `capture_queries` remains empty. | `rust/axon-win/src/lib.rs` `EXCLUDED` guard precedes validation, capture, and backend routing. | Runtime health is irrelevant: these tools are statically absent. |
-| N-L | `unimplemented_tools_have_structured_errors_before_backend_dispatch` covers `wait_for_value`, `wait_for_stability`, `permit`, `save`, and `scroll`: `-32004`, capability-specific data, reason `not-implemented`; scroll dispatch count remains zero. | `rust/axon-linux/src/lib.rs` `EXCLUDED` guard precedes validation and backend routing. | Runtime health is irrelevant: these tools are statically absent. |
-| N-W-UNKNOWN | No facade/backend route exists. A direct router request currently reaches the unknown-method arm and returns `-32601` (`unknown method …`) with zero backend dispatch, rather than the census-required `-32004` capability envelope. | `rust/axon-win/src/lib.rs` final `Router::request` match arm; absence from `EXCLUDED` is the evidence and the contract discrepancy. | Runtime health is irrelevant. |
-| N-L-UNKNOWN | No facade/backend route exists. A direct router request currently reaches the unknown-method arm and returns `-32601` (`unknown method …`) with zero backend dispatch, rather than the census-required `-32004` capability envelope. This applies to browser methods and `drag`. | `rust/axon-linux/src/lib.rs` final `Router::request` match arm; absence from `EXCLUDED` is the evidence and the contract discrepancy. | Runtime health is irrelevant. |
+| N-W | `excluded_tools_have_structured_errors_before_backend_dispatch` covers `navigate`, `windows`, `tabs`, `wait_for_value`, `wait_for_stability`, `permit`, `save`, and `drag`: `-32004`, capability-specific data, reason `not-implemented`; `capture_queries` remains empty. | `rust/axon-win/src/lib.rs` `EXCLUDED` guard precedes validation, capture, and backend routing. | Runtime health is irrelevant: these tools are statically absent. |
+| N-L | `unimplemented_tools_have_structured_errors_before_backend_dispatch` covers `navigate`, `windows`, `tabs`, `wait_for_value`, `wait_for_stability`, `permit`, `save`, `drag`, and `scroll`: `-32004`, capability-specific data, reason `not-implemented`; scroll dispatch count remains zero. | `rust/axon-linux/src/lib.rs` `EXCLUDED` guard precedes validation and backend routing. | Runtime health is irrelevant: these tools are statically absent. |
 
 ## Linux session distinctions
 
@@ -88,7 +86,7 @@ The macOS cutover retains Swift-only browser scripting, permission prompting, an
 
 ### Priority 2: bounded parity
 
-1. Complete transactional foreground delivery where activation, proof, dispatch, and restoration can all be demonstrated.
+1. Complete foreground delivery per the AXN-165 contract: prove activation, dispatch once, and report `session.restored` honestly as a best-effort fact rather than a success gate.
 2. Expand target-bound pointer/keyboard acceptance only from live toolkit/control evidence.
 3. Fill Rust macOS point-target and wheel-scroll forms only after native delivery is proven.
 
