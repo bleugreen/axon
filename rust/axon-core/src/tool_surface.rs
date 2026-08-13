@@ -318,6 +318,24 @@ fn apply_defaults(schema: &Value, value: &mut Value) {
             }
         }
     }
+    if let (Some(items), Some(values)) = (schema.get("items"), value.as_array_mut()) {
+        for item in values {
+            apply_defaults(items, item);
+        }
+    }
+    for keyword in ["anyOf", "oneOf"] {
+        if let Some(branch) = schema
+            .get(keyword)
+            .and_then(Value::as_array)
+            .and_then(|branches| {
+                branches
+                    .iter()
+                    .find(|branch| validate_value(branch, value, "default").is_ok())
+            })
+        {
+            apply_defaults(branch, value);
+        }
+    }
 }
 
 fn invalid(path: &str, message: &str, expected: Option<&str>) -> JsonRpcError {
@@ -438,6 +456,34 @@ mod tests {
             validate_tool_arguments(ToolBackend::Windows, "keyboard", json!({"text": false}))
                 .unwrap_err();
         assert_eq!(error.data.unwrap()["path"], "params.arguments.text");
+    }
+
+    #[test]
+    fn applies_defaults_inside_the_matching_composed_schema_branch() {
+        let target = json!({
+            "location": {
+                "app": "Notes",
+                "text": {"contains": "Save"}
+            }
+        });
+        let normalized = validate_tool_arguments(
+            ToolBackend::Windows,
+            "click",
+            json!({"target": target}),
+        )
+        .unwrap();
+
+        assert_eq!(
+            normalized["target"],
+            json!({
+                "location": {
+                    "app": "Notes",
+                    "text": {"contains": "Save", "caseSensitive": false},
+                    "source": "auto"
+                }
+            })
+        );
+        assert_eq!(normalized["deliveryPolicy"], "backgroundOnly");
     }
 
     #[test]
