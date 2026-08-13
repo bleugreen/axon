@@ -156,9 +156,18 @@ impl LookRequest {
         }
         let app = params
             .get("app")
-            .map(|v| {
-                serde_json::from_value::<AppQuery>(v.clone())
-                    .map_err(|e| LookRequestError(format!("app: {e}")))
+            .map(|value| {
+                if let Some(value) = value.as_str() {
+                    let process_id = value.strip_prefix("pid:").unwrap_or(value).parse().ok();
+                    Ok(AppQuery {
+                        process_id,
+                        name: process_id.is_none().then(|| value.to_owned()),
+                        identifier: None,
+                    })
+                } else {
+                    serde_json::from_value::<AppQuery>(value.clone())
+                        .map_err(|error| LookRequestError(format!("app: {error}")))
+                }
             })
             .transpose()?;
         let target = params
