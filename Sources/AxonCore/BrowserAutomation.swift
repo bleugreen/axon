@@ -1,12 +1,63 @@
 import AppKit
+import ApplicationServices
 import Foundation
+
+public enum BrowserAutomationAuthorization: String, Equatable, Sendable {
+    case denied
+    case notDetermined
+}
+
+struct AppleEventAuthorizationService {
+    let authorizer: any AppleEventAuthorizing
+
+    func authorize(bundleIdentifier: String, appName: String) throws {
+        let initial = authorizer.determinePermission(bundleIdentifier: bundleIdentifier, askUserIfNeeded: false)
+        switch initial {
+        case noErr:
+            return
+        case OSStatus(errAEEventWouldRequireUserConsent):
+            let prompted = authorizer.determinePermission(bundleIdentifier: bundleIdentifier, askUserIfNeeded: true)
+            switch prompted {
+            case noErr:
+                return
+            case OSStatus(errAEEventNotPermitted):
+                throw BrowserAutomationError.automationNotGranted(app: appName, authorization: .denied, status: prompted)
+            case OSStatus(errAEEventWouldRequireUserConsent):
+                throw BrowserAutomationError.automationNotGranted(app: appName, authorization: .notDetermined, status: prompted)
+            default:
+                throw BrowserAutomationError.authorizationFailed(app: appName, status: prompted)
+            }
+        case OSStatus(errAEEventNotPermitted):
+            throw BrowserAutomationError.automationNotGranted(app: appName, authorization: .denied, status: initial)
+        default:
+            throw BrowserAutomationError.authorizationFailed(app: appName, status: initial)
+        }
+    }
+}
+
+protocol AppleEventAuthorizing {
+    func determinePermission(bundleIdentifier: String, askUserIfNeeded: Bool) -> OSStatus
+}
+
+struct SystemAppleEventAuthorizer: AppleEventAuthorizing {
+    func determinePermission(bundleIdentifier: String, askUserIfNeeded: Bool) -> OSStatus {
+        let target = NSAppleEventDescriptor(bundleIdentifier: bundleIdentifier)
+        return AEDeterminePermissionToAutomateTarget(
+            target.aeDesc,
+            AEEventClass(typeWildCard),
+            AEEventID(typeWildCard),
+            askUserIfNeeded
+        )
+    }
+}
 
 public enum BrowserAutomationError: Error, Equatable, CustomStringConvertible {
     case unsupportedApp(String)
     case appNotRunning(String)
     case invalidURL(String)
     case invalidWindow(Int)
-    case permissionRequired(String)
+    case automationNotGranted(app: String, authorization: BrowserAutomationAuthorization, status: Int32?)
+    case authorizationFailed(app: String, status: Int32)
     case timeout(String)
     case executionFailed(String)
 
@@ -16,7 +67,8 @@ public enum BrowserAutomationError: Error, Equatable, CustomStringConvertible {
         case let .appNotRunning(app): return "Browser is not running: \(app)"
         case let .invalidURL(reason): return "Invalid navigation URL: \(reason)"
         case let .invalidWindow(index): return "Window index must be greater than zero: \(index)"
-        case let .permissionRequired(app): return "Automation permission required for \(app). Allow Axon to control it in System Settings > Privacy & Security > Automation."
+        case let .automationNotGranted(app, authorization, _): return "Automation permission for \(app) is \(authorization.rawValue). Allow Axon to control it in System Settings > Privacy & Security > Automation."
+        case let .authorizationFailed(app, status): return "Could not determine Automation permission for \(app) (OSStatus \(status))"
         case let .timeout(app): return "Browser automation timed out waiting for \(app)"
         case let .executionFailed(message): return "Browser automation failed: \(message)"
         }
@@ -61,11 +113,23 @@ public final class AppleScriptBrowserAutomation: BrowserAutomationServing {
         var name: String { self == .safari ? "Safari" : "Google Chrome" }
     }
 
-    public init() {}
+    private let authorizer: any AppleEventAuthorizing
+    private let isRunning: (String) -> Bool
+
+    public convenience init() {
+        self.init(authorizer: SystemAppleEventAuthorizer(), isRunning: { bundleIdentifier in
+            NSRunningApplication.runningApplications(withBundleIdentifier: bundleIdentifier).contains { !$0.isTerminated }
+        })
+    }
+
+    init(authorizer: any AppleEventAuthorizing, isRunning: @escaping (String) -> Bool) {
+        self.authorizer = authorizer
+        self.isRunning = isRunning
+    }
 
     public func navigate(app: String, url: String) throws -> BrowserNavigationResult {
-        let browser = try resolve(app)
         let validatedURL = try Self.validatedURL(url)
+        let browser = try resolve(app)
         let tabExpression = browser == .safari ? "current tab of front window" : "active tab of front window"
         let source = """
         tell application id "\(browser.rawValue)"
@@ -136,10 +200,18 @@ public final class AppleScriptBrowserAutomation: BrowserAutomationServing {
         default: browser = nil
         }
         guard let browser else { throw BrowserAutomationError.unsupportedApp(query) }
-        guard NSRunningApplication.runningApplications(withBundleIdentifier: browser.rawValue).contains(where: { !$0.isTerminated }) else {
+        guard isRunning(browser.rawValue) else {
             throw BrowserAutomationError.appNotRunning(browser.name)
         }
+        try authorize(browser)
         return browser
+    }
+
+    private func authorize(_ browser: Browser) throws {
+        try AppleEventAuthorizationService(authorizer: authorizer).authorize(
+            bundleIdentifier: browser.rawValue,
+            appName: browser.name
+        )
     }
 
     static func validatedURL(_ raw: String) throws -> String {
@@ -171,7 +243,7 @@ public final class AppleScriptBrowserAutomation: BrowserAutomationServing {
         let boundedSource = "with timeout of 15 seconds\n\(source)\nend timeout"
         guard let script = NSAppleScript(source: boundedSource), let result = script.executeAndReturnError(&error) as NSAppleEventDescriptor? else {
             let number = error?[NSAppleScript.errorNumber] as? Int
-            if number == -1743 { throw BrowserAutomationError.permissionRequired(appName) }
+            if number == Int(errAEEventNotPermitted) { throw BrowserAutomationError.automationNotGranted(app: appName, authorization: .denied, status: Int32(number!)) }
             if number == -1712 { throw BrowserAutomationError.timeout(appName) }
             throw BrowserAutomationError.executionFailed((error?[NSAppleScript.errorMessage] as? String) ?? "unknown Apple event error")
         }

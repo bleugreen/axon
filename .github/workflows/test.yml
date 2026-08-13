@@ -126,6 +126,19 @@ jobs:
           grep -q "Axon-$VERSION/Axon.app/" <<<"$LISTING"
           ACTUAL="$(dist/Axon.app/Contents/Resources/bin/axon version)"
           [[ "$ACTUAL" == "$VERSION" ]]
+          assert_daemon_plist() {
+            local plist="$1"
+            [[ "$(plutil -extract CFBundleIdentifier raw "$plist")" == "com.bleugreen.axon" ]]
+            [[ "$(plutil -extract CFBundleExecutable raw "$plist")" == "Axon" ]]
+            [[ "$(plutil -extract CFBundleShortVersionString raw "$plist")" == "$VERSION" ]]
+            [[ "$(plutil -extract CFBundleVersion raw "$plist")" == "$VERSION" ]]
+            [[ "$(plutil -extract NSAppleEventsUsageDescription raw "$plist")" == "Axon uses browser automation to navigate and enumerate browser windows and tabs." ]]
+          }
+          assert_daemon_plist "dist/Axon.app/Contents/Info.plist"
+          archive_dir="$(mktemp -d)"
+          trap 'rm -rf "$archive_dir"' EXIT
+          ditto -x -k "$ZIP" "$archive_dir"
+          assert_daemon_plist "$archive_dir/Axon-$VERSION/Axon.app/Contents/Info.plist"
 
   rust-macos:
     name: Rust macOS

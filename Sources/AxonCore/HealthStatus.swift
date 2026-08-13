@@ -92,6 +92,9 @@ public enum HealthReason {
     public static let accessibilityNotGranted = "accessibility-not-granted"
     /// macOS has not granted Screen Recording to the daemon identity.
     public static let screenRecordingNotGranted = "screen-recording-not-granted"
+    /// A target browser has not granted Apple Events Automation to the daemon identity. This is
+    /// operation-scoped because macOS records a separate grant for every controlled application.
+    public static let automationNotGranted = "automation-not-granted"
     /// A daemon answered, but not with a health document this build can read. The running daemon
     /// is a different version from the CLI asking it.
     public static let versionSkew = "version-skew"

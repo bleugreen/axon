@@ -89,8 +89,8 @@ public struct JSONRPCError: Codable, Equatable, Error, Sendable {
         JSONRPCError(code: -32602, message: message)
     }
 
-    public static func internalError(_ message: String) -> JSONRPCError {
-        JSONRPCError(code: -32603, message: message)
+    public static func internalError(_ message: String, data: JSONValue? = nil) -> JSONRPCError {
+        JSONRPCError(code: -32603, message: message, data: data)
     }
 }
 
