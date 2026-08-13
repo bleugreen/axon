@@ -212,3 +212,45 @@ pub enum HandleError {
         actual: String,
     },
 }
+
+
+#[cfg(test)]
+mod summary_tests {
+    use super::*;
+    use serde_json::json;
+
+    fn snapshot(value: &str) -> Snapshot {
+        serde_json::from_value(json!({
+            "id": "capture-id",
+            "app": {
+                "name": "Editor",
+                "identifier": "com.example.Editor",
+                "windows": [{
+                    "title": "Document",
+                    "root": {
+                        "role": "window",
+                        "children": [{"role": "textField", "value": value}]
+                    }
+                }]
+            }
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn snapshot_summary_ignores_capture_identity_for_identical_observations() {
+        let first = snapshot("draft");
+        let mut second = first.clone();
+        second.id = SnapshotId("another-capture-id".into());
+
+        assert_eq!(SnapshotSummary::from(&first), SnapshotSummary::from(&second));
+    }
+
+    #[test]
+    fn snapshot_summary_detects_ordinary_control_changes() {
+        let before = snapshot("draft");
+        let after = snapshot("saved");
+
+        assert_ne!(SnapshotSummary::from(&before), SnapshotSummary::from(&after));
+    }
+}
