@@ -2,7 +2,10 @@ use axon_core::{
     BackendError, Capability, OBSERVATION_SCREENSHOT_MAX_DIMENSION,
     OBSERVATION_SCREENSHOT_MEDIA_TYPE, Rect, Screenshot,
 };
-use std::{ffi::{CStr, c_char, c_void}, ptr::null};
+use std::{
+    ffi::{CStr, c_char, c_void},
+    ptr::null,
+};
 
 type CFTypeRef = *const c_void;
 type CFMutableDataRef = *mut c_void;
@@ -180,7 +183,6 @@ impl Owned {
             .then_some(Self(value))
             .ok_or_else(|| op(operation, "native API returned null"))
     }
-
 }
 
 impl Drop for Owned {
@@ -219,65 +221,102 @@ pub(crate) fn capture(pid: i32) -> Result<CapturedWindow, BackendError> {
         },
         "capture window image",
     )?;
-    Ok(CapturedWindow { image, frame: window.frame })
-}
-
-impl CapturedWindow {
-pub(crate) fn screenshot(&self) -> Result<Screenshot, BackendError> {
-    let source_width = unsafe { CGImageGetWidth(self.image.0) };
-    let source_height = unsafe { CGImageGetHeight(self.image.0) };
-    let (width, height) = scaled_dimensions(
-        (source_width, source_height),
-        OBSERVATION_SCREENSHOT_MAX_DIMENSION,
-    )?;
-    let image = if (width, height) == (source_width, source_height) {
-        None
-    } else {
-        Some(resize(self.image.0, width, height)?)
-    };
-    let image_ref = image.as_ref().map_or(self.image.0, |image| image.0);
-    let bytes = encode_png(image_ref)?;
-
-    Ok(Screenshot {
-        bytes,
-        media_type: OBSERVATION_SCREENSHOT_MEDIA_TYPE.into(),
-        width: u32::try_from(width).map_err(|_| op("capture window image", "width overflow"))?,
-        height: u32::try_from(height).map_err(|_| op("capture window image", "height overflow"))?,
-        frame: self.frame,
+    Ok(CapturedWindow {
+        image,
+        frame: window.frame,
     })
 }
 
-pub(crate) fn recognize_text(&self) -> Result<Vec<axon_core::RecognizedText>, BackendError> {
-    let native = unsafe { axon_vision_recognize(self.image.0.cast_mut()) };
-    let result = if !native.error.is_null() {
-        Err(op("recognize screen text", unsafe { CStr::from_ptr(native.error) }.to_string_lossy()))
-    } else if native.count != 0 && native.items.is_null() {
-        Err(op("recognize screen text", "Vision returned a null result array"))
-    } else {
-        let items = unsafe { std::slice::from_raw_parts(native.items, native.count) };
-        Ok(items.iter().filter_map(|item| vision_item(item, self.frame)).collect())
-    };
-    unsafe { axon_vision_result_destroy(native) };
-    result
-}
+impl CapturedWindow {
+    pub(crate) fn screenshot(&self) -> Result<Screenshot, BackendError> {
+        let source_width = unsafe { CGImageGetWidth(self.image.0) };
+        let source_height = unsafe { CGImageGetHeight(self.image.0) };
+        let (width, height) = scaled_dimensions(
+            (source_width, source_height),
+            OBSERVATION_SCREENSHOT_MAX_DIMENSION,
+        )?;
+        let image = if (width, height) == (source_width, source_height) {
+            None
+        } else {
+            Some(resize(self.image.0, width, height)?)
+        };
+        let image_ref = image.as_ref().map_or(self.image.0, |image| image.0);
+        let bytes = encode_png(image_ref)?;
+
+        Ok(Screenshot {
+            bytes,
+            media_type: OBSERVATION_SCREENSHOT_MEDIA_TYPE.into(),
+            width: u32::try_from(width)
+                .map_err(|_| op("capture window image", "width overflow"))?,
+            height: u32::try_from(height)
+                .map_err(|_| op("capture window image", "height overflow"))?,
+            frame: self.frame,
+        })
+    }
+
+    pub(crate) fn recognize_text(&self) -> Result<Vec<axon_core::RecognizedText>, BackendError> {
+        let native = unsafe { axon_vision_recognize(self.image.0.cast_mut()) };
+        let result = if !native.error.is_null() {
+            Err(op(
+                "recognize screen text",
+                unsafe { CStr::from_ptr(native.error) }.to_string_lossy(),
+            ))
+        } else if native.count != 0 && native.items.is_null() {
+            Err(op(
+                "recognize screen text",
+                "Vision returned a null result array",
+            ))
+        } else {
+            let items = unsafe { std::slice::from_raw_parts(native.items, native.count) };
+            Ok(items
+                .iter()
+                .filter_map(|item| vision_item(item, self.frame))
+                .collect())
+        };
+        unsafe { axon_vision_result_destroy(native) };
+        result
+    }
 }
 
 #[repr(C)]
-struct VisionItem { text: *mut c_char, x: f64, y: f64, width: f64, height: f64, confidence: f64 }
+struct VisionItem {
+    text: *mut c_char,
+    x: f64,
+    y: f64,
+    width: f64,
+    height: f64,
+    confidence: f64,
+}
 #[repr(C)]
 #[derive(Clone, Copy)]
-struct VisionResult { items: *mut VisionItem, count: usize, error: *mut c_char }
+struct VisionResult {
+    items: *mut VisionItem,
+    count: usize,
+    error: *mut c_char,
+}
 unsafe extern "C" {
     fn axon_vision_recognize(image: *mut c_void) -> VisionResult;
     fn axon_vision_result_destroy(result: VisionResult);
 }
 
 fn vision_item(item: &VisionItem, window: Rect) -> Option<axon_core::RecognizedText> {
-    if item.text.is_null() || !item.x.is_finite() || !item.y.is_finite()
-        || !item.width.is_finite() || !item.height.is_finite()
-        || item.width <= 0.0 || item.height <= 0.0 { return None; }
-    let text = unsafe { CStr::from_ptr(item.text) }.to_string_lossy().trim().to_owned();
-    if text.is_empty() { return None; }
+    if item.text.is_null()
+        || !item.x.is_finite()
+        || !item.y.is_finite()
+        || !item.width.is_finite()
+        || !item.height.is_finite()
+        || item.width <= 0.0
+        || item.height <= 0.0
+    {
+        return None;
+    }
+    let text = unsafe { CStr::from_ptr(item.text) }
+        .to_string_lossy()
+        .trim()
+        .to_owned();
+    if text.is_empty() {
+        return None;
+    }
     Some(axon_core::RecognizedText {
         text,
         frame: Rect {
@@ -390,9 +429,24 @@ mod tests {
     #[test]
     fn converts_vision_lower_left_coordinates_to_screen_coordinates() {
         let text = b"Hello\0";
-        let item = VisionItem { text: text.as_ptr().cast_mut().cast(), x: 0.25, y: 0.20,
-            width: 0.5, height: 0.10, confidence: 0.9 };
-        let recognized = vision_item(&item, Rect { x: -1200.0, y: 40.0, width: 800.0, height: 600.0 }).unwrap();
+        let item = VisionItem {
+            text: text.as_ptr().cast_mut().cast(),
+            x: 0.25,
+            y: 0.20,
+            width: 0.5,
+            height: 0.10,
+            confidence: 0.9,
+        };
+        let recognized = vision_item(
+            &item,
+            Rect {
+                x: -1200.0,
+                y: 40.0,
+                width: 800.0,
+                height: 600.0,
+            },
+        )
+        .unwrap();
         assert_eq!(recognized.frame.x, -1000.0);
         assert!((recognized.frame.y - 460.0).abs() < f64::EPSILON * 512.0);
         assert_eq!(recognized.frame.width, 400.0);
@@ -404,8 +458,25 @@ mod tests {
     #[test]
     fn rejects_empty_and_invalid_vision_observations() {
         let empty = b"  \0";
-        let item = VisionItem { text: empty.as_ptr().cast_mut().cast(), x: 0.0, y: 0.0,
-            width: 0.0, height: 1.0, confidence: f64::NAN };
-        assert!(vision_item(&item, Rect { x: 0.0, y: 0.0, width: 100.0, height: 100.0 }).is_none());
+        let item = VisionItem {
+            text: empty.as_ptr().cast_mut().cast(),
+            x: 0.0,
+            y: 0.0,
+            width: 0.0,
+            height: 1.0,
+            confidence: f64::NAN,
+        };
+        assert!(
+            vision_item(
+                &item,
+                Rect {
+                    x: 0.0,
+                    y: 0.0,
+                    width: 100.0,
+                    height: 100.0
+                }
+            )
+            .is_none()
+        );
     }
 }
