@@ -376,19 +376,6 @@ impl WindowsBackend {
             last_foreground: std::collections::HashMap::new(),
         })
     }
-
-    /// Creates an independent request facade over the one COM-owned UI Automation actor.
-    ///
-    /// Blocking waits use this facade with a snapshot of the canonical router state, so polling
-    /// sleeps outside the canonical router. Each native UI Automation call still crosses the
-    /// shared actor and executes on the MTA thread that created the COM objects.
-    pub(crate) fn fork(&self) -> Self {
-        Self {
-            tx: self.tx.clone(),
-            thread: None,
-            last_foreground: std::collections::HashMap::new(),
-        }
-    }
 }
 impl Drop for WindowsBackend {
     fn drop(&mut self) {

@@ -296,21 +296,6 @@ impl LinuxBackend {
         })
     }
 
-    /// Creates an independent request facade over the one serialized AT-SPI actor.
-    ///
-    /// Blocking waits use this facade with a snapshot of the canonical router state, so their
-    /// polling sleeps do not hold the canonical router. Native AT-SPI calls still cross the shared
-    /// actor one at a time, while X11 connections and identity caches remain independent.
-    pub(crate) fn fork(&self) -> Self {
-        Self {
-            tx: self.tx.clone(),
-            input: input_session(),
-            screenshot: screenshot_session(),
-            identities: Vec::new(),
-            identities_read: None,
-        }
-    }
-
     fn ask<T>(&self, make: impl FnOnce(Reply<T>) -> Command) -> Result<T, BackendError> {
         let (tx, rx) = mpsc::channel();
         self.tx

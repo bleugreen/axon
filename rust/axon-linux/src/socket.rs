@@ -28,7 +28,7 @@ use crate::{
     parse_request,
 };
 #[cfg(target_os = "linux")]
-use axon_core::{CapabilityInfo, JsonRpcResponse, PlatformBackend};
+use axon_core::{CapabilityInfo, JsonRpcResponse, PlatformBackend, poll_wait_request};
 #[cfg(target_os = "linux")]
 use std::{fs, os::unix::fs::PermissionsExt, sync::Mutex};
 
@@ -54,21 +54,20 @@ fn dispatch_shared(
     reported: &[CapabilityInfo],
     endpoint: &str,
 ) -> (Value, bool) {
-    let is_wait = serde_json::from_str::<Value>(line)
-        .ok()
-        .and_then(|value| {
-            value
-                .get("method")
-                .and_then(Value::as_str)
-                .map(str::to_owned)
-        })
-        .is_some_and(|method| matches!(method.as_str(), "wait_for_value" | "wait_for_stability"));
-    if is_wait {
-        let mut wait_router = {
-            let canonical = router.lock().unwrap();
-            canonical.fork_for_wait(canonical.backend().fork())
-        };
-        dispatch(line, &mut wait_router, reported, endpoint)
+    let Ok(request) = parse_request(line) else {
+        return dispatch(line, &mut router.lock().unwrap(), reported, endpoint);
+    };
+    if matches!(
+        request.method.as_str(),
+        "wait_for_value" | "wait_for_stability"
+    ) {
+        let response = poll_wait_request(request, |poll| router.lock().unwrap().request(poll));
+        (
+            response
+                .map(|r| serde_json::to_value(r).unwrap())
+                .unwrap_or(Value::Null),
+            false,
+        )
     } else {
         dispatch(line, &mut router.lock().unwrap(), reported, endpoint)
     }

@@ -2,7 +2,8 @@
 
 use crate::{Router, WindowsBackend, parse_request};
 use axon_core::{
-    JsonRpcId, JsonRpcRequest, PlatformBackend, ToolBackend, backend_tools, validate_tools_call,
+    JsonRpcId, JsonRpcRequest, PlatformBackend, ToolBackend, backend_tools, poll_wait_request,
+    validate_tools_call,
 };
 use serde_json::{Value, json};
 use std::{
@@ -327,11 +328,7 @@ fn dispatch_request(
             request.method.as_str(),
             "wait_for_value" | "wait_for_stability"
         ) {
-            let mut wait_router = {
-                let canonical = router.lock().unwrap();
-                canonical.fork_for_wait(canonical.backend().fork())
-            };
-            wait_router.request(request)
+            poll_wait_request(request, |poll| router.lock().unwrap().request(poll))
         } else {
             router.lock().unwrap().request(request)
         }

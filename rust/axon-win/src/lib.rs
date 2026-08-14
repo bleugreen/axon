@@ -329,20 +329,6 @@ impl<
         }
     }
 
-    #[cfg(windows)]
-    pub(crate) fn fork_for_wait(&self, backend: B) -> Self {
-        Self {
-            backend,
-            snapshot: self.snapshot.clone(),
-            semantic_names: self.semantic_names.clone(),
-        }
-    }
-
-    #[cfg(windows)]
-    pub(crate) fn backend(&self) -> &B {
-        &self.backend
-    }
-
     fn register_snapshot(&mut self, snapshot: &Snapshot) -> Vec<axon_core::SemanticElementName> {
         let live_processes = self.backend.live_process_ids().ok();
         self.semantic_names.register_with_liveness(snapshot, |pid| {
