@@ -369,6 +369,11 @@ function Wait-Tick {
     Start-Sleep -Milliseconds 250
 }
 
+function Wait-BrowserTransition {
+    # Browser chrome can acknowledge input before its out-of-process page applies the transition.
+    Start-Sleep -Seconds 1
+}
+
 function Test-ProcessIsRunning {
     param([Parameter(Mandatory)][int] $ProcessId)
 
@@ -990,7 +995,7 @@ function Invoke-ProbeStage {
                 $dismissEvidence.dispatchSuccess -ne $true) {
                 throw 'the probe-owned Edge sync confirmation could not be dismissed through its semantic accessibility action'
             }
-            Start-Sleep -Seconds 1
+            Wait-BrowserTransition
             $dismissed = Invoke-AxonMcp -Request (@{
                 jsonrpc = '2.0'; id = 73; method = 'tools/call'; params = @{
                     name = 'look'; arguments = @{ app = $browserApp; screenshot = $false }
@@ -1050,7 +1055,7 @@ function Invoke-ProbeStage {
             # Edge's browser chrome is out of process from the page and can acknowledge the input
             # batch before it has applied the focus/text transition. One second keeps the gesture
             # ordered on slow interactive runners without changing the daemon transaction itself.
-            Start-Sleep -Seconds 1
+            Wait-BrowserTransition
         }
 
         $loadedRequest = @{ jsonrpc = '2.0'; id = 1; method = 'tools/call'; params = @{
