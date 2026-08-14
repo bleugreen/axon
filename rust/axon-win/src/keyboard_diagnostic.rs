@@ -340,11 +340,19 @@ fn identity(pid: u32, window: HWND, task_name: Option<&str>) -> Value {
         "window":{"hwnd":format!("0x{:X}",hwnd_bits(window)),"className":wide_text(&class[..class_len.max(0) as usize]),"title":wide_text(&title[..title_len.max(0) as usize]),"guiThreadId":if owner==pid { Some(gui_thread) } else { None }},"taskName":task_name})
 }
 
+fn foreground_identity_from(
+    owner_pid: u32,
+    window: HWND,
+    describe: impl FnOnce(u32, HWND, Option<&str>) -> Value,
+) -> Value {
+    describe(owner_pid, window, None)
+}
+
 fn foreground_identity() -> Value {
     let window = unsafe { GetForegroundWindow() };
-    let mut pid = 0;
-    unsafe { GetWindowThreadProcessId(window, Some(&mut pid)) };
-    identity(pid, window, None)
+    let mut owner_pid = 0;
+    unsafe { GetWindowThreadProcessId(window, Some(&mut owner_pid)) };
+    foreground_identity_from(owner_pid, window, identity)
 }
 
 struct Uia {
@@ -525,6 +533,21 @@ pub(super) fn run(args: &[String]) -> Result<Value, BackendError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn foreground_identity_uses_foreground_owner_not_intended_edge_pid() {
+        const INTENDED_EDGE_PID: u32 = 6664;
+        const FOREGROUND_OWNER_PID: u32 = 7112;
+
+        let identity = foreground_identity_from(
+            FOREGROUND_OWNER_PID,
+            HWND::default(),
+            |pid, _, _| json!({"processId": pid}),
+        );
+
+        assert_eq!(identity["processId"], FOREGROUND_OWNER_PID);
+        assert_ne!(identity["processId"], INTENDED_EDGE_PID);
+    }
+
     #[test]
     fn normalizes_hook_flags_and_direction() {
         let e = normalize(&RawKeyEvent {
