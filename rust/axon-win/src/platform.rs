@@ -1202,7 +1202,14 @@ impl UiaState {
         let value =
             unsafe { e.GetCachedPatternAs::<IUIAutomationValuePattern>(UIA_ValuePatternId) }
                 .ok()
-                .and_then(|p| unsafe { p.CachedValue() }.ok())
+                .and_then(|pattern| {
+                    // Some providers, including current Notepad, cache the ValuePattern itself but not its
+                    // value property. Reading the current value keeps snapshots truthful instead of
+                    // advertising a Value action while silently omitting the value it can read.
+                    unsafe { pattern.CachedValue() }
+                        .or_else(|_| unsafe { pattern.CurrentValue() })
+                        .ok()
+                })
                 .map(|x| x.to_string());
         Ok(Node {
             role: control_type_name(ct.0).into(),
