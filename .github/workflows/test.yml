@@ -261,9 +261,9 @@ jobs:
       # is reading the answer back, so it needs a real X server. Chromium-family activation is an
       # attributes call that crosses D-Bus and is answered late, so it needs a real bus. Each test
       # brings its own miniature server -- an EWMH window manager, an AT-SPI provider built to
-      # withhold like Chromium -- so a bare Xvfb and dbus-daemon are the entire requirement: no
-      # desktop, no toolkit, nothing to vary between runs. `--ignored` sweeps both, and whatever
-      # hermetic test is written next.
+      # withhold like Chromium -- so a bare Xvfb and dbus-daemon are the entire requirement for
+      # those paths. OCR additionally renders a fixed X11 label and crosses production Tesseract
+      # plus foreground click. `--ignored` sweeps every hermetic desktop test together.
       #
       # This runs for pull requests, unlike the live lane. It has to: the project's only real Linux
       # desktop is a GNOME Wayland session, which is the worst possible place to verify X11

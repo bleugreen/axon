@@ -323,12 +323,8 @@ fn run_ocr_window(
                 &CreateGCAux::new().foreground(setup.black_pixel).background(setup.white_pixel).font(font),
             )
             .map_err(|error| error.to_string())?;
-        // Three identical baselines make the label a substantial, high-contrast OCR target while
-        // retaining a single deterministic line for the resolver.
-        for baseline in [85_i16, 115, 145] {
-            connection.image_text8(window, gc, 70, baseline, b"AXON CLICK")
-                .map_err(|error| error.to_string())?;
-        }
+        connection.image_text8(window, gc, 70, 120, b"AXON CLICK")
+            .map_err(|error| error.to_string())?;
         connection.flush().map_err(|error| error.to_string())?;
         connection.sync().map_err(|error| error.to_string())?;
         Ok((connection, root, window, [supported, active, clients]))
@@ -453,7 +449,7 @@ fn missing_tesseract_preserves_semantics_and_reports_remediation() {
     );
     assert!(looked.get("screenText").is_none());
     let unavailable = &looked["screenTextUnavailable"];
-    assert_eq!(unavailable["code"], "operation-failed");
+    assert_eq!(unavailable["code"], "capture-failed");
     let explanation = unavailable.to_string();
     assert!(
         explanation.contains("tesseract") && explanation.contains("install Tesseract OCR"),
