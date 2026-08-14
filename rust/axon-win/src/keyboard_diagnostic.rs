@@ -493,7 +493,7 @@ pub(super) fn run(args: &[String]) -> Result<Value, BackendError> {
             &inputs,
             KeyboardBatchIntent::NamedChord {
                 events: metadata,
-                require_top_level_focus: true,
+                top_level_focus_window_class: Some("Chrome_WidgetWin_1"),
             },
         );
         let returned = now_us();

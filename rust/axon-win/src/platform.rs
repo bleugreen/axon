@@ -230,7 +230,7 @@ struct KeyboardEventMetadata {
 enum KeyboardBatchIntent {
     NamedChord {
         events: Vec<KeyboardEventMetadata>,
-        require_top_level_focus: bool,
+        top_level_focus_window_class: Option<&'static str>,
     },
     Text,
 }
@@ -274,9 +274,9 @@ fn send_keyboard_batch(
     let require_top_level = matches!(
         &intent,
         KeyboardBatchIntent::NamedChord {
-            require_top_level_focus: true,
+            top_level_focus_window_class: Some(required_class),
             ..
-        }
+        } if pixel::class_name(pixel::foreground_window()) == *required_class
     );
     let focus_proof = pixel::ensure_foreground_focus(require_top_level);
     if !focus_proof.proved() {
@@ -340,9 +340,10 @@ fn send_keyboard_batch(
     Ok(diagnostics)
 }
 
-fn requires_top_level_focus(key: Key, modifiers: &[Modifier]) -> bool {
-    modifiers == [Modifier::Control]
-        && matches!(key, Key::Character(character) if character.eq_ignore_ascii_case(&'l'))
+fn top_level_focus_window_class(key: Key, modifiers: &[Modifier]) -> Option<&'static str> {
+    (modifiers == [Modifier::Control]
+        && matches!(key, Key::Character(character) if character.eq_ignore_ascii_case(&'l')))
+    .then_some("Chrome_WidgetWin_1")
 }
 
 #[cfg(test)]
@@ -351,18 +352,18 @@ mod keyboard_focus_requirement_tests {
 
     #[test]
     fn only_the_measured_ctrl_l_accelerator_requires_top_level_focus() {
-        assert!(requires_top_level_focus(
-            Key::Character('l'),
-            &[Modifier::Control]
-        ));
-        assert!(!requires_top_level_focus(
-            Key::Character('c'),
-            &[Modifier::Control]
-        ));
-        assert!(!requires_top_level_focus(
-            Key::Named(axon_core::NamedKey::Return),
-            &[]
-        ));
+        assert_eq!(
+            top_level_focus_window_class(Key::Character('l'), &[Modifier::Control]),
+            Some("Chrome_WidgetWin_1")
+        );
+        assert_eq!(
+            top_level_focus_window_class(Key::Character('c'), &[Modifier::Control]),
+            None
+        );
+        assert_eq!(
+            top_level_focus_window_class(Key::Named(axon_core::NamedKey::Return), &[]),
+            None
+        );
     }
 }
 
@@ -371,7 +372,7 @@ fn send_key(spec: &str) -> Result<(), BackendError> {
         axon_core::parse_chord(spec).map_err(|error| cap(Capability::KeyboardInput, error))?;
     // Resolve every event before posting any. In particular, a character is interpreted using the
     // proved-frontmost target's own keyboard layout rather than the daemon thread's layout.
-    let require_top_level_focus = requires_top_level_focus(chord.key, &chord.modifiers);
+    let top_level_focus_window_class = top_level_focus_window_class(chord.key, &chord.modifiers);
     let mut modifiers = chord.modifiers;
     let key = match chord.key {
         Key::Named(key) => crate::keys::named_key(key),
@@ -426,7 +427,7 @@ fn send_key(spec: &str) -> Result<(), BackendError> {
         &inputs,
         KeyboardBatchIntent::NamedChord {
             events,
-            require_top_level_focus,
+            top_level_focus_window_class,
         },
     )
     .map(|_| ())
