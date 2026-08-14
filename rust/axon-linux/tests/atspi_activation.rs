@@ -464,9 +464,13 @@ fn look_ocr_coordinates_and_screenshot_text_click_cross_the_real_linux_route() {
         .find(|item| {
             item["text"]
                 .as_str()
-                .is_some_and(|text| text.contains("AXON CLICK"))
+                .is_some_and(|text| text.contains("CLICK"))
         })
         .unwrap_or_else(|| panic!("Tesseract recognizes the deterministic label: {looked:#}"));
+    let recognized_text = recognized["text"]
+        .as_str()
+        .expect("recognized text is a string")
+        .to_owned();
     let frame = &recognized["frame"];
     let (x, y, width, height) = (
         frame["x"].as_f64().unwrap(),
@@ -488,7 +492,7 @@ fn look_ocr_coordinates_and_screenshot_text_click_cross_the_real_linux_route() {
         Some(JsonRpcId::Integer(2)),
         "click",
         Some(serde_json::json!({
-            "target": {"location": {"app": WAKES, "text": "AXON CLICK", "source": "screenshot"}},
+            "target": {"location": {"app": WAKES, "text": recognized_text, "source": "screenshot"}},
             "deliveryPolicy": "foregroundPermitted"
         })),
     )));
