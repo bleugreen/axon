@@ -210,6 +210,114 @@ fn a_withholding_provider_is_woken_at_its_root_waited_for_and_asked_once() {
     leave_proof_of_the_inner_run();
 }
 
+#[test]
+#[ignore = "requires dbus-daemon, Xvfb, and Tesseract; run in the hermetic Linux lane"]
+fn look_ocr_coordinates_and_screenshot_text_click_cross_the_real_linux_route() {
+    if std::env::var_os(INNER_RUN).is_none() {
+        return supervise_an_inner_run(OCR);
+    }
+
+    let _desktop = Desktop::start();
+    let window = OcrWindow::start();
+    let mut router = Router::new(
+        LinuxBackend::start().expect("the backend reaches both halves of the fake desktop"),
+    );
+    let looked = success(router.request(JsonRpcRequest::new(
+        Some(JsonRpcId::Integer(1)),
+        "look",
+        Some(serde_json::json!({
+            "app": WAKES,
+            "screenText": true,
+            "screenshot": false,
+            "frames": true
+        })),
+    )));
+    assert!(looked.get("screenshot").is_none(), "OCR-only look must not return PNG bytes");
+    let recognized = looked["screenText"]
+        .as_array()
+        .expect("screenText is the shared array")
+        .iter()
+        .find(|item| item["text"].as_str().is_some_and(|text| text.contains("AXON CLICK")))
+        .unwrap_or_else(|| panic!("Tesseract recognizes the deterministic label: {looked:#}"));
+    let frame = &recognized["frame"];
+    let (x, y, width, height) = (
+        frame["x"].as_f64().unwrap(),
+        frame["y"].as_f64().unwrap(),
+        frame["width"].as_f64().unwrap(),
+        frame["height"].as_f64().unwrap(),
+    );
+    assert!(
+        x >= f64::from(OcrWindow::X) && y >= f64::from(OcrWindow::Y),
+        "OCR coordinates are absolute screen coordinates, not window-relative: {frame}"
+    );
+    assert!(
+        x + width <= f64::from(OcrWindow::X + OcrWindow::WIDTH)
+            && y + height <= f64::from(OcrWindow::Y + OcrWindow::HEIGHT),
+        "the absolute frame remains inside the captured top-level window: {frame}"
+    );
+
+    let clicked = success(router.request(JsonRpcRequest::new(
+        Some(JsonRpcId::Integer(2)),
+        "click",
+        Some(serde_json::json!({
+            "target": {"location": {"app": WAKES, "text": "AXON CLICK", "source": "screenshot"}},
+            "deliveryPolicy": "foregroundPermitted"
+        })),
+    )));
+    assert_eq!(clicked["resolution"]["best"]["source"], "screenshot");
+    let event = window
+        .clicked
+        .recv_timeout(PROMPTLY)
+        .expect("the existing Linux foreground XTest path delivers the OCR click");
+    let expected = ((x + width / 2.0).round() as i16, (y + height / 2.0).round() as i16);
+    assert_eq!(
+        event, expected,
+        "the click effect lands at the center of the absolute frame returned by look"
+    );
+    leave_proof_of_the_inner_run();
+}
+
+#[test]
+#[ignore = "requires dbus-daemon and Xvfb; run in the hermetic Linux lane"]
+fn missing_tesseract_preserves_semantics_and_reports_remediation() {
+    if std::env::var_os(INNER_RUN).is_none() {
+        return supervise_an_inner_run(NO_OCR);
+    }
+    let _desktop = Desktop::start();
+    let _window = OcrWindow::start();
+    let mut router = Router::new(LinuxBackend::start().expect("the semantic daemon remains healthy"));
+    let looked = success(router.request(JsonRpcRequest::new(
+        Some(JsonRpcId::Integer(1)),
+        "look",
+        Some(serde_json::json!({
+            "app": WAKES,
+            "screenText": true,
+            "screenshot": false,
+            "frames": true
+        })),
+    )));
+    assert!(
+        looked.to_string().contains(WINDOW_NAME),
+        "the semantic observation survives an unavailable OCR engine: {looked:#}"
+    );
+    assert!(looked.get("screenText").is_none());
+    let unavailable = &looked["screenTextUnavailable"];
+    assert_eq!(unavailable["code"], "operation-failed");
+    let explanation = unavailable.to_string();
+    assert!(
+        explanation.contains("tesseract") && explanation.contains("install Tesseract OCR"),
+        "the explicit remediation names the missing executable and how to restore OCR: {unavailable}"
+    );
+    leave_proof_of_the_inner_run();
+}
+
+fn success(response: Option<JsonRpcResponse>) -> serde_json::Value {
+    let JsonRpcResponse::Success(success) = response.expect("the router answers") else {
+        panic!("the request succeeds")
+    };
+    success.result
+}
+
 /// The session gate, from the bus it lives on to the document that publishes it.
 ///
 /// `org.a11y.Status.IsEnabled` is a property of the running session, not a fact about this build,
