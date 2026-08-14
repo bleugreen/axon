@@ -45,6 +45,69 @@ if (-not $ProbeScript) {
     $ProbeScript = Join-Path $PSScriptRoot '..\.github\scripts\windows-live-probe.ps1'
 }
 
+function Invoke-KeyboardDiagnostic {
+    param([int] $TargetProcessId, [int] $MaxTrials)
+    $resultPath = 'C:\keyboard-diagnostic.json'
+    try {
+        Remove-ProbeKeyboardResult -ResultPath $resultPath
+        Register-ProbeKeyboardTask -TargetProcessId $TargetProcessId -MaxTrials $MaxTrials -ResultPath $resultPath
+        Start-ProbeKeyboardTask
+        $run = Wait-ForProbeKeyboardTask -ResultPath $resultPath
+        if ($run.exitCode -ne 0) { throw "keyboard diagnostic exited $($run.exitCode): $($run.stderr)" }
+        $payload = $run.payload
+        if ($null -eq $payload -or $payload.schemaVersion -ne 'keyboard-diagnostic-v1') { throw 'keyboard diagnostic returned no keyboard-diagnostic-v1 payload' }
+        foreach ($trial in @($payload.trials)) {
+            if ($trial.experiment -eq 'baseline') {
+                $ctrlL = @($trial.dispatches | Where-Object intent -eq 'ctrl+l')
+                if ($ctrlL.Count -ne 1) { throw "keyboard diagnostic baseline trial $($trial.index) emitted $($ctrlL.Count) Ctrl+L dispatches; exactly one is required" }
+            }
+        }
+        $payload
+    }
+    finally {
+        Unregister-ProbeKeyboardTask
+        Remove-ProbeKeyboardResult -ResultPath $resultPath
+    }
+}
+
+function Register-ProbeKeyboardTask {
+    param([int] $TargetProcessId, [int] $MaxTrials, [string] $ResultPath)
+    $script:Machine.Log.Add("register-probe-keyboard-task $TargetProcessId $MaxTrials")
+    $script:Machine.ProbeKeyboardTaskRegistered = $true
+}
+
+function Start-ProbeKeyboardTask {
+    $script:Machine.Log.Add('start-probe-keyboard-task')
+    if (-not $script:Machine.ProbeKeyboardTaskRegistered) { throw 'the keyboard diagnostic task was not registered' }
+}
+
+function Wait-ForProbeKeyboardTask {
+    param([string] $ResultPath)
+    $script:Machine.Log.Add('wait-probe-keyboard-task')
+    [pscustomobject]@{ exitCode = 0; stdout = '{}'; stderr = ''; payload = $script:Machine.KeyboardDiagnosticPayload }
+}
+
+function Unregister-ProbeKeyboardTask {
+    $script:Machine.Log.Add('unregister-probe-keyboard-task')
+    $script:Machine.ProbeKeyboardTaskRegistered = $false
+}
+
+function Remove-ProbeKeyboardResult {
+    param([string] $ResultPath)
+    $script:Machine.Log.Add("remove-probe-keyboard-result $ResultPath")
+    $script:Machine.ProbeKeyboardPayloadRemoved = $true
+}
+if ($keyboardRegistration.Count -ne 1 -or $keyboardDiagnostic.Count -ne 1 -or
+    $keyboardRegistration[0].Extent.Text -notmatch 'LogonType Interactive' -or
+    $keyboardRegistration[0].Extent.Text -notmatch 'probe keyboard-diagnostic' -or
+    $keyboardRegistration[0].Extent.Text -notmatch 'Move-Item' -or
+    $keyboardDiagnostic[0].Extent.Text -notmatch 'finally' -or
+    $keyboardDiagnostic[0].Extent.Text -notmatch 'Remove-ProbeKeyboardResult' -or
+    $keyboardDiagnostic[0].Extent.Text -notmatch "Where-Object intent -eq 'ctrl\+l'" -or
+    $keyboardDiagnostic[0].Extent.Text -notmatch '\$ctrlL\.Count -ne 1') {
+    throw 'the keyboard diagnostic must run interactively, publish atomically, clean payloads, and reject a second baseline Ctrl+L dispatch'
+}
+
 $ProbeScript = (Resolve-Path $ProbeScript).Path
 
 . $ProbeScript
@@ -60,7 +123,8 @@ $StubbedSeams = @(
     'Start-ProbeBrowserTask', 'Register-ProbeActivationTask', 'Start-ProbeActivationTask',
     'Wait-ForProbeActivationTask', 'Unregister-ProbeActivationTask', 'Remove-ProbeActivationResult', 'Invoke-Axon', 'Invoke-AxonMcp', 'Start-ProbeBrowser',
     'Register-ProbeForegroundTask', 'Start-ProbeForegroundTask', 'Wait-ForProbeForegroundTask', 'Unregister-ProbeForegroundTask',
-    'Stop-ProbeBrowser', 'Invoke-HandBackSweep', 'Get-ExpectedVersion',
+    'Register-ProbeKeyboardTask', 'Start-ProbeKeyboardTask', 'Wait-ForProbeKeyboardTask', 'Unregister-ProbeKeyboardTask', 'Remove-ProbeKeyboardResult',
+    'Stop-ProbeBrowser', 'Invoke-HandBackSweep', 'Invoke-KeyboardDiagnostic', 'Get-ExpectedVersion',
     'Invoke-CargoBuild', 'Copy-ProbeExecutable', 'Read-ParkState', 'Write-ParkState', 'Clear-ParkState'
 )
 
@@ -143,6 +207,8 @@ if ($browserCleanup[0].Extent.Text -notmatch 'finally' -or
 
 $activationRegistration = @($functions | Where-Object Name -eq 'Register-ProbeActivationTask')
 $foregroundRegistration = @($functions | Where-Object Name -eq 'Register-ProbeForegroundTask')
+$keyboardRegistration = @($functions | Where-Object Name -eq 'Register-ProbeKeyboardTask')
+$keyboardDiagnostic = @($functions | Where-Object Name -eq 'Invoke-KeyboardDiagnostic')
 $handBackSweep = @($functions | Where-Object Name -eq 'Invoke-HandBackSweep')
 if ($activationRegistration.Count -ne 1 -or $foregroundRegistration.Count -ne 1 -or $handBackSweep.Count -ne 1 -or
     $activationRegistration[0].Extent.Text -notmatch 'LogonType Interactive' -or
@@ -279,6 +345,9 @@ function Reset-Machine {
         ProbeNotepadTaskRegistered = $false
         ProbeActivationTaskRegistered = $false
         ProbeForegroundTaskRegistered = $false
+        ProbeKeyboardTaskRegistered = $false
+        ProbeKeyboardPayloadRemoved = $false
+        KeyboardDiagnosticPayload = $null
         NotepadText = $null
         Processes = @()
         Quarantined = @()
