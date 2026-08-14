@@ -964,6 +964,37 @@ function Invoke-ProbeStage {
         if ($seen -ne [int]$children.total) {
             throw "Edge paging covered $seen children but reported total $($children.total)"
         }
+
+        # A fresh Edge profile can inherit the runner user's signed-in state and place a sync
+        # confirmation document in front of browser chrome despite --no-first-run. That modal
+        # intentionally consumes Ctrl+L and F6. Clear it through its accessibility control so the
+        # keyboard acceptance measures page navigation rather than persistent runner account state.
+        if ([string]$verified.window.value -eq 'edge://sync-confirmation-dialog/') {
+            $dismissRequest = @{ jsonrpc = '2.0'; id = 72; method = 'tools/call'; params = @{
+                name = 'click'; arguments = @{
+                    target = @{ app = $browserApp; name = 'Got it' }
+                    deliveryPolicy = 'foregroundPermitted'
+                }
+            } } | ConvertTo-Json -Compress -Depth 10
+            $dismiss = Invoke-AxonMcp -Request $dismissRequest
+            $dismissEvidence = $dismiss.result.structuredContent
+            Write-Note "Edge sync confirmation dismissal: $($dismissEvidence | ConvertTo-Json -Compress -Depth 20)"
+            if ($dismiss.result.isError -ne $false -or $dismissEvidence.dispatchSuccess -ne $true -or
+                $dismissEvidence.foreground.activationProved -ne $true) {
+                throw 'the probe-owned Edge sync confirmation could not be dismissed through its accessibility button'
+            }
+            Start-Sleep -Seconds 1
+            $dismissed = Invoke-AxonMcp -Request (@{
+                jsonrpc = '2.0'; id = 73; method = 'tools/call'; params = @{
+                    name = 'look'; arguments = @{ app = $browserApp; screenshot = $false }
+                }
+            } | ConvertTo-Json -Compress -Depth 10)
+            if (($dismissed.result.structuredContent | ConvertTo-Json -Compress -Depth 100) -match
+                'edge://sync-confirmation-dialog/') {
+                throw 'the Edge sync confirmation remained after its Got it button was invoked'
+            }
+        }
+
         # The A-H hand-back experiment remains available through `probe foreground-handback-sweep`,
         # but it is not repeated in the standing acceptance run. Its completed 2x2 measurement chose
         # HeldAttachment; requiring arbitrary persistent desktop applications to foreground on every
@@ -981,25 +1012,6 @@ function Invoke-ProbeStage {
             $null -eq $evidence.foreground.restored) {
             throw 'aimed keyboard did not activate the target and return foreground dispatch/restoration evidence'
         }
-        $addressFocusRequest = @{ jsonrpc = '2.0'; id = 73; method = 'tools/call'; params = @{
-            name = 'look'; arguments = @{ app = $browserApp; screenshot = $false }
-        } } | ConvertTo-Json -Compress -Depth 10
-        $addressFocus = Invoke-AxonMcp -Request $addressFocusRequest
-        Write-Note "Edge accessibility after aimed Ctrl+L=$($addressFocus.result.structuredContent | ConvertTo-Json -Compress -Depth 100)"
-
-        # F6 is a modifier-free browser-chrome focus control. Logging it beside Ctrl+L separates a
-        # Chromium modifier-path failure from a broader inability to deliver hardware key records.
-        $f6Request = @{ jsonrpc = '2.0'; id = 74; method = 'tools/call'; params = @{
-            name = 'keyboard'; arguments = @{ key = 'F6'; deliveryPolicy = 'foregroundPermitted' }
-        } } | ConvertTo-Json -Compress -Depth 10
-        $f6Result = Invoke-AxonMcp -Request $f6Request
-        if ($f6Result.result.isError -ne $false -or
-            -not [bool]$f6Result.result.structuredContent.dispatchSuccess) {
-            throw "the Edge F6 control did not dispatch: $($f6Result.result.structuredContent | ConvertTo-Json -Compress -Depth 20)"
-        }
-        $f6Focus = Invoke-AxonMcp -Request $addressFocusRequest
-        Write-Note "Edge accessibility after F6=$($f6Focus.result.structuredContent | ConvertTo-Json -Compress -Depth 100)"
-
         # Windows keeps Edge forward after the aimed action because SendInput has no consumption
         # fence. Re-prove the exact PID through the independent task seam, then exercise the
         # frontmost form for the indivisible Ctrl+L/text/Return gesture.
