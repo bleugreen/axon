@@ -955,6 +955,28 @@ function Invoke-ProbeStage {
         if ($seen -ne [int]$children.total) {
             throw "Edge paging covered $seen children but reported total $($children.total)"
         }
+        # Discriminate session-wide injection from browser-specific handling before exercising Edge.
+        # The persistent interactive desktop includes Notepad; its document value is a readable
+        # postcondition for the exact same aimed keyboard transaction.
+        $notepad = $listResponse.result.structuredContent.apps |
+            Where-Object { $_.name -match 'Notepad' -and $null -ne $_.identifier } |
+            Select-Object -First 1
+        if ($null -eq $notepad) { throw 'the interactive desktop exposed no Notepad control target' }
+        $sentinel = "axon-sendinput-$([guid]::NewGuid().ToString('N'))"
+        $notepadRequest = @{ jsonrpc = '2.0'; id = 70; method = 'tools/call'; params = @{
+            name = 'keyboard'; arguments = @{ app = [string]$notepad.identifier; text = $sentinel; deliveryPolicy = 'foregroundPermitted' }
+        } } | ConvertTo-Json -Compress -Depth 10
+        $notepadResult = Invoke-AxonMcp -Request $notepadRequest
+        $notepadLookRequest = @{ jsonrpc = '2.0'; id = 71; method = 'tools/call'; params = @{
+            name = 'look'; arguments = @{ app = [string]$notepad.identifier; screenshot = $false }
+        } } | ConvertTo-Json -Compress -Depth 10
+        $notepadLook = Invoke-AxonMcp -Request $notepadLookRequest
+        Write-Note "Notepad SendInput control dispatch=$($notepadResult.result.structuredContent | ConvertTo-Json -Compress -Depth 20)"
+        if (($notepadLook.result.structuredContent | ConvertTo-Json -Compress -Depth 100) -notmatch $sentinel) {
+            throw 'the Notepad control did not expose the text posted by SendInput'
+        }
+        Write-Note 'Notepad SendInput control verified through UI Automation value readback'
+
         # The A-H hand-back experiment remains available through `probe foreground-handback-sweep`,
         # but it is not repeated in the standing acceptance run. Its completed 2x2 measurement chose
         # HeldAttachment; requiring arbitrary persistent desktop applications to foreground on every
