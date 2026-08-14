@@ -308,10 +308,16 @@ function Start-ProbeBrowser {
         Start-ProbeBrowserTask
         $timer = [System.Diagnostics.Stopwatch]::StartNew()
         do {
-            # The unique profile path identifies every process in this browser instance. A successful
-            # Axon capture then proves which candidate actually owns the top-level window.
+            # The unique profile path identifies every process in this browser instance. Chromium
+            # children add --type=... to their command lines and can expose renderer documents or
+            # disappear while queried, so only the primary browser process is eligible. A successful
+            # Axon capture then proves that it owns the top-level window.
             $candidates = @(Get-CimInstance Win32_Process -Filter "Name = 'msedge.exe'" |
-                Where-Object { $_.CommandLine -and $_.CommandLine.Contains($profile) })
+                Where-Object {
+                    $_.CommandLine -and
+                    $_.CommandLine.Contains($profile) -and
+                    -not $_.CommandLine.Contains('--type=')
+                })
             foreach ($candidate in $candidates) {
                 $lookRequest = @{ jsonrpc = '2.0'; id = 1; method = 'tools/call'; params = @{
                     name = 'look'; arguments = @{ app = [string]$candidate.ProcessId; screenshot = $false }

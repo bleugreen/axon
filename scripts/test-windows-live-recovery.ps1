@@ -130,6 +130,10 @@ if ($browserLaunchCommands -contains 'Start-Process' -or
     $browserLaunch[0].Extent.Text -notmatch 'Start-ProbeBrowserTask') {
     throw 'the probe browser must start through its Interactive task, not directly from the SSH shell'
 }
+if ($browserLaunch[0].Extent.Text -notmatch "\.Contains\('--type='\)" -or
+    $browserLaunch[0].Extent.Text -notmatch "role -eq 'Window'") {
+    throw 'Edge discovery must reject Chromium child processes and prove the primary process owns a top-level window'
+}
 if ($browserCleanup[0].Extent.Text -notmatch 'finally' -or
     $browserCleanup[0].Extent.Text -notmatch 'Unregister-ProbeBrowserTask') {
     throw 'the probe browser task is not cleanup-safe when Edge process cleanup fails'
