@@ -10,9 +10,12 @@ use axon_core::{
     PlatformBackend, RecognizedText, RecordedCall, Rect, Screenshot, Snapshot, SnapshotHandle,
     TextRecognitionProvider, Window,
 };
+use serde::Serialize;
 
 #[path = "capture.rs"]
 mod graphics_capture;
+#[path = "keyboard_diagnostic.rs"]
+mod keyboard_diagnostic;
 #[path = "pixel.rs"]
 mod pixel;
 use std::{
@@ -214,11 +217,249 @@ enum Command {
     AllowUnverifiedPixelClasses(bool, mpsc::Sender<Result<(), BackendError>>),
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct KeyboardEventMetadata {
+    virtual_key: u16,
+    scan_code: u16,
+    flags: u32,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+enum KeyboardBatchIntent {
+    NamedChord {
+        events: Vec<KeyboardEventMetadata>,
+        top_level_focus_window_class: Option<&'static str>,
+    },
+    Text,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct KeyboardBatchDiagnostics {
+    intent: KeyboardBatchIntent,
+    focus_proof: pixel::ForegroundFocusProof,
+    stability_proof: Option<pixel::ForegroundFocusProof>,
+    top_level_focus_repair_engaged: bool,
+    before_send: pixel::KeyboardSnapshot,
+    immediately_after_send: pixel::KeyboardSnapshot,
+    bounded_after_send: pixel::KeyboardSnapshot,
+    requested_count: u32,
+    returned_count: u32,
+    send_duration_micros: u64,
+    short_count_last_error: Option<u32>,
+}
+
+fn keyboard_event_metadata(inputs: &[INPUT]) -> Vec<KeyboardEventMetadata> {
+    inputs
+        .iter()
+        .map(|input| {
+            let keyboard = unsafe { input.Anonymous.ki };
+            KeyboardEventMetadata {
+                virtual_key: keyboard.wVk.0,
+                scan_code: keyboard.wScan,
+                flags: keyboard.dwFlags.0,
+            }
+        })
+        .collect()
+}
+
+fn proved_foreground_identity(proof: &pixel::ForegroundFocusProof) -> Option<(u64, u32)> {
+    let foreground = &proof.after_repair.as_ref()?.foreground;
+    Some((foreground.hwnd, foreground.process_id?))
+}
+
+fn snapshot_matches_foreground_identity(
+    snapshot: &pixel::KeyboardSnapshot,
+    expected: (u64, u32),
+) -> bool {
+    snapshot.foreground.hwnd == expected.0 && snapshot.foreground.process_id == Some(expected.1)
+}
+
+fn send_keyboard_batch(
+    inputs: &[INPUT],
+    intent: KeyboardBatchIntent,
+) -> Result<KeyboardBatchDiagnostics, BackendError> {
+    // Chromium routes injected browser accelerators only while the foreground top-level owns native
+    // focus. A same-process renderer child is not enough: SendInput still enters the desktop stream,
+    // but Chromium's browser-side accelerator manager never sees it. Unicode text deliberately
+    // preserves control focus. A full SendInput count is queue acceptance, never consumption proof.
+    let require_top_level = matches!(
+        &intent,
+        KeyboardBatchIntent::NamedChord {
+            top_level_focus_window_class: Some(required_class),
+            ..
+        } if pixel::class_name(pixel::foreground_window()) == *required_class
+    );
+    let focus_proof = pixel::ensure_foreground_focus(require_top_level);
+    if !focus_proof.proved() {
+        return Err(op(
+            "SendInput keyboard",
+            "the proved foreground process did not own keyboard focus; no events were posted",
+        ));
+    }
+    // The first-run Chromium surface can arrive asynchronously after activation. For the measured
+    // accelerator path, require two top-level proofs separated by a bounded quiet interval. Any
+    // transition is repaired and read back once; failure refuses without posting a second gesture.
+    let stability_proof = if require_top_level {
+        thread::sleep(Duration::from_millis(50));
+        Some(pixel::ensure_foreground_focus(true))
+    } else {
+        None
+    };
+    let stable_foreground_identity = if require_top_level {
+        let first_identity = proved_foreground_identity(&focus_proof);
+        let second_identity = stability_proof
+            .as_ref()
+            .filter(|proof| proof.proved())
+            .and_then(proved_foreground_identity);
+        match (first_identity, second_identity) {
+            (Some(first), Some(second)) if first == second => Some(first),
+            _ => {
+                return Err(op(
+                    "SendInput keyboard",
+                    "the foreground top-level window changed during the stability proof; no events were posted",
+                ));
+            }
+        }
+    } else {
+        None
+    };
+    let top_level_focus_repair_engaged = focus_proof.classification
+        == pixel::FocusProofClassification::ProvedRepairedFocus
+        || stability_proof.as_ref().is_some_and(|proof| {
+            proof.classification == pixel::FocusProofClassification::ProvedRepairedFocus
+        });
+    let intended_process_id = focus_proof
+        .target_process_id
+        .expect("a successful focus proof always names its target process");
+    let before_send = pixel::keyboard_snapshot(
+        pixel::KeyboardSnapshotPhase::BeforeSend,
+        intended_process_id,
+        false,
+    );
+    if stable_foreground_identity
+        .is_some_and(|expected| !snapshot_matches_foreground_identity(&before_send, expected))
+    {
+        return Err(op(
+            "SendInput keyboard",
+            "the foreground top-level window changed at the posting boundary; no events were posted",
+        ));
+    }
+    let started = Instant::now();
+    // This is the sole posting point for both key chords and Unicode text. A full count proves only
+    // that Windows accepted the records, not that the foreground application consumed them.
+    let returned_count = unsafe { SendInput(inputs, std::mem::size_of::<INPUT>() as i32) };
+    let send_duration_micros = started.elapsed().as_micros().min(u64::MAX as u128) as u64;
+    let short_count_last_error =
+        (returned_count != inputs.len() as u32).then(|| unsafe { GetLastError().0 });
+    let immediately_after_send = pixel::keyboard_snapshot(
+        pixel::KeyboardSnapshotPhase::ImmediatelyAfterSend,
+        intended_process_id,
+        false,
+    );
+    thread::sleep(Duration::from_millis(10));
+    let bounded_after_send = pixel::keyboard_snapshot(
+        pixel::KeyboardSnapshotPhase::BoundedAfterSend,
+        intended_process_id,
+        false,
+    );
+    let diagnostics = KeyboardBatchDiagnostics {
+        intent,
+        focus_proof,
+        stability_proof,
+        top_level_focus_repair_engaged,
+        before_send,
+        immediately_after_send,
+        bounded_after_send,
+        requested_count: inputs.len() as u32,
+        returned_count,
+        send_duration_micros,
+        short_count_last_error,
+    };
+    if std::env::var_os("AXON_KEYBOARD_DIAGNOSTICS").is_some() {
+        if let Ok(json) = serde_json::to_string(&diagnostics) {
+            eprintln!("{json}");
+        }
+    }
+    if returned_count != inputs.len() as u32 {
+        return Err(op(
+            "SendInput keyboard",
+            format!(
+                "sent {returned_count} of {} events (GetLastError={})",
+                inputs.len(),
+                short_count_last_error.unwrap_or_default()
+            ),
+        ));
+    }
+    Ok(diagnostics)
+}
+
+fn top_level_focus_window_class(key: Key, modifiers: &[Modifier]) -> Option<&'static str> {
+    (modifiers == [Modifier::Control]
+        && matches!(key, Key::Character(character) if character.eq_ignore_ascii_case(&'l')))
+    .then_some("Chrome_WidgetWin_1")
+}
+
+#[cfg(test)]
+mod keyboard_focus_requirement_tests {
+    use super::*;
+
+    #[test]
+    fn foreground_identity_requires_the_same_hwnd_and_process() {
+        let ownership = pixel::WindowOwnership {
+            hwnd: 41,
+            thread_id: Some(7),
+            process_id: Some(11),
+        };
+        let snapshot = pixel::KeyboardSnapshot {
+            monotonic_micros: 0,
+            phase: pixel::KeyboardSnapshotPhase::BeforeSend,
+            intended_process_id: 11,
+            foreground: ownership,
+            gui_thread: None,
+            caller_attached_to_target_queue: false,
+            caller_queue: pixel::QueueStatus {
+                current_bits: 0,
+                changed_bits: 0,
+                keyboard_current: false,
+                keyboard_changed: false,
+                raw_input_current: false,
+                raw_input_changed: false,
+            },
+            foreground_matches_intended_process: true,
+            focus_matches_intended_process: true,
+        };
+
+        assert!(snapshot_matches_foreground_identity(&snapshot, (41, 11)));
+        assert!(!snapshot_matches_foreground_identity(&snapshot, (42, 11)));
+        assert!(!snapshot_matches_foreground_identity(&snapshot, (41, 12)));
+    }
+
+    #[test]
+    fn only_the_measured_ctrl_l_accelerator_requires_top_level_focus() {
+        assert_eq!(
+            top_level_focus_window_class(Key::Character('l'), &[Modifier::Control]),
+            Some("Chrome_WidgetWin_1")
+        );
+        assert_eq!(
+            top_level_focus_window_class(Key::Character('c'), &[Modifier::Control]),
+            None
+        );
+        assert_eq!(
+            top_level_focus_window_class(Key::Named(axon_core::NamedKey::Return), &[]),
+            None
+        );
+    }
+}
+
 fn send_key(spec: &str) -> Result<(), BackendError> {
     let chord =
         axon_core::parse_chord(spec).map_err(|error| cap(Capability::KeyboardInput, error))?;
     // Resolve every event before posting any. In particular, a character is interpreted using the
     // proved-frontmost target's own keyboard layout rather than the daemon thread's layout.
+    let top_level_focus_window_class = top_level_focus_window_class(chord.key, &chord.modifiers);
     let mut modifiers = chord.modifiers;
     let key = match chord.key {
         Key::Named(key) => crate::keys::named_key(key),
@@ -268,14 +509,15 @@ fn send_key(spec: &str) -> Result<(), BackendError> {
     for modifier in modifier_keys.iter().rev() {
         inputs.push(key_input(*modifier, true));
     }
-    let sent = unsafe { SendInput(&inputs, std::mem::size_of::<INPUT>() as i32) };
-    if sent != inputs.len() as u32 {
-        return Err(op(
-            "SendInput keyboard",
-            format!("sent {sent} of {} events", inputs.len()),
-        ));
-    }
-    Ok(())
+    let events = keyboard_event_metadata(&inputs);
+    send_keyboard_batch(
+        &inputs,
+        KeyboardBatchIntent::NamedChord {
+            events,
+            top_level_focus_window_class,
+        },
+    )
+    .map(|_| ())
 }
 
 fn key_input(key: crate::keys::VirtualKey, key_up: bool) -> INPUT {
@@ -1394,12 +1636,6 @@ impl PlatformBackend for WindowsBackend {
         send_click(p)
     }
     fn keyboard(&mut self, _: &AppQuery, intent: KeyboardIntent<'_>) -> Result<(), BackendError> {
-        if !pixel::ensure_foreground_focus() {
-            return Err(op(
-                "SendInput keyboard",
-                "the proved foreground process did not own keyboard focus; no events were posted",
-            ));
-        }
         match intent {
             KeyboardIntent::Text(text) => send_text(text),
             KeyboardIntent::Key(spec) => send_key(spec),
@@ -1579,6 +1815,7 @@ impl IntegrationProbe {
         match command {
             "pixel-click" => return probe_pixel_click(args),
             "foreground" => return probe_foreground(args),
+            "keyboard-diagnostic" => return keyboard_diagnostic::run(args),
             _ => {}
         }
         let _com = ComApartment::mta()?;
@@ -2379,14 +2616,7 @@ fn send_text(text: &str) -> Result<(), BackendError> {
             })
         }
     }
-    let sent = unsafe { SendInput(&inputs, std::mem::size_of::<INPUT>() as i32) };
-    if sent != inputs.len() as u32 {
-        return Err(op(
-            "SendInput keyboard",
-            format!("sent {sent} of {} events", inputs.len()),
-        ));
-    }
-    Ok(())
+    send_keyboard_batch(&inputs, KeyboardBatchIntent::Text).map(|_| ())
 }
 fn send_click((x, y): (f64, f64)) -> Result<(), BackendError> {
     let origin_x = unsafe { GetSystemMetrics(SM_XVIRTUALSCREEN) };

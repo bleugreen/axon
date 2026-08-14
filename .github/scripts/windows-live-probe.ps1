@@ -40,7 +40,10 @@ than inline, and the entry point at the bottom runs only when this file is execu
 [CmdletBinding()]
 param(
     [ValidateSet('build', 'park', 'probe', 'restore')]
-    [string] $Stage
+    [string] $Stage,
+    [switch] $KeyboardDiagnostic,
+    [ValidateRange(1, 10)]
+    [int] $KeyboardDiagnosticMaxTrials = 10
 )
 
 $ErrorActionPreference = 'Stop'
@@ -60,6 +63,7 @@ $ProbeTaskName = 'Axon Live Probe Daemon'
 $ProbeBrowserTaskName = 'Axon Live Probe Browser'
 $ProbeActivationTaskName = 'Axon Live Probe Prior Activation'
 $ProbeForegroundTaskName = 'Axon Live Probe Foreground Sweep'
+$ProbeKeyboardTaskName = 'Axon Live Probe Keyboard Diagnostic'
 $LiveDirectory = 'C:\ProgramData\Axon\live'
 # Outside the runner workspace on purpose: a running process locks its image on Windows, so a
 # daemon started from the checkout survives its job and breaks the next checkout (AXN-38).
@@ -112,6 +116,131 @@ function Write-Note {
     param([Parameter(Mandatory)][string] $Message)
 
     Write-Host $Message
+}
+
+function Invoke-KeyboardDiagnostic {
+    param([Parameter(Mandatory)][int] $TargetProcessId, [Parameter(Mandatory)][int] $MaxTrials)
+    $resultPath = Join-Path $LiveDirectory 'keyboard-diagnostic.json'
+    try {
+        Remove-ProbeKeyboardResult -ResultPath $resultPath
+        Register-ProbeKeyboardTask -TargetProcessId $TargetProcessId -MaxTrials $MaxTrials -ResultPath $resultPath
+        Start-ProbeKeyboardTask
+        $run = Wait-ForProbeKeyboardTask -ResultPath $resultPath
+        if ($run.exitCode -ne 0) { throw "keyboard diagnostic exited $($run.exitCode): $($run.stderr)" }
+        $payload = $run.payload
+        if ($null -eq $payload -or $payload.schemaVersion -ne 'keyboard-diagnostic-v1') {
+            throw 'keyboard diagnostic returned no keyboard-diagnostic-v1 payload'
+        }
+
+        $trials = @($payload.trials)
+        if ($trials.Count -lt 1 -or $trials.Count -gt $MaxTrials) {
+            throw "keyboard diagnostic returned $($trials.Count) trials outside the declared 1..$MaxTrials bound"
+        }
+        if ($null -eq $payload.target.identity -or $null -eq $payload.finalForeground.identity) {
+            throw 'keyboard diagnostic omitted target or final foreground PID identity'
+        }
+        foreach ($identity in @($payload.target.identity, $payload.finalForeground.identity)) {
+            if ([string]::IsNullOrWhiteSpace([string]$identity.executablePath) -or
+                $null -eq $identity.parentProcessId -or $null -eq $identity.sessionId -or
+                [string]::IsNullOrWhiteSpace([string]$identity.integrityLevel) -or
+                $null -eq $identity.window.className -or $null -eq $identity.window.title) {
+                throw 'keyboard diagnostic returned incomplete process, window, or task identity'
+            }
+        }
+        foreach ($trial in $trials) {
+            if ($null -eq $trial.foregroundBefore.identity -or @($trial.timeline).Count -eq 0) {
+                throw "keyboard diagnostic trial $($trial.index) omitted foreground identity or timeline"
+            }
+            if ($trial.hook.valid -ne $true -or $trial.hook.sentinelObserved -ne $true) {
+                throw "keyboard diagnostic trial $($trial.index) has invalid low-level-hook evidence"
+            }
+            if ($trial.setup.pageFocusRestored -ne $true -or $trial.setup.topLevelFocusRepaired -ne $true -or
+                $trial.focus.before.classification -ne 'page') {
+                throw "keyboard diagnostic trial $($trial.index) did not restore independent page focus before Ctrl+L"
+            }
+            if ($null -eq $trial.focus.before.classification -or $null -eq $trial.focus.after.classification -or
+                $null -eq $trial.focus.ctrlLTransitionObserved -or $null -eq $trial.page.outcome) {
+                throw "keyboard diagnostic trial $($trial.index) omitted its UI Automation focus outcome"
+            }
+            if ($trial.experiment -eq 'baseline') {
+                $ctrlL = @($trial.dispatches | Where-Object intent -eq 'ctrl+l')
+                if ($ctrlL.Count -ne 1 -or [int]$ctrlL[0].ordinal -ne 1) {
+                    throw "keyboard diagnostic baseline trial $($trial.index) emitted $($ctrlL.Count) Ctrl+L dispatches; exactly one is required"
+                }
+            }
+        }
+        if ($payload.cleanup.hookRemoved -ne $true) {
+            throw 'keyboard diagnostic did not prove hook cleanup'
+        }
+        if ($payload.cleanup.observerWindowCreated -ne $false -or $null -ne $payload.cleanup.observerWindowDestroyed) {
+            throw 'keyboard diagnostic reported dishonest observer-window cleanup'
+        }
+        $payload
+    }
+    finally {
+        Unregister-ProbeKeyboardTask
+        Remove-ProbeKeyboardResult -ResultPath $resultPath
+    }
+}
+
+function Register-ProbeKeyboardTask {
+    param(
+        [Parameter(Mandatory)][int] $TargetProcessId,
+        [Parameter(Mandatory)][int] $MaxTrials,
+        [Parameter(Mandatory)][string] $ResultPath
+    )
+    $escapedExecutable = $ProbeCliExecutable.Replace("'", "''")
+    $escapedResultPath = $ResultPath.Replace("'", "''")
+    $escapedTemporaryPath = ("$ResultPath.tmp").Replace("'", "''")
+    $command = @"
+`$start = [System.Diagnostics.ProcessStartInfo]::new()
+`$start.FileName = '$escapedExecutable'
+`$start.Arguments = 'probe keyboard-diagnostic $TargetProcessId --max-trials $MaxTrials --task-name AxonLiveProbeKeyboardDiagnostic'
+`$start.UseShellExecute = `$false
+`$start.RedirectStandardOutput = `$true
+`$start.RedirectStandardError = `$true
+`$process = [System.Diagnostics.Process]::Start(`$start)
+`$stdoutTask = `$process.StandardOutput.ReadToEndAsync()
+`$stderrTask = `$process.StandardError.ReadToEndAsync()
+`$process.WaitForExit()
+`$stdout = `$stdoutTask.Result
+`$stderr = `$stderrTask.Result
+`$payload = `$null
+if (`$process.ExitCode -eq 0) { `$payload = `$stdout | ConvertFrom-Json }
+@{ stdout = `$stdout; stderr = `$stderr; exitCode = `$process.ExitCode; payload = `$payload } | ConvertTo-Json -Compress -Depth 100 | Set-Content -LiteralPath '$escapedTemporaryPath' -Encoding utf8
+Move-Item -LiteralPath '$escapedTemporaryPath' -Destination '$escapedResultPath' -Force
+"@
+    $encodedCommand = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($command))
+    $action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument "-NoProfile -NonInteractive -EncodedCommand $encodedCommand"
+    $principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive
+    Register-ScheduledTask -TaskName $ProbeKeyboardTaskName -Action $action -Principal $principal -Force | Out-Null
+}
+
+function Start-ProbeKeyboardTask {
+    Start-ScheduledTask -TaskName $ProbeKeyboardTaskName
+}
+
+function Wait-ForProbeKeyboardTask {
+    param([Parameter(Mandatory)][string] $ResultPath)
+    $timer = [System.Diagnostics.Stopwatch]::StartNew()
+    do {
+        if (Test-Path -LiteralPath $ResultPath) {
+            return Get-Content -LiteralPath $ResultPath -Raw | ConvertFrom-Json
+        }
+        $task = Get-ScheduledTask -TaskName $ProbeKeyboardTaskName -ErrorAction SilentlyContinue
+        if ($null -eq $task) { throw 'the keyboard diagnostic task disappeared before reporting its result' }
+        Wait-Tick
+    } while ($timer.Elapsed.TotalSeconds -lt $ProcessDiscoveryTimeoutSeconds)
+    throw 'the keyboard diagnostic task did not report completion before the timeout'
+}
+
+function Unregister-ProbeKeyboardTask {
+    Unregister-ScheduledTask -TaskName $ProbeKeyboardTaskName -Confirm:$false -ErrorAction SilentlyContinue
+}
+
+function Remove-ProbeKeyboardResult {
+    param([Parameter(Mandatory)][string] $ResultPath)
+    Remove-Item -LiteralPath $ResultPath, "$ResultPath.tmp" -Force -ErrorAction SilentlyContinue
 }
 
 function Register-ProbeForegroundTask {
@@ -175,7 +304,7 @@ function Register-ProbeBrowserTask {
     )
 
     $action = New-ScheduledTaskAction -Execute $EdgeExecutable -Argument (
-        "--new-window --no-first-run --user-data-dir=`"$ProfilePath`" `"$InitialUrl`""
+        "--new-window --no-first-run --disable-sync --user-data-dir=`"$ProfilePath`" `"$InitialUrl`""
     )
     # Match the daemon's execution context: the SSH relay runs in session 0, while this task must
     # receive the logged-in user's desktop token to create a window the daemon can inspect.
@@ -663,6 +792,7 @@ function Invoke-BuildStage {
     Assert-DesktopRegistrationIsNotAProbePath -RegistrationPath (Get-DesktopRegistrationPath)
     Unregister-ProbeActivationTask
     Unregister-ProbeForegroundTask
+    Unregister-ProbeKeyboardTask
     Unregister-ProbeBrowserTask
     Unregister-ProbeTask
     Stop-ProbeDaemonProcess
@@ -984,9 +1114,23 @@ function Invoke-ProbeStage {
         }
 
         # A fresh Edge profile can inherit the runner user's signed-in state and place a sync
-        # confirmation document in front of browser chrome despite --no-first-run. That modal
-        # intentionally consumes Ctrl+L and F6. Clear it through its accessibility control so the
-        # keyboard acceptance measures page navigation rather than persistent runner account state.
+        # confirmation document in front of browser chrome despite --no-first-run/--disable-sync.
+        # Its asynchronous arrival steals focus from a gesture already in flight. Sample a bounded
+        # settling window and always refresh the exact PID's root before deciding whether to dismiss.
+        for ($settleSample = 1; $settleSample -le 6 -and
+            [string]$verified.window.value -ne 'edge://sync-confirmation-dialog/'; $settleSample++) {
+            Wait-BrowserTransition
+            $settledResponse = Invoke-AxonMcp -Request $request
+            $settledWindow = $settledResponse.result.structuredContent.app.windows |
+                ForEach-Object root | Select-Object -First 1
+            if ($settledResponse.result.isError -ne $false -or $null -eq $settledWindow) {
+                throw "Edge settle sample $settleSample could not recapture the probe-owned window"
+            }
+            $verified = @{ response = $settledResponse; window = $settledWindow; app = $browserApp }
+            Write-Note "Edge settle sample=$settleSample value=$([string]$settledWindow.value)"
+        }
+        # The modal intentionally consumes Ctrl+L and F6. Clear it semantically so acceptance
+        # measures page navigation rather than runner account state.
         if ([string]$verified.window.value -eq 'edge://sync-confirmation-dialog/') {
             $dismissalButton = @($verified.window.children |
                 Where-Object identifier -eq 'got-it-button' |
@@ -1020,6 +1164,12 @@ function Invoke-ProbeStage {
             }
         }
 
+        if ($KeyboardDiagnostic) {
+            $diagnostic = Invoke-KeyboardDiagnostic -TargetProcessId ([int]$browser.ProcessId) -MaxTrials $KeyboardDiagnosticMaxTrials
+            Write-Note "keyboard diagnostic timeline: $($diagnostic | ConvertTo-Json -Compress -Depth 100)"
+            return
+        }
+
         # The A-H hand-back experiment remains available through `probe foreground-handback-sweep`,
         # but it is not repeated in the standing acceptance run. Its completed 2x2 measurement chose
         # HeldAttachment; requiring arbitrary persistent desktop applications to foreground on every
@@ -1041,6 +1191,9 @@ function Invoke-ProbeStage {
         # fence. Re-prove the exact PID through the independent task seam, then exercise the
         # frontmost form for the indivisible Ctrl+L/text/Return gesture.
         $activationResultPath = Join-Path $LiveDirectory 'keyboard-activation.json'
+        # A timed-out predecessor can leave an atomic result behind after its task is gone. Remove
+        # both names before registration so this run can never accept another run's PID as proof.
+        Remove-ProbeActivationResult -ResultPath $activationResultPath
         Register-ProbeActivationTask -ProcessId ([int]$browser.ProcessId) -ResultPath $activationResultPath
         try {
             Start-ProbeActivationTask
@@ -1229,6 +1382,7 @@ function Remove-ProbeInstallation {
     Unregister-ProbeBrowserTask
     Unregister-ProbeActivationTask
     Unregister-ProbeForegroundTask
+    Unregister-ProbeKeyboardTask
     Unregister-ProbeTask
     Stop-ProbeDaemonProcess
 }

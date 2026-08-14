@@ -5,8 +5,10 @@
 //! and is verified against fakes on any machine; this file is what only a Windows machine can
 //! check, which is why it is kept as small as the job allows.
 
+use serde::Serialize;
 use std::{
     ffi::c_void,
+    sync::OnceLock,
     thread,
     time::{Duration, Instant},
 };
@@ -31,14 +33,15 @@ use windows::{
                 GetAwarenessFromDpiAwarenessContext, GetWindowDpiAwarenessContext,
                 PhysicalToLogicalPointForPerMonitorDPI,
             },
-            Input::KeyboardAndMouse::{GetFocus, SetFocus},
+            Input::KeyboardAndMouse::SetFocus,
             WindowsAndMessaging::{
                 CWP_SKIPDISABLED, CWP_SKIPINVISIBLE, CWP_SKIPTRANSPARENT, ChildWindowFromPointEx,
-                EnumWindows, GA_ROOT, GW_OWNER, GetAncestor, GetClassNameW, GetClientRect,
-                GetCursorPos, GetForegroundWindow, GetWindow, GetWindowTextLengthW,
-                GetWindowThreadProcessId, IsIconic, IsWindow, IsWindowVisible, SMTO_ABORTIFHUNG,
-                SMTO_NORMAL, SendMessageTimeoutW, SetCursorPos, SetForegroundWindow,
-                WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE,
+                EnumWindows, GA_ROOT, GUITHREADINFO, GW_OWNER, GetAncestor, GetClassNameW,
+                GetClientRect, GetCursorPos, GetForegroundWindow, GetGUIThreadInfo, GetQueueStatus,
+                GetWindow, GetWindowTextLengthW, GetWindowThreadProcessId, IsIconic, IsWindow,
+                IsWindowVisible, QS_KEY, QS_RAWINPUT, SMTO_ABORTIFHUNG, SMTO_NORMAL,
+                SendMessageTimeoutW, SetCursorPos, SetForegroundWindow, WM_LBUTTONDOWN,
+                WM_LBUTTONUP, WM_MOUSEMOVE,
             },
         },
     },
@@ -81,45 +84,375 @@ pub fn hwnd(bits: u64) -> HWND {
     HWND(bits as usize as *mut c_void)
 }
 
+#[cfg(test)]
+mod keyboard_snapshot_tests {
+    use super::*;
+
+    #[test]
+    fn classifies_existing_repaired_and_failed_focus() {
+        assert_eq!(
+            classify_focus_proof(true, true, false, true, true),
+            FocusProofClassification::ProvedExistingFocus
+        );
+        assert_eq!(
+            classify_focus_proof(false, false, true, true, true),
+            FocusProofClassification::ProvedRepairedFocus
+        );
+        assert_eq!(
+            classify_focus_proof(true, false, true, true, true),
+            FocusProofClassification::ProvedRepairedFocus,
+            "a same-process child must be repaired when top-level focus is required"
+        );
+        assert_eq!(
+            classify_focus_proof(false, false, true, false, false),
+            FocusProofClassification::RepairFailed
+        );
+    }
+
+    #[test]
+    fn focus_classification_serializes_canonically() {
+        assert_eq!(
+            serde_json::to_string(&FocusProofClassification::ProvedRepairedFocus).unwrap(),
+            r#""provedRepairedFocus""#
+        );
+    }
+
+    #[test]
+    fn queue_status_keeps_current_and_changed_words_distinct() {
+        let status = classify_queue_status(((QS_KEY.0 as u32) << 16) | QS_RAWINPUT.0 as u32);
+        assert!(status.keyboard_current);
+        assert!(!status.keyboard_changed);
+        assert!(!status.raw_input_current);
+        assert!(status.raw_input_changed);
+    }
+
+    #[test]
+    fn snapshot_serialization_has_stable_phase_and_ownership_fields() {
+        let empty = WindowOwnership {
+            hwnd: 0,
+            thread_id: None,
+            process_id: None,
+        };
+        let snapshot = KeyboardSnapshot {
+            monotonic_micros: 42,
+            phase: KeyboardSnapshotPhase::BeforeSend,
+            intended_process_id: 7,
+            foreground: empty,
+            gui_thread: None,
+            caller_attached_to_target_queue: false,
+            caller_queue: QueueStatus {
+                current_bits: 0,
+                changed_bits: 0,
+                keyboard_current: false,
+                keyboard_changed: false,
+                raw_input_current: false,
+                raw_input_changed: false,
+            },
+            foreground_matches_intended_process: false,
+            focus_matches_intended_process: false,
+        };
+        let value = serde_json::to_value(snapshot).unwrap();
+        assert_eq!(value["phase"], "beforeSend");
+        assert_eq!(value["foreground"]["hwnd"], 0);
+        assert_eq!(value["intendedProcessId"], 7);
+    }
+}
+
+#[derive(Clone, Copy, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum KeyboardSnapshotPhase {
+    BeforeFocusRepair,
+    AfterFocusRepair,
+    BeforeSend,
+    ImmediatelyAfterSend,
+    BoundedAfterSend,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WindowOwnership {
+    pub hwnd: u64,
+    pub thread_id: Option<u32>,
+    pub process_id: Option<u32>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GuiThreadState {
+    pub flags: u32,
+    pub active: WindowOwnership,
+    pub focus: WindowOwnership,
+    pub capture: WindowOwnership,
+    pub menu_owner: WindowOwnership,
+    pub move_size: WindowOwnership,
+    pub caret: WindowOwnership,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct QueueStatus {
+    pub current_bits: u16,
+    pub changed_bits: u16,
+    pub keyboard_current: bool,
+    pub keyboard_changed: bool,
+    pub raw_input_current: bool,
+    pub raw_input_changed: bool,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct KeyboardSnapshot {
+    pub monotonic_micros: u64,
+    pub phase: KeyboardSnapshotPhase,
+    pub intended_process_id: u32,
+    pub foreground: WindowOwnership,
+    pub gui_thread: Option<GuiThreadState>,
+    pub caller_attached_to_target_queue: bool,
+    /// State of the calling thread's queue. When attached this is the joined queue; otherwise it is
+    /// never presented as evidence about the target thread or consumption of a specific record.
+    pub caller_queue: QueueStatus,
+    pub foreground_matches_intended_process: bool,
+    pub focus_matches_intended_process: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum FocusProofClassification {
+    ProvedExistingFocus,
+    ProvedRepairedFocus,
+    InvalidForeground,
+    MissingForegroundOwner,
+    MissingForegroundThread,
+    AttachFailed,
+    RepairFailed,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ForegroundFocusProof {
+    pub classification: FocusProofClassification,
+    pub target_process_id: Option<u32>,
+    pub target_thread_id: Option<u32>,
+    pub attach_attempted: bool,
+    pub attach_succeeded: bool,
+    pub detach_attempted: bool,
+    pub detach_succeeded: bool,
+    pub before_repair: Option<KeyboardSnapshot>,
+    pub after_repair: Option<KeyboardSnapshot>,
+}
+
+impl ForegroundFocusProof {
+    pub fn proved(&self) -> bool {
+        matches!(
+            self.classification,
+            FocusProofClassification::ProvedExistingFocus
+                | FocusProofClassification::ProvedRepairedFocus
+        )
+    }
+}
+
+pub fn classify_focus_proof(
+    before_owned: bool,
+    before_meets_requirement: bool,
+    repair_attempted: bool,
+    after_owned: bool,
+    after_meets_requirement: bool,
+) -> FocusProofClassification {
+    if before_owned && before_meets_requirement {
+        FocusProofClassification::ProvedExistingFocus
+    } else if repair_attempted && after_owned && after_meets_requirement {
+        FocusProofClassification::ProvedRepairedFocus
+    } else {
+        FocusProofClassification::RepairFailed
+    }
+}
+
+fn classify_queue_status(queue_bits: u32) -> QueueStatus {
+    // GetQueueStatus returns current state in the high word and changes since the previous read in
+    // the low word. Reading it consumes those changed bits, so snapshots are sampled in one order.
+    let current_bits = (queue_bits >> 16) as u16;
+    let changed_bits = queue_bits as u16;
+    let key = QS_KEY.0 as u16;
+    let raw = QS_RAWINPUT.0 as u16;
+    QueueStatus {
+        current_bits,
+        changed_bits,
+        keyboard_current: current_bits & key != 0,
+        keyboard_changed: changed_bits & key != 0,
+        raw_input_current: current_bits & raw != 0,
+        raw_input_changed: changed_bits & raw != 0,
+    }
+}
+
+fn ownership(window: HWND) -> WindowOwnership {
+    let mut process_id = 0;
+    let thread_id = if window.is_invalid() {
+        0
+    } else {
+        unsafe { GetWindowThreadProcessId(window, Some(&mut process_id)) }
+    };
+    WindowOwnership {
+        hwnd: bits(window),
+        thread_id: (thread_id != 0).then_some(thread_id),
+        process_id: (process_id != 0).then_some(process_id),
+    }
+}
+
+fn monotonic_micros() -> u64 {
+    static ORIGIN: OnceLock<Instant> = OnceLock::new();
+    ORIGIN
+        .get_or_init(Instant::now)
+        .elapsed()
+        .as_micros()
+        .min(u64::MAX as u128) as u64
+}
+
+pub fn keyboard_snapshot(
+    phase: KeyboardSnapshotPhase,
+    intended_process_id: u32,
+    caller_attached_to_target_queue: bool,
+) -> KeyboardSnapshot {
+    let foreground = foreground_window();
+    let foreground_ownership = ownership(foreground);
+    let target_thread = foreground_ownership.thread_id.unwrap_or(0);
+    let mut info = GUITHREADINFO {
+        cbSize: std::mem::size_of::<GUITHREADINFO>() as u32,
+        ..Default::default()
+    };
+    let gui_thread = (target_thread != 0
+        && unsafe { GetGUIThreadInfo(target_thread, &mut info) }.is_ok())
+    .then(|| GuiThreadState {
+        flags: info.flags.0,
+        active: ownership(info.hwndActive),
+        focus: ownership(info.hwndFocus),
+        capture: ownership(info.hwndCapture),
+        menu_owner: ownership(info.hwndMenuOwner),
+        move_size: ownership(info.hwndMoveSize),
+        caret: ownership(info.hwndCaret),
+    });
+    let queue_bits = unsafe { GetQueueStatus(QS_KEY | QS_RAWINPUT) };
+    let focus_matches_intended_process =
+        gui_thread.as_ref().and_then(|state| state.focus.process_id) == Some(intended_process_id);
+    KeyboardSnapshot {
+        monotonic_micros: monotonic_micros(),
+        phase,
+        intended_process_id,
+        foreground: foreground_ownership,
+        gui_thread,
+        caller_attached_to_target_queue,
+        caller_queue: classify_queue_status(queue_bits),
+        foreground_matches_intended_process: process_of(foreground) == Some(intended_process_id),
+        focus_matches_intended_process,
+    }
+}
+
 /// Proves that the foreground process also owns keyboard focus.
 ///
-/// Foreground ownership and keyboard focus are separate Windows facts. In particular, an
-/// Interactive scheduled task can create a foreground Edge window whose input queue has no focused
-/// child. `SendInput` succeeds there while browser accelerators such as Ctrl+L receive nothing.
-/// Join the foreground thread's input queue long enough to inspect its focus. Preserve an existing
-/// focused child, because replacing the omnibox focus before a following text request would break
-/// the gesture; only an absent or foreign focus is repaired to the foreground top-level window.
-pub fn ensure_foreground_focus() -> bool {
+/// The temporary queue join is always undone. Unicode text preserves an existing focused child.
+/// The measured Chromium Ctrl+L accelerator requires the foreground top-level itself: live Edge
+/// measurements proved that an owned renderer child can receive those injected records while the
+/// browser accelerator ignores them. Other keys preserve focused-control semantics. Absent, foreign, or contract-ineligible focus is repaired and read back before dispatch.
+pub fn ensure_foreground_focus(require_top_level: bool) -> ForegroundFocusProof {
     let target = foreground_window();
     if target.is_invalid() {
-        return false;
+        return ForegroundFocusProof::failed(
+            FocusProofClassification::InvalidForeground,
+            None,
+            None,
+        );
     }
     let Some(target_pid) = process_of(target) else {
-        return false;
+        return ForegroundFocusProof::failed(
+            FocusProofClassification::MissingForegroundOwner,
+            None,
+            None,
+        );
     };
     let ours = unsafe { GetCurrentThreadId() };
     let target_thread = unsafe { GetWindowThreadProcessId(target, None) };
     if target_thread == 0 {
-        return false;
+        return ForegroundFocusProof::failed(
+            FocusProofClassification::MissingForegroundThread,
+            Some(target_pid),
+            None,
+        );
     }
+    let attach_attempted = target_thread != ours;
     let attached =
-        target_thread != ours && unsafe { AttachThreadInput(ours, target_thread, true) }.as_bool();
-    if target_thread != ours && !attached {
-        return false;
+        !attach_attempted || unsafe { AttachThreadInput(ours, target_thread, true) }.as_bool();
+    if !attached {
+        return ForegroundFocusProof::failed(
+            FocusProofClassification::AttachFailed,
+            Some(target_pid),
+            Some(target_thread),
+        );
     }
 
-    let focused = unsafe { GetFocus() };
-    let mut proved = !focused.is_invalid() && process_of(focused) == Some(target_pid);
-    if !proved {
+    let before = keyboard_snapshot(
+        KeyboardSnapshotPhase::BeforeFocusRepair,
+        target_pid,
+        attach_attempted,
+    );
+    let before_is_top_level = before
+        .gui_thread
+        .as_ref()
+        .is_some_and(|state| state.focus.hwnd == before.foreground.hwnd);
+    let before_meets_requirement = !require_top_level || before_is_top_level;
+    let repair_attempted = !before.focus_matches_intended_process || !before_meets_requirement;
+    if repair_attempted {
         let _ = unsafe { SetFocus(Some(target)) };
-        let focused = unsafe { GetFocus() };
-        proved = !focused.is_invalid() && process_of(focused) == Some(target_pid);
     }
+    let after = keyboard_snapshot(
+        KeyboardSnapshotPhase::AfterFocusRepair,
+        target_pid,
+        attach_attempted,
+    );
+    let after_is_top_level = after
+        .gui_thread
+        .as_ref()
+        .is_some_and(|state| state.focus.hwnd == after.foreground.hwnd);
+    let classification = classify_focus_proof(
+        before.focus_matches_intended_process,
+        before_meets_requirement,
+        repair_attempted,
+        after.focus_matches_intended_process,
+        !require_top_level || after_is_top_level,
+    );
 
-    if attached {
-        let _ = unsafe { AttachThreadInput(ours, target_thread, false) };
+    let detach_attempted = attach_attempted;
+    let detach_succeeded =
+        !detach_attempted || unsafe { AttachThreadInput(ours, target_thread, false) }.as_bool();
+    ForegroundFocusProof {
+        classification,
+        target_process_id: Some(target_pid),
+        target_thread_id: Some(target_thread),
+        attach_attempted,
+        attach_succeeded: true,
+        detach_attempted,
+        detach_succeeded,
+        before_repair: Some(before),
+        after_repair: Some(after),
     }
-    proved
+}
+
+impl ForegroundFocusProof {
+    fn failed(
+        classification: FocusProofClassification,
+        target_process_id: Option<u32>,
+        target_thread_id: Option<u32>,
+    ) -> Self {
+        Self {
+            classification,
+            target_process_id,
+            target_thread_id,
+            attach_attempted: classification == FocusProofClassification::AttachFailed,
+            attach_succeeded: false,
+            detach_attempted: false,
+            detach_succeeded: false,
+            before_repair: None,
+            after_repair: None,
+        }
+    }
 }
 
 pub fn bits(window: HWND) -> u64 {
