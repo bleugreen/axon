@@ -273,9 +273,11 @@ events with a close conceptual fit to AX.
   from reliably observing or driving the user's UI through UIA or `SendInput`.
 - Foreground keyboard delivery joins the target GUI input queue and proves native
   focus before posting one indivisible batch. Unicode text preserves focused
-  controls. Named chords require focus on the active top-level window, because a
-  Chromium renderer child can remain a valid same-process focus owner while
-  browser-side accelerators ignore injected chords. `SendInput`'s returned count
+  controls. The measured Chromium Ctrl+L browser accelerator requires focus on
+  the active top-level window, because a renderer child can remain a valid
+  same-process focus owner while that injected accelerator is ignored. Other
+  keys retain focused-control semantics until equivalent evidence justifies a
+  broader application-accelerator intent. `SendInput`'s returned count
   proves only that Windows accepted records, never that the application consumed
   them.
 - A normally elevated daemon cannot freely cross integrity boundaries. Driving

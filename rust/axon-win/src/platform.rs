@@ -228,7 +228,10 @@ struct KeyboardEventMetadata {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 enum KeyboardBatchIntent {
-    NamedChord { events: Vec<KeyboardEventMetadata> },
+    NamedChord {
+        events: Vec<KeyboardEventMetadata>,
+        require_top_level_focus: bool,
+    },
     Text,
 }
 
@@ -268,7 +271,13 @@ fn send_keyboard_batch(
     // focus. A same-process renderer child is not enough: SendInput still enters the desktop stream,
     // but Chromium's browser-side accelerator manager never sees it. Unicode text deliberately
     // preserves control focus. A full SendInput count is queue acceptance, never consumption proof.
-    let require_top_level = matches!(&intent, KeyboardBatchIntent::NamedChord { .. });
+    let require_top_level = matches!(
+        &intent,
+        KeyboardBatchIntent::NamedChord {
+            require_top_level_focus: true,
+            ..
+        }
+    );
     let focus_proof = pixel::ensure_foreground_focus(require_top_level);
     if !focus_proof.proved() {
         return Err(op(
@@ -331,11 +340,38 @@ fn send_keyboard_batch(
     Ok(diagnostics)
 }
 
+fn requires_top_level_focus(key: Key, modifiers: &[Modifier]) -> bool {
+    modifiers == [Modifier::Control]
+        && matches!(key, Key::Character(character) if character.eq_ignore_ascii_case(&'l'))
+}
+
+#[cfg(test)]
+mod keyboard_focus_requirement_tests {
+    use super::*;
+
+    #[test]
+    fn only_the_measured_ctrl_l_accelerator_requires_top_level_focus() {
+        assert!(requires_top_level_focus(
+            Key::Character('l'),
+            &[Modifier::Control]
+        ));
+        assert!(!requires_top_level_focus(
+            Key::Character('c'),
+            &[Modifier::Control]
+        ));
+        assert!(!requires_top_level_focus(
+            Key::Named(axon_core::NamedKey::Return),
+            &[]
+        ));
+    }
+}
+
 fn send_key(spec: &str) -> Result<(), BackendError> {
     let chord =
         axon_core::parse_chord(spec).map_err(|error| cap(Capability::KeyboardInput, error))?;
     // Resolve every event before posting any. In particular, a character is interpreted using the
     // proved-frontmost target's own keyboard layout rather than the daemon thread's layout.
+    let require_top_level_focus = requires_top_level_focus(chord.key, &chord.modifiers);
     let mut modifiers = chord.modifiers;
     let key = match chord.key {
         Key::Named(key) => crate::keys::named_key(key),
@@ -386,7 +422,14 @@ fn send_key(spec: &str) -> Result<(), BackendError> {
         inputs.push(key_input(*modifier, true));
     }
     let events = keyboard_event_metadata(&inputs);
-    send_keyboard_batch(&inputs, KeyboardBatchIntent::NamedChord { events }).map(|_| ())
+    send_keyboard_batch(
+        &inputs,
+        KeyboardBatchIntent::NamedChord {
+            events,
+            require_top_level_focus,
+        },
+    )
+    .map(|_| ())
 }
 
 fn key_input(key: crate::keys::VirtualKey, key_up: bool) -> INPUT {

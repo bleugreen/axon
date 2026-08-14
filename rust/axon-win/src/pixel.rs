@@ -140,7 +140,7 @@ mod keyboard_snapshot_tests {
             foreground: empty,
             gui_thread: None,
             caller_attached_to_target_queue: false,
-            queue: QueueStatus {
+            caller_queue: QueueStatus {
                 current_bits: 0,
                 changed_bits: 0,
                 keyboard_current: false,
@@ -208,7 +208,9 @@ pub struct KeyboardSnapshot {
     pub foreground: WindowOwnership,
     pub gui_thread: Option<GuiThreadState>,
     pub caller_attached_to_target_queue: bool,
-    pub queue: QueueStatus,
+    /// State of the calling thread's queue. When attached this is the joined queue; otherwise it is
+    /// never presented as evidence about the target thread or consumption of a specific record.
+    pub caller_queue: QueueStatus,
     pub foreground_matches_intended_process: bool,
     pub focus_matches_intended_process: bool,
 }
@@ -338,7 +340,7 @@ pub fn keyboard_snapshot(
         foreground: foreground_ownership,
         gui_thread,
         caller_attached_to_target_queue,
-        queue: classify_queue_status(queue_bits),
+        caller_queue: classify_queue_status(queue_bits),
         foreground_matches_intended_process: process_of(foreground) == Some(intended_process_id),
         focus_matches_intended_process,
     }
@@ -347,9 +349,9 @@ pub fn keyboard_snapshot(
 /// Proves that the foreground process also owns keyboard focus.
 ///
 /// The temporary queue join is always undone. Unicode text preserves an existing focused child.
-/// Named chords require the foreground top-level itself: live Edge measurements proved that an
-/// owned Chromium renderer child can receive injected records while browser accelerators ignore
-/// them. Absent, foreign, or contract-ineligible focus is repaired and read back before dispatch.
+/// The measured Chromium Ctrl+L accelerator requires the foreground top-level itself: live Edge
+/// measurements proved that an owned renderer child can receive those injected records while the
+/// browser accelerator ignores them. Other keys preserve focused-control semantics. Absent, foreign, or contract-ineligible focus is repaired and read back before dispatch.
 pub fn ensure_foreground_focus(require_top_level: bool) -> ForegroundFocusProof {
     let target = foreground_window();
     if target.is_invalid() {

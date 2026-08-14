@@ -491,7 +491,10 @@ pub(super) fn run(args: &[String]) -> Result<Value, BackendError> {
         let metadata = keyboard_event_metadata(&inputs);
         let result = send_keyboard_batch(
             &inputs,
-            KeyboardBatchIntent::NamedChord { events: metadata },
+            KeyboardBatchIntent::NamedChord {
+                events: metadata,
+                require_top_level_focus: true,
+            },
         );
         let returned = now_us();
         let sentinel_key = VirtualKey {
