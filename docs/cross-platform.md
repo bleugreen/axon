@@ -2,7 +2,7 @@
 
 Axon uses the native accessibility system on macOS, Windows, and Linux. The platforms expose different capabilities, so Axon reports what it can actually do rather than presenting one lowest-common-denominator promise.
 
-The matrix below is the current user-facing contract. Detailed evidence, backend architecture, and verification procedures remain in the contributor reference, [Cross-platform internals](../docs/cross-platform-internals.md).
+The matrix below is the current user-facing contract. Contributors can consult the exhaustive [tool-by-platform capability census](platform-capability-matrix.md) and the deeper [cross-platform internals](cross-platform-internals.md) for evidence, refusal behavior, backend architecture, and verification procedures.
 
 ## Support matrix
 

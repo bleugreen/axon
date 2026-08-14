@@ -37,7 +37,12 @@ pub mod x11;
 /// Tools this backend does not implement at all. These are not delivery decisions: the request
 /// names something the Linux daemon has no code path for, which stays a JSON-RPC error.
 const EXCLUDED: &[(&str, &str)] = &[
+    ("navigate", "BrowserScripting"),
+    ("windows", "BrowserScripting"),
+    ("tabs", "BrowserScripting"),
     ("save", "SerializeHistory"),
+    ("drag", "PointerDrag"),
+    ("scroll", "Scroll"),
     ("wait_for_value", "WaitForValue"),
     ("wait_for_stability", "WaitForStability"),
     ("permit", "PermissionPrompt"),
@@ -326,9 +331,10 @@ impl<B: PointerTargetVerifier + BackgroundPixelInput> Router<B> {
         params: &Map<String, Value>,
     ) -> Result<Value, JsonRpcError> {
         if let Some((_, capability)) = EXCLUDED.iter().find(|(tool, _)| *tool == method) {
-            return Err(rpc_error(
-                -32004,
-                format!("tool {method} requires unavailable capability {capability}"),
+            return Err(capability_unavailable(
+                method,
+                capability,
+                "not-implemented",
             ));
         }
         // The policy is decoded before the target is resolved and before any backend call, so an
@@ -349,9 +355,10 @@ impl<B: PointerTargetVerifier + BackgroundPixelInput> Router<B> {
                 self.dispatch_resolved_click(handle, resolution, policy)
             }
             "type" => {
+                // `value` is the sole public spelling. Validate it before resolving the target so
+                // private aliases and malformed calls cannot cause native observation.
+                let value = required_str(params, "value")?;
                 let (handle, resolution) = self.resolve(params)?;
-                let value =
-                    required_str(params, "value").or_else(|_| required_str(params, "text"))?;
                 // Setting an editable value through AT-SPI needs no focus, and taking focus would
                 // make this a foreground action wearing a semantic name.
                 self.backend
@@ -462,26 +469,15 @@ impl<B: PointerTargetVerifier + BackgroundPixelInput> Router<B> {
                 ))
             }
             "invoke" => {
-                let (handle, resolution) = self.resolve(params)?;
+                // The action name is distinct from target.name and is required by the canonical
+                // schema. Check it before target resolution or any backend work.
                 let action = required_str(params, "name")?;
+                let (handle, resolution) = self.resolve(params)?;
                 self.backend
                     .invoke(&handle, action)
                     .map_err(backend_error)?;
                 Ok(delivered(
                     json!({"dispatch":{"success":true,"mechanism":"AT-SPI Action.DoAction","action":action},"verification":{"verified":false,"reason":"invoke has no declared postcondition"},"resolution":resolution}),
-                    policy,
-                    DeliveryRung::Semantic,
-                ))
-            }
-            "scroll" => {
-                let (handle, resolution) = self.resolve(params)?;
-                let dx = params.get("deltaX").and_then(Value::as_f64).unwrap_or(0.0);
-                let dy = params.get("deltaY").and_then(Value::as_f64).unwrap_or(0.0);
-                self.backend
-                    .scroll(&handle, (dx, dy))
-                    .map_err(backend_error)?;
-                Ok(delivered(
-                    json!({"dispatch":{"success":true,"mechanism":"AT-SPI Component.ScrollTo"},"verification":{"verified":false,"reason":"scroll has no declared postcondition"},"resolution":resolution}),
                     policy,
                     DeliveryRung::Semantic,
                 ))
@@ -1254,6 +1250,15 @@ fn rpc_error(code: i64, message: impl Into<String>) -> JsonRpcError {
         data: None,
     }
 }
+fn capability_unavailable(tool: &str, capability: &str, reason: &str) -> JsonRpcError {
+    JsonRpcError {
+        code: -32004,
+        message: format!("tool {tool} requires unavailable capability {capability}"),
+        data: Some(
+            json!({"code":"capability-unavailable","tool":tool,"capability":capability,"reason":reason}),
+        ),
+    }
+}
 fn backend_error(e: axon_core::BackendError) -> JsonRpcError {
     rpc_error(-32000, e.to_string())
 }
@@ -1394,6 +1399,8 @@ mod tests {
         verified_handles: Rc<RefCell<Vec<SnapshotHandle>>>,
         value: Rc<RefCell<Option<String>>>,
         clicks: Rc<RefCell<usize>>,
+        scrolls: Rc<RefCell<usize>>,
+        invokes: Rc<RefCell<Vec<String>>>,
         keystrokes: Rc<RefCell<usize>>,
         focuses: Rc<RefCell<usize>>,
         /// Where the real pointer sits. A click moves it, which is why the transaction restores it.
@@ -1508,7 +1515,8 @@ mod tests {
             self.capture_queries.borrow_mut().push(query.clone());
             Ok(self.snapshot.clone())
         }
-        fn invoke(&mut self, _: &SnapshotHandle, _: &str) -> Result<(), BackendError> {
+        fn invoke(&mut self, _: &SnapshotHandle, action: &str) -> Result<(), BackendError> {
+            self.invokes.borrow_mut().push(action.into());
             Ok(())
         }
         fn read_value(&self, _: &SnapshotHandle) -> Result<Option<String>, BackendError> {
@@ -1523,6 +1531,7 @@ mod tests {
             Ok(())
         }
         fn scroll(&mut self, _: &SnapshotHandle, _: (f64, f64)) -> Result<(), BackendError> {
+            *self.scrolls.borrow_mut() += 1;
             Ok(())
         }
         fn observe(&mut self, _: &AppQuery, _: Duration) -> Result<Observation, BackendError> {
@@ -1669,6 +1678,8 @@ mod tests {
             verified_handles: Rc::new(RefCell::new(vec![])),
             value: Rc::new(RefCell::new(value.map(str::to_owned))),
             clicks: Rc::new(RefCell::new(0)),
+            scrolls: Rc::new(RefCell::new(0)),
+            invokes: Rc::new(RefCell::new(vec![])),
             keystrokes: Rc::new(RefCell::new(0)),
             focuses: Rc::new(RefCell::new(0)),
             pointer: Rc::new(RefCell::new(POINTER_ORIGIN)),
@@ -1733,6 +1744,61 @@ mod tests {
         )
         .unwrap()
         .unwrap()
+    }
+
+    #[test]
+    fn canonical_type_and_invoke_arguments_route_without_private_aliases() {
+        use axon_core::{ToolBackend, validate_tool_arguments};
+
+        let backend = backend(vec![node("Field"), node("Button")], Some("before"));
+        let value = backend.value.clone();
+        let invokes = backend.invokes.clone();
+        let captures = backend.capture_queries.clone();
+        let mut router = Router::new(backend);
+        let names = router.register_snapshot(&router.backend.snapshot.clone());
+        let field = names.iter().find(|name| name.label == "Field").unwrap();
+        let button = names.iter().find(|name| name.label == "Button").unwrap();
+
+        let type_args = validate_tool_arguments(
+            ToolBackend::Linux,
+            "type",
+            json!({"target":{"app":"App","name":field.name},"value":"after"}),
+        )
+        .unwrap();
+        let response = router.request(request("type", type_args)).unwrap();
+        assert!(matches!(response, JsonRpcResponse::Success(_)));
+        assert_eq!(value.borrow().as_deref(), Some("after"));
+
+        let invoke_args = validate_tool_arguments(
+            ToolBackend::Linux,
+            "invoke",
+            json!({"target":{"app":"App","name":button.name},"name":"Invoke"}),
+        )
+        .unwrap();
+        let response = router.request(request("invoke", invoke_args)).unwrap();
+        assert!(matches!(response, JsonRpcResponse::Success(_)));
+        assert_eq!(invokes.borrow().as_slice(), ["Invoke"]);
+
+        let captures_before = captures.borrow().len();
+        for (method, params) in [
+            (
+                "type",
+                json!({"target":{"app":"App","name":field.name},"text":"alias"}),
+            ),
+            (
+                "invoke",
+                json!({"target":{"app":"App","name":button.name},"action":"Invoke"}),
+            ),
+        ] {
+            let response = router.request(request(method, params)).unwrap();
+            let JsonRpcResponse::Failure(failure) = response else {
+                panic!("{method} private alias must be rejected")
+            };
+            assert_eq!(failure.error.code, -32602, "{method}");
+        }
+        assert_eq!(captures.borrow().len(), captures_before);
+        assert_eq!(value.borrow().as_deref(), Some("after"));
+        assert_eq!(invokes.borrow().as_slice(), ["Invoke"]);
     }
 
     #[test]
@@ -1815,14 +1881,50 @@ mod tests {
         assert!(success.result.get("screenshot").is_none());
     }
     #[test]
-    fn unimplemented_tools_stay_json_rpc_errors_rather_than_refusals() {
+    fn unimplemented_tools_have_structured_errors_before_backend_dispatch() {
         // These are not delivery decisions: the Linux daemon has no code path for them at all, so
         // they remain transport errors instead of well-formed actions the daemon declined.
-        assert_eq!(EXCLUDED.len(), 4);
-        for tool in ["save", "wait_for_value", "wait_for_stability", "permit"] {
-            assert!(EXCLUDED.iter().any(|entry| entry.0 == tool), "{tool}");
+        let backend = backend(vec![], None);
+        let scrolls = backend.scrolls.clone();
+        let mut router = Router::new(backend);
+        for (tool, capability) in EXCLUDED {
+            let response = router
+                .request(request(
+                    tool,
+                    json!({"target":{"app":"missing","name":"missing"},"deliveryPolicy":"invalid"}),
+                ))
+                .unwrap();
+            let JsonRpcResponse::Failure(failure) = response else {
+                panic!("{tool} must be a JSON-RPC error")
+            };
+            assert_eq!(failure.error.code, -32004, "{tool}");
+            assert_eq!(
+                failure.error.data,
+                Some(json!({
+                    "code":"capability-unavailable",
+                    "tool":tool,
+                    "capability":capability,
+                    "reason":"not-implemented"
+                })),
+                "{tool}"
+            );
         }
-        for tool in ["click", "keyboard", "drag", "type", "scroll", "invoke"] {
+        assert_eq!(*scrolls.borrow(), 0);
+        assert_eq!(
+            EXCLUDED.iter().map(|entry| entry.0).collect::<Vec<_>>(),
+            [
+                "navigate",
+                "windows",
+                "tabs",
+                "save",
+                "drag",
+                "scroll",
+                "wait_for_value",
+                "wait_for_stability",
+                "permit"
+            ]
+        );
+        for tool in ["click", "keyboard", "type", "invoke"] {
             assert!(!EXCLUDED.iter().any(|entry| entry.0 == tool), "{tool}");
         }
     }
@@ -2445,10 +2547,6 @@ mod tests {
                 "type",
                 json!({"target": {"app": "App", "name": "Field"}, "value": "after"}),
             ),
-            (
-                "scroll",
-                json!({"target": {"app": "App", "name": "List"}, "deltaY": -120.0}),
-            ),
         ] {
             let response = router.request(request(method, params)).unwrap();
             let JsonRpcResponse::Failure(failure) = response else {
@@ -2477,7 +2575,7 @@ mod tests {
         let mut router = Router::new(backend);
         router.snapshot = Some(router.backend.snapshot.clone());
 
-        for method in ["click", "type", "keyboard", "scroll", "invoke", "drag"] {
+        for method in ["click", "type", "keyboard", "invoke"] {
             let response = router
                 .request(request(
                     method,

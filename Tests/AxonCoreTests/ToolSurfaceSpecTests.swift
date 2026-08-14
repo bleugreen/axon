@@ -29,10 +29,6 @@ import Testing
     #expect(tool(named: "keyboard", in: tools)?["inputSchema"]?["additionalProperties"] == .bool(false))
 }
 
-private func availableToolNames(for facade: ToolFacade) -> [String] {
-    ToolSurfaceSpec.tools.filter { $0.availability.contains(facade) }.map(\.name)
-}
-
 @Test func toolSurfaceDeclaresExactNestedTargetSchemas() throws {
     let tools = ToolSurfaceSchema.mcpToolJSONValues()
     let clickTarget = tool(named: "click", in: tools)?["inputSchema"]?["properties"]?["target"]
@@ -63,18 +59,33 @@ private func availableToolNames(for facade: ToolFacade) -> [String] {
 }
 
 @Test func toolSurfaceDeclaresFacadeAvailability() throws {
-    let all = ToolSurfaceSpec.tools
-    #expect(all.allSatisfy { $0.availability.contains(.swift) })
-    #expect(availableToolNames(for: .mac) == [
-        "look", "find", "wait_for_value", "wait_for_stability", "run", "click", "type",
-        "keyboard", "scroll", "invoke"
-    ])
-    #expect(availableToolNames(for: .windows) == [
-        "look", "find", "run", "click", "type", "keyboard", "scroll", "invoke"
-    ])
-    #expect(availableToolNames(for: .linux) == [
-        "look", "find", "run", "click", "type", "keyboard", "scroll", "invoke"
-    ])
+    let expected: [(String, String, Set<ToolFacade>)] = [
+        ("look", "look", [.swift, .mac, .windows, .linux]),
+        ("navigate", "navigate", [.swift]),
+        ("windows", "windows", [.swift]),
+        ("tabs", "tabs", [.swift]),
+        ("find", "find", [.swift, .mac, .windows, .linux]),
+        ("wait_for_value", "wait_for_value", [.swift, .mac]),
+        ("wait_for_stability", "wait_for_stability", [.swift, .mac]),
+        ("permit", "permit", [.swift]),
+        ("run", "run", [.swift, .mac, .windows, .linux]),
+        ("save", "save", [.swift]),
+        ("click", "click", [.swift, .mac, .windows, .linux]),
+        ("type", "type", [.swift, .mac, .windows, .linux]),
+        ("keyboard", "keyboard", [.swift, .mac, .windows, .linux]),
+        ("scroll", "scroll", [.swift, .mac, .windows]),
+        ("drag", "drag", [.swift]),
+        ("invoke", "invoke", [.swift, .mac, .windows, .linux]),
+    ]
+
+    #expect(ToolSurfaceSpec.tools.count == expected.count)
+    for (tool, row) in zip(ToolSurfaceSpec.tools, expected) {
+        #expect(tool.name == row.0)
+        #expect(tool.socketMethod == row.1)
+        for facade in ToolFacade.allCases {
+            #expect(tool.availability.contains(facade) == row.2.contains(facade))
+        }
+    }
 }
 
 @Test func checkedInToolSurfaceArtifactMatchesGeneratedBytes() throws {

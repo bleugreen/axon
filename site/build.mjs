@@ -28,6 +28,7 @@ const docs = [
 const supportingDocs = [
   ['platform-spec', 'Platform Contract'],
   ['cross-platform-internals', 'Cross-platform internals'],
+  ['platform-capability-matrix', 'Platform capability census'],
 ];
 
 const escapeHtml = (value) => String(value)

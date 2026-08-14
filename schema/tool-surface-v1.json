@@ -762,7 +762,7 @@
     },
     {
       "availability" : {
-        "linux" : true,
+        "linux" : false,
         "mac" : true,
         "swift" : true,
         "windows" : true

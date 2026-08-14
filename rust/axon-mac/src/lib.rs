@@ -589,6 +589,13 @@ impl<
                 {
                     return self.click_text_location(&location.clone(), policy);
                 }
+                if params.get("target").is_some_and(pointer_target_is_point) {
+                    return Err(capability_unavailable(
+                        "click",
+                        "point-target",
+                        "not-implemented",
+                    ));
+                }
                 let (handle, resolution) = self.resolve(params)?;
                 self.backend
                     .invoke(&handle, "AXPress")
@@ -600,9 +607,8 @@ impl<
                 ))
             }
             "type" => {
+                let value = required_str(params, "value")?;
                 let (handle, resolution) = self.resolve(params)?;
-                let value =
-                    required_str(params, "value").or_else(|_| required_str(params, "text"))?;
                 // AXValue is target-bound and does not require global keyboard input.
                 self.backend
                     .set_value(&handle, value)
@@ -667,11 +673,8 @@ impl<
                 )
             }
             "invoke" => {
+                let action = required_str(params, "name")?;
                 let (handle, resolution) = self.resolve(params)?;
-                let action = params
-                    .get("action")
-                    .and_then(Value::as_str)
-                    .unwrap_or("AXPress");
                 self.backend
                     .invoke(&handle, action)
                     .map_err(backend_error)?;
@@ -682,15 +685,33 @@ impl<
                 ))
             }
             "scroll" => {
-                let (handle, resolution) = self.resolve(params)?;
-                let dx = params.get("deltaX").and_then(Value::as_f64).unwrap_or(0.0);
-                let dy = params.get("deltaY").and_then(Value::as_f64).unwrap_or(0.0);
+                // These defaults mirror the generated public schema. Any amount or directional
+                // request is unsupported by AXScrollToVisible and must be refused before target
+                // resolution can capture an application or call another native API.
+                let dx = number_param(params, "deltaX", 0.0)?;
+                let dy = number_param(params, "deltaY", -120.0)?;
                 if dx != 0.0 || dy != 0.0 {
-                    return Err(rpc_error(
-                        -32004,
-                        "directional or amount scrolling has no semantic AX implementation in v1",
+                    return Err(capability_unavailable(
+                        "scroll",
+                        "directional-scroll",
+                        "not-implemented",
                     ));
                 }
+                let Some(target) = params.get("target") else {
+                    return Err(capability_unavailable(
+                        "scroll",
+                        "semantic-target",
+                        "not-implemented",
+                    ));
+                };
+                if pointer_target_is_point(target) || target.get("location").is_some() {
+                    return Err(capability_unavailable(
+                        "scroll",
+                        "non-semantic-target",
+                        "not-implemented",
+                    ));
+                }
+                let (handle, resolution) = self.resolve(params)?;
                 self.backend
                     .scroll(&handle, (dx, dy))
                     .map_err(backend_error)?;
@@ -1188,7 +1209,7 @@ impl<
             10,
             timeout.as_millis().max(100) as u64,
         )?;
-        let stable_for = bounded_ms(params, "stableMs", 500, 0, 60_000)?;
+        let stable_for = bounded_ms(params, "stableMs", 300, 0, 10_000)?;
         let condition = params
             .get("condition")
             .and_then(Value::as_str)
@@ -1498,6 +1519,19 @@ fn required_str<'a>(p: &'a Map<String, Value>, key: &str) -> Result<&'a str, Jso
         .and_then(Value::as_str)
         .ok_or_else(|| rpc_error(-32602, format!("missing string parameter {key}")))
 }
+
+fn number_param(params: &Map<String, Value>, key: &str, default: f64) -> Result<f64, JsonRpcError> {
+    match params.get(key) {
+        None => Ok(default),
+        Some(value) => value
+            .as_f64()
+            .ok_or_else(|| rpc_error(-32602, format!("{key} must be a number"))),
+    }
+}
+
+fn pointer_target_is_point(target: &Value) -> bool {
+    target.get("point").is_some() || (target.get("x").is_some() && target.get("y").is_some())
+}
 /// Stamps the four stable delivery fields onto an action result.
 fn delivered(mut result: Value, policy: DeliveryPolicy, rung: DeliveryRung) -> Value {
     let success = result
@@ -1539,7 +1573,7 @@ fn capability_unavailable(tool: &str, capability: &str, reason: &str) -> JsonRpc
         code: -32004,
         message: format!("tool {tool} requires unavailable capability {capability}"),
         data: Some(
-            json!({"kind":"capability-unavailable","tool":tool,"capability":capability,"reason":reason}),
+            json!({"code":"capability-unavailable","tool":tool,"capability":capability,"reason":reason}),
         ),
     }
 }
@@ -1759,6 +1793,101 @@ mod tests {
         assert_eq!(primitive["value"], "draft");
     }
 
+    fn validated_params(tool: &str, arguments: Value) -> Map<String, Value> {
+        axon_core::validate_tool_arguments(axon_core::ToolBackend::Mac, tool, arguments)
+            .unwrap()
+            .as_object()
+            .unwrap()
+            .clone()
+    }
+
+    fn router_error(
+        router: &mut Router<EnumerationBackend>,
+        tool: &str,
+        params: Map<String, Value>,
+    ) -> JsonRpcError {
+        let response = router
+            .request(JsonRpcRequest::new(
+                Some(JsonRpcId::Integer(1)),
+                tool,
+                Some(Value::Object(params)),
+            ))
+            .unwrap();
+        let JsonRpcResponse::Failure(failure) = response else {
+            panic!("{tool} must refuse before native dispatch")
+        };
+        failure.error
+    }
+
+    #[test]
+    fn canonical_invoke_name_survives_validation_and_is_required_by_router() {
+        let params = validated_params(
+            "invoke",
+            json!({"target":{"app":"Notes","name":"Save"},"name":"AXShowMenu"}),
+        );
+        assert_eq!(required_str(&params, "name").unwrap(), "AXShowMenu");
+
+        let mut missing_name = params;
+        missing_name.remove("name");
+        let error = router_error(&mut Router::new(EnumerationBackend), "invoke", missing_name);
+        assert_eq!(error.code, -32602);
+    }
+
+    #[test]
+    fn legacy_type_text_alias_is_rejected_by_canonical_validation() {
+        let error = axon_core::validate_tool_arguments(
+            axon_core::ToolBackend::Mac,
+            "type",
+            json!({"target":{"app":"Notes","name":"Body"},"text":"draft"}),
+        )
+        .unwrap_err();
+        assert_eq!(error.code, -32602);
+        assert_eq!(error.data.unwrap()["path"], "params.arguments.value");
+    }
+
+    #[test]
+    fn screen_text_and_unsupported_click_forms_refuse_before_dispatch() {
+        let screen_text = validated_params("look", json!({"app":"Notes","screenText":true}));
+        let error = router_error(&mut Router::new(EnumerationBackend), "look", screen_text);
+        assert_eq!(error.code, -32004);
+        assert_eq!(error.data.as_ref().unwrap()["capability"], "screenText");
+
+        for target in [
+            json!({"point":{"x":10,"y":20}}),
+            json!({"x":10,"y":20,"coordinateSpace":"screen"}),
+        ] {
+            let params = validated_params("click", json!({"target":target}));
+            let error = router_error(&mut Router::new(EnumerationBackend), "click", params);
+            assert_eq!(error.code, -32004);
+            assert_eq!(error.data.as_ref().unwrap()["capability"], "point-target");
+            assert_eq!(error.data.as_ref().unwrap()["reason"], "not-implemented");
+        }
+    }
+
+    #[test]
+    fn canonical_scroll_defaults_and_unsupported_forms_refuse_before_dispatch() {
+        let defaulted = validated_params("scroll", json!({"target":{"app":"Notes","name":"List"}}));
+        assert_eq!(defaulted["deltaX"], 0);
+        assert_eq!(defaulted["deltaY"], -120);
+        let error = router_error(&mut Router::new(EnumerationBackend), "scroll", defaulted);
+        assert_eq!(error.code, -32004);
+        assert_eq!(
+            error.data.as_ref().unwrap()["capability"],
+            "directional-scroll"
+        );
+
+        for arguments in [
+            json!({"app":"Notes","deltaX":0,"deltaY":0}),
+            json!({"target":{"point":{"x":10,"y":20}},"deltaX":0,"deltaY":0}),
+            json!({"target":{"location":{"app":"Notes","text":"Bottom"}},"deltaX":0,"deltaY":0}),
+        ] {
+            let params = validated_params("scroll", arguments);
+            let error = router_error(&mut Router::new(EnumerationBackend), "scroll", params);
+            assert_eq!(error.code, -32004);
+            assert_eq!(error.data.as_ref().unwrap()["reason"], "not-implemented");
+        }
+    }
+
     #[test]
     fn excluded_tools_are_capability_errors_before_dispatch() {
         for tool in ["save", "drag", "permit"] {
@@ -1772,7 +1901,7 @@ mod tests {
         let error = capability_unavailable("drag", "PointerDrag", "not-implemented");
         assert_eq!(error.code, -32004);
         assert_eq!(
-            error.data.as_ref().unwrap()["kind"],
+            error.data.as_ref().unwrap()["code"],
             "capability-unavailable"
         );
         assert_eq!(error.data.as_ref().unwrap()["tool"], "drag");

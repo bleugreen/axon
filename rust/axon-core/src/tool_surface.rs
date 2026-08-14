@@ -632,9 +632,7 @@ mod tests {
         );
         assert_eq!(
             names(ToolBackend::Linux),
-            [
-                "look", "find", "run", "click", "type", "keyboard", "scroll", "invoke"
-            ]
+            ["look", "find", "run", "click", "type", "keyboard", "invoke"]
         );
     }
 

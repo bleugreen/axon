@@ -291,7 +291,7 @@ public enum ToolSurfaceSpec {
                 deliveryPolicyParameter
             ],
             cliUsage: "axon scroll [--app app] [--target target-json] [--dx n] [--dy n]"
-        , availability: .all),
+        , availability: [.swift, .mac, .windows]),
         ToolSpec(
             name: "drag",
             description: "Drag from one semantic name, explicit point, or text location to another. Pointer dispatch and verified semantic outcome are reported separately.",
