@@ -642,20 +642,19 @@ matters because `SendInput` moves it. `axon-win probe foreground` shows
 activation proved, the dispatch running once, and the pointer returning to where
 it started.
 
-What can fail is the hand-back, and the asymmetry is the whole finding: the daemon
-can take the foreground and cannot give it back. `axon-win probe foreground`
-activates Character Map away from Notepad, proves it, restores the cursor exactly
-— and then `SetForegroundWindow` aimed back at Notepad's own window returns
-false, with Character Map still holding the foreground a full second later. The
-second reading is what makes that a refusal rather than an activation that had
-not landed yet, and the two are worth keeping apart, because a refusal is a
-permission problem and latency is a waiting problem.
+The hand-back has a stronger Windows constraint than permission alone. A live
+Notepad control proved that `SendInput` can return its full inserted-event count
+while the target has consumed only a prefix; changing foreground immediately then
+redirects the suffix. The identical already-frontmost dispatch landed completely.
+Windows exposes no target-consumption fence for this global input stream, and a
+trailing sent message is not one because sent messages may run ahead of queued input.
 
-The rung therefore promises only what the backend can prove before posting:
-activation of the intended target and exactly one dispatch. Returning the prior
-window and pointer remains guaranteed cleanup work, and its outcome remains
-first-class evidence, but a refused hand-back no longer converts a verified
-action into failure. This is deliberately available only under the per-action
+The rung therefore promises only what the backend can prove: activation of the
+intended target and exactly one dispatch. Windows leaves the target frontmost after
+a dispatch and reports `restored: false` with the input-stream reason; pre-dispatch
+exits still restore, and pointer restoration remains guaranteed cleanup work. Other
+backends restore after dispatch when their mechanisms provide a safe boundary. This
+is deliberately available only under the per-action
 `foregroundPermitted` opt-in; `backgroundOnly` remains non-disruptive.
 
 Linux implements the same seams and offers the rung on an X11 session with an

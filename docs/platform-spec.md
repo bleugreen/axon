@@ -237,9 +237,10 @@ whatever the policy says.
 ### Foreground escalation
 
 Foreground escalation is transactional. A backend captures the prior frontmost
-application, activates the target and proves it is frontmost, dispatches exactly
-one action, and attempts to restore the prior application in guaranteed cleanup
-— on success, on validation failure, on a thrown error, and on timeout alike.
+application, activates the target and proves it is frontmost, and dispatches exactly
+one action. It restores the prior application in guaranteed cleanup whenever the
+backend has a completion boundary proving that restoration cannot redirect the action;
+pre-dispatch exits always restore because no input is pending.
 Activation is skipped when the target already holds the foreground. If activation
 cannot be proved, nothing is posted and the action refuses with
 `activationNotProved`. If a dispatch moves the real pointer, the pointer is
@@ -274,7 +275,7 @@ available, and a backend must not claim it before a live probe passes.
 | platform | semantic | pixel | foreground |
 | --- | --- | --- | --- |
 | macOS | `AXPress`, `AXValue`, `AXScrollToVisible` | `CGEventPostToPid` against the target process, invariants proved after dispatch | Global `CGEvent`, transactional activate/dispatch/restore |
-| Windows | UIA `InvokePattern`, `ValuePattern`, `ScrollItemPattern`, none of which call `SetFocus` | Client-coordinate window messages to a leaf HWND bound through UIA ancestry, for window classes a live probe has verified; every other class refuses `backgroundPixelUnsupported` by name | `SendInput` after proved activation for clicks, text, named keys, and chords; prior-window and pointer restoration are always attempted and reported, but Windows may refuse the foreground hand-back |
+| Windows | UIA `InvokePattern`, `ValuePattern`, `ScrollItemPattern`, none of which call `SetFocus` | Client-coordinate window messages to a leaf HWND bound through UIA ancestry, for window classes a live probe has verified; every other class refuses `backgroundPixelUnsupported` by name | `SendInput` after proved activation for clicks, text, named keys, and chords; the target remains frontmost after dispatch because Windows exposes no input-consumption boundary, while pointer restoration is still attempted and reported |
 | Linux | AT-SPI `Action.DoAction`, `EditableText.SetTextContents`, `Component.ScrollTo`, none of which take focus | `XSendEvent` to a window resolved from the target's own AT-SPI application, for toolkits a committed measurement recorded as acting on it: Chromium clicks, GTK 3 and Qt 6 keystrokes. Every other toolkit, and every version series nobody measured, refuses `backgroundPixelUnsupported` by name | `XTest` on an X11 session with an EWMH-capable window manager, transactional activate/dispatch/restore; withheld on every other session |
 
 On Linux the pixel rung's availability is a fact about the target's toolkit, and
@@ -375,9 +376,11 @@ the compositor refuses synthetic input and the foreground cannot be read or set
 even with XWayland running alongside. A mechanism that dispatches while its proof
 quietly does not is the trap this contract exists to close, so the capability is
 reported per session and the same answer decides both the health document and the
-dispatch. Windows offers the rung because it can activate and prove the target;
-its measured refusal to return the foreground is retained as honest restoration
-evidence rather than used to suppress a delivery the caller explicitly permitted.
+dispatch. Windows offers the rung because it can activate and prove the target. A live
+Notepad control showed immediate hand-back redirecting a suffix of a successfully
+inserted `SendInput` stream, while the identical already-frontmost dispatch landed
+completely. Windows therefore withholds post-dispatch foreground restoration and
+reports that fact rather than sacrificing delivery the caller explicitly permitted.
 
 Restoration covers the pointer as well as the foreground. A mechanism that moves
 the real cursor puts it back before the prior application returns, and reports

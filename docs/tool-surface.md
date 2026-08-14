@@ -228,14 +228,14 @@ it never will for this target. The array is always present, and empty when the
 ladder walked past nothing.
 
 Foreground escalation is transactional. Axon captures the prior frontmost
-application, activates the target and proves it is frontmost, dispatches exactly
-one action, and hands the session back — on success, on validation failure, and
-on a thrown error alike. The result reports that evidence under `foreground`:
-prior app identity, whether the target was already frontmost, whether activation
-was proved, whether the prior app was restored, and whether the real pointer was
-put back. If activation cannot be proved, nothing is posted and the action
-refuses. If restoration fails after dispatch, the dispatch evidence is kept and
-the overall result is a failure.
+application, activates the target and proves it is frontmost, and dispatches exactly
+one action. It hands the session back when the backend can prove doing so will not
+redirect pending input; pre-dispatch exits always restore. The result reports that
+evidence under `foreground`: prior app identity, whether the target was already
+frontmost, whether activation was proved, whether the prior app was restored, and
+whether the real pointer was put back. If activation cannot be proved, nothing is
+posted and the action refuses. Failed or deliberately withheld restoration is
+reported independently and does not erase dispatch or verification evidence.
 
 Axon has no clipboard path and will not grow one by accident: the pasteboard is
 modelled as a forbidden delivery capability that the planner refuses on sight.
