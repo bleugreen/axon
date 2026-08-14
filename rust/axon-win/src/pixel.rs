@@ -33,7 +33,7 @@ use windows::{
                 GetAwarenessFromDpiAwarenessContext, GetWindowDpiAwarenessContext,
                 PhysicalToLogicalPointForPerMonitorDPI,
             },
-            Input::KeyboardAndMouse::{GetFocus, SetFocus},
+            Input::KeyboardAndMouse::SetFocus,
             WindowsAndMessaging::{
                 CWP_SKIPDISABLED, CWP_SKIPINVISIBLE, CWP_SKIPTRANSPARENT, ChildWindowFromPointEx,
                 EnumWindows, GA_ROOT, GUITHREADINFO, GW_OWNER, GetAncestor, GetClassNameW,
@@ -91,15 +91,20 @@ mod keyboard_snapshot_tests {
     #[test]
     fn classifies_existing_repaired_and_failed_focus() {
         assert_eq!(
-            classify_focus_proof(true, false, true),
+            classify_focus_proof(true, true, false, true, true),
             FocusProofClassification::ProvedExistingFocus
         );
         assert_eq!(
-            classify_focus_proof(false, true, true),
+            classify_focus_proof(false, false, true, true, true),
             FocusProofClassification::ProvedRepairedFocus
         );
         assert_eq!(
-            classify_focus_proof(false, true, false),
+            classify_focus_proof(true, false, true, true, true),
+            FocusProofClassification::ProvedRepairedFocus,
+            "a same-process child must be repaired when top-level focus is required"
+        );
+        assert_eq!(
+            classify_focus_proof(false, false, true, false, false),
             FocusProofClassification::RepairFailed
         );
     }
@@ -246,12 +251,14 @@ impl ForegroundFocusProof {
 
 pub fn classify_focus_proof(
     before_owned: bool,
+    before_meets_requirement: bool,
     repair_attempted: bool,
     after_owned: bool,
+    after_meets_requirement: bool,
 ) -> FocusProofClassification {
-    if before_owned {
+    if before_owned && before_meets_requirement {
         FocusProofClassification::ProvedExistingFocus
-    } else if repair_attempted && after_owned {
+    } else if repair_attempted && after_owned && after_meets_requirement {
         FocusProofClassification::ProvedRepairedFocus
     } else {
         FocusProofClassification::RepairFailed
@@ -339,9 +346,11 @@ pub fn keyboard_snapshot(
 
 /// Proves that the foreground process also owns keyboard focus.
 ///
-/// The temporary queue join is always undone, and an existing focused child is preserved. Only
-/// absent or foreign focus is repaired to the foreground top-level window.
-pub fn ensure_foreground_focus() -> ForegroundFocusProof {
+/// The temporary queue join is always undone. Unicode text preserves an existing focused child.
+/// Named chords require the foreground top-level itself: live Edge measurements proved that an
+/// owned Chromium renderer child can receive injected records while browser accelerators ignore
+/// them. Absent, foreign, or contract-ineligible focus is repaired and read back before dispatch.
+pub fn ensure_foreground_focus(require_top_level: bool) -> ForegroundFocusProof {
     let target = foreground_window();
     if target.is_invalid() {
         return ForegroundFocusProof::failed(
@@ -382,7 +391,12 @@ pub fn ensure_foreground_focus() -> ForegroundFocusProof {
         target_pid,
         attach_attempted,
     );
-    let repair_attempted = !before.focus_matches_intended_process;
+    let before_is_top_level = before
+        .gui_thread
+        .as_ref()
+        .is_some_and(|state| state.focus.hwnd == before.foreground.hwnd);
+    let before_meets_requirement = !require_top_level || before_is_top_level;
+    let repair_attempted = !before.focus_matches_intended_process || !before_meets_requirement;
     if repair_attempted {
         let _ = unsafe { SetFocus(Some(target)) };
     }
@@ -391,10 +405,16 @@ pub fn ensure_foreground_focus() -> ForegroundFocusProof {
         target_pid,
         attach_attempted,
     );
+    let after_is_top_level = after
+        .gui_thread
+        .as_ref()
+        .is_some_and(|state| state.focus.hwnd == after.foreground.hwnd);
     let classification = classify_focus_proof(
         before.focus_matches_intended_process,
+        before_meets_requirement,
         repair_attempted,
         after.focus_matches_intended_process,
+        !require_top_level || after_is_top_level,
     );
 
     let detach_attempted = attach_attempted;
@@ -411,31 +431,6 @@ pub fn ensure_foreground_focus() -> ForegroundFocusProof {
         before_repair: Some(before),
         after_repair: Some(after),
     }
-}
-
-/// Probe-only discriminator: replace a same-process child focus with the foreground top-level.
-/// Production does not call this until live evidence proves that preserving the child is the loss mechanism.
-pub fn focus_foreground_top_level_for_probe() -> bool {
-    let target = foreground_window();
-    let Some(target_pid) = process_of(target) else {
-        return false;
-    };
-    let ours = unsafe { GetCurrentThreadId() };
-    let target_thread = unsafe { GetWindowThreadProcessId(target, None) };
-    if target_thread == 0 {
-        return false;
-    }
-    let attached =
-        target_thread == ours || unsafe { AttachThreadInput(ours, target_thread, true) }.as_bool();
-    if !attached {
-        return false;
-    }
-    let _ = unsafe { SetFocus(Some(target)) };
-    let focused_top_level =
-        unsafe { GetFocus() } == target && process_of(target) == Some(target_pid);
-    let detached =
-        target_thread == ours || unsafe { AttachThreadInput(ours, target_thread, false) }.as_bool();
-    focused_top_level && detached
 }
 
 impl ForegroundFocusProof {

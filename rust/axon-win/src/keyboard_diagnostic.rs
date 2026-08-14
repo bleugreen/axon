@@ -460,7 +460,7 @@ pub(super) fn run(args: &[String]) -> Result<Value, BackendError> {
                 .is_some_and(|element| unsafe { element.SetFocus() }.is_ok())
         };
         let setup_top_level_focus_repaired =
-            index == 0 || super::pixel::focus_foreground_top_level_for_probe();
+            index == 0 || super::pixel::ensure_foreground_focus(true).proved();
         if index > 0 {
             observer.pump(Duration::from_millis(50));
             let mut events = EVENTS.get_or_init(Default::default).lock().unwrap();

@@ -271,6 +271,13 @@ events with a close conceptual fit to AX.
 - The daemon must run in the interactive user's session, normally as a tray
   application started at login. Windows session-0 isolation prevents a service
   from reliably observing or driving the user's UI through UIA or `SendInput`.
+- Foreground keyboard delivery joins the target GUI input queue and proves native
+  focus before posting one indivisible batch. Unicode text preserves focused
+  controls. Named chords require focus on the active top-level window, because a
+  Chromium renderer child can remain a valid same-process focus owner while
+  browser-side accelerators ignore injected chords. `SendInput`'s returned count
+  proves only that Windows accepted records, never that the application consumed
+  them.
 - A normally elevated daemon cannot freely cross integrity boundaries. Driving
   elevated windows requires matching elevation or a correctly signed and
   installed UIAccess application. Capability reporting must identify this

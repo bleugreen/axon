@@ -264,7 +264,12 @@ fn send_keyboard_batch(
     inputs: &[INPUT],
     intent: KeyboardBatchIntent,
 ) -> Result<KeyboardBatchDiagnostics, BackendError> {
-    let focus_proof = pixel::ensure_foreground_focus();
+    // Chromium routes injected browser accelerators only while the foreground top-level owns native
+    // focus. A same-process renderer child is not enough: SendInput still enters the desktop stream,
+    // but Chromium's browser-side accelerator manager never sees it. Unicode text deliberately
+    // preserves control focus. A full SendInput count is queue acceptance, never consumption proof.
+    let require_top_level = matches!(&intent, KeyboardBatchIntent::NamedChord { .. });
+    let focus_proof = pixel::ensure_foreground_focus(require_top_level);
     if !focus_proof.proved() {
         return Err(op(
             "SendInput keyboard",
