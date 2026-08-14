@@ -2,7 +2,7 @@
 
 #![cfg(windows)]
 
-use crate::{Router, WindowsBackend, pipe};
+use crate::{WindowsBackend, pipe};
 use std::{
     io::Write,
     path::PathBuf,
@@ -58,7 +58,6 @@ pub fn run() -> Result<(), Box<dyn std::error::Error>> {
     pipe::serve(
         move || {
             WindowsBackend::start_with_logger(move |stage| backend_log.stage(stage))
-                .map(Router::new)
                 .map_err(Into::into)
         },
         || startup.stage("pipe bind: complete"),

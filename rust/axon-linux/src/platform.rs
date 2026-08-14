@@ -295,6 +295,7 @@ impl LinuxBackend {
             identities_read: None,
         })
     }
+
     fn ask<T>(&self, make: impl FnOnce(Reply<T>) -> Command) -> Result<T, BackendError> {
         let (tx, rx) = mpsc::channel();
         self.tx

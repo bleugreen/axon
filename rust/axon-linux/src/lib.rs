@@ -117,7 +117,6 @@ fn primitive_dispatch_params(params: &Map<String, Value>) -> Map<String, Value> 
             target.retain(|field, _| field == "app" || field == "name");
         }
     }
-
     params
 }
 
@@ -301,6 +300,7 @@ impl<B: PointerTargetVerifier + BackgroundPixelInput> Router<B> {
             semantic_names: SemanticNameRegistry::default(),
         }
     }
+
     fn register_snapshot(&mut self, snapshot: &Snapshot) -> Vec<axon_core::SemanticElementName> {
         let live_processes = self.backend.live_process_ids().ok();
         self.semantic_names.register_with_liveness(snapshot, |pid| {
@@ -1061,6 +1061,15 @@ impl<B: PointerTargetVerifier + BackgroundPixelInput> Router<B> {
         let started = Instant::now();
         let first = self.backend.capture(&app).map_err(backend_error)?;
         let first_names = self.register_snapshot(&first);
+        if params
+            .get(axon_core::SINGLE_STABILITY_CAPTURE)
+            .and_then(Value::as_bool)
+            == Some(true)
+        {
+            return Ok(
+                json!({"wait":{"success":false,"status":"polling","condition":condition,"elapsedMs":started.elapsed().as_millis(),"stableMs":0,"snapshot":first}}),
+            );
+        }
         let mut last = first.clone();
         let mut last_names = first_names.clone();
         let mut stable_since = Instant::now();

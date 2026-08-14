@@ -29,6 +29,45 @@ fn endpoint(name: &str) -> PathBuf {
     path
 }
 
+#[test]
+fn a_blocking_request_does_not_starve_another_client() {
+    let path = endpoint("concurrent");
+    let listener = UnixListener::bind(&path).expect("bind the endpoint");
+    let (release, held) = mpsc::channel::<()>();
+    let held = std::sync::Arc::new(std::sync::Mutex::new(held));
+    let (entered, waiting) = mpsc::channel::<()>();
+
+    let server = thread::spawn(move || {
+        serve_connections(&listener, PATIENCE, move || {
+            let held = held.clone();
+            let entered = entered.clone();
+            Box::new(move |line| {
+                if line == "wait" {
+                    entered.send(()).unwrap();
+                    held.lock().unwrap().recv().unwrap();
+                }
+                (json!({"echo": line}), line == "shutdown")
+            })
+        })
+    });
+
+    let wait_path = path.clone();
+    let waiter = thread::spawn(move || ask(&wait_path, "wait"));
+    waiting
+        .recv_timeout(PATIENCE)
+        .expect("the blocking request entered its handler");
+
+    let answer: Value = serde_json::from_str(&ask(&path, "invoke")).unwrap();
+    assert_eq!(answer, json!({"echo": "invoke"}));
+
+    release.send(()).unwrap();
+    let waited: Value = serde_json::from_str(&waiter.join().unwrap()).unwrap();
+    assert_eq!(waited, json!({"echo": "wait"}));
+    let _ = ask(&path, "shutdown");
+    server.join().unwrap().expect("the loop ends cleanly");
+    let _ = std::fs::remove_file(&path);
+}
+
 /// Sends one line and reads the answer, the way every Axon client speaks to the daemon.
 fn ask(path: &Path, line: &str) -> String {
     let mut stream = UnixStream::connect(path).expect("the daemon is still accepting connections");
@@ -54,13 +93,19 @@ fn a_client_that_hangs_up_never_takes_the_daemon_with_it() {
     let (saw, requests) = mpsc::channel::<String>();
 
     let server = thread::spawn(move || {
-        serve_connections(&listener, PATIENCE, move |line| {
-            saw.send(line.to_owned()).unwrap();
-            if line == "wait" {
-                entered.send(()).unwrap();
-                held.recv().unwrap();
-            }
-            (json!({ "echo": line }), line == "shutdown")
+        let held = std::sync::Arc::new(std::sync::Mutex::new(held));
+        serve_connections(&listener, PATIENCE, move || {
+            let entered = entered.clone();
+            let held = held.clone();
+            let saw = saw.clone();
+            Box::new(move |line| {
+                saw.send(line.to_owned()).unwrap();
+                if line == "wait" {
+                    entered.send(()).unwrap();
+                    held.lock().unwrap().recv().unwrap();
+                }
+                (json!({ "echo": line }), line == "shutdown")
+            })
         })
     });
 
@@ -97,8 +142,9 @@ fn a_client_that_hangs_up_never_takes_the_daemon_with_it() {
 
     // The connection that sent nothing is absent on purpose: there was no request to answer, so
     // the daemon has nothing to say and nothing to log.
-    let seen = requests.iter().collect::<Vec<_>>();
-    assert_eq!(seen, vec!["{\"jsonrpc\"", "wait", "ping", "shutdown"]);
+    let mut seen = requests.iter().collect::<Vec<_>>();
+    seen.sort();
+    assert_eq!(seen, vec!["ping", "shutdown", "wait", "{\"jsonrpc\""]);
 
     let _ = std::fs::remove_file(&path);
 }
@@ -111,10 +157,15 @@ fn a_shutdown_whose_caller_walked_away_still_stops_the_daemon() {
     let (entered, waiting) = mpsc::channel::<()>();
 
     let server = thread::spawn(move || {
-        serve_connections(&listener, PATIENCE, move |line| {
-            entered.send(()).unwrap();
-            held.recv().unwrap();
-            (json!({ "echo": line }), line == "shutdown")
+        let held = std::sync::Arc::new(std::sync::Mutex::new(held));
+        serve_connections(&listener, PATIENCE, move || {
+            let entered = entered.clone();
+            let held = held.clone();
+            Box::new(move |line| {
+                entered.send(()).unwrap();
+                held.lock().unwrap().recv().unwrap();
+                (json!({ "echo": line }), line == "shutdown")
+            })
         })
     });
 
@@ -157,16 +208,18 @@ fn a_client_that_stops_reading_its_answer_does_not_park_the_daemon() {
     let patience = Duration::from_millis(300);
 
     let server = thread::spawn(move || {
-        serve_connections(&listener, patience, |line| {
-            // Comfortably past what a socket buffer holds, which is what makes the answer block
-            // in the daemon rather than disappear into the kernel and return. A `look` at a real
-            // application is large enough to reach the same state.
-            let answer = if line == "big" {
-                "x".repeat(8 * 1024 * 1024)
-            } else {
-                line.to_owned()
-            };
-            (json!({ "echo": answer }), line == "shutdown")
+        serve_connections(&listener, patience, || {
+            Box::new(|line| {
+                // Comfortably past what a socket buffer holds, which is what makes the answer block
+                // in the daemon rather than disappear into the kernel and return. A `look` at a real
+                // application is large enough to reach the same state.
+                let answer = if line == "big" {
+                    "x".repeat(8 * 1024 * 1024)
+                } else {
+                    line.to_owned()
+                };
+                (json!({ "echo": answer }), line == "shutdown")
+            })
         })
     });
 
@@ -196,13 +249,13 @@ fn a_client_that_connects_and_says_nothing_is_dropped_rather_than_served_forever
     let patience = Duration::from_millis(200);
 
     let server = thread::spawn(move || {
-        serve_connections(&listener, patience, |line| {
-            (json!({ "echo": line }), line == "shutdown")
+        serve_connections(&listener, patience, || {
+            Box::new(|line| (json!({ "echo": line }), line == "shutdown"))
         })
     });
 
-    // Held open and silent. The daemon serves one connection at a time, so if this one were
-    // waited on forever the request below would never be accepted.
+    // Held open and silent. Its connection worker may wait for the timeout, but the request below
+    // must be accepted and answered independently.
     let mute = UnixStream::connect(&path).expect("the silent client connects");
 
     let answer: Value = serde_json::from_str(&ask(&path, "ping")).unwrap();
