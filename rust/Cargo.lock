@@ -241,6 +241,7 @@ dependencies = [
  "axon-core",
  "base64",
  "image",
+ "regex",
  "serde",
  "serde_json",
  "tokio",
@@ -284,6 +285,7 @@ version = "0.3.4"
 dependencies = [
  "axon-core",
  "base64",
+ "regex",
  "serde",
  "serde_json",
  "windows",

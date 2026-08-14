@@ -578,8 +578,16 @@ jobs:
           fi
           retained_app="$(printf '%s' "$look" | jq -r '.result.structuredContent.app.name')"
           display_object="$(printf '%s' "$look" | jq -r '[.result.structuredContent.app.windows[].root | .. | objects | select(.role == "text box" and .value? == "0")][0].identifier')"
+          display_name="$(printf '%s' "$look" | jq -r '[.result.structuredContent.app.windows[].root | .. | objects | select(.role == "text box" and .value? == "0")][0].name')"
           retained_name="$(printf '%s' "$look" | jq -r '[.result.structuredContent.app.windows[].root | .. | objects | select(.role == "button" and .label? == "1" and (.actions | index("Click")))][0].name')"
           echo 'GNOME Calculator display and digit 1 button have retained app-scoped semantic identity'
+
+          # Start the wait before dispatch so this proves polling observes a real transition rather
+          # than merely accepting a value that was already present.
+          jq -cn --arg app "$retained_app" --arg name "$display_name" '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"wait_for_value","arguments":{"target":{"app":$app,"name":$name},"equals":"01","timeoutMs":5000,"intervalMs":50}}}' \
+            | "$daemon" mcp > /tmp/axon-linux-wait-transition.json &
+          wait_pid=$!
+          sleep 0.1
 
           # The name came from the earlier observation. Resolution captures the live tree again and
           # scores the recorded locator facts; no second look or public snapshot handle participates.
@@ -590,21 +598,22 @@ jobs:
             exit 1
           fi
 
-          verified=false
-          for _ in {1..20}; do
-            after="$(printf '%s\n' '{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"look","arguments":{"app":"Calculator"}}}' | "$daemon" mcp)"
-            if printf '%s' "$after" | jq -e --arg object "$display_object" '[.result.structuredContent.app.windows[]?.root | .. | objects | select(.identifier? == $object and .value? == "01")] | length == 1' >/dev/null 2>&1; then
-              verified=true
-              break
-            fi
-            sleep 0.1
-          done
-          if [[ "$verified" != true ]]; then
-            echo '::error::GNOME Calculator display identity did not change from 0 to 01 after the semantic invocation'
-            printf '%s\n' "$after" | jq --arg object "$display_object" '[.result.structuredContent.app.windows[]?.root | .. | objects | select(.identifier? == $object) | {role, value, name, identifier}]'
+          wait "$wait_pid"
+          transitioned="$(cat /tmp/axon-linux-wait-transition.json)"
+          if ! printf '%s' "$transitioned" | jq -e '.result.isError == false and .result.structuredContent.wait.success == true and .result.structuredContent.wait.status == "satisfied" and .result.structuredContent.wait.matched.value == "01"' >/dev/null; then
+            echo '::error::wait_for_value did not observe the GNOME Calculator display transition from 0 to 01'
+            printf '%s\n' "$transitioned" | jq .
             exit 1
           fi
-          echo 'Linux MCP facade captured, resolved, invoked, and verified GNOME Calculator through the daemon'
+
+          timed_out="$(jq -cn --arg app "$retained_app" --arg name "$display_name" '{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"wait_for_value","arguments":{"target":{"app":$app,"name":$name},"equals":"value-that-never-appears","timeoutMs":0,"intervalMs":10}}}' | "$daemon" mcp)"
+          if ! printf '%s' "$timed_out" | jq -e '.result.isError == false and .result.structuredContent.wait.success == false and .result.structuredContent.wait.status == "predicate_timeout"' >/dev/null; then
+            echo '::error::wait_for_value did not report its bounded timeout honestly'
+            printf '%s\n' "$timed_out" | jq .
+            exit 1
+          fi
+          echo 'Linux MCP facade captured, resolved, invoked, observed a real value transition, and timed out honestly'
+
 
       # The rung that must NOT light up here. This runner is a GNOME Wayland session: the
       # compositor refuses synthetic input, and X11 cannot see or restore the foreground even with

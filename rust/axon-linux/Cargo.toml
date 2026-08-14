@@ -9,6 +9,7 @@ axon-core = { path = "../axon-core" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 base64 = "0.22"
+regex = "1"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 # Proxies and the wire types only. `atspi-connection` is deliberately absent from this crate's
