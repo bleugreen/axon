@@ -1206,7 +1206,6 @@ impl<B: PointerTargetVerifier + BackgroundPixelInput> Router<B> {
             ("title", node.title.as_ref().or(node.name.as_ref())),
             ("description", node.description.as_ref()),
             ("identifier", node.identifier.as_ref()),
-            ("help", node.description.as_ref()),
         ] {
             if let Some(value) = value.filter(|value| !value.is_empty()) {
                 state.insert(field.into(), Value::String(value.clone()));
@@ -2876,7 +2875,7 @@ mod tests {
     }
 
     #[test]
-    fn wait_for_value_matches_every_readable_state_field() {
+    fn wait_for_value_matches_every_available_readable_state_field() {
         let mut backend = backend(vec![], None);
         let root = &mut backend.snapshot.app.windows[0].root;
         root.title = Some("Window title".into());
@@ -2892,7 +2891,6 @@ mod tests {
             (json!({"equals":"Window title"}), "title"),
             (json!({"contains":"description"}), "description"),
             (json!({"matches":"stable-.+"}), "identifier"),
-            (json!({"equals":"Helpful description"}), "help"),
         ] {
             let mut params = predicate.as_object().unwrap().clone();
             params.insert("target".into(), json!({"app":"App","name":"window-title"}));
@@ -2909,9 +2907,7 @@ mod tests {
                 "{:?}",
                 success.result
             );
-            if field != "help" {
-                assert_eq!(success.result["wait"]["matched"]["field"], field);
-            }
+            assert_eq!(success.result["wait"]["matched"]["field"], field);
         }
     }
 
