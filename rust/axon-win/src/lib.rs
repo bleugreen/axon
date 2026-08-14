@@ -1133,6 +1133,15 @@ impl<
         let started = Instant::now();
         let first = self.backend.capture(&app).map_err(backend_error)?;
         let first_names = self.register_snapshot(&first);
+        if params
+            .get(axon_core::SINGLE_STABILITY_CAPTURE)
+            .and_then(Value::as_bool)
+            == Some(true)
+        {
+            return Ok(
+                json!({"wait":{"success":false,"status":"polling","condition":condition,"elapsedMs":started.elapsed().as_millis(),"stableMs":0,"snapshot":first}}),
+            );
+        }
         let mut last = first.clone();
         let mut last_names = first_names.clone();
         let mut stable_since = Instant::now();

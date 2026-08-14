@@ -2,6 +2,9 @@ use crate::{
     DiffClassification, DiffPolicy, JsonRpcError, JsonRpcRequest, JsonRpcResponse,
     SemanticNameDeriver, Snapshot, classify_semantic_diff,
 };
+
+/// Private router parameter used by daemon transports to make one atomic stability capture.
+pub const SINGLE_STABILITY_CAPTURE: &str = "_axonSingleStabilityCapture";
 use serde_json::{Map, Value, json};
 use std::{
     thread,
@@ -82,9 +85,10 @@ fn poll_wait_request_with(
     };
     params.insert("timeoutMs".into(), json!(0));
     if stability {
-        // Each router call contributes one complete capture comparison. The daemon helper retains
-        // the longer-lived baseline and stable duration across those atomic calls.
+        // Each router call contributes exactly one capture. The daemon helper retains the baseline,
+        // last observation, and stable duration across those atomic calls.
         params.insert("stableMs".into(), json!(0));
+        params.insert(SINGLE_STABILITY_CAPTURE.into(), json!(true));
     }
     request.params = Some(Value::Object(params.clone()));
 
@@ -97,6 +101,7 @@ fn poll_wait_request_with(
     let mut last: Option<(Snapshot, Vec<crate::SemanticElementName>)> = None;
     let mut stable_since = started;
     loop {
+        let had_baseline = baseline.is_some();
         let response = poll(request.clone())?;
         let JsonRpcResponse::Success(mut success) = response else {
             return Some(response);
@@ -166,7 +171,11 @@ fn poll_wait_request_with(
                 return Some(JsonRpcResponse::Success(success));
             }
         }
-        sleep(interval.min(timeout.saturating_sub(started.elapsed())));
+        // The original stability operation captures its baseline and first comparison back-to-back.
+        // Preserve that timing while still releasing the router between the two atomic captures.
+        if !stability || had_baseline {
+            sleep(interval.min(timeout.saturating_sub(started.elapsed())));
+        }
     }
 }
 
@@ -174,6 +183,60 @@ fn poll_wait_request_with(
 mod tests {
     use super::*;
     use crate::{JsonRpcId, JsonRpcResponse};
+
+    fn snapshot(value: &str) -> Snapshot {
+        serde_json::from_value(json!({
+            "id": format!("snapshot-{value}"),
+            "app": {
+                "name": "App",
+                "windows": [{
+                    "title": "Window",
+                    "root": {"role": "window", "value": value}
+                }]
+            }
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn stability_changed_compares_the_first_two_single_captures() {
+        let request = JsonRpcRequest::new(
+            Some(JsonRpcId::Integer(8)),
+            "wait_for_stability",
+            Some(json!({
+                "app":"App",
+                "condition":"changed",
+                "timeoutMs":100,
+                "intervalMs":10
+            })),
+        );
+        let captures = [snapshot("Before"), snapshot("After")];
+        let mut polls = 0;
+        let mut sleeps = 0;
+        let mut poll = |request: JsonRpcRequest| {
+            assert_eq!(
+                request.params.as_ref().unwrap()[SINGLE_STABILITY_CAPTURE],
+                true
+            );
+            let current = captures[polls].clone();
+            polls += 1;
+            Some(JsonRpcResponse::success(
+                request.id.unwrap(),
+                json!({"wait":{"success":false,"status":"polling","snapshot":current}}),
+            ))
+        };
+
+        let response = poll_wait_request_with(request, &mut poll, |_| sleeps += 1).unwrap();
+        let JsonRpcResponse::Success(success) = response else {
+            panic!("expected success envelope")
+        };
+        assert_eq!(success.result["wait"]["success"], true);
+        assert_eq!(
+            polls, 2,
+            "the first change must not require a third capture"
+        );
+        assert_eq!(sleeps, 0, "the first comparison is immediate");
+    }
 
     #[test]
     fn another_request_can_run_between_atomic_polls_and_timeout_keeps_final_envelope() {
