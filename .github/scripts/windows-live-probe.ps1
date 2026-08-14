@@ -1033,7 +1033,35 @@ function Invoke-ProbeStage {
         $notepadLook = Invoke-AxonMcp -Request $notepadLookRequest
         Write-Note "Notepad SendInput control dispatch=$($notepadResult.result.structuredContent | ConvertTo-Json -Compress -Depth 20)"
         if (($notepadLook.result.structuredContent | ConvertTo-Json -Compress -Depth 100) -notmatch $sentinel) {
-            throw 'the Notepad control did not expose the text posted by SendInput'
+            # SendInput reports queue insertion, not target consumption. Keep the same process
+            # frontmost and repeat without an aimed transaction so the readback distinguishes a
+            # broken injection path from hand-back overtaking the target's input queue.
+            $activationResultPath = Join-Path $LiveDirectory 'notepad-activation.json'
+            Register-ProbeActivationTask -ProcessId ([int]$notepad.ProcessId) -ResultPath $activationResultPath
+            try {
+                Start-ProbeActivationTask
+                [void](Wait-ForProbeActivationTask -ResultPath $activationResultPath)
+            }
+            finally {
+                Unregister-ProbeActivationTask
+                Remove-Item -LiteralPath $activationResultPath, "$activationResultPath.tmp" -Force -ErrorAction SilentlyContinue
+            }
+            $frontmostSentinel = "axon-frontmost-$([guid]::NewGuid().ToString('N'))"
+            $frontmostRequest = @{ jsonrpc = '2.0'; id = 72; method = 'tools/call'; params = @{
+                name = 'keyboard'; arguments = @{ text = $frontmostSentinel; deliveryPolicy = 'foregroundPermitted' }
+            } } | ConvertTo-Json -Compress -Depth 10
+            $frontmostResult = Invoke-AxonMcp -Request $frontmostRequest
+            $timer = [System.Diagnostics.Stopwatch]::StartNew()
+            do {
+                $notepadLook = Invoke-AxonMcp -Request $notepadLookRequest
+                if (($notepadLook.result.structuredContent | ConvertTo-Json -Compress -Depth 100) -match $frontmostSentinel) { break }
+                Wait-Tick
+            } while ($timer.Elapsed.TotalSeconds -lt 5)
+            Write-Note "Notepad frontmost SendInput control dispatch=$($frontmostResult.result.structuredContent | ConvertTo-Json -Compress -Depth 20)"
+            if (($notepadLook.result.structuredContent | ConvertTo-Json -Compress -Depth 100) -match $frontmostSentinel) {
+                throw 'aimed Notepad input was lost during hand-back, while the same frontmost SendInput reached Notepad'
+            }
+            throw 'neither aimed nor frontmost SendInput reached the probe-owned Notepad'
         }
         Write-Note 'Notepad SendInput control verified through UI Automation value readback'
 
