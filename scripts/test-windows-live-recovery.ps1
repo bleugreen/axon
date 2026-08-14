@@ -121,7 +121,8 @@ if ($browserRegistration.Count -ne 1 -or $browserLaunch.Count -ne 1 -or $browser
 if ($browserRegistration[0].Extent.Text -notmatch 'New-ScheduledTaskAction' -or
     $browserRegistration[0].Extent.Text -notmatch 'New-ScheduledTaskPrincipal' -or
     $browserRegistration[0].Extent.Text -notmatch 'LogonType Interactive' -or
-    $browserRegistration[0].Extent.Text -notmatch 'Register-ScheduledTask') {
+    $browserRegistration[0].Extent.Text -notmatch 'Register-ScheduledTask' -or
+    $browserRegistration[0].Extent.Text -notmatch 'InitialUrl') {
     throw 'the probe browser task is not registered with an Interactive scheduled-task principal'
 }
 $browserLaunchCommands = @($browserLaunch[0].Body.FindAll({ param($node) $node -is [System.Management.Automation.Language.CommandAst] }, $true) |
@@ -131,8 +132,9 @@ if ($browserLaunchCommands -contains 'Start-Process' -or
     throw 'the probe browser must start through its Interactive task, not directly from the SSH shell'
 }
 if ($browserLaunch[0].Extent.Text -notmatch "\.Contains\('--type='\)" -or
-    $browserLaunch[0].Extent.Text -notmatch '\$roots\.Count -gt 0') {
-    throw 'Edge discovery must reject Chromium child processes and prove the primary process has a capturable accessibility root'
+    $browserLaunch[0].Extent.Text -notmatch '\$roots\.Count -gt 0' -or
+    $browserLaunch[0].Extent.Text -notmatch 'Axon Edge Ready') {
+    throw 'Edge discovery must reject Chromium child processes and prove the primary process owns the readiness document'
 }
 if ($browserCleanup[0].Extent.Text -notmatch 'finally' -or
     $browserCleanup[0].Extent.Text -notmatch 'Unregister-ProbeBrowserTask') {
@@ -498,8 +500,8 @@ function Start-ProbeTask {
 }
 
 function Register-ProbeBrowserTask {
-    param([string] $EdgeExecutable, [string] $ProfilePath)
-    $script:Machine.Log.Add("register-probe-browser-task [$EdgeExecutable] [$ProfilePath]")
+    param([string] $EdgeExecutable, [string] $ProfilePath, [string] $InitialUrl)
+    $script:Machine.Log.Add("register-probe-browser-task [$EdgeExecutable] [$ProfilePath] [$InitialUrl]")
     $script:Machine.ProbeBrowserTaskRegistered = $true
 }
 
@@ -768,7 +770,7 @@ function Get-ExpectedVersion {
 function Start-ProbeBrowser {
     $script:Machine.Log.Add('start-probe-browser')
     $script:Machine.BrowserRunning = $true
-    Register-ProbeBrowserTask -EdgeExecutable 'C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe' -ProfilePath 'C:\probe-edge-profile'
+    Register-ProbeBrowserTask -EdgeExecutable 'C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe' -ProfilePath 'C:\probe-edge-profile' -InitialUrl 'file:///C:/probe-edge-profile/pages/ready.html'
     Start-ProbeBrowserTask
     if ($script:Machine.BrowserStartFails) {
         # Mirrors production ownership: a helper that throws before returning cleanup state must

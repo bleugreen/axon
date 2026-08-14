@@ -170,11 +170,12 @@ function Unregister-ProbeForegroundTask {
 function Register-ProbeBrowserTask {
     param(
         [Parameter(Mandatory)][string] $EdgeExecutable,
-        [Parameter(Mandatory)][string] $ProfilePath
+        [Parameter(Mandatory)][string] $ProfilePath,
+        [Parameter(Mandatory)][string] $InitialUrl
     )
 
     $action = New-ScheduledTaskAction -Execute $EdgeExecutable -Argument (
-        "--new-window --no-first-run --user-data-dir=`"$ProfilePath`" about:blank"
+        "--new-window --no-first-run --user-data-dir=`"$ProfilePath`" `"$InitialUrl`""
     )
     # Match the daemon's execution context: the SSH relay runs in session 0, while this task must
     # receive the logged-in user's desktop token to create a window the daemon can inspect.
@@ -298,11 +299,15 @@ function Start-ProbeBrowser {
 <!doctype html><title>Axon Foreground Probe</title>
 <main style="min-height: 300vh"><h1>Axon Foreground Probe</h1><a href="complete.html">Continue</a></main>
 '@
+    Set-Content -LiteralPath (Join-Path $pages 'ready.html') -Encoding utf8 -Value @'
+<!doctype html><title>Axon Edge Ready</title><h1>Axon Edge Ready</h1>
+'@
     Set-Content -LiteralPath (Join-Path $pages 'complete.html') -Encoding utf8 -Value @'
 <!doctype html><title>Axon Foreground Click Complete</title>
 <main style="min-height: 300vh"><h1>Axon Foreground Click Complete</h1></main>
 '@
     $url = ([uri](Join-Path $pages 'start.html')).AbsoluteUri
+    $readyUrl = ([uri](Join-Path $pages 'ready.html')).AbsoluteUri
     $browser = [pscustomobject]@{ ProcessId = 0; ProfilePath = $profile; PageUrl = $url }
     try {
         # This script is invoked through the runner's SSH relay in session 0. Starting Edge from
@@ -310,7 +315,7 @@ function Start-ProbeBrowser {
         # desktop where the daemon is inspecting. The probe browser must cross the same Interactive
         # Task Scheduler boundary as the daemon, or a successful daemon health reply and an empty
         # window list describe two different sessions.
-        Register-ProbeBrowserTask -EdgeExecutable $edge -ProfilePath $profile
+        Register-ProbeBrowserTask -EdgeExecutable $edge -ProfilePath $profile -InitialUrl $readyUrl
         Start-ProbeBrowserTask
         $timer = [System.Diagnostics.Stopwatch]::StartNew()
         do {
@@ -330,14 +335,16 @@ function Start-ProbeBrowser {
                 } } | ConvertTo-Json -Compress -Depth 10
                 $look = Invoke-AxonMcp -Request $lookRequest
                 $roots = @($look.result.structuredContent.app.windows | ForEach-Object root)
-                if ($look.result.isError -eq $false -and $roots.Count -gt 0) {
+                $captured = $look.result.structuredContent | ConvertTo-Json -Compress -Depth 100
+                if ($look.result.isError -eq $false -and $roots.Count -gt 0 -and
+                    $captured -match 'Axon Edge Ready') {
                     $browser.ProcessId = [int]$candidate.ProcessId
                     return $browser
                 }
             }
             Wait-Tick
         } while ($timer.Elapsed.TotalSeconds -lt $ProcessDiscoveryTimeoutSeconds)
-        throw 'the probe-owned Edge instance produced no window-owning process'
+        throw 'the probe-owned Edge instance produced no window owning its readiness document'
     }
     catch {
         # The caller cannot receive cleanup state from a function that throws, so startup owns every
