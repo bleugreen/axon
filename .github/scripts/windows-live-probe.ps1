@@ -132,11 +132,6 @@ function Invoke-KeyboardDiagnostic {
             throw 'keyboard diagnostic returned no keyboard-diagnostic-v1 payload'
         }
 
-        if ($KeyboardDiagnostic) {
-            $diagnostic = Invoke-KeyboardDiagnostic -TargetProcessId ([int]$browser.ProcessId) -MaxTrials $KeyboardDiagnosticMaxTrials
-            Write-Note "keyboard diagnostic timeline: $($diagnostic | ConvertTo-Json -Compress -Depth 100)"
-            return
-        }
         $trials = @($payload.trials)
         if ($trials.Count -lt 1 -or $trials.Count -gt $MaxTrials) {
             throw "keyboard diagnostic returned $($trials.Count) trials outside the declared 1..$MaxTrials bound"
@@ -1134,6 +1129,12 @@ function Invoke-ProbeStage {
                 'edge://sync-confirmation-dialog/') {
                 throw 'the Edge sync confirmation remained after its Got it button was invoked'
             }
+        }
+
+        if ($KeyboardDiagnostic) {
+            $diagnostic = Invoke-KeyboardDiagnostic -TargetProcessId ([int]$browser.ProcessId) -MaxTrials $KeyboardDiagnosticMaxTrials
+            Write-Note "keyboard diagnostic timeline: $($diagnostic | ConvertTo-Json -Compress -Depth 100)"
+            return
         }
 
         # The A-H hand-back experiment remains available through `probe foreground-handback-sweep`,
