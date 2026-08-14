@@ -33,7 +33,7 @@ use windows::{
                 GetAwarenessFromDpiAwarenessContext, GetWindowDpiAwarenessContext,
                 PhysicalToLogicalPointForPerMonitorDPI,
             },
-            Input::KeyboardAndMouse::SetFocus,
+            Input::KeyboardAndMouse::{GetFocus, SetFocus},
             WindowsAndMessaging::{
                 CWP_SKIPDISABLED, CWP_SKIPINVISIBLE, CWP_SKIPTRANSPARENT, ChildWindowFromPointEx,
                 EnumWindows, GA_ROOT, GUITHREADINFO, GW_OWNER, GetAncestor, GetClassNameW,
@@ -411,6 +411,31 @@ pub fn ensure_foreground_focus() -> ForegroundFocusProof {
         before_repair: Some(before),
         after_repair: Some(after),
     }
+}
+
+/// Probe-only discriminator: replace a same-process child focus with the foreground top-level.
+/// Production does not call this until live evidence proves that preserving the child is the loss mechanism.
+pub fn focus_foreground_top_level_for_probe() -> bool {
+    let target = foreground_window();
+    let Some(target_pid) = process_of(target) else {
+        return false;
+    };
+    let ours = unsafe { GetCurrentThreadId() };
+    let target_thread = unsafe { GetWindowThreadProcessId(target, None) };
+    if target_thread == 0 {
+        return false;
+    }
+    let attached =
+        target_thread == ours || unsafe { AttachThreadInput(ours, target_thread, true) }.as_bool();
+    if !attached {
+        return false;
+    }
+    let _ = unsafe { SetFocus(Some(target)) };
+    let focused_top_level =
+        unsafe { GetFocus() } == target && process_of(target) == Some(target_pid);
+    let detached =
+        target_thread == ours || unsafe { AttachThreadInput(ours, target_thread, false) }.as_bool();
+    focused_top_level && detached
 }
 
 impl ForegroundFocusProof {

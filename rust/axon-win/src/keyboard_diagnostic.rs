@@ -459,6 +459,8 @@ pub(super) fn run(args: &[String]) -> Result<Value, BackendError> {
                 .as_ref()
                 .is_some_and(|element| unsafe { element.SetFocus() }.is_ok())
         };
+        let setup_top_level_focus_repaired =
+            index == 0 || super::pixel::focus_foreground_top_level_for_probe();
         if index > 0 {
             observer.pump(Duration::from_millis(50));
             let mut events = EVENTS.get_or_init(Default::default).lock().unwrap();
@@ -546,7 +548,7 @@ pub(super) fn run(args: &[String]) -> Result<Value, BackendError> {
                 json!({"ordinal":1,"intent":"ctrl+l","requestedUs":dispatch_started,"returnedUs":returned,"requestedCount":4,"returnedCount":0,"error":e.to_string(),"snapshots":[]})
             }
         };
-        trials.push(json!({"index":index+1,"experiment":"baseline","requestedDelayMs":0,"foregroundBefore":{"identity":foreground_before},"activation":{"startedUs":started,"provedUs":proved,"proof":{"proved":activated}},"setup":{"pageFocusRestored":setup_focus_restored},"dispatches":[dispatch],"hook":{"valid":sentinel_sent == 2 && sentinel_observed,"sentinelObserved":sentinel_observed,"overflowed":overflowed,"events":hook_events},"focusEvents":focus_events,"focus":{"before":focus_before,"after":focus_after,"ctrlLTransitionObserved":ctrl_l_transition},"page":{"observedUs":if focus_before["classification"] == "page" { Some(started) } else { None },"navigated":false,"url":null,"classificationBefore":focus_before["classification"],"browserChromeFocusedAfter":focus_after["classification"] == "browserChrome","outcome":if ctrl_l_transition { "pageToBrowserChrome" } else { "transitionNotObserved" }},"timeline":ordered_timeline(timeline)}));
+        trials.push(json!({"index":index+1,"experiment":"baseline","requestedDelayMs":0,"foregroundBefore":{"identity":foreground_before},"activation":{"startedUs":started,"provedUs":proved,"proof":{"proved":activated}},"setup":{"pageFocusRestored":setup_focus_restored,"topLevelFocusRepaired":setup_top_level_focus_repaired},"dispatches":[dispatch],"hook":{"valid":sentinel_sent == 2 && sentinel_observed,"sentinelObserved":sentinel_observed,"overflowed":overflowed,"events":hook_events},"focusEvents":focus_events,"focus":{"before":focus_before,"after":focus_after,"ctrlLTransitionObserved":ctrl_l_transition},"page":{"observedUs":if focus_before["classification"] == "page" { Some(started) } else { None },"navigated":false,"url":null,"classificationBefore":focus_before["classification"],"browserChromeFocusedAfter":focus_after["classification"] == "browserChrome","outcome":if ctrl_l_transition { "pageToBrowserChrome" } else { "transitionNotObserved" }},"timeline":ordered_timeline(timeline)}));
     }
     let hook_removed = observer.remove();
     Ok(
