@@ -125,6 +125,17 @@ fn primitive_dispatch_params(params: &Map<String, Value>) -> Map<String, Value> 
             target.retain(|field, _| field == "app" || field == "name");
         }
     }
+    #[test]
+    fn look_preserves_semantics_when_screen_text_is_unavailable() {
+        let mut router = Router::new(backend(vec![node("semantic child")], None));
+        let response = router
+            .request(request("look", json!({"app":"App","screenshot":false,"screenText":true})))
+            .unwrap();
+        let JsonRpcResponse::Success(success) = response else { panic!() };
+        assert!(success.result.to_string().contains("semantic child"));
+        assert_eq!(success.result["screenTextUnavailable"]["code"], "capability-unavailable");
+        assert!(success.result.get("screenText").is_none());
+    }
 
     params
 }
@@ -1050,7 +1061,14 @@ impl<B: PointerTargetVerifier + BackgroundPixelInput> Router<B> {
                         }
                         Err(e) => {
                             if request.screen_text {
-                                return Err(backend_error(e));
+                                object.insert(
+                                    "screenTextUnavailable".into(),
+                                    serde_json::to_value(
+                                        axon_core::ScreenshotUnavailable::from_backend_error(e),
+                                    )
+                                    .map_err(internal_error)?,
+                                );
+                                continue;
                             }
                             object.insert(
                                 "screenshotUnavailable".into(),

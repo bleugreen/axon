@@ -1,8 +1,9 @@
 use axon_core::{BackendError, RecognizedText, Rect};
 use std::{
     collections::BTreeMap,
-    io::Write,
-    process::{Command, Stdio},
+    io::{Read, Write},
+    path::Path,
+    process::{Command, ExitStatus, Stdio},
     thread,
     time::{Duration, Instant},
 };
@@ -56,7 +57,15 @@ pub fn recognize_png(
 }
 
 fn run_tesseract(png: &[u8]) -> Result<String, OcrFailure> {
-    let mut child = Command::new("tesseract")
+    run_tesseract_with("tesseract", png, OCR_TIMEOUT)
+}
+
+fn run_tesseract_with(
+    executable: impl AsRef<Path>,
+    png: &[u8],
+    timeout: Duration,
+) -> Result<String, OcrFailure> {
+    let mut child = Command::new(executable.as_ref())
         .args(["stdin", "stdout", "-l", "eng", "tsv"])
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -69,32 +78,56 @@ fn run_tesseract(png: &[u8]) -> Result<String, OcrFailure> {
                 OcrFailure::Execution(error.to_string())
             }
         })?;
-    child
+    let mut stdin = child
         .stdin
         .take()
-        .ok_or_else(|| OcrFailure::Execution("stdin was not available".into()))?
-        .write_all(png)
-        .map_err(|error| OcrFailure::Execution(error.to_string()))?;
+        .ok_or_else(|| OcrFailure::Execution("stdin was not available".into()))?;
+    let stdout = child
+        .stdout
+        .take()
+        .ok_or_else(|| OcrFailure::Execution("stdout was not available".into()))?;
+    let stderr = child
+        .stderr
+        .take()
+        .ok_or_else(|| OcrFailure::Execution("stderr was not available".into()))?;
+
+    // All three pipes must make progress independently. In particular, waiting for the process
+    // before reading output deadlocks as soon as either kernel pipe buffer fills.
+    let input = png.to_vec();
+    let writer = thread::spawn(move || stdin.write_all(&input));
+    let stdout_reader = thread::spawn(move || read_all(stdout));
+    let stderr_reader = thread::spawn(move || read_all(stderr));
     let started = Instant::now();
-    loop {
+    let status: ExitStatus = loop {
         match child
             .try_wait()
             .map_err(|error| OcrFailure::Execution(error.to_string()))?
         {
-            Some(_) => break,
-            None if started.elapsed() >= OCR_TIMEOUT => {
+            Some(status) => break status,
+            None if started.elapsed() >= timeout => {
                 let _ = child.kill();
                 let _ = child.wait();
+                let _ = writer.join();
+                let _ = stdout_reader.join();
+                let _ = stderr_reader.join();
                 return Err(OcrFailure::Timeout);
             }
             None => thread::sleep(Duration::from_millis(10)),
         }
     }
-    let output = child
-        .wait_with_output()
+    let write_result = writer
+        .join()
+        .map_err(|_| OcrFailure::Execution("stdin writer panicked".into()))?;
+    let stdout = stdout_reader
+        .join()
+        .map_err(|_| OcrFailure::Execution("stdout reader panicked".into()))?
         .map_err(|error| OcrFailure::Execution(error.to_string()))?;
-    let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-    if !output.status.success() {
+    let stderr = stderr_reader
+        .join()
+        .map_err(|_| OcrFailure::Execution("stderr reader panicked".into()))?
+        .map_err(|error| OcrFailure::Execution(error.to_string()))?;
+    let stderr = String::from_utf8_lossy(&stderr).trim().to_string();
+    if !status.success() {
         let lowered = stderr.to_ascii_lowercase();
         return Err(
             if lowered.contains("traineddata")
@@ -107,7 +140,14 @@ fn run_tesseract(png: &[u8]) -> Result<String, OcrFailure> {
             },
         );
     }
-    String::from_utf8(output.stdout).map_err(|error| OcrFailure::MalformedOutput(error.to_string()))
+    write_result.map_err(|error| OcrFailure::Execution(error.to_string()))?;
+    String::from_utf8(stdout).map_err(|error| OcrFailure::MalformedOutput(error.to_string()))
+}
+
+fn read_all(mut stream: impl Read) -> std::io::Result<Vec<u8>> {
+    let mut bytes = Vec::new();
+    stream.read_to_end(&mut bytes)?;
+    Ok(bytes)
 }
 
 #[derive(Default)]
@@ -228,6 +268,7 @@ fn parse_tsv(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::{fs, os::unix::fs::PermissionsExt, path::PathBuf, sync::atomic::{AtomicUsize, Ordering}};
     const HEADER: &str = "level\tpage_num\tblock_num\tpar_num\tline_num\tword_num\tleft\ttop\twidth\theight\tconf\ttext\n";
     #[test]
     fn groups_words_and_scales_non_uniformly_from_negative_origin() {
@@ -276,9 +317,40 @@ mod tests {
         ));
     }
     #[test]
+    fn fake_executable(body: &str) -> PathBuf {
+        static NEXT: AtomicUsize = AtomicUsize::new(0);
+        let path = std::env::temp_dir().join(format!(
+            "axon-tesseract-test-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::Relaxed)
+        ));
+        fs::write(&path, format!("#!/bin/sh\n{body}\n")).unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o700)).unwrap();
+        path
+    }
+    #[test]
+    fn reports_missing_executable() {
+        assert_eq!(run_tesseract_with("/axon/missing/tesseract", b"", Duration::from_secs(1)), Err(OcrFailure::EngineMissing));
+    }
+    #[test]
     fn classifies_missing_language_data() {
-        let stderr =
-            "Error opening data file /usr/share/tessdata/eng.traineddata".to_ascii_lowercase();
-        assert!(stderr.contains("traineddata"));
+        let executable = fake_executable("echo 'Error opening eng.traineddata' >&2; exit 1");
+        assert!(matches!(run_tesseract_with(executable, b"png", Duration::from_secs(1)), Err(OcrFailure::LanguageDataMissing(_))));
+    }
+    #[test]
+    fn preserves_nonzero_exit_as_execution_failure() {
+        let executable = fake_executable("echo exploded >&2; exit 7");
+        assert_eq!(run_tesseract_with(executable, b"png", Duration::from_secs(1)), Err(OcrFailure::Execution("exploded".into())));
+    }
+    #[test]
+    fn kills_an_executable_that_times_out() {
+        let executable = fake_executable("sleep 5");
+        assert_eq!(run_tesseract_with(executable, b"png", Duration::from_millis(30)), Err(OcrFailure::Timeout));
+    }
+    #[test]
+    fn drains_output_larger_than_pipe_backpressure_capacity() {
+        let executable = fake_executable("head -c 200000 /dev/zero | tr '\\000' x");
+        let output = run_tesseract_with(executable, b"png", Duration::from_secs(2)).unwrap();
+        assert_eq!(output.len(), 200_000);
     }
 }
