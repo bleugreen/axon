@@ -41,7 +41,6 @@ pub mod x11;
 
 /// Tools this backend does not implement at all. These are not delivery decisions: the request
 /// names something the Linux daemon has no code path for, which stays a JSON-RPC error.
-
 const EXCLUDED: &[(&str, &str)] = &[
     ("navigate", "BrowserScripting"),
     ("windows", "BrowserScripting"),
