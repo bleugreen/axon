@@ -2663,6 +2663,38 @@ mod tests {
     }
 
     #[test]
+    fn a_backend_can_withhold_post_dispatch_restoration_to_preserve_delivery() {
+        let mut backend = backend(vec![], None);
+        backend.post_dispatch_restoration_restriction =
+            Some("input stream has no completion fence");
+        let activations = backend.activations.clone();
+        let frontmost = backend.frontmost.clone();
+        let mut router = Router::new(backend);
+        router.snapshot = Some(router.backend.snapshot.clone());
+
+        let response = router
+            .request(request(
+                "keyboard",
+                json!({
+                    "app": "App",
+                    "text": "delivered",
+                    "deliveryPolicy": "foregroundPermitted"
+                }),
+            ))
+            .unwrap();
+        let result = action_result(&response);
+
+        assert_eq!(result["dispatchSuccess"], json!(true));
+        assert_eq!(result["foreground"]["restored"], json!(false));
+        assert_eq!(
+            result["foreground"]["message"],
+            json!("input stream has no completion fence")
+        );
+        assert_eq!(*frontmost.borrow(), Some("App".into()));
+        assert_eq!(*activations.borrow(), vec!["App".to_string()]);
+    }
+
+    #[test]
     fn a_restored_session_is_not_by_itself_goal_success() {
         // The foreground rung's own condition and the action's verification are separate, and this
         // rung is where they are most easily confused: a transaction that captured, activated,
