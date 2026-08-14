@@ -1076,10 +1076,15 @@ function Invoke-ProbeStage {
             $null -eq $evidence.foreground.restored) {
             throw 'aimed keyboard did not activate the target and return foreground dispatch/restoration evidence'
         }
+        $addressFocusRequest = @{ jsonrpc = '2.0'; id = 73; method = 'tools/call'; params = @{
+            name = 'look'; arguments = @{ app = $browserApp; screenshot = $false }
+        } } | ConvertTo-Json -Compress -Depth 10
+        $addressFocus = Invoke-AxonMcp -Request $addressFocusRequest
+        Write-Note "Edge accessibility after aimed Ctrl+L=$($addressFocus.result.structuredContent | ConvertTo-Json -Compress -Depth 100)"
 
-        # Each aimed action is a complete transaction and therefore restores before returning. Edge
-        # intentionally drops address-bar focus across that deactivation. Put the proved PID back in
-        # front once, then exercise the frontmost form for the indivisible Ctrl+L/text/Return gesture.
+        # Windows keeps Edge forward after the aimed action because SendInput has no consumption
+        # fence. Re-prove the exact PID through the independent task seam, then exercise the
+        # frontmost form for the indivisible Ctrl+L/text/Return gesture.
         $activationResultPath = Join-Path $LiveDirectory 'keyboard-activation.json'
         Register-ProbeActivationTask -ProcessId ([int]$browser.ProcessId) -ResultPath $activationResultPath
         try {
