@@ -324,8 +324,7 @@ function Start-ProbeBrowser {
                 } } | ConvertTo-Json -Compress -Depth 10
                 $look = Invoke-AxonMcp -Request $lookRequest
                 $roots = @($look.result.structuredContent.app.windows | ForEach-Object root)
-                if ($look.result.isError -eq $false -and
-                    @($roots | Where-Object role -eq 'Window').Count -gt 0) {
+                if ($look.result.isError -eq $false -and $roots.Count -gt 0) {
                     $browser.ProcessId = [int]$candidate.ProcessId
                     return $browser
                 }
@@ -912,8 +911,10 @@ function Invoke-ProbeStage {
             $screenshot.contentTransport -eq 'mcp_image' -and
             $image.Count -eq 1 -and
             [Math]::Max([int]$screenshot.width, [int]$screenshot.height) -le 1280
-        $verified = if ($response.result.isError -eq $false -and $null -ne $window -and
-            $window.role -eq 'Window' -and $screenshotOk) {
+        # Chromium can expose the top-level browser surface as a Document accessibility
+        # root. The unique-profile primary PID establishes ownership; a nonempty root and screenshot
+        # establish that Axon captured that process, independent of provider-specific role naming.
+        $verified = if ($response.result.isError -eq $false -and $null -ne $window -and $screenshotOk) {
             @{ response = $response; window = $window; app = $browserApp }
         } else {
             $null
