@@ -1003,7 +1003,10 @@ impl<
                     }));
                 }
                 if let Some(text) = visuals.and_then(|v| v.recognized_text) {
-                    object.insert("screenText".into(), json!(text));
+                    object.insert(
+                        "screenText".into(),
+                        axon_core::format_screen_text(&text, request.display.frames),
+                    );
                 }
                 if let Some(unavailable) = screenshot_unavailable {
                     object.insert(
@@ -2405,8 +2408,38 @@ mod tests {
         assert_eq!(screenshot["width"], 640);
         assert_eq!(screenshot["height"], 480);
         assert_eq!(success.result["screenText"][0]["text"], "Save");
+        assert!(success.result["screenText"][0].get("frame").is_none());
         assert_eq!(*captures.borrow(), 1);
     }
+
+    #[test]
+    fn look_screen_text_includes_frames_only_when_requested() {
+        let mut backend = backend(vec![], None);
+        backend.recognized = vec![recognized("Save", 100.0)];
+        let captures = backend.visual_captures.clone();
+        let mut router = Router::new(backend);
+        let response = router
+            .request(request(
+                "look",
+                json!({
+                    "app":"App",
+                    "screenshot":false,
+                    "screenText":true,
+                    "frames":true
+                }),
+            ))
+            .unwrap();
+        let JsonRpcResponse::Success(success) = response else {
+            panic!()
+        };
+        assert!(success.result.get("screenshot").is_none());
+        assert_eq!(
+            success.result["screenText"][0]["frame"],
+            json!({"x":100.0,"y":10.0,"width":40.0,"height":20.0})
+        );
+        assert_eq!(*captures.borrow(), 1);
+    }
+
     #[test]
     fn ambiguous_text_location_fails_closed() {
         let mut router = Router::new(backend(vec![node("Save"), node("Save")], None));
