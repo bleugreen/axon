@@ -237,19 +237,23 @@ whatever the policy says.
 ### Foreground escalation
 
 Foreground escalation is transactional. A backend captures the prior frontmost
-application, activates the target and proves it is frontmost, dispatches exactly
-one action, and restores the prior application in guaranteed cleanup — on
-success, on validation failure, on a thrown error, and on timeout alike.
+application, activates the target and proves it is frontmost, and dispatches exactly
+one action. It restores the prior application in guaranteed cleanup whenever the
+backend has a completion boundary proving that restoration cannot redirect the action;
+pre-dispatch exits always restore because no input is pending.
 Activation is skipped when the target already holds the foreground. If activation
 cannot be proved, nothing is posted and the action refuses with
 `activationNotProved`. If a dispatch moves the real pointer, the pointer is
 captured and restored around it. If restoration fails after dispatch, the result
-keeps its `delivery` and `dispatchSuccess` evidence and reports overall failure.
+keeps its `delivery`, `dispatchSuccess`, and verification evidence and reports
+the failed hand-back separately.
 
-Restoration is a condition on the action's `success`, not a stand-in for having
-verified it. A session handed back immaculately says nothing about whether the
-target acted on what was posted, so a foreground dispatch of an action with no
-postcondition reports `dispatchSuccess: true` alongside `success: false`.
+Restoration is reported evidence, not a condition on the action's `success`.
+The foreground rung promises proved activation and exactly one dispatch; action
+verification still decides goal success. A session handed back immaculately says
+nothing about whether the target acted on what was posted, so a foreground
+dispatch of an action with no postcondition reports `dispatchSuccess: true`
+alongside `success: false`.
 
 The result reports that evidence under `foreground`: `priorApp`,
 `priorAppProcessIdentifier`, `alreadyFrontmost`, `activationProved`, `restored`,
@@ -271,7 +275,7 @@ available, and a backend must not claim it before a live probe passes.
 | platform | semantic | pixel | foreground |
 | --- | --- | --- | --- |
 | macOS | `AXPress`, `AXValue`, `AXScrollToVisible` | `CGEventPostToPid` against the target process, invariants proved after dispatch | Global `CGEvent`, transactional activate/dispatch/restore |
-| Windows | UIA `InvokePattern`, `ValuePattern`, `ScrollItemPattern`, none of which call `SetFocus` | Client-coordinate window messages to a leaf HWND bound through UIA ancestry, for window classes a live probe has verified; every other class refuses `backgroundPixelUnsupported` by name | Withheld; `SendInput`, activation, proof, and pointer hand-back all work, but Windows refuses to return the foreground to the application it was taken from |
+| Windows | UIA `InvokePattern`, `ValuePattern`, `ScrollItemPattern`, none of which call `SetFocus` | Client-coordinate window messages to a leaf HWND bound through UIA ancestry, for window classes a live probe has verified; every other class refuses `backgroundPixelUnsupported` by name | `SendInput` after proved activation for clicks, text, named keys, and chords; the target remains frontmost after dispatch because Windows exposes no input-consumption boundary, while pointer restoration is still attempted and reported |
 | Linux | AT-SPI `Action.DoAction`, `EditableText.SetTextContents`, `Component.ScrollTo`, none of which take focus | `XSendEvent` to a window resolved from the target's own AT-SPI application, for toolkits a committed measurement recorded as acting on it: Chromium clicks, GTK 3 and Qt 6 keystrokes. Every other toolkit, and every version series nobody measured, refuses `backgroundPixelUnsupported` by name | `XTest` on an X11 session with an EWMH-capable window manager, transactional activate/dispatch/restore; withheld on every other session |
 
 On Linux the pixel rung's availability is a fact about the target's toolkit, and
@@ -358,31 +362,32 @@ exactly in every case but one, which sits four pixels out in x on both lanes.
 GTK 4 reports the correct sizes at `(0, 0)` origins, so a GTK 4 target has no
 usable coordinate source whatever the delivery mechanism does.
 
-The foreground rung is not merely "global input". It is global input that hands
-back what it borrowed, and a backend that cannot do that must not offer the rung
-at all. Dispatching an unrestored `SendInput` or `XTest` call while reporting
-`delivery: "foreground"` would claim a guarantee the backend does not keep, which
-is the exact behavior this contract exists to prevent. Such a backend reports
-`noDeliveryCandidate` naming the missing transaction, at either policy, because
-opting in cannot supply a faculty the backend lacks.
+The foreground rung is not merely "global input". It is global input whose
+backend can capture the foreground, activate the named target, and prove that
+activation before dispatch. A backend that cannot provide those facts must not
+offer the rung. Such a backend reports `noDeliveryCandidate` naming the missing
+transaction, at either policy, because opting in cannot supply a faculty the
+backend lacks.
 
-Whether a backend can hand the session back is a fact about the running session
-as much as about the build. The Linux backend offers the rung on an X11 session
+Whether a backend can activate and prove the target is a fact about the running
+session as much as about the build. The Linux backend offers the rung on an X11 session
 with an EWMH-capable window manager and withholds it on a Wayland session, where
 the compositor refuses synthetic input and the foreground cannot be read or set
 even with XWayland running alongside. A mechanism that dispatches while its proof
 quietly does not is the trap this contract exists to close, so the capability is
 reported per session and the same answer decides both the health document and the
-dispatch. Windows withholds the rung for a different reason: every part of the
-transaction works there except the last one, and Windows declines to return the
-foreground to the application it was taken from.
+dispatch. Windows offers the rung because it can activate and prove the target. A live
+Notepad control showed immediate hand-back redirecting a suffix of a successfully
+inserted `SendInput` stream, while the identical already-frontmost dispatch landed
+completely. Windows therefore withholds post-dispatch foreground restoration and
+reports that fact rather than sacrificing delivery the caller explicitly permitted.
 
 Restoration covers the pointer as well as the foreground. A mechanism that moves
 the real cursor puts it back before the prior application returns, and reports
 `pointerRestored`: `true` when it was put back, `false` when it could not be, and
 null when the dispatch never moved it. An action that leaves either the window or
-the cursor where it put them reports `success: false` while keeping its dispatch
-evidence, because the session was not handed back whole.
+the cursor where it put them reports that fact and its reason while keeping both
+its dispatch evidence and the success earned by verification.
 
 ## Transport and result envelopes
 

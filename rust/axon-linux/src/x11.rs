@@ -534,9 +534,16 @@ impl X11Session {
                 .map(|keysym| mapping.stroke(keysym, &[]))
                 .collect(),
             KeyboardIntent::Key(spec) => {
-                let chord = keys::parse_chord(spec)
+                let chord = axon_core::parse_chord(spec)
                     .map_err(|error| capability(Capability::KeyboardInput, &error))?;
-                Ok(vec![mapping.stroke(chord.key, &chord.modifiers)?])
+                let modifiers = chord
+                    .modifiers
+                    .into_iter()
+                    .map(keys::keysym_for_modifier)
+                    .collect::<Vec<_>>();
+                Ok(vec![
+                    mapping.stroke(keys::keysym_for(chord.key), &modifiers)?,
+                ])
             }
         }
     }

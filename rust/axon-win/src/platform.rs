@@ -1,3 +1,4 @@
+use crate::handback::HandBackStrategy;
 use crate::{
     BackgroundPixelPointer, PixelDispatch, PixelDispatchError, PixelPlan, PixelTarget,
     PointerTargetVerifier, ScrollDispatch, VisualObservation, VisualObservationProvider,
@@ -5,9 +6,9 @@ use crate::{
 };
 use axon_core::{
     AppQuery, Application, BackendError, Capability, CapabilityInfo, CaptureBounds,
-    ChildPageCapture, ChildPageRequest, ForegroundTarget, KeyboardIntent, Node, Observation,
+    ChildPageCapture, ChildPageRequest, Key, KeyboardIntent, Modifier, Node, Observation,
     PlatformBackend, RecognizedText, RecordedCall, Rect, Screenshot, Snapshot, SnapshotHandle,
-    TextRecognitionProvider, Window, dispatch_in_foreground,
+    TextRecognitionProvider, Window,
 };
 
 #[path = "capture.rs"]
@@ -22,7 +23,8 @@ use std::{
 };
 use windows::{
     Win32::{
-        Foundation::{HWND, POINT},
+        Foundation::{GetLastError, HWND, POINT, SetLastError, WIN32_ERROR},
+        System::Threading::{AttachThreadInput, GetCurrentThreadId},
         System::{
             Com::{
                 CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED, CoCreateInstance, CoInitializeEx,
@@ -58,13 +60,18 @@ use windows::{
             },
             HiDpi::{DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, SetProcessDpiAwarenessContext},
             Input::KeyboardAndMouse::{
-                INPUT, INPUT_0, INPUT_KEYBOARD, INPUT_MOUSE, KEYBDINPUT, KEYEVENTF_KEYUP,
-                KEYEVENTF_UNICODE, MOUSEEVENTF_ABSOLUTE, MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP,
-                MOUSEEVENTF_MOVE, MOUSEEVENTF_VIRTUALDESK, MOUSEINPUT, SendInput, VIRTUAL_KEY,
+                GetKeyboardLayout, INPUT, INPUT_0, INPUT_KEYBOARD, INPUT_MOUSE, KEYBDINPUT,
+                KEYEVENTF_EXTENDEDKEY, KEYEVENTF_KEYUP, KEYEVENTF_SCANCODE, KEYEVENTF_UNICODE,
+                MAPVK_VK_TO_VSC_EX, MOUSEEVENTF_ABSOLUTE, MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP,
+                MOUSEEVENTF_MOVE, MOUSEEVENTF_VIRTUALDESK, MOUSEINPUT, MapVirtualKeyW, SendInput,
+                SetActiveWindow, VIRTUAL_KEY, VkKeyScanExW,
             },
             WindowsAndMessaging::{
-                GetSystemMetrics, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN,
-                SM_YVIRTUALSCREEN,
+                ASFW_ANY, AllowSetForegroundWindow, BringWindowToTop, GetForegroundWindow,
+                GetSystemMetrics, GetWindowThreadProcessId, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN,
+                SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN, SPI_GETFOREGROUNDLOCKTIMEOUT,
+                SPI_SETFOREGROUNDLOCKTIMEOUT, SPIF_SENDCHANGE, SetForegroundWindow,
+                SwitchToThisWindow, SystemParametersInfoW,
             },
         },
     },
@@ -82,6 +89,35 @@ fn child_page_range(total: usize, offset: usize, limit: Option<usize>) -> (usize
         .saturating_add(requested.min(MAX_NODES.saturating_sub(1)))
         .min(total);
     (start, end)
+}
+
+fn foreground_probe_process_id(
+    requested_process_id: Option<u32>,
+    captured_identity: &str,
+) -> Result<u32, BackendError> {
+    requested_process_id
+        .or_else(|| captured_identity.parse().ok())
+        .ok_or_else(|| op("probe", "target identity is not a process id"))
+}
+
+#[cfg(test)]
+mod foreground_probe_tests {
+    use super::foreground_probe_process_id;
+
+    #[test]
+    fn explicit_process_id_outweighs_non_numeric_capture_identity() {
+        assert_eq!(
+            foreground_probe_process_id(Some(6060), r"C:\Program Files\Microsoft\Edge\msedge.exe")
+                .unwrap(),
+            6060
+        );
+    }
+
+    #[test]
+    fn numeric_capture_identity_remains_a_fallback_for_named_queries() {
+        assert_eq!(foreground_probe_process_id(None, "7070").unwrap(), 7070);
+        assert!(foreground_probe_process_id(None, "msedge.exe").is_err());
+    }
 }
 
 fn scroll_amount(delta: f64) -> ScrollAmount {
@@ -176,6 +212,97 @@ enum Command {
     /// Probe-only: lets `axon-win probe pixel-click` reach a class the allowlist has not yet
     /// accepted, which is how a class becomes a candidate for it in the first place.
     AllowUnverifiedPixelClasses(bool, mpsc::Sender<Result<(), BackendError>>),
+}
+
+fn send_key(spec: &str) -> Result<(), BackendError> {
+    let chord =
+        axon_core::parse_chord(spec).map_err(|error| cap(Capability::KeyboardInput, error))?;
+    // Resolve every event before posting any. In particular, a character is interpreted using the
+    // proved-frontmost target's own keyboard layout rather than the daemon thread's layout.
+    let mut modifiers = chord.modifiers;
+    let key = match chord.key {
+        Key::Named(key) => crate::keys::named_key(key),
+        Key::Character(character) => {
+            let window = unsafe { GetForegroundWindow() };
+            let thread = unsafe { GetWindowThreadProcessId(window, None) };
+            let layout = unsafe { GetKeyboardLayout(thread) };
+            let utf16 = u16::try_from(character as u32).map_err(|_| {
+                cap(
+                    Capability::KeyboardInput,
+                    format!("{character} cannot be represented by one Windows virtual key"),
+                )
+            })?;
+            let mapped = unsafe { VkKeyScanExW(utf16, layout) };
+            if mapped == -1 {
+                return Err(cap(
+                    Capability::KeyboardInput,
+                    format!("{character} is not present in the target window's keyboard layout"),
+                ));
+            }
+            let required = ((mapped as u16) >> 8) as u8;
+            for (bit, modifier) in [
+                (1, Modifier::Shift),
+                (2, Modifier::Control),
+                (4, Modifier::Alt),
+            ] {
+                if required & bit != 0 && !modifiers.contains(&modifier) {
+                    modifiers.push(modifier);
+                }
+            }
+            crate::keys::VirtualKey {
+                code: mapped as u16 & 0xff,
+                extended: false,
+            }
+        }
+    };
+    let modifier_keys = modifiers
+        .into_iter()
+        .map(crate::keys::modifier_key)
+        .collect::<Vec<_>>();
+    let mut inputs = Vec::with_capacity(modifier_keys.len() * 2 + 2);
+    for modifier in &modifier_keys {
+        inputs.push(key_input(*modifier, false));
+    }
+    inputs.push(key_input(key, false));
+    inputs.push(key_input(key, true));
+    for modifier in modifier_keys.iter().rev() {
+        inputs.push(key_input(*modifier, true));
+    }
+    let sent = unsafe { SendInput(&inputs, std::mem::size_of::<INPUT>() as i32) };
+    if sent != inputs.len() as u32 {
+        return Err(op(
+            "SendInput keyboard",
+            format!("sent {sent} of {} events", inputs.len()),
+        ));
+    }
+    Ok(())
+}
+
+fn key_input(key: crate::keys::VirtualKey, key_up: bool) -> INPUT {
+    // Chromium and other raw-input consumers inspect the hardware scan code. A virtual-key-only
+    // SendInput record is accepted by Windows but can be discarded downstream because wScan is
+    // zero. MAPVK_VK_TO_VSC_EX also reports the E0/E1 prefix in the high byte.
+    let mapped = unsafe { MapVirtualKeyW(key.code.into(), MAPVK_VK_TO_VSC_EX) };
+    let mut flags = KEYEVENTF_SCANCODE;
+    let prefix = mapped >> 8;
+    if key.extended || prefix == 0xE0 || prefix == 0xE1 {
+        flags |= KEYEVENTF_EXTENDEDKEY;
+    }
+    if key_up {
+        flags |= KEYEVENTF_KEYUP;
+    }
+    INPUT {
+        r#type: INPUT_KEYBOARD,
+        Anonymous: INPUT_0 {
+            ki: KEYBDINPUT {
+                wVk: VIRTUAL_KEY(0),
+                wScan: (mapped & 0xff) as u16,
+                dwFlags: flags,
+                time: 0,
+                dwExtraInfo: 0,
+            },
+        },
+    }
 }
 
 impl VisualObservationProvider for WindowsBackend {
@@ -855,10 +982,13 @@ impl UiaState {
             .into_iter()
             .filter_map(|e| {
                 let name = unsafe { e.CurrentName() }.ok()?.to_string();
+                let process_id = automation_process_id(&e);
                 (!name.is_empty()).then(|| Application {
-                    process_id: automation_process_id(&e),
+                    process_id,
                     name,
-                    identifier: None,
+                    // process_id is internal targeting state and skipped by serde. Windows uses the
+                    // pid as its stable identity, so public enumeration carries it here as well.
+                    identifier: process_id.map(|pid| pid.to_string()),
                     windows: vec![],
                 })
             })
@@ -1072,7 +1202,14 @@ impl UiaState {
         let value =
             unsafe { e.GetCachedPatternAs::<IUIAutomationValuePattern>(UIA_ValuePatternId) }
                 .ok()
-                .and_then(|p| unsafe { p.CachedValue() }.ok())
+                .and_then(|pattern| {
+                    // Some providers, including current Notepad, cache the ValuePattern itself but not its
+                    // value property. Reading the current value keeps snapshots truthful instead of
+                    // advertising a Value action while silently omitting the value it can read.
+                    unsafe { pattern.CachedValue() }
+                        .or_else(|_| unsafe { pattern.CurrentValue() })
+                        .ok()
+                })
                 .map(|x| x.to_string());
         Ok(Node {
             role: control_type_name(ct.0).into(),
@@ -1257,16 +1394,15 @@ impl PlatformBackend for WindowsBackend {
         send_click(p)
     }
     fn keyboard(&mut self, _: &AppQuery, intent: KeyboardIntent<'_>) -> Result<(), BackendError> {
+        if !pixel::ensure_foreground_focus() {
+            return Err(op(
+                "SendInput keyboard",
+                "the proved foreground process did not own keyboard focus; no events were posted",
+            ));
+        }
         match intent {
             KeyboardIntent::Text(text) => send_text(text),
-            // Chords need virtual-key and modifier handling this backend does not have. Typing the
-            // chord's own name into the user's window would be worse than saying so.
-            KeyboardIntent::Key(key) => Err(cap(
-                Capability::KeyboardInput,
-                format!(
-                    "named keys and chords are not implemented on this backend, so {key} cannot be posted"
-                ),
-            )),
+            KeyboardIntent::Key(spec) => send_key(spec),
         }
     }
     fn observe(&mut self, _: &AppQuery, _: Duration) -> Result<Observation, BackendError> {
@@ -1307,24 +1443,17 @@ impl PlatformBackend for WindowsBackend {
         Err(cap(Capability::ObserveGlobalInput, "excluded from v1"))
     }
 
-    /// Withheld, on measurement rather than on principle.
-    ///
-    /// Every other part of the transaction works on a real desktop, and
-    /// `axon-win probe foreground` shows it: activation is proved, the dispatch runs once, and the
-    /// real pointer is captured and put back. What fails is the hand-back. `SetForegroundWindow`
-    /// activates the target and is then refused when asked to return the foreground to the
-    /// application it was taken from — twice, against two unrelated prior applications, with the
-    /// thread-attachment assist in place and a bounded wait for the change to settle. The probe
-    /// reports `accepted: false` on a direct retry, so this is Windows declining rather than a
-    /// readback sampled too early.
-    ///
-    /// The rung is global input that hands the session back. Offering one that reliably steals the
-    /// foreground and reliably reports `success: false` is the worst of both: the caller pays the
-    /// side effect and does not get the guarantee. So the seams below stay — they are what the
-    /// probe exercises and what a fix will need — and the rung stays closed until the probe says
-    /// the foreground comes home.
+    /// Activation and readback are proved before dispatch.
     fn supports_foreground_transaction(&self) -> bool {
-        false
+        true
+    }
+
+    fn post_dispatch_restoration_restriction(&self) -> Option<&'static str> {
+        Some(
+            "The prior application was not restored because Windows exposes no completion boundary \
+             for SendInput; changing foreground immediately can redirect events still in the input \
+             stream",
+        )
     }
 
     /// The foreground window's process id.
@@ -1379,6 +1508,12 @@ impl PlatformBackend for WindowsBackend {
                 .clone()
                 .filter(|identity| !identity.is_empty())
         };
+        if let Some(wanted) = app.process_id {
+            return Ok(applications
+                .iter()
+                .find(|candidate| candidate.process_id == Some(wanted))
+                .and_then(identified));
+        }
         if let Some(wanted) = app.identifier.as_deref() {
             return Ok(applications
                 .iter()
@@ -1649,28 +1784,46 @@ fn probe_pixel_click(args: &[String]) -> Result<serde_json::Value, BackendError>
     }))
 }
 
-/// Runs the foreground transaction against a real application and reports the whole of it.
-///
-/// This is what answers whether `SetForegroundWindow` is usable from the daemon on this machine.
-/// If it is not, `activationProved` is false, nothing was posted, and the honest response is to
-/// leave the foreground rung withheld rather than to ship a rung that always refuses late.
-///
-/// The body deliberately moves the real pointer, because that is the seam a `SendInput` click
-/// depends on: `pointerRestored` in the output is the daemon proving it can hand the cursor back.
+/// Measures every proposed hand-back mechanism without changing shipping delivery behavior.
 fn probe_foreground(args: &[String]) -> Result<serde_json::Value, BackendError> {
     let app = required_probe_arg(args, 1, "app-query")?.to_string();
+    let selected = probe_flag(args, "--strategy")
+        .map(|value| {
+            value
+                .parse::<HandBackStrategy>()
+                .map_err(|error| op("probe", error))
+        })
+        .transpose()?;
+    let strategies = HandBackStrategy::ALL
+        .into_iter()
+        .filter(|strategy| selected.is_none_or(|selected| selected == *strategy));
+
     let mut backend = WindowsBackend::start()?;
-    let query = AppQuery {
-        process_id: None,
-        name: Some(app.clone()),
-        identifier: None,
+    let query = match app.parse::<u32>() {
+        Ok(process_id) => AppQuery {
+            process_id: Some(process_id),
+            name: None,
+            identifier: None,
+        },
+        Err(_) => AppQuery {
+            process_id: None,
+            name: Some(app.clone()),
+            identifier: None,
+        },
     };
     let snapshot = backend.capture(&query)?;
-    let identity = snapshot
+    let captured_identity = snapshot
         .app
         .identifier
         .clone()
         .unwrap_or_else(|| snapshot.app.name.clone());
+    // Capture may publish an executable path or other stable app identifier. When the caller gave
+    // us a PID, that boundary value remains the authority for native process comparisons.
+    let target_pid = foreground_probe_process_id(query.process_id, &captured_identity)?;
+    let identity = query
+        .process_id
+        .map(|process_id| process_id.to_string())
+        .unwrap_or(captured_identity);
     let nudge = snapshot
         .app
         .windows
@@ -1682,64 +1835,202 @@ fn probe_foreground(args: &[String]) -> Result<serde_json::Value, BackendError> 
                 (frame.y + frame.height / 2.0).round() as i32,
             )
         });
-
-    let prior_window = pixel::bits(pixel::foreground_window());
+    let prior = pixel::foreground_window();
+    let prior_pid = pixel::process_of(prior)
+        .ok_or_else(|| op("probe", "the prior foreground window has no process"))?;
+    if prior_pid == target_pid {
+        return Err(op(
+            "probe",
+            "target must be unrelated to the prior foreground application",
+        ));
+    }
     let cursor_before = pixel::cursor();
-    let dispatch = dispatch_in_foreground(
-        &mut backend,
-        ForegroundTarget::Application(&identity),
-        // This probe's whole subject is the hand-back, so it deliberately moves the cursor and
-        // then reports whether the transaction put it home. Passing false would exercise the one
-        // path it exists to measure and skip it.
-        true,
-        |_| {
+    let original_foreground_lock_timeout = foreground_lock_timeout()?;
+    let mut results = Vec::new();
+    for strategy in strategies {
+        if pixel::foreground_window() != prior {
+            let _ = pixel::activate(prior_pid, Some(prior));
+            thread::sleep(Duration::from_millis(250));
+        }
+        let started = Instant::now();
+        if strategy == HandBackStrategy::AllowForeground {
+            let _ = unsafe { AllowSetForegroundWindow(ASFW_ANY) };
+        }
+        let activation_accepted = backend.activate_application(&identity)?;
+        thread::sleep(Duration::from_millis(250));
+        let activated = pixel::process_of(pixel::foreground_window()) == Some(target_pid);
+        if activated && strategy != HandBackStrategy::NoDispatch {
             if let Some((x, y)) = nudge {
                 pixel::set_cursor(x, y);
             }
-        },
-    );
-    let cursor_after = pixel::cursor();
-
-    // What the transaction's own restore could not report: where the foreground actually ended up,
-    // and whether asking again changes the answer. A restore that fails is only diagnosable if the
-    // difference between "the request was refused" and "the request was accepted and ignored" is
-    // visible.
-    let settled = pixel::foreground_window();
-    let prior_identity = dispatch.cleanup.prior_app.clone();
-    let retry = prior_identity.as_ref().map(|identity| {
-        let accepted = backend.activate_application(identity).unwrap_or(false);
-        let immediately = pixel::foreground_window();
-        // Read once, then again after a wait longer than the transaction's own. Acceptance is a
-        // request and the foreground changes when Windows gets to it, so a single read cannot tell
-        // a refusal from an activation that had not happened yet — which is precisely the
-        // confusion that would have this rung withheld for the wrong reason.
-        thread::sleep(Duration::from_millis(1_000));
-        let eventually = pixel::foreground_window();
-        serde_json::json!({
-            "identity": identity,
-            "accepted": accepted,
-            "foregroundWindow": format!("0x{:08X}", pixel::bits(immediately)),
-            "foregroundProcess": pixel::process_of(immediately),
-            "foregroundWindowAfterWait": format!("0x{:08X}", pixel::bits(eventually)),
-            "foregroundProcessAfterWait": pixel::process_of(eventually),
-        })
-    });
-
+        }
+        let mut attachments = ProbeAttachments::default();
+        if matches!(
+            strategy,
+            HandBackStrategy::HeldAttachment
+                | HandBackStrategy::AllowForeground
+                | HandBackStrategy::AttachedActivation
+        ) {
+            attachments.attach_window(pixel::foreground_window());
+        }
+        if matches!(
+            strategy,
+            HandBackStrategy::HeldAttachment | HandBackStrategy::AttachedActivation
+        ) {
+            attachments.attach_window(prior);
+        }
+        if strategy == HandBackStrategy::AllowForeground {
+            attachments.attach_window(pixel::foreground_window());
+            let _ = unsafe { AllowSetForegroundWindow(ASFW_ANY) };
+        }
+        if strategy == HandBackStrategy::AltInput {
+            send_alt_unlock();
+        }
+        let _timeout_restore = if strategy == HandBackStrategy::ForegroundLockTimeout {
+            Some(ForegroundTimeoutRestore::zero(
+                original_foreground_lock_timeout,
+            )?)
+        } else {
+            None
+        };
+        unsafe { SetLastError(WIN32_ERROR(0)) };
+        let accepted = match strategy {
+            HandBackStrategy::SwitchWindow => {
+                unsafe { SwitchToThisWindow(prior, true) };
+                true
+            }
+            HandBackStrategy::AttachedActivation => unsafe {
+                let brought_to_top = BringWindowToTop(prior).is_ok();
+                let made_active = SetActiveWindow(prior).is_ok();
+                brought_to_top && made_active
+            },
+            _ => unsafe { SetForegroundWindow(prior).as_bool() },
+        };
+        let last_error = unsafe { GetLastError().0 };
+        let immediate = foreground_sample();
+        thread::sleep(Duration::from_millis(250));
+        let after_250_ms = foreground_sample();
+        thread::sleep(Duration::from_millis(750));
+        let settled = foreground_sample();
+        drop(attachments);
+        drop(_timeout_restore);
+        if strategy == HandBackStrategy::ForegroundLockTimeout {
+            let restored = foreground_lock_timeout()?;
+            if restored != original_foreground_lock_timeout {
+                return Err(op(
+                    "probe",
+                    format!(
+                        "foreground lock timeout was {original_foreground_lock_timeout} before strategy H but {restored} after cleanup"
+                    ),
+                ));
+            }
+        }
+        if let Some((x, y)) = cursor_before {
+            pixel::set_cursor(x, y);
+        }
+        results.push(serde_json::json!({
+            "strategy": strategy.letter(),
+            "measurementOnly": strategy == HandBackStrategy::ForegroundLockTimeout,
+            "activationAccepted": activation_accepted,
+            "activationProved": activated,
+            "activator": { "returnValue": accepted, "getLastError": last_error },
+            "immediate": immediate,
+            "after250Ms": after_250_ms,
+            "settled": settled,
+            "cursor": probe_point(pixel::cursor()),
+            "elapsedMs": started.elapsed().as_millis(),
+        }));
+    }
     Ok(serde_json::json!({
-        "probe": "foreground",
-        "app": app,
-        "identity": identity,
-        "priorForegroundWindow": format!("0x{prior_window:08X}"),
-        "priorForegroundProcess": pixel::process_of(pixel::hwnd(prior_window)),
-        "foreground": dispatch.cleanup,
-        "refusal": dispatch.refusal,
-        "pointerNudgedTo": probe_point(nudge),
-        "cursorBefore": probe_point(cursor_before),
-        "cursorAfter": probe_point(cursor_after),
-        "settledForegroundWindow": format!("0x{:08X}", pixel::bits(settled)),
-        "settledForegroundProcess": pixel::process_of(settled),
-        "restoreRetry": retry,
+        "probe": "foreground-handback-sweep", "app": app, "identity": identity,
+        "priorForegroundWindow": format!("0x{:08X}", pixel::bits(prior)),
+        "priorForegroundProcess": prior_pid, "foregroundLockTimeoutMs": original_foreground_lock_timeout,
+        "results": results,
     }))
+}
+
+fn foreground_sample() -> serde_json::Value {
+    let window = pixel::foreground_window();
+    serde_json::json!({
+        "window": format!("0x{:08X}", pixel::bits(window)),
+        "process": pixel::process_of(window),
+        "cursor": probe_point(pixel::cursor()),
+    })
+}
+
+fn foreground_lock_timeout() -> Result<u32, BackendError> {
+    let mut value = 0u32;
+    unsafe {
+        SystemParametersInfoW(
+            SPI_GETFOREGROUNDLOCKTIMEOUT,
+            0,
+            Some((&mut value as *mut u32).cast()),
+            Default::default(),
+        )
+    }
+    .map_err(|error| operation("read foreground lock timeout", error))?;
+    Ok(value)
+}
+
+struct ForegroundTimeoutRestore(u32);
+impl ForegroundTimeoutRestore {
+    fn zero(original: u32) -> Result<Self, BackendError> {
+        set_foreground_lock_timeout(0)
+            .map_err(|error| operation("temporarily zero foreground lock timeout", error))?;
+        Ok(Self(original))
+    }
+}
+impl Drop for ForegroundTimeoutRestore {
+    fn drop(&mut self) {
+        let _ = set_foreground_lock_timeout(self.0);
+    }
+}
+
+fn set_foreground_lock_timeout(value: u32) -> windows::core::Result<()> {
+    // Unlike the corresponding GET action, SPI_SETFOREGROUNDLOCKTIMEOUT interprets pvParam itself
+    // as the DWORD value. The caller must also be eligible to change the foreground window.
+    unsafe {
+        SystemParametersInfoW(
+            SPI_SETFOREGROUNDLOCKTIMEOUT,
+            0,
+            (value != 0).then_some(value as usize as *mut std::ffi::c_void),
+            SPIF_SENDCHANGE,
+        )
+    }
+}
+
+#[derive(Default)]
+struct ProbeAttachments {
+    ours: u32,
+    threads: Vec<u32>,
+}
+impl ProbeAttachments {
+    fn attach_window(&mut self, window: HWND) {
+        if self.ours == 0 {
+            self.ours = unsafe { GetCurrentThreadId() };
+        }
+        let thread = unsafe { GetWindowThreadProcessId(window, None) };
+        if thread != 0
+            && thread != self.ours
+            && !self.threads.contains(&thread)
+            && unsafe { AttachThreadInput(self.ours, thread, true) }.as_bool()
+        {
+            self.threads.push(thread);
+        }
+    }
+}
+impl Drop for ProbeAttachments {
+    fn drop(&mut self) {
+        for thread in self.threads.drain(..).rev() {
+            let _ = unsafe { AttachThreadInput(self.ours, thread, false) };
+        }
+    }
+}
+
+fn send_alt_unlock() {
+    let alt = crate::keys::modifier_key(Modifier::Alt);
+    let inputs = [key_input(alt, false), key_input(alt, true)];
+    let _ = unsafe { SendInput(&inputs, std::mem::size_of::<INPUT>() as i32) };
 }
 
 fn probe_number(value: Option<&String>, default: u64, name: &str) -> Result<u64, BackendError> {

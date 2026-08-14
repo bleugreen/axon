@@ -13,7 +13,7 @@ These are the only sources that promote or sustain a **Supported** cell.
 | macOS live loop | `.github/workflows/live.yml` `macos` job | capture → resolve → `invoke` `AXPress` → verified Calculator display; complete health-v1 document; Accessibility grant — each asserted against the app bundle the job launched, by process id | every push to `main` |
 | macOS grant-carry upgrade verification | `bglab-mac`, measured during the axn/119 v0.3.0 rollout | `daemon install` from `~/.local/lib/axon/0.3.0` repointed the LaunchAgent from 0.2.3 while the unchanged `com.bleugreen.axon` bundle identity carried Accessibility and Screen Recording grants across the upgrade: the daemon returned ready in about one second with all fifteen capabilities usable and no System Settings prompts | manual (2026-08-11); re-run on changes to bundle identity or installation registration |
 | Linux live loop | `.github/workflows/live.yml` `linux` job | AT-SPI capture/resolve/invoke with verified readback on GNOME Calculator under GNOME/Mutter Wayland; honest refusal of global input at both policies; systemd-user lifecycle and health-v1, including the session accessibility switch this runner has on | every push to `main` |
-| Windows live loop | `.github/workflows/live.yml` `windows` job | the interactive-session daemon serves `look` with a real window root through the DACL-restricted pipe, and the complete health-v1 document — each asserted against the task the job registered, by process id, with the desktop's own registration proved unchanged across the run | every push to `main` |
+| Windows live loop | `.github/workflows/live.yml` `windows` job | the interactive-session daemon serves `look` through the DACL-restricted pipe; against a probe-owned isolated Edge window targeted by its window-owning process id, Ctrl+L, text, Return, and a page-content click dispatch through the foreground rung and are verified from page state; the complete health-v1 document and the desktop's unchanged registration are also asserted | every push to `main` |
 | Hermetic X11 foreground test | `.github/workflows/test.yml` Linux job; `rust/axon-linux/tests/x11_foreground.rs` | the X11 activate/prove/dispatch/restore conversation against a real X server with a miniature EWMH window manager | every pull request |
 | Hermetic AT-SPI activation test | `.github/workflows/test.yml` Linux job; `rust/axon-linux/tests/atspi_activation.rs` | that the attributes call is issued against the application root and only once per application, that the bounded wait ends when a withholding provider publishes rather than when the bound expires, and that a provider which never publishes is reported as withheld rather than as empty — against a private session bus and a provider built to withhold the way Chromium does; and, on a second private bus, that the session's accessibility switch is read live rather than remembered and reaches health-v1 as a degraded session | every pull request |
 | Windows session-1 probes | `axon-win probe value`, `events`, `timeout`, `pixel-click`, `foreground`; findings recorded in this document | value set and readback, event delivery, provider timeouts, the pixel-click allowlist entry, the foreground hand-back finding | manual; re-run and re-date when the area changes |
@@ -624,12 +624,12 @@ act while requesting activation instead of delivering to it and watching.
 rung is target-bound input derived from verified window geometry; `keyboard`
 names an application and an input string, so there is no element, no window to
 bind to, and no transform to report. It refuses `backgroundPixelUnsupported`
-saying exactly that and falls to the foreground rung. Key delivery gets an honest
-home later as a `type` fallback below `ValuePattern`, once the pointer path is
-proven against real targets.
+saying exactly that and falls to the foreground rung. Literal text into a known
+field has an honest background home through `type` and UIA `ValuePattern`;
+shortcuts and named keys use the explicitly permitted foreground rung.
 
-Linux offers the foreground rung where the session supports it; Windows withholds
-it everywhere.
+Linux offers the foreground rung where the session supports it. Windows offers
+it in an interactive desktop session where activation can be proved.
 
 On Windows every seam is implemented and all but one of them is proved on a real
 desktop. `frontmost_application` reports the foreground window's process id — the
@@ -642,20 +642,20 @@ matters because `SendInput` moves it. `axon-win probe foreground` shows
 activation proved, the dispatch running once, and the pointer returning to where
 it started.
 
-What fails is the hand-back, and the asymmetry is the whole finding: the daemon
-can take the foreground and cannot give it back. `axon-win probe foreground`
-activates Character Map away from Notepad, proves it, restores the cursor exactly
-— and then `SetForegroundWindow` aimed back at Notepad's own window returns
-false, with Character Map still holding the foreground a full second later. The
-second reading is what makes that a refusal rather than an activation that had
-not landed yet, and the two are worth keeping apart, because a refusal is a
-permission problem and latency is a waiting problem.
+The hand-back has a stronger Windows constraint than permission alone. A live
+Notepad control proved that `SendInput` can return its full inserted-event count
+while the target has consumed only a prefix; changing foreground immediately then
+redirects the suffix. The identical already-frontmost dispatch landed completely.
+Windows exposes no target-consumption fence for this global input stream, and a
+trailing sent message is not one because sent messages may run ahead of queued input.
 
-The rung is global input that hands the session back, so one that reliably takes
-the foreground and reliably reports failure would give a caller the side effect
-without the guarantee. It stays closed, the seams stay — they are what the probe
-exercises and what a fix will need — and the probe is how anyone knows when that
-changes.
+The rung therefore promises only what the backend can prove: activation of the
+intended target and exactly one dispatch. Windows leaves the target frontmost after
+a dispatch and reports `restored: false` with the input-stream reason; pre-dispatch
+exits still restore, and pointer restoration remains guaranteed cleanup work. Other
+backends restore after dispatch when their mechanisms provide a safe boundary. This
+is deliberately available only under the per-action
+`foregroundPermitted` opt-in; `backgroundOnly` remains non-disruptive.
 
 Linux implements the same seams and offers the rung on an X11 session with an
 EWMH-capable window manager, withholding it everywhere else. The seams live on
@@ -668,8 +668,8 @@ running session can actually prove, not on what the build contains.
 
 What a dispatch at either rung is allowed to *claim* is shared in that same
 module. `goal_success` takes the action's verification and the carrying rung's
-own conditions and answers with the action's `success`, so requiring one and
-forgetting the other is not something an individual backend can do. macOS reaches
+activation proof and answers with the action's `success`; restoration stays in
+the cleanup evidence rather than in that condition. macOS reaches
 the same rule through a different shape: `PrimitiveActionResult.unverifiedDispatch`
 constructs the delivered-but-unproved result directly, rather than computing it
 at each call site.

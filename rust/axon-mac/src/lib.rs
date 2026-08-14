@@ -65,8 +65,8 @@ const NO_RECOGNIZED_TEXT_GEOMETRY: &str = "this text location resolved from reco
 ///
 /// Specific because the specifics are what a caller can act on, and what tells the next person
 /// which part of the transaction still needs work.
-const NO_FOREGROUND_TRANSACTION: &str = "axon-mac v1 does not implement the transactional \
-     activate, global-dispatch, and restore sequence required by the foreground rung";
+const NO_FOREGROUND_TRANSACTION: &str = "this backend cannot capture the foreground, activate the \
+     requested target, and prove that activation before dispatch";
 
 pub struct Router<B> {
     backend: B,
@@ -825,10 +825,9 @@ impl<
         }
     }
 
-    /// The foreground rung is global input that restores what it borrowed. A backend that cannot
-    /// capture, prove, and hand back the foreground does not get to offer it: dispatching
-    /// unrestored `SendInput` while reporting `delivery: "foreground"` would claim a guarantee it
-    /// does not keep, which is precisely what this contract exists to prevent.
+    /// The foreground rung requires a backend to capture the foreground, activate the target, and
+    /// prove that activation before dispatch. The hand-back is always attempted and reported, but
+    /// a backend that cannot provide the activation proof does not get to offer this rung.
     fn foreground_transaction_restriction(&self) -> Option<String> {
         if self.backend.supports_foreground_transaction() {
             return None;
@@ -865,13 +864,9 @@ impl<
         }
 
         let result = json!({
-            // Two separate things have to hold here, and this rung is the one that adds the second.
-            // Dispatch evidence survives a failed hand-back, but the action as a whole did not
-            // succeed if the user's session was not put back where they left it — a cursor left
-            // where synthetic input dropped it counts as much as a window that never came forward
-            // again. And a session handed back immaculately still says nothing about whether the
-            // target acted on what `SendInput` posted, so the verification has to hold as well.
-            "success": goal_success(&verification, dispatch.cleanup.session_restored()),
+            // This rung promises proved activation and exactly one dispatch. The hand-back remains
+            // reported cleanup evidence, while verification proves whether the target acted.
+            "success": goal_success(&verification, dispatch.cleanup.activation_proved),
             "dispatch": {"success": true, "mechanism": candidate.mechanism},
             "verification": verification,
             "foreground": dispatch.cleanup,

@@ -106,6 +106,15 @@ fn element_text<'a>(xml: &'a str, name: &str) -> Option<&'a str> {
 /// remote-shell install look like it worked. Window-station membership is checked separately
 /// because a session-1 process can still be started outside the interactive desktop.
 pub fn session_health(session_id: u32, window_station: Option<&str>) -> SessionHealth {
+    session_health_with_connection(session_id, window_station, true, true)
+}
+
+fn session_health_with_connection(
+    session_id: u32,
+    window_station: Option<&str>,
+    connected: bool,
+    attached_to_input_desktop: bool,
+) -> SessionHealth {
     if session_id == 0 {
         return SessionHealth::degraded(
             false,
@@ -114,6 +123,26 @@ pub fn session_health(session_id: u32, window_station: Option<&str>) -> SessionH
             Some(
                 "Running in session 0; UI Automation requires the logged-in desktop session".into(),
             ),
+        );
+    }
+    if !attached_to_input_desktop {
+        return SessionHealth::degraded(
+            false,
+            true,
+            reason::NOT_INTERACTIVE_SESSION,
+            Some(format!(
+                "Session {session_id} is not attached to its input desktop; the workstation may be locked"
+            )),
+        );
+    }
+    if !connected {
+        return SessionHealth::degraded(
+            false,
+            true,
+            reason::NOT_INTERACTIVE_SESSION,
+            Some(format!(
+                "Session {session_id} is disconnected; UI Automation can inspect its desktop, but global input cannot reach a user"
+            )),
         );
     }
     match window_station {
@@ -148,11 +177,15 @@ pub fn session_health(session_id: u32, window_station: Option<&str>) -> SessionH
 pub fn current_session() -> SessionHealth {
     #[link(name = "kernel32")]
     unsafe extern "system" {
+        fn GetCurrentThreadId() -> u32;
         fn ProcessIdToSessionId(process_id: u32, session_id: *mut u32) -> i32;
     }
     #[link(name = "user32")]
     unsafe extern "system" {
         fn GetProcessWindowStation() -> isize;
+        fn GetThreadDesktop(thread_id: u32) -> isize;
+        fn OpenInputDesktop(flags: u32, inherit: i32, desired_access: u32) -> isize;
+        fn CloseDesktop(desktop: isize) -> i32;
         fn GetUserObjectInformationW(
             object: isize,
             index: i32,
@@ -161,15 +194,28 @@ pub fn current_session() -> SessionHealth {
             needed: *mut u32,
         ) -> i32;
     }
+    #[link(name = "wtsapi32")]
+    unsafe extern "system" {
+        fn WTSQuerySessionInformationW(
+            server: isize,
+            session_id: u32,
+            info_class: i32,
+            buffer: *mut *mut std::ffi::c_void,
+            bytes_returned: *mut u32,
+        ) -> i32;
+        fn WTSFreeMemory(memory: *mut std::ffi::c_void);
+    }
     const UOI_NAME: i32 = 2;
+    const DESKTOP_READOBJECTS: u32 = 0x0001;
+    const WTS_CONNECT_STATE: i32 = 8;
+    const WTS_ACTIVE: i32 = 0;
 
     let mut session_id = 0u32;
     if unsafe { ProcessIdToSessionId(std::process::id(), &mut session_id) } == 0 {
         session_id = 0;
     }
 
-    let station = (|| {
-        let handle = unsafe { GetProcessWindowStation() };
+    let object_name = |handle: isize| {
         if handle == 0 {
             return None;
         }
@@ -189,9 +235,47 @@ pub fn current_session() -> SessionHealth {
         }
         let length = buffer.iter().position(|unit| *unit == 0).unwrap_or(0);
         Some(String::from_utf16_lossy(&buffer[..length]))
+    };
+    let station = object_name(unsafe { GetProcessWindowStation() });
+
+    let input_desktop = (|| {
+        let input = unsafe { OpenInputDesktop(0, 0, DESKTOP_READOBJECTS) };
+        if input == 0 {
+            return None;
+        }
+        let name = object_name(input);
+        unsafe { CloseDesktop(input) };
+        name
+    })();
+    let thread_desktop = object_name(unsafe { GetThreadDesktop(GetCurrentThreadId()) });
+    let attached_to_input_desktop = match (thread_desktop, input_desktop) {
+        (Some(thread), Some(input)) => thread.eq_ignore_ascii_case(&input),
+        _ => true,
+    };
+
+    let connected = (|| {
+        let mut buffer = std::ptr::null_mut();
+        let mut bytes = 0u32;
+        let ok = unsafe {
+            WTSQuerySessionInformationW(0, session_id, WTS_CONNECT_STATE, &mut buffer, &mut bytes)
+        };
+        if ok == 0 || buffer.is_null() || bytes < std::mem::size_of::<i32>() as u32 {
+            if !buffer.is_null() {
+                unsafe { WTSFreeMemory(buffer) };
+            }
+            return None;
+        }
+        let state = unsafe { *(buffer.cast::<i32>()) };
+        unsafe { WTSFreeMemory(buffer) };
+        Some(state == WTS_ACTIVE)
     })();
 
-    session_health(session_id, station.as_deref())
+    session_health_with_connection(
+        session_id,
+        station.as_deref(),
+        connected.unwrap_or(true),
+        attached_to_input_desktop,
+    )
 }
 
 /// The daemon's own answer to a `health` request.
@@ -308,6 +392,32 @@ mod tests {
         assert!(session.interactive);
         assert!(session.graphical);
         assert_eq!(session.reason, None);
+    }
+
+    #[test]
+    fn a_disconnected_desktop_cannot_reach_global_input() {
+        let session = session_health_with_connection(1, Some("WinSta0"), false, true);
+
+        assert!(!session.interactive);
+        assert!(session.graphical);
+        assert_eq!(
+            session.reason.as_deref(),
+            Some(reason::NOT_INTERACTIVE_SESSION)
+        );
+        assert!(session.detail.as_deref().unwrap().contains("disconnected"));
+    }
+
+    #[test]
+    fn a_locked_desktop_cannot_reach_global_input() {
+        let session = session_health_with_connection(1, Some("WinSta0"), true, false);
+
+        assert!(!session.interactive);
+        assert!(session.graphical);
+        assert_eq!(
+            session.reason.as_deref(),
+            Some(reason::NOT_INTERACTIVE_SESSION)
+        );
+        assert!(session.detail.as_deref().unwrap().contains("locked"));
     }
 
     #[test]

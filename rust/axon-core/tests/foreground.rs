@@ -195,7 +195,8 @@ fn a_click_puts_the_cursor_home_before_the_window_and_reports_it() {
     assert!(dispatch.cleanup.activation_proved);
     assert!(dispatch.cleanup.restored);
     assert_eq!(dispatch.cleanup.pointer_restored, Some(true));
-    assert!(dispatch.cleanup.session_restored());
+    assert!(dispatch.cleanup.restored);
+    assert_ne!(dispatch.cleanup.pointer_restored, Some(false));
     assert_eq!(dispatch.cleanup.message, None);
     // The session is as the user left it, on both axes.
     assert_eq!(session.frontmost.as_deref(), Some("Prior"));
@@ -227,7 +228,8 @@ fn a_dispatch_that_never_moved_the_cursor_reports_nothing_to_put_back() {
     );
 
     assert_eq!(dispatch.cleanup.pointer_restored, None);
-    assert!(dispatch.cleanup.session_restored());
+    assert!(dispatch.cleanup.restored);
+    assert_eq!(dispatch.cleanup.pointer_restored, None);
     assert!(!session.steps.contains(&Step::MovePointer));
 }
 
@@ -283,7 +285,7 @@ fn a_backend_with_no_pointer_has_nothing_to_put_back() {
 }
 
 #[test]
-fn a_cursor_that_cannot_be_put_back_fails_the_action_and_keeps_the_evidence() {
+fn a_cursor_that_cannot_be_put_back_keeps_the_cleanup_evidence() {
     let mut session = FakeSession::new();
     session.dispatch_moves_pointer_to = Some((400.0, 300.0));
     session.refuses_pointer_move = true;
@@ -299,7 +301,6 @@ fn a_cursor_that_cannot_be_put_back_fails_the_action_and_keeps_the_evidence() {
     assert!(dispatch.value.is_some());
     assert!(dispatch.cleanup.restored);
     assert_eq!(dispatch.cleanup.pointer_restored, Some(false));
-    assert!(!dispatch.cleanup.session_restored());
     assert!(
         dispatch
             .cleanup

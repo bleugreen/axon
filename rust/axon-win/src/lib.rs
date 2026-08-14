@@ -18,6 +18,8 @@ use std::{
 
 #[cfg(windows)]
 pub mod daemon;
+mod handback;
+mod keys;
 pub mod lifecycle;
 #[cfg(windows)]
 pub mod pipe;
@@ -51,19 +53,16 @@ const PIXEL_MECHANISM: &str = "HWND client-coordinate message";
 /// transform to report. Key delivery gets an honest home as a `type` fallback, below ValuePattern,
 /// once the pointer path is proven on real targets.
 const NO_KEYBOARD_GEOMETRY: &str = "keyboard input names an application rather than an element, so \
-     there is no verified window geometry to bind it to";
+     there is no verified window geometry to bind it to; for literal text into a known field use \
+     type with a named editable element, or for shortcuts and named keys opt in with \
+     deliveryPolicy: foregroundPermitted";
 
 /// Why a text location that resolved from screen text alone cannot travel the pixel rung.
 const NO_RECOGNIZED_TEXT_GEOMETRY: &str = "this text location resolved from recognized screen text \
      rather than an accessibility element, so there is no ancestry to bind a window to";
 
-/// Why the foreground rung is withheld rather than merely gated behind the opt-in.
-///
-/// Specific because the specifics are what a caller can act on, and what tells the next person
-/// which part of the transaction still needs work.
-const NO_FOREGROUND_TRANSACTION: &str = "this Windows backend can activate an application and \
-     prove it came forward, but Windows refuses to return the foreground to the application it was \
-     taken from, so global input here cannot hand the session back";
+const NO_FOREGROUND_TRANSACTION: &str = "this backend cannot capture the foreground, activate the \
+     requested target, and prove that activation before dispatch";
 
 pub struct Router<B> {
     backend: B,
@@ -538,11 +537,10 @@ impl<
     /// activation and no proof — the exact bug this contract exists to close.
     fn resolved_application(&self) -> Option<String> {
         let app = &self.snapshot.as_ref()?.app;
-        app.identifier
-            .as_deref()
-            .or(Some(app.name.as_str()))
-            .filter(|identity| !identity.is_empty())
-            .map(str::to_owned)
+        app.process_id
+            .map(|process_id| process_id.to_string())
+            .or_else(|| app.identifier.clone())
+            .or_else(|| (!app.name.is_empty()).then(|| app.name.clone()))
     }
 
     pub fn request(&mut self, request: JsonRpcRequest) -> Option<JsonRpcResponse> {
@@ -630,7 +628,8 @@ impl<
                 // foreground: nothing to activate, nothing to restore. Naming one makes it aimed,
                 // and the transaction compares and activates the backend's own identity for that
                 // application rather than the display name the request carried.
-                let aimed = app.name.is_some() || app.identifier.is_some();
+                let aimed =
+                    app.process_id.is_some() || app.name.is_some() || app.identifier.is_some();
                 let target = if aimed {
                     match self
                         .backend
@@ -806,10 +805,9 @@ impl<
         }
     }
 
-    /// The foreground rung is global input that restores what it borrowed. A backend that cannot
-    /// capture, prove, and hand back the foreground does not get to offer it: dispatching
-    /// unrestored `SendInput` while reporting `delivery: "foreground"` would claim a guarantee it
-    /// does not keep, which is precisely what this contract exists to prevent.
+    /// The foreground rung requires a backend to capture the foreground, activate the target, and
+    /// prove that activation before dispatch. The hand-back is always attempted and reported, but
+    /// a backend that cannot provide the activation proof does not get to offer this rung.
     fn foreground_transaction_restriction(&self) -> Option<String> {
         if self.backend.supports_foreground_transaction() {
             return None;
@@ -846,13 +844,9 @@ impl<
         }
 
         let result = json!({
-            // Two separate things have to hold here, and this rung is the one that adds the second.
-            // Dispatch evidence survives a failed hand-back, but the action as a whole did not
-            // succeed if the user's session was not put back where they left it — a cursor left
-            // where synthetic input dropped it counts as much as a window that never came forward
-            // again. And a session handed back immaculately still says nothing about whether the
-            // target acted on what `SendInput` posted, so the verification has to hold as well.
-            "success": goal_success(&verification, dispatch.cleanup.session_restored()),
+            // This rung promises proved activation and exactly one dispatch. The hand-back remains
+            // reported cleanup evidence, while verification proves whether the target acted.
+            "success": goal_success(&verification, dispatch.cleanup.activation_proved),
             "dispatch": {"success": true, "mechanism": candidate.mechanism},
             "verification": verification,
             "foreground": dispatch.cleanup,
@@ -1659,6 +1653,7 @@ mod tests {
         value: Rc<RefCell<Option<String>>>,
         value_reads: Rc<RefCell<Vec<Option<String>>>>,
         clicks: Rc<RefCell<usize>>,
+        keyboard_dispatches: Rc<RefCell<usize>>,
         recognized: Vec<axon_core::RecognizedText>,
         ocr_calls: Rc<RefCell<usize>>,
         visual_captures: Rc<RefCell<usize>>,
@@ -1667,9 +1662,9 @@ mod tests {
         /// Whether this session can reach the global input devices at all. Session 0, a
         /// noninteractive window station, and an integrity boundary all present as false.
         global_input_usable: bool,
-        /// Whether this backend can capture, prove, and restore the foreground. Without it the
-        /// foreground rung is withheld rather than dispatched unrestored.
+        /// Whether this backend can capture, activate, and prove the foreground target.
         foreground_transaction: bool,
+        post_dispatch_restoration_restriction: Option<&'static str>,
         frontmost: Rc<RefCell<Option<String>>>,
         /// Applications that refuse to come forward, so activation cannot be proved.
         refuses_activation: Rc<RefCell<Vec<String>>>,
@@ -1788,7 +1783,7 @@ mod tests {
         }
         fn enumerate_applications(&self) -> Result<Vec<Application>, BackendError> {
             Ok(vec![Application {
-                process_id: None,
+                process_id: Some(4242),
                 name: self.snapshot.app.name.clone(),
                 identifier: self.snapshot.app.identifier.clone(),
                 windows: vec![],
@@ -1798,6 +1793,13 @@ mod tests {
         /// naming an application that is not running actually misses. A fake that answered every
         /// name would make the unidentifiable-target refusal unreachable.
         fn resolve_application(&mut self, app: &AppQuery) -> Result<Option<String>, BackendError> {
+            if let Some(wanted) = app.process_id {
+                return Ok(self
+                    .enumerate_applications()?
+                    .into_iter()
+                    .find(|running| running.process_id == Some(wanted))
+                    .map(|running| running.identifier.unwrap_or_else(|| wanted.to_string())));
+            }
             let wanted = app.name.as_deref().or(app.identifier.as_deref());
             Ok(self
                 .enumerate_applications()?
@@ -1853,6 +1855,7 @@ mod tests {
             unreachable!()
         }
         fn keyboard(&mut self, _: &AppQuery, _: KeyboardIntent<'_>) -> Result<(), BackendError> {
+            *self.keyboard_dispatches.borrow_mut() += 1;
             Ok(())
         }
         fn screenshot(&mut self, _: &AppQuery) -> Result<Screenshot, BackendError> {
@@ -1872,6 +1875,9 @@ mod tests {
         }
         fn supports_foreground_transaction(&self) -> bool {
             self.foreground_transaction
+        }
+        fn post_dispatch_restoration_restriction(&self) -> Option<&'static str> {
+            self.post_dispatch_restoration_restriction
         }
         fn frontmost_application(&mut self) -> Result<Option<String>, BackendError> {
             Ok(self.frontmost.borrow().clone())
@@ -1933,6 +1939,7 @@ mod tests {
             value: Rc::new(RefCell::new(value.map(str::to_owned))),
             value_reads: Rc::new(RefCell::new(vec![])),
             clicks: Rc::new(RefCell::new(0)),
+            keyboard_dispatches: Rc::new(RefCell::new(0)),
             recognized: vec![],
             ocr_calls: Rc::new(RefCell::new(0)),
             visual_captures: Rc::new(RefCell::new(0)),
@@ -1940,6 +1947,7 @@ mod tests {
             focuses: Rc::new(RefCell::new(0)),
             global_input_usable: true,
             foreground_transaction: true,
+            post_dispatch_restoration_restriction: None,
             frontmost: Rc::new(RefCell::new(Some("Prior".into()))),
             refuses_activation: Rc::new(RefCell::new(vec![])),
             activations: Rc::new(RefCell::new(vec![])),
@@ -2579,10 +2587,8 @@ mod tests {
     }
 
     #[test]
-    fn a_backend_that_cannot_restore_the_foreground_never_offers_the_rung() {
-        // Unrestored `SendInput` is not the foreground rung, it is the behaviour this contract
-        // exists to prevent. Offering it and reporting `delivery: "foreground"` would claim a
-        // guarantee the backend does not keep.
+    fn a_backend_that_cannot_prove_activation_never_offers_the_rung() {
+        // A backend that cannot prove the target is frontmost cannot safely dispatch global input.
         let mut backend = backend(vec![], None);
         backend.foreground_transaction = false;
         let clicks = backend.clicks.clone();
@@ -2606,8 +2612,8 @@ mod tests {
                 result["refusal"]["message"]
                     .as_str()
                     .unwrap()
-                    .contains("hand the session back"),
-                "the refusal names the guarantee that cannot be kept, under {policy}"
+                    .contains("prove that activation"),
+                "the refusal names the proof the backend cannot provide, under {policy}"
             );
         }
         assert_eq!(*clicks.borrow(), 0);
@@ -2656,11 +2662,44 @@ mod tests {
     }
 
     #[test]
+    fn a_backend_can_withhold_post_dispatch_restoration_to_preserve_delivery() {
+        let mut backend = backend(vec![], None);
+        backend.post_dispatch_restoration_restriction =
+            Some("input stream has no completion fence");
+        let activations = backend.activations.clone();
+        let frontmost = backend.frontmost.clone();
+        let mut router = Router::new(backend);
+        router.snapshot = Some(router.backend.snapshot.clone());
+
+        let response = router
+            .request(request(
+                "keyboard",
+                json!({
+                    "app": "App",
+                    "text": "delivered",
+                    "deliveryPolicy": "foregroundPermitted"
+                }),
+            ))
+            .unwrap();
+        let result = action_result(&response);
+
+        assert_eq!(result["dispatchSuccess"], json!(true));
+        assert_eq!(result["foreground"]["restored"], json!(false));
+        assert_eq!(
+            result["foreground"]["message"],
+            json!("input stream has no completion fence")
+        );
+        assert_eq!(*frontmost.borrow(), Some("App".into()));
+        assert_eq!(*activations.borrow(), vec!["App".to_string()]);
+    }
+
+    #[test]
     fn a_restored_session_is_not_by_itself_goal_success() {
         // The foreground rung's own condition and the action's verification are separate, and this
         // rung is where they are most easily confused: a transaction that captured, activated,
-        // proved, dispatched and handed the session back has done everything it promised, and
-        // still knows nothing about whether the target acted on what `SendInput` posted. `click`
+        // proved and dispatched has done everything the rung promised, and still knows nothing
+        // about whether the target acted on what `SendInput` posted. The reported hand-back does
+        // not supply that missing verification. `click`
         // declares no postcondition, so nothing here can say that it did.
         let backend = backend(vec![], None);
         let clicks = backend.clicks.clone();
@@ -2725,6 +2764,16 @@ mod tests {
     }
 
     #[test]
+    fn resolved_application_prefers_the_captured_process_over_the_window_title() {
+        let mut router = Router::new(backend(vec![], None));
+        router.backend.snapshot.app.process_id = Some(3024);
+        router.backend.snapshot.app.name = "Continue - Microsoft Edge".into();
+        router.snapshot = Some(router.backend.snapshot.clone());
+
+        assert_eq!(router.resolved_application().as_deref(), Some("3024"));
+    }
+
+    #[test]
     fn foreground_escalation_refuses_without_dispatching_when_activation_is_not_proved() {
         let backend = backend(vec![], None);
         backend.refuses_activation.borrow_mut().push("App".into());
@@ -2750,7 +2799,7 @@ mod tests {
     }
 
     #[test]
-    fn a_failed_restoration_keeps_dispatch_evidence_and_fails_overall() {
+    fn a_failed_hand_back_is_reported_and_does_not_fail_a_verified_action() {
         let backend = backend(vec![], None);
         backend.refuses_activation.borrow_mut().push("Prior".into());
         let mut router = Router::new(backend);
@@ -2771,12 +2820,11 @@ mod tests {
         assert_eq!(result["dispatchSuccess"], json!(true));
         assert_eq!(result["delivery"], json!("foreground"));
         assert_eq!(result["foreground"]["restored"], json!(false));
-        // The events went out, but the user's session was not put back.
+        // The unverified action still fails for its own reason; cleanup is reported independently.
         assert_eq!(result["success"], json!(false));
 
-        // Asserted again with the verification satisfied, because an unverified click fails for
-        // its own reason and would report exactly the same thing if restoration stopped counting
-        // at all. Here it is the only variable left. The first dispatch left the target forward,
+        // Asserted again with verification satisfied to show that failed cleanup does not downgrade
+        // the action. The first dispatch left the target forward,
         // so the foreground is put back by hand first: a target that already holds it activates
         // nothing and has nothing to restore, which is a different case than the one under test.
         *router.backend.frontmost.borrow_mut() = Some("Prior".into());
@@ -2799,8 +2847,8 @@ mod tests {
         assert_eq!(verified["dispatchSuccess"], json!(true));
         assert_eq!(
             verified["success"],
-            json!(false),
-            "a verified goal does not excuse a session that was not handed back"
+            json!(true),
+            "a verified foreground action succeeds while failed cleanup remains reported"
         );
     }
 
@@ -2901,6 +2949,88 @@ mod tests {
         assert_eq!(result["refusal"], Value::Null);
         assert_eq!(result["dispatch"]["mechanism"], json!("SendInput"));
         assert_eq!(*clicks.borrow(), 1);
+    }
+
+    #[test]
+    fn keyboard_requires_opt_in_and_dispatches_once_to_a_named_application() {
+        let backend = backend(vec![], None);
+        let dispatches = backend.keyboard_dispatches.clone();
+        let activations = backend.activations.clone();
+        let mut router = Router::new(backend);
+
+        let refused = router
+            .request(request("keyboard", json!({"app":"App", "key":"ctrl+l"})))
+            .unwrap();
+        let refused = action_result(&refused);
+        assert_eq!(
+            refused["refusal"]["reason"],
+            json!("foregroundNotPermitted")
+        );
+        assert_eq!(refused["dispatchSuccess"], json!(false));
+        assert_eq!(*dispatches.borrow(), 0);
+        assert!(
+            refused["refusal"]["alsoRefused"]
+                .to_string()
+                .contains("named editable element")
+        );
+
+        let permitted = router
+            .request(request(
+                "keyboard",
+                json!({"app":"App", "key":"ctrl+l", "deliveryPolicy":"foregroundPermitted"}),
+            ))
+            .unwrap();
+        let permitted = action_result(&permitted);
+        assert_eq!(permitted["delivery"], json!("foreground"));
+        assert_eq!(permitted["dispatchSuccess"], json!(true));
+        assert_eq!(permitted["foreground"]["activationProved"], json!(true));
+        assert_eq!(*dispatches.borrow(), 1);
+        assert_eq!(
+            *activations.borrow(),
+            vec!["App".to_string(), "Prior".to_string()]
+        );
+    }
+
+    #[test]
+    fn keyboard_without_an_application_targets_the_frontmost_without_activation() {
+        let backend = backend(vec![], None);
+        let dispatches = backend.keyboard_dispatches.clone();
+        let activations = backend.activations.clone();
+        let mut router = Router::new(backend);
+        let response = router
+            .request(request(
+                "keyboard",
+                json!({"key":"Return", "deliveryPolicy":"foregroundPermitted"}),
+            ))
+            .unwrap();
+        let result = action_result(&response);
+        assert_eq!(result["dispatchSuccess"], json!(true));
+        assert_eq!(result["foreground"]["alreadyFrontmost"], json!(true));
+        assert_eq!(result["foreground"]["restored"], json!(true));
+        assert_eq!(*dispatches.borrow(), 1);
+        assert!(activations.borrow().is_empty());
+    }
+
+    #[test]
+    fn keyboard_targeted_by_process_id_activates_and_dispatches_once() {
+        let backend = backend(vec![], None);
+        let dispatches = backend.keyboard_dispatches.clone();
+        let activations = backend.activations.clone();
+        let mut router = Router::new(backend);
+        let response = router
+            .request(request(
+                "keyboard",
+                json!({"app":"4242", "key":"ctrl+l", "deliveryPolicy":"foregroundPermitted"}),
+            ))
+            .unwrap();
+        let result = action_result(&response);
+        assert_eq!(result["dispatchSuccess"], json!(true));
+        assert_eq!(result["foreground"]["activationProved"], json!(true));
+        assert_eq!(*dispatches.borrow(), 1);
+        assert_eq!(
+            *activations.borrow(),
+            vec!["4242".to_string(), "Prior".to_string()]
+        );
     }
 
     #[test]

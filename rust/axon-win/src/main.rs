@@ -232,7 +232,7 @@ probes:
   probe events <app-query> [seconds]
   probe timeout [app-query] [milliseconds]
   probe pixel-click <app-query> <element-query> [--observe <query>] [--unverified-class] [--settle-ms N]
-  probe foreground <app-query>
+  probe foreground <app-query> [--strategy A|B|C|D|E|F|G|H]
 
 Probes drive real windows and must run in the interactive desktop session. Over SSH they land in
 session 0, where UI Automation and SetForegroundWindow cannot reach the logged-in desktop and

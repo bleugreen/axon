@@ -5,7 +5,11 @@
 //! and is verified against fakes on any machine; this file is what only a Windows machine can
 //! check, which is why it is kept as small as the job allows.
 
-use std::ffi::c_void;
+use std::{
+    ffi::c_void,
+    thread,
+    time::{Duration, Instant},
+};
 use windows::{
     Win32::{
         Foundation::{CloseHandle, HANDLE, HWND, LPARAM, POINT, RECT, WPARAM},
@@ -27,6 +31,7 @@ use windows::{
                 GetAwarenessFromDpiAwarenessContext, GetWindowDpiAwarenessContext,
                 PhysicalToLogicalPointForPerMonitorDPI,
             },
+            Input::KeyboardAndMouse::{GetFocus, SetFocus},
             WindowsAndMessaging::{
                 CWP_SKIPDISABLED, CWP_SKIPINVISIBLE, CWP_SKIPTRANSPARENT, ChildWindowFromPointEx,
                 EnumWindows, GA_ROOT, GW_OWNER, GetAncestor, GetClassNameW, GetClientRect,
@@ -74,6 +79,47 @@ pub const MAX_ANCESTRY: usize = 64;
 
 pub fn hwnd(bits: u64) -> HWND {
     HWND(bits as usize as *mut c_void)
+}
+
+/// Proves that the foreground process also owns keyboard focus.
+///
+/// Foreground ownership and keyboard focus are separate Windows facts. In particular, an
+/// Interactive scheduled task can create a foreground Edge window whose input queue has no focused
+/// child. `SendInput` succeeds there while browser accelerators such as Ctrl+L receive nothing.
+/// Join the foreground thread's input queue long enough to inspect its focus. Preserve an existing
+/// focused child, because replacing the omnibox focus before a following text request would break
+/// the gesture; only an absent or foreign focus is repaired to the foreground top-level window.
+pub fn ensure_foreground_focus() -> bool {
+    let target = foreground_window();
+    if target.is_invalid() {
+        return false;
+    }
+    let Some(target_pid) = process_of(target) else {
+        return false;
+    };
+    let ours = unsafe { GetCurrentThreadId() };
+    let target_thread = unsafe { GetWindowThreadProcessId(target, None) };
+    if target_thread == 0 {
+        return false;
+    }
+    let attached =
+        target_thread != ours && unsafe { AttachThreadInput(ours, target_thread, true) }.as_bool();
+    if target_thread != ours && !attached {
+        return false;
+    }
+
+    let focused = unsafe { GetFocus() };
+    let mut proved = !focused.is_invalid() && process_of(focused) == Some(target_pid);
+    if !proved {
+        let _ = unsafe { SetFocus(Some(target)) };
+        let focused = unsafe { GetFocus() };
+        proved = !focused.is_invalid() && process_of(focused) == Some(target_pid);
+    }
+
+    if attached {
+        let _ = unsafe { AttachThreadInput(ours, target_thread, false) };
+    }
+    proved
 }
 
 pub fn bits(window: HWND) -> u64 {
@@ -504,9 +550,10 @@ fn top_level_window_for(pid: u32) -> Option<HWND> {
 /// search is the fallback for when that window is gone.
 ///
 /// `SetForegroundWindow` is restricted: a background process normally gets a flashing taskbar
-/// button rather than activation. Attaching to the current foreground window's input thread is the
-/// documented way to be allowed, and the attachment is undone on every path — a leaked attachment
-/// couples two applications' input queues for as long as both processes live.
+/// button rather than activation. The daemon temporarily joins both the current and target input
+/// queues, retaining the joins until foreground readback observes the target or the bounded wait
+/// expires. Both joins are undone on every path — a leaked attachment couples applications' input
+/// queues for as long as their processes live.
 ///
 /// The answer is only whether the request was accepted. The transaction proves the outcome by
 /// reading the foreground back, so a true here is never taken as proof on its own.
@@ -522,24 +569,33 @@ pub fn activate(pid: u32, preferred: Option<HWND>) -> bool {
     else {
         return false;
     };
-    let current = foreground_window();
     let ours = unsafe { GetCurrentThreadId() };
-    let theirs = if current.is_invalid() {
-        0
-    } else {
-        unsafe { GetWindowThreadProcessId(current, None) }
-    };
-    let attached =
-        theirs != 0 && theirs != ours && unsafe { AttachThreadInput(ours, theirs, true) }.as_bool();
-    let accepted = unsafe { SetForegroundWindow(target) }.as_bool();
-    // Detached immediately: the activation is already queued, and an attachment held any longer
-    // couples two applications' input queues for no further benefit.
-    if attached {
-        let _ = unsafe { AttachThreadInput(ours, theirs, false) };
+    let mut attached = Vec::with_capacity(2);
+    for window in [foreground_window(), target] {
+        if window.is_invalid() {
+            continue;
+        }
+        let thread_id = unsafe { GetWindowThreadProcessId(window, None) };
+        if thread_id != 0
+            && thread_id != ours
+            && !attached.contains(&thread_id)
+            && unsafe { AttachThreadInput(ours, thread_id, true) }.as_bool()
+        {
+            attached.push(thread_id);
+        }
     }
-    // Acceptance only. `SetForegroundWindow` queues an activation rather than performing one, so
-    // the outcome has to be waited for — but the shared transaction already does that on a bounded
-    // budget, and a second wait here would only make a refused activation take twice as long to
-    // report the same answer.
+    let accepted = unsafe { SetForegroundWindow(target) }.as_bool();
+    if accepted {
+        let deadline = Instant::now() + Duration::from_millis(250);
+        while foreground_window() != target && Instant::now() < deadline {
+            thread::sleep(Duration::from_millis(10));
+        }
+    }
+    for thread_id in attached.into_iter().rev() {
+        let _ = unsafe { AttachThreadInput(ours, thread_id, false) };
+    }
+    // Acceptance only. The shared transaction still performs the authoritative foreground proof;
+    // this short wait exists solely to retain the input-queue joins while Windows applies the
+    // queued activation.
     accepted
 }

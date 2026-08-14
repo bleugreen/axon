@@ -90,7 +90,7 @@
       }
     },
     {
-      "name": "foreground escalation whose restoration failed after dispatch",
+      "name": "foreground escalation that dispatched and reported an unrestored session",
       "deliveryPolicy": "foregroundPermitted",
       "delivery": "foreground",
       "dispatchSuccess": true,
