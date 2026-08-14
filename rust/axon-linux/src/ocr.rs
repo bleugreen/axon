@@ -70,12 +70,23 @@ fn run_tesseract_with(
     png: &[u8],
     timeout: Duration,
 ) -> Result<String, OcrFailure> {
-    let mut child = Command::new(executable.as_ref())
-        .args(["stdin", "stdout", "-l", "eng", "tsv"])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
+    let mut child = (0..3)
+        .find_map(|attempt| {
+            let result = Command::new(executable.as_ref())
+                .args(["stdin", "stdout", "-l", "eng", "tsv"])
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .spawn();
+            match result {
+                Err(error) if error.raw_os_error() == Some(26) && attempt < 2 => {
+                    thread::sleep(Duration::from_millis(10));
+                    None
+                }
+                result => Some(result),
+            }
+        })
+        .expect("the bounded spawn loop always returns its final attempt")
         .map_err(|error| {
             if error.kind() == std::io::ErrorKind::NotFound {
                 OcrFailure::EngineMissing
