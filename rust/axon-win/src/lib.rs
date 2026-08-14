@@ -1665,6 +1665,7 @@ mod tests {
         global_input_usable: bool,
         /// Whether this backend can capture, activate, and prove the foreground target.
         foreground_transaction: bool,
+        post_dispatch_restoration_restriction: Option<&'static str>,
         frontmost: Rc<RefCell<Option<String>>>,
         /// Applications that refuse to come forward, so activation cannot be proved.
         refuses_activation: Rc<RefCell<Vec<String>>>,
@@ -1876,6 +1877,9 @@ mod tests {
         fn supports_foreground_transaction(&self) -> bool {
             self.foreground_transaction
         }
+        fn post_dispatch_restoration_restriction(&self) -> Option<&'static str> {
+            self.post_dispatch_restoration_restriction
+        }
         fn frontmost_application(&mut self) -> Result<Option<String>, BackendError> {
             Ok(self.frontmost.borrow().clone())
         }
@@ -1944,6 +1948,7 @@ mod tests {
             focuses: Rc::new(RefCell::new(0)),
             global_input_usable: true,
             foreground_transaction: true,
+            post_dispatch_restoration_restriction: None,
             frontmost: Rc::new(RefCell::new(Some("Prior".into()))),
             refuses_activation: Rc::new(RefCell::new(vec![])),
             activations: Rc::new(RefCell::new(vec![])),
