@@ -17,6 +17,8 @@ use std::{
 
 pub mod keys;
 pub mod lifecycle;
+#[cfg(target_os = "linux")]
+mod ocr;
 /// The measured table of which toolkits act on background, window-targeted input. Pure, and public
 /// so its entries can be read next to the fixtures they cite.
 pub mod pixel;
