@@ -978,17 +978,17 @@ function Invoke-ProbeStage {
                 throw 'the Edge sync confirmation did not expose its Got it accessibility button'
             }
             $dismissRequest = @{ jsonrpc = '2.0'; id = 72; method = 'tools/call'; params = @{
-                name = 'click'; arguments = @{
+                name = 'invoke'; arguments = @{
                     target = @{ app = $browserApp; name = [string]$dismissalButton[0].name }
-                    deliveryPolicy = 'foregroundPermitted'
+                    name = 'Invoke'
                 }
             } } | ConvertTo-Json -Compress -Depth 10
             $dismiss = Invoke-AxonMcp -Request $dismissRequest
             $dismissEvidence = $dismiss.result.structuredContent
             Write-Note "Edge sync confirmation dismissal: $($dismissEvidence | ConvertTo-Json -Compress -Depth 20)"
-            if ($dismiss.result.isError -ne $false -or $dismissEvidence.dispatchSuccess -ne $true -or
-                $dismissEvidence.foreground.activationProved -ne $true) {
-                throw 'the probe-owned Edge sync confirmation could not be dismissed through its accessibility button'
+            if ($dismiss.result.isError -ne $false -or $dismissEvidence.delivery -ne 'semantic' -or
+                $dismissEvidence.dispatchSuccess -ne $true) {
+                throw 'the probe-owned Edge sync confirmation could not be dismissed through its semantic accessibility action'
             }
             Start-Sleep -Seconds 1
             $dismissed = Invoke-AxonMcp -Request (@{
