@@ -8,15 +8,15 @@ use serde_json::{json, Value};
 use std::sync::{Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant};
-use windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, WPARAM};
+use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::System::Threading::GetCurrentThreadId;
 use windows::Win32::UI::Accessibility::{
-    SetWinEventHook, UnhookWinEvent, HWINEVENTHOOK, EVENT_OBJECT_FOCUS, WINEVENT_OUTOFCONTEXT,
+    SetWinEventHook, UnhookWinEvent, HWINEVENTHOOK,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     CallNextHookEx, DispatchMessageW, GetForegroundWindow, GetWindowThreadProcessId, PeekMessageW,
     SetWindowsHookExW, TranslateMessage, UnhookWindowsHookEx, HHOOK, KBDLLHOOKSTRUCT, MSG, PM_REMOVE,
-    WH_KEYBOARD_LL, WM_KEYDOWN, WM_KEYUP, WM_SYSKEYDOWN, WM_SYSKEYUP,
+    EVENT_OBJECT_FOCUS, WINEVENT_OUTOFCONTEXT, WH_KEYBOARD_LL, WM_KEYUP, WM_SYSKEYUP,
 };
 
 const EVENT_CAPACITY: usize = 512;
@@ -56,7 +56,7 @@ unsafe extern "system" fn focus_hook(_: HWINEVENTHOOK, _: u32, hwnd: HWND, objec
 struct Observer { keyboard: HHOOK, focus: HWINEVENTHOOK }
 impl Observer {
     fn install() -> Result<Self, BackendError> {
-        let keyboard = unsafe { SetWindowsHookExW(WH_KEYBOARD_LL, Some(keyboard_hook), HINSTANCE::default(), 0) }
+        let keyboard = unsafe { SetWindowsHookExW(WH_KEYBOARD_LL, Some(keyboard_hook), None, 0) }
             .map_err(|e| op("keyboard diagnostic", format!("WH_KEYBOARD_LL installation failed: {e}")))?;
         let focus = unsafe { SetWinEventHook(EVENT_OBJECT_FOCUS, EVENT_OBJECT_FOCUS, None, Some(focus_hook), 0, 0, WINEVENT_OUTOFCONTEXT) };
         if focus.is_invalid() { unsafe { let _ = UnhookWindowsHookEx(keyboard); } return Err(op("keyboard diagnostic", "focus WinEvent hook installation failed")); }
