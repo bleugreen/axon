@@ -107,28 +107,19 @@ pub(super) fn run(args: &[String]) -> Result<Value, BackendError> {
         let metadata = keyboard_event_metadata(&inputs);
         let result = send_keyboard_batch(&inputs, KeyboardBatchIntent::NamedChord { events: metadata });
         let returned = now_us();
+        let sentinel_key = VirtualKey { code: 0x87, extended: false };
+        let sentinel_inputs = [key_input(sentinel_key, false), key_input(sentinel_key, true)];
+        let sentinel_sent = unsafe { SendInput(&sentinel_inputs, std::mem::size_of_val(&sentinel_inputs[0]) as i32) };
         observer.pump(Duration::from_millis(150));
         let (keys, focuses, overflowed) = { let mut b=EVENTS.get_or_init(Default::default).lock().unwrap(); (std::mem::take(&mut b.keyboard),std::mem::take(&mut b.focus),b.overflowed) };
+        let sentinel_observed = keys.iter().filter(|event| event.vk == 0x87 && event.flags & 0x10 != 0).count() >= 2;
         let hook_events: Vec<_> = keys.iter().map(normalize).collect();
         let focus_events: Vec<_> = focuses.iter().map(|e| json!({"atUs":e.at_us,"hwnd":format!("0x{:X}",e.hwnd),"objectId":e.object_id,"childId":e.child_id,"observerThread":e.thread})).collect();
         let mut timeline = vec![json!({"atUs":started,"phase":"activation","source":"native","data":{"started":true}}),json!({"atUs":proved,"phase":"stablePrecondition","source":"native","data":{"proved":activated}})];
         timeline.extend(hook_events.iter().map(|e| json!({"atUs":e.at_us,"phase":"injectedStream","source":"WH_KEYBOARD_LL","data":e})));
         timeline.extend(focus_events.iter().map(|e| json!({"atUs":e["atUs"],"phase":"edgeFocus","source":"WinEvent","data":e})));
         let dispatch = match result { Ok(d) => json!({"ordinal":1,"intent":"ctrl+l","requestedUs":dispatch_started,"returnedUs":returned,"requestedCount":d.requested_count,"returnedCount":d.returned_count,"snapshots":{"focusProof":d.focus_proof,"beforeSend":d.before_send,"immediatelyAfterSend":d.immediately_after_send,"boundedAfterSend":d.bounded_after_send}}), Err(e) => json!({"ordinal":1,"intent":"ctrl+l","requestedUs":dispatch_started,"returnedUs":returned,"requestedCount":4,"returnedCount":0,"error":e.to_string(),"snapshots":[]}) };
-        trials.push(json!({"index":index+1,"experiment":"baseline","requestedDelayMs":0,"foregroundBefore":{"identity":foreground_before},"activation":{"startedUs":started,"provedUs":proved,"proof":{"proved":activated}},"dispatches":[dispatch],"hook":{"valid":false,"sentinelObserved":false,"overflowed":overflowed,"events":hook_events},"focusEvents":focus_events,"page":{"observedUs":null,"navigated":false,"url":null},"timeline":ordered_timeline(timeline)}));
-    }
-    // F24 is reserved for the observer sentinel. Seeing its injected down/up pair immediately before
-    // unhooking distinguishes a valid empty observation from Windows silently removing a timed-out
-    // low-level hook.
-    let sentinel_key = VirtualKey { code: 0x87, extended: false };
-    let sentinel_inputs = [key_input(sentinel_key, false), key_input(sentinel_key, true)];
-    let sentinel_sent = unsafe { SendInput(&sentinel_inputs, std::mem::size_of_val(&sentinel_inputs[0]) as i32) };
-    observer.pump(Duration::from_millis(100));
-    let sentinel_observed = EVENTS.get_or_init(Default::default).lock().unwrap().keyboard.iter()
-        .filter(|event| event.vk == 0x87 && event.flags & 0x10 != 0).count() >= 2;
-    if let Some(last) = trials.last_mut() {
-        last["hook"]["sentinelObserved"] = json!(sentinel_observed);
-        last["hook"]["valid"] = json!(sentinel_sent == 2 && sentinel_observed);
+        trials.push(json!({"index":index+1,"experiment":"baseline","requestedDelayMs":0,"foregroundBefore":{"identity":foreground_before},"activation":{"startedUs":started,"provedUs":proved,"proof":{"proved":activated}},"dispatches":[dispatch],"hook":{"valid":sentinel_sent == 2 && sentinel_observed,"sentinelObserved":sentinel_observed,"overflowed":overflowed,"events":hook_events},"focusEvents":focus_events,"page":{"observedUs":null,"navigated":false,"url":null},"timeline":ordered_timeline(timeline)}));
     }
     drop(observer);
     Ok(json!({"schemaVersion":"keyboard-diagnostic-v1","target":target,"trials":trials,"finalForeground":{"identity":identity(pid)},"cleanup":{"hookRemoved":true,"observerWindowDestroyed":true}}))
