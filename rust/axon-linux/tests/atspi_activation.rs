@@ -27,21 +27,22 @@
 #![cfg(target_os = "linux")]
 
 use atspi::{ObjectRef, ObjectRefOwned};
-use axon_core::{AppQuery, Node, PlatformBackend, Snapshot, reason};
+use axon_core::{AppQuery, JsonRpcId, JsonRpcRequest, JsonRpcResponse, Node, PlatformBackend, Snapshot, reason};
 use axon_linux::lifecycle::{SessionEnvironment, daemon_report};
-use axon_linux::{ACTIVATION_TIMEOUT, CHILD_NOT_PUBLISHED, LinuxBackend};
+use axon_linux::{ACTIVATION_TIMEOUT, CHILD_NOT_PUBLISHED, LinuxBackend, Router};
 use std::{
     collections::HashMap,
     io::{BufRead, BufReader},
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
     sync::{
-        Arc, Mutex,
+        Arc, Mutex, mpsc,
         atomic::{AtomicBool, AtomicUsize, Ordering},
     },
     time::{Duration, Instant},
 };
 use zbus::{connection, interface, names::UniqueName, zvariant::ObjectPath};
+use x11rb::{COPY_DEPTH_FROM_PARENT, COPY_FROM_PARENT, connection::Connection, protocol::{Event, xproto::{AtomEnum, ChangeGCAux, ChangeWindowAttributesAux, ConnectionExt as _, CreateGCAux, CreateWindowAux, EventMask, PropMode, WindowClass}}, wrapper::ConnectionExt as _};
 
 /// How long the publishing provider takes to answer with the tree it was asked for.
 ///
@@ -79,6 +80,8 @@ const INNER_RUN: &str = "AXON_ATSPI_HERMETIC_BUS";
 /// matching nothing is a passing libtest run.
 const ACTIVATION: &str = "a_withholding_provider_is_woken_at_its_root_waited_for_and_asked_once";
 const ACCESSIBILITY: &str = "a_session_that_switches_accessibility_off_reports_it_in_health";
+const OCR: &str = "look_ocr_coordinates_and_screenshot_text_click_cross_the_real_linux_route";
+const NO_OCR: &str = "missing_tesseract_preserves_semantics_and_reports_remediation";
 
 const WINDOW_NAME: &str = "Withholding Window";
 const INNER_NAME: &str = "Tool Bar";
