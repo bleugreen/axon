@@ -12,6 +12,7 @@ public enum UserActionRecorderError: Error, CustomStringConvertible {
             return "Unable to create passive event tap"
         }
     }
+
 }
 
 public enum UserRecordingScope: Equatable, Sendable {
@@ -199,6 +200,10 @@ public final class UserActionRecorder {
             warnings: group.warnings,
             observation: collector?.observation
         )
+    }
+
+    private func pointEvidence(_ point: CGPoint) -> JSONValue {
+        .object(["kind": .string("point"), "x": .double(point.x), "y": .double(point.y)])
     }
 
     private func recordScroll(_ event: CGEvent) {
@@ -402,14 +407,20 @@ public final class UserActionRecorder {
         }
         do {
             let snapshot = try AXFullTreeCapturer(elementStore: elementStore).capture(app: app.name, screenshot: false)
-            if let sourceIndex = elementStore.index(of: element, in: snapshot.id),
-               let target = RecordedSemanticTargetBuilder.target(
-                    app: app.name, locator: selection.locator,
-                    snapshotJSON: snapshot.jsonValue(includeTree: true), sourceIndex: sourceIndex
-               ) {
+            if let target = RecordedSemanticTargetBuilder.target(
+                app: app.name,
+                locator: selection.locator,
+                snapshot: snapshot
+            ) {
+                var observed: [JSONValue] = [
+                    .object(["kind": .string("ax-target"), "role": .string(hitRole), "targetRole": .string(selection.candidate.role)])
+                ]
+                if fallbackPoint != .zero {
+                    observed.append(pointEvidence(fallbackPoint))
+                }
                 return (
                     target,
-                    [.object(["kind": .string("ax-target"), "role": .string(hitRole), "targetRole": .string(selection.candidate.role)])],
+                    observed,
                     selection.warnings,
                     app
                 )
@@ -481,7 +492,7 @@ public final class UserActionRecorder {
         }
         return (
             .object(target),
-            [.object(["kind": .string("point"), "x": .double(point.x), "y": .double(point.y)])],
+            [pointEvidence(point)],
             [warning],
             app
         )

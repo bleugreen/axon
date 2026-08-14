@@ -10,10 +10,50 @@ public enum RecordedUserAction: Equatable, Sendable {
     case performAction(target: JSONValue, action: String)
 }
 
+public enum AxnRunParameters {
+    public static func applyingDefaultDeliveryPolicy(
+        _ policy: DeliveryPolicy,
+        to params: [String: JSONValue]
+    ) -> [String: JSONValue] {
+        guard case let .array(actions)? = params["actions"] else {
+            return params
+        }
+        var result = params
+        result["actions"] = .array(actions.map { action in
+            guard case var .object(fields) = action, fields["deliveryPolicy"] == nil else {
+                return action
+            }
+            fields["deliveryPolicy"] = .string(policy.rawValue)
+            return .object(fields)
+        })
+        return result
+    }
+}
+
 /// Bridges recorder evidence to the same semantic naming model used by observations.
 /// The recorder does not own a complete serialized snapshot, so callers must supply the
 /// snapshot and the selected node index rather than deriving a second, local name.
 public enum RecordedSemanticTargetBuilder {
+    public static func target(
+        app: String,
+        locator: [String: JSONValue],
+        snapshot: AppSnapshot
+    ) -> JSONValue? {
+        guard let parsedLocator = try? AXLocator(jsonValue: .object(locator)) else {
+            return nil
+        }
+        let resolution = LocatorResolver().resolve(parsedLocator, in: snapshot)
+        guard resolution.status == .unique, let sourceIndex = resolution.best?.index else {
+            return nil
+        }
+        return target(
+            app: app,
+            locator: locator,
+            snapshotJSON: snapshot.jsonValue(includeTree: true),
+            sourceIndex: sourceIndex
+        )
+    }
+
     public static func target(
         app: String,
         locator: [String: JSONValue],
