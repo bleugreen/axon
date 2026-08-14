@@ -45,33 +45,6 @@ if (-not $ProbeScript) {
     $ProbeScript = Join-Path $PSScriptRoot '..\.github\scripts\windows-live-probe.ps1'
 }
 
-function Start-ProbeNotepad {
-    $script:Machine.Log.Add('start-probe-notepad')
-    $script:Machine.ProbeNotepadTaskRegistered = $true
-    [pscustomobject]@{ ProcessId = 7070 }
-}
-
-function Stop-ProbeNotepad {
-    param([Parameter(Mandatory)] $Notepad)
-    $script:Machine.Log.Add("stop-probe-notepad $($Notepad.ProcessId)")
-    $script:Machine.ProbeNotepadTaskRegistered = $false
-}
-
-function Register-ProbeNotepadTask {
-    $script:Machine.Log.Add('register-probe-notepad-task')
-    $script:Machine.ProbeNotepadTaskRegistered = $true
-}
-
-function Start-ProbeNotepadTask {
-    $script:Machine.Log.Add('start-probe-notepad-task')
-    if (-not $script:Machine.ProbeNotepadTaskRegistered) { throw 'the probe Notepad task was not registered' }
-}
-
-function Unregister-ProbeNotepadTask {
-    $script:Machine.Log.Add('unregister-probe-notepad-task')
-    $script:Machine.ProbeNotepadTaskRegistered = $false
-}
-
 $ProbeScript = (Resolve-Path $ProbeScript).Path
 
 . $ProbeScript
@@ -84,8 +57,7 @@ $StubbedSeams = @(
     'Write-Note', 'Wait-Tick', 'Test-ProcessIsRunning', 'Get-AxonProcess', 'Test-EdgeIsRunning', 'Stop-ProcessById',
     'Get-DesktopRegistrationPath', 'Get-DesktopTaskState', 'Start-DesktopDaemonTask', 'Register-ProbeTask',
     'Unregister-ProbeTask', 'Start-ProbeTask', 'Register-ProbeBrowserTask', 'Unregister-ProbeBrowserTask',
-    'Start-ProbeBrowserTask', 'Register-ProbeNotepadTask', 'Start-ProbeNotepadTask', 'Unregister-ProbeNotepadTask',
-    'Start-ProbeNotepad', 'Stop-ProbeNotepad', 'Register-ProbeActivationTask', 'Start-ProbeActivationTask',
+    'Start-ProbeBrowserTask', 'Register-ProbeActivationTask', 'Start-ProbeActivationTask',
     'Wait-ForProbeActivationTask', 'Unregister-ProbeActivationTask', 'Invoke-Axon', 'Invoke-AxonMcp', 'Start-ProbeBrowser',
     'Register-ProbeForegroundTask', 'Start-ProbeForegroundTask', 'Wait-ForProbeForegroundTask', 'Unregister-ProbeForegroundTask',
     'Stop-ProbeBrowser', 'Invoke-HandBackSweep', 'Get-ExpectedVersion',

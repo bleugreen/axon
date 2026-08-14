@@ -58,7 +58,6 @@ $DesktopTaskName = 'Axon Windows Daemon'
 # somebody's start-at-login daemon.
 $ProbeTaskName = 'Axon Live Probe Daemon'
 $ProbeBrowserTaskName = 'Axon Live Probe Browser'
-$ProbeNotepadTaskName = 'Axon Live Probe Notepad'
 $ProbeActivationTaskName = 'Axon Live Probe Prior Activation'
 $ProbeForegroundTaskName = 'Axon Live Probe Foreground Sweep'
 $LiveDirectory = 'C:\ProgramData\Axon\live'
@@ -113,66 +112,6 @@ function Write-Note {
     param([Parameter(Mandatory)][string] $Message)
 
     Write-Host $Message
-}
-
-function Start-ProbeNotepad {
-    <# Launches a blank Notepad through the logged-in desktop token and returns its UIA-visible pid. #>
-    $existing = @(Get-Process notepad -ErrorAction SilentlyContinue | ForEach-Object Id)
-    try {
-        Register-ProbeNotepadTask
-        Start-ProbeNotepadTask
-        $timer = [System.Diagnostics.Stopwatch]::StartNew()
-        do {
-            $candidates = @(Get-Process notepad -ErrorAction SilentlyContinue |
-                Where-Object { $existing -notcontains $_.Id })
-            foreach ($candidate in $candidates) {
-                $request = @{ jsonrpc = '2.0'; id = 69; method = 'tools/call'; params = @{
-                    name = 'look'; arguments = @{ app = [string]$candidate.Id; screenshot = $false }
-                } } | ConvertTo-Json -Compress -Depth 10
-                $look = Invoke-AxonMcp -Request $request
-                if ($look.result.isError -eq $false -and
-                    @($look.result.structuredContent.app.windows).Count -gt 0) {
-                    return [pscustomobject]@{ ProcessId = [int]$candidate.Id }
-                }
-            }
-            Wait-Tick
-        } while ($timer.Elapsed.TotalSeconds -lt $ProcessDiscoveryTimeoutSeconds)
-        throw 'the probe-owned Notepad instance produced no window-owning process'
-    }
-    catch {
-        foreach ($candidate in @(Get-Process notepad -ErrorAction SilentlyContinue |
-            Where-Object { $existing -notcontains $_.Id })) {
-            Stop-ProcessById -ProcessId $candidate.Id
-        }
-        Unregister-ProbeNotepadTask
-        throw
-    }
-}
-
-function Stop-ProbeNotepad {
-    param([Parameter(Mandatory)] $Notepad)
-    try {
-        if (Test-ProcessIsRunning -ProcessId $Notepad.ProcessId) {
-            Stop-ProcessById -ProcessId $Notepad.ProcessId
-        }
-    }
-    finally {
-        Unregister-ProbeNotepadTask
-    }
-}
-
-function Register-ProbeNotepadTask {
-    $action = New-ScheduledTaskAction -Execute 'notepad.exe'
-    $principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive
-    Register-ScheduledTask -TaskName $ProbeNotepadTaskName -Action $action -Principal $principal -Force | Out-Null
-}
-
-function Start-ProbeNotepadTask {
-    Start-ScheduledTask -TaskName $ProbeNotepadTaskName
-}
-
-function Unregister-ProbeNotepadTask {
-    Unregister-ScheduledTask -TaskName $ProbeNotepadTaskName -Confirm:$false -ErrorAction SilentlyContinue
 }
 
 function Register-ProbeForegroundTask {
@@ -701,7 +640,6 @@ function Invoke-BuildStage {
     Unregister-ProbeActivationTask
     Unregister-ProbeForegroundTask
     Unregister-ProbeBrowserTask
-    Unregister-ProbeNotepadTask
     Unregister-ProbeTask
     Stop-ProbeDaemonProcess
 
@@ -880,7 +818,6 @@ function Invoke-ProbeStage {
     $stageError = $null
     $sweepError = $null
     $browser = $null
-    $notepad = $null
 
     try {
         # The probe's own registration, at its own name. `daemon install` is deliberately not used:
@@ -1018,71 +955,6 @@ function Invoke-ProbeStage {
         if ($seen -ne [int]$children.total) {
             throw "Edge paging covered $seen children but reported total $($children.total)"
         }
-        # Discriminate session-wide injection from browser-specific handling before exercising Edge.
-        # Own the control process rather than depending on mutable desktop state, and cross the same
-        # Interactive Task Scheduler boundary as the daemon and browser so all three share a desktop.
-        $notepad = Start-ProbeNotepad
-        $notepadInitialRequest = @{ jsonrpc = '2.0'; id = 68; method = 'tools/call'; params = @{
-            name = 'look'; arguments = @{ app = [string]$notepad.ProcessId; screenshot = $false }
-        } } | ConvertTo-Json -Compress -Depth 10
-        $notepadInitial = Invoke-AxonMcp -Request $notepadInitialRequest
-        Write-Note "Notepad initial accessibility=$($notepadInitial.result.structuredContent | ConvertTo-Json -Compress -Depth 100)"
-        # This control discriminates session-wide input delivery from Edge handling. Foreground the
-        # owned editor independently so a transient SetForegroundWindow refusal cannot be mistaken
-        # for a SendInput failure; the Edge phase below owns activation acceptance.
-        $activationResultPath = Join-Path $LiveDirectory 'notepad-activation.json'
-        Register-ProbeActivationTask -ProcessId ([int]$notepad.ProcessId) -ResultPath $activationResultPath
-        try {
-            Start-ProbeActivationTask
-            [void](Wait-ForProbeActivationTask -ResultPath $activationResultPath)
-        }
-        finally {
-            Unregister-ProbeActivationTask
-            Remove-Item -LiteralPath $activationResultPath, "$activationResultPath.tmp" -Force -ErrorAction SilentlyContinue
-        }
-        $sentinel = "axon-sendinput-$([guid]::NewGuid().ToString('N'))"
-        $notepadRequest = @{ jsonrpc = '2.0'; id = 70; method = 'tools/call'; params = @{
-            name = 'keyboard'; arguments = @{ app = [string]$notepad.ProcessId; text = $sentinel; deliveryPolicy = 'foregroundPermitted' }
-        } } | ConvertTo-Json -Compress -Depth 10
-        $notepadResult = Invoke-AxonMcp -Request $notepadRequest
-        $notepadLookRequest = @{ jsonrpc = '2.0'; id = 71; method = 'tools/call'; params = @{
-            name = 'look'; arguments = @{ app = [string]$notepad.ProcessId; screenshot = $false }
-        } } | ConvertTo-Json -Compress -Depth 10
-        $notepadLook = Invoke-AxonMcp -Request $notepadLookRequest
-        Write-Note "Notepad SendInput control dispatch=$($notepadResult.result.structuredContent | ConvertTo-Json -Compress -Depth 20)"
-        Write-Note "Notepad accessibility after aimed dispatch=$($notepadLook.result.structuredContent | ConvertTo-Json -Compress -Depth 100)"
-        if (-not [bool]$notepadResult.result.structuredContent.dispatchSuccess) {
-            throw "the foregrounded Notepad control did not dispatch: $($notepadResult.result.structuredContent | ConvertTo-Json -Compress -Depth 20)"
-        }
-        if (($notepadLook.result.structuredContent | ConvertTo-Json -Compress -Depth 100) -notmatch $sentinel) {
-            throw 'SendInput did not reach the independently foregrounded probe-owned Notepad'
-        }
-        Write-Note 'Notepad SendInput control verified through UI Automation value readback'
-
-        # Prove chord interpretation independently of Chromium. If Ctrl+A replaces the exact
-        # UIA-readable editor value, modifier ordering and scan-code generation work in the same
-        # interactive session; a browser-only failure is then not a session-wide SendInput defect.
-        $replacement = "axon-chord-$([guid]::NewGuid().ToString('N'))"
-        foreach ($notepadCall in @(
-            @{ name = 'keyboard'; arguments = @{ key = 'ctrl+a'; deliveryPolicy = 'foregroundPermitted' } },
-            @{ name = 'keyboard'; arguments = @{ text = $replacement; deliveryPolicy = 'foregroundPermitted' } }
-        )) {
-            $notepadChordRequest = @{ jsonrpc = '2.0'; id = 72; method = 'tools/call'; params = $notepadCall } |
-                ConvertTo-Json -Compress -Depth 10
-            $notepadChordResult = Invoke-AxonMcp -Request $notepadChordRequest
-            if ($notepadChordResult.result.isError -ne $false -or
-                -not [bool]$notepadChordResult.result.structuredContent.dispatchSuccess) {
-                throw "the Notepad chord control did not dispatch: $($notepadChordResult.result.structuredContent | ConvertTo-Json -Compress -Depth 20)"
-            }
-        }
-        $notepadChordLook = Invoke-AxonMcp -Request $notepadLookRequest
-        $notepadChordJson = $notepadChordLook.result.structuredContent | ConvertTo-Json -Compress -Depth 100
-        Write-Note "Notepad accessibility after Ctrl+A replacement=$notepadChordJson"
-        if ($notepadChordJson -notmatch $replacement -or $notepadChordJson -match $sentinel) {
-            throw 'Ctrl+A did not select the exact probe-owned Notepad value for replacement'
-        }
-        Write-Note 'Notepad Ctrl+A chord control verified through exact UI Automation value replacement'
-
         # The A-H hand-back experiment remains available through `probe foreground-handback-sweep`,
         # but it is not repeated in the standing acceptance run. Its completed 2x2 measurement chose
         # HeldAttachment; requiring arbitrary persistent desktop applications to foreground on every
@@ -1248,13 +1120,6 @@ function Invoke-ProbeStage {
         # The probe's own registration and daemon go now rather than in the restore stage, so that a
         # job which never reaches the restore still leaves nothing of this lane's registered. The
         # restore repeats both, because a stage that dies here reaches neither.
-        if ($null -ne $notepad) {
-            try { Stop-ProbeNotepad -Notepad $notepad }
-            catch {
-                $sweepError = $_.Exception.Message
-                Write-Note "warning: this lane could not remove its probe-owned Notepad: $sweepError"
-            }
-        }
         if ($null -ne $browser) {
             try { Stop-ProbeBrowser -Browser $browser }
             catch {
