@@ -4,6 +4,7 @@ use crate::{
     PointerTargetVerifier, ScrollDispatch, VisualObservation, VisualObservationProvider,
     WindowsScrollProvider,
 };
+use serde::Serialize;
 use axon_core::{
     AppQuery, Application, BackendError, Capability, CapabilityInfo, CaptureBounds,
     ChildPageCapture, ChildPageRequest, Key, KeyboardIntent, Modifier, Node, Observation,
@@ -214,6 +215,117 @@ enum Command {
     AllowUnverifiedPixelClasses(bool, mpsc::Sender<Result<(), BackendError>>),
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct KeyboardEventMetadata {
+    virtual_key: u16,
+    scan_code: u16,
+    flags: u32,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+enum KeyboardBatchIntent {
+    NamedChord {
+        events: Vec<KeyboardEventMetadata>,
+    },
+    Text,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct KeyboardBatchDiagnostics {
+    intent: KeyboardBatchIntent,
+    focus_proof: pixel::ForegroundFocusProof,
+    before_send: pixel::KeyboardSnapshot,
+    immediately_after_send: pixel::KeyboardSnapshot,
+    bounded_after_send: pixel::KeyboardSnapshot,
+    requested_count: u32,
+    returned_count: u32,
+    send_duration_micros: u64,
+    short_count_last_error: Option<u32>,
+}
+
+fn keyboard_event_metadata(inputs: &[INPUT]) -> Vec<KeyboardEventMetadata> {
+    inputs
+        .iter()
+        .map(|input| {
+            let keyboard = unsafe { input.Anonymous.ki };
+            KeyboardEventMetadata {
+                virtual_key: keyboard.wVk.0,
+                scan_code: keyboard.wScan,
+                flags: keyboard.dwFlags.0,
+            }
+        })
+        .collect()
+}
+
+fn send_keyboard_batch(
+    inputs: &[INPUT],
+    intent: KeyboardBatchIntent,
+) -> Result<KeyboardBatchDiagnostics, BackendError> {
+    let focus_proof = pixel::ensure_foreground_focus();
+    if !focus_proof.proved() {
+        return Err(op(
+            "SendInput keyboard",
+            "the proved foreground process did not own keyboard focus; no events were posted",
+        ));
+    }
+    let intended_process_id = focus_proof
+        .target_process_id
+        .expect("a successful focus proof always names its target process");
+    let before_send = pixel::keyboard_snapshot(
+        pixel::KeyboardSnapshotPhase::BeforeSend,
+        intended_process_id,
+        false,
+    );
+    let started = Instant::now();
+    // This is the sole posting point for both key chords and Unicode text. A full count proves only
+    // that Windows accepted the records, not that the foreground application consumed them.
+    let returned_count = unsafe { SendInput(inputs, std::mem::size_of::<INPUT>() as i32) };
+    let send_duration_micros = started.elapsed().as_micros().min(u64::MAX as u128) as u64;
+    let short_count_last_error =
+        (returned_count != inputs.len() as u32).then(|| unsafe { GetLastError().0 });
+    let immediately_after_send = pixel::keyboard_snapshot(
+        pixel::KeyboardSnapshotPhase::ImmediatelyAfterSend,
+        intended_process_id,
+        false,
+    );
+    thread::sleep(Duration::from_millis(10));
+    let bounded_after_send = pixel::keyboard_snapshot(
+        pixel::KeyboardSnapshotPhase::BoundedAfterSend,
+        intended_process_id,
+        false,
+    );
+    let diagnostics = KeyboardBatchDiagnostics {
+        intent,
+        focus_proof,
+        before_send,
+        immediately_after_send,
+        bounded_after_send,
+        requested_count: inputs.len() as u32,
+        returned_count,
+        send_duration_micros,
+        short_count_last_error,
+    };
+    if std::env::var_os("AXON_KEYBOARD_DIAGNOSTICS").is_some() {
+        if let Ok(json) = serde_json::to_string(&diagnostics) {
+            eprintln!("{json}");
+        }
+    }
+    if returned_count != inputs.len() as u32 {
+        return Err(op(
+            "SendInput keyboard",
+            format!(
+                "sent {returned_count} of {} events (GetLastError={})",
+                inputs.len(),
+                short_count_last_error.unwrap_or_default()
+            ),
+        ));
+    }
+    Ok(diagnostics)
+}
+
 fn send_key(spec: &str) -> Result<(), BackendError> {
     let chord =
         axon_core::parse_chord(spec).map_err(|error| cap(Capability::KeyboardInput, error))?;
@@ -268,14 +380,8 @@ fn send_key(spec: &str) -> Result<(), BackendError> {
     for modifier in modifier_keys.iter().rev() {
         inputs.push(key_input(*modifier, true));
     }
-    let sent = unsafe { SendInput(&inputs, std::mem::size_of::<INPUT>() as i32) };
-    if sent != inputs.len() as u32 {
-        return Err(op(
-            "SendInput keyboard",
-            format!("sent {sent} of {} events", inputs.len()),
-        ));
-    }
-    Ok(())
+    let events = keyboard_event_metadata(&inputs);
+    send_keyboard_batch(&inputs, KeyboardBatchIntent::NamedChord { events }).map(|_| ())
 }
 
 fn key_input(key: crate::keys::VirtualKey, key_up: bool) -> INPUT {
@@ -1394,12 +1500,6 @@ impl PlatformBackend for WindowsBackend {
         send_click(p)
     }
     fn keyboard(&mut self, _: &AppQuery, intent: KeyboardIntent<'_>) -> Result<(), BackendError> {
-        if !pixel::ensure_foreground_focus() {
-            return Err(op(
-                "SendInput keyboard",
-                "the proved foreground process did not own keyboard focus; no events were posted",
-            ));
-        }
         match intent {
             KeyboardIntent::Text(text) => send_text(text),
             KeyboardIntent::Key(spec) => send_key(spec),
@@ -2379,14 +2479,7 @@ fn send_text(text: &str) -> Result<(), BackendError> {
             })
         }
     }
-    let sent = unsafe { SendInput(&inputs, std::mem::size_of::<INPUT>() as i32) };
-    if sent != inputs.len() as u32 {
-        return Err(op(
-            "SendInput keyboard",
-            format!("sent {sent} of {} events", inputs.len()),
-        ));
-    }
-    Ok(())
+    send_keyboard_batch(&inputs, KeyboardBatchIntent::Text).map(|_| ())
 }
 fn send_click((x, y): (f64, f64)) -> Result<(), BackendError> {
     let origin_x = unsafe { GetSystemMetrics(SM_XVIRTUALSCREEN) };
