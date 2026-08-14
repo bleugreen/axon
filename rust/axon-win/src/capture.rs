@@ -391,31 +391,54 @@ pub(crate) fn ocr(captured: &CapturedBitmap) -> Result<Vec<OcrWord>, BackendErro
             .PixelHeight()
             .map_err(|e| operation("read OCR bitmap height", e))?,
     );
-    let mut words = Vec::new();
+    let mut lines = Vec::new();
     for line in result.Lines().map_err(|e| operation("read OCR lines", e))? {
+        let mut word_bounds = Vec::new();
         for word in line.Words().map_err(|e| operation("read OCR words", e))? {
             let bounds = word
                 .BoundingRect()
                 .map_err(|e| operation("read OCR word bounds", e))?;
-            words.push(OcrWord {
-                text: word
-                    .Text()
-                    .map_err(|e| operation("read OCR word text", e))?
-                    .to_string(),
-                frame: map_bitmap_rect(
-                    Rect {
-                        x: bounds.X as f64,
-                        y: bounds.Y as f64,
-                        width: bounds.Width as f64,
-                        height: bounds.Height as f64,
-                    },
-                    bitmap_size,
-                    captured.screen_frame,
-                )?,
+            word_bounds.push(Rect {
+                x: bounds.X as f64,
+                y: bounds.Y as f64,
+                width: bounds.Width as f64,
+                height: bounds.Height as f64,
             });
         }
+        let Some(bounds) = union_rects(&word_bounds) else {
+            continue;
+        };
+        lines.push(OcrWord {
+            text: line
+                .Text()
+                .map_err(|e| operation("read OCR line text", e))?
+                .to_string(),
+            frame: map_bitmap_rect(bounds, bitmap_size, captured.screen_frame)?,
+        });
     }
-    Ok(words)
+    Ok(lines)
+}
+
+fn union_rects(rects: &[Rect]) -> Option<Rect> {
+    let mut valid = rects
+        .iter()
+        .copied()
+        .filter(|rect| rect.width > 0.0 && rect.height > 0.0);
+    let first = valid.next()?;
+    let (mut left, mut top) = (first.x, first.y);
+    let (mut right, mut bottom) = (first.x + first.width, first.y + first.height);
+    for rect in valid {
+        left = left.min(rect.x);
+        top = top.min(rect.y);
+        right = right.max(rect.x + rect.width);
+        bottom = bottom.max(rect.y + rect.height);
+    }
+    Some(Rect {
+        x: left,
+        y: top,
+        width: right - left,
+        height: bottom - top,
+    })
 }
 
 fn create_direct3d_device() -> Result<IDirect3DDevice, BackendError> {
@@ -481,6 +504,66 @@ fn op(name: &str, message: impl Into<String>) -> BackendError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn combines_ocr_words_into_one_line_frame() {
+        assert_eq!(
+            union_rects(&[
+                Rect {
+                    x: 10.0,
+                    y: 20.0,
+                    width: 30.0,
+                    height: 10.0,
+                },
+                Rect {
+                    x: 45.0,
+                    y: 18.0,
+                    width: 25.0,
+                    height: 14.0,
+                },
+            ]),
+            Some(Rect {
+                x: 10.0,
+                y: 18.0,
+                width: 60.0,
+                height: 14.0,
+            })
+        );
+    }
+
+    #[test]
+    fn keeps_single_word_ocr_line_frame_unchanged() {
+        let word = Rect {
+            x: 12.0,
+            y: 34.0,
+            width: 56.0,
+            height: 18.0,
+        };
+        assert_eq!(union_rects(&[word]), Some(word));
+    }
+
+    #[test]
+    fn ignores_invalid_ocr_words_and_empty_lines() {
+        let valid = Rect {
+            x: 1.0,
+            y: 2.0,
+            width: 3.0,
+            height: 4.0,
+        };
+        assert_eq!(
+            union_rects(&[
+                Rect {
+                    x: 0.0,
+                    y: 0.0,
+                    width: 0.0,
+                    height: 1.0,
+                },
+                valid,
+            ]),
+            Some(valid)
+        );
+        assert_eq!(union_rects(&[]), None);
+    }
 
     #[test]
     fn maps_bitmap_pixels_to_negative_origin_physical_screen_rect() {
