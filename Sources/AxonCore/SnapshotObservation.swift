@@ -194,24 +194,40 @@ public struct SnapshotObservationFormatter {
         guard case let .array(items)? = value else {
             return nil
         }
-        let compactItems = items.prefix(Self.maxScreenTextItems).compactMap { item -> JSONValue? in
+        let normalized = items.compactMap { item -> (object: [String: JSONValue], x: Double, y: Double)? in
             guard case let .object(object) = item,
                   let text = string("text", in: object),
-                  !text.isEmpty
+                  !text.isEmpty,
+                  let frame = object["frame"]?.objectValue,
+                  let x = frame["x"]?.doubleValue,
+                  let y = frame["y"]?.doubleValue,
+                  let width = frame["width"]?.doubleValue,
+                  let height = frame["height"]?.doubleValue,
+                  x.isFinite,
+                  y.isFinite,
+                  width.isFinite,
+                  height.isFinite,
+                  width > 0,
+                  height > 0
             else {
                 return nil
             }
 
             var compact: [String: JSONValue] = ["text": .string(text)]
-            if let confidence = object["confidence"] {
-                compact["confidence"] = confidence
+            if let confidence = object["confidence"]?.doubleValue, confidence.isFinite {
+                compact["confidence"] = .double(confidence)
             }
-            if frames, let frame = object["frame"], frame != .null {
-                compact["frame"] = frame
+            if frames {
+                compact["frame"] = .object(frame)
             }
-            return .object(compact)
+            return (compact, x, y)
         }
-        return .array(compactItems)
+        .sorted { lhs, rhs in
+            lhs.y == rhs.y ? lhs.x < rhs.x : lhs.y < rhs.y
+        }
+        .prefix(Self.maxScreenTextItems)
+        .map { JSONValue.object($0.object) }
+        return .array(Array(normalized))
     }
 
     private func appendScreenText(_ value: JSONValue, lines: inout [String]) {
