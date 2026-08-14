@@ -33,6 +33,19 @@ import Testing
 
     try makeAppBundle(at: editorURL, identifier: AppBundle.axonEditorIdentifier, version: "0.1.7", executable: "AxonEditor")
     #expect(AppBundle.pairedEditorURL(beside: daemonURL) == nil)
+
+    try makeAppBundle(at: daemonURL, identifier: "com.example.daemon", version: "0.3.4", executable: "Axon")
+    try makeAppBundle(at: editorURL, identifier: AppBundle.axonEditorIdentifier, version: "0.3.4", executable: "AxonEditor")
+    #expect(AppBundle.pairedEditorURL(beside: daemonURL) == nil)
+
+    try makeAppBundle(at: daemonURL, identifier: AppBundle.axonDaemonIdentifier, version: "0.3.4", executable: "Axon")
+    try makeAppBundle(at: editorURL, identifier: "com.example.editor", version: "0.3.4", executable: "AxonEditor")
+    #expect(AppBundle.pairedEditorURL(beside: daemonURL) == nil)
+
+    try makeAppBundle(at: editorURL, identifier: AppBundle.axonEditorIdentifier, version: "0.3.4", executable: "AxonEditor")
+    try FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: editorURL.appendingPathComponent("Contents/MacOS/AxonEditor").path)
+    #expect(AppBundle.pairedEditorURL(beside: daemonURL) == nil)
+
     try FileManager.default.removeItem(at: editorURL)
     #expect(AppBundle.pairedEditorURL(beside: daemonURL) == nil)
 }
@@ -47,7 +60,8 @@ private func makeAppBundle(at url: URL, identifier: String, version: String, exe
     ]
     let data = try PropertyListSerialization.data(fromPropertyList: info, format: .xml, options: 0)
     try data.write(to: url.appendingPathComponent("Contents/Info.plist"))
-    FileManager.default.createFile(atPath: executableURL.path, contents: Data(), attributes: [.posixPermissions: 0o755])
+    FileManager.default.createFile(atPath: executableURL.path, contents: Data())
+    try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: executableURL.path)
 }
 
 @Test func socketLineReadRejectsOversizedMessages() throws {
