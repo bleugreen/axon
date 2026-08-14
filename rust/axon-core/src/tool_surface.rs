@@ -627,12 +627,31 @@ mod tests {
         assert_eq!(
             names(ToolBackend::Windows),
             [
-                "look", "find", "run", "click", "type", "keyboard", "scroll", "invoke"
+                "look",
+                "find",
+                "wait_for_value",
+                "wait_for_stability",
+                "run",
+                "click",
+                "type",
+                "keyboard",
+                "scroll",
+                "invoke"
             ]
         );
         assert_eq!(
             names(ToolBackend::Linux),
-            ["look", "find", "run", "click", "type", "keyboard", "invoke"]
+            [
+                "look",
+                "find",
+                "wait_for_value",
+                "wait_for_stability",
+                "run",
+                "click",
+                "type",
+                "keyboard",
+                "invoke",
+            ]
         );
     }
 

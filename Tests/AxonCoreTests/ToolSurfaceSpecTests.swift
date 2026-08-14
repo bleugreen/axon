@@ -59,14 +59,15 @@ import Testing
 }
 
 @Test func toolSurfaceDeclaresFacadeAvailability() throws {
+
     let expected: [(String, String, Set<ToolFacade>)] = [
         ("look", "look", [.swift, .mac, .windows, .linux]),
         ("navigate", "navigate", [.swift]),
         ("windows", "windows", [.swift]),
         ("tabs", "tabs", [.swift]),
         ("find", "find", [.swift, .mac, .windows, .linux]),
-        ("wait_for_value", "wait_for_value", [.swift, .mac]),
-        ("wait_for_stability", "wait_for_stability", [.swift, .mac]),
+        ("wait_for_value", "wait_for_value", [.swift, .mac, .windows, .linux]),
+        ("wait_for_stability", "wait_for_stability", [.swift, .mac, .windows, .linux]),
         ("permit", "permit", [.swift]),
         ("run", "run", [.swift, .mac, .windows, .linux]),
         ("save", "save", [.swift]),
@@ -86,6 +87,7 @@ import Testing
             #expect(tool.availability.contains(facade) == row.2.contains(facade))
         }
     }
+
 }
 
 @Test func checkedInToolSurfaceArtifactMatchesGeneratedBytes() throws {

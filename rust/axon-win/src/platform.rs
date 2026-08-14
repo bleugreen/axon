@@ -45,15 +45,16 @@ use windows::{
                 UIA_BoundingRectanglePropertyId, UIA_ButtonControlTypeId,
                 UIA_CheckBoxControlTypeId, UIA_ComboBoxControlTypeId, UIA_ControlTypePropertyId,
                 UIA_CustomControlTypeId, UIA_DocumentControlTypeId, UIA_EditControlTypeId,
-                UIA_GroupControlTypeId, UIA_HyperlinkControlTypeId, UIA_ImageControlTypeId,
-                UIA_InvokePatternId, UIA_ListControlTypeId, UIA_ListItemControlTypeId,
-                UIA_MenuControlTypeId, UIA_MenuItemControlTypeId, UIA_NamePropertyId,
-                UIA_PaneControlTypeId, UIA_ProgressBarControlTypeId, UIA_RadioButtonControlTypeId,
-                UIA_ScrollBarControlTypeId, UIA_ScrollItemPatternId, UIA_ScrollPatternId,
-                UIA_SliderControlTypeId, UIA_TabControlTypeId, UIA_TabItemControlTypeId,
-                UIA_Text_TextChangedEventId, UIA_TextControlTypeId, UIA_ThumbControlTypeId,
-                UIA_ToolBarControlTypeId, UIA_ToolTipControlTypeId, UIA_TreeControlTypeId,
-                UIA_TreeItemControlTypeId, UIA_ValuePatternId, UIA_WindowControlTypeId,
+                UIA_GroupControlTypeId, UIA_HelpTextPropertyId, UIA_HyperlinkControlTypeId,
+                UIA_ImageControlTypeId, UIA_InvokePatternId, UIA_ListControlTypeId,
+                UIA_ListItemControlTypeId, UIA_MenuControlTypeId, UIA_MenuItemControlTypeId,
+                UIA_NamePropertyId, UIA_PaneControlTypeId, UIA_ProgressBarControlTypeId,
+                UIA_RadioButtonControlTypeId, UIA_ScrollBarControlTypeId, UIA_ScrollItemPatternId,
+                UIA_ScrollPatternId, UIA_SliderControlTypeId, UIA_TabControlTypeId,
+                UIA_TabItemControlTypeId, UIA_Text_TextChangedEventId, UIA_TextControlTypeId,
+                UIA_ThumbControlTypeId, UIA_ToolBarControlTypeId, UIA_ToolTipControlTypeId,
+                UIA_TreeControlTypeId, UIA_TreeItemControlTypeId, UIA_ValuePatternId,
+                UIA_WindowControlTypeId,
             },
             HiDpi::{DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, SetProcessDpiAwarenessContext},
             Input::KeyboardAndMouse::{
@@ -981,6 +982,7 @@ impl UiaState {
                 UIA_NamePropertyId,
                 UIA_AutomationIdPropertyId,
                 UIA_BoundingRectanglePropertyId,
+                UIA_HelpTextPropertyId,
             ] {
                 cache
                     .AddProperty(property)
@@ -1059,6 +1061,10 @@ impl UiaState {
             .ok()
             .map(|x| x.to_string())
             .filter(|x| !x.is_empty());
+        let help = unsafe { e.CachedHelpText() }
+            .ok()
+            .map(|x| x.to_string())
+            .filter(|x| !x.is_empty());
         let id = unsafe { e.CachedAutomationId() }
             .ok()
             .map(|x| x.to_string())
@@ -1075,7 +1081,7 @@ impl UiaState {
             title: name.clone(),
             label: name,
             value,
-            description: None,
+            description: help,
             identifier: id,
             actions,
             frame: r.map(|x| Rect {

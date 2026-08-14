@@ -3,12 +3,17 @@
 use axon_core::{
     AppQuery, AxnRunner, Capability, DeliveryCandidate, DeliveryCapability, DeliveryOutcome,
     DeliveryPolicy, DeliveryRefusal, DeliveryRefusalReason, DeliveryRung, DeliverySelection,
-    DispatchOutcome, ExpectedFact, ForegroundTarget, JsonRpcError, JsonRpcId, JsonRpcRequest,
-    JsonRpcResponse, KeyboardIntent, PlatformBackend, Resolution, RunEnvelope, SemanticLookup,
-    SemanticNameRegistry, SemanticSelection, Snapshot, SnapshotHandle, ToolDispatcher,
-    dispatch_in_foreground, goal_success, prepare_run, select_delivery,
+    DiffPolicy, DispatchOutcome, ExpectedFact, ForegroundTarget, JsonRpcError, JsonRpcId,
+    JsonRpcRequest, JsonRpcResponse, KeyboardIntent, PlatformBackend, Resolution, RunEnvelope,
+    SemanticLookup, SemanticNameRegistry, SemanticSelection, Snapshot, SnapshotHandle,
+    ToolDispatcher, classify_semantic_diff, dispatch_in_foreground, goal_success, prepare_run,
+    select_delivery,
 };
 use serde_json::{Map, Value, json};
+use std::{
+    thread,
+    time::{Duration, Instant},
+};
 
 pub mod keys;
 pub mod lifecycle;
@@ -36,6 +41,7 @@ pub mod x11;
 
 /// Tools this backend does not implement at all. These are not delivery decisions: the request
 /// names something the Linux daemon has no code path for, which stays a JSON-RPC error.
+
 const EXCLUDED: &[(&str, &str)] = &[
     ("navigate", "BrowserScripting"),
     ("windows", "BrowserScripting"),
@@ -43,8 +49,6 @@ const EXCLUDED: &[(&str, &str)] = &[
     ("save", "SerializeHistory"),
     ("drag", "PointerDrag"),
     ("scroll", "Scroll"),
-    ("wait_for_value", "WaitForValue"),
-    ("wait_for_stability", "WaitForStability"),
     ("permit", "PermissionPrompt"),
 ];
 
@@ -343,6 +347,8 @@ impl<B: PointerTargetVerifier + BackgroundPixelInput> Router<B> {
             DeliveryPolicy::from_params(params).map_err(|error| rpc_error(-32602, error))?;
         match method {
             "look" => self.look(params),
+            "wait_for_value" => self.wait_for_value(params),
+            "wait_for_stability" => self.wait_for_stability(params),
             "find" => {
                 let (handle, resolution) = self.resolve(params)?;
                 Ok(json!({"handle": handle, "resolution": resolution}))
@@ -946,6 +952,162 @@ impl<B: PointerTargetVerifier + BackgroundPixelInput> Router<B> {
         }
     }
 
+    fn wait_for_value(&mut self, params: &Map<String, Value>) -> Result<Value, JsonRpcError> {
+        let predicates = ["contains", "equals", "matches"]
+            .into_iter()
+            .filter_map(|key| {
+                params
+                    .get(key)
+                    .and_then(Value::as_str)
+                    .map(|value| (key, value))
+            })
+            .collect::<Vec<_>>();
+        if predicates.len() != 1 || predicates[0].1.is_empty() {
+            return Err(rpc_error(
+                -32602,
+                "wait_for_value requires exactly one non-empty contains, equals, or matches predicate",
+            ));
+        }
+        let (predicate_kind, predicate_value) = predicates[0];
+        let regex = (predicate_kind == "matches")
+            .then(|| {
+                regex::Regex::new(predicate_value)
+                    .map_err(|error| rpc_error(-32602, error.to_string()))
+            })
+            .transpose()?;
+        let predicate = json!({predicate_kind: predicate_value});
+        let timeout = bounded_ms(params, "timeoutMs", 5_000, 0, 60_000)?;
+        let interval = bounded_ms(
+            params,
+            "intervalMs",
+            100,
+            10,
+            timeout.as_millis().max(100) as u64,
+        )?;
+        let started = Instant::now();
+        let mut last_observed = None;
+        let mut last_resolution = None;
+        loop {
+            match self.resolve(params) {
+                Ok((handle, resolution)) => {
+                    last_resolution = Some(resolution.clone());
+                    let observed = self.readable_state(&handle)?;
+                    last_observed = Some(observed.clone());
+                    let matched = ["value", "title", "description", "identifier", "help"]
+                        .into_iter()
+                        .find_map(|field| {
+                            observed
+                                .get(field)
+                                .and_then(Value::as_str)
+                                .filter(|value| match predicate_kind {
+                                    "equals" => *value == predicate_value,
+                                    "contains" => value
+                                        .to_lowercase()
+                                        .contains(&predicate_value.to_lowercase()),
+                                    "matches" => {
+                                        regex.as_ref().is_some_and(|regex| regex.is_match(value))
+                                    }
+                                    _ => false,
+                                })
+                                .map(|value| json!({"field":field,"value":value}))
+                        });
+                    if let Some(matched) = matched {
+                        return Ok(
+                            json!({"wait":{"success":true,"status":"satisfied","predicate":predicate,"elapsedMs":started.elapsed().as_millis(),"matched":matched,"lastObserved":observed,"resolution":resolution,"message":"wait_for_value predicate satisfied"}}),
+                        );
+                    }
+                }
+                Err(error) if error.code == -32002 => {}
+                Err(error) => return Err(error),
+            }
+            if started.elapsed() >= timeout {
+                let status = if last_observed
+                    .as_ref()
+                    .is_some_and(|state| !state.is_empty())
+                {
+                    "predicate_timeout"
+                } else {
+                    "target_unresolved_timeout"
+                };
+                return Ok(
+                    json!({"wait":{"success":false,"status":status,"predicate":predicate,"elapsedMs":started.elapsed().as_millis(),"matched":null,"lastObserved":last_observed,"resolution":last_resolution,"message":if status == "predicate_timeout" {"wait_for_value timed out before the predicate matched"} else {"wait_for_value timed out before the target resolved uniquely"}}}),
+                );
+            }
+            thread::sleep(interval.min(timeout.saturating_sub(started.elapsed())));
+        }
+    }
+
+    fn wait_for_stability(&mut self, params: &Map<String, Value>) -> Result<Value, JsonRpcError> {
+        let app = app_query(params);
+        if app.name.is_none() && app.identifier.is_none() {
+            return Err(rpc_error(-32602, "wait_for_stability requires app"));
+        }
+        let timeout = bounded_ms(params, "timeoutMs", 5_000, 0, 60_000)?;
+        let interval = bounded_ms(
+            params,
+            "intervalMs",
+            100,
+            10,
+            timeout.as_millis().max(100) as u64,
+        )?;
+        let stable_for = bounded_ms(params, "stableMs", 300, 0, 10_000)?;
+        let condition = match params.get("condition") {
+            None | Some(Value::Null) => "stable",
+            Some(Value::String(condition)) => condition.as_str(),
+            Some(_) => return Err(rpc_error(-32602, "condition must be a string")),
+        };
+        if !matches!(condition, "stable" | "changed") {
+            return Err(rpc_error(-32602, "condition must be stable or changed"));
+        }
+        let started = Instant::now();
+        let first = self.backend.capture(&app).map_err(backend_error)?;
+        let first_names = self.register_snapshot(&first);
+        let mut last = first.clone();
+        let mut last_names = first_names.clone();
+        let mut stable_since = Instant::now();
+        loop {
+            let snapshot = self.backend.capture(&app).map_err(backend_error)?;
+            let names = self.register_snapshot(&snapshot);
+            let changed_from_last = !matches!(
+                classify_semantic_diff(
+                    &last,
+                    &last_names,
+                    &snapshot,
+                    &names,
+                    DiffPolicy::default()
+                )
+                .map_err(|error| rpc_error(-32603, error.to_string()))?,
+                axon_core::DiffClassification::Unchanged
+            );
+            if changed_from_last {
+                last = snapshot.clone();
+                last_names = names.clone();
+                stable_since = Instant::now();
+            }
+            let satisfied = if condition == "changed" {
+                !matches!(
+                    classify_semantic_diff(
+                        &first,
+                        &first_names,
+                        &snapshot,
+                        &names,
+                        DiffPolicy::default()
+                    )
+                    .map_err(|error| rpc_error(-32603, error.to_string()))?,
+                    axon_core::DiffClassification::Unchanged
+                )
+            } else {
+                stable_since.elapsed() >= stable_for
+            };
+            if satisfied || started.elapsed() >= timeout {
+                return Ok(
+                    json!({"wait":{"success":satisfied,"status":if satisfied {"satisfied"} else {"timeout"},"condition":condition,"elapsedMs":started.elapsed().as_millis(),"stableMs":stable_since.elapsed().as_millis(),"snapshot":snapshot}}),
+                );
+            }
+            thread::sleep(interval.min(timeout.saturating_sub(started.elapsed())));
+        }
+    }
+
     fn resolve(
         &mut self,
         params: &Map<String, Value>,
@@ -1036,6 +1198,29 @@ impl<B: PointerTargetVerifier + BackgroundPixelInput> Router<B> {
                 data: Some(json!({"status":"ambiguous","query":target,"candidates":candidates})),
             }),
         }
+    }
+
+    fn readable_state(&self, handle: &SnapshotHandle) -> Result<Map<String, Value>, JsonRpcError> {
+        let node = self.node(handle)?;
+        let mut state = Map::new();
+        for (field, value) in [
+            ("title", node.title.as_ref().or(node.name.as_ref())),
+            ("description", node.description.as_ref()),
+            ("identifier", node.identifier.as_ref()),
+            ("help", node.description.as_ref()),
+        ] {
+            if let Some(value) = value.filter(|value| !value.is_empty()) {
+                state.insert(field.into(), Value::String(value.clone()));
+            }
+        }
+        if let Some(value) = self.backend.read_value(handle).map_err(backend_error)?
+            && !value.is_empty()
+        {
+            state.insert("value".into(), Value::String(value));
+        } else if let Some(value) = node.value.as_ref().filter(|value| !value.is_empty()) {
+            state.insert("value".into(), Value::String(value.clone()));
+        }
+        Ok(state)
     }
 
     fn node_center(&self, handle: &SnapshotHandle) -> Result<(f64, f64), JsonRpcError> {
@@ -1196,6 +1381,29 @@ fn flattened(snapshot: &Snapshot) -> impl Iterator<Item = &axon_core::Node> {
     }
     out.into_iter()
 }
+fn bounded_ms(
+    params: &Map<String, Value>,
+    key: &str,
+    default: u64,
+    minimum: u64,
+    maximum: u64,
+) -> Result<Duration, JsonRpcError> {
+    let value = match params.get(key) {
+        None | Some(Value::Null) => default,
+        Some(Value::Number(number)) => number
+            .as_u64()
+            .ok_or_else(|| rpc_error(-32602, format!("{key} must be a non-negative integer")))?,
+        Some(_) => return Err(rpc_error(-32602, format!("{key} must be an integer"))),
+    };
+    if value < minimum {
+        return Err(rpc_error(
+            -32602,
+            format!("{key} must be at least {minimum}"),
+        ));
+    }
+    Ok(Duration::from_millis(value.min(maximum)))
+}
+
 fn app_query(params: &Map<String, Value>) -> AppQuery {
     let app = params.get("app").and_then(Value::as_str);
     let process_id = app.and_then(|value| value.strip_prefix("pid:").unwrap_or(value).parse().ok());
@@ -1398,6 +1606,7 @@ mod tests {
         pointer_target_matches: bool,
         verified_handles: Rc<RefCell<Vec<SnapshotHandle>>>,
         value: Rc<RefCell<Option<String>>>,
+        value_reads: Rc<RefCell<Vec<Option<String>>>>,
         clicks: Rc<RefCell<usize>>,
         scrolls: Rc<RefCell<usize>>,
         invokes: Rc<RefCell<Vec<String>>>,
@@ -1520,6 +1729,9 @@ mod tests {
             Ok(())
         }
         fn read_value(&self, _: &SnapshotHandle) -> Result<Option<String>, BackendError> {
+            if !self.value_reads.borrow().is_empty() {
+                return Ok(self.value_reads.borrow_mut().remove(0));
+            }
             Ok(self.value.borrow().clone())
         }
         fn set_value(&mut self, _: &SnapshotHandle, value: &str) -> Result<(), BackendError> {
@@ -1677,6 +1889,7 @@ mod tests {
             pointer_target_matches: true,
             verified_handles: Rc::new(RefCell::new(vec![])),
             value: Rc::new(RefCell::new(value.map(str::to_owned))),
+            value_reads: Rc::new(RefCell::new(vec![])),
             clicks: Rc::new(RefCell::new(0)),
             scrolls: Rc::new(RefCell::new(0)),
             invokes: Rc::new(RefCell::new(vec![])),
@@ -1884,6 +2097,7 @@ mod tests {
     fn unimplemented_tools_have_structured_errors_before_backend_dispatch() {
         // These are not delivery decisions: the Linux daemon has no code path for them at all, so
         // they remain transport errors instead of well-formed actions the daemon declined.
+
         let backend = backend(vec![], None);
         let scrolls = backend.scrolls.clone();
         let mut router = Router::new(backend);
@@ -1913,15 +2127,7 @@ mod tests {
         assert_eq!(
             EXCLUDED.iter().map(|entry| entry.0).collect::<Vec<_>>(),
             [
-                "navigate",
-                "windows",
-                "tabs",
-                "save",
-                "drag",
-                "scroll",
-                "wait_for_value",
-                "wait_for_stability",
-                "permit"
+                "navigate", "windows", "tabs", "save", "drag", "scroll", "permit"
             ]
         );
         for tool in ["click", "keyboard", "type", "invoke"] {
@@ -2600,6 +2806,160 @@ mod tests {
         assert_eq!(*clicks.borrow(), 0);
         assert_eq!(*focuses.borrow(), 0);
     }
+
+    #[test]
+    fn waits_poll_captures_and_report_satisfied_and_timeout_results() {
+        let backend = backend(vec![], Some("Ready"));
+        *backend.value_reads.borrow_mut() = vec![Some("Loading".into()), Some("Ready".into())];
+        let mut router = Router::new(backend);
+        let look = router
+            .request(request("look", json!({"app":"App","screenshot":false})))
+            .unwrap();
+        assert!(matches!(look, JsonRpcResponse::Success(_)));
+
+        let value = router
+            .request(request(
+                "wait_for_value",
+                json!({
+                    "target":{"app":"App","name":"root"},
+                    "equals":"Ready",
+                    "timeoutMs":100,
+                    "intervalMs":10
+                }),
+            ))
+            .unwrap();
+        let JsonRpcResponse::Success(value) = value else {
+            panic!()
+        };
+        assert_eq!(value.result["wait"]["success"], true);
+        assert_eq!(value.result["wait"]["matched"]["field"], "value");
+        assert!(router.backend.value_reads.borrow().is_empty());
+
+        let timeout = router
+            .request(request(
+                "wait_for_value",
+                json!({
+                    "target":{"app":"App","name":"root"},
+                    "contains":"never",
+                    "timeoutMs":0,
+                    "intervalMs":10
+                }),
+            ))
+            .unwrap();
+        let JsonRpcResponse::Success(timeout) = timeout else {
+            panic!()
+        };
+        assert_eq!(timeout.result["wait"]["success"], false);
+        assert_eq!(timeout.result["wait"]["status"], "predicate_timeout");
+
+        let stable = router
+            .request(request(
+                "wait_for_stability",
+                json!({"app":"App","stableMs":0,"timeoutMs":0,"intervalMs":10}),
+            ))
+            .unwrap();
+        let JsonRpcResponse::Success(stable) = stable else {
+            panic!()
+        };
+        assert_eq!(stable.result["wait"]["success"], true);
+
+        let changed = router
+            .request(request(
+                "wait_for_stability",
+                json!({"app":"App","condition":"changed","timeoutMs":0,"intervalMs":10}),
+            ))
+            .unwrap();
+        let JsonRpcResponse::Success(changed) = changed else {
+            panic!()
+        };
+        assert_eq!(changed.result["wait"]["success"], false);
+        assert_eq!(changed.result["wait"]["status"], "timeout");
+    }
+
+    #[test]
+    fn wait_for_value_matches_every_readable_state_field() {
+        let mut backend = backend(vec![], None);
+        let root = &mut backend.snapshot.app.windows[0].root;
+        root.title = Some("Window title".into());
+        root.description = Some("Helpful description".into());
+        root.identifier = Some("stable-id".into());
+        let mut router = Router::new(backend);
+        let look = router
+            .request(request("look", json!({"app":"App","screenshot":false})))
+            .unwrap();
+        assert!(matches!(look, JsonRpcResponse::Success(_)));
+
+        for (predicate, field) in [
+            (json!({"equals":"Window title"}), "title"),
+            (json!({"contains":"description"}), "description"),
+            (json!({"matches":"stable-.+"}), "identifier"),
+            (json!({"equals":"Helpful description"}), "help"),
+        ] {
+            let mut params = predicate.as_object().unwrap().clone();
+            params.insert("target".into(), json!({"app":"App","name":"window-title"}));
+            params.insert("timeoutMs".into(), json!(0));
+            params.insert("intervalMs".into(), json!(10));
+            let response = router
+                .request(request("wait_for_value", Value::Object(params)))
+                .unwrap();
+            let JsonRpcResponse::Success(success) = response else {
+                panic!()
+            };
+            assert_eq!(
+                success.result["wait"]["success"], true,
+                "{:?}",
+                success.result
+            );
+            if field != "help" {
+                assert_eq!(success.result["wait"]["matched"]["field"], field);
+            }
+        }
+    }
+
+    #[test]
+    fn waits_validate_predicates_patterns_and_durations_before_polling() {
+        assert_eq!(
+            bounded_ms(&Map::new(), "stableMs", 300, 0, 10_000).unwrap(),
+            Duration::from_millis(300)
+        );
+        assert_eq!(
+            bounded_ms(
+                json!({"stableMs": 50_000}).as_object().unwrap(),
+                "stableMs",
+                300,
+                0,
+                10_000,
+            )
+            .unwrap(),
+            Duration::from_millis(10_000)
+        );
+
+        let mut router = Router::new(backend(vec![], None));
+        let condition = router
+            .request(request(
+                "wait_for_stability",
+                json!({"app":"App","condition":7,"timeoutMs":0,"intervalMs":10}),
+            ))
+            .unwrap();
+        let JsonRpcResponse::Failure(condition) = condition else {
+            panic!()
+        };
+        assert_eq!(condition.error.code, -32602);
+
+        for params in [
+            json!({"target":{"app":"App","name":"root"},"timeoutMs":0}),
+            json!({"target":{"app":"App","name":"root"},"equals":"x","contains":"x","timeoutMs":0}),
+            json!({"target":{"app":"App","name":"root"},"matches":"[","timeoutMs":0}),
+            json!({"target":{"app":"App","name":"root"},"equals":"x","timeoutMs":-1}),
+        ] {
+            let response = router.request(request("wait_for_value", params)).unwrap();
+            let JsonRpcResponse::Failure(failure) = response else {
+                panic!()
+            };
+            assert_eq!(failure.error.code, -32602);
+        }
+    }
+
     #[test]
     fn invalid_json_is_parse_error() {
         let e = parse_request("{").unwrap_err();

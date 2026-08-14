@@ -226,10 +226,10 @@
     },
     {
       "availability" : {
-        "linux" : false,
+        "linux" : true,
         "mac" : true,
         "swift" : true,
-        "windows" : false
+        "windows" : true
       },
       "description" : "Poll readable accessibility state from an app-scoped semantic name until a contains, equals, or regex predicate holds, or a bounded timeout reports the last observed state.",
       "inputSchema" : {
@@ -293,10 +293,10 @@
     },
     {
       "availability" : {
-        "linux" : false,
+        "linux" : true,
         "mac" : true,
         "swift" : true,
-        "windows" : false
+        "windows" : true
       },
       "description" : "Poll full app observations until the accessibility surface remains unchanged for a stability window or changes from its initial state; timeout returns the final observation.",
       "inputSchema" : {
