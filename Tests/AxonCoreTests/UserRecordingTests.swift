@@ -11,6 +11,71 @@ import Testing
     #expect(scopes == [.app(editor), .app(browser), .all])
 }
 
+@Test func recordedSemanticTargetReportsAmbiguousDuplicateControls() {
+    let snapshot = AppSnapshot(
+        id: SnapshotID("ambiguous-recorded-target"),
+        app: AppIdentity(bundleIdentifier: "com.example", name: "Safari", processIdentifier: 1),
+        windows: [
+            AXNode(role: "AXWindow", title: "Browser", children: [
+                AXNode(role: "AXButton", title: "Close", actions: ["AXPress"]),
+                AXNode(role: "AXButton", title: "Close", actions: ["AXPress"])
+            ])
+        ],
+        screenshot: nil
+    )
+    let locator: [String: JSONValue] = [
+        "role": .string("AXButton"),
+        "title": .string("Close"),
+        "actions": .array([.string("AXPress")])
+    ]
+
+    let result = RecordedSemanticTargetBuilder.resolveTarget(app: "Safari", locator: locator, snapshot: snapshot)
+
+    #expect(result == .ambiguous)
+    #expect(RecordedSemanticTargetBuilder.target(app: "Safari", locator: locator, snapshot: snapshot) == nil)
+}
+
+@Test func recordedSemanticTargetResolvesLocatorWithoutDependingOnAXObjectIdentity() {
+    let snapshot = AppSnapshot(
+        id: SnapshotID("recorded-target"),
+        app: AppIdentity(bundleIdentifier: "com.example", name: "Example", processIdentifier: 1),
+        windows: [
+            AXNode(role: "AXWindow", title: "Calculator", children: [
+                AXNode(role: "AXButton", title: "7", actions: ["AXPress"])
+            ])
+        ],
+        screenshot: nil
+    )
+    let locator: [String: JSONValue] = [
+        "role": .string("AXButton"),
+        "title": .string("7"),
+        "actions": .array([.string("AXPress")])
+    ]
+
+    let target = RecordedSemanticTargetBuilder.target(app: "Example", locator: locator, snapshot: snapshot)
+
+    #expect(target?["app"] == .string("Example"))
+    #expect(target?["name"] != nil)
+    #expect(target?["locator"] == .object(locator))
+}
+
+@Test func axnRunParametersDefaultForegroundDeliveryWithoutOverridingExplicitPolicy() {
+    let params: [String: JSONValue] = [
+        "actions": .array([
+            .object(["tool": .string("click")]),
+            .object([
+                "tool": .string("click"),
+                "deliveryPolicy": .string(DeliveryPolicy.backgroundOnly.rawValue)
+            ])
+        ])
+    ]
+
+    let result = AxnRunParameters.applyingDefaultDeliveryPolicy(.foregroundPermitted, to: params)
+
+    #expect(result["actions"]?[0]?["deliveryPolicy"] == .string(DeliveryPolicy.foregroundPermitted.rawValue))
+    #expect(result["actions"]?[1]?["deliveryPolicy"] == .string(DeliveryPolicy.backgroundOnly.rawValue))
+}
+
 @Test func recordedSemanticTargetUsesCanonicalDeriverOutput() {
     let snapshot: JSONValue = .object([
         "windows": .array([.object([

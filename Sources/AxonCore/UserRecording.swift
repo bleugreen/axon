@@ -10,10 +10,71 @@ public enum RecordedUserAction: Equatable, Sendable {
     case performAction(target: JSONValue, action: String)
 }
 
+public enum AxnRunParameters {
+    public static func applyingDefaultDeliveryPolicy(
+        _ policy: DeliveryPolicy,
+        to params: [String: JSONValue]
+    ) -> [String: JSONValue] {
+        guard case let .array(actions)? = params["actions"] else {
+            return params
+        }
+        var result = params
+        result["actions"] = .array(actions.map { action in
+            guard case var .object(fields) = action, fields["deliveryPolicy"] == nil else {
+                return action
+            }
+            fields["deliveryPolicy"] = .string(policy.rawValue)
+            return .object(fields)
+        })
+        return result
+    }
+}
+
 /// Bridges recorder evidence to the same semantic naming model used by observations.
 /// The recorder does not own a complete serialized snapshot, so callers must supply the
 /// snapshot and the selected node index rather than deriving a second, local name.
 public enum RecordedSemanticTargetBuilder {
+    public enum Resolution: Equatable, Sendable {
+        case target(JSONValue)
+        case ambiguous
+        case missing
+        case invalidLocator
+    }
+
+    public static func resolveTarget(
+        app: String,
+        locator: [String: JSONValue],
+        snapshot: AppSnapshot
+    ) -> Resolution {
+        guard let parsedLocator = try? AXLocator(jsonValue: .object(locator)) else {
+            return .invalidLocator
+        }
+        let resolution = LocatorResolver().resolve(parsedLocator, in: snapshot)
+        guard resolution.status == .unique, let sourceIndex = resolution.best?.index else {
+            return resolution.status == .ambiguous ? .ambiguous : .missing
+        }
+        guard let target = target(
+            app: app,
+            locator: locator,
+            snapshotJSON: snapshot.jsonValue(includeTree: true),
+            sourceIndex: sourceIndex
+        ) else {
+            return .missing
+        }
+        return .target(target)
+    }
+
+    public static func target(
+        app: String,
+        locator: [String: JSONValue],
+        snapshot: AppSnapshot
+    ) -> JSONValue? {
+        guard case let .target(target) = resolveTarget(app: app, locator: locator, snapshot: snapshot) else {
+            return nil
+        }
+        return target
+    }
+
     public static func target(
         app: String,
         locator: [String: JSONValue],

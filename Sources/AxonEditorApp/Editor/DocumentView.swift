@@ -217,12 +217,10 @@ struct DocumentView: View {
         lastError = nil
         lastTrace = []
 
-        let params: [String: JSONValue]
-        if case let .object(object) = runTarget.jsonValue {
-            params = object
-        } else {
-            params = [:]
-        }
+        let params = AxnRunParameters.applyingDefaultDeliveryPolicy(
+            .foregroundPermitted,
+            to: axnParams(for: runTarget)
+        )
 
         Task.detached(priority: .userInitiated) {
             let response: Result<JSONRPCResponse, Error>
@@ -503,7 +501,14 @@ struct DocumentView: View {
     }
 
     private func axnParams() -> [String: JSONValue] {
-        if case let .object(object) = document.axn.jsonValue {
+        AxnRunParameters.applyingDefaultDeliveryPolicy(
+            .foregroundPermitted,
+            to: axnParams(for: document.axn)
+        )
+    }
+
+    private func axnParams(for axn: Axn) -> [String: JSONValue] {
+        if case let .object(object) = axn.jsonValue {
             return object
         }
         return [:]
