@@ -8,7 +8,11 @@ use std::{
     fs::OpenOptions,
     io::{self, BufRead, BufReader, Write},
     ptr,
-    sync::{Arc, mpsc},
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+        mpsc,
+    },
     thread,
     time::{Duration, Instant},
 };
@@ -35,6 +39,12 @@ const PIPE_TYPE_BYTE: u32 = 0;
 const PIPE_READMODE_BYTE: u32 = 0;
 const PIPE_WAIT: u32 = 0;
 const PIPE_REJECT_REMOTE_CLIENTS: u32 = 8;
+const PIPE_UNLIMITED_INSTANCES: u32 = 255;
+
+struct RouterRequest {
+    request: JsonRpcRequest,
+    response: mpsc::SyncSender<Option<axon_core::JsonRpcResponse>>,
+}
 
 #[link(name = "kernel32")]
 unsafe extern "system" {
@@ -158,62 +168,122 @@ impl Drop for PipeSecurity {
 }
 
 pub fn serve(
-    start_backend: impl FnOnce() -> Result<Router<WindowsBackend>, Box<dyn std::error::Error>>,
+    start_backend: impl FnOnce() -> Result<Router<WindowsBackend>, Box<dyn std::error::Error>>
+    + Send
+    + 'static,
     on_bound: impl FnOnce(),
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut security = PipeSecurity::current_user()?;
-    let mut on_bound = Some(on_bound);
-    let mut start_backend = Some(start_backend);
-    let mut router = None;
-    loop {
-        let handle = unsafe {
-            CreateNamedPipeW(
-                PIPE_WIDE.as_ptr(),
-                PIPE_ACCESS_DUPLEX,
-                PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT | PIPE_REJECT_REMOTE_CLIENTS,
-                1,
-                1024 * 1024,
-                1024 * 1024,
-                0,
-                (&mut security.attributes as *mut SecurityAttributes).cast(),
-            )
+    let (router_tx, router_rx) = mpsc::channel::<RouterRequest>();
+    let (ready_tx, ready_rx) = mpsc::sync_channel(1);
+    thread::spawn(move || {
+        let started = start_backend().map_err(|error| error.to_string());
+        let _ = ready_tx.send(
+            started
+                .as_ref()
+                .map(|router| router.capabilities().unwrap_or_default())
+                .map_err(Clone::clone),
+        );
+        let Ok(mut router) = started else {
+            return;
         };
-        if handle == INVALID_HANDLE_VALUE {
-            return Err(io::Error::last_os_error().into());
+        for request in router_rx {
+            let response = router.request(request.request);
+            let _ = request.response.send(response);
         }
+    });
+
+    let mut on_bound = Some(on_bound);
+    let capabilities = Arc::new(loop {
+        let handle = create_pipe(&mut security)?;
         if let Some(on_bound) = on_bound.take() {
             on_bound();
         }
-        if let Some(start_backend) = start_backend.take() {
-            router = Some(start_backend()?);
+        match ready_rx.recv().map_err(io::Error::other)? {
+            Ok(capabilities) => {
+                close_pipe(handle);
+                break capabilities;
+            }
+            Err(error) => {
+                close_pipe(handle);
+                return Err(io::Error::other(error).into());
+            }
         }
+    });
+    let stopping = Arc::new(AtomicBool::new(false));
+
+    while !stopping.load(Ordering::Acquire) {
+        let handle = create_pipe(&mut security)?;
         let connected = unsafe { ConnectNamedPipe(handle, ptr::null_mut()) } != 0
             || io::Error::last_os_error().raw_os_error() == Some(535);
-        if connected {
-            let shutdown = connection(
-                handle,
-                router
-                    .as_mut()
-                    .expect("backend initializes after the first pipe bind"),
-            )
-            .unwrap_or(false);
-            unsafe {
-                DisconnectNamedPipe(handle);
-                CloseHandle(handle);
-            }
-            if shutdown {
-                return Ok(());
-            }
+        if !connected {
+            close_pipe(handle);
             continue;
         }
-        unsafe {
-            DisconnectNamedPipe(handle);
-            CloseHandle(handle);
+        if stopping.load(Ordering::Acquire) {
+            close_pipe(handle);
+            break;
+        }
+        let router = router_tx.clone();
+        let capabilities = Arc::clone(&capabilities);
+        let stopping = Arc::clone(&stopping);
+        thread::spawn(move || {
+            if let Err(error) = connection(handle, &router, &capabilities, &stopping) {
+                eprintln!("axon-win: dropped a client connection: {error}");
+            }
+            close_pipe(handle);
+        });
+    }
+    Ok(())
+}
+
+fn create_pipe(security: &mut PipeSecurity) -> io::Result<isize> {
+    let handle = unsafe {
+        CreateNamedPipeW(
+            PIPE_WIDE.as_ptr(),
+            PIPE_ACCESS_DUPLEX,
+            PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT | PIPE_REJECT_REMOTE_CLIENTS,
+            PIPE_UNLIMITED_INSTANCES,
+            1024 * 1024,
+            1024 * 1024,
+            0,
+            (&mut security.attributes as *mut SecurityAttributes).cast(),
+        )
+    };
+    if handle == INVALID_HANDLE_VALUE {
+        Err(io::Error::last_os_error())
+    } else {
+        Ok(handle)
+    }
+}
+
+fn close_pipe(handle: isize) {
+    unsafe {
+        DisconnectNamedPipe(handle);
+        CloseHandle(handle);
+    }
+}
+
+fn wake_listener() {
+    // The accept loop may be between instances when shutdown is dispatched. Retry long enough to
+    // either connect to its next blocking listener or observe that it exited before creating one.
+    for _ in 0..100 {
+        match OpenOptions::new().read(true).write(true).open(PIPE) {
+            Ok(_) => return,
+            Err(error) if matches!(error.raw_os_error(), Some(2 | 231)) => {
+                thread::sleep(Duration::from_millis(10));
+            }
+            Err(_) => return,
         }
     }
 }
 
-fn connection(handle: isize, router: &mut Router<WindowsBackend>) -> io::Result<bool> {
+fn connection(
+    handle: isize,
+    router: &mpsc::Sender<RouterRequest>,
+    capabilities: &[axon_core::CapabilityInfo],
+    stopping: &AtomicBool,
+) -> io::Result<()> {
     let mut pending = Vec::new();
     let mut buf = [0u8; 8192];
     loop {
@@ -229,41 +299,14 @@ fn connection(handle: isize, router: &mut Router<WindowsBackend>) -> io::Result<
         } == 0
             || n == 0
         {
-            return Ok(false);
+            return Ok(());
         }
         pending.extend_from_slice(&buf[..n as usize]);
         while let Some(pos) = pending.iter().position(|b| *b == b'\n') {
             let line = pending.drain(..=pos).collect::<Vec<_>>();
             let line = String::from_utf8_lossy(&line);
-            let parsed = parse_request(line.trim());
-            let shutdown =
-                matches!(&parsed, Ok(req) if req.method == "shutdown" && req.id.is_some());
-            let response = match parsed {
-                // Answering health at all means UI Automation finished initializing, because
-                // the router only exists after it does; the pipe binds earlier so a stalled
-                // startup stays observable, and a request arriving in that window is refused
-                // rather than answered as ready.
-                Ok(req) if req.method == "health" => req.id.map(|id| {
-                    let capabilities = router.capabilities().unwrap_or_default();
-                    axon_core::JsonRpcResponse::success(
-                        id,
-                        serde_json::to_value(crate::lifecycle::daemon_report(
-                            std::process::id(),
-                            &capabilities,
-                            crate::lifecycle::current_session(),
-                        ))
-                        .unwrap_or(Value::Null),
-                    )
-                }),
-                Ok(req) if shutdown => req.id.map(|id| {
-                    axon_core::JsonRpcResponse::success(
-                        id,
-                        json!({"shutdown": true, "processId": std::process::id()}),
-                    )
-                }),
-                Ok(req) => router.request(req),
-                Err(e) => Some(e),
-            };
+            let (response, shutdown) =
+                dispatch_request(parse_request(line.trim()), router, capabilities)?;
             if let Some(response) = response {
                 let mut out = serde_json::to_vec(&response)?;
                 out.push(b'\n');
@@ -282,10 +325,55 @@ fn connection(handle: isize, router: &mut Router<WindowsBackend>) -> io::Result<
                 }
             }
             if shutdown {
-                return Ok(true);
+                stopping.store(true, Ordering::Release);
+                wake_listener();
+                return Ok(());
             }
         }
     }
+}
+
+fn dispatch_request(
+    parsed: Result<JsonRpcRequest, axon_core::JsonRpcResponse>,
+    router: &mpsc::Sender<RouterRequest>,
+    capabilities: &[axon_core::CapabilityInfo],
+) -> io::Result<(Option<axon_core::JsonRpcResponse>, bool)> {
+    let shutdown = matches!(&parsed, Ok(req) if req.method == "shutdown" && req.id.is_some());
+    let response = match parsed {
+        // Lifecycle requests deliberately bypass the serial router worker. A wait may own mutable
+        // backend state for minutes, but health and shutdown must remain available throughout it.
+        Ok(req) if req.method == "health" => req.id.map(|id| {
+            axon_core::JsonRpcResponse::success(
+                id,
+                serde_json::to_value(crate::lifecycle::daemon_report(
+                    std::process::id(),
+                    capabilities,
+                    crate::lifecycle::current_session(),
+                ))
+                .unwrap_or(Value::Null),
+            )
+        }),
+        Ok(req) if shutdown => req.id.map(|id| {
+            axon_core::JsonRpcResponse::success(
+                id,
+                json!({"shutdown": true, "processId": std::process::id()}),
+            )
+        }),
+        Ok(req) => {
+            let (response_tx, response_rx) = mpsc::sync_channel(1);
+            router
+                .send(RouterRequest {
+                    request: req,
+                    response: response_tx,
+                })
+                .map_err(|_| io::Error::other("router worker stopped"))?;
+            response_rx
+                .recv()
+                .map_err(|_| io::Error::other("router worker stopped"))?
+        }
+        Err(error) => Some(error),
+    };
+    Ok((response, shutdown))
 }
 
 pub fn shutdown() -> io::Result<u32> {
@@ -359,6 +447,41 @@ fn wait_until_ready_with<T: Send + 'static>(
 mod tests {
     use super::*;
     use std::sync::atomic::{AtomicUsize, Ordering};
+
+    #[test]
+    fn lifecycle_requests_bypass_a_busy_router() {
+        let (router, receiver) = mpsc::channel();
+        let (blocked_tx, blocked_rx) = mpsc::sync_channel(0);
+        thread::spawn(move || {
+            let request = receiver.recv().unwrap();
+            blocked_tx.send(()).unwrap();
+            thread::sleep(Duration::from_secs(1));
+            drop(request);
+        });
+        router
+            .send(RouterRequest {
+                request: JsonRpcRequest::new(
+                    Some(JsonRpcId::Integer(1)),
+                    "wait_for_value",
+                    Some(json!({})),
+                ),
+                response: mpsc::sync_channel(0).0,
+            })
+            .unwrap();
+        blocked_rx.recv().unwrap();
+
+        let started = Instant::now();
+        let health = JsonRpcRequest::new(Some(JsonRpcId::Integer(2)), "health", Some(json!({})));
+        let (response, shutdown) = dispatch_request(Ok(health), &router, &[]).unwrap();
+        assert!(response.is_some());
+        assert!(!shutdown);
+        assert!(started.elapsed() < Duration::from_millis(250));
+
+        let stop = JsonRpcRequest::new(Some(JsonRpcId::Integer(3)), "shutdown", Some(json!({})));
+        let (response, shutdown) = dispatch_request(Ok(stop), &router, &[]).unwrap();
+        assert!(response.is_some());
+        assert!(shutdown);
+    }
 
     #[test]
     fn readiness_requires_a_successful_health_response() {
