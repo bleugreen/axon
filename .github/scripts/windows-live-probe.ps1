@@ -1022,6 +1022,11 @@ function Invoke-ProbeStage {
         # Own the control process rather than depending on mutable desktop state, and cross the same
         # Interactive Task Scheduler boundary as the daemon and browser so all three share a desktop.
         $notepad = Start-ProbeNotepad
+        $notepadInitialRequest = @{ jsonrpc = '2.0'; id = 68; method = 'tools/call'; params = @{
+            name = 'look'; arguments = @{ app = [string]$notepad.ProcessId; screenshot = $false }
+        } } | ConvertTo-Json -Compress -Depth 10
+        $notepadInitial = Invoke-AxonMcp -Request $notepadInitialRequest
+        Write-Note "Notepad initial accessibility=$($notepadInitial.result.structuredContent | ConvertTo-Json -Compress -Depth 100)"
         $sentinel = "axon-sendinput-$([guid]::NewGuid().ToString('N'))"
         $notepadRequest = @{ jsonrpc = '2.0'; id = 70; method = 'tools/call'; params = @{
             name = 'keyboard'; arguments = @{ app = [string]$notepad.ProcessId; text = $sentinel; deliveryPolicy = 'foregroundPermitted' }
@@ -1032,6 +1037,7 @@ function Invoke-ProbeStage {
         } } | ConvertTo-Json -Compress -Depth 10
         $notepadLook = Invoke-AxonMcp -Request $notepadLookRequest
         Write-Note "Notepad SendInput control dispatch=$($notepadResult.result.structuredContent | ConvertTo-Json -Compress -Depth 20)"
+        Write-Note "Notepad accessibility after aimed dispatch=$($notepadLook.result.structuredContent | ConvertTo-Json -Compress -Depth 100)"
         if (($notepadLook.result.structuredContent | ConvertTo-Json -Compress -Depth 100) -notmatch $sentinel) {
             # SendInput reports queue insertion, not target consumption. Keep the same process
             # frontmost and repeat without an aimed transaction so the readback distinguishes a
