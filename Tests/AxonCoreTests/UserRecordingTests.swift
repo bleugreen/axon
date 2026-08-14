@@ -11,6 +11,30 @@ import Testing
     #expect(scopes == [.app(editor), .app(browser), .all])
 }
 
+@Test func recordedSemanticTargetReportsAmbiguousDuplicateControls() {
+    let snapshot = AppSnapshot(
+        id: SnapshotID("ambiguous-recorded-target"),
+        app: AppIdentity(bundleIdentifier: "com.example", name: "Safari", processIdentifier: 1),
+        windows: [
+            AXNode(role: "AXWindow", title: "Browser", children: [
+                AXNode(role: "AXButton", title: "Close", actions: ["AXPress"]),
+                AXNode(role: "AXButton", title: "Close", actions: ["AXPress"])
+            ])
+        ],
+        screenshot: nil
+    )
+    let locator: [String: JSONValue] = [
+        "role": .string("AXButton"),
+        "title": .string("Close"),
+        "actions": .array([.string("AXPress")])
+    ]
+
+    let result = RecordedSemanticTargetBuilder.resolveTarget(app: "Safari", locator: locator, snapshot: snapshot)
+
+    #expect(result == .ambiguous)
+    #expect(RecordedSemanticTargetBuilder.target(app: "Safari", locator: locator, snapshot: snapshot) == nil)
+}
+
 @Test func recordedSemanticTargetResolvesLocatorWithoutDependingOnAXObjectIdentity() {
     let snapshot = AppSnapshot(
         id: SnapshotID("recorded-target"),

@@ -397,25 +397,26 @@ public final class UserActionRecorder {
         return targetForElement(element, app: app, fallbackPoint: point)
     }
 
-    private func targetForElement(_ element: AXUIElement, app: AppIdentity, fallbackPoint: CGPoint = .zero) -> (target: JSONValue, observed: [JSONValue], warnings: [String], app: AppIdentity?) {
+    private func targetForElement(_ element: AXUIElement, app: AppIdentity, fallbackPoint: CGPoint? = nil) -> (target: JSONValue, observed: [JSONValue], warnings: [String], app: AppIdentity?) {
         let candidates = elementCandidates(from: element)
         guard let hitRole = candidates.first?.role else {
-            return pointTarget(fallbackPoint, app: app, warning: "AX element missing role; recorded point fallback")
+            return pointTarget(fallbackPoint ?? .zero, app: app, warning: "AX element missing role; recorded point fallback")
         }
         guard let selection = RecordedTargetSelector.select(from: candidates) else {
-            return pointTarget(fallbackPoint, app: app, warning: "AX element hierarchy did not contain a stable replay target; recorded point fallback")
+            return pointTarget(fallbackPoint ?? .zero, app: app, warning: "AX element hierarchy did not contain a stable replay target; recorded point fallback")
         }
         do {
             let snapshot = try AXFullTreeCapturer(elementStore: elementStore).capture(app: app.name, screenshot: false)
-            if let target = RecordedSemanticTargetBuilder.target(
+            switch RecordedSemanticTargetBuilder.resolveTarget(
                 app: app.name,
                 locator: selection.locator,
                 snapshot: snapshot
             ) {
+            case let .target(target):
                 var observed: [JSONValue] = [
                     .object(["kind": .string("ax-target"), "role": .string(hitRole), "targetRole": .string(selection.candidate.role)])
                 ]
-                if fallbackPoint != .zero {
+                if let fallbackPoint {
                     observed.append(pointEvidence(fallbackPoint))
                 }
                 return (
@@ -424,11 +425,17 @@ public final class UserActionRecorder {
                     selection.warnings,
                     app
                 )
+            case .ambiguous:
+                return pointTarget(fallbackPoint ?? .zero, app: app, warning: "AX locator matched multiple elements; recorded point fallback")
+            case .missing:
+                break
+            case .invalidLocator:
+                return pointTarget(fallbackPoint ?? .zero, app: app, warning: "Recorded AX locator was invalid; recorded point fallback")
             }
         } catch {
             // The point fallback below is explicit because semantic identity could not be captured.
         }
-        return pointTarget(fallbackPoint, app: app, warning: "Could not derive a canonical semantic name; recorded point fallback")
+        return pointTarget(fallbackPoint ?? .zero, app: app, warning: "Could not derive a canonical semantic name; recorded point fallback")
     }
 
     private func elementCandidates(from element: AXUIElement) -> [RecordedElementCandidate] {
