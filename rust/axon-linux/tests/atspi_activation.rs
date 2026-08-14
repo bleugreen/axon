@@ -52,7 +52,7 @@ use x11rb::{
         Event,
         xproto::{
             AtomEnum, ChangeWindowAttributesAux, ConnectionExt as _, CreateGCAux, CreateWindowAux,
-            EventMask, PropMode, WindowClass,
+            EventMask, PropMode, Rectangle, WindowClass,
         },
     },
     wrapper::ConnectionExt as _,
@@ -337,12 +337,6 @@ fn run_ocr_window(
             .map_window(window)
             .map_err(|error| error.to_string())?;
 
-        let font = connection
-            .generate_id()
-            .map_err(|error| error.to_string())?;
-        connection
-            .open_font(font, b"10x20")
-            .map_err(|error| error.to_string())?;
         let gc = connection
             .generate_id()
             .map_err(|error| error.to_string())?;
@@ -352,12 +346,54 @@ fn run_ocr_window(
                 window,
                 &CreateGCAux::new()
                     .foreground(setup.black_pixel)
-                    .background(setup.white_pixel)
-                    .font(font),
+                    .background(setup.white_pixel),
             )
             .map_err(|error| error.to_string())?;
+        let glyph = |character| match character {
+            'A' => [
+                0b01110, 0b10001, 0b10001, 0b11111, 0b10001, 0b10001, 0b10001,
+            ],
+            'X' => [
+                0b10001, 0b10001, 0b01010, 0b00100, 0b01010, 0b10001, 0b10001,
+            ],
+            'O' => [
+                0b01110, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b01110,
+            ],
+            'N' => [
+                0b10001, 0b11001, 0b10101, 0b10011, 0b10001, 0b10001, 0b10001,
+            ],
+            'C' => [
+                0b01110, 0b10001, 0b10000, 0b10000, 0b10000, 0b10001, 0b01110,
+            ],
+            'L' => [
+                0b10000, 0b10000, 0b10000, 0b10000, 0b10000, 0b10000, 0b11111,
+            ],
+            'I' => [
+                0b11111, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100, 0b11111,
+            ],
+            'K' => [
+                0b10001, 0b10010, 0b10100, 0b11000, 0b10100, 0b10010, 0b10001,
+            ],
+            _ => [0; 7],
+        };
+        let scale = 7i16;
+        let mut rectangles = Vec::new();
+        for (index, character) in "AXON CLICK".chars().enumerate() {
+            for (row, bits) in glyph(character).into_iter().enumerate() {
+                for column in 0..5 {
+                    if bits & (1 << (4 - column)) != 0 {
+                        rectangles.push(Rectangle {
+                            x: 45 + index as i16 * 6 * scale + column * scale,
+                            y: 85 + row as i16 * scale,
+                            width: scale as u16,
+                            height: scale as u16,
+                        });
+                    }
+                }
+            }
+        }
         connection
-            .image_text8(window, gc, 70, 120, b"AXON CLICK")
+            .poly_fill_rectangle(window, gc, &rectangles)
             .map_err(|error| error.to_string())?;
         connection.flush().map_err(|error| error.to_string())?;
         connection.sync().map_err(|error| error.to_string())?;
