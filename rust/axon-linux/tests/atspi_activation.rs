@@ -39,10 +39,11 @@ use std::{
         Arc, Mutex, mpsc,
         atomic::{AtomicBool, AtomicUsize, Ordering},
     },
+    thread,
     time::{Duration, Instant},
 };
 use zbus::{connection, interface, names::UniqueName, zvariant::ObjectPath};
-use x11rb::{COPY_DEPTH_FROM_PARENT, COPY_FROM_PARENT, connection::Connection, protocol::{Event, xproto::{AtomEnum, ChangeGCAux, ChangeWindowAttributesAux, ConnectionExt as _, CreateGCAux, CreateWindowAux, EventMask, PropMode, WindowClass}}, wrapper::ConnectionExt as _};
+use x11rb::{COPY_DEPTH_FROM_PARENT, COPY_FROM_PARENT, connection::Connection, protocol::{Event, xproto::{AtomEnum, ChangeWindowAttributesAux, ConnectionExt as _, CreateGCAux, CreateWindowAux, EventMask, PropMode, WindowClass}}, wrapper::ConnectionExt as _};
 
 /// How long the publishing provider takes to answer with the tree it was asked for.
 ///
@@ -286,10 +287,10 @@ fn run_ocr_window(
                 COPY_DEPTH_FROM_PARENT,
                 window,
                 root,
-                Self::X,
-                Self::Y,
-                Self::WIDTH as u16,
-                Self::HEIGHT as u16,
+                OcrWindow::X,
+                OcrWindow::Y,
+                OcrWindow::WIDTH as u16,
+                OcrWindow::HEIGHT as u16,
                 0,
                 WindowClass::INPUT_OUTPUT,
                 COPY_FROM_PARENT,
