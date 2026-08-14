@@ -290,11 +290,11 @@ function Start-ProbeBrowser {
     New-Item -ItemType Directory -Path $pages -Force | Out-Null
     Set-Content -LiteralPath (Join-Path $pages 'start.html') -Encoding utf8 -Value @'
 <!doctype html><title>Axon Foreground Probe</title>
-<main><h1>Axon Foreground Probe</h1><a href="complete.html">Continue</a></main>
+<main style="min-height: 300vh"><h1>Axon Foreground Probe</h1><a href="complete.html">Continue</a></main>
 '@
     Set-Content -LiteralPath (Join-Path $pages 'complete.html') -Encoding utf8 -Value @'
 <!doctype html><title>Axon Foreground Click Complete</title>
-<main><h1>Axon Foreground Click Complete</h1></main>
+<main style="min-height: 300vh"><h1>Axon Foreground Click Complete</h1></main>
 '@
     $url = ([uri](Join-Path $pages 'start.html')).AbsoluteUri
     $browser = [pscustomobject]@{ ProcessId = 0; ProfilePath = $profile; PageUrl = $url }
@@ -1057,12 +1057,26 @@ function Invoke-ProbeStage {
             name = 'look'; arguments = @{ app = $browserApp }
         } } | ConvertTo-Json -Compress -Depth 10
         $loaded = Invoke-AxonMcp -Request $loadedRequest
-        if (($loaded.result.structuredContent | ConvertTo-Json -Compress -Depth 100) -notmatch 'Axon Foreground Probe') {
+        $loadedWindow = @($loaded.result.structuredContent.app.windows |
+            ForEach-Object root | Select-Object -First 1)
+        if ($loadedWindow.Count -ne 1 -or
+            ($loaded.result.structuredContent | ConvertTo-Json -Compress -Depth 100) -notmatch
+                'Axon Foreground Probe') {
             throw 'Ctrl+L, text, and Return did not load the probe page in the targeted Edge window'
+        }
+        $continueLink = @($loadedWindow[0].children |
+            Where-Object { $_.role -eq 'Hyperlink' -and $_.title -eq 'Continue' } |
+            Select-Object -First 1)
+        if ($continueLink.Count -ne 1 -or
+            [string]::IsNullOrWhiteSpace([string]$continueLink[0].name)) {
+            throw 'the loaded Edge probe page did not expose its Continue hyperlink'
         }
 
         $clickRequest = @{ jsonrpc = '2.0'; id = 1; method = 'tools/call'; params = @{
-            name = 'click'; arguments = @{ target = @{ app = $browserApp; name = 'Continue' }; deliveryPolicy = 'foregroundPermitted' }
+            name = 'click'; arguments = @{
+                target = @{ app = $browserApp; name = [string]$continueLink[0].name }
+                deliveryPolicy = 'foregroundPermitted'
+            }
         } } | ConvertTo-Json -Compress -Depth 10
         $click = Invoke-AxonMcp -Request $clickRequest
         $clickEvidence = $click.result.structuredContent
@@ -1072,8 +1086,16 @@ function Invoke-ProbeStage {
             throw 'the page-content click did not return foreground dispatch and restoration evidence'
         }
         $clicked = Invoke-AxonMcp -Request $loadedRequest
-        if (($clicked.result.structuredContent | ConvertTo-Json -Compress -Depth 100) -notmatch 'Axon Foreground Click Complete') {
+        $clickedWindow = @($clicked.result.structuredContent.app.windows |
+            ForEach-Object root | Select-Object -First 1)
+        if ($clickedWindow.Count -ne 1 -or
+            ($clicked.result.structuredContent | ConvertTo-Json -Compress -Depth 100) -notmatch
+                'Axon Foreground Click Complete') {
             throw 'the page-content click did not navigate the targeted Edge window'
+        }
+        $parentName = [string]$clickedWindow[0].name
+        if ([string]::IsNullOrWhiteSpace($parentName)) {
+            throw 'the clicked Edge page did not expose a reusable semantic root name'
         }
         Write-Note 'foreground keyboard and page-content click acceptance verified from page state'
 
