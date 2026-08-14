@@ -6,9 +6,9 @@ use crate::{
 };
 use axon_core::{
     AppQuery, Application, BackendError, Capability, CapabilityInfo, CaptureBounds,
-    ChildPageCapture, ChildPageRequest, ForegroundTarget, Key, KeyboardIntent, Modifier, Node,
-    Observation, PlatformBackend, RecognizedText, RecordedCall, Rect, Screenshot, Snapshot,
-    SnapshotHandle, TextRecognitionProvider, Window, dispatch_in_foreground,
+    ChildPageCapture, ChildPageRequest, Key, KeyboardIntent, Modifier, Node, Observation,
+    PlatformBackend, RecognizedText, RecordedCall, Rect, Screenshot, Snapshot, SnapshotHandle,
+    TextRecognitionProvider, Window,
 };
 
 #[path = "capture.rs"]
@@ -1394,6 +1394,12 @@ impl PlatformBackend for WindowsBackend {
         send_click(p)
     }
     fn keyboard(&mut self, _: &AppQuery, intent: KeyboardIntent<'_>) -> Result<(), BackendError> {
+        if !pixel::ensure_foreground_focus() {
+            return Err(op(
+                "SendInput keyboard",
+                "the proved foreground process did not own keyboard focus; no events were posted",
+            ));
+        }
         match intent {
             KeyboardIntent::Text(text) => send_text(text),
             KeyboardIntent::Key(spec) => send_key(spec),

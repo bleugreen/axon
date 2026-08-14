@@ -31,6 +31,7 @@ use windows::{
                 GetAwarenessFromDpiAwarenessContext, GetWindowDpiAwarenessContext,
                 PhysicalToLogicalPointForPerMonitorDPI,
             },
+            Input::KeyboardAndMouse::{GetFocus, SetFocus},
             WindowsAndMessaging::{
                 CWP_SKIPDISABLED, CWP_SKIPINVISIBLE, CWP_SKIPTRANSPARENT, ChildWindowFromPointEx,
                 EnumWindows, GA_ROOT, GW_OWNER, GetAncestor, GetClassNameW, GetClientRect,
@@ -78,6 +79,47 @@ pub const MAX_ANCESTRY: usize = 64;
 
 pub fn hwnd(bits: u64) -> HWND {
     HWND(bits as usize as *mut c_void)
+}
+
+/// Proves that the foreground process also owns keyboard focus.
+///
+/// Foreground ownership and keyboard focus are separate Windows facts. In particular, an
+/// Interactive scheduled task can create a foreground Edge window whose input queue has no focused
+/// child. `SendInput` succeeds there while browser accelerators such as Ctrl+L receive nothing.
+/// Join the foreground thread's input queue long enough to inspect its focus. Preserve an existing
+/// focused child, because replacing the omnibox focus before a following text request would break
+/// the gesture; only an absent or foreign focus is repaired to the foreground top-level window.
+pub fn ensure_foreground_focus() -> bool {
+    let target = foreground_window();
+    if target.is_invalid() {
+        return false;
+    }
+    let Some(target_pid) = process_of(target) else {
+        return false;
+    };
+    let ours = unsafe { GetCurrentThreadId() };
+    let target_thread = unsafe { GetWindowThreadProcessId(target, None) };
+    if target_thread == 0 {
+        return false;
+    }
+    let attached =
+        target_thread != ours && unsafe { AttachThreadInput(ours, target_thread, true) }.as_bool();
+    if target_thread != ours && !attached {
+        return false;
+    }
+
+    let focused = unsafe { GetFocus() };
+    let mut proved = !focused.is_invalid() && process_of(focused) == Some(target_pid);
+    if !proved {
+        let _ = unsafe { SetFocus(Some(target)) };
+        let focused = unsafe { GetFocus() };
+        proved = !focused.is_invalid() && process_of(focused) == Some(target_pid);
+    }
+
+    if attached {
+        let _ = unsafe { AttachThreadInput(ours, target_thread, false) };
+    }
+    proved
 }
 
 pub fn bits(window: HWND) -> u64 {
