@@ -62,9 +62,9 @@ use windows::{
             Input::KeyboardAndMouse::{
                 GetKeyboardLayout, INPUT, INPUT_0, INPUT_KEYBOARD, INPUT_MOUSE, KEYBDINPUT,
                 KEYEVENTF_EXTENDEDKEY, KEYEVENTF_KEYUP, KEYEVENTF_SCANCODE, KEYEVENTF_UNICODE,
-                MAPVK_VK_TO_VSC_EX, MOUSEEVENTF_ABSOLUTE, MOUSEEVENTF_LEFTDOWN,
-                MOUSEEVENTF_LEFTUP, MOUSEEVENTF_MOVE, MOUSEEVENTF_VIRTUALDESK, MOUSEINPUT,
-                MapVirtualKeyW, SendInput, SetActiveWindow, VIRTUAL_KEY, VkKeyScanExW,
+                MAPVK_VK_TO_VSC_EX, MOUSEEVENTF_ABSOLUTE, MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP,
+                MOUSEEVENTF_MOVE, MOUSEEVENTF_VIRTUALDESK, MOUSEINPUT, MapVirtualKeyW, SendInput,
+                SetActiveWindow, VIRTUAL_KEY, VkKeyScanExW,
             },
             WindowsAndMessaging::{
                 ASFW_ANY, AllowSetForegroundWindow, BringWindowToTop, GetForegroundWindow,
