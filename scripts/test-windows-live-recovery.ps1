@@ -45,6 +45,33 @@ if (-not $ProbeScript) {
     $ProbeScript = Join-Path $PSScriptRoot '..\.github\scripts\windows-live-probe.ps1'
 }
 
+function Start-ProbeNotepad {
+    $script:Machine.Log.Add('start-probe-notepad')
+    $script:Machine.ProbeNotepadTaskRegistered = $true
+    [pscustomobject]@{ ProcessId = 7070 }
+}
+
+function Stop-ProbeNotepad {
+    param([Parameter(Mandatory)] $Notepad)
+    $script:Machine.Log.Add("stop-probe-notepad $($Notepad.ProcessId)")
+    $script:Machine.ProbeNotepadTaskRegistered = $false
+}
+
+function Register-ProbeNotepadTask {
+    $script:Machine.Log.Add('register-probe-notepad-task')
+    $script:Machine.ProbeNotepadTaskRegistered = $true
+}
+
+function Start-ProbeNotepadTask {
+    $script:Machine.Log.Add('start-probe-notepad-task')
+    if (-not $script:Machine.ProbeNotepadTaskRegistered) { throw 'the probe Notepad task was not registered' }
+}
+
+function Unregister-ProbeNotepadTask {
+    $script:Machine.Log.Add('unregister-probe-notepad-task')
+    $script:Machine.ProbeNotepadTaskRegistered = $false
+}
+
 $ProbeScript = (Resolve-Path $ProbeScript).Path
 
 . $ProbeScript
@@ -57,7 +84,8 @@ $StubbedSeams = @(
     'Write-Note', 'Wait-Tick', 'Test-ProcessIsRunning', 'Get-AxonProcess', 'Test-EdgeIsRunning', 'Stop-ProcessById',
     'Get-DesktopRegistrationPath', 'Get-DesktopTaskState', 'Start-DesktopDaemonTask', 'Register-ProbeTask',
     'Unregister-ProbeTask', 'Start-ProbeTask', 'Register-ProbeBrowserTask', 'Unregister-ProbeBrowserTask',
-    'Start-ProbeBrowserTask', 'Register-ProbeActivationTask', 'Start-ProbeActivationTask',
+    'Start-ProbeBrowserTask', 'Register-ProbeNotepadTask', 'Start-ProbeNotepadTask', 'Unregister-ProbeNotepadTask',
+    'Start-ProbeNotepad', 'Stop-ProbeNotepad', 'Register-ProbeActivationTask', 'Start-ProbeActivationTask',
     'Wait-ForProbeActivationTask', 'Unregister-ProbeActivationTask', 'Invoke-Axon', 'Invoke-AxonMcp', 'Start-ProbeBrowser',
     'Register-ProbeForegroundTask', 'Start-ProbeForegroundTask', 'Wait-ForProbeForegroundTask', 'Unregister-ProbeForegroundTask',
     'Stop-ProbeBrowser', 'Invoke-HandBackSweep', 'Get-ExpectedVersion',
@@ -270,8 +298,10 @@ function Reset-Machine {
         ParkState = $null
         ProbeTaskRegistered = $false
         ProbeBrowserTaskRegistered = $false
+        ProbeNotepadTaskRegistered = $false
         ProbeActivationTaskRegistered = $false
         ProbeForegroundTaskRegistered = $false
+        NotepadText = $null
         Processes = @()
         Quarantined = @()
         Health = $null
@@ -641,6 +671,10 @@ function Invoke-AxonMcp {
     }
 
     if ($name -eq 'keyboard' -or $name -eq 'click') {
+        if ($name -eq 'keyboard' -and [string]$parsed.params.arguments.app -eq '7070' -and
+            $null -ne $parsed.params.arguments.text) {
+            $script:Machine.NotepadText = [string]$parsed.params.arguments.text
+        }
         if ($name -eq 'click') { $script:Machine.PageTitle = 'Axon Foreground Click Complete' }
         $pointerRestored = if ($name -eq 'click') { $true } else { $null }
         return @{
@@ -717,7 +751,11 @@ function Invoke-AxonMcp {
                             root = @{
                                 role = 'Window'
                                 name = 'edge-root'
-                                title = $script:Machine.PageTitle
+                                title = if ([string]$parsed.params.arguments.app -eq '7070') {
+                                    $script:Machine.NotepadText
+                                } else {
+                                    $script:Machine.PageTitle
+                                }
                             }
                         }
                     )

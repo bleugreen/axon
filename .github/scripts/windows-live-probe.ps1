@@ -58,6 +58,7 @@ $DesktopTaskName = 'Axon Windows Daemon'
 # somebody's start-at-login daemon.
 $ProbeTaskName = 'Axon Live Probe Daemon'
 $ProbeBrowserTaskName = 'Axon Live Probe Browser'
+$ProbeNotepadTaskName = 'Axon Live Probe Notepad'
 $ProbeActivationTaskName = 'Axon Live Probe Prior Activation'
 $ProbeForegroundTaskName = 'Axon Live Probe Foreground Sweep'
 $LiveDirectory = 'C:\ProgramData\Axon\live'
@@ -112,6 +113,66 @@ function Write-Note {
     param([Parameter(Mandatory)][string] $Message)
 
     Write-Host $Message
+}
+
+function Start-ProbeNotepad {
+    <# Launches a blank Notepad through the logged-in desktop token and returns its UIA-visible pid. #>
+    $existing = @(Get-Process notepad -ErrorAction SilentlyContinue | ForEach-Object Id)
+    try {
+        Register-ProbeNotepadTask
+        Start-ProbeNotepadTask
+        $timer = [System.Diagnostics.Stopwatch]::StartNew()
+        do {
+            $candidates = @(Get-Process notepad -ErrorAction SilentlyContinue |
+                Where-Object { $existing -notcontains $_.Id })
+            foreach ($candidate in $candidates) {
+                $request = @{ jsonrpc = '2.0'; id = 69; method = 'tools/call'; params = @{
+                    name = 'look'; arguments = @{ app = [string]$candidate.Id; screenshot = $false }
+                } } | ConvertTo-Json -Compress -Depth 10
+                $look = Invoke-AxonMcp -Request $request
+                if ($look.result.isError -eq $false -and
+                    @($look.result.structuredContent.app.windows).Count -gt 0) {
+                    return [pscustomobject]@{ ProcessId = [int]$candidate.Id }
+                }
+            }
+            Wait-Tick
+        } while ($timer.Elapsed.TotalSeconds -lt $ProcessDiscoveryTimeoutSeconds)
+        throw 'the probe-owned Notepad instance produced no window-owning process'
+    }
+    catch {
+        foreach ($candidate in @(Get-Process notepad -ErrorAction SilentlyContinue |
+            Where-Object { $existing -notcontains $_.Id })) {
+            Stop-ProcessById -ProcessId $candidate.Id
+        }
+        Unregister-ProbeNotepadTask
+        throw
+    }
+}
+
+function Stop-ProbeNotepad {
+    param([Parameter(Mandatory)] $Notepad)
+    try {
+        if (Test-ProcessIsRunning -ProcessId $Notepad.ProcessId) {
+            Stop-ProcessById -ProcessId $Notepad.ProcessId
+        }
+    }
+    finally {
+        Unregister-ProbeNotepadTask
+    }
+}
+
+function Register-ProbeNotepadTask {
+    $action = New-ScheduledTaskAction -Execute 'notepad.exe'
+    $principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive
+    Register-ScheduledTask -TaskName $ProbeNotepadTaskName -Action $action -Principal $principal -Force | Out-Null
+}
+
+function Start-ProbeNotepadTask {
+    Start-ScheduledTask -TaskName $ProbeNotepadTaskName
+}
+
+function Unregister-ProbeNotepadTask {
+    Unregister-ScheduledTask -TaskName $ProbeNotepadTaskName -Confirm:$false -ErrorAction SilentlyContinue
 }
 
 function Register-ProbeForegroundTask {
@@ -640,6 +701,7 @@ function Invoke-BuildStage {
     Unregister-ProbeActivationTask
     Unregister-ProbeForegroundTask
     Unregister-ProbeBrowserTask
+    Unregister-ProbeNotepadTask
     Unregister-ProbeTask
     Stop-ProbeDaemonProcess
 
@@ -818,6 +880,7 @@ function Invoke-ProbeStage {
     $stageError = $null
     $sweepError = $null
     $browser = $null
+    $notepad = $null
 
     try {
         # The probe's own registration, at its own name. `daemon install` is deliberately not used:
@@ -956,19 +1019,16 @@ function Invoke-ProbeStage {
             throw "Edge paging covered $seen children but reported total $($children.total)"
         }
         # Discriminate session-wide injection from browser-specific handling before exercising Edge.
-        # The persistent interactive desktop includes Notepad; its document value is a readable
-        # postcondition for the exact same aimed keyboard transaction.
-        $notepad = $listResponse.result.structuredContent.apps |
-            Where-Object { $_.name -match 'Notepad' -and $null -ne $_.identifier } |
-            Select-Object -First 1
-        if ($null -eq $notepad) { throw 'the interactive desktop exposed no Notepad control target' }
+        # Own the control process rather than depending on mutable desktop state, and cross the same
+        # Interactive Task Scheduler boundary as the daemon and browser so all three share a desktop.
+        $notepad = Start-ProbeNotepad
         $sentinel = "axon-sendinput-$([guid]::NewGuid().ToString('N'))"
         $notepadRequest = @{ jsonrpc = '2.0'; id = 70; method = 'tools/call'; params = @{
-            name = 'keyboard'; arguments = @{ app = [string]$notepad.identifier; text = $sentinel; deliveryPolicy = 'foregroundPermitted' }
+            name = 'keyboard'; arguments = @{ app = [string]$notepad.ProcessId; text = $sentinel; deliveryPolicy = 'foregroundPermitted' }
         } } | ConvertTo-Json -Compress -Depth 10
         $notepadResult = Invoke-AxonMcp -Request $notepadRequest
         $notepadLookRequest = @{ jsonrpc = '2.0'; id = 71; method = 'tools/call'; params = @{
-            name = 'look'; arguments = @{ app = [string]$notepad.identifier; screenshot = $false }
+            name = 'look'; arguments = @{ app = [string]$notepad.ProcessId; screenshot = $false }
         } } | ConvertTo-Json -Compress -Depth 10
         $notepadLook = Invoke-AxonMcp -Request $notepadLookRequest
         Write-Note "Notepad SendInput control dispatch=$($notepadResult.result.structuredContent | ConvertTo-Json -Compress -Depth 20)"
@@ -1124,6 +1184,13 @@ function Invoke-ProbeStage {
         # The probe's own registration and daemon go now rather than in the restore stage, so that a
         # job which never reaches the restore still leaves nothing of this lane's registered. The
         # restore repeats both, because a stage that dies here reaches neither.
+        if ($null -ne $notepad) {
+            try { Stop-ProbeNotepad -Notepad $notepad }
+            catch {
+                $sweepError = $_.Exception.Message
+                Write-Note "warning: this lane could not remove its probe-owned Notepad: $sweepError"
+            }
+        }
         if ($null -ne $browser) {
             try { Stop-ProbeBrowser -Browser $browser }
             catch {
