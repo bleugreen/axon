@@ -27,7 +27,9 @@
 #![cfg(target_os = "linux")]
 
 use atspi::{ObjectRef, ObjectRefOwned};
-use axon_core::{AppQuery, JsonRpcId, JsonRpcRequest, JsonRpcResponse, Node, PlatformBackend, Snapshot, reason};
+use axon_core::{
+    AppQuery, JsonRpcId, JsonRpcRequest, JsonRpcResponse, Node, PlatformBackend, Snapshot, reason,
+};
 use axon_linux::lifecycle::{SessionEnvironment, daemon_report};
 use axon_linux::{ACTIVATION_TIMEOUT, CHILD_NOT_PUBLISHED, LinuxBackend, Router};
 use std::{
@@ -36,14 +38,26 @@ use std::{
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
     sync::{
-        Arc, Mutex, mpsc,
+        Arc, Mutex,
         atomic::{AtomicBool, AtomicUsize, Ordering},
+        mpsc,
     },
     thread,
     time::{Duration, Instant},
 };
+use x11rb::{
+    COPY_DEPTH_FROM_PARENT, COPY_FROM_PARENT,
+    connection::Connection,
+    protocol::{
+        Event,
+        xproto::{
+            AtomEnum, ChangeWindowAttributesAux, ConnectionExt as _, CreateGCAux, CreateWindowAux,
+            EventMask, PropMode, WindowClass,
+        },
+    },
+    wrapper::ConnectionExt as _,
+};
 use zbus::{connection, interface, names::UniqueName, zvariant::ObjectPath};
-use x11rb::{COPY_DEPTH_FROM_PARENT, COPY_FROM_PARENT, connection::Connection, protocol::{Event, xproto::{AtomEnum, ChangeWindowAttributesAux, ConnectionExt as _, CreateGCAux, CreateWindowAux, EventMask, PropMode, WindowClass}}, wrapper::ConnectionExt as _};
 
 /// How long the publishing provider takes to answer with the tree it was asked for.
 ///
@@ -281,7 +295,9 @@ fn run_ocr_window(
             .map_err(|error| error.to_string())?
             .check()
             .map_err(|_| "another window manager already owns this X server".to_string())?;
-        let window = connection.generate_id().map_err(|error| error.to_string())?;
+        let window = connection
+            .generate_id()
+            .map_err(|error| error.to_string())?;
         connection
             .create_window(
                 COPY_DEPTH_FROM_PARENT,
@@ -300,7 +316,13 @@ fn run_ocr_window(
             )
             .map_err(|error| error.to_string())?;
         connection
-            .change_property32(PropMode::REPLACE, window, pid, AtomEnum::CARDINAL, &[std::process::id()])
+            .change_property32(
+                PropMode::REPLACE,
+                window,
+                pid,
+                AtomEnum::CARDINAL,
+                &[std::process::id()],
+            )
             .map_err(|error| error.to_string())?;
         let publish = |property, kind, values: &[u32]| -> Result<(), String> {
             connection
@@ -311,19 +333,31 @@ fn run_ocr_window(
         publish(supported, AtomEnum::ATOM, &[active, clients, pid])?;
         publish(clients, AtomEnum::WINDOW, &[window])?;
         publish(active, AtomEnum::WINDOW, &[window])?;
-        connection.map_window(window).map_err(|error| error.to_string())?;
+        connection
+            .map_window(window)
+            .map_err(|error| error.to_string())?;
 
-        let font = connection.generate_id().map_err(|error| error.to_string())?;
-        connection.open_font(font, b"10x20").map_err(|error| error.to_string())?;
-        let gc = connection.generate_id().map_err(|error| error.to_string())?;
+        let font = connection
+            .generate_id()
+            .map_err(|error| error.to_string())?;
+        connection
+            .open_font(font, b"10x20")
+            .map_err(|error| error.to_string())?;
+        let gc = connection
+            .generate_id()
+            .map_err(|error| error.to_string())?;
         connection
             .create_gc(
                 gc,
                 window,
-                &CreateGCAux::new().foreground(setup.black_pixel).background(setup.white_pixel).font(font),
+                &CreateGCAux::new()
+                    .foreground(setup.black_pixel)
+                    .background(setup.white_pixel)
+                    .font(font),
             )
             .map_err(|error| error.to_string())?;
-        connection.image_text8(window, gc, 70, 120, b"AXON CLICK")
+        connection
+            .image_text8(window, gc, 70, 120, b"AXON CLICK")
             .map_err(|error| error.to_string())?;
         connection.flush().map_err(|error| error.to_string())?;
         connection.sync().map_err(|error| error.to_string())?;
@@ -338,7 +372,11 @@ fn run_ocr_window(
         match connection.poll_for_event() {
             Ok(Some(Event::ClientMessage(message))) if message.type_ == properties[1] => {
                 let _ = connection.change_property32(
-                    PropMode::REPLACE, root, properties[1], AtomEnum::WINDOW, &[message.window],
+                    PropMode::REPLACE,
+                    root,
+                    properties[1],
+                    AtomEnum::WINDOW,
+                    &[message.window],
                 );
                 let _ = connection.flush();
             }
@@ -379,12 +417,19 @@ fn look_ocr_coordinates_and_screenshot_text_click_cross_the_real_linux_route() {
             "frames": true
         })),
     )));
-    assert!(looked.get("screenshot").is_none(), "OCR-only look must not return PNG bytes");
+    assert!(
+        looked.get("screenshot").is_none(),
+        "OCR-only look must not return PNG bytes"
+    );
     let recognized = looked["screenText"]
         .as_array()
         .expect("screenText is the shared array")
         .iter()
-        .find(|item| item["text"].as_str().is_some_and(|text| text.contains("AXON CLICK")))
+        .find(|item| {
+            item["text"]
+                .as_str()
+                .is_some_and(|text| text.contains("AXON CLICK"))
+        })
         .unwrap_or_else(|| panic!("Tesseract recognizes the deterministic label: {looked:#}"));
     let frame = &recognized["frame"];
     let (x, y, width, height) = (
@@ -416,7 +461,10 @@ fn look_ocr_coordinates_and_screenshot_text_click_cross_the_real_linux_route() {
         .clicked
         .recv_timeout(PROMPTLY)
         .expect("the existing Linux foreground XTest path delivers the OCR click");
-    let expected = ((x + width / 2.0).round() as i16, (y + height / 2.0).round() as i16);
+    let expected = (
+        (x + width / 2.0).round() as i16,
+        (y + height / 2.0).round() as i16,
+    );
     assert_eq!(
         event, expected,
         "the click effect lands at the center of the absolute frame returned by look"
@@ -432,7 +480,8 @@ fn missing_tesseract_preserves_semantics_and_reports_remediation() {
     }
     let _desktop = Desktop::start();
     let _window = OcrWindow::start();
-    let mut router = Router::new(LinuxBackend::start().expect("the semantic daemon remains healthy"));
+    let mut router =
+        Router::new(LinuxBackend::start().expect("the semantic daemon remains healthy"));
     let looked = success(router.request(JsonRpcRequest::new(
         Some(JsonRpcId::Integer(1)),
         "look",
@@ -564,8 +613,7 @@ fn supervise_an_inner_run(test: &str) {
     if test == NO_OCR {
         command.env("PATH", bus.directory.join("no-executables"));
     }
-    let status = command.status()
-        .expect("this test binary re-executes");
+    let status = command.status().expect("this test binary re-executes");
     assert!(
         status.success(),
         "the run against the private bus failed; its output is above"
