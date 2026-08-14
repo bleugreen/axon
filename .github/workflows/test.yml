@@ -282,7 +282,7 @@ jobs:
             sleep 0.1
           done
           xdpyinfo -display :99 >/dev/null
-          cargo test -p axon-linux -- --ignored
+          cargo test -p axon-linux -- --ignored --test-threads=1
 
       - name: Build axon-linux in release mode
         working-directory: rust
