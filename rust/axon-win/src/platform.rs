@@ -265,6 +265,18 @@ fn keyboard_event_metadata(inputs: &[INPUT]) -> Vec<KeyboardEventMetadata> {
         .collect()
 }
 
+fn proved_foreground_identity(proof: &pixel::ForegroundFocusProof) -> Option<(u64, u32)> {
+    let foreground = &proof.after_repair.as_ref()?.foreground;
+    Some((foreground.hwnd, foreground.process_id?))
+}
+
+fn snapshot_matches_foreground_identity(
+    snapshot: &pixel::KeyboardSnapshot,
+    expected: (u64, u32),
+) -> bool {
+    snapshot.foreground.hwnd == expected.0 && snapshot.foreground.process_id == Some(expected.1)
+}
+
 fn send_keyboard_batch(
     inputs: &[INPUT],
     intent: KeyboardBatchIntent,
@@ -296,15 +308,24 @@ fn send_keyboard_batch(
     } else {
         None
     };
-    if stability_proof
-        .as_ref()
-        .is_some_and(|proof| !proof.proved())
-    {
-        return Err(op(
-            "SendInput keyboard",
-            "the foreground top-level focus was not stable; no events were posted",
-        ));
-    }
+    let stable_foreground_identity = if require_top_level {
+        let first_identity = proved_foreground_identity(&focus_proof);
+        let second_identity = stability_proof
+            .as_ref()
+            .filter(|proof| proof.proved())
+            .and_then(proved_foreground_identity);
+        match (first_identity, second_identity) {
+            (Some(first), Some(second)) if first == second => Some(first),
+            _ => {
+                return Err(op(
+                    "SendInput keyboard",
+                    "the foreground top-level window changed during the stability proof; no events were posted",
+                ));
+            }
+        }
+    } else {
+        None
+    };
     let top_level_focus_repair_engaged = focus_proof.classification
         == pixel::FocusProofClassification::ProvedRepairedFocus
         || stability_proof.as_ref().is_some_and(|proof| {
@@ -318,6 +339,14 @@ fn send_keyboard_batch(
         intended_process_id,
         false,
     );
+    if stable_foreground_identity
+        .is_some_and(|expected| !snapshot_matches_foreground_identity(&before_send, expected))
+    {
+        return Err(op(
+            "SendInput keyboard",
+            "the foreground top-level window changed at the posting boundary; no events were posted",
+        ));
+    }
     let started = Instant::now();
     // This is the sole posting point for both key chords and Unicode text. A full count proves only
     // that Windows accepted the records, not that the foreground application consumed them.
@@ -376,6 +405,37 @@ fn top_level_focus_window_class(key: Key, modifiers: &[Modifier]) -> Option<&'st
 #[cfg(test)]
 mod keyboard_focus_requirement_tests {
     use super::*;
+
+    #[test]
+    fn foreground_identity_requires_the_same_hwnd_and_process() {
+        let ownership = pixel::WindowOwnership {
+            hwnd: 41,
+            thread_id: Some(7),
+            process_id: Some(11),
+        };
+        let snapshot = pixel::KeyboardSnapshot {
+            monotonic_micros: 0,
+            phase: pixel::KeyboardSnapshotPhase::BeforeSend,
+            intended_process_id: 11,
+            foreground: ownership,
+            gui_thread: None,
+            caller_attached_to_target_queue: false,
+            caller_queue: pixel::QueueStatus {
+                current_bits: 0,
+                changed_bits: 0,
+                keyboard_current: false,
+                keyboard_changed: false,
+                raw_input_current: false,
+                raw_input_changed: false,
+            },
+            foreground_matches_intended_process: true,
+            focus_matches_intended_process: true,
+        };
+
+        assert!(snapshot_matches_foreground_identity(&snapshot, (41, 11)));
+        assert!(!snapshot_matches_foreground_identity(&snapshot, (42, 11)));
+        assert!(!snapshot_matches_foreground_identity(&snapshot, (41, 12)));
+    }
 
     #[test]
     fn only_the_measured_ctrl_l_accelerator_requires_top_level_focus() {
