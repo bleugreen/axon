@@ -58,7 +58,7 @@ $StubbedSeams = @(
     'Get-DesktopRegistrationPath', 'Get-DesktopTaskState', 'Start-DesktopDaemonTask', 'Register-ProbeTask',
     'Unregister-ProbeTask', 'Start-ProbeTask', 'Register-ProbeBrowserTask', 'Unregister-ProbeBrowserTask',
     'Start-ProbeBrowserTask', 'Register-ProbeActivationTask', 'Start-ProbeActivationTask',
-    'Wait-ForProbeActivationTask', 'Unregister-ProbeActivationTask', 'Invoke-Axon', 'Invoke-AxonMcp', 'Start-ProbeBrowser',
+    'Wait-ForProbeActivationTask', 'Unregister-ProbeActivationTask', 'Remove-ProbeActivationResult', 'Invoke-Axon', 'Invoke-AxonMcp', 'Start-ProbeBrowser',
     'Register-ProbeForegroundTask', 'Start-ProbeForegroundTask', 'Wait-ForProbeForegroundTask', 'Unregister-ProbeForegroundTask',
     'Stop-ProbeBrowser', 'Invoke-HandBackSweep', 'Get-ExpectedVersion',
     'Invoke-CargoBuild', 'Copy-ProbeExecutable', 'Read-ParkState', 'Write-ParkState', 'Clear-ParkState'
@@ -535,6 +535,11 @@ function Wait-ForProbeActivationTask {
 function Unregister-ProbeActivationTask {
     $script:Machine.Log.Add('unregister-probe-activation-task')
     $script:Machine.ProbeActivationTaskRegistered = $false
+}
+
+function Remove-ProbeActivationResult {
+    param([Parameter(Mandatory)][string] $ResultPath)
+    $script:Machine.Log.Add("remove-probe-activation-result $ResultPath")
 }
 
 function Register-ProbeForegroundTask {

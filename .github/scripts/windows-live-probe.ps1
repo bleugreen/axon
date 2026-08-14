@@ -246,6 +246,12 @@ function Unregister-ProbeActivationTask {
     Unregister-ScheduledTask -TaskName $ProbeActivationTaskName -Confirm:$false -ErrorAction SilentlyContinue
 }
 
+function Remove-ProbeActivationResult {
+    param([Parameter(Mandatory)][string] $ResultPath)
+
+    Remove-Item -LiteralPath $ResultPath, "$ResultPath.tmp" -Force -ErrorAction SilentlyContinue
+}
+
 function Invoke-HandBackSweep {
     param(
         [Parameter(Mandatory)][int] $PriorProcessId,
@@ -1035,7 +1041,7 @@ function Invoke-ProbeStage {
         }
         finally {
             Unregister-ProbeActivationTask
-            Remove-Item -LiteralPath $activationResultPath, "$activationResultPath.tmp" -Force -ErrorAction SilentlyContinue
+            Remove-ProbeActivationResult -ResultPath $activationResultPath
         }
         $foregroundCalls = @(
             @{ name = 'keyboard'; arguments = @{ key = 'ctrl+l'; deliveryPolicy = 'foregroundPermitted' } },
