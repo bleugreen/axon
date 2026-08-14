@@ -273,10 +273,12 @@ events with a close conceptual fit to AX.
   from reliably observing or driving the user's UI through UIA or `SendInput`.
 - Foreground keyboard delivery joins the target GUI input queue and proves native
   focus before posting one indivisible batch. Unicode text preserves focused
-  controls. The measured Chromium Ctrl+L browser accelerator requires focus on
-  the active top-level window, because a renderer child can remain a valid
-  same-process focus owner while that injected accelerator is ignored. Other
-  keys retain focused-control semantics until equivalent evidence justifies a
+  controls. The measured Chromium Ctrl+L browser accelerator requires two
+  consecutive proofs of active top-level focus across a bounded interval. This
+  closes two observed gaps: a renderer child can remain a valid same-process
+  focus owner while that accelerator is ignored, and Edge's asynchronous
+  first-run sync surface can steal focus after initial activation. Other keys
+  retain focused-control semantics until equivalent evidence justifies a
   broader application-accelerator intent. `SendInput`'s returned count
   proves only that Windows accepted records, never that the application consumed
   them.

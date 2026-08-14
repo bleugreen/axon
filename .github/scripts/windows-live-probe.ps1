@@ -304,7 +304,7 @@ function Register-ProbeBrowserTask {
     )
 
     $action = New-ScheduledTaskAction -Execute $EdgeExecutable -Argument (
-        "--new-window --no-first-run --user-data-dir=`"$ProfilePath`" `"$InitialUrl`""
+        "--new-window --no-first-run --disable-sync --user-data-dir=`"$ProfilePath`" `"$InitialUrl`""
     )
     # Match the daemon's execution context: the SSH relay runs in session 0, while this task must
     # receive the logged-in user's desktop token to create a window the daemon can inspect.
@@ -1114,9 +1114,23 @@ function Invoke-ProbeStage {
         }
 
         # A fresh Edge profile can inherit the runner user's signed-in state and place a sync
-        # confirmation document in front of browser chrome despite --no-first-run. That modal
-        # intentionally consumes Ctrl+L and F6. Clear it through its accessibility control so the
-        # keyboard acceptance measures page navigation rather than persistent runner account state.
+        # confirmation document in front of browser chrome despite --no-first-run/--disable-sync.
+        # Its asynchronous arrival steals focus from a gesture already in flight. Sample a bounded
+        # settling window and always refresh the exact PID's root before deciding whether to dismiss.
+        for ($settleSample = 1; $settleSample -le 6 -and
+            [string]$verified.window.value -ne 'edge://sync-confirmation-dialog/'; $settleSample++) {
+            Wait-BrowserTransition
+            $settledResponse = Invoke-AxonMcp -Request $request
+            $settledWindow = $settledResponse.result.structuredContent.app.windows |
+                ForEach-Object root | Select-Object -First 1
+            if ($settledResponse.result.isError -ne $false -or $null -eq $settledWindow) {
+                throw "Edge settle sample $settleSample could not recapture the probe-owned window"
+            }
+            $verified = @{ response = $settledResponse; window = $settledWindow; app = $browserApp }
+            Write-Note "Edge settle sample=$settleSample value=$([string]$settledWindow.value)"
+        }
+        # The modal intentionally consumes Ctrl+L and F6. Clear it semantically so acceptance
+        # measures page navigation rather than runner account state.
         if ([string]$verified.window.value -eq 'edge://sync-confirmation-dialog/') {
             $dismissalButton = @($verified.window.children |
                 Where-Object identifier -eq 'got-it-button' |

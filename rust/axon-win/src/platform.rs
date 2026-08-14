@@ -240,6 +240,8 @@ enum KeyboardBatchIntent {
 struct KeyboardBatchDiagnostics {
     intent: KeyboardBatchIntent,
     focus_proof: pixel::ForegroundFocusProof,
+    stability_proof: Option<pixel::ForegroundFocusProof>,
+    top_level_focus_repair_engaged: bool,
     before_send: pixel::KeyboardSnapshot,
     immediately_after_send: pixel::KeyboardSnapshot,
     bounded_after_send: pixel::KeyboardSnapshot,
@@ -285,6 +287,29 @@ fn send_keyboard_batch(
             "the proved foreground process did not own keyboard focus; no events were posted",
         ));
     }
+    // The first-run Chromium surface can arrive asynchronously after activation. For the measured
+    // accelerator path, require two top-level proofs separated by a bounded quiet interval. Any
+    // transition is repaired and read back once; failure refuses without posting a second gesture.
+    let stability_proof = if require_top_level {
+        thread::sleep(Duration::from_millis(50));
+        Some(pixel::ensure_foreground_focus(true))
+    } else {
+        None
+    };
+    if stability_proof
+        .as_ref()
+        .is_some_and(|proof| !proof.proved())
+    {
+        return Err(op(
+            "SendInput keyboard",
+            "the foreground top-level focus was not stable; no events were posted",
+        ));
+    }
+    let top_level_focus_repair_engaged = focus_proof.classification
+        == pixel::FocusProofClassification::ProvedRepairedFocus
+        || stability_proof.as_ref().is_some_and(|proof| {
+            proof.classification == pixel::FocusProofClassification::ProvedRepairedFocus
+        });
     let intended_process_id = focus_proof
         .target_process_id
         .expect("a successful focus proof always names its target process");
@@ -314,6 +339,8 @@ fn send_keyboard_batch(
     let diagnostics = KeyboardBatchDiagnostics {
         intent,
         focus_proof,
+        stability_proof,
+        top_level_focus_repair_engaged,
         before_send,
         immediately_after_send,
         bounded_after_send,
