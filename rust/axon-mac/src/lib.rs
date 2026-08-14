@@ -92,7 +92,8 @@ fn visual_observation_result(
             let reason = error.to_string();
             (
                 None,
-                None,
+                wants_screenshot
+                    .then(|| axon_core::ScreenshotUnavailable::from_backend_error(error)),
                 Some(json!({"code":"ocr-failed","reason":reason})),
             )
         }
@@ -1666,6 +1667,16 @@ mod tests {
         let unavailable = screenshot_unavailable.unwrap();
         assert_eq!(unavailable.code, "capture-failed");
         assert_eq!(unavailable.reason, "Vision request failed");
+    }
+
+    #[test]
+    fn combined_visual_failure_reports_both_missing_outputs() {
+        let (visuals, screenshot_unavailable, screen_text_unavailable) =
+            visual_observation_result(Err(operation_failure()), true, true);
+
+        assert!(visuals.is_none());
+        assert_eq!(screenshot_unavailable.unwrap().code, "capture-failed");
+        assert_eq!(screen_text_unavailable.unwrap()["code"], "ocr-failed");
     }
 
     struct EnumerationBackend;

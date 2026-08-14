@@ -1052,12 +1052,18 @@ impl<B: PointerTargetVerifier + BackgroundPixelInput> Router<B> {
                         }
                         Err(e) => {
                             if request.screen_text {
+                                let unavailable =
+                                    axon_core::ScreenshotUnavailable::from_backend_error(e);
+                                if screenshot_requested {
+                                    object.insert(
+                                        "screenshotUnavailable".into(),
+                                        serde_json::to_value(&unavailable)
+                                            .map_err(internal_error)?,
+                                    );
+                                }
                                 object.insert(
                                     "screenTextUnavailable".into(),
-                                    serde_json::to_value(
-                                        axon_core::ScreenshotUnavailable::from_backend_error(e),
-                                    )
-                                    .map_err(internal_error)?,
+                                    serde_json::to_value(unavailable).map_err(internal_error)?,
                                 );
                             } else {
                                 object.insert(
@@ -2252,6 +2258,24 @@ mod tests {
             "portal-authorization-required"
         );
         assert!(success.result.get("screenText").is_none());
+    }
+
+    #[test]
+    fn combined_visual_failure_reports_both_missing_outputs() {
+        let mut router = Router::new(backend(vec![node("semantic child")], None));
+        let response = router
+            .request(request(
+                "look",
+                json!({"app":"App","screenshot":true,"screenText":true}),
+            ))
+            .unwrap();
+        let JsonRpcResponse::Success(success) = response else {
+            panic!()
+        };
+        assert!(success.result.get("screenshot").is_none());
+        assert!(success.result.get("screenText").is_none());
+        assert!(success.result.get("screenshotUnavailable").is_some());
+        assert!(success.result.get("screenTextUnavailable").is_some());
     }
 
     #[test]
