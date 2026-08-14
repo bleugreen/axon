@@ -738,6 +738,14 @@ function Invoke-AxonMcp {
                                 } else {
                                     $script:Machine.PageTitle
                                 }
+                                children = @(
+                                    @{
+                                        role = 'Link'
+                                        name = 'continue-link'
+                                        title = 'Continue'
+                                        actions = @('Invoke')
+                                    }
+                                )
                             }
                         }
                     )
@@ -845,10 +853,8 @@ function Test-Scenario {
 
     $script:ScenarioName = $Name
     $script:ScenarioCount++
-    Write-Host "rehearsing: $Name"
     Reset-Machine
     & $Body
-    Write-Host "rehearsed: $Name"
 }
 
 function Check {

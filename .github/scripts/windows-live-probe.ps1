@@ -1084,7 +1084,9 @@ function Invoke-ProbeStage {
                 @($node.actions) -contains 'Invoke') {
                 $continueLinks += $node
             }
-            foreach ($child in @($node.children)) { $nodes.Push($child) }
+            foreach ($child in @($node.children)) {
+                if ($null -ne $child) { $nodes.Push($child) }
+            }
         }
         if ($continueLinks.Count -ne 1 -or
             [string]::IsNullOrWhiteSpace([string]$continueLinks[0].name)) {
