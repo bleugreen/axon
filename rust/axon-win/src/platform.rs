@@ -61,10 +61,10 @@ use windows::{
             HiDpi::{DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, SetProcessDpiAwarenessContext},
             Input::KeyboardAndMouse::{
                 GetKeyboardLayout, INPUT, INPUT_0, INPUT_KEYBOARD, INPUT_MOUSE, KEYBDINPUT,
-                KEYEVENTF_EXTENDEDKEY, KEYEVENTF_KEYUP, KEYEVENTF_UNICODE, MOUSEEVENTF_ABSOLUTE,
-                MOUSEEVENTF_LEFTDOWN, MOUSEEVENTF_LEFTUP, MOUSEEVENTF_MOVE,
-                MOUSEEVENTF_VIRTUALDESK, MOUSEINPUT, SendInput, SetActiveWindow, VIRTUAL_KEY,
-                VkKeyScanExW,
+                KEYEVENTF_EXTENDEDKEY, KEYEVENTF_KEYUP, KEYEVENTF_SCANCODE, KEYEVENTF_UNICODE,
+                MAPVK_VK_TO_VSC_EX, MOUSEEVENTF_ABSOLUTE, MOUSEEVENTF_LEFTDOWN,
+                MOUSEEVENTF_LEFTUP, MOUSEEVENTF_MOVE, MOUSEEVENTF_VIRTUALDESK, MOUSEINPUT,
+                MapVirtualKeyW, SendInput, SetActiveWindow, VIRTUAL_KEY, VkKeyScanExW,
             },
             WindowsAndMessaging::{
                 ASFW_ANY, AllowSetForegroundWindow, BringWindowToTop, GetForegroundWindow,
@@ -279,11 +279,15 @@ fn send_key(spec: &str) -> Result<(), BackendError> {
 }
 
 fn key_input(key: crate::keys::VirtualKey, key_up: bool) -> INPUT {
-    let mut flags = if key.extended {
-        KEYEVENTF_EXTENDEDKEY
-    } else {
-        Default::default()
-    };
+    // Chromium and other raw-input consumers inspect the hardware scan code. A virtual-key-only
+    // SendInput record is accepted by Windows but can be discarded downstream because wScan is
+    // zero. MAPVK_VK_TO_VSC_EX also reports the E0/E1 prefix in the high byte.
+    let mapped = unsafe { MapVirtualKeyW(key.code.into(), MAPVK_VK_TO_VSC_EX) };
+    let mut flags = KEYEVENTF_SCANCODE;
+    let prefix = mapped >> 8;
+    if key.extended || prefix == 0xE0 || prefix == 0xE1 {
+        flags |= KEYEVENTF_EXTENDEDKEY;
+    }
     if key_up {
         flags |= KEYEVENTF_KEYUP;
     }
@@ -291,8 +295,8 @@ fn key_input(key: crate::keys::VirtualKey, key_up: bool) -> INPUT {
         r#type: INPUT_KEYBOARD,
         Anonymous: INPUT_0 {
             ki: KEYBDINPUT {
-                wVk: VIRTUAL_KEY(key.code),
-                wScan: 0,
+                wVk: VIRTUAL_KEY(0),
+                wScan: (mapped & 0xff) as u16,
                 dwFlags: flags,
                 time: 0,
                 dwExtraInfo: 0,
