@@ -17,6 +17,32 @@ public struct AppBundle: Equatable, Sendable {
     /// The identifier of the sibling editor app bundle.
     public static let axonEditorIdentifier = "com.bleugreen.axon.editor"
 
+    /// Returns the editor shipped beside a daemon bundle only when both halves identify as Axon
+    /// and declare the same release version. Launch Services can retain older registrations for
+    /// years, so falling back by bundle identifier would silently pair a current recorder with an
+    /// incompatible editor.
+    public static func pairedEditorURL(
+        beside daemonBundleURL: URL,
+        fileManager: FileManager = .default
+    ) -> URL? {
+        let editorURL = daemonBundleURL.deletingLastPathComponent()
+            .appendingPathComponent("Axon Editor.app", isDirectory: true)
+        guard fileManager.fileExists(atPath: editorURL.path),
+              let daemonInfo = infoDictionary(at: daemonBundleURL.appendingPathComponent("Contents/Info.plist")),
+              let editorInfo = infoDictionary(at: editorURL.appendingPathComponent("Contents/Info.plist")),
+              daemonInfo["CFBundleIdentifier"] as? String == axonDaemonIdentifier,
+              editorInfo["CFBundleIdentifier"] as? String == axonEditorIdentifier,
+              let daemonVersion = daemonInfo["CFBundleShortVersionString"] as? String,
+              !daemonVersion.isEmpty,
+              editorInfo["CFBundleShortVersionString"] as? String == daemonVersion,
+              let executable = editorInfo["CFBundleExecutable"] as? String,
+              fileManager.isExecutableFile(atPath: editorURL.appendingPathComponent("Contents/MacOS/\(executable)").path)
+        else {
+            return nil
+        }
+        return editorURL
+    }
+
     /// The bundle directory, such as `/Applications/Axon.app`.
     public let path: String
 

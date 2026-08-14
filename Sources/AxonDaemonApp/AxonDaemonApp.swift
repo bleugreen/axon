@@ -20,7 +20,6 @@ final class AxonDaemonAppDelegate: NSObject, NSApplicationDelegate, @unchecked S
     }
 
     nonisolated private static let appBundleIdentifier = AppBundle.axonDaemonIdentifier
-    nonisolated private static let editorBundleIdentifier = AppBundle.axonEditorIdentifier
     nonisolated private static let homebrewCaskName = "axon"
 
     private let socketPath = AxonEnvironment.socketPath()
@@ -454,25 +453,21 @@ final class AxonDaemonAppDelegate: NSObject, NSApplicationDelegate, @unchecked S
     }
 
     private func openEditor(url: URL) throws {
+        let expectedEditorURL = Bundle.main.bundleURL.deletingLastPathComponent()
+            .appendingPathComponent("Axon Editor.app", isDirectory: true)
+        guard let editorAppURL = AppBundle.pairedEditorURL(beside: Bundle.main.bundleURL) else {
+            throw CocoaError(.executableNotLoadable, userInfo: [
+                NSLocalizedDescriptionKey: "The matching Axon Editor.app was not found at \(expectedEditorURL.path). Reinstall Axon to restore the paired applications."
+            ])
+        }
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/open")
-        if let editorAppURL = siblingEditorAppURL() {
-            process.arguments = ["-a", editorAppURL.path, url.absoluteString]
-        } else {
-            process.arguments = ["-b", Self.editorBundleIdentifier, url.absoluteString]
-        }
+        process.arguments = ["-a", editorAppURL.path, url.absoluteString]
         try process.run()
         process.waitUntilExit()
         guard process.terminationStatus == 0 else {
             throw CocoaError(.executableNotLoadable)
         }
-    }
-
-    private func siblingEditorAppURL() -> URL? {
-        let candidate = Bundle.main.bundleURL
-            .deletingLastPathComponent()
-            .appendingPathComponent("Axon Editor.app", isDirectory: true)
-        return FileManager.default.fileExists(atPath: candidate.path) ? candidate : nil
     }
 
     private func defaultRecordingsDirectory() -> URL {

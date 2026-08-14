@@ -20,6 +20,50 @@ import Testing
     }
 }
 
+@Test func pairedEditorRequiresTheShippedIdentityVersionAndExecutable() throws {
+    let root = FileManager.default.temporaryDirectory
+        .appendingPathComponent("axon-paired-editor-\(UUID().uuidString)")
+    defer { try? FileManager.default.removeItem(at: root) }
+    let daemonURL = root.appendingPathComponent("Axon.app")
+    let editorURL = root.appendingPathComponent("Axon Editor.app")
+
+    try makeAppBundle(at: daemonURL, identifier: AppBundle.axonDaemonIdentifier, version: "0.3.4", executable: "Axon")
+    try makeAppBundle(at: editorURL, identifier: AppBundle.axonEditorIdentifier, version: "0.3.4", executable: "AxonEditor")
+    #expect(AppBundle.pairedEditorURL(beside: daemonURL)?.path == editorURL.path)
+
+    try makeAppBundle(at: editorURL, identifier: AppBundle.axonEditorIdentifier, version: "0.1.7", executable: "AxonEditor")
+    #expect(AppBundle.pairedEditorURL(beside: daemonURL) == nil)
+
+    try makeAppBundle(at: daemonURL, identifier: "com.example.daemon", version: "0.3.4", executable: "Axon")
+    try makeAppBundle(at: editorURL, identifier: AppBundle.axonEditorIdentifier, version: "0.3.4", executable: "AxonEditor")
+    #expect(AppBundle.pairedEditorURL(beside: daemonURL) == nil)
+
+    try makeAppBundle(at: daemonURL, identifier: AppBundle.axonDaemonIdentifier, version: "0.3.4", executable: "Axon")
+    try makeAppBundle(at: editorURL, identifier: "com.example.editor", version: "0.3.4", executable: "AxonEditor")
+    #expect(AppBundle.pairedEditorURL(beside: daemonURL) == nil)
+
+    try makeAppBundle(at: editorURL, identifier: AppBundle.axonEditorIdentifier, version: "0.3.4", executable: "AxonEditor")
+    try FileManager.default.setAttributes([.posixPermissions: 0o644], ofItemAtPath: editorURL.appendingPathComponent("Contents/MacOS/AxonEditor").path)
+    #expect(AppBundle.pairedEditorURL(beside: daemonURL) == nil)
+
+    try FileManager.default.removeItem(at: editorURL)
+    #expect(AppBundle.pairedEditorURL(beside: daemonURL) == nil)
+}
+
+private func makeAppBundle(at url: URL, identifier: String, version: String, executable: String) throws {
+    let executableURL = url.appendingPathComponent("Contents/MacOS/\(executable)")
+    try FileManager.default.createDirectory(at: executableURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+    let info: [String: Any] = [
+        "CFBundleIdentifier": identifier,
+        "CFBundleShortVersionString": version,
+        "CFBundleExecutable": executable
+    ]
+    let data = try PropertyListSerialization.data(fromPropertyList: info, format: .xml, options: 0)
+    try data.write(to: url.appendingPathComponent("Contents/Info.plist"))
+    FileManager.default.createFile(atPath: executableURL.path, contents: Data())
+    try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: executableURL.path)
+}
+
 @Test func socketLineReadRejectsOversizedMessages() throws {
     let descriptors = try socketPair()
     defer {
