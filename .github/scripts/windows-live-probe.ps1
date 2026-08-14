@@ -970,9 +970,16 @@ function Invoke-ProbeStage {
         # intentionally consumes Ctrl+L and F6. Clear it through its accessibility control so the
         # keyboard acceptance measures page navigation rather than persistent runner account state.
         if ([string]$verified.window.value -eq 'edge://sync-confirmation-dialog/') {
+            $dismissalButton = @($verified.window.children |
+                Where-Object identifier -eq 'got-it-button' |
+                Select-Object -First 1)
+            if ($dismissalButton.Count -ne 1 -or
+                [string]::IsNullOrWhiteSpace([string]$dismissalButton[0].name)) {
+                throw 'the Edge sync confirmation did not expose its Got it accessibility button'
+            }
             $dismissRequest = @{ jsonrpc = '2.0'; id = 72; method = 'tools/call'; params = @{
                 name = 'click'; arguments = @{
-                    target = @{ app = $browserApp; name = 'Got it' }
+                    target = @{ app = $browserApp; name = [string]$dismissalButton[0].name }
                     deliveryPolicy = 'foregroundPermitted'
                 }
             } } | ConvertTo-Json -Compress -Depth 10
