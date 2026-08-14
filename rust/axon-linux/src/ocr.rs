@@ -62,8 +62,7 @@ fn recognize_png_with(
     screen: Rect,
     timeout: Duration,
 ) -> Result<Vec<RecognizedText>, OcrFailure> {
-    run_tesseract_with(executable, png, timeout)
-        .and_then(|tsv| parse_tsv(&tsv, image_size, screen))
+    run_tesseract_with(executable, png, timeout).and_then(|tsv| parse_tsv(&tsv, image_size, screen))
 }
 
 fn run_tesseract_with(
@@ -274,7 +273,12 @@ fn parse_tsv(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::{fs, os::unix::fs::PermissionsExt, path::PathBuf, sync::atomic::{AtomicUsize, Ordering}};
+    use std::{
+        fs,
+        os::unix::fs::PermissionsExt,
+        path::PathBuf,
+        sync::atomic::{AtomicUsize, Ordering},
+    };
     const HEADER: &str = "level\tpage_num\tblock_num\tpar_num\tline_num\tword_num\tleft\ttop\twidth\theight\tconf\ttext\n";
     #[test]
     fn groups_words_and_scales_non_uniformly_from_negative_origin() {
@@ -335,23 +339,36 @@ mod tests {
     }
     #[test]
     fn reports_missing_executable() {
-        assert_eq!(run_tesseract_with("/axon/missing/tesseract", b"", Duration::from_secs(1)), Err(OcrFailure::EngineMissing));
+        assert_eq!(
+            run_tesseract_with("/axon/missing/tesseract", b"", Duration::from_secs(1)),
+            Err(OcrFailure::EngineMissing)
+        );
     }
     #[test]
     fn classifies_missing_language_data() {
-        let executable = fake_executable("cat >/dev/null; echo 'Error opening eng.traineddata' >&2; exit 1");
+        let executable =
+            fake_executable("cat >/dev/null; echo 'Error opening eng.traineddata' >&2; exit 1");
         let result = run_tesseract_with(executable, b"png", Duration::from_secs(1));
-        assert!(matches!(result, Err(OcrFailure::LanguageDataMissing(_))), "{result:?}");
+        assert!(
+            matches!(result, Err(OcrFailure::LanguageDataMissing(_))),
+            "{result:?}"
+        );
     }
     #[test]
     fn preserves_nonzero_exit_as_execution_failure() {
         let executable = fake_executable("cat >/dev/null; echo exploded >&2; exit 7");
-        assert_eq!(run_tesseract_with(executable, b"png", Duration::from_secs(1)), Err(OcrFailure::Execution("exploded".into())));
+        assert_eq!(
+            run_tesseract_with(executable, b"png", Duration::from_secs(1)),
+            Err(OcrFailure::Execution("exploded".into()))
+        );
     }
     #[test]
     fn kills_an_executable_that_times_out() {
         let executable = fake_executable("exec sleep 5");
-        assert_eq!(run_tesseract_with(executable, b"png", Duration::from_millis(30)), Err(OcrFailure::Timeout));
+        assert_eq!(
+            run_tesseract_with(executable, b"png", Duration::from_millis(30)),
+            Err(OcrFailure::Timeout)
+        );
     }
     #[test]
     fn executable_malformed_output_is_typed() {
@@ -360,7 +377,12 @@ mod tests {
             executable,
             b"png",
             (1, 1),
-            Rect { x: 0.0, y: 0.0, width: 1.0, height: 1.0 },
+            Rect {
+                x: 0.0,
+                y: 0.0,
+                width: 1.0,
+                height: 1.0,
+            },
             Duration::from_secs(1),
         );
         assert!(matches!(result, Err(OcrFailure::MalformedOutput(_))));

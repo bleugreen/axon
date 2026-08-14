@@ -1070,18 +1070,17 @@ impl<
             axon_core::LookObservationKind::FullApp,
         );
         let wants_screen_text = request.screen_text;
-        let (visuals, screenshot_unavailable, screen_text_unavailable) = if wants_screenshot
-            || wants_screen_text
-        {
-            visual_observation_result(
-                self.backend
-                    .observe_visuals(&app, wants_screenshot, wants_screen_text),
-                wants_screenshot,
-                wants_screen_text,
-            )
-        } else {
-            (None, None, None)
-        };
+        let (visuals, screenshot_unavailable, screen_text_unavailable) =
+            if wants_screenshot || wants_screen_text {
+                visual_observation_result(
+                    self.backend
+                        .observe_visuals(&app, wants_screenshot, wants_screen_text),
+                    wants_screenshot,
+                    wants_screen_text,
+                )
+            } else {
+                (None, None, None)
+            };
         if let Some(screenshot) = visuals
             .as_ref()
             .and_then(|result| result.screenshot.as_ref())
@@ -1106,7 +1105,11 @@ impl<
                 .expect("snapshots serialize as objects")
                 .insert(
                     "screenText".into(),
-                    axon_core::format_screen_text(&screen_text, request.display.frames, &self.observation_redaction),
+                    axon_core::format_screen_text(
+                        &screen_text,
+                        request.display.frames,
+                        &self.observation_redaction,
+                    ),
                 );
         }
         if let Some(unavailable) = screenshot_unavailable {
@@ -1379,7 +1382,10 @@ impl<
         + BackgroundPixelPointer,
 > ToolDispatcher for Router<B>
 {
-    fn set_observation_redaction_context(&mut self, context: axon_core::ObservationRedactionContext) {
+    fn set_observation_redaction_context(
+        &mut self,
+        context: axon_core::ObservationRedactionContext,
+    ) {
         self.observation_redaction = context;
     }
 

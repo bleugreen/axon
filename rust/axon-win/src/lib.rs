@@ -1007,7 +1007,11 @@ impl<
                 if let Some(text) = visuals.and_then(|v| v.recognized_text) {
                     object.insert(
                         "screenText".into(),
-                        axon_core::format_screen_text(&text, request.display.frames, &self.observation_redaction),
+                        axon_core::format_screen_text(
+                            &text,
+                            request.display.frames,
+                            &self.observation_redaction,
+                        ),
                     );
                 }
                 if let Some(unavailable) = screenshot_unavailable {
@@ -1312,7 +1316,10 @@ impl<
         + WindowsScrollProvider,
 > ToolDispatcher for Router<B>
 {
-    fn set_observation_redaction_context(&mut self, context: axon_core::ObservationRedactionContext) {
+    fn set_observation_redaction_context(
+        &mut self,
+        context: axon_core::ObservationRedactionContext,
+    ) {
         self.observation_redaction = context;
     }
 

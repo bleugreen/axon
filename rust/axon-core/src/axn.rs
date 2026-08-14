@@ -477,11 +477,7 @@ pub struct DispatchOutcome {
 }
 pub trait ToolDispatcher {
     /// Supplies replay-scoped secrets to public observation serialization.
-    fn set_observation_redaction_context(
-        &mut self,
-        _context: crate::ObservationRedactionContext,
-    ) {
-    }
+    fn set_observation_redaction_context(&mut self, _context: crate::ObservationRedactionContext) {}
     /// Seed platform semantic resolution with locator evidence attached by the recorder.
     /// Implementations must resolve this locator through their normal live backend.
     fn register_replay_target(

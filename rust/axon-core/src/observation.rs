@@ -24,7 +24,10 @@ pub struct ObservationRedactionContext {
 impl ObservationRedactionContext {
     pub fn from_active_secrets(secrets: impl IntoIterator<Item = String>) -> Self {
         Self {
-            active_secrets: secrets.into_iter().filter(|value| !value.is_empty()).collect(),
+            active_secrets: secrets
+                .into_iter()
+                .filter(|value| !value.is_empty())
+                .collect(),
         }
     }
 
@@ -64,7 +67,10 @@ pub fn format_screen_text(
             .map(|item| {
                 let mut object = Map::new();
                 if redaction.redacts(&item.text) {
-                    object.insert("text".into(), Value::String("<redacted: active-credential>".into()));
+                    object.insert(
+                        "text".into(),
+                        Value::String("<redacted: active-credential>".into()),
+                    );
                     object.insert(
                         "redaction".into(),
                         serde_json::json!({

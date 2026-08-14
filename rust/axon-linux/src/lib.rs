@@ -1391,7 +1391,10 @@ impl<B: PointerTargetVerifier + BackgroundPixelInput> Router<B> {
 }
 
 impl<B: PointerTargetVerifier + BackgroundPixelInput> ToolDispatcher for Router<B> {
-    fn set_observation_redaction_context(&mut self, context: axon_core::ObservationRedactionContext) {
+    fn set_observation_redaction_context(
+        &mut self,
+        context: axon_core::ObservationRedactionContext,
+    ) {
         self.observation_redaction = context;
     }
 
@@ -2235,11 +2238,19 @@ mod tests {
     fn look_preserves_semantics_when_screen_text_is_unavailable() {
         let mut router = Router::new(backend(vec![node("semantic child")], None));
         let response = router
-            .request(request("look", json!({"app":"App","screenshot":false,"screenText":true})))
+            .request(request(
+                "look",
+                json!({"app":"App","screenshot":false,"screenText":true}),
+            ))
             .unwrap();
-        let JsonRpcResponse::Success(success) = response else { panic!() };
+        let JsonRpcResponse::Success(success) = response else {
+            panic!()
+        };
         assert!(success.result.to_string().contains("semantic child"));
-        assert_eq!(success.result["screenTextUnavailable"]["code"], "portal-authorization-required");
+        assert_eq!(
+            success.result["screenTextUnavailable"]["code"],
+            "portal-authorization-required"
+        );
         assert!(success.result.get("screenText").is_none());
     }
 
