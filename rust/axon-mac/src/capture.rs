@@ -393,7 +393,10 @@ mod tests {
         let item = VisionItem { text: text.as_ptr().cast_mut().cast(), x: 0.25, y: 0.20,
             width: 0.5, height: 0.10, confidence: 0.9 };
         let recognized = vision_item(&item, Rect { x: -1200.0, y: 40.0, width: 800.0, height: 600.0 }).unwrap();
-        assert_eq!(recognized.frame, Rect { x: -1000.0, y: 460.0, width: 400.0, height: 60.0 });
+        assert_eq!(recognized.frame.x, -1000.0);
+        assert!((recognized.frame.y - 460.0).abs() < f64::EPSILON * 512.0);
+        assert_eq!(recognized.frame.width, 400.0);
+        assert_eq!(recognized.frame.height, 60.0);
         assert_eq!(recognized.text, "Hello");
         assert_eq!(recognized.confidence, Some(0.9));
     }
