@@ -8,14 +8,25 @@ use serde_json::{Value, json};
 use std::sync::{Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant};
-use windows::core::BSTR;
 use windows::Win32::Foundation::{CloseHandle, HANDLE, HWND, LPARAM, LRESULT, MAX_PATH, WPARAM};
-use windows::Win32::Security::{GetTokenInformation, TOKEN_MANDATORY_LABEL, TOKEN_QUERY, TokenIntegrityLevel};
-use windows::Win32::System::Com::{CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED, CoCreateInstance, CoInitializeEx, CoUninitialize};
-use windows::Win32::System::Diagnostics::ToolHelp::{CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW, TH32CS_SNAPPROCESS};
+use windows::Win32::Security::{
+    GetTokenInformation, TOKEN_MANDATORY_LABEL, TOKEN_QUERY, TokenIntegrityLevel,
+};
+use windows::Win32::System::Com::{
+    CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED, CoCreateInstance, CoInitializeEx, CoUninitialize,
+};
+use windows::Win32::System::Diagnostics::ToolHelp::{
+    CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW, TH32CS_SNAPPROCESS,
+};
 use windows::Win32::System::RemoteDesktop::ProcessIdToSessionId;
-use windows::Win32::System::Threading::{GetCurrentThreadId, OpenProcess, OpenProcessToken, QueryFullProcessImageNameW, PROCESS_NAME_FORMAT, PROCESS_QUERY_LIMITED_INFORMATION};
-use windows::Win32::UI::Accessibility::{CUIAutomation, HWINEVENTHOOK, IUIAutomation, SetWinEventHook, UIA_DocumentControlTypeId, UIA_EditControlTypeId, UnhookWinEvent};
+use windows::Win32::System::Threading::{
+    GetCurrentThreadId, OpenProcess, OpenProcessToken, PROCESS_NAME_FORMAT,
+    PROCESS_QUERY_LIMITED_INFORMATION, QueryFullProcessImageNameW,
+};
+use windows::Win32::UI::Accessibility::{
+    CUIAutomation, HWINEVENTHOOK, IUIAutomation, SetWinEventHook, UIA_DocumentControlTypeId,
+    UIA_EditControlTypeId, UnhookWinEvent,
+};
 use windows::Win32::UI::Input::KeyboardAndMouse::SendInput;
 use windows::Win32::UI::WindowsAndMessaging::{
     CallNextHookEx, DispatchMessageW, EVENT_OBJECT_FOCUS, GetForegroundWindow,
@@ -23,6 +34,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     SetWindowsHookExW, TranslateMessage, UnhookWindowsHookEx, WH_KEYBOARD_LL,
     WINEVENT_OUTOFCONTEXT, WM_KEYUP, WM_SYSKEYUP,
 };
+use windows::core::BSTR;
 
 const EVENT_CAPACITY: usize = 512;
 static EPOCH: OnceLock<Instant> = OnceLock::new();
@@ -141,7 +153,10 @@ impl Observer {
                 "focus WinEvent hook installation failed",
             ));
         }
-        Ok(Self { keyboard: Some(keyboard), focus: Some(focus) })
+        Ok(Self {
+            keyboard: Some(keyboard),
+            focus: Some(focus),
+        })
     }
     fn pump(&self, duration: Duration) {
         let end = Instant::now() + duration;
@@ -157,15 +172,29 @@ impl Observer {
         }
     }
     fn remove(mut self) -> bool {
-        let focus_removed = self.focus.take().is_none_or(|hook| unsafe { UnhookWinEvent(hook) }.as_bool());
-        let keyboard_removed = self.keyboard.take().is_none_or(|hook| unsafe { UnhookWindowsHookEx(hook) }.is_ok());
+        let focus_removed = self
+            .focus
+            .take()
+            .is_none_or(|hook| unsafe { UnhookWinEvent(hook) }.as_bool());
+        let keyboard_removed = self
+            .keyboard
+            .take()
+            .is_none_or(|hook| unsafe { UnhookWindowsHookEx(hook) }.is_ok());
         focus_removed && keyboard_removed
     }
 }
 impl Drop for Observer {
     fn drop(&mut self) {
-        if let Some(hook) = self.focus.take() { unsafe { let _ = UnhookWinEvent(hook); } }
-        if let Some(hook) = self.keyboard.take() { unsafe { let _ = UnhookWindowsHookEx(hook); } }
+        if let Some(hook) = self.focus.take() {
+            unsafe {
+                let _ = UnhookWinEvent(hook);
+            }
+        }
+        if let Some(hook) = self.keyboard.take() {
+            unsafe {
+                let _ = UnhookWindowsHookEx(hook);
+            }
+        }
     }
 }
 
@@ -208,15 +237,25 @@ fn wide_text(buffer: &[u16]) -> String {
 
 fn parent_process_id(pid: u32) -> Option<u32> {
     let snapshot = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) }.ok()?;
-    let mut entry = PROCESSENTRY32W { dwSize: std::mem::size_of::<PROCESSENTRY32W>() as u32, ..Default::default() };
+    let mut entry = PROCESSENTRY32W {
+        dwSize: std::mem::size_of::<PROCESSENTRY32W>() as u32,
+        ..Default::default()
+    };
     let mut found = None;
     if unsafe { Process32FirstW(snapshot, &mut entry) }.is_ok() {
         loop {
-            if entry.th32ProcessID == pid { found = Some(entry.th32ParentProcessID); break; }
-            if unsafe { Process32NextW(snapshot, &mut entry) }.is_err() { break; }
+            if entry.th32ProcessID == pid {
+                found = Some(entry.th32ParentProcessID);
+                break;
+            }
+            if unsafe { Process32NextW(snapshot, &mut entry) }.is_err() {
+                break;
+            }
         }
     }
-    unsafe { let _ = CloseHandle(snapshot); }
+    unsafe {
+        let _ = CloseHandle(snapshot);
+    }
     found
 }
 
@@ -225,8 +264,17 @@ fn process_details(pid: u32) -> (Option<String>, Option<u32>, Option<String>) {
     let path = process.and_then(|handle| {
         let mut buffer = [0u16; 32768];
         let mut size = buffer.len() as u32;
-        let result = unsafe { QueryFullProcessImageNameW(handle, PROCESS_NAME_FORMAT(0), windows::core::PWSTR(buffer.as_mut_ptr()), &mut size) };
-        result.ok().map(|_| String::from_utf16_lossy(&buffer[..size as usize]))
+        let result = unsafe {
+            QueryFullProcessImageNameW(
+                handle,
+                PROCESS_NAME_FORMAT(0),
+                windows::core::PWSTR(buffer.as_mut_ptr()),
+                &mut size,
+            )
+        };
+        result
+            .ok()
+            .map(|_| String::from_utf16_lossy(&buffer[..size as usize]))
     });
     let integrity = process.and_then(|handle| {
         let mut token = HANDLE::default();
@@ -234,16 +282,43 @@ fn process_details(pid: u32) -> (Option<String>, Option<u32>, Option<String>) {
         let mut size = 0;
         let _ = unsafe { GetTokenInformation(token, TokenIntegrityLevel, None, 0, &mut size) };
         let mut bytes = vec![0u8; size as usize];
-        let ok = unsafe { GetTokenInformation(token, TokenIntegrityLevel, Some(bytes.as_mut_ptr().cast()), size, &mut size) }.is_ok();
-        let level = ok.then(|| unsafe {
-            let label = &*(bytes.as_ptr().cast::<TOKEN_MANDATORY_LABEL>());
-            let count = *windows::Win32::Security::GetSidSubAuthorityCount(label.Label.Sid) as u32;
-            *windows::Win32::Security::GetSidSubAuthority(label.Label.Sid, count - 1)
-        }).map(|rid| match rid { 0x0000..=0x0fff => "untrusted", 0x1000..=0x1fff => "low", 0x2000..=0x2fff => "medium", 0x3000..=0x3fff => "high", _ => "system" }.to_string());
-        unsafe { let _ = CloseHandle(token); }
+        let ok = unsafe {
+            GetTokenInformation(
+                token,
+                TokenIntegrityLevel,
+                Some(bytes.as_mut_ptr().cast()),
+                size,
+                &mut size,
+            )
+        }
+        .is_ok();
+        let level = ok
+            .then(|| unsafe {
+                let label = &*(bytes.as_ptr().cast::<TOKEN_MANDATORY_LABEL>());
+                let count =
+                    *windows::Win32::Security::GetSidSubAuthorityCount(label.Label.Sid) as u32;
+                *windows::Win32::Security::GetSidSubAuthority(label.Label.Sid, count - 1)
+            })
+            .map(|rid| {
+                match rid {
+                    0x0000..=0x0fff => "untrusted",
+                    0x1000..=0x1fff => "low",
+                    0x2000..=0x2fff => "medium",
+                    0x3000..=0x3fff => "high",
+                    _ => "system",
+                }
+                .to_string()
+            });
+        unsafe {
+            let _ = CloseHandle(token);
+        }
         level
     });
-    if let Some(handle) = process { unsafe { let _ = CloseHandle(handle); } }
+    if let Some(handle) = process {
+        unsafe {
+            let _ = CloseHandle(handle);
+        }
+    }
     (path, parent_process_id(pid), integrity)
 }
 
@@ -252,35 +327,78 @@ fn identity(pid: u32, task_name: &str) -> Value {
     let mut owner = 0;
     let gui_thread = unsafe { GetWindowThreadProcessId(foreground, Some(&mut owner)) };
     let mut session = 0;
-    let session_id = unsafe { ProcessIdToSessionId(pid, &mut session) }.is_ok().then_some(session);
+    let session_id = unsafe { ProcessIdToSessionId(pid, &mut session) }
+        .is_ok()
+        .then_some(session);
     let (path, parent, integrity) = process_details(pid);
     let mut class = [0u16; 256];
-    let class_len = unsafe { windows::Win32::UI::WindowsAndMessaging::GetClassNameW(foreground, &mut class) };
+    let class_len =
+        unsafe { windows::Win32::UI::WindowsAndMessaging::GetClassNameW(foreground, &mut class) };
     let mut title = [0u16; MAX_PATH as usize];
-    let title_len = unsafe { windows::Win32::UI::WindowsAndMessaging::GetWindowTextW(foreground, &mut title) };
+    let title_len =
+        unsafe { windows::Win32::UI::WindowsAndMessaging::GetWindowTextW(foreground, &mut title) };
     json!({"processId":pid,"executablePath":path,"parentProcessId":parent,"sessionId":session_id,"integrityLevel":integrity,
         "window":{"hwnd":format!("0x{:X}",hwnd_bits(foreground)),"className":wide_text(&class[..class_len.max(0) as usize]),"title":wide_text(&title[..title_len.max(0) as usize]),"guiThreadId":if owner==pid { Some(gui_thread) } else { None }},"taskName":task_name})
 }
 
-struct Uia { automation: IUIAutomation }
+struct Uia {
+    automation: IUIAutomation,
+}
 impl Uia {
     fn new() -> Result<Self, BackendError> {
-        unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) }.ok().map_err(|e| op("keyboard diagnostic", format!("initialize UI Automation COM: {e}")))?;
-        let automation = unsafe { CoCreateInstance(&CUIAutomation, None, CLSCTX_INPROC_SERVER) }.map_err(|e| op("keyboard diagnostic", format!("create UI Automation client: {e}")))?;
+        unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) }
+            .ok()
+            .map_err(|e| {
+                op(
+                    "keyboard diagnostic",
+                    format!("initialize UI Automation COM: {e}"),
+                )
+            })?;
+        let automation = unsafe { CoCreateInstance(&CUIAutomation, None, CLSCTX_INPROC_SERVER) }
+            .map_err(|e| {
+                op(
+                    "keyboard diagnostic",
+                    format!("create UI Automation client: {e}"),
+                )
+            })?;
         Ok(Self { automation })
     }
     fn focused(&self) -> Value {
-        let Ok(element) = (unsafe { self.automation.GetFocusedElement() }) else { return json!({"observed":false,"classification":"unknown"}); };
+        let Ok(element) = (unsafe { self.automation.GetFocusedElement() }) else {
+            return json!({"observed":false,"classification":"unknown"});
+        };
         let control = unsafe { element.CurrentControlType() }.ok();
-        let automation_id = unsafe { element.CurrentAutomationId() }.ok().map(|v: BSTR| v.to_string()).unwrap_or_default();
-        let class_name = unsafe { element.CurrentClassName() }.ok().map(|v: BSTR| v.to_string()).unwrap_or_default();
-        let name = unsafe { element.CurrentName() }.ok().map(|v: BSTR| v.to_string()).unwrap_or_default();
+        let automation_id = unsafe { element.CurrentAutomationId() }
+            .ok()
+            .map(|v: BSTR| v.to_string())
+            .unwrap_or_default();
+        let class_name = unsafe { element.CurrentClassName() }
+            .ok()
+            .map(|v: BSTR| v.to_string())
+            .unwrap_or_default();
+        let name = unsafe { element.CurrentName() }
+            .ok()
+            .map(|v: BSTR| v.to_string())
+            .unwrap_or_default();
         let process_id = unsafe { element.CurrentProcessId() }.ok();
-        let classification = if control == Some(UIA_DocumentControlTypeId) { "page" } else if control == Some(UIA_EditControlTypeId) && (automation_id.to_ascii_lowercase().contains("address") || name.to_ascii_lowercase().contains("address")) { "browserChrome" } else { "other" };
+        let classification = if control == Some(UIA_DocumentControlTypeId) {
+            "page"
+        } else if control == Some(UIA_EditControlTypeId)
+            && (automation_id.to_ascii_lowercase().contains("address")
+                || name.to_ascii_lowercase().contains("address"))
+        {
+            "browserChrome"
+        } else {
+            "other"
+        };
         json!({"observed":true,"classification":classification,"processId":process_id,"controlType":control.map(|v|v.0),"automationId":automation_id,"className":class_name,"name":name})
     }
 }
-impl Drop for Uia { fn drop(&mut self) { unsafe { CoUninitialize() } } }
+impl Drop for Uia {
+    fn drop(&mut self) {
+        unsafe { CoUninitialize() }
+    }
+}
 
 pub(super) fn run(args: &[String]) -> Result<Value, BackendError> {
     let pid: u32 = args
@@ -298,7 +416,12 @@ pub(super) fn run(args: &[String]) -> Result<Value, BackendError> {
     if !(1..=10).contains(&max_trials) {
         return Err(op("probe", "max-trials must be between 1 and 10"));
     }
-    let task_name = args.iter().position(|a| a == "--task-name").and_then(|i| args.get(i + 1)).map(String::as_str).unwrap_or("Axon Live Probe Keyboard Diagnostic");
+    let task_name = args
+        .iter()
+        .position(|a| a == "--task-name")
+        .and_then(|i| args.get(i + 1))
+        .map(String::as_str)
+        .unwrap_or("Axon Live Probe Keyboard Diagnostic");
     let target = json!({"processId":pid,"identity":identity(pid, task_name)});
     let observer = Observer::install()?;
     observer.pump(Duration::ZERO);
@@ -347,7 +470,8 @@ pub(super) fn run(args: &[String]) -> Result<Value, BackendError> {
         };
         observer.pump(Duration::from_millis(150));
         let focus_after = uia.focused();
-        let ctrl_l_transition = focus_before["classification"] == "page" && focus_after["classification"] == "browserChrome";
+        let ctrl_l_transition = focus_before["classification"] == "page"
+            && focus_after["classification"] == "browserChrome";
         let (keys, focuses, overflowed) = {
             let mut b = EVENTS.get_or_init(Default::default).lock().unwrap();
             (
