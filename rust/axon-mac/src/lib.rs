@@ -76,6 +76,39 @@ pub struct Router<B> {
     observation_sequence: u64,
 }
 
+fn visual_observation_result(
+    result: Result<VisualObservation, axon_core::BackendError>,
+    wants_screenshot: bool,
+    wants_screen_text: bool,
+) -> (
+    Option<VisualObservation>,
+    Option<axon_core::ScreenshotUnavailable>,
+    Option<Value>,
+) {
+    match result {
+        Ok(visuals) => (Some(visuals), None, None),
+        Err(error) if wants_screen_text => {
+            let reason = error.to_string();
+            (
+                None,
+                None,
+                Some(json!({"code":"ocr-failed","reason":reason})),
+            )
+        }
+        if let Some(unavailable) = screen_text_unavailable {
+            observation_object(&mut value, request.display.format)
+                .expect("snapshots serialize as objects")
+                .insert("screenTextUnavailable".into(), unavailable);
+        }
+        Err(error) if wants_screenshot => (
+            None,
+            Some(axon_core::ScreenshotUnavailable::from_backend_error(error)),
+            None,
+        ),
+        Err(_) => (None, None, None),
+    }
+}
+
 fn observation_object(
     value: &mut Value,
     format: axon_core::LookFormat,
@@ -1040,20 +1073,17 @@ impl<
             axon_core::LookObservationKind::FullApp,
         );
         let wants_screen_text = request.screen_text;
-        let (visuals, screenshot_unavailable) = if wants_screenshot || wants_screen_text {
-            match self
-                .backend
-                .observe_visuals(&app, wants_screenshot, wants_screen_text)
-            {
-                Ok(visuals) => (Some(visuals), None),
-                Err(error) if wants_screenshot && !wants_screen_text => (
-                    None,
-                    Some(axon_core::ScreenshotUnavailable::from_backend_error(error)),
-                ),
-                Err(error) => return Err(backend_error(error)),
-            }
+        let (visuals, screenshot_unavailable, screen_text_unavailable) = if wants_screenshot
+            || wants_screen_text
+        {
+            visual_observation_result(
+                self.backend
+                    .observe_visuals(&app, wants_screenshot, wants_screen_text),
+                wants_screenshot,
+                wants_screen_text,
+            )
         } else {
-            (None, None)
+            (None, None, None)
         };
         if let Some(screenshot) = visuals
             .as_ref()
@@ -1589,6 +1619,42 @@ pub fn parse_request(line: &str) -> Result<JsonRpcRequest, JsonRpcResponse> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn operation_failure() -> axon_core::BackendError {
+        axon_core::BackendError::Operation {
+            operation: "recognize screen text".into(),
+            message: "Vision request failed".into(),
+            diagnostic: None,
+        }
+    }
+
+    #[test]
+    fn screen_text_failure_is_observation_metadata_instead_of_a_top_level_error() {
+        let (visuals, screenshot_unavailable, screen_text_unavailable) =
+            visual_observation_result(Err(operation_failure()), false, true);
+
+        assert!(visuals.is_none());
+        assert!(screenshot_unavailable.is_none());
+        assert_eq!(
+            screen_text_unavailable.unwrap(),
+            json!({
+                "code": "ocr-failed",
+                "reason": "operation recognize screen text failed: Vision request failed"
+            })
+        );
+    }
+
+    #[test]
+    fn screenshot_only_failure_keeps_the_existing_unavailable_contract() {
+        let (visuals, screenshot_unavailable, screen_text_unavailable) =
+            visual_observation_result(Err(operation_failure()), true, false);
+
+        assert!(visuals.is_none());
+        assert!(screen_text_unavailable.is_none());
+        let unavailable = screenshot_unavailable.unwrap();
+        assert_eq!(unavailable.code, "capture-failed");
+        assert_eq!(unavailable.reason, "Vision request failed");
+    }
 
     struct EnumerationBackend;
 
