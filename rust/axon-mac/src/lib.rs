@@ -895,13 +895,6 @@ impl<
     fn look(&mut self, params: &Map<String, Value>) -> Result<Value, JsonRpcError> {
         let request = axon_core::LookRequest::decode(params)
             .map_err(|error| rpc_error(-32602, error.to_string()))?;
-        if params.get("screenText").and_then(Value::as_bool) == Some(true) {
-            return Err(capability_unavailable(
-                "look",
-                "screenText",
-                "not-implemented",
-            ));
-        }
         if let axon_core::LookMode::ChildPage {
             target,
             offset,
