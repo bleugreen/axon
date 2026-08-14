@@ -1,7 +1,7 @@
 //! Linux AT-SPI backend and v1 JSON-RPC tool router.
 
 use axon_core::{
-    AppQuery, AxnRunner, Capability, DeliveryCandidate, DeliveryCapability, DeliveryOutcome,
+    AppQuery, AxnRunner, Capability, Confidence, DeliveryCandidate, DeliveryCapability, DeliveryOutcome,
     DeliveryPolicy, DeliveryRefusal, DeliveryRefusalReason, DeliveryRung, DeliverySelection,
     DiffPolicy, DispatchOutcome, ExpectedFact, ForegroundTarget, JsonRpcError, JsonRpcId,
     JsonRpcRequest, JsonRpcResponse, KeyboardIntent, PlatformBackend, Resolution, RunEnvelope,
@@ -126,29 +126,6 @@ fn primitive_dispatch_params(params: &Map<String, Value>) -> Map<String, Value> 
         }
     }
 
-    fn click_text_location(&mut self, value: Value, policy: DeliveryPolicy) -> Result<Value, JsonRpcError> {
-        let target: TextLocationTarget = serde_json::from_value(value).map_err(|error| rpc_error(-32602, error.to_string()))?;
-        if target.app.is_empty() { return Err(rpc_error(-32602, "location app must not be empty")); }
-        let app = AppQuery { process_id: None, name: Some(target.app.clone()), identifier: None };
-        let snapshot = self.backend.capture(&app).map_err(backend_error)?;
-        let initial = TextLocationResolver::resolve(&target, &snapshot, &[]);
-        let resolution = if target.source == TextLocationSource::Screenshot || (target.source == TextLocationSource::Auto && initial.status == ResolutionStatus::Missing) {
-            let visual = self.backend.capture_visuals(&app, false, true).map_err(backend_error)?;
-            TextLocationResolver::resolve(&target, &snapshot, &visual.recognized_text)
-        } else { initial };
-        let candidate = resolution.best.as_ref().ok_or_else(|| rpc_error(-32001, format!("text location resolution was {:?}", resolution.status)))?;
-        if let Some(handle) = candidate.handle.clone() {
-            self.snapshot = Some(snapshot);
-            return self.dispatch_resolved_click(handle, Resolution { status: resolution.status, snapshot_id: resolution.snapshot_id.clone(), best: None, candidates: Vec::new() }, policy);
-        }
-        let point = (candidate.point.x, candidate.point.y);
-        let identity = self.backend.resolve_application(&app).map_err(backend_error)?.ok_or_else(|| rpc_error(-32003, "the recognized application is no longer available"))?;
-        let ladder = self.global_input_ladder(Capability::PointerInput, "XTest pointer", &PixelPlan::unavailable("OCR coordinates have no AT-SPI handle for target-bound background delivery"));
-        let Some(selected) = self.selected(&ladder, policy) else { return Ok(self.refusal(&ladder, policy)); };
-        self.snapshot = Some(snapshot);
-        self.foreground_dispatch(ForegroundDispatch { policy, candidate: &selected, target: ForegroundTarget::Application(&identity), restores_pointer: true, verification: json!({"verified":false,"reason":"OCR click has no declared postcondition"}), resolution: None }, |backend| backend.pointer_click(point))
-            .map(|mut result| { if let Some(object)=result.as_object_mut(){object.insert("resolution".into(),json!(resolution));} result })
-    }
     params
 }
 
@@ -541,6 +518,30 @@ impl<B: PointerTargetVerifier + BackgroundPixelInput> Router<B> {
             "run" => self.run_axn(params),
             _ => Err(rpc_error(-32601, format!("unknown method {method}"))),
         }
+    }
+
+    fn click_text_location(&mut self, value: Value, policy: DeliveryPolicy) -> Result<Value, JsonRpcError> {
+        let target: TextLocationTarget = serde_json::from_value(value).map_err(|error| rpc_error(-32602, error.to_string()))?;
+        if target.app.is_empty() { return Err(rpc_error(-32602, "location app must not be empty")); }
+        let app = AppQuery { process_id: None, name: Some(target.app.clone()), identifier: None };
+        let snapshot = self.backend.capture(&app).map_err(backend_error)?;
+        let initial = TextLocationResolver::resolve(&target, &snapshot, &[]);
+        let resolution = if target.source == TextLocationSource::Screenshot || (target.source == TextLocationSource::Auto && initial.status == ResolutionStatus::Missing) {
+            let visual = self.backend.capture_visuals(&app, false, true).map_err(backend_error)?;
+            TextLocationResolver::resolve(&target, &snapshot, &visual.recognized_text)
+        } else { initial };
+        let candidate = resolution.best.as_ref().ok_or_else(|| rpc_error(-32001, format!("text location resolution was {:?}", resolution.status)))?;
+        if let Some(handle) = candidate.handle.clone() {
+            self.snapshot = Some(snapshot);
+            return self.dispatch_resolved_click(handle, Resolution { status: resolution.status, snapshot_id: resolution.snapshot_id.clone(), confidence: Confidence::High, best: None, candidates: Vec::new() }, policy);
+        }
+        let point = (candidate.point.x, candidate.point.y);
+        let identity = self.backend.resolve_application(&app).map_err(backend_error)?.ok_or_else(|| rpc_error(-32003, "the recognized application is no longer available"))?;
+        let ladder = self.global_input_ladder(Capability::PointerInput, "XTest pointer", &PixelPlan::unavailable("OCR coordinates have no AT-SPI handle for target-bound background delivery"));
+        let Some(selected) = self.selected(&ladder, policy) else { return Ok(self.refusal(&ladder, policy)); };
+        self.snapshot = Some(snapshot);
+        self.foreground_dispatch(ForegroundDispatch { policy, candidate: &selected, target: ForegroundTarget::Application(&identity), restores_pointer: true, verification: json!({"verified":false,"reason":"OCR click has no declared postcondition"}), resolution: None }, |backend| backend.pointer_click(point))
+            .map(|mut result| { if let Some(object)=result.as_object_mut(){object.insert("resolution".into(),json!(resolution));} result })
     }
 
     fn dispatch_resolved_click(

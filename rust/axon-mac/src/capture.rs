@@ -266,6 +266,8 @@ impl CapturedWindow {
                 "recognize screen text",
                 "Vision returned a null result array",
             ))
+        } else if native.count == 0 {
+            Ok(Vec::new())
         } else {
             let items = unsafe { std::slice::from_raw_parts(native.items, native.count) };
             Ok(items

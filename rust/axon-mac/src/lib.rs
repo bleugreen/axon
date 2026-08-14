@@ -1046,7 +1046,7 @@ impl<
                 .observe_visuals(&app, wants_screenshot, wants_screen_text)
             {
                 Ok(visuals) => (Some(visuals), None),
-                Err(error) if wants_screenshot => (
+                Err(error) if wants_screenshot && !wants_screen_text => (
                     None,
                     Some(axon_core::ScreenshotUnavailable::from_backend_error(error)),
                 ),
@@ -1077,7 +1077,10 @@ impl<
         if let Some(screen_text) = visuals.and_then(|result| result.recognized_text) {
             observation_object(&mut value, request.display.format)
                 .expect("snapshots serialize as objects")
-                .insert("screenText".into(), json!(screen_text));
+                .insert(
+                    "screenText".into(),
+                    axon_core::format_screen_text(&screen_text, request.display.frames),
+                );
         }
         if let Some(unavailable) = screenshot_unavailable {
             observation_object(&mut value, request.display.format)
