@@ -4,13 +4,13 @@ use crate::{
     PointerTargetVerifier, ScrollDispatch, VisualObservation, VisualObservationProvider,
     WindowsScrollProvider,
 };
-use serde::Serialize;
 use axon_core::{
     AppQuery, Application, BackendError, Capability, CapabilityInfo, CaptureBounds,
     ChildPageCapture, ChildPageRequest, Key, KeyboardIntent, Modifier, Node, Observation,
     PlatformBackend, RecognizedText, RecordedCall, Rect, Screenshot, Snapshot, SnapshotHandle,
     TextRecognitionProvider, Window,
 };
+use serde::Serialize;
 
 #[path = "capture.rs"]
 mod graphics_capture;
@@ -226,9 +226,7 @@ struct KeyboardEventMetadata {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 enum KeyboardBatchIntent {
-    NamedChord {
-        events: Vec<KeyboardEventMetadata>,
-    },
+    NamedChord { events: Vec<KeyboardEventMetadata> },
     Text,
 }
 

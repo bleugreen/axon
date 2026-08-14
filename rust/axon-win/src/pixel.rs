@@ -5,13 +5,13 @@
 //! and is verified against fakes on any machine; this file is what only a Windows machine can
 //! check, which is why it is kept as small as the job allows.
 
+use serde::Serialize;
 use std::{
     ffi::c_void,
     sync::OnceLock,
     thread,
     time::{Duration, Instant},
 };
-use serde::Serialize;
 use windows::{
     Win32::{
         Foundation::{CloseHandle, HANDLE, HWND, LPARAM, POINT, RECT, WPARAM},
@@ -33,14 +33,15 @@ use windows::{
                 GetAwarenessFromDpiAwarenessContext, GetWindowDpiAwarenessContext,
                 PhysicalToLogicalPointForPerMonitorDPI,
             },
-            Input::KeyboardAndMouse::{GetFocus, GetQueueStatus, SetFocus, QS_KEY, QS_RAWINPUT},
+            Input::KeyboardAndMouse::SetFocus,
             WindowsAndMessaging::{
                 CWP_SKIPDISABLED, CWP_SKIPINVISIBLE, CWP_SKIPTRANSPARENT, ChildWindowFromPointEx,
                 EnumWindows, GA_ROOT, GUITHREADINFO, GW_OWNER, GetAncestor, GetClassNameW,
-                GetClientRect, GetCursorPos, GetForegroundWindow, GetGUIThreadInfo, GetWindow,
-                GetWindowTextLengthW, GetWindowThreadProcessId, IsIconic, IsWindow,
-                IsWindowVisible, SMTO_ABORTIFHUNG, SMTO_NORMAL, SendMessageTimeoutW, SetCursorPos,
-                SetForegroundWindow, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE,
+                GetClientRect, GetCursorPos, GetForegroundWindow, GetGUIThreadInfo, GetQueueStatus,
+                GetWindow, GetWindowTextLengthW, GetWindowThreadProcessId, IsIconic, IsWindow,
+                IsWindowVisible, QS_KEY, QS_RAWINPUT, SMTO_ABORTIFHUNG, SMTO_NORMAL,
+                SendMessageTimeoutW, SetCursorPos, SetForegroundWindow, WM_LBUTTONDOWN,
+                WM_LBUTTONUP, WM_MOUSEMOVE,
             },
         },
     },
@@ -109,6 +110,46 @@ mod keyboard_snapshot_tests {
             serde_json::to_string(&FocusProofClassification::ProvedRepairedFocus).unwrap(),
             r#""provedRepairedFocus""#
         );
+    }
+
+    #[test]
+    fn queue_status_keeps_current_and_changed_words_distinct() {
+        let status = classify_queue_status(((QS_KEY.0 as u32) << 16) | QS_RAWINPUT.0 as u32);
+        assert!(status.keyboard_current);
+        assert!(!status.keyboard_changed);
+        assert!(!status.raw_input_current);
+        assert!(status.raw_input_changed);
+    }
+
+    #[test]
+    fn snapshot_serialization_has_stable_phase_and_ownership_fields() {
+        let empty = WindowOwnership {
+            hwnd: 0,
+            thread_id: None,
+            process_id: None,
+        };
+        let snapshot = KeyboardSnapshot {
+            monotonic_micros: 42,
+            phase: KeyboardSnapshotPhase::BeforeSend,
+            intended_process_id: 7,
+            foreground: empty,
+            gui_thread: None,
+            caller_attached_to_target_queue: false,
+            queue: QueueStatus {
+                current_bits: 0,
+                changed_bits: 0,
+                keyboard_current: false,
+                keyboard_changed: false,
+                raw_input_current: false,
+                raw_input_changed: false,
+            },
+            foreground_matches_intended_process: false,
+            focus_matches_intended_process: false,
+        };
+        let value = serde_json::to_value(snapshot).unwrap();
+        assert_eq!(value["phase"], "beforeSend");
+        assert_eq!(value["foreground"]["hwnd"], 0);
+        assert_eq!(value["intendedProcessId"], 7);
     }
 }
 
@@ -217,6 +258,23 @@ pub fn classify_focus_proof(
     }
 }
 
+fn classify_queue_status(queue_bits: u32) -> QueueStatus {
+    // GetQueueStatus returns current state in the high word and changes since the previous read in
+    // the low word. Reading it consumes those changed bits, so snapshots are sampled in one order.
+    let current_bits = (queue_bits >> 16) as u16;
+    let changed_bits = queue_bits as u16;
+    let key = QS_KEY.0 as u16;
+    let raw = QS_RAWINPUT.0 as u16;
+    QueueStatus {
+        current_bits,
+        changed_bits,
+        keyboard_current: current_bits & key != 0,
+        keyboard_changed: changed_bits & key != 0,
+        raw_input_current: current_bits & raw != 0,
+        raw_input_changed: changed_bits & raw != 0,
+    }
+}
+
 fn ownership(window: HWND) -> WindowOwnership {
     let mut process_id = 0;
     let thread_id = if window.is_invalid() {
@@ -255,7 +313,7 @@ pub fn keyboard_snapshot(
     let gui_thread = (target_thread != 0
         && unsafe { GetGUIThreadInfo(target_thread, &mut info) }.is_ok())
     .then(|| GuiThreadState {
-        flags: info.flags,
+        flags: info.flags.0,
         active: ownership(info.hwndActive),
         focus: ownership(info.hwndFocus),
         capture: ownership(info.hwndCapture),
@@ -264,14 +322,8 @@ pub fn keyboard_snapshot(
         caret: ownership(info.hwndCaret),
     });
     let queue_bits = unsafe { GetQueueStatus(QS_KEY | QS_RAWINPUT) };
-    let current_bits = queue_bits as u16;
-    let changed_bits = (queue_bits >> 16) as u16;
-    let key = QS_KEY.0 as u16;
-    let raw = QS_RAWINPUT.0 as u16;
-    let focus_matches_intended_process = gui_thread
-        .as_ref()
-        .and_then(|state| state.focus.process_id)
-        == Some(intended_process_id);
+    let focus_matches_intended_process =
+        gui_thread.as_ref().and_then(|state| state.focus.process_id) == Some(intended_process_id);
     KeyboardSnapshot {
         monotonic_micros: monotonic_micros(),
         phase,
@@ -279,14 +331,7 @@ pub fn keyboard_snapshot(
         foreground: foreground_ownership,
         gui_thread,
         caller_attached_to_target_queue,
-        queue: QueueStatus {
-            current_bits,
-            changed_bits,
-            keyboard_current: current_bits & key != 0,
-            keyboard_changed: changed_bits & key != 0,
-            raw_input_current: current_bits & raw != 0,
-            raw_input_changed: changed_bits & raw != 0,
-        },
+        queue: classify_queue_status(queue_bits),
         foreground_matches_intended_process: process_of(foreground) == Some(intended_process_id),
         focus_matches_intended_process,
     }
@@ -299,7 +344,11 @@ pub fn keyboard_snapshot(
 pub fn ensure_foreground_focus() -> ForegroundFocusProof {
     let target = foreground_window();
     if target.is_invalid() {
-        return ForegroundFocusProof::failed(FocusProofClassification::InvalidForeground, None, None);
+        return ForegroundFocusProof::failed(
+            FocusProofClassification::InvalidForeground,
+            None,
+            None,
+        );
     }
     let Some(target_pid) = process_of(target) else {
         return ForegroundFocusProof::failed(
@@ -318,8 +367,8 @@ pub fn ensure_foreground_focus() -> ForegroundFocusProof {
         );
     }
     let attach_attempted = target_thread != ours;
-    let attached = !attach_attempted
-        || unsafe { AttachThreadInput(ours, target_thread, true) }.as_bool();
+    let attached =
+        !attach_attempted || unsafe { AttachThreadInput(ours, target_thread, true) }.as_bool();
     if !attached {
         return ForegroundFocusProof::failed(
             FocusProofClassification::AttachFailed,
