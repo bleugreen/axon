@@ -47,7 +47,7 @@ if (-not $ProbeScript) {
 
 $ProbeScript = (Resolve-Path $ProbeScript).Path
 
-. $ProbeScript
+. $ProbeScript -KeyboardDiagnostic:$false -KeyboardDiagnosticMaxTrials 10
 
 # ---------------------------------------------------------------------------------------------
 # Seam census
