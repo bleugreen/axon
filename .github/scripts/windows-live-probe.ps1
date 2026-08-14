@@ -1059,6 +1059,30 @@ function Invoke-ProbeStage {
         }
         Write-Note 'Notepad SendInput control verified through UI Automation value readback'
 
+        # Prove chord interpretation independently of Chromium. If Ctrl+A replaces the exact
+        # UIA-readable editor value, modifier ordering and scan-code generation work in the same
+        # interactive session; a browser-only failure is then not a session-wide SendInput defect.
+        $replacement = "axon-chord-$([guid]::NewGuid().ToString('N'))"
+        foreach ($notepadCall in @(
+            @{ name = 'keyboard'; arguments = @{ key = 'ctrl+a'; deliveryPolicy = 'foregroundPermitted' } },
+            @{ name = 'keyboard'; arguments = @{ text = $replacement; deliveryPolicy = 'foregroundPermitted' } }
+        )) {
+            $notepadChordRequest = @{ jsonrpc = '2.0'; id = 72; method = 'tools/call'; params = $notepadCall } |
+                ConvertTo-Json -Compress -Depth 10
+            $notepadChordResult = Invoke-AxonMcp -Request $notepadChordRequest
+            if ($notepadChordResult.result.isError -ne $false -or
+                -not [bool]$notepadChordResult.result.structuredContent.dispatchSuccess) {
+                throw "the Notepad chord control did not dispatch: $($notepadChordResult.result.structuredContent | ConvertTo-Json -Compress -Depth 20)"
+            }
+        }
+        $notepadChordLook = Invoke-AxonMcp -Request $notepadLookRequest
+        $notepadChordJson = $notepadChordLook.result.structuredContent | ConvertTo-Json -Compress -Depth 100
+        Write-Note "Notepad accessibility after Ctrl+A replacement=$notepadChordJson"
+        if ($notepadChordJson -notmatch $replacement -or $notepadChordJson -match $sentinel) {
+            throw 'Ctrl+A did not select the exact probe-owned Notepad value for replacement'
+        }
+        Write-Note 'Notepad Ctrl+A chord control verified through exact UI Automation value replacement'
+
         # The A-H hand-back experiment remains available through `probe foreground-handback-sweep`,
         # but it is not repeated in the standing acceptance run. Its completed 2x2 measurement chose
         # HeldAttachment; requiring arbitrary persistent desktop applications to foreground on every
@@ -1081,6 +1105,19 @@ function Invoke-ProbeStage {
         } } | ConvertTo-Json -Compress -Depth 10
         $addressFocus = Invoke-AxonMcp -Request $addressFocusRequest
         Write-Note "Edge accessibility after aimed Ctrl+L=$($addressFocus.result.structuredContent | ConvertTo-Json -Compress -Depth 100)"
+
+        # F6 is a modifier-free browser-chrome focus control. Logging it beside Ctrl+L separates a
+        # Chromium modifier-path failure from a broader inability to deliver hardware key records.
+        $f6Request = @{ jsonrpc = '2.0'; id = 74; method = 'tools/call'; params = @{
+            name = 'keyboard'; arguments = @{ key = 'F6'; deliveryPolicy = 'foregroundPermitted' }
+        } } | ConvertTo-Json -Compress -Depth 10
+        $f6Result = Invoke-AxonMcp -Request $f6Request
+        if ($f6Result.result.isError -ne $false -or
+            -not [bool]$f6Result.result.structuredContent.dispatchSuccess) {
+            throw "the Edge F6 control did not dispatch: $($f6Result.result.structuredContent | ConvertTo-Json -Compress -Depth 20)"
+        }
+        $f6Focus = Invoke-AxonMcp -Request $addressFocusRequest
+        Write-Note "Edge accessibility after F6=$($f6Focus.result.structuredContent | ConvertTo-Json -Compress -Depth 100)"
 
         # Windows keeps Edge forward after the aimed action because SendInput has no consumption
         # fence. Re-prove the exact PID through the independent task seam, then exercise the
