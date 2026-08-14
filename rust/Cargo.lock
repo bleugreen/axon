@@ -255,6 +255,7 @@ version = "0.3.4"
 dependencies = [
  "axon-core",
  "base64",
+ "cc",
  "regex",
  "serde",
  "serde_json",
