@@ -45,6 +45,65 @@ if (-not $ProbeScript) {
     $ProbeScript = Join-Path $PSScriptRoot '..\.github\scripts\windows-live-probe.ps1'
 }
 
+Test-Scenario 'probe: keyboard diagnostic removes its task and payload after one baseline dispatch' {
+    Set-ParkedMachine
+    $identity = [pscustomobject]@{
+        processId = 6664; executablePath = 'C:\Windows\explorer.exe'; parentProcessId = 1000
+        sessionId = 1; integrityLevel = 'medium'
+        window = [pscustomobject]@{ hwnd = '0x1'; className = 'Shell_TrayWnd'; title = ''; guiThreadId = 99 }
+        taskName = $null
+    }
+    $script:Machine.KeyboardDiagnosticPayload = [pscustomobject]@{
+        schemaVersion = 'keyboard-diagnostic-v1'
+        target = [pscustomobject]@{ processId = 6060; identity = $identity }
+        trials = @([pscustomobject]@{
+            index = 1; experiment = 'baseline'
+            foregroundBefore = [pscustomobject]@{ identity = $identity }
+            dispatches = @([pscustomobject]@{ ordinal = 1; intent = 'ctrl+l' })
+            hook = [pscustomobject]@{ valid = $true; sentinelObserved = $true }
+            timeline = @([pscustomobject]@{ atUs = 1; phase = 'activation'; source = 'native' })
+        })
+        finalForeground = [pscustomobject]@{ identity = $identity }
+        cleanup = [pscustomobject]@{ hookRemoved = $true; observerWindowDestroyed = $true }
+    }
+    $KeyboardDiagnostic = $true
+    try { $result = Invoke-StageUnderTest -Name 'probe' }
+    finally { $KeyboardDiagnostic = $false }
+    Check 'the diagnostic succeeds' (-not $result.Failed) $result.Error
+    Check 'it issued one diagnostic task' ((Get-Count 'start-probe-keyboard-task') -eq 1)
+    Check 'it removed the result on every exit' $script:Machine.ProbeKeyboardPayloadRemoved
+    Check 'it unregistered the task' (-not $script:Machine.ProbeKeyboardTaskRegistered)
+    Check 'standing keyboard acceptance was skipped' ((Get-Count 'mcp keyboard') -eq 0)
+}
+
+Test-Scenario 'probe: keyboard diagnostic rejects a second baseline dispatch and still cleans up' {
+    Set-ParkedMachine
+    $identity = [pscustomobject]@{ processId = 6664 }
+    $script:Machine.KeyboardDiagnosticPayload = [pscustomobject]@{
+        schemaVersion = 'keyboard-diagnostic-v1'
+        target = [pscustomobject]@{ identity = $identity }
+        trials = @([pscustomobject]@{
+            index = 1; experiment = 'baseline'
+            foregroundBefore = [pscustomobject]@{ identity = $identity }
+            dispatches = @(
+                [pscustomobject]@{ ordinal = 1; intent = 'ctrl+l' },
+                [pscustomobject]@{ ordinal = 2; intent = 'ctrl+l' }
+            )
+            hook = [pscustomobject]@{ valid = $true; sentinelObserved = $true }
+            timeline = @([pscustomobject]@{ phase = 'activation' })
+        })
+        finalForeground = [pscustomobject]@{ identity = $identity }
+        cleanup = [pscustomobject]@{ hookRemoved = $true; observerWindowDestroyed = $true }
+    }
+    $KeyboardDiagnostic = $true
+    try { $result = Invoke-StageUnderTest -Name 'probe' }
+    finally { $KeyboardDiagnostic = $false }
+    Check 'the diagnostic fails' $result.Failed
+    Check 'it names the second dispatch' ($result.Error -match 'emitted 2 Ctrl\+L dispatches') $result.Error
+    Check 'it removes the payload after refusal' $script:Machine.ProbeKeyboardPayloadRemoved
+    Check 'it unregisters the task after refusal' (-not $script:Machine.ProbeKeyboardTaskRegistered)
+}
+
 function Invoke-KeyboardDiagnostic {
     param([int] $TargetProcessId, [int] $MaxTrials)
     $resultPath = 'C:\keyboard-diagnostic.json'
