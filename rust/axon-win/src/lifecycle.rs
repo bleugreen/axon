@@ -106,6 +106,14 @@ fn element_text<'a>(xml: &'a str, name: &str) -> Option<&'a str> {
 /// remote-shell install look like it worked. Window-station membership is checked separately
 /// because a session-1 process can still be started outside the interactive desktop.
 pub fn session_health(session_id: u32, window_station: Option<&str>) -> SessionHealth {
+    session_health_with_connection(session_id, window_station, true)
+}
+
+fn session_health_with_connection(
+    session_id: u32,
+    window_station: Option<&str>,
+    connected: bool,
+) -> SessionHealth {
     if session_id == 0 {
         return SessionHealth::degraded(
             false,
@@ -114,6 +122,16 @@ pub fn session_health(session_id: u32, window_station: Option<&str>) -> SessionH
             Some(
                 "Running in session 0; UI Automation requires the logged-in desktop session".into(),
             ),
+        );
+    }
+    if !connected {
+        return SessionHealth::degraded(
+            false,
+            true,
+            reason::NOT_INTERACTIVE_SESSION,
+            Some(format!(
+                "Session {session_id} is disconnected; UI Automation can inspect its desktop, but global input cannot reach a user"
+            )),
         );
     }
     match window_station {
@@ -161,7 +179,20 @@ pub fn current_session() -> SessionHealth {
             needed: *mut u32,
         ) -> i32;
     }
+    #[link(name = "wtsapi32")]
+    unsafe extern "system" {
+        fn WTSQuerySessionInformationW(
+            server: isize,
+            session_id: u32,
+            info_class: i32,
+            buffer: *mut *mut std::ffi::c_void,
+            bytes_returned: *mut u32,
+        ) -> i32;
+        fn WTSFreeMemory(memory: *mut std::ffi::c_void);
+    }
     const UOI_NAME: i32 = 2;
+    const WTS_CONNECT_STATE: i32 = 8;
+    const WTS_ACTIVE: i32 = 0;
 
     let mut session_id = 0u32;
     if unsafe { ProcessIdToSessionId(std::process::id(), &mut session_id) } == 0 {
@@ -191,7 +222,24 @@ pub fn current_session() -> SessionHealth {
         Some(String::from_utf16_lossy(&buffer[..length]))
     })();
 
-    session_health(session_id, station.as_deref())
+    let connected = (|| {
+        let mut buffer = std::ptr::null_mut();
+        let mut bytes = 0u32;
+        let ok = unsafe {
+            WTSQuerySessionInformationW(0, session_id, WTS_CONNECT_STATE, &mut buffer, &mut bytes)
+        };
+        if ok == 0 || buffer.is_null() || bytes < std::mem::size_of::<i32>() as u32 {
+            if !buffer.is_null() {
+                unsafe { WTSFreeMemory(buffer) };
+            }
+            return None;
+        }
+        let state = unsafe { *(buffer.cast::<i32>()) };
+        unsafe { WTSFreeMemory(buffer) };
+        Some(state == WTS_ACTIVE)
+    })();
+
+    session_health_with_connection(session_id, station.as_deref(), connected.unwrap_or(true))
 }
 
 /// The daemon's own answer to a `health` request.
@@ -308,6 +356,19 @@ mod tests {
         assert!(session.interactive);
         assert!(session.graphical);
         assert_eq!(session.reason, None);
+    }
+
+    #[test]
+    fn a_disconnected_desktop_cannot_reach_global_input() {
+        let session = session_health_with_connection(1, Some("WinSta0"), false);
+
+        assert!(!session.interactive);
+        assert!(session.graphical);
+        assert_eq!(
+            session.reason.as_deref(),
+            Some(reason::NOT_INTERACTIVE_SESSION)
+        );
+        assert!(session.detail.as_deref().unwrap().contains("disconnected"));
     }
 
     #[test]
