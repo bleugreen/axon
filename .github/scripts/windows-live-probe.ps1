@@ -1054,7 +1054,7 @@ function Invoke-ProbeStage {
         }
 
         $loadedRequest = @{ jsonrpc = '2.0'; id = 1; method = 'tools/call'; params = @{
-            name = 'look'; arguments = @{ app = $browserApp }
+            name = 'look'; arguments = @{ app = $browserApp; depth = 10 }
         } } | ConvertTo-Json -Compress -Depth 10
         $loaded = Invoke-AxonMcp -Request $loadedRequest
         $loadedWindow = @($loaded.result.structuredContent.app.windows |
@@ -1064,17 +1064,25 @@ function Invoke-ProbeStage {
                 'Axon Foreground Probe') {
             throw 'Ctrl+L, text, and Return did not load the probe page in the targeted Edge window'
         }
-        $continueLink = @($loadedWindow[0].children |
-            Where-Object { $_.role -eq 'Hyperlink' -and $_.title -eq 'Continue' } |
-            Select-Object -First 1)
-        if ($continueLink.Count -ne 1 -or
-            [string]::IsNullOrWhiteSpace([string]$continueLink[0].name)) {
-            throw 'the loaded Edge probe page did not expose its Continue hyperlink'
+        $nodes = [Collections.Generic.Stack[object]]::new()
+        $nodes.Push($loadedWindow[0])
+        $continueLinks = @()
+        while ($nodes.Count -gt 0) {
+            $node = $nodes.Pop()
+            if (($node.title -eq 'Continue' -or $node.label -eq 'Continue') -and
+                @($node.actions) -contains 'Invoke') {
+                $continueLinks += $node
+            }
+            foreach ($child in @($node.children)) { $nodes.Push($child) }
+        }
+        if ($continueLinks.Count -ne 1 -or
+            [string]::IsNullOrWhiteSpace([string]$continueLinks[0].name)) {
+            throw "the loaded Edge probe page exposed $($continueLinks.Count) actionable Continue hyperlinks"
         }
 
         $clickRequest = @{ jsonrpc = '2.0'; id = 1; method = 'tools/call'; params = @{
             name = 'click'; arguments = @{
-                target = @{ app = $browserApp; name = [string]$continueLink[0].name }
+                target = @{ app = $browserApp; name = [string]$continueLinks[0].name }
                 deliveryPolicy = 'foregroundPermitted'
             }
         } } | ConvertTo-Json -Compress -Depth 10
