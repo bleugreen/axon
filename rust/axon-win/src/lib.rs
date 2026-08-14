@@ -349,11 +349,7 @@ impl<
         if target.app.is_empty() {
             return Err(rpc_error(-32602, "location app must not be empty"));
         }
-        let app = AppQuery {
-            process_id: None,
-            name: Some(target.app.clone()),
-            identifier: None,
-        };
+        let app = app_query_from_parts(Some(&target.app), None);
         let snapshot = self.backend.capture(&app).map_err(backend_error)?;
         let initial = TextLocationResolver::resolve(&target, &snapshot, &[]);
         let resolution = if target.source == TextLocationSource::Screenshot
@@ -1470,7 +1466,13 @@ fn bounded_ms(
 }
 
 fn app_query(params: &Map<String, Value>) -> AppQuery {
-    let app = params.get("app").and_then(Value::as_str);
+    app_query_from_parts(
+        params.get("app").and_then(Value::as_str),
+        params.get("identifier").and_then(Value::as_str),
+    )
+}
+
+fn app_query_from_parts(app: Option<&str>, identifier: Option<&str>) -> AppQuery {
     let process_id = app.and_then(|value| value.strip_prefix("pid:").unwrap_or(value).parse().ok());
     AppQuery {
         process_id,
@@ -1478,10 +1480,7 @@ fn app_query(params: &Map<String, Value>) -> AppQuery {
             .is_none()
             .then(|| app.map(str::to_owned))
             .flatten(),
-        identifier: params
-            .get("identifier")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
+        identifier: identifier.map(str::to_owned),
     }
 }
 /// `keyboard` carries exactly one intent. Neither is an empty request and both at once is an
@@ -2480,6 +2479,23 @@ mod tests {
         assert!(matches!(response, JsonRpcResponse::Success(_)));
         assert_eq!(*calls.borrow(), 0);
     }
+    #[test]
+    fn text_location_uses_the_canonical_bare_pid_app_query() {
+        let backend = backend(vec![node("Save")], None);
+        let queries = backend.capture_queries.clone();
+        let mut router = Router::new(backend);
+        let response = router
+            .request(request(
+                "click",
+                json!({"target":{"location":{"app":"12336","text":"save","source":"auto"}}, "deliveryPolicy":"foregroundPermitted"}),
+            ))
+            .unwrap();
+
+        assert!(matches!(response, JsonRpcResponse::Success(_)));
+        assert_eq!(queries.borrow()[0].process_id, Some(12336));
+        assert_eq!(queries.borrow()[0].name, None);
+    }
+
     #[test]
     fn forced_screenshot_uses_ocr_even_when_uia_matches() {
         let mut backend = backend(vec![node("Save")], None);

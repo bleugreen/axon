@@ -540,11 +540,7 @@ impl<B: PointerTargetVerifier + BackgroundPixelInput> Router<B> {
         if target.app.is_empty() {
             return Err(rpc_error(-32602, "location app must not be empty"));
         }
-        let app = AppQuery {
-            process_id: None,
-            name: Some(target.app.clone()),
-            identifier: None,
-        };
+        let app = app_query_from_parts(Some(&target.app), None);
         let snapshot = self.backend.capture(&app).map_err(backend_error)?;
         let initial = TextLocationResolver::resolve(&target, &snapshot, &[]);
         let resolution = if target.source == TextLocationSource::Screenshot
@@ -1551,7 +1547,13 @@ fn bounded_ms(
 }
 
 fn app_query(params: &Map<String, Value>) -> AppQuery {
-    let app = params.get("app").and_then(Value::as_str);
+    app_query_from_parts(
+        params.get("app").and_then(Value::as_str),
+        params.get("identifier").and_then(Value::as_str),
+    )
+}
+
+fn app_query_from_parts(app: Option<&str>, identifier: Option<&str>) -> AppQuery {
     let process_id = app.and_then(|value| value.strip_prefix("pid:").unwrap_or(value).parse().ok());
     AppQuery {
         process_id,
@@ -1559,10 +1561,7 @@ fn app_query(params: &Map<String, Value>) -> AppQuery {
             .is_none()
             .then(|| app.map(str::to_owned))
             .flatten(),
-        identifier: params
-            .get("identifier")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
+        identifier: identifier.map(str::to_owned),
     }
 }
 /// `keyboard` carries exactly one intent. Neither is an empty request and both at once is an
@@ -1660,6 +1659,26 @@ mod tests {
                 name: None,
                 identifier: None,
             }]
+        );
+    }
+
+    #[test]
+    fn text_location_and_look_share_bare_pid_parsing() {
+        assert_eq!(
+            app_query_from_parts(Some("12336"), None),
+            AppQuery {
+                process_id: Some(12336),
+                name: None,
+                identifier: None,
+            }
+        );
+        assert_eq!(
+            app_query_from_parts(Some("App"), None),
+            AppQuery {
+                process_id: None,
+                name: Some("App".into()),
+                identifier: None,
+            }
         );
     }
 
