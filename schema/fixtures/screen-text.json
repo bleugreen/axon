@@ -9,48 +9,48 @@
         {
           "text": "ignored-empty",
           "frame": {
-            "x": 0,
-            "y": 0,
-            "width": 0,
-            "height": 10
+            "x": 0.0,
+            "y": 0.0,
+            "width": 0.0,
+            "height": 10.0
           },
           "confidence": 0.2
         },
         {
           "text": "Bottom",
           "frame": {
-            "x": 12,
-            "y": 40,
-            "width": 20,
-            "height": 8
+            "x": 12.0,
+            "y": 40.0,
+            "width": 20.0,
+            "height": 8.0
           }
         },
         {
           "text": "Right",
           "frame": {
-            "x": 5,
-            "y": -20,
-            "width": 12,
-            "height": 5
+            "x": 5.0,
+            "y": -20.0,
+            "width": 12.0,
+            "height": 5.0
           },
           "confidence": 0.75
         },
         {
           "text": "",
           "frame": {
-            "x": 1,
-            "y": 1,
-            "width": 1,
-            "height": 1
+            "x": 1.0,
+            "y": 1.0,
+            "width": 1.0,
+            "height": 1.0
           }
         },
         {
           "text": "Left",
           "frame": {
-            "x": -120,
-            "y": -20,
-            "width": 10,
-            "height": 5
+            "x": -120.0,
+            "y": -20.0,
+            "width": 10.0,
+            "height": 5.0
           },
           "confidence": 0.9
         }
@@ -60,29 +60,29 @@
           "text": "Left",
           "confidence": 0.9,
           "frame": {
-            "x": -120,
-            "y": -20,
-            "width": 10,
-            "height": 5
+            "x": -120.0,
+            "y": -20.0,
+            "width": 10.0,
+            "height": 5.0
           }
         },
         {
           "text": "Right",
           "confidence": 0.75,
           "frame": {
-            "x": 5,
-            "y": -20,
-            "width": 12,
-            "height": 5
+            "x": 5.0,
+            "y": -20.0,
+            "width": 12.0,
+            "height": 5.0
           }
         },
         {
           "text": "Bottom",
           "frame": {
-            "x": 12,
-            "y": 40,
-            "width": 20,
-            "height": 8
+            "x": 12.0,
+            "y": 40.0,
+            "width": 20.0,
+            "height": 8.0
           }
         }
       ]
@@ -94,48 +94,48 @@
         {
           "text": "ignored-empty",
           "frame": {
-            "x": 0,
-            "y": 0,
-            "width": 0,
-            "height": 10
+            "x": 0.0,
+            "y": 0.0,
+            "width": 0.0,
+            "height": 10.0
           },
           "confidence": 0.2
         },
         {
           "text": "Bottom",
           "frame": {
-            "x": 12,
-            "y": 40,
-            "width": 20,
-            "height": 8
+            "x": 12.0,
+            "y": 40.0,
+            "width": 20.0,
+            "height": 8.0
           }
         },
         {
           "text": "Right",
           "frame": {
-            "x": 5,
-            "y": -20,
-            "width": 12,
-            "height": 5
+            "x": 5.0,
+            "y": -20.0,
+            "width": 12.0,
+            "height": 5.0
           },
           "confidence": 0.75
         },
         {
           "text": "",
           "frame": {
-            "x": 1,
-            "y": 1,
-            "width": 1,
-            "height": 1
+            "x": 1.0,
+            "y": 1.0,
+            "width": 1.0,
+            "height": 1.0
           }
         },
         {
           "text": "Left",
           "frame": {
-            "x": -120,
-            "y": -20,
-            "width": 10,
-            "height": 5
+            "x": -120.0,
+            "y": -20.0,
+            "width": 10.0,
+            "height": 5.0
           },
           "confidence": 0.9
         }
@@ -161,910 +161,910 @@
         {
           "text": "Item 000",
           "frame": {
-            "x": 0,
-            "y": 0,
-            "width": 1,
-            "height": 1
+            "x": 0.0,
+            "y": 0.0,
+            "width": 1.0,
+            "height": 1.0
           }
         },
         {
           "text": "Item 001",
           "frame": {
-            "x": 1,
-            "y": 0,
-            "width": 1,
-            "height": 1
+            "x": 1.0,
+            "y": 0.0,
+            "width": 1.0,
+            "height": 1.0
           }
         },
         {
           "text": "Item 002",
           "frame": {
-            "x": 2,
-            "y": 0,
-            "width": 1,
-            "height": 1
+            "x": 2.0,
+            "y": 0.0,
+            "width": 1.0,
+            "height": 1.0
           }
         },
         {
           "text": "Item 003",
           "frame": {
-            "x": 3,
-            "y": 0,
-            "width": 1,
-            "height": 1
+            "x": 3.0,
+            "y": 0.0,
+            "width": 1.0,
+            "height": 1.0
           }
         },
         {
           "text": "Item 004",
           "frame": {
-            "x": 0,
-            "y": 1,
-            "width": 1,
-            "height": 1
+            "x": 0.0,
+            "y": 1.0,
+            "width": 1.0,
+            "height": 1.0
           }
         },
         {
           "text": "Item 005",
           "frame": {
-            "x": 1,
-            "y": 1,
-            "width": 1,
-            "height": 1
+            "x": 1.0,
+            "y": 1.0,
+            "width": 1.0,
+            "height": 1.0
           }
         },
         {
           "text": "Item 006",
           "frame": {
-            "x": 2,
-            "y": 1,
-            "width": 1,
-            "height": 1
+            "x": 2.0,
+            "y": 1.0,
+            "width": 1.0,
+            "height": 1.0
           }
         },
         {
           "text": "Item 007",
           "frame": {
-            "x": 3,
-            "y": 1,
-            "width": 1,
-            "height": 1
+            "x": 3.0,
+            "y": 1.0,
+            "width": 1.0,
+            "height": 1.0
           }
         },
         {
           "text": "Item 008",
           "frame": {
-            "x": 0,
-            "y": 2,
-            "width": 1,
-            "height": 1
+            "x": 0.0,
+            "y": 2.0,
+            "width": 1.0,
+            "height": 1.0
           }
         },
         {
           "text": "Item 009",
           "frame": {
-            "x": 1,
-            "y": 2,
-            "width": 1,
-            "height": 1
+            "x": 1.0,
+            "y": 2.0,
+            "width": 1.0,
+            "height": 1.0
           }
         },
         {
           "text": "Item 010",
           "frame": {
-            "x": 2,
-            "y": 2,
-            "width": 1,
-            "height": 1
+            "x": 2.0,
+            "y": 2.0,
+            "width": 1.0,
+            "height": 1.0
           }
         },
         {
           "text": "Item 011",
           "frame": {
-            "x": 3,
-            "y": 2,
-            "width": 1,
-            "height": 1
+            "x": 3.0,
+            "y": 2.0,
+            "width": 1.0,
+            "height": 1.0
           }
         },
         {
           "text": "Item 012",
           "frame": {
-            "x": 0,
-            "y": 3,
-            "width": 1,
-            "height": 1
+            "x": 0.0,
+            "y": 3.0,
+            "width": 1.0,
+            "height": 1.0
           }
         },
         {
           "text": "Item 013",
           "frame": {
-            "x": 1,
-            "y": 3,
-            "width": 1,
-            "height": 1
+            "x": 1.0,
+            "y": 3.0,
+            "width": 1.0,
+            "height": 1.0
           }
         },
         {
           "text": "Item 014",
           "frame": {
-            "x": 2,
-            "y": 3,
-            "width": 1,
-            "height": 1
+            "x": 2.0,
+            "y": 3.0,
+            "width": 1.0,
+            "height": 1.0
           }
         },
         {
           "text": "Item 015",
           "frame": {
-            "x": 3,
-            "y": 3,
-            "width": 1,
-            "height": 1
+            "x": 3.0,
+            "y": 3.0,
+            "width": 1.0,
+            "height": 1.0
           }
         },
         {
           "text": "Item 016",
           "frame": {
-            "x": 0,
-            "y": 4,
-            "width": 1,
-            "height": 1
+            "x": 0.0,
+            "y": 4.0,
+            "width": 1.0,
+            "height": 1.0
           }
         },
         {
           "text": "Item 017",
           "frame": {
-            "x": 1,
-            "y": 4,
-            "width": 1,
-            "height": 1
+            "x": 1.0,
+            "y": 4.0,
+            "width": 1.0,
+            "height": 1.0
           }
         },
         {
           "text": "Item 018",
           "frame": {
-            "x": 2,
-            "y": 4,
-            "width": 1,
-            "height": 1
+            "x": 2.0,
+            "y": 4.0,
+            "width": 1.0,
+            "height": 1.0
           }
         },
         {
           "text": "Item 019",
           "frame": {
-            "x": 3,
-            "y": 4,
-            "width": 1,
-            "height": 1
+            "x": 3.0,
+            "y": 4.0,
+            "width": 1.0,
+            "height": 1.0
           }
         },
         {
           "text": "Item 020",
           "frame": {
-            "x": 0,
-            "y": 5,
-            "width": 1,
-            "height": 1
+            "x": 0.0,
+            "y": 5.0,
+            "width": 1.0,
+            "height": 1.0
           }
         },
         {
           "text": "Item 021",
           "frame": {
-            "x": 1,
-            "y": 5,
-            "width": 1,
-            "height": 1
+            "x": 1.0,
+            "y": 5.0,
+            "width": 1.0,
+            "height": 1.0
           }
         },
         {
           "text": "Item 022",
           "frame": {
-            "x": 2,
-            "y": 5,
-            "width": 1,
-            "height": 1
+            "x": 2.0,
+            "y": 5.0,
+            "width": 1.0,
+            "height": 1.0
           }
         },
         {
           "text": "Item 023",
           "frame": {
-            "x": 3,
-            "y": 5,
-            "width": 1,
-            "height": 1
+            "x": 3.0,
+            "y": 5.0,
+            "width": 1.0,
+            "height": 1.0
           }
         },
         {
           "text": "Item 024",
           "frame": {
-            "x": 0,
-            "y": 6,
-            "width": 1,
-            "height": 1
+            "x": 0.0,
+            "y": 6.0,
+            "width": 1.0,
+            "height": 1.0
           }
         },
         {
           "text": "Item 025",
           "frame": {
-            "x": 1,
-            "y": 6,
-            "width": 1,
-            "height": 1
+            "x": 1.0,
+            "y": 6.0,
+            "width": 1.0,
+            "height": 1.0
           }
         },
         {
           "text": "Item 026",
           "frame": {
-            "x": 2,
-            "y": 6,
-            "width": 1,
-            "height": 1
+            "x": 2.0,
+            "y": 6.0,
+            "width": 1.0,
+            "height": 1.0
           }
         },
         {
           "text": "Item 027",
           "frame": {
-            "x": 3,
-            "y": 6,
-            "width": 1,
-            "height": 1
+            "x": 3.0,
+            "y": 6.0,
+            "width": 1.0,
+            "height": 1.0
           }
         },
         {
           "text": "Item 028",
           "frame": {
-            "x": 0,
-            "y": 7,
-            "width": 1,
-            "height": 1
+            "x": 0.0,
+            "y": 7.0,
+            "width": 1.0,
+            "height": 1.0
           }
         },
         {
           "text": "Item 029",
           "frame": {
-            "x": 1,
-            "y": 7,
-            "width": 1,
-            "height": 1
+            "x": 1.0,
+            "y": 7.0,
+            "width": 1.0,
+            "height": 1.0
           }
         },
         {
           "text": "Item 030",
           "frame": {
-            "x": 2,
-            "y": 7,
-            "width": 1,
-            "height": 1
+            "x": 2.0,
+            "y": 7.0,
+            "width": 1.0,
+            "height": 1.0
           }
         },
         {
           "text": "Item 031",
           "frame": {
-            "x": 3,
-            "y": 7,
-            "width": 1,
-            "height": 1
+            "x": 3.0,
+            "y": 7.0,
+            "width": 1.0,
+            "height": 1.0
           }
         },
         {
           "text": "Item 032",
           "frame": {
-            "x": 0,
-            "y": 8,
-            "width": 1,
-            "height": 1
+            "x": 0.0,
+            "y": 8.0,
+            "width": 1.0,
+            "height": 1.0
           }
         },
         {
           "text": "Item 033",
           "frame": {
-            "x": 1,
-            "y": 8,
-            "width": 1,
-            "height": 1
+            "x": 1.0,
+            "y": 8.0,
+            "width": 1.0,
+            "height": 1.0
           }
         },
         {
           "text": "Item 034",
           "frame": {
-            "x": 2,
-            "y": 8,
-            "width": 1,
-            "height": 1
+            "x": 2.0,
+            "y": 8.0,
+            "width": 1.0,
+            "height": 1.0
           }
         },
         {
           "text": "Item 035",
           "frame": {
-            "x": 3,
-            "y": 8,
-            "width": 1,
-            "height": 1
+            "x": 3.0,
+            "y": 8.0,
+            "width": 1.0,
+            "height": 1.0
           }
         },
         {
           "text": "Item 036",
           "frame": {
-            "x": 0,
-            "y": 9,
-            "width": 1,
-            "height": 1
+            "x": 0.0,
+            "y": 9.0,
+            "width": 1.0,
+            "height": 1.0
           }
         },
         {
           "text": "Item 037",
           "frame": {
-            "x": 1,
-            "y": 9,
-            "width": 1,
-            "height": 1
+            "x": 1.0,
+            "y": 9.0,
+            "width": 1.0,
+            "height": 1.0
           }
         },
         {
           "text": "Item 038",
           "frame": {
-            "x": 2,
-            "y": 9,
-            "width": 1,
-            "height": 1
+            "x": 2.0,
+            "y": 9.0,
+            "width": 1.0,
+            "height": 1.0
           }
         },
         {
           "text": "Item 039",
           "frame": {
-            "x": 3,
-            "y": 9,
-            "width": 1,
-            "height": 1
+            "x": 3.0,
+            "y": 9.0,
+            "width": 1.0,
+            "height": 1.0
           }
         },
         {
           "text": "Item 040",
           "frame": {
-            "x": 0,
-            "y": 10,
-            "width": 1,
-            "height": 1
+            "x": 0.0,
+            "y": 10.0,
+            "width": 1.0,
+            "height": 1.0
           }
         },
         {
           "text": "Item 041",
           "frame": {
-            "x": 1,
-            "y": 10,
-            "width": 1,
-            "height": 1
+            "x": 1.0,
+            "y": 10.0,
+            "width": 1.0,
+            "height": 1.0
           }
         },
         {
           "text": "Item 042",
           "frame": {
-            "x": 2,
-            "y": 10,
-            "width": 1,
-            "height": 1
+            "x": 2.0,
+            "y": 10.0,
+            "width": 1.0,
+            "height": 1.0
           }
         },
         {
           "text": "Item 043",
           "frame": {
-            "x": 3,
-            "y": 10,
-            "width": 1,
-            "height": 1
+            "x": 3.0,
+            "y": 10.0,
+            "width": 1.0,
+            "height": 1.0
           }
         },
         {
           "text": "Item 044",
           "frame": {
-            "x": 0,
-            "y": 11,
-            "width": 1,
-            "height": 1
+            "x": 0.0,
+            "y": 11.0,
+            "width": 1.0,
+            "height": 1.0
           }
         },
         {
           "text": "Item 045",
           "frame": {
-            "x": 1,
-            "y": 11,
-            "width": 1,
-            "height": 1
+            "x": 1.0,
+            "y": 11.0,
+            "width": 1.0,
+            "height": 1.0
           }
         },
         {
           "text": "Item 046",
           "frame": {
-            "x": 2,
-            "y": 11,
-            "width": 1,
-            "height": 1
+            "x": 2.0,
+            "y": 11.0,
+            "width": 1.0,
+            "height": 1.0
           }
         },
         {
           "text": "Item 047",
           "frame": {
-            "x": 3,
-            "y": 11,
-            "width": 1,
-            "height": 1
+            "x": 3.0,
+            "y": 11.0,
+            "width": 1.0,
+            "height": 1.0
           }
         },
         {
           "text": "Item 048",
           "frame": {
-            "x": 0,
-            "y": 12,
-            "width": 1,
-            "height": 1
+            "x": 0.0,
+            "y": 12.0,
+            "width": 1.0,
+            "height": 1.0
           }
         },
         {
           "text": "Item 049",
           "frame": {
-            "x": 1,
-            "y": 12,
-            "width": 1,
-            "height": 1
+            "x": 1.0,
+            "y": 12.0,
+            "width": 1.0,
+            "height": 1.0
           }
         },
         {
           "text": "Item 050",
           "frame": {
-            "x": 2,
-            "y": 12,
-            "width": 1,
-            "height": 1
+            "x": 2.0,
+            "y": 12.0,
+            "width": 1.0,
+            "height": 1.0
           }
         },
         {
           "text": "Item 051",
           "frame": {
-            "x": 3,
-            "y": 12,
-            "width": 1,
-            "height": 1
+            "x": 3.0,
+            "y": 12.0,
+            "width": 1.0,
+            "height": 1.0
           }
         },
         {
           "text": "Item 052",
           "frame": {
-            "x": 0,
-            "y": 13,
-            "width": 1,
-            "height": 1
+            "x": 0.0,
+            "y": 13.0,
+            "width": 1.0,
+            "height": 1.0
           }
         },
         {
           "text": "Item 053",
           "frame": {
-            "x": 1,
-            "y": 13,
-            "width": 1,
-            "height": 1
+            "x": 1.0,
+            "y": 13.0,
+            "width": 1.0,
+            "height": 1.0
           }
         },
         {
           "text": "Item 054",
           "frame": {
-            "x": 2,
-            "y": 13,
-            "width": 1,
-            "height": 1
+            "x": 2.0,
+            "y": 13.0,
+            "width": 1.0,
+            "height": 1.0
           }
         },
         {
           "text": "Item 055",
           "frame": {
-            "x": 3,
-            "y": 13,
-            "width": 1,
-            "height": 1
+            "x": 3.0,
+            "y": 13.0,
+            "width": 1.0,
+            "height": 1.0
           }
         },
         {
           "text": "Item 056",
           "frame": {
-            "x": 0,
-            "y": 14,
-            "width": 1,
-            "height": 1
+            "x": 0.0,
+            "y": 14.0,
+            "width": 1.0,
+            "height": 1.0
           }
         },
         {
           "text": "Item 057",
           "frame": {
-            "x": 1,
-            "y": 14,
-            "width": 1,
-            "height": 1
+            "x": 1.0,
+            "y": 14.0,
+            "width": 1.0,
+            "height": 1.0
           }
         },
         {
           "text": "Item 058",
           "frame": {
-            "x": 2,
-            "y": 14,
-            "width": 1,
-            "height": 1
+            "x": 2.0,
+            "y": 14.0,
+            "width": 1.0,
+            "height": 1.0
           }
         },
         {
           "text": "Item 059",
           "frame": {
-            "x": 3,
-            "y": 14,
-            "width": 1,
-            "height": 1
+            "x": 3.0,
+            "y": 14.0,
+            "width": 1.0,
+            "height": 1.0
           }
         },
         {
           "text": "Item 060",
           "frame": {
-            "x": 0,
-            "y": 15,
-            "width": 1,
-            "height": 1
+            "x": 0.0,
+            "y": 15.0,
+            "width": 1.0,
+            "height": 1.0
           }
         },
         {
           "text": "Item 061",
           "frame": {
-            "x": 1,
-            "y": 15,
-            "width": 1,
-            "height": 1
+            "x": 1.0,
+            "y": 15.0,
+            "width": 1.0,
+            "height": 1.0
           }
         },
         {
           "text": "Item 062",
           "frame": {
-            "x": 2,
-            "y": 15,
-            "width": 1,
-            "height": 1
+            "x": 2.0,
+            "y": 15.0,
+            "width": 1.0,
+            "height": 1.0
           }
         },
         {
           "text": "Item 063",
           "frame": {
-            "x": 3,
-            "y": 15,
-            "width": 1,
-            "height": 1
+            "x": 3.0,
+            "y": 15.0,
+            "width": 1.0,
+            "height": 1.0
           }
         },
         {
           "text": "Item 064",
           "frame": {
-            "x": 0,
-            "y": 16,
-            "width": 1,
-            "height": 1
+            "x": 0.0,
+            "y": 16.0,
+            "width": 1.0,
+            "height": 1.0
           }
         },
         {
           "text": "Item 065",
           "frame": {
-            "x": 1,
-            "y": 16,
-            "width": 1,
-            "height": 1
+            "x": 1.0,
+            "y": 16.0,
+            "width": 1.0,
+            "height": 1.0
           }
         },
         {
           "text": "Item 066",
           "frame": {
-            "x": 2,
-            "y": 16,
-            "width": 1,
-            "height": 1
+            "x": 2.0,
+            "y": 16.0,
+            "width": 1.0,
+            "height": 1.0
           }
         },
         {
           "text": "Item 067",
           "frame": {
-            "x": 3,
-            "y": 16,
-            "width": 1,
-            "height": 1
+            "x": 3.0,
+            "y": 16.0,
+            "width": 1.0,
+            "height": 1.0
           }
         },
         {
           "text": "Item 068",
           "frame": {
-            "x": 0,
-            "y": 17,
-            "width": 1,
-            "height": 1
+            "x": 0.0,
+            "y": 17.0,
+            "width": 1.0,
+            "height": 1.0
           }
         },
         {
           "text": "Item 069",
           "frame": {
-            "x": 1,
-            "y": 17,
-            "width": 1,
-            "height": 1
+            "x": 1.0,
+            "y": 17.0,
+            "width": 1.0,
+            "height": 1.0
           }
         },
         {
           "text": "Item 070",
           "frame": {
-            "x": 2,
-            "y": 17,
-            "width": 1,
-            "height": 1
+            "x": 2.0,
+            "y": 17.0,
+            "width": 1.0,
+            "height": 1.0
           }
         },
         {
           "text": "Item 071",
           "frame": {
-            "x": 3,
-            "y": 17,
-            "width": 1,
-            "height": 1
+            "x": 3.0,
+            "y": 17.0,
+            "width": 1.0,
+            "height": 1.0
           }
         },
         {
           "text": "Item 072",
           "frame": {
-            "x": 0,
-            "y": 18,
-            "width": 1,
-            "height": 1
+            "x": 0.0,
+            "y": 18.0,
+            "width": 1.0,
+            "height": 1.0
           }
         },
         {
           "text": "Item 073",
           "frame": {
-            "x": 1,
-            "y": 18,
-            "width": 1,
-            "height": 1
+            "x": 1.0,
+            "y": 18.0,
+            "width": 1.0,
+            "height": 1.0
           }
         },
         {
           "text": "Item 074",
           "frame": {
-            "x": 2,
-            "y": 18,
-            "width": 1,
-            "height": 1
+            "x": 2.0,
+            "y": 18.0,
+            "width": 1.0,
+            "height": 1.0
           }
         },
         {
           "text": "Item 075",
           "frame": {
-            "x": 3,
-            "y": 18,
-            "width": 1,
-            "height": 1
+            "x": 3.0,
+            "y": 18.0,
+            "width": 1.0,
+            "height": 1.0
           }
         },
         {
           "text": "Item 076",
           "frame": {
-            "x": 0,
-            "y": 19,
-            "width": 1,
-            "height": 1
+            "x": 0.0,
+            "y": 19.0,
+            "width": 1.0,
+            "height": 1.0
           }
         },
         {
           "text": "Item 077",
           "frame": {
-            "x": 1,
-            "y": 19,
-            "width": 1,
-            "height": 1
+            "x": 1.0,
+            "y": 19.0,
+            "width": 1.0,
+            "height": 1.0
           }
         },
         {
           "text": "Item 078",
           "frame": {
-            "x": 2,
-            "y": 19,
-            "width": 1,
-            "height": 1
+            "x": 2.0,
+            "y": 19.0,
+            "width": 1.0,
+            "height": 1.0
           }
         },
         {
           "text": "Item 079",
           "frame": {
-            "x": 3,
-            "y": 19,
-            "width": 1,
-            "height": 1
+            "x": 3.0,
+            "y": 19.0,
+            "width": 1.0,
+            "height": 1.0
           }
         },
         {
           "text": "Item 080",
           "frame": {
-            "x": 0,
-            "y": 20,
-            "width": 1,
-            "height": 1
+            "x": 0.0,
+            "y": 20.0,
+            "width": 1.0,
+            "height": 1.0
           }
         },
         {
           "text": "Item 081",
           "frame": {
-            "x": 1,
-            "y": 20,
-            "width": 1,
-            "height": 1
+            "x": 1.0,
+            "y": 20.0,
+            "width": 1.0,
+            "height": 1.0
           }
         },
         {
           "text": "Item 082",
           "frame": {
-            "x": 2,
-            "y": 20,
-            "width": 1,
-            "height": 1
+            "x": 2.0,
+            "y": 20.0,
+            "width": 1.0,
+            "height": 1.0
           }
         },
         {
           "text": "Item 083",
           "frame": {
-            "x": 3,
-            "y": 20,
-            "width": 1,
-            "height": 1
+            "x": 3.0,
+            "y": 20.0,
+            "width": 1.0,
+            "height": 1.0
           }
         },
         {
           "text": "Item 084",
           "frame": {
-            "x": 0,
-            "y": 21,
-            "width": 1,
-            "height": 1
+            "x": 0.0,
+            "y": 21.0,
+            "width": 1.0,
+            "height": 1.0
           }
         },
         {
           "text": "Item 085",
           "frame": {
-            "x": 1,
-            "y": 21,
-            "width": 1,
-            "height": 1
+            "x": 1.0,
+            "y": 21.0,
+            "width": 1.0,
+            "height": 1.0
           }
         },
         {
           "text": "Item 086",
           "frame": {
-            "x": 2,
-            "y": 21,
-            "width": 1,
-            "height": 1
+            "x": 2.0,
+            "y": 21.0,
+            "width": 1.0,
+            "height": 1.0
           }
         },
         {
           "text": "Item 087",
           "frame": {
-            "x": 3,
-            "y": 21,
-            "width": 1,
-            "height": 1
+            "x": 3.0,
+            "y": 21.0,
+            "width": 1.0,
+            "height": 1.0
           }
         },
         {
           "text": "Item 088",
           "frame": {
-            "x": 0,
-            "y": 22,
-            "width": 1,
-            "height": 1
+            "x": 0.0,
+            "y": 22.0,
+            "width": 1.0,
+            "height": 1.0
           }
         },
         {
           "text": "Item 089",
           "frame": {
-            "x": 1,
-            "y": 22,
-            "width": 1,
-            "height": 1
+            "x": 1.0,
+            "y": 22.0,
+            "width": 1.0,
+            "height": 1.0
           }
         },
         {
           "text": "Item 090",
           "frame": {
-            "x": 2,
-            "y": 22,
-            "width": 1,
-            "height": 1
+            "x": 2.0,
+            "y": 22.0,
+            "width": 1.0,
+            "height": 1.0
           }
         },
         {
           "text": "Item 091",
           "frame": {
-            "x": 3,
-            "y": 22,
-            "width": 1,
-            "height": 1
+            "x": 3.0,
+            "y": 22.0,
+            "width": 1.0,
+            "height": 1.0
           }
         },
         {
           "text": "Item 092",
           "frame": {
-            "x": 0,
-            "y": 23,
-            "width": 1,
-            "height": 1
+            "x": 0.0,
+            "y": 23.0,
+            "width": 1.0,
+            "height": 1.0
           }
         },
         {
           "text": "Item 093",
           "frame": {
-            "x": 1,
-            "y": 23,
-            "width": 1,
-            "height": 1
+            "x": 1.0,
+            "y": 23.0,
+            "width": 1.0,
+            "height": 1.0
           }
         },
         {
           "text": "Item 094",
           "frame": {
-            "x": 2,
-            "y": 23,
-            "width": 1,
-            "height": 1
+            "x": 2.0,
+            "y": 23.0,
+            "width": 1.0,
+            "height": 1.0
           }
         },
         {
           "text": "Item 095",
           "frame": {
-            "x": 3,
-            "y": 23,
-            "width": 1,
-            "height": 1
+            "x": 3.0,
+            "y": 23.0,
+            "width": 1.0,
+            "height": 1.0
           }
         },
         {
           "text": "Item 096",
           "frame": {
-            "x": 0,
-            "y": 24,
-            "width": 1,
-            "height": 1
+            "x": 0.0,
+            "y": 24.0,
+            "width": 1.0,
+            "height": 1.0
           }
         },
         {
           "text": "Item 097",
           "frame": {
-            "x": 1,
-            "y": 24,
-            "width": 1,
-            "height": 1
+            "x": 1.0,
+            "y": 24.0,
+            "width": 1.0,
+            "height": 1.0
           }
         },
         {
           "text": "Item 098",
           "frame": {
-            "x": 2,
-            "y": 24,
-            "width": 1,
-            "height": 1
+            "x": 2.0,
+            "y": 24.0,
+            "width": 1.0,
+            "height": 1.0
           }
         },
         {
           "text": "Item 099",
           "frame": {
-            "x": 3,
-            "y": 24,
-            "width": 1,
-            "height": 1
+            "x": 3.0,
+            "y": 24.0,
+            "width": 1.0,
+            "height": 1.0
           }
         },
         {
           "text": "Item 100",
           "frame": {
-            "x": 0,
-            "y": 25,
-            "width": 1,
-            "height": 1
+            "x": 0.0,
+            "y": 25.0,
+            "width": 1.0,
+            "height": 1.0
           }
         }
       ],

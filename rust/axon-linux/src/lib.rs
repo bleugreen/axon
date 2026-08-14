@@ -6,7 +6,8 @@ use axon_core::{
     DiffPolicy, DispatchOutcome, ExpectedFact, ForegroundTarget, JsonRpcError, JsonRpcId,
     JsonRpcRequest, JsonRpcResponse, KeyboardIntent, PlatformBackend, Resolution, RunEnvelope,
     SemanticLookup, SemanticNameRegistry, SemanticSelection, Snapshot, SnapshotHandle,
-    ToolDispatcher, classify_semantic_diff, dispatch_in_foreground, goal_success, prepare_run,
+    TextLocationResolver, TextLocationSource, TextLocationTarget, RecognizedText, Screenshot,
+    ResolutionStatus, ToolDispatcher, classify_semantic_diff, dispatch_in_foreground, goal_success, prepare_run,
     select_delivery,
 };
 use serde_json::{Map, Value, json};
@@ -89,6 +90,11 @@ pub struct Router<B> {
     semantic_names: SemanticNameRegistry,
 }
 
+pub struct VisualObservation {
+    pub screenshot: Option<Screenshot>,
+    pub recognized_text: Vec<RecognizedText>,
+}
+
 fn application_enumeration<T: serde::Serialize>(apps: Vec<T>) -> Value {
     json!({"apps": apps})
 }
@@ -119,6 +125,30 @@ fn primitive_dispatch_params(params: &Map<String, Value>) -> Map<String, Value> 
             target.retain(|field, _| field == "app" || field == "name");
         }
     }
+
+    fn click_text_location(&mut self, value: Value, policy: DeliveryPolicy) -> Result<Value, JsonRpcError> {
+        let target: TextLocationTarget = serde_json::from_value(value).map_err(|error| rpc_error(-32602, error.to_string()))?;
+        if target.app.is_empty() { return Err(rpc_error(-32602, "location app must not be empty")); }
+        let app = AppQuery { process_id: None, name: Some(target.app.clone()), identifier: None };
+        let snapshot = self.backend.capture(&app).map_err(backend_error)?;
+        let initial = TextLocationResolver::resolve(&target, &snapshot, &[]);
+        let resolution = if target.source == TextLocationSource::Screenshot || (target.source == TextLocationSource::Auto && initial.status == ResolutionStatus::Missing) {
+            let visual = self.backend.capture_visuals(&app, false, true).map_err(backend_error)?;
+            TextLocationResolver::resolve(&target, &snapshot, &visual.recognized_text)
+        } else { initial };
+        let candidate = resolution.best.as_ref().ok_or_else(|| rpc_error(-32001, format!("text location resolution was {:?}", resolution.status)))?;
+        if let Some(handle) = candidate.handle.clone() {
+            self.snapshot = Some(snapshot);
+            return self.dispatch_resolved_click(handle, Resolution { status: resolution.status, snapshot_id: resolution.snapshot_id.clone(), best: None, candidates: Vec::new() }, policy);
+        }
+        let point = (candidate.point.x, candidate.point.y);
+        let identity = self.backend.resolve_application(&app).map_err(backend_error)?.ok_or_else(|| rpc_error(-32003, "the recognized application is no longer available"))?;
+        let ladder = self.global_input_ladder(Capability::PointerInput, "XTest pointer", &PixelPlan::unavailable("OCR coordinates have no AT-SPI handle for target-bound background delivery"));
+        let Some(selected) = self.selected(&ladder, policy) else { return Ok(self.refusal(&ladder, policy)); };
+        self.snapshot = Some(snapshot);
+        self.foreground_dispatch(ForegroundDispatch { policy, candidate: &selected, target: ForegroundTarget::Application(&identity), restores_pointer: true, verification: json!({"verified":false,"reason":"OCR click has no declared postcondition"}), resolution: None }, |backend| backend.pointer_click(point))
+            .map(|mut result| { if let Some(object)=result.as_object_mut(){object.insert("resolution".into(),json!(resolution));} result })
+    }
     params
 }
 
@@ -137,6 +167,22 @@ pub trait PointerTargetVerifier: PlatformBackend {
 /// use it is platform-neutral and testable on any machine against a fake; the mechanism behind it
 /// is an X11 conversation with a live toolkit and is not.
 pub trait BackgroundPixelInput: PlatformBackend {
+    fn capture_visuals(
+        &mut self,
+        app: &AppQuery,
+        screenshot: bool,
+        screen_text: bool,
+    ) -> Result<VisualObservation, axon_core::BackendError> {
+        let image = (screenshot || screen_text).then(|| self.screenshot(app)).transpose()?;
+        if screen_text {
+            return Err(axon_core::BackendError::Capability {
+                capability: Capability::Screenshot,
+                reason: "screen text recognition is unavailable on this backend".into(),
+                diagnostic: None,
+            });
+        }
+        Ok(VisualObservation { screenshot: image, recognized_text: Vec::new() })
+    }
     /// Resolves a delivery plan for one click at a point inside a resolved element. Pure
     /// inspection with no native side effect, because the planner may discard the result and
     /// refuse before anything is allowed to happen.
@@ -355,6 +401,9 @@ impl<B: PointerTargetVerifier + BackgroundPixelInput> Router<B> {
                 Ok(json!({"handle": handle, "resolution": resolution}))
             }
             "click" => {
+                if let Some(location) = params.get("target").and_then(|target| target.get("location")).or_else(|| params.get("location")) {
+                    return self.click_text_location(location.clone(), policy);
+                }
                 // The target is resolved first, so an absent, malformed, or stale target is a
                 // JSON-RPC error. A refusal means the request was well formed and the target
                 // resolved, and the daemon declined to act; the two must not be confused.
@@ -904,12 +953,6 @@ impl<B: PointerTargetVerifier + BackgroundPixelInput> Router<B> {
                 "since change checks are unavailable on this backend",
             )),
             axon_core::LookMode::FullApp { app, child_depth } => {
-                if request.screen_text {
-                    return Err(rpc_error(
-                        -32602,
-                        "screenText is unavailable on this backend",
-                    ));
-                }
                 let snapshot = self
                     .backend
                     .capture_bounded(&app, axon_core::CaptureBounds { child_depth })
@@ -917,21 +960,26 @@ impl<B: PointerTargetVerifier + BackgroundPixelInput> Router<B> {
                 let names = self.register_snapshot(&snapshot);
                 let rendered = axon_core::render_semantic_names(&snapshot, &names);
                 let mut value = axon_core::format_snapshot(&rendered, &request.display);
-                if axon_core::screenshot_requested(
+                let screenshot_requested = axon_core::screenshot_requested(
                     request.screenshot,
                     axon_core::LookObservationKind::FullApp,
-                ) {
+                );
+                if screenshot_requested || request.screen_text {
                     let object = if request.display.format == axon_core::LookFormat::Debug {
                         value.get_mut("observation").and_then(Value::as_object_mut)
                     } else {
                         value.as_object_mut()
                     }
                     .expect("observation object");
-                    match self.backend.screenshot(&app) {
-                        Ok(s) => {
+                    match self.backend.capture_visuals(&app, screenshot_requested, request.screen_text) {
+                        Ok(visual) => {
+                            if let Some(s) = visual.screenshot {
                             object.insert("screenshot".into(),json!({"mediaType":s.media_type,"base64Data":base64::Engine::encode(&base64::engine::general_purpose::STANDARD,&s.bytes),"width":s.width,"height":s.height}));
+                            }
+                            if request.screen_text { object.insert("screenText".into(), axon_core::format_screen_text(&visual.recognized_text, request.display.frames)); }
                         }
                         Err(e) => {
+                            if request.screen_text { return Err(backend_error(e)); }
                             object.insert(
                                 "screenshotUnavailable".into(),
                                 serde_json::to_value(
