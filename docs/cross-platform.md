@@ -12,7 +12,7 @@ The matrix below is the current user-facing contract. Contributors can consult t
 | --- | --- | --- | --- | --- |
 | macOS 14+ | **Supported** | **Experimental** | **Experimental** | Accessibility permission is required. Screen Recording permission is required for screenshots. |
 | Windows 10+ | **Supported with limits** — semantic activation uses `InvokePattern` | **Pointer supported with limits** for a small set of controls; keyboard is **refused** | **Supported** | Must run in an interactive user session. Elevated targets require matching elevation or UIAccess. |
-| Linux X11 | **Supported** | **Supported with limits** — background delivery depends on toolkit; Chromium keyboard delivery is refused | **Supported** | Requires AT-SPI, an EWMH window manager, and XTEST. GTK 4 element positions are not reliable for pointer targeting. |
+| Linux X11 | **Supported** | **Supported with limits** — background delivery depends on toolkit; Chromium keyboard delivery is refused | **Supported** | Requires AT-SPI and an EWMH window manager. OCR additionally requires Tesseract and an installed English language pack; input requires XTEST. GTK 4 element positions are not reliable for pointer targeting. |
 | Linux GNOME/Mutter on Wayland | **Supported** | **Refused** — Wayland does not provide Axon a safe unattended input path | **Not implemented** | Requires AT-SPI with accessibility enabled. GTK 4 element positions are not reliable for pointer targeting. |
 | Linux KWin or wlroots on Wayland | **Experimental** | **Refused (expected)** | **Not implemented** | No live verification environment currently backs these desktop sessions. |
 | XWayland apps in a Wayland session | **Supported** for semantic access | **Refused** | **Not implemented** | Axon follows the Wayland session's safety constraints even when an individual app uses XWayland. |
@@ -38,7 +38,7 @@ External MCP clients should launch the resolved absolute form of `%LOCALAPPDATA%
 
 ### Linux
 
-Semantic access uses AT-SPI. On X11, some toolkits accept target-bound pointer and keyboard events while others do not, so Axon names those refusals at runtime. On Wayland, synthetic pointer and keyboard input is refused rather than silently becoming global input.
+Semantic access uses AT-SPI. X11 window screenshots use direct X11 capture without portal authorization. `screenText` and screenshot-sourced text locations run the system `tesseract` executable and require English language data (commonly the `tesseract-ocr` and `tesseract-ocr-eng` packages). Missing OCR dependencies fail only the requested OCR operation; semantic AT-SPI access remains available. Wayland capture remains unimplemented, and synthetic pointer and keyboard input is refused rather than silently becoming global input.
 
 External MCP clients should launch the resolved absolute form of `~/.local/lib/axon/current/axon-linux mcp`; the installer prints ready-to-run registration commands. The installer atomically repoints this symlink on upgrade while systemd continues to name the immutable versioned executable.
 

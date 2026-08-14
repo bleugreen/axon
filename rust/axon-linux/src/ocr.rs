@@ -113,7 +113,7 @@ mod tests {
     fn groups_words_and_scales_non_uniformly_from_negative_origin() {
         let tsv = format!("{HEADER}5\t1\t1\t1\t1\t1\t10\t20\t30\t10\t80\tHello\n5\t1\t1\t1\t1\t2\t45\t18\t40\t14\t100\tworld\n5\t1\t1\t1\t2\t1\t5\t60\t0\t10\t90\tignored\n");
         let items = parse_tsv(&tsv, (100,100), Rect{x:-200.0,y:40.0,width:200.0,height:50.0}).unwrap();
-        assert_eq!(items, vec![RecognizedText{text:"Hello world".into(),frame:Rect{x:-180.0,y:49.0,width:150.0,height:8.0},confidence:Some(0.9)}]);
+        assert_eq!(items, vec![RecognizedText{text:"Hello world".into(),frame:Rect{x:-180.0,y:49.0,width:150.0,height:7.0},confidence:Some(0.9)}]);
     }
     #[test]
     fn malformed_rows_are_not_silently_empty() {

@@ -183,9 +183,14 @@ where it can run. `tests/x11_foreground.rs` exercises the protocol conversation
 against a real X server by being its own miniature EWMH window manager, which is
 why it needs nothing but `Xvfb`.
 
-Screenshots still require a portal authorization flow, and `drag` remains
-unimplemented: it holds a button down across the whole gesture, so an interrupted
-one leaves the session in a state the restoration here cannot describe.
+X11 screenshots use direct window capture and require no portal authorization.
+Screenshot OCR and screenshot-sourced text locations additionally require the
+`tesseract` executable and English language data (on Debian/Ubuntu, install
+`tesseract-ocr tesseract-ocr-eng`). Axon discovers these at runtime, so missing OCR
+packages do not disable AT-SPI operation. Wayland screenshot capture remains
+unimplemented. `drag` also remains unimplemented: it holds a button down across
+the whole gesture, so an interrupted one leaves the session in a state the
+restoration here cannot describe.
 
 ## Windows UI Automation spike
 

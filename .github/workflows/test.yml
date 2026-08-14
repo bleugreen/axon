@@ -248,7 +248,7 @@ jobs:
       - name: Install AT-SPI build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libdbus-1-dev pkg-config xvfb x11-utils dbus
+          sudo apt-get install -y libdbus-1-dev pkg-config xvfb x11-utils dbus tesseract-ocr tesseract-ocr-eng
 
       # The lifecycle, session classification, status assembly, keysym translation, and the whole
       # router are pure and run headlessly. Only the systemd and socket calls need a real desktop.

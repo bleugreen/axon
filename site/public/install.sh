@@ -39,6 +39,10 @@ case "$OS_NAME/$ARCH_NAME" in
     fail "unsupported platform $OS_NAME/$ARCH_NAME; release binaries exist only for macos/aarch64, linux/x86_64, and windows/x86_64"
     ;;
 esac
+if [ "$OS" = linux ] && ! command -v tesseract >/dev/null 2>&1; then
+  printf '%s\n' "warning: Tesseract OCR was not found; screenText and screenshot text locations will be unavailable." >&2
+  printf '%s\n' "         Install tesseract plus an English language pack (for example: tesseract-ocr tesseract-ocr-eng)." >&2
+fi
 
 if [ "$OS" = macos ] && command -v brew >/dev/null 2>&1 && brew list --cask bleugreen/tap/axon >/dev/null 2>&1; then
   printf '%s\n' 'Axon is managed by Homebrew on this machine; no second copy will be installed.'
