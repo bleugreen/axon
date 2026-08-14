@@ -24,8 +24,8 @@ use windows::Win32::System::Threading::{
     PROCESS_QUERY_LIMITED_INFORMATION, QueryFullProcessImageNameW,
 };
 use windows::Win32::UI::Accessibility::{
-    CUIAutomation, HWINEVENTHOOK, IUIAutomation, SetWinEventHook, UIA_DocumentControlTypeId,
-    UIA_EditControlTypeId, UnhookWinEvent,
+    CUIAutomation, HWINEVENTHOOK, IUIAutomation, IUIAutomationElement, SetWinEventHook,
+    UIA_DocumentControlTypeId, UIA_EditControlTypeId, UnhookWinEvent,
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::SendInput;
 use windows::Win32::UI::WindowsAndMessaging::{
@@ -377,8 +377,12 @@ impl Uia {
             })?;
         Ok(Self { automation })
     }
-    fn focused(&self) -> Value {
-        let Ok(element) = (unsafe { self.automation.GetFocusedElement() }) else {
+    fn focused_element(&self) -> Option<IUIAutomationElement> {
+        unsafe { self.automation.GetFocusedElement() }.ok()
+    }
+
+    fn describe(&self, element: Option<&IUIAutomationElement>) -> Value {
+        let Some(element) = element else {
             return json!({"observed":false,"classification":"unknown"});
         };
         let control = unsafe { element.CurrentControlType() }.ok();
@@ -442,12 +446,31 @@ pub(super) fn run(args: &[String]) -> Result<Value, BackendError> {
     observer.pump(Duration::ZERO);
     let uia = Uia::new()?;
     let mut trials = Vec::new();
+    let mut page_focus: Option<IUIAutomationElement> = None;
     for index in 0..max_trials {
         let foreground_before = foreground_identity();
         let started = now_us();
         let activated = super::pixel::activate(pid, None);
         let proved = now_us();
-        let focus_before = uia.focused();
+        let setup_focus_restored = if index == 0 {
+            true
+        } else {
+            page_focus
+                .as_ref()
+                .is_some_and(|element| unsafe { element.SetFocus() }.is_ok())
+        };
+        if index > 0 {
+            observer.pump(Duration::from_millis(50));
+            let mut events = EVENTS.get_or_init(Default::default).lock().unwrap();
+            events.keyboard.clear();
+            events.focus.clear();
+            events.overflowed = false;
+        }
+        let focused_before = uia.focused_element();
+        let focus_before = uia.describe(focused_before.as_ref());
+        if index == 0 && focus_before["classification"] == "page" {
+            page_focus = focused_before;
+        }
         let dispatch_started = now_us();
         let ctrl = VirtualKey {
             code: 0x11,
@@ -484,7 +507,8 @@ pub(super) fn run(args: &[String]) -> Result<Value, BackendError> {
             )
         };
         observer.pump(Duration::from_millis(150));
-        let focus_after = uia.focused();
+        let focused_after = uia.focused_element();
+        let focus_after = uia.describe(focused_after.as_ref());
         let ctrl_l_transition = focus_before["classification"] == "page"
             && focus_after["classification"] == "browserChrome";
         let (keys, focuses, overflowed) = {
@@ -522,7 +546,7 @@ pub(super) fn run(args: &[String]) -> Result<Value, BackendError> {
                 json!({"ordinal":1,"intent":"ctrl+l","requestedUs":dispatch_started,"returnedUs":returned,"requestedCount":4,"returnedCount":0,"error":e.to_string(),"snapshots":[]})
             }
         };
-        trials.push(json!({"index":index+1,"experiment":"baseline","requestedDelayMs":0,"foregroundBefore":{"identity":foreground_before},"activation":{"startedUs":started,"provedUs":proved,"proof":{"proved":activated}},"dispatches":[dispatch],"hook":{"valid":sentinel_sent == 2 && sentinel_observed,"sentinelObserved":sentinel_observed,"overflowed":overflowed,"events":hook_events},"focusEvents":focus_events,"focus":{"before":focus_before,"after":focus_after,"ctrlLTransitionObserved":ctrl_l_transition},"page":{"observedUs":if focus_before["classification"] == "page" { Some(started) } else { None },"navigated":false,"url":null,"classificationBefore":focus_before["classification"],"browserChromeFocusedAfter":focus_after["classification"] == "browserChrome","outcome":if ctrl_l_transition { "pageToBrowserChrome" } else { "transitionNotObserved" }},"timeline":ordered_timeline(timeline)}));
+        trials.push(json!({"index":index+1,"experiment":"baseline","requestedDelayMs":0,"foregroundBefore":{"identity":foreground_before},"activation":{"startedUs":started,"provedUs":proved,"proof":{"proved":activated}},"setup":{"pageFocusRestored":setup_focus_restored},"dispatches":[dispatch],"hook":{"valid":sentinel_sent == 2 && sentinel_observed,"sentinelObserved":sentinel_observed,"overflowed":overflowed,"events":hook_events},"focusEvents":focus_events,"focus":{"before":focus_before,"after":focus_after,"ctrlLTransitionObserved":ctrl_l_transition},"page":{"observedUs":if focus_before["classification"] == "page" { Some(started) } else { None },"navigated":false,"url":null,"classificationBefore":focus_before["classification"],"browserChromeFocusedAfter":focus_after["classification"] == "browserChrome","outcome":if ctrl_l_transition { "pageToBrowserChrome" } else { "transitionNotObserved" }},"timeline":ordered_timeline(timeline)}));
     }
     let hook_removed = observer.remove();
     Ok(
