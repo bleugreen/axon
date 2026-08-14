@@ -1469,6 +1469,7 @@ Test-Scenario 'restore: the desktop gets its daemon back and the verdict is a he
     Test-Order -First 'unregister-probe-task' -Then 'axon daemon restart'
     Test-Order -First 'unregister-probe-browser-task' -Then 'axon daemon restart'
     Test-Order -First 'unregister-probe-foreground-task' -Then 'axon daemon restart'
+    Test-Order -First 'unregister-probe-keyboard-task' -Then 'axon daemon restart'
     Test-Order -First 'unregister-probe-activation-task' -Then 'axon daemon restart'
 }
 

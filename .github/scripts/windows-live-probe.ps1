@@ -1346,6 +1346,7 @@ function Remove-ProbeInstallation {
     Unregister-ProbeBrowserTask
     Unregister-ProbeActivationTask
     Unregister-ProbeForegroundTask
+    Unregister-ProbeKeyboardTask
     Unregister-ProbeTask
     Stop-ProbeDaemonProcess
 }
