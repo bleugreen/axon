@@ -8,9 +8,14 @@ use serde_json::{Value, json};
 use std::sync::{Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant};
-use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
-use windows::Win32::System::Threading::GetCurrentThreadId;
-use windows::Win32::UI::Accessibility::{HWINEVENTHOOK, SetWinEventHook, UnhookWinEvent};
+use windows::core::BSTR;
+use windows::Win32::Foundation::{CloseHandle, HANDLE, HWND, LPARAM, LRESULT, MAX_PATH, WPARAM};
+use windows::Win32::Security::{GetTokenInformation, TOKEN_MANDATORY_LABEL, TOKEN_QUERY, TokenIntegrityLevel};
+use windows::Win32::System::Com::{CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED, CoCreateInstance, CoInitializeEx, CoUninitialize};
+use windows::Win32::System::Diagnostics::ToolHelp::{CreateToolhelp32Snapshot, PROCESSENTRY32W, Process32FirstW, Process32NextW, TH32CS_SNAPPROCESS};
+use windows::Win32::System::RemoteDesktop::ProcessIdToSessionId;
+use windows::Win32::System::Threading::{GetCurrentThreadId, OpenProcess, OpenProcessToken, QueryFullProcessImageNameW, PROCESS_NAME_FORMAT, PROCESS_QUERY_LIMITED_INFORMATION};
+use windows::Win32::UI::Accessibility::{CUIAutomation, HWINEVENTHOOK, IUIAutomation, SetWinEventHook, UIA_DocumentControlTypeId, UIA_EditControlTypeId, UnhookWinEvent};
 use windows::Win32::UI::Input::KeyboardAndMouse::SendInput;
 use windows::Win32::UI::WindowsAndMessaging::{
     CallNextHookEx, DispatchMessageW, EVENT_OBJECT_FOCUS, GetForegroundWindow,
@@ -104,8 +109,8 @@ unsafe extern "system" fn focus_hook(
 }
 
 struct Observer {
-    keyboard: HHOOK,
-    focus: HWINEVENTHOOK,
+    keyboard: Option<HHOOK>,
+    focus: Option<HWINEVENTHOOK>,
 }
 impl Observer {
     fn install() -> Result<Self, BackendError> {
@@ -136,7 +141,7 @@ impl Observer {
                 "focus WinEvent hook installation failed",
             ));
         }
-        Ok(Self { keyboard, focus })
+        Ok(Self { keyboard: Some(keyboard), focus: Some(focus) })
     }
     fn pump(&self, duration: Duration) {
         let end = Instant::now() + duration;
@@ -151,13 +156,16 @@ impl Observer {
             thread::sleep(Duration::from_millis(1));
         }
     }
+    fn remove(mut self) -> bool {
+        let focus_removed = self.focus.take().is_none_or(|hook| unsafe { UnhookWinEvent(hook) }.as_bool());
+        let keyboard_removed = self.keyboard.take().is_none_or(|hook| unsafe { UnhookWindowsHookEx(hook) }.is_ok());
+        focus_removed && keyboard_removed
+    }
 }
 impl Drop for Observer {
     fn drop(&mut self) {
-        unsafe {
-            let _ = UnhookWinEvent(self.focus);
-            let _ = UnhookWindowsHookEx(self.keyboard);
-        }
+        if let Some(hook) = self.focus.take() { unsafe { let _ = UnhookWinEvent(hook); } }
+        if let Some(hook) = self.keyboard.take() { unsafe { let _ = UnhookWindowsHookEx(hook); } }
     }
 }
 
@@ -194,13 +202,85 @@ fn ordered_timeline(mut events: Vec<Value>) -> Vec<Value> {
     events
 }
 
-fn identity(pid: u32) -> Value {
+fn wide_text(buffer: &[u16]) -> String {
+    String::from_utf16_lossy(&buffer[..buffer.iter().position(|c| *c == 0).unwrap_or(buffer.len())])
+}
+
+fn parent_process_id(pid: u32) -> Option<u32> {
+    let snapshot = unsafe { CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0) }.ok()?;
+    let mut entry = PROCESSENTRY32W { dwSize: std::mem::size_of::<PROCESSENTRY32W>() as u32, ..Default::default() };
+    let mut found = None;
+    if unsafe { Process32FirstW(snapshot, &mut entry) }.is_ok() {
+        loop {
+            if entry.th32ProcessID == pid { found = Some(entry.th32ParentProcessID); break; }
+            if unsafe { Process32NextW(snapshot, &mut entry) }.is_err() { break; }
+        }
+    }
+    unsafe { let _ = CloseHandle(snapshot); }
+    found
+}
+
+fn process_details(pid: u32) -> (Option<String>, Option<u32>, Option<String>) {
+    let process = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) }.ok();
+    let path = process.and_then(|handle| {
+        let mut buffer = [0u16; 32768];
+        let mut size = buffer.len() as u32;
+        let result = unsafe { QueryFullProcessImageNameW(handle, PROCESS_NAME_FORMAT(0), windows::core::PWSTR(buffer.as_mut_ptr()), &mut size) };
+        result.ok().map(|_| String::from_utf16_lossy(&buffer[..size as usize]))
+    });
+    let integrity = process.and_then(|handle| {
+        let mut token = HANDLE::default();
+        unsafe { OpenProcessToken(handle, TOKEN_QUERY, &mut token) }.ok()?;
+        let mut size = 0;
+        let _ = unsafe { GetTokenInformation(token, TokenIntegrityLevel, None, 0, &mut size) };
+        let mut bytes = vec![0u8; size as usize];
+        let ok = unsafe { GetTokenInformation(token, TokenIntegrityLevel, Some(bytes.as_mut_ptr().cast()), size, &mut size) }.is_ok();
+        let level = ok.then(|| unsafe {
+            let label = &*(bytes.as_ptr().cast::<TOKEN_MANDATORY_LABEL>());
+            let count = *windows::Win32::Security::GetSidSubAuthorityCount(label.Label.Sid) as u32;
+            *windows::Win32::Security::GetSidSubAuthority(label.Label.Sid, count - 1)
+        }).map(|rid| match rid { 0x0000..=0x0fff => "untrusted", 0x1000..=0x1fff => "low", 0x2000..=0x2fff => "medium", 0x3000..=0x3fff => "high", _ => "system" }.to_string());
+        unsafe { let _ = CloseHandle(token); }
+        level
+    });
+    if let Some(handle) = process { unsafe { let _ = CloseHandle(handle); } }
+    (path, parent_process_id(pid), integrity)
+}
+
+fn identity(pid: u32, task_name: &str) -> Value {
     let foreground = unsafe { GetForegroundWindow() };
     let mut owner = 0;
     let gui_thread = unsafe { GetWindowThreadProcessId(foreground, Some(&mut owner)) };
-    json!({"processId":pid,"executablePath":null,"parentProcessId":null,"sessionId":null,"integrityLevel":null,
-        "window":{"hwnd":format!("0x{:X}",hwnd_bits(foreground)),"className":null,"title":null,"guiThreadId":if owner==pid { Some(gui_thread) } else { None }},"taskName":null})
+    let mut session = 0;
+    let session_id = unsafe { ProcessIdToSessionId(pid, &mut session) }.is_ok().then_some(session);
+    let (path, parent, integrity) = process_details(pid);
+    let mut class = [0u16; 256];
+    let class_len = unsafe { windows::Win32::UI::WindowsAndMessaging::GetClassNameW(foreground, &mut class) };
+    let mut title = [0u16; MAX_PATH as usize];
+    let title_len = unsafe { windows::Win32::UI::WindowsAndMessaging::GetWindowTextW(foreground, &mut title) };
+    json!({"processId":pid,"executablePath":path,"parentProcessId":parent,"sessionId":session_id,"integrityLevel":integrity,
+        "window":{"hwnd":format!("0x{:X}",hwnd_bits(foreground)),"className":wide_text(&class[..class_len.max(0) as usize]),"title":wide_text(&title[..title_len.max(0) as usize]),"guiThreadId":if owner==pid { Some(gui_thread) } else { None }},"taskName":task_name})
 }
+
+struct Uia { automation: IUIAutomation }
+impl Uia {
+    fn new() -> Result<Self, BackendError> {
+        unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) }.ok().map_err(|e| op("keyboard diagnostic", format!("initialize UI Automation COM: {e}")))?;
+        let automation = unsafe { CoCreateInstance(&CUIAutomation, None, CLSCTX_INPROC_SERVER) }.map_err(|e| op("keyboard diagnostic", format!("create UI Automation client: {e}")))?;
+        Ok(Self { automation })
+    }
+    fn focused(&self) -> Value {
+        let Ok(element) = (unsafe { self.automation.GetFocusedElement() }) else { return json!({"observed":false,"classification":"unknown"}); };
+        let control = unsafe { element.CurrentControlType() }.ok();
+        let automation_id = unsafe { element.CurrentAutomationId() }.ok().map(|v: BSTR| v.to_string()).unwrap_or_default();
+        let class_name = unsafe { element.CurrentClassName() }.ok().map(|v: BSTR| v.to_string()).unwrap_or_default();
+        let name = unsafe { element.CurrentName() }.ok().map(|v: BSTR| v.to_string()).unwrap_or_default();
+        let process_id = unsafe { element.CurrentProcessId() }.ok();
+        let classification = if control == Some(UIA_DocumentControlTypeId) { "page" } else if control == Some(UIA_EditControlTypeId) && (automation_id.to_ascii_lowercase().contains("address") || name.to_ascii_lowercase().contains("address")) { "browserChrome" } else { "other" };
+        json!({"observed":true,"classification":classification,"processId":process_id,"controlType":control.map(|v|v.0),"automationId":automation_id,"className":class_name,"name":name})
+    }
+}
+impl Drop for Uia { fn drop(&mut self) { unsafe { CoUninitialize() } } }
 
 pub(super) fn run(args: &[String]) -> Result<Value, BackendError> {
     let pid: u32 = args
@@ -218,14 +298,18 @@ pub(super) fn run(args: &[String]) -> Result<Value, BackendError> {
     if !(1..=10).contains(&max_trials) {
         return Err(op("probe", "max-trials must be between 1 and 10"));
     }
-    let target = json!({"processId":pid,"identity":identity(pid)});
+    let task_name = args.iter().position(|a| a == "--task-name").and_then(|i| args.get(i + 1)).map(String::as_str).unwrap_or("Axon Live Probe Keyboard Diagnostic");
+    let target = json!({"processId":pid,"identity":identity(pid, task_name)});
     let observer = Observer::install()?;
+    observer.pump(Duration::ZERO);
+    let uia = Uia::new()?;
     let mut trials = Vec::new();
     for index in 0..max_trials {
-        let foreground_before = identity(pid);
+        let foreground_before = identity(pid, task_name);
         let started = now_us();
         let activated = super::pixel::activate(pid, None);
         let proved = now_us();
+        let focus_before = uia.focused();
         let dispatch_started = now_us();
         let ctrl = VirtualKey {
             code: 0x11,
@@ -262,6 +346,8 @@ pub(super) fn run(args: &[String]) -> Result<Value, BackendError> {
             )
         };
         observer.pump(Duration::from_millis(150));
+        let focus_after = uia.focused();
+        let ctrl_l_transition = focus_before["classification"] == "page" && focus_after["classification"] == "browserChrome";
         let (keys, focuses, overflowed) = {
             let mut b = EVENTS.get_or_init(Default::default).lock().unwrap();
             (
@@ -297,11 +383,11 @@ pub(super) fn run(args: &[String]) -> Result<Value, BackendError> {
                 json!({"ordinal":1,"intent":"ctrl+l","requestedUs":dispatch_started,"returnedUs":returned,"requestedCount":4,"returnedCount":0,"error":e.to_string(),"snapshots":[]})
             }
         };
-        trials.push(json!({"index":index+1,"experiment":"baseline","requestedDelayMs":0,"foregroundBefore":{"identity":foreground_before},"activation":{"startedUs":started,"provedUs":proved,"proof":{"proved":activated}},"dispatches":[dispatch],"hook":{"valid":sentinel_sent == 2 && sentinel_observed,"sentinelObserved":sentinel_observed,"overflowed":overflowed,"events":hook_events},"focusEvents":focus_events,"page":{"observedUs":null,"navigated":false,"url":null},"timeline":ordered_timeline(timeline)}));
+        trials.push(json!({"index":index+1,"experiment":"baseline","requestedDelayMs":0,"foregroundBefore":{"identity":foreground_before},"activation":{"startedUs":started,"provedUs":proved,"proof":{"proved":activated}},"dispatches":[dispatch],"hook":{"valid":sentinel_sent == 2 && sentinel_observed,"sentinelObserved":sentinel_observed,"overflowed":overflowed,"events":hook_events},"focusEvents":focus_events,"focus":{"before":focus_before,"after":focus_after,"ctrlLTransitionObserved":ctrl_l_transition},"page":{"observedUs":if focus_before["classification"] == "page" { Some(started) } else { None },"navigated":false,"url":null,"classificationBefore":focus_before["classification"],"browserChromeFocusedAfter":focus_after["classification"] == "browserChrome","outcome":if ctrl_l_transition { "pageToBrowserChrome" } else { "transitionNotObserved" }},"timeline":ordered_timeline(timeline)}));
     }
-    drop(observer);
+    let hook_removed = observer.remove();
     Ok(
-        json!({"schemaVersion":"keyboard-diagnostic-v1","target":target,"trials":trials,"finalForeground":{"identity":identity(pid)},"cleanup":{"hookRemoved":true,"observerWindowDestroyed":true}}),
+        json!({"schemaVersion":"keyboard-diagnostic-v1","target":target,"trials":trials,"finalForeground":{"identity":identity(pid, task_name)},"cleanup":{"hookRemoved":hook_removed,"observerWindowCreated":false,"observerWindowDestroyed":null}}),
     )
 }
 

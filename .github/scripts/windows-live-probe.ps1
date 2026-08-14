@@ -139,12 +139,25 @@ function Invoke-KeyboardDiagnostic {
         if ($null -eq $payload.target.identity -or $null -eq $payload.finalForeground.identity) {
             throw 'keyboard diagnostic omitted target or final foreground PID identity'
         }
+        foreach ($identity in @($payload.target.identity, $payload.finalForeground.identity)) {
+            if ([string]::IsNullOrWhiteSpace([string]$identity.executablePath) -or
+                $null -eq $identity.parentProcessId -or $null -eq $identity.sessionId -or
+                [string]::IsNullOrWhiteSpace([string]$identity.integrityLevel) -or
+                $null -eq $identity.window.className -or $null -eq $identity.window.title -or
+                [string]::IsNullOrWhiteSpace([string]$identity.taskName)) {
+                throw 'keyboard diagnostic returned incomplete process, window, or task identity'
+            }
+        }
         foreach ($trial in $trials) {
             if ($null -eq $trial.foregroundBefore.identity -or @($trial.timeline).Count -eq 0) {
                 throw "keyboard diagnostic trial $($trial.index) omitted foreground identity or timeline"
             }
             if ($trial.hook.valid -ne $true -or $trial.hook.sentinelObserved -ne $true) {
                 throw "keyboard diagnostic trial $($trial.index) has invalid low-level-hook evidence"
+            }
+            if ($null -eq $trial.focus.before.classification -or $null -eq $trial.focus.after.classification -or
+                $null -eq $trial.focus.ctrlLTransitionObserved -or $null -eq $trial.page.outcome) {
+                throw "keyboard diagnostic trial $($trial.index) omitted its UI Automation focus outcome"
             }
             if ($trial.experiment -eq 'baseline') {
                 $ctrlL = @($trial.dispatches | Where-Object intent -eq 'ctrl+l')
@@ -153,8 +166,11 @@ function Invoke-KeyboardDiagnostic {
                 }
             }
         }
-        if ($payload.cleanup.hookRemoved -ne $true -or $payload.cleanup.observerWindowDestroyed -ne $true) {
-            throw 'keyboard diagnostic did not prove observer cleanup'
+        if ($payload.cleanup.hookRemoved -ne $true) {
+            throw 'keyboard diagnostic did not prove hook cleanup'
+        }
+        if ($payload.cleanup.observerWindowCreated -ne $false -or $null -ne $payload.cleanup.observerWindowDestroyed) {
+            throw 'keyboard diagnostic reported dishonest observer-window cleanup'
         }
         $payload
     }
@@ -176,7 +192,7 @@ function Register-ProbeKeyboardTask {
     $command = @"
 `$start = [System.Diagnostics.ProcessStartInfo]::new()
 `$start.FileName = '$escapedExecutable'
-`$start.Arguments = 'probe keyboard-diagnostic $TargetProcessId --max-trials $MaxTrials'
+`$start.Arguments = 'probe keyboard-diagnostic $TargetProcessId --max-trials $MaxTrials --task-name AxonLiveProbeKeyboardDiagnostic'
 `$start.UseShellExecute = `$false
 `$start.RedirectStandardOutput = `$true
 `$start.RedirectStandardError = `$true
