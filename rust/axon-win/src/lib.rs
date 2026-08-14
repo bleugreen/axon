@@ -537,11 +537,10 @@ impl<
     /// activation and no proof — the exact bug this contract exists to close.
     fn resolved_application(&self) -> Option<String> {
         let app = &self.snapshot.as_ref()?.app;
-        app.identifier
-            .as_deref()
-            .or(Some(app.name.as_str()))
-            .filter(|identity| !identity.is_empty())
-            .map(str::to_owned)
+        app.process_id
+            .map(|process_id| process_id.to_string())
+            .or_else(|| app.identifier.clone())
+            .or_else(|| (!app.name.is_empty()).then(|| app.name.clone()))
     }
 
     pub fn request(&mut self, request: JsonRpcRequest) -> Option<JsonRpcResponse> {
@@ -2762,6 +2761,16 @@ mod tests {
         assert_eq!(promoted["success"], json!(true));
         assert_eq!(promoted["dispatchSuccess"], json!(true));
         assert_eq!(promoted["foreground"]["restored"], json!(true));
+    }
+
+    #[test]
+    fn resolved_application_prefers_the_captured_process_over_the_window_title() {
+        let mut router = Router::new(backend(vec![], None));
+        router.backend.snapshot.app.process_id = Some(3024);
+        router.backend.snapshot.app.name = "Continue - Microsoft Edge".into();
+        router.snapshot = Some(router.backend.snapshot.clone());
+
+        assert_eq!(router.resolved_application().as_deref(), Some("3024"));
     }
 
     #[test]
