@@ -181,24 +181,6 @@ impl Owned {
             .ok_or_else(|| op(operation, "native API returned null"))
     }
 
-    #[test]
-    fn converts_vision_lower_left_coordinates_to_screen_coordinates() {
-        let text = b"Hello\0";
-        let item = VisionItem { text: text.as_ptr().cast_mut().cast(), x: 0.25, y: 0.20,
-            width: 0.5, height: 0.10, confidence: 0.9 };
-        let recognized = vision_item(&item, Rect { x: -1200.0, y: 40.0, width: 800.0, height: 600.0 }).unwrap();
-        assert_eq!(recognized.frame, Rect { x: -1000.0, y: 460.0, width: 400.0, height: 60.0 });
-        assert_eq!(recognized.text, "Hello");
-        assert_eq!(recognized.confidence, Some(0.9));
-    }
-
-    #[test]
-    fn rejects_empty_and_invalid_vision_observations() {
-        let empty = b"  \0";
-        let item = VisionItem { text: empty.as_ptr().cast_mut().cast(), x: 0.0, y: 0.0,
-            width: 0.0, height: 1.0, confidence: f64::NAN };
-        assert!(vision_item(&item, Rect { x: 0.0, y: 0.0, width: 100.0, height: 100.0 }).is_none());
-    }
 }
 
 impl Drop for Owned {
@@ -403,5 +385,24 @@ mod tests {
         assert_eq!(scaled_dimensions((2560, 1600), max).unwrap(), (1280, 800));
         assert_eq!(scaled_dimensions((640, 480), max).unwrap(), (640, 480));
         assert_eq!(scaled_dimensions((1, 4096), max).unwrap(), (1, 1280));
+    }
+
+    #[test]
+    fn converts_vision_lower_left_coordinates_to_screen_coordinates() {
+        let text = b"Hello\0";
+        let item = VisionItem { text: text.as_ptr().cast_mut().cast(), x: 0.25, y: 0.20,
+            width: 0.5, height: 0.10, confidence: 0.9 };
+        let recognized = vision_item(&item, Rect { x: -1200.0, y: 40.0, width: 800.0, height: 600.0 }).unwrap();
+        assert_eq!(recognized.frame, Rect { x: -1000.0, y: 460.0, width: 400.0, height: 60.0 });
+        assert_eq!(recognized.text, "Hello");
+        assert_eq!(recognized.confidence, Some(0.9));
+    }
+
+    #[test]
+    fn rejects_empty_and_invalid_vision_observations() {
+        let empty = b"  \0";
+        let item = VisionItem { text: empty.as_ptr().cast_mut().cast(), x: 0.0, y: 0.0,
+            width: 0.0, height: 1.0, confidence: f64::NAN };
+        assert!(vision_item(&item, Rect { x: 0.0, y: 0.0, width: 100.0, height: 100.0 }).is_none());
     }
 }
