@@ -14,10 +14,10 @@ use serde::Serialize;
 
 #[path = "capture.rs"]
 mod graphics_capture;
-#[path = "pixel.rs"]
-mod pixel;
 #[path = "keyboard_diagnostic.rs"]
 mod keyboard_diagnostic;
+#[path = "pixel.rs"]
+mod pixel;
 use std::{
     ffi::c_void,
     sync::{Arc, mpsc},
