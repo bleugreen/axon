@@ -249,6 +249,13 @@ pub trait PlatformBackend {
         false
     }
 
+    /// Why a proved, dispatched foreground action must leave its target frontmost instead of
+    /// restoring the prior application. Backends return a reason only when restoring would make
+    /// delivery itself unreliable; the transaction still restores on every pre-dispatch exit.
+    fn post_dispatch_restoration_restriction(&self) -> Option<&'static str> {
+        None
+    }
+
     /// Stable identity of whatever currently holds the foreground.
     fn frontmost_application(&mut self) -> Result<Option<String>, BackendError> {
         Err(BackendError::Capability {

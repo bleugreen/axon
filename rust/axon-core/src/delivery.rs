@@ -785,7 +785,12 @@ where
 
     let value = body(backend);
     let pointer_restored = restore_pointer(backend, pointer_before);
-    let restored = restore(backend);
+    let restoration_restriction = if already_frontmost || prior.is_none() {
+        None
+    } else {
+        backend.post_dispatch_restoration_restriction()
+    };
+    let restored = restoration_restriction.is_none() && restore(backend);
     ForegroundDispatch {
         value: Some(value),
         cleanup: ForegroundCleanup {
@@ -795,12 +800,15 @@ where
             activation_proved: true,
             restored,
             pointer_restored,
-            message: match (restored, pointer_restored) {
-                (false, _) => Some("The prior application did not return to the foreground".into()),
-                (true, Some(false)) => {
+            message: match (restoration_restriction, restored, pointer_restored) {
+                (Some(reason), _, _) => Some(reason.into()),
+                (None, false, _) => {
+                    Some("The prior application did not return to the foreground".into())
+                }
+                (None, true, Some(false)) => {
                     Some("The pointer did not return to where the dispatch found it".into())
                 }
-                (true, _) => None,
+                (None, true, _) => None,
             },
         },
         refusal: None,

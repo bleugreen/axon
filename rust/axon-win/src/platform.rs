@@ -1437,10 +1437,17 @@ impl PlatformBackend for WindowsBackend {
         Err(cap(Capability::ObserveGlobalInput, "excluded from v1"))
     }
 
-    /// Activation and readback are proved before dispatch. Windows may refuse the later hand-back;
-    /// cleanup always attempts it and reports the settled result rather than withholding input.
+    /// Activation and readback are proved before dispatch.
     fn supports_foreground_transaction(&self) -> bool {
         true
+    }
+
+    fn post_dispatch_restoration_restriction(&self) -> Option<&'static str> {
+        Some(
+            "The prior application was not restored because Windows exposes no completion boundary \
+             for SendInput; changing foreground immediately can redirect events still in the input \
+             stream",
+        )
     }
 
     /// The foreground window's process id.
