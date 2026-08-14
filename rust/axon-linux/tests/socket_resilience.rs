@@ -54,14 +54,19 @@ fn a_client_that_hangs_up_never_takes_the_daemon_with_it() {
     let (saw, requests) = mpsc::channel::<String>();
 
     let server = thread::spawn(move || {
-        serve_connections(&listener, PATIENCE, move |line| {
+        serve_connections(&listener, PATIENCE, move || {
+          let release = release.clone();
+          let entered = entered.clone();
+          let saw = saw.clone();
+          Box::new(move |line| {
             saw.send(line.to_owned()).unwrap();
             if line == "wait" {
                 entered.send(()).unwrap();
                 held.recv().unwrap();
             }
             (json!({ "echo": line }), line == "shutdown")
-        })
+          })
+        }))
     });
 
     // A liveness probe: connect, ask nothing, hang up.
@@ -111,10 +116,15 @@ fn a_shutdown_whose_caller_walked_away_still_stops_the_daemon() {
     let (entered, waiting) = mpsc::channel::<()>();
 
     let server = thread::spawn(move || {
-        serve_connections(&listener, PATIENCE, move |line| {
+        let held = std::sync::Arc::new(std::sync::Mutex::new(held));
+        serve_connections(&listener, PATIENCE, move || {
+          let entered = entered.clone();
+          let held = held.clone();
+          Box::new(move |line| {
             entered.send(()).unwrap();
-            held.recv().unwrap();
+            held.lock().unwrap().recv().unwrap();
             (json!({ "echo": line }), line == "shutdown")
+          })
         })
     });
 
@@ -157,7 +167,7 @@ fn a_client_that_stops_reading_its_answer_does_not_park_the_daemon() {
     let patience = Duration::from_millis(300);
 
     let server = thread::spawn(move || {
-        serve_connections(&listener, patience, |line| {
+        serve_connections(&listener, patience, || Box::new(|line| {
             // Comfortably past what a socket buffer holds, which is what makes the answer block
             // in the daemon rather than disappear into the kernel and return. A `look` at a real
             // application is large enough to reach the same state.
@@ -196,9 +206,9 @@ fn a_client_that_connects_and_says_nothing_is_dropped_rather_than_served_forever
     let patience = Duration::from_millis(200);
 
     let server = thread::spawn(move || {
-        serve_connections(&listener, patience, |line| {
+        serve_connections(&listener, patience, || Box::new(|line| {
             (json!({ "echo": line }), line == "shutdown")
-        })
+        }))
     });
 
     // Held open and silent. The daemon serves one connection at a time, so if this one were

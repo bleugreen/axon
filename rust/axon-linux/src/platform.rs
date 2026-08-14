@@ -188,6 +188,21 @@ fn input_restriction(facts: SessionFacts) -> Option<&'static str> {
         return Some(WAYLAND_SESSION);
     }
 
+    /// Creates an independent request facade over the one serialized AT-SPI actor.
+    ///
+    /// Each client needs its own router state so a blocking wait can sleep without holding every
+    /// other request. Native AT-SPI calls still cross the shared actor one at a time, while the
+    /// per-client X11 connections and identity cache remain independent.
+    pub(crate) fn fork(&self) -> Self {
+        Self {
+            tx: self.tx.clone(),
+            input: input_session(),
+            screenshot: screenshot_session(),
+            identities: Vec::new(),
+            identities_read: None,
+        }
+    }
+
     if !facts.x_display {
         return Some(NO_X_DISPLAY);
     }

@@ -13,6 +13,11 @@ use std::{
     io::{self, BufRead, BufReader, Write},
     os::unix::net::{UnixListener, UnixStream},
     path::PathBuf,
+    sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    },
+    thread,
     time::{Duration, Instant},
 };
 
@@ -29,10 +34,8 @@ use std::{fs, os::unix::fs::PermissionsExt};
 
 /// How long the daemon waits on a client that has stopped participating, in either direction.
 ///
-/// The daemon answers one connection at a time, so a client that connects and says nothing, or
-/// asks and then stops draining its answer, would otherwise hold the entire session hostage.
-/// Every Axon client writes its request immediately and reads the reply, so this bound is only
-/// ever reached by a client that has stopped taking part.
+/// Client connections are independent, so this bound contains a client that stops participating
+/// without delaying unrelated requests.
 pub const REQUEST_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// How many accept failures in a row mean the listener is broken rather than unlucky.
@@ -158,14 +161,20 @@ pub fn shutdown_rpc() -> io::Result<u32> {
 pub fn serve_connections(
     listener: &UnixListener,
     request_timeout: Duration,
-    mut handle: impl FnMut(&str) -> (Value, bool),
+    make_handle: impl Fn() -> Box<dyn FnMut(&str) -> (Value, bool) + Send> + Send + Sync,
 ) -> io::Result<()> {
+    listener.set_nonblocking(true)?;
+    let stopping = Arc::new(AtomicBool::new(false));
     let mut failures = 0usize;
-    for incoming in listener.incoming() {
-        let stream = match incoming {
-            Ok(stream) => {
+    while !stopping.load(Ordering::Acquire) {
+        let stream = match listener.accept() {
+            Ok((stream, _)) => {
                 failures = 0;
                 stream
+            }
+            Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                thread::sleep(Duration::from_millis(10));
+                continue;
             }
             // An accept can fail for reasons that belong to the connection being accepted: a
             // client that gave up while queued, an interrupted syscall, a momentarily exhausted
@@ -181,11 +190,13 @@ pub fn serve_connections(
                 continue;
             }
         };
-        match answer(stream, request_timeout, &mut handle) {
-            Ok(true) => return Ok(()),
+        let mut handle = make_handle();
+        let stopping = Arc::clone(&stopping);
+        thread::spawn(move || match answer(stream, request_timeout, &mut handle) {
+            Ok(true) => stopping.store(true, Ordering::Release),
             Ok(false) => {}
             Err(error) => eprintln!("axon-linux: dropped a client connection: {error}"),
-        }
+        });
     }
     Ok(())
 }
@@ -247,13 +258,14 @@ pub fn serve() -> io::Result<()> {
     // Captured once: the backend's capability list describes the build, not the moment, and
     // rebuilding it per request would add an AT-SPI round trip to every health check.
     let reported: Vec<CapabilityInfo> = backend.capabilities().unwrap_or_default();
-    let mut router = Router::new(backend);
-
     let listener = UnixListener::bind(&path)?;
     fs::set_permissions(&path, fs::Permissions::from_mode(0o600))?;
     let endpoint = path.display().to_string();
-    let result = serve_connections(&listener, REQUEST_TIMEOUT, |line| {
-        dispatch(line, &mut router, &reported, &endpoint)
+    let result = serve_connections(&listener, REQUEST_TIMEOUT, move || {
+        let mut router = Router::new(backend.fork());
+        let reported = reported.clone();
+        let endpoint = endpoint.clone();
+        Box::new(move |line| dispatch(line, &mut router, &reported, &endpoint))
     });
     let _ = fs::remove_file(path);
     result
