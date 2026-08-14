@@ -73,7 +73,7 @@ fn run_tesseract_with(
     let mut child = (0..3)
         .find_map(|attempt| {
             let result = Command::new(executable.as_ref())
-                .args(["stdin", "stdout", "-l", "eng", "tsv"])
+                .args(["stdin", "stdout", "-l", "eng", "--psm", "11", "tsv"])
                 .stdin(Stdio::piped())
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped())
