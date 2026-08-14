@@ -145,7 +145,7 @@ if ($browserCleanup[0].Extent.Text -notmatch 'finally' -or
 $activationRegistration = @($functions | Where-Object Name -eq 'Register-ProbeActivationTask')
 $foregroundRegistration = @($functions | Where-Object Name -eq 'Register-ProbeForegroundTask')
 $keyboardRegistration = @($functions | Where-Object Name -eq 'Register-ProbeKeyboardTask')
-$keyboardDiagnostic = @($functions | Where-Object Name -eq 'Invoke-KeyboardDiagnostic')
+$keyboardDiagnosticFunction = @($functions | Where-Object Name -eq 'Invoke-KeyboardDiagnostic')
 $handBackSweep = @($functions | Where-Object Name -eq 'Invoke-HandBackSweep')
 if ($activationRegistration.Count -ne 1 -or $foregroundRegistration.Count -ne 1 -or $handBackSweep.Count -ne 1 -or
     $activationRegistration[0].Extent.Text -notmatch 'LogonType Interactive' -or
@@ -248,14 +248,14 @@ if (-not $sweptRegistration) {
 
 # Every bound in the probe script, shrunk. A scenario that has to sit through the real one is a
 # scenario nobody adds.
-if ($keyboardRegistration.Count -ne 1 -or $keyboardDiagnostic.Count -ne 1 -or
+if ($keyboardRegistration.Count -ne 1 -or $keyboardDiagnosticFunction.Count -ne 1 -or
     $keyboardRegistration[0].Extent.Text -notmatch 'LogonType Interactive' -or
     $keyboardRegistration[0].Extent.Text -notmatch 'probe keyboard-diagnostic' -or
     $keyboardRegistration[0].Extent.Text -notmatch 'Move-Item' -or
-    $keyboardDiagnostic[0].Extent.Text -notmatch 'finally' -or
-    $keyboardDiagnostic[0].Extent.Text -notmatch 'Remove-ProbeKeyboardResult' -or
-    $keyboardDiagnostic[0].Extent.Text -notmatch "Where-Object intent -eq 'ctrl\+l'" -or
-    $keyboardDiagnostic[0].Extent.Text -notmatch '\$ctrlL\.Count -ne 1') {
+    $keyboardDiagnosticFunction[0].Extent.Text -notmatch 'finally' -or
+    $keyboardDiagnosticFunction[0].Extent.Text -notmatch 'Remove-ProbeKeyboardResult' -or
+    $keyboardDiagnosticFunction[0].Extent.Text -notmatch "Where-Object intent -eq 'ctrl\+l'" -or
+    $keyboardDiagnosticFunction[0].Extent.Text -notmatch '\$ctrlL\.Count -ne 1') {
     throw 'the keyboard diagnostic must run interactively, publish atomically, clean payloads, and reject a second baseline Ctrl+L dispatch'
 }
 
