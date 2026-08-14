@@ -1228,6 +1228,9 @@ Test-Scenario 'probe: the daemon it started is the one it reports on' {
     Check 'it launches Edge through its own Interactive-task seam' (Test-Did 'register-probe-browser-task')
     Test-Order -First 'register-probe-browser-task' -Then 'start-probe-browser-task'
     Check 'it activated isolated Edge through an Interactive-task seam' ((Get-Count 'register-probe-activation-task 6060') -eq 1)
+    $keyboardActivationRemoval = "remove-probe-activation-result $(Join-Path $LiveDirectory 'keyboard-activation.json')"
+    Check 'it removed stale activation results before registration' ((Get-Count $keyboardActivationRemoval) -eq 2)
+    Test-Order -First ([regex]::Escape($keyboardActivationRemoval)) -Then 'register-probe-activation-task 6060'
     Test-Order -First 'start-probe-activation-task' -Then 'wait-probe-activation-task'
     Check 'it removed the short-lived activation task' (-not $script:Machine.ProbeActivationTaskRegistered)
     Check 'it sent the aimed and frontmost keyboard sequence' ((Get-Count 'mcp keyboard') -eq 4)

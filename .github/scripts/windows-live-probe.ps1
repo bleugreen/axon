@@ -1177,6 +1177,9 @@ function Invoke-ProbeStage {
         # fence. Re-prove the exact PID through the independent task seam, then exercise the
         # frontmost form for the indivisible Ctrl+L/text/Return gesture.
         $activationResultPath = Join-Path $LiveDirectory 'keyboard-activation.json'
+        # A timed-out predecessor can leave an atomic result behind after its task is gone. Remove
+        # both names before registration so this run can never accept another run's PID as proof.
+        Remove-ProbeActivationResult -ResultPath $activationResultPath
         Register-ProbeActivationTask -ProcessId ([int]$browser.ProcessId) -ResultPath $activationResultPath
         try {
             Start-ProbeActivationTask
