@@ -54,7 +54,7 @@ $ProbeScript = (Resolve-Path $ProbeScript).Path
 # ---------------------------------------------------------------------------------------------
 
 $StubbedSeams = @(
-    'Write-Note', 'Wait-Tick', 'Test-ProcessIsRunning', 'Get-AxonProcess', 'Test-EdgeIsRunning', 'Stop-ProcessById',
+    'Write-Note', 'Wait-Tick', 'Wait-BrowserTransition', 'Test-ProcessIsRunning', 'Get-AxonProcess', 'Test-EdgeIsRunning', 'Stop-ProcessById',
     'Get-DesktopRegistrationPath', 'Get-DesktopTaskState', 'Start-DesktopDaemonTask', 'Register-ProbeTask',
     'Unregister-ProbeTask', 'Start-ProbeTask', 'Register-ProbeBrowserTask', 'Unregister-ProbeBrowserTask',
     'Start-ProbeBrowserTask', 'Register-ProbeActivationTask', 'Start-ProbeActivationTask',
@@ -412,6 +412,7 @@ function Write-Note {
 }
 
 function Wait-Tick { }
+function Wait-BrowserTransition { }
 
 function Test-ProcessIsRunning {
     param([Parameter(Mandatory)][int] $ProcessId)
