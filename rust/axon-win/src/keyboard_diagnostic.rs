@@ -322,10 +322,9 @@ fn process_details(pid: u32) -> (Option<String>, Option<u32>, Option<String>) {
     (path, parent_process_id(pid), integrity)
 }
 
-fn identity(pid: u32, task_name: &str) -> Value {
-    let foreground = unsafe { GetForegroundWindow() };
+fn identity(pid: u32, window: HWND, task_name: Option<&str>) -> Value {
     let mut owner = 0;
-    let gui_thread = unsafe { GetWindowThreadProcessId(foreground, Some(&mut owner)) };
+    let gui_thread = unsafe { GetWindowThreadProcessId(window, Some(&mut owner)) };
     let mut session = 0;
     let session_id = unsafe { ProcessIdToSessionId(pid, &mut session) }
         .is_ok()
@@ -333,12 +332,19 @@ fn identity(pid: u32, task_name: &str) -> Value {
     let (path, parent, integrity) = process_details(pid);
     let mut class = [0u16; 256];
     let class_len =
-        unsafe { windows::Win32::UI::WindowsAndMessaging::GetClassNameW(foreground, &mut class) };
+        unsafe { windows::Win32::UI::WindowsAndMessaging::GetClassNameW(window, &mut class) };
     let mut title = [0u16; MAX_PATH as usize];
     let title_len =
-        unsafe { windows::Win32::UI::WindowsAndMessaging::GetWindowTextW(foreground, &mut title) };
+        unsafe { windows::Win32::UI::WindowsAndMessaging::GetWindowTextW(window, &mut title) };
     json!({"processId":pid,"executablePath":path,"parentProcessId":parent,"sessionId":session_id,"integrityLevel":integrity,
-        "window":{"hwnd":format!("0x{:X}",hwnd_bits(foreground)),"className":wide_text(&class[..class_len.max(0) as usize]),"title":wide_text(&title[..title_len.max(0) as usize]),"guiThreadId":if owner==pid { Some(gui_thread) } else { None }},"taskName":task_name})
+        "window":{"hwnd":format!("0x{:X}",hwnd_bits(window)),"className":wide_text(&class[..class_len.max(0) as usize]),"title":wide_text(&title[..title_len.max(0) as usize]),"guiThreadId":if owner==pid { Some(gui_thread) } else { None }},"taskName":task_name})
+}
+
+fn foreground_identity() -> Value {
+    let window = unsafe { GetForegroundWindow() };
+    let mut pid = 0;
+    unsafe { GetWindowThreadProcessId(window, Some(&mut pid)) };
+    identity(pid, window, None)
 }
 
 struct Uia {
@@ -422,13 +428,14 @@ pub(super) fn run(args: &[String]) -> Result<Value, BackendError> {
         .and_then(|i| args.get(i + 1))
         .map(String::as_str)
         .unwrap_or("Axon Live Probe Keyboard Diagnostic");
-    let target = json!({"processId":pid,"identity":identity(pid, task_name)});
+    let target_window = unsafe { GetForegroundWindow() };
+    let target = json!({"processId":pid,"identity":identity(pid, target_window, None)});
     let observer = Observer::install()?;
     observer.pump(Duration::ZERO);
     let uia = Uia::new()?;
     let mut trials = Vec::new();
     for index in 0..max_trials {
-        let foreground_before = identity(pid, task_name);
+        let foreground_before = foreground_identity();
         let started = now_us();
         let activated = super::pixel::activate(pid, None);
         let proved = now_us();
@@ -511,7 +518,7 @@ pub(super) fn run(args: &[String]) -> Result<Value, BackendError> {
     }
     let hook_removed = observer.remove();
     Ok(
-        json!({"schemaVersion":"keyboard-diagnostic-v1","target":target,"trials":trials,"finalForeground":{"identity":identity(pid, task_name)},"cleanup":{"hookRemoved":hook_removed,"observerWindowCreated":false,"observerWindowDestroyed":null}}),
+        json!({"schemaVersion":"keyboard-diagnostic-v1","observer":{"processId":std::process::id(),"taskName":task_name},"target":target,"trials":trials,"finalForeground":{"identity":foreground_identity()},"cleanup":{"hookRemoved":hook_removed,"observerWindowCreated":false,"observerWindowDestroyed":null}}),
     )
 }
 

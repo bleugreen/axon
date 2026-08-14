@@ -143,8 +143,7 @@ function Invoke-KeyboardDiagnostic {
             if ([string]::IsNullOrWhiteSpace([string]$identity.executablePath) -or
                 $null -eq $identity.parentProcessId -or $null -eq $identity.sessionId -or
                 [string]::IsNullOrWhiteSpace([string]$identity.integrityLevel) -or
-                $null -eq $identity.window.className -or $null -eq $identity.window.title -or
-                [string]::IsNullOrWhiteSpace([string]$identity.taskName)) {
+                $null -eq $identity.window.className -or $null -eq $identity.window.title) {
                 throw 'keyboard diagnostic returned incomplete process, window, or task identity'
             }
         }
