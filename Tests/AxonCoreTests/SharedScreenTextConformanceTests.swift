@@ -12,8 +12,9 @@ private func screenTextFixture() throws -> JSONValue {
     #expect(fixture["maxItems"] == .int(100))
     guard case let .array(cases)? = fixture["cases"] else { Issue.record("screenText fixture must carry cases"); return }
     for fixtureCase in cases {
+        let name = if case let .string(value)? = fixtureCase["name"] { value } else { "unnamed fixture" }
         let snapshot: JSONValue = .object(["id": .string("screen-text-fixture"), "app": .object(["name": .string("Fixture"), "processIdentifier": .int(1)]), "windows": .array([]), "screenText": fixtureCase["input"] ?? .array([])])
         let observation = SnapshotObservationFormatter().observation(from: snapshot, frames: fixtureCase["frames"] == .bool(true))
-        #expect(observation["screenText"] == fixtureCase["expected"], "\(fixtureCase["name"]?.scalarText ?? "unnamed fixture")")
+        #expect(observation["screenText"] == fixtureCase["expected"], "\(name)")
     }
 }

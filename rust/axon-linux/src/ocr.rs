@@ -249,11 +249,11 @@ fn parse_tsv(
         line.top = line.top.min(top);
         line.right = line.right.max(left + width);
         line.bottom = line.bottom.max(top + height);
-        if let Ok(confidence) = columns[10].parse::<f64>() {
-            if confidence >= 0.0 {
-                line.confidence_sum += confidence / 100.0;
-                line.confidence_count += 1;
-            }
+        if let Ok(confidence) = columns[10].parse::<f64>()
+            && confidence >= 0.0
+        {
+            line.confidence_sum += confidence / 100.0;
+            line.confidence_count += 1;
         }
     }
     let sx = screen.width / f64::from(image_size.0);
