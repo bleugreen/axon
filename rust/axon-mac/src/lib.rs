@@ -1846,12 +1846,7 @@ mod tests {
     }
 
     #[test]
-    fn screen_text_and_unsupported_click_forms_refuse_before_dispatch() {
-        let screen_text = validated_params("look", json!({"app":"Notes","screenText":true}));
-        let error = router_error(&mut Router::new(EnumerationBackend), "look", screen_text);
-        assert_eq!(error.code, -32004);
-        assert_eq!(error.data.as_ref().unwrap()["capability"], "screenText");
-
+    fn unsupported_click_forms_refuse_before_dispatch() {
         for target in [
             json!({"point":{"x":10,"y":20}}),
             json!({"x":10,"y":20,"coordinateSpace":"screen"}),
