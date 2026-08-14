@@ -329,6 +329,7 @@ impl<
         }
     }
 
+    #[cfg(windows)]
     pub(crate) fn fork_for_wait(&self, backend: B) -> Self {
         Self {
             backend,
@@ -337,6 +338,7 @@ impl<
         }
     }
 
+    #[cfg(windows)]
     pub(crate) fn backend(&self) -> &B {
         &self.backend
     }

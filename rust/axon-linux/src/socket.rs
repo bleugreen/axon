@@ -14,7 +14,7 @@ use std::{
     os::unix::net::{UnixListener, UnixStream},
     path::PathBuf,
     sync::{
-        Arc, Mutex,
+        Arc,
         atomic::{AtomicBool, Ordering},
     },
     thread,
@@ -30,7 +30,7 @@ use crate::{
 #[cfg(target_os = "linux")]
 use axon_core::{CapabilityInfo, JsonRpcResponse, PlatformBackend};
 #[cfg(target_os = "linux")]
-use std::{fs, os::unix::fs::PermissionsExt};
+use std::{fs, os::unix::fs::PermissionsExt, sync::Mutex};
 
 /// How long the daemon waits on a client that has stopped participating, in either direction.
 ///

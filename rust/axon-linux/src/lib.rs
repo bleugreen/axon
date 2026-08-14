@@ -301,6 +301,7 @@ impl<B: PointerTargetVerifier + BackgroundPixelInput> Router<B> {
         }
     }
 
+    #[cfg(target_os = "linux")]
     pub(crate) fn fork_for_wait(&self, backend: B) -> Self {
         Self {
             backend,
