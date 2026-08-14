@@ -845,8 +845,10 @@ function Test-Scenario {
 
     $script:ScenarioName = $Name
     $script:ScenarioCount++
+    Write-Host "rehearsing: $Name"
     Reset-Machine
     & $Body
+    Write-Host "rehearsed: $Name"
 }
 
 function Check {
