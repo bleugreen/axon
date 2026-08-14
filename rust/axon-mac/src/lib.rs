@@ -74,6 +74,7 @@ pub struct Router<B> {
     semantic_names: SemanticNameRegistry,
     observations: HashMap<String, (Snapshot, Vec<SemanticElementName>)>,
     observation_sequence: u64,
+    observation_redaction: axon_core::ObservationRedactionContext,
 }
 
 fn visual_observation_result(
@@ -94,11 +95,6 @@ fn visual_observation_result(
                 None,
                 Some(json!({"code":"ocr-failed","reason":reason})),
             )
-        }
-        if let Some(unavailable) = screen_text_unavailable {
-            observation_object(&mut value, request.display.format)
-                .expect("snapshots serialize as objects")
-                .insert("screenTextUnavailable".into(), unavailable);
         }
         Err(error) if wants_screenshot => (
             None,
@@ -360,6 +356,7 @@ impl<
             semantic_names: SemanticNameRegistry::default(),
             observations: HashMap::new(),
             observation_sequence: 0,
+            observation_redaction: Default::default(),
         }
     }
     fn register_snapshot(&mut self, snapshot: &Snapshot) -> Vec<axon_core::SemanticElementName> {
@@ -1109,7 +1106,7 @@ impl<
                 .expect("snapshots serialize as objects")
                 .insert(
                     "screenText".into(),
-                    axon_core::format_screen_text(&screen_text, request.display.frames),
+                    axon_core::format_screen_text(&screen_text, request.display.frames, &self.observation_redaction),
                 );
         }
         if let Some(unavailable) = screenshot_unavailable {
@@ -1119,6 +1116,11 @@ impl<
                     "screenshotUnavailable".into(),
                     serde_json::to_value(unavailable).map_err(internal_error)?,
                 );
+        }
+        if let Some(unavailable) = screen_text_unavailable {
+            observation_object(&mut value, request.display.format)
+                .expect("snapshots serialize as objects")
+                .insert("screenTextUnavailable".into(), unavailable);
         }
         observation_object(&mut value, request.display.format)
             .expect("snapshots serialize as objects")
@@ -1377,6 +1379,10 @@ impl<
         + BackgroundPixelPointer,
 > ToolDispatcher for Router<B>
 {
+    fn set_observation_redaction_context(&mut self, context: axon_core::ObservationRedactionContext) {
+        self.observation_redaction = context;
+    }
+
     fn register_replay_target(
         &mut self,
         app: &str,

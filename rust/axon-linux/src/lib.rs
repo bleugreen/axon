@@ -88,6 +88,7 @@ pub struct Router<B> {
     backend: B,
     snapshot: Option<Snapshot>,
     semantic_names: SemanticNameRegistry,
+    observation_redaction: axon_core::ObservationRedactionContext,
 }
 
 pub struct VisualObservation {
@@ -125,18 +126,6 @@ fn primitive_dispatch_params(params: &Map<String, Value>) -> Map<String, Value> 
             target.retain(|field, _| field == "app" || field == "name");
         }
     }
-    #[test]
-    fn look_preserves_semantics_when_screen_text_is_unavailable() {
-        let mut router = Router::new(backend(vec![node("semantic child")], None));
-        let response = router
-            .request(request("look", json!({"app":"App","screenshot":false,"screenText":true})))
-            .unwrap();
-        let JsonRpcResponse::Success(success) = response else { panic!() };
-        assert!(success.result.to_string().contains("semantic child"));
-        assert_eq!(success.result["screenTextUnavailable"]["code"], "capability-unavailable");
-        assert!(success.result.get("screenText").is_none());
-    }
-
     params
 }
 
@@ -339,6 +328,7 @@ impl<B: PointerTargetVerifier + BackgroundPixelInput> Router<B> {
             backend,
             snapshot: None,
             semantic_names: SemanticNameRegistry::default(),
+            observation_redaction: Default::default(),
         }
     }
 
@@ -1055,6 +1045,7 @@ impl<B: PointerTargetVerifier + BackgroundPixelInput> Router<B> {
                                     axon_core::format_screen_text(
                                         &visual.recognized_text,
                                         request.display.frames,
+                                        &self.observation_redaction,
                                     ),
                                 );
                             }
@@ -1068,15 +1059,15 @@ impl<B: PointerTargetVerifier + BackgroundPixelInput> Router<B> {
                                     )
                                     .map_err(internal_error)?,
                                 );
-                                continue;
+                            } else {
+                                object.insert(
+                                    "screenshotUnavailable".into(),
+                                    serde_json::to_value(
+                                        axon_core::ScreenshotUnavailable::from_backend_error(e),
+                                    )
+                                    .map_err(internal_error)?,
+                                );
                             }
-                            object.insert(
-                                "screenshotUnavailable".into(),
-                                serde_json::to_value(
-                                    axon_core::ScreenshotUnavailable::from_backend_error(e),
-                                )
-                                .map_err(internal_error)?,
-                            );
                         }
                     }
                 }
@@ -1400,6 +1391,10 @@ impl<B: PointerTargetVerifier + BackgroundPixelInput> Router<B> {
 }
 
 impl<B: PointerTargetVerifier + BackgroundPixelInput> ToolDispatcher for Router<B> {
+    fn set_observation_redaction_context(&mut self, context: axon_core::ObservationRedactionContext) {
+        self.observation_redaction = context;
+    }
+
     fn register_replay_target(
         &mut self,
         app: &str,
@@ -2235,6 +2230,19 @@ mod tests {
         assert!(success.result.get("screenshotUnavailable").is_none());
         assert!(success.result.get("screenshot").is_none());
     }
+
+    #[test]
+    fn look_preserves_semantics_when_screen_text_is_unavailable() {
+        let mut router = Router::new(backend(vec![node("semantic child")], None));
+        let response = router
+            .request(request("look", json!({"app":"App","screenshot":false,"screenText":true})))
+            .unwrap();
+        let JsonRpcResponse::Success(success) = response else { panic!() };
+        assert!(success.result.to_string().contains("semantic child"));
+        assert_eq!(success.result["screenTextUnavailable"]["code"], "portal-authorization-required");
+        assert!(success.result.get("screenText").is_none());
+    }
+
     #[test]
     fn unimplemented_tools_have_structured_errors_before_backend_dispatch() {
         // These are not delivery decisions: the Linux daemon has no code path for them at all, so

@@ -16,7 +16,28 @@ pub const OBSERVATION_SCREEN_TEXT_MAX_ITEMS: usize = 100;
 ///
 /// Geometry remains on RecognizedText for text-location resolution even when frames is false;
 /// this boundary alone controls whether frames appear on the wire.
-pub fn format_screen_text(recognized: &[RecognizedText], frames: bool) -> Value {
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ObservationRedactionContext {
+    active_secrets: Vec<String>,
+}
+
+impl ObservationRedactionContext {
+    pub fn from_active_secrets(secrets: impl IntoIterator<Item = String>) -> Self {
+        Self {
+            active_secrets: secrets.into_iter().filter(|value| !value.is_empty()).collect(),
+        }
+    }
+
+    fn redacts(&self, value: &str) -> bool {
+        !value.is_empty() && self.active_secrets.iter().any(|secret| secret == value)
+    }
+}
+
+pub fn format_screen_text(
+    recognized: &[RecognizedText],
+    frames: bool,
+    redaction: &ObservationRedactionContext,
+) -> Value {
     let mut items: Vec<&RecognizedText> = recognized
         .iter()
         .filter(|item| {
@@ -42,7 +63,18 @@ pub fn format_screen_text(recognized: &[RecognizedText], frames: bool) -> Value 
             .take(OBSERVATION_SCREEN_TEXT_MAX_ITEMS)
             .map(|item| {
                 let mut object = Map::new();
-                object.insert("text".into(), Value::String(item.text.clone()));
+                if redaction.redacts(&item.text) {
+                    object.insert("text".into(), Value::String("<redacted: active-credential>".into()));
+                    object.insert(
+                        "redaction".into(),
+                        serde_json::json!({
+                            "fields": ["text"],
+                            "reasons": {"text": "active-credential"}
+                        }),
+                    );
+                } else {
+                    object.insert("text".into(), Value::String(item.text.clone()));
+                }
                 if let Some(confidence) = item.confidence.filter(|value| value.is_finite()) {
                     object.insert("confidence".into(), Value::from(confidence));
                 }
