@@ -298,9 +298,9 @@ impl LinuxBackend {
 
     /// Creates an independent request facade over the one serialized AT-SPI actor.
     ///
-    /// Each client needs its own router state so a blocking wait can sleep without holding every
-    /// other request. Native AT-SPI calls still cross the shared actor one at a time, while the
-    /// per-client X11 connections and identity cache remain independent.
+    /// Blocking waits use this facade with a snapshot of the canonical router state, so their
+    /// polling sleeps do not hold the canonical router. Native AT-SPI calls still cross the shared
+    /// actor one at a time, while X11 connections and identity caches remain independent.
     pub(crate) fn fork(&self) -> Self {
         Self {
             tx: self.tx.clone(),

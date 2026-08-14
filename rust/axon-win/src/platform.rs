@@ -379,9 +379,9 @@ impl WindowsBackend {
 
     /// Creates an independent request facade over the one COM-owned UI Automation actor.
     ///
-    /// Router state is per connection, so a polling wait sleeps on its connection thread. Each
-    /// native UI Automation call still crosses the shared actor and executes on the MTA thread
-    /// that created the COM objects.
+    /// Blocking waits use this facade with a snapshot of the canonical router state, so polling
+    /// sleeps outside the canonical router. Each native UI Automation call still crosses the
+    /// shared actor and executes on the MTA thread that created the COM objects.
     pub(crate) fn fork(&self) -> Self {
         Self {
             tx: self.tx.clone(),

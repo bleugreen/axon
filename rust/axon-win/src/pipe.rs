@@ -11,7 +11,7 @@ use std::{
     io::{self, BufRead, BufReader, Write},
     ptr,
     sync::{
-        Arc,
+        Arc, Mutex,
         atomic::{AtomicBool, Ordering},
         mpsc,
     },
@@ -193,6 +193,7 @@ pub fn serve(
         }
     };
     let capabilities = Arc::new(backend.capabilities().unwrap_or_default());
+    let router = Arc::new(Mutex::new(Router::new(backend)));
     let stopping = Arc::new(AtomicBool::new(false));
 
     while !stopping.load(Ordering::Acquire) {
@@ -207,11 +208,11 @@ pub fn serve(
             close_pipe(handle);
             break;
         }
-        let mut router = Router::new(backend.fork());
+        let router = Arc::clone(&router);
         let capabilities = Arc::clone(&capabilities);
         let stopping = Arc::clone(&stopping);
         thread::spawn(move || {
-            if let Err(error) = connection(handle, &mut router, &capabilities, &stopping) {
+            if let Err(error) = connection(handle, &router, &capabilities, &stopping) {
                 eprintln!("axon-win: dropped a client connection: {error}");
             }
             close_pipe(handle);
@@ -263,7 +264,7 @@ fn wake_listener() {
 
 fn connection(
     handle: isize,
-    router: &mut Router<WindowsBackend>,
+    router: &Arc<Mutex<Router<WindowsBackend>>>,
     capabilities: &[axon_core::CapabilityInfo],
     stopping: &AtomicBool,
 ) -> io::Result<()> {
@@ -318,11 +319,22 @@ fn connection(
 
 fn dispatch_request(
     parsed: Result<JsonRpcRequest, axon_core::JsonRpcResponse>,
-    router: &mut Router<WindowsBackend>,
+    router: &Arc<Mutex<Router<WindowsBackend>>>,
     capabilities: &[axon_core::CapabilityInfo],
 ) -> io::Result<(Option<axon_core::JsonRpcResponse>, bool)> {
     Ok(dispatch_with(parsed, capabilities, |request| {
-        router.request(request)
+        if matches!(
+            request.method.as_str(),
+            "wait_for_value" | "wait_for_stability"
+        ) {
+            let mut wait_router = {
+                let canonical = router.lock().unwrap();
+                canonical.fork_for_wait(canonical.backend().fork())
+            };
+            wait_router.request(request)
+        } else {
+            router.lock().unwrap().request(request)
+        }
     }))
 }
 

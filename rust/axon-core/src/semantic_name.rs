@@ -458,6 +458,7 @@ struct ReplayRecord {
     process_id: Option<crate::ProcessId>,
 }
 
+#[derive(Clone)]
 pub struct SemanticNameRegistry {
     max_snapshots: usize,
     order: VecDeque<crate::SnapshotId>,

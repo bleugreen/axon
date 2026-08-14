@@ -14,7 +14,7 @@ use std::{
     os::unix::net::{UnixListener, UnixStream},
     path::PathBuf,
     sync::{
-        Arc,
+        Arc, Mutex,
         atomic::{AtomicBool, Ordering},
     },
     thread,
@@ -45,6 +45,33 @@ pub fn path() -> io::Result<PathBuf> {
     let dir = std::env::var_os("XDG_RUNTIME_DIR")
         .ok_or_else(|| io::Error::new(io::ErrorKind::NotFound, "XDG_RUNTIME_DIR is not set"))?;
     Ok(PathBuf::from(dir).join("axon-v1.sock"))
+}
+
+#[cfg(target_os = "linux")]
+fn dispatch_shared(
+    line: &str,
+    router: &Arc<Mutex<Router<LinuxBackend>>>,
+    reported: &[CapabilityInfo],
+    endpoint: &str,
+) -> (Value, bool) {
+    let is_wait = serde_json::from_str::<Value>(line)
+        .ok()
+        .and_then(|value| {
+            value
+                .get("method")
+                .and_then(Value::as_str)
+                .map(str::to_owned)
+        })
+        .is_some_and(|method| matches!(method.as_str(), "wait_for_value" | "wait_for_stability"));
+    if is_wait {
+        let mut wait_router = {
+            let canonical = router.lock().unwrap();
+            canonical.fork_for_wait(canonical.backend().fork())
+        };
+        dispatch(line, &mut wait_router, reported, endpoint)
+    } else {
+        dispatch(line, &mut router.lock().unwrap(), reported, endpoint)
+    }
 }
 
 fn mcp_success_response(id: Value, result: Value) -> Value {
@@ -261,11 +288,12 @@ pub fn serve() -> io::Result<()> {
     let listener = UnixListener::bind(&path)?;
     fs::set_permissions(&path, fs::Permissions::from_mode(0o600))?;
     let endpoint = path.display().to_string();
+    let router = Arc::new(Mutex::new(Router::new(backend)));
     let result = serve_connections(&listener, REQUEST_TIMEOUT, move || {
-        let mut router = Router::new(backend.fork());
+        let router = Arc::clone(&router);
         let reported = reported.clone();
         let endpoint = endpoint.clone();
-        Box::new(move |line| dispatch(line, &mut router, &reported, &endpoint))
+        Box::new(move |line| dispatch_shared(line, &router, &reported, &endpoint))
     });
     let _ = fs::remove_file(path);
     result
