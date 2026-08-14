@@ -154,6 +154,9 @@ function Invoke-KeyboardDiagnostic {
             if ($trial.hook.valid -ne $true -or $trial.hook.sentinelObserved -ne $true) {
                 throw "keyboard diagnostic trial $($trial.index) has invalid low-level-hook evidence"
             }
+            if ($trial.setup.pageFocusRestored -ne $true -or $trial.focus.before.classification -ne 'page') {
+                throw "keyboard diagnostic trial $($trial.index) did not restore independent page focus before Ctrl+L"
+            }
             if ($null -eq $trial.focus.before.classification -or $null -eq $trial.focus.after.classification -or
                 $null -eq $trial.focus.ctrlLTransitionObserved -or $null -eq $trial.page.outcome) {
                 throw "keyboard diagnostic trial $($trial.index) omitted its UI Automation focus outcome"
