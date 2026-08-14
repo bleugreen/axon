@@ -16,6 +16,8 @@ use serde::Serialize;
 mod graphics_capture;
 #[path = "pixel.rs"]
 mod pixel;
+#[path = "keyboard_diagnostic.rs"]
+mod keyboard_diagnostic;
 use std::{
     ffi::c_void,
     sync::{Arc, mpsc},
@@ -1677,6 +1679,7 @@ impl IntegrationProbe {
         match command {
             "pixel-click" => return probe_pixel_click(args),
             "foreground" => return probe_foreground(args),
+            "keyboard-diagnostic" => return keyboard_diagnostic::run(args),
             _ => {}
         }
         let _com = ComApartment::mta()?;
