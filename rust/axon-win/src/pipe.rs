@@ -1,7 +1,9 @@
 #![cfg(windows)]
 
 use crate::{Router, WindowsBackend, parse_request};
-use axon_core::{JsonRpcId, JsonRpcRequest, ToolBackend, backend_tools, validate_tools_call};
+use axon_core::{
+    JsonRpcId, JsonRpcRequest, PlatformBackend, ToolBackend, backend_tools, validate_tools_call,
+};
 use serde_json::{Value, json};
 use std::{
     ffi::c_void,
@@ -40,11 +42,6 @@ const PIPE_READMODE_BYTE: u32 = 0;
 const PIPE_WAIT: u32 = 0;
 const PIPE_REJECT_REMOTE_CLIENTS: u32 = 8;
 const PIPE_UNLIMITED_INSTANCES: u32 = 255;
-
-struct RouterRequest {
-    request: JsonRpcRequest,
-    response: mpsc::SyncSender<Option<axon_core::JsonRpcResponse>>,
-}
 
 #[link(name = "kernel32")]
 unsafe extern "system" {
@@ -168,48 +165,34 @@ impl Drop for PipeSecurity {
 }
 
 pub fn serve(
-    start_backend: impl FnOnce() -> Result<Router<WindowsBackend>, Box<dyn std::error::Error>>
-    + Send
-    + 'static,
+    start_backend: impl FnOnce() -> Result<WindowsBackend, Box<dyn std::error::Error>> + Send + 'static,
     on_bound: impl FnOnce(),
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mut security = PipeSecurity::current_user()?;
-    let (router_tx, router_rx) = mpsc::channel::<RouterRequest>();
     let (ready_tx, ready_rx) = mpsc::sync_channel(1);
     thread::spawn(move || {
         let started = start_backend().map_err(|error| error.to_string());
-        let _ = ready_tx.send(
-            started
-                .as_ref()
-                .map(|router| router.capabilities().unwrap_or_default())
-                .map_err(Clone::clone),
-        );
-        let Ok(mut router) = started else {
-            return;
-        };
-        for request in router_rx {
-            let response = router.request(request.request);
-            let _ = request.response.send(response);
-        }
+        let _ = ready_tx.send(started);
     });
 
     let mut on_bound = Some(on_bound);
-    let capabilities = Arc::new(loop {
+    let backend = loop {
         let handle = create_pipe(&mut security)?;
         if let Some(on_bound) = on_bound.take() {
             on_bound();
         }
         match ready_rx.recv().map_err(io::Error::other)? {
-            Ok(capabilities) => {
+            Ok(backend) => {
                 close_pipe(handle);
-                break capabilities;
+                break backend;
             }
             Err(error) => {
                 close_pipe(handle);
                 return Err(io::Error::other(error).into());
             }
         }
-    });
+    };
+    let capabilities = Arc::new(backend.capabilities().unwrap_or_default());
     let stopping = Arc::new(AtomicBool::new(false));
 
     while !stopping.load(Ordering::Acquire) {
@@ -224,11 +207,11 @@ pub fn serve(
             close_pipe(handle);
             break;
         }
-        let router = router_tx.clone();
+        let mut router = Router::new(backend.fork());
         let capabilities = Arc::clone(&capabilities);
         let stopping = Arc::clone(&stopping);
         thread::spawn(move || {
-            if let Err(error) = connection(handle, &router, &capabilities, &stopping) {
+            if let Err(error) = connection(handle, &mut router, &capabilities, &stopping) {
                 eprintln!("axon-win: dropped a client connection: {error}");
             }
             close_pipe(handle);
@@ -280,7 +263,7 @@ fn wake_listener() {
 
 fn connection(
     handle: isize,
-    router: &mpsc::Sender<RouterRequest>,
+    router: &mut Router<WindowsBackend>,
     capabilities: &[axon_core::CapabilityInfo],
     stopping: &AtomicBool,
 ) -> io::Result<()> {
@@ -335,13 +318,22 @@ fn connection(
 
 fn dispatch_request(
     parsed: Result<JsonRpcRequest, axon_core::JsonRpcResponse>,
-    router: &mpsc::Sender<RouterRequest>,
+    router: &mut Router<WindowsBackend>,
     capabilities: &[axon_core::CapabilityInfo],
 ) -> io::Result<(Option<axon_core::JsonRpcResponse>, bool)> {
+    Ok(dispatch_with(parsed, capabilities, |request| {
+        router.request(request)
+    }))
+}
+
+fn dispatch_with(
+    parsed: Result<JsonRpcRequest, axon_core::JsonRpcResponse>,
+    capabilities: &[axon_core::CapabilityInfo],
+    request: impl FnOnce(JsonRpcRequest) -> Option<axon_core::JsonRpcResponse>,
+) -> (Option<axon_core::JsonRpcResponse>, bool) {
     let shutdown = matches!(&parsed, Ok(req) if req.method == "shutdown" && req.id.is_some());
     let response = match parsed {
-        // Lifecycle requests deliberately bypass the serial router worker. A wait may own mutable
-        // backend state for minutes, but health and shutdown must remain available throughout it.
+        // Lifecycle requests deliberately bypass the per-connection router.
         Ok(req) if req.method == "health" => req.id.map(|id| {
             axon_core::JsonRpcResponse::success(
                 id,
@@ -359,21 +351,10 @@ fn dispatch_request(
                 json!({"shutdown": true, "processId": std::process::id()}),
             )
         }),
-        Ok(req) => {
-            let (response_tx, response_rx) = mpsc::sync_channel(1);
-            router
-                .send(RouterRequest {
-                    request: req,
-                    response: response_tx,
-                })
-                .map_err(|_| io::Error::other("router worker stopped"))?;
-            response_rx
-                .recv()
-                .map_err(|_| io::Error::other("router worker stopped"))?
-        }
+        Ok(req) => request(req),
         Err(error) => Some(error),
     };
-    Ok((response, shutdown))
+    (response, shutdown)
 }
 
 pub fn shutdown() -> io::Result<u32> {
@@ -449,36 +430,63 @@ mod tests {
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     #[test]
-    fn lifecycle_requests_bypass_a_busy_router() {
-        let (router, receiver) = mpsc::channel();
-        let (blocked_tx, blocked_rx) = mpsc::sync_channel(0);
-        thread::spawn(move || {
-            let request = receiver.recv().unwrap();
-            blocked_tx.send(()).unwrap();
-            thread::sleep(Duration::from_secs(1));
-            drop(request);
-        });
-        router
-            .send(RouterRequest {
-                request: JsonRpcRequest::new(
-                    Some(JsonRpcId::Integer(1)),
-                    "wait_for_value",
-                    Some(json!({})),
-                ),
-                response: mpsc::sync_channel(0).0,
+    fn blocking_wait_does_not_starve_another_non_lifecycle_request() {
+        let (entered_tx, entered_rx) = mpsc::sync_channel(0);
+        let (release_tx, release_rx) = mpsc::sync_channel(0);
+        let waiting = thread::spawn(move || {
+            let wait = JsonRpcRequest::new(
+                Some(JsonRpcId::Integer(1)),
+                "wait_for_value",
+                Some(json!({})),
+            );
+            dispatch_with(Ok(wait), &[], |request| {
+                assert_eq!(request.method, "wait_for_value");
+                entered_tx.send(()).unwrap();
+                release_rx.recv().unwrap();
+                request.id.map(|id| {
+                    axon_core::JsonRpcResponse::success(id, json!({"outcome":"satisfied"}))
+                })
             })
-            .unwrap();
-        blocked_rx.recv().unwrap();
+        });
+        entered_rx.recv().unwrap();
 
-        let started = Instant::now();
-        let health = JsonRpcRequest::new(Some(JsonRpcId::Integer(2)), "health", Some(json!({})));
-        let (response, shutdown) = dispatch_request(Ok(health), &router, &[]).unwrap();
+        let (done_tx, done_rx) = mpsc::sync_channel(0);
+        thread::spawn(move || {
+            let look = JsonRpcRequest::new(
+                Some(JsonRpcId::Integer(2)),
+                "look",
+                Some(json!({"app":"Editor"})),
+            );
+            let result = dispatch_with(Ok(look), &[], |request| {
+                request
+                    .id
+                    .map(|id| axon_core::JsonRpcResponse::success(id, json!({"app":"Editor"})))
+            });
+            done_tx.send(result).unwrap();
+        });
+
+        let (response, shutdown) = done_rx
+            .recv_timeout(Duration::from_millis(250))
+            .expect("a second non-lifecycle connection must finish while the wait is blocked");
         assert!(response.is_some());
         assert!(!shutdown);
-        assert!(started.elapsed() < Duration::from_millis(250));
+        release_tx.send(()).unwrap();
+        assert!(waiting.join().unwrap().0.is_some());
+    }
+
+    #[test]
+    fn lifecycle_requests_bypass_connection_routers() {
+        let health = JsonRpcRequest::new(Some(JsonRpcId::Integer(2)), "health", Some(json!({})));
+        let (response, shutdown) = dispatch_with(Ok(health), &[], |_| {
+            panic!("health must not reach a connection router")
+        });
+        assert!(response.is_some());
+        assert!(!shutdown);
 
         let stop = JsonRpcRequest::new(Some(JsonRpcId::Integer(3)), "shutdown", Some(json!({})));
-        let (response, shutdown) = dispatch_request(Ok(stop), &router, &[]).unwrap();
+        let (response, shutdown) = dispatch_with(Ok(stop), &[], |_| {
+            panic!("shutdown must not reach a connection router")
+        });
         assert!(response.is_some());
         assert!(shutdown);
     }
