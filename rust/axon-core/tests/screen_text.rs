@@ -38,8 +38,5 @@ fn active_secret_text_is_replaced_at_the_observation_boundary() {
     let serialized = serde_json::to_string(&value).unwrap();
     assert!(!serialized.contains("configured-secret"));
     assert_eq!(value[0]["text"], "<redacted: active-credential>");
-    assert_eq!(
-        value[0]["redaction"]["reasons"]["text"],
-        "active-credential"
-    );
+    assert_eq!(value[0].as_object().unwrap().len(), 1);
 }

@@ -71,13 +71,6 @@ pub fn format_screen_text(
                         "text".into(),
                         Value::String("<redacted: active-credential>".into()),
                     );
-                    object.insert(
-                        "redaction".into(),
-                        serde_json::json!({
-                            "fields": ["text"],
-                            "reasons": {"text": "active-credential"}
-                        }),
-                    );
                 } else {
                     object.insert("text".into(), Value::String(item.text.clone()));
                 }
