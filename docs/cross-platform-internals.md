@@ -294,8 +294,10 @@ events with a close conceptual fit to AX.
   modern compositor-backed applications and occluded windows more consistently;
   `PrintWindow` depends on application paint behavior and can return stale or
   blank content. The backend encodes captures as PNG and uses the built-in
-  `Windows.Media.Ocr` engine for word rectangles. OCR bitmap coordinates are
-  scaled independently on each axis into the physical `GetWindowRect` coordinate
+  `Windows.Media.Ocr` engine. Public observations are line-level: each line's
+  text is paired with the union of its valid word rectangles, matching the
+  Vision and Tesseract backends while preserving native geometry. OCR bitmap
+  coordinates are scaled independently on each axis into the physical `GetWindowRect` coordinate
   space before UIA hit testing or `SendInput` dispatch.
 - Windows text-location resolution follows the shared ordering: UIA text and
   retained element identity first, then screenshot OCR only when requested or
@@ -462,9 +464,15 @@ than equating “Linux” with one uniform tree.
   compositor supports and authorizes them. The backend must otherwise declare
   pointer fallback and global user-input observation unavailable rather than
   bypassing Wayland's security model.
+- X11 screenshot pixels also feed runtime-discovered Tesseract OCR without a
+  second capture. Axon streams PNG bytes to the executable, parses TSV into
+  line-level observations, and converts image rectangles into absolute desktop
+  coordinates with independent axis scaling. Missing engines or language data,
+  timeouts, malformed output, and execution failures are explicit OCR
+  unavailability while semantic AT-SPI remains usable.
 - Screenshots under Wayland require the screenshot or ScreenCast portal and user
   authorization. Lack of portal access must not prevent semantic AT-SPI capture,
-  but it restricts screenshot and screenshot-coordinate capabilities.
+  but it restricts screenshot, OCR, and screenshot-coordinate capabilities.
 - `save` can still serialize calls already known to Axon, but recording user
   input into a session depends on global observation and may therefore be
   unavailable on Wayland. The capability report must distinguish these facets.
@@ -1089,10 +1097,14 @@ owned wrapper.
 
 Screenshot health is independent and truthful: the capability is usable only
 when `CGPreflightScreenCaptureAccess` reports a Screen Recording grant, and its
-restriction names that missing grant otherwise. Capture or encoding failure is
-returned as `screenshotUnavailable` on the observation while the semantic
-`look` still succeeds. The app-list, change-check, and child-page carve-outs
-remain imageless through axon-core's shared screenshot policy.
+restriction names that missing grant otherwise. One owned `CGImage` can feed
+ImageIO, native Vision text recognition, or both, so requesting screenshot and
+screen text never captures twice. A narrow Objective-C bridge owns Vision
+objects, autorelease and exception boundaries; Rust converts Vision's
+lower-left normalized boxes into absolute Accessibility coordinates. Capture,
+encoding, or OCR failure is returned as named observation unavailability while
+the semantic `look` still succeeds. The app-list, change-check, and child-page
+carve-outs remain imageless through axon-core's shared screenshot policy.
 
 The daemon resolves the same production endpoint as every Swift client and the
 LaunchAgent: `AXON_SOCKET_PATH`, defaulting to `/tmp/axon.sock`. Development,
