@@ -193,19 +193,37 @@ fn answer(
     endpoint: &std::path::Path,
     stopping: &AtomicBool,
 ) -> io::Result<()> {
-    stream.set_read_timeout(Some(REQUEST_TIMEOUT))?;
-    stream.set_write_timeout(Some(REQUEST_TIMEOUT))?;
+    prepare_client_stream(&stream, REQUEST_TIMEOUT)?;
     let mut line = String::new();
     if BufReader::new(stream.try_clone()?).read_line(&mut line)? == 0 {
         return Ok(());
     }
     let (response, stop) = dispatch(line.trim(), router, endpoint);
-    writeln!(stream, "{}", serde_json::to_string(&response).unwrap())?;
+    write_response(&mut stream, &response)?;
     if stop {
         stopping.store(true, Ordering::Release);
     }
     Ok(())
 }
+
+fn prepare_client_stream(stream: &UnixStream, timeout: Duration) -> io::Result<()> {
+    // The listener is nonblocking so the daemon can observe shutdown requests. On macOS, accepted
+    // sockets inherit that state; leaving it in place makes a response larger than the socket
+    // buffer fail with EAGAIN instead of waiting for the client to drain it.
+    stream.set_nonblocking(false)?;
+    // These are per-syscall bounds. They prevent a client that stops participating from parking a
+    // connection thread forever while still allowing large observations to advance in partial
+    // writes as buffer space becomes available.
+    let _ = stream.set_read_timeout(Some(timeout));
+    let _ = stream.set_write_timeout(Some(timeout));
+    Ok(())
+}
+
+fn write_response(stream: &mut UnixStream, response: &Value) -> io::Result<()> {
+    stream.write_all(serde_json::to_string(response).unwrap().as_bytes())?;
+    stream.write_all(b"\n")
+}
+
 fn dispatch(
     line: &str,
     router: &mpsc::Sender<RouterRequest>,
@@ -441,6 +459,25 @@ mod tests {
         assert!(!fs::symlink_metadata(&path).unwrap().file_type().is_socket());
         fs::remove_file(path).unwrap();
     }
+    #[test]
+    fn large_response_waits_for_a_delayed_reader_instead_of_failing_with_would_block() {
+        use std::io::Read;
+
+        let (mut server, mut client) = UnixStream::pair().unwrap();
+        server.set_nonblocking(true).unwrap();
+        prepare_client_stream(&server, Duration::from_secs(2)).unwrap();
+        let response = json!({"result": {"screenText": "x".repeat(1_000_000)}});
+        let expected = format!("{}\n", serde_json::to_string(&response).unwrap());
+
+        let writer = thread::spawn(move || write_response(&mut server, &response));
+        thread::sleep(Duration::from_millis(50));
+        let mut received = String::new();
+        client.read_to_string(&mut received).unwrap();
+
+        writer.join().unwrap().unwrap();
+        assert_eq!(received, expected);
+    }
+
     #[test]
     fn disconnected_client_error_is_contained() {
         let (server, client) = UnixStream::pair().unwrap();

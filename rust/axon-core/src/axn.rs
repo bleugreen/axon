@@ -476,6 +476,8 @@ pub struct DispatchOutcome {
     pub resolution: Option<TargetResolution>,
 }
 pub trait ToolDispatcher {
+    /// Supplies replay-scoped secrets to public observation serialization.
+    fn set_observation_redaction_context(&mut self, _context: crate::ObservationRedactionContext) {}
     /// Seed platform semantic resolution with locator evidence attached by the recorder.
     /// Implementations must resolve this locator through their normal live backend.
     fn register_replay_target(
@@ -726,6 +728,9 @@ impl<'a, D: ToolDispatcher> AxnRunner<'a, D> {
             .filter(|(_, secret)| *secret)
             .map(|(value, _)| value.clone())
             .collect();
+        self.dispatcher.set_observation_redaction_context(
+            crate::ObservationRedactionContext::from_active_secrets(active_secrets.clone()),
+        );
         let dry_run = options
             .dry_run
             .unwrap_or_else(|| document_flag(doc, "dryRun"));

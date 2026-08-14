@@ -649,7 +649,7 @@ impl PlatformBackend for MacBackend {
             ));
         }
         let (pid, _) = self.resolve(app)?;
-        window_capture::screenshot(pid)
+        window_capture::capture(pid)?.screenshot()
     }
     fn hit_test(&mut self, _: (f64, f64)) -> Result<Option<Node>, BackendError> {
         Err(cap(Capability::HitTest, "excluded from v1"))
@@ -669,20 +669,23 @@ impl VisualObservationProvider for MacBackend {
         &mut self,
         app: &AppQuery,
         screenshot: bool,
-        _screen_text: bool,
+        screen_text: bool,
     ) -> Result<VisualObservation, BackendError> {
+        let (pid, _) = self.resolve(app)?;
+        let captured = window_capture::capture(pid)?;
         Ok(VisualObservation {
-            screenshot: screenshot.then(|| self.screenshot(app)).transpose()?,
-            recognized_text: None,
+            screenshot: screenshot.then(|| captured.screenshot()).transpose()?,
+            recognized_text: screen_text.then(|| captured.recognize_text()).transpose()?,
         })
     }
 }
 impl axon_core::TextRecognitionProvider for MacBackend {
     fn recognize_text(
         &mut self,
-        _: &AppQuery,
+        app: &AppQuery,
     ) -> Result<Vec<axon_core::RecognizedText>, BackendError> {
-        Err(cap(Capability::Screenshot, "screen text excluded from v1"))
+        let (pid, _) = self.resolve(app)?;
+        window_capture::capture(pid)?.recognize_text()
     }
 }
 impl PointerTargetVerifier for MacBackend {

@@ -1,13 +1,14 @@
 //! Linux AT-SPI backend and v1 JSON-RPC tool router.
 
 use axon_core::{
-    AppQuery, AxnRunner, Capability, DeliveryCandidate, DeliveryCapability, DeliveryOutcome,
-    DeliveryPolicy, DeliveryRefusal, DeliveryRefusalReason, DeliveryRung, DeliverySelection,
-    DiffPolicy, DispatchOutcome, ExpectedFact, ForegroundTarget, JsonRpcError, JsonRpcId,
-    JsonRpcRequest, JsonRpcResponse, KeyboardIntent, PlatformBackend, Resolution, RunEnvelope,
-    SemanticLookup, SemanticNameRegistry, SemanticSelection, Snapshot, SnapshotHandle,
-    ToolDispatcher, classify_semantic_diff, dispatch_in_foreground, goal_success, prepare_run,
-    select_delivery,
+    AppQuery, AxnRunner, Capability, Confidence, DeliveryCandidate, DeliveryCapability,
+    DeliveryOutcome, DeliveryPolicy, DeliveryRefusal, DeliveryRefusalReason, DeliveryRung,
+    DeliverySelection, DiffPolicy, DispatchOutcome, ExpectedFact, ForegroundTarget, JsonRpcError,
+    JsonRpcId, JsonRpcRequest, JsonRpcResponse, KeyboardIntent, PlatformBackend, RecognizedText,
+    Resolution, ResolutionStatus, RunEnvelope, Screenshot, SemanticLookup, SemanticNameRegistry,
+    SemanticSelection, Snapshot, SnapshotHandle, TextLocationResolver, TextLocationSource,
+    TextLocationTarget, ToolDispatcher, classify_semantic_diff, dispatch_in_foreground,
+    goal_success, prepare_run, select_delivery,
 };
 use serde_json::{Map, Value, json};
 use std::{
@@ -17,6 +18,8 @@ use std::{
 
 pub mod keys;
 pub mod lifecycle;
+#[cfg(target_os = "linux")]
+mod ocr;
 /// The measured table of which toolkits act on background, window-targeted input. Pure, and public
 /// so its entries can be read next to the fixtures they cite.
 pub mod pixel;
@@ -85,6 +88,12 @@ pub struct Router<B> {
     backend: B,
     snapshot: Option<Snapshot>,
     semantic_names: SemanticNameRegistry,
+    observation_redaction: axon_core::ObservationRedactionContext,
+}
+
+pub struct VisualObservation {
+    pub screenshot: Option<Screenshot>,
+    pub recognized_text: Vec<RecognizedText>,
 }
 
 fn application_enumeration<T: serde::Serialize>(apps: Vec<T>) -> Value {
@@ -135,6 +144,27 @@ pub trait PointerTargetVerifier: PlatformBackend {
 /// use it is platform-neutral and testable on any machine against a fake; the mechanism behind it
 /// is an X11 conversation with a live toolkit and is not.
 pub trait BackgroundPixelInput: PlatformBackend {
+    fn capture_visuals(
+        &mut self,
+        app: &AppQuery,
+        screenshot: bool,
+        screen_text: bool,
+    ) -> Result<VisualObservation, axon_core::BackendError> {
+        let image = (screenshot || screen_text)
+            .then(|| self.screenshot(app))
+            .transpose()?;
+        if screen_text {
+            return Err(axon_core::BackendError::Capability {
+                capability: Capability::Screenshot,
+                reason: "screen text recognition is unavailable on this backend".into(),
+                diagnostic: None,
+            });
+        }
+        Ok(VisualObservation {
+            screenshot: image,
+            recognized_text: Vec::new(),
+        })
+    }
     /// Resolves a delivery plan for one click at a point inside a resolved element. Pure
     /// inspection with no native side effect, because the planner may discard the result and
     /// refuse before anything is allowed to happen.
@@ -298,6 +328,7 @@ impl<B: PointerTargetVerifier + BackgroundPixelInput> Router<B> {
             backend,
             snapshot: None,
             semantic_names: SemanticNameRegistry::default(),
+            observation_redaction: Default::default(),
         }
     }
 
@@ -353,6 +384,13 @@ impl<B: PointerTargetVerifier + BackgroundPixelInput> Router<B> {
                 Ok(json!({"handle": handle, "resolution": resolution}))
             }
             "click" => {
+                if let Some(location) = params
+                    .get("target")
+                    .and_then(|target| target.get("location"))
+                    .or_else(|| params.get("location"))
+                {
+                    return self.click_text_location(location.clone(), policy);
+                }
                 // The target is resolved first, so an absent, malformed, or stale target is a
                 // JSON-RPC error. A refusal means the request was well formed and the target
                 // resolved, and the daemon declined to act; the two must not be confused.
@@ -490,6 +528,74 @@ impl<B: PointerTargetVerifier + BackgroundPixelInput> Router<B> {
             "run" => self.run_axn(params),
             _ => Err(rpc_error(-32601, format!("unknown method {method}"))),
         }
+    }
+
+    fn click_text_location(
+        &mut self,
+        value: Value,
+        policy: DeliveryPolicy,
+    ) -> Result<Value, JsonRpcError> {
+        let target: TextLocationTarget =
+            serde_json::from_value(value).map_err(|error| rpc_error(-32602, error.to_string()))?;
+        if target.app.is_empty() {
+            return Err(rpc_error(-32602, "location app must not be empty"));
+        }
+        let app = app_query_from_parts(Some(&target.app), None);
+        let snapshot = self.backend.capture(&app).map_err(backend_error)?;
+        let initial = TextLocationResolver::resolve(&target, &snapshot, &[]);
+        let resolution = if target.source == TextLocationSource::Screenshot
+            || (target.source == TextLocationSource::Auto
+                && initial.status == ResolutionStatus::Missing)
+        {
+            let visual = self
+                .backend
+                .capture_visuals(&app, false, true)
+                .map_err(backend_error)?;
+            TextLocationResolver::resolve(&target, &snapshot, &visual.recognized_text)
+        } else {
+            initial
+        };
+        let candidate = resolution.best.as_ref().ok_or_else(|| {
+            rpc_error(
+                -32001,
+                format!("text location resolution was {:?}", resolution.status),
+            )
+        })?;
+        if let Some(handle) = candidate.handle.clone() {
+            self.snapshot = Some(snapshot);
+            return self.dispatch_resolved_click(
+                handle,
+                Resolution {
+                    status: resolution.status,
+                    snapshot_id: resolution.snapshot_id.clone(),
+                    confidence: Confidence::High,
+                    best: None,
+                    candidates: Vec::new(),
+                },
+                policy,
+            );
+        }
+        let point = (candidate.point.x, candidate.point.y);
+        let identity = self
+            .backend
+            .resolve_application(&app)
+            .map_err(backend_error)?
+            .ok_or_else(|| {
+                rpc_error(-32003, "the recognized application is no longer available")
+            })?;
+        let ladder = self.global_input_ladder(
+            Capability::PointerInput,
+            "XTest pointer",
+            &PixelPlan::unavailable(
+                "OCR coordinates have no AT-SPI handle for target-bound background delivery",
+            ),
+        );
+        let Some(selected) = self.selected(&ladder, policy) else {
+            return Ok(self.refusal(&ladder, policy));
+        };
+        self.snapshot = Some(snapshot);
+        self.foreground_dispatch(ForegroundDispatch { policy, candidate: &selected, target: ForegroundTarget::Application(&identity), restores_pointer: true, verification: json!({"verified":false,"reason":"OCR click has no declared postcondition"}), resolution: None }, |backend| backend.pointer_click(point))
+            .map(|mut result| { if let Some(object)=result.as_object_mut(){object.insert("resolution".into(),json!(resolution));} result })
     }
 
     fn dispatch_resolved_click(
@@ -902,12 +1008,6 @@ impl<B: PointerTargetVerifier + BackgroundPixelInput> Router<B> {
                 "since change checks are unavailable on this backend",
             )),
             axon_core::LookMode::FullApp { app, child_depth } => {
-                if request.screen_text {
-                    return Err(rpc_error(
-                        -32602,
-                        "screenText is unavailable on this backend",
-                    ));
-                }
                 let snapshot = self
                     .backend
                     .capture_bounded(&app, axon_core::CaptureBounds { child_depth })
@@ -915,28 +1015,61 @@ impl<B: PointerTargetVerifier + BackgroundPixelInput> Router<B> {
                 let names = self.register_snapshot(&snapshot);
                 let rendered = axon_core::render_semantic_names(&snapshot, &names);
                 let mut value = axon_core::format_snapshot(&rendered, &request.display);
-                if axon_core::screenshot_requested(
+                let screenshot_requested = axon_core::screenshot_requested(
                     request.screenshot,
                     axon_core::LookObservationKind::FullApp,
-                ) {
+                );
+                if screenshot_requested || request.screen_text {
                     let object = if request.display.format == axon_core::LookFormat::Debug {
                         value.get_mut("observation").and_then(Value::as_object_mut)
                     } else {
                         value.as_object_mut()
                     }
                     .expect("observation object");
-                    match self.backend.screenshot(&app) {
-                        Ok(s) => {
-                            object.insert("screenshot".into(),json!({"mediaType":s.media_type,"base64Data":base64::Engine::encode(&base64::engine::general_purpose::STANDARD,&s.bytes),"width":s.width,"height":s.height}));
+                    match self.backend.capture_visuals(
+                        &app,
+                        screenshot_requested,
+                        request.screen_text,
+                    ) {
+                        Ok(visual) => {
+                            if let Some(s) = visual.screenshot {
+                                object.insert("screenshot".into(),json!({"mediaType":s.media_type,"base64Data":base64::Engine::encode(&base64::engine::general_purpose::STANDARD,&s.bytes),"width":s.width,"height":s.height}));
+                            }
+                            if request.screen_text {
+                                object.insert(
+                                    "screenText".into(),
+                                    axon_core::format_screen_text(
+                                        &visual.recognized_text,
+                                        request.display.frames,
+                                        &self.observation_redaction,
+                                    ),
+                                );
+                            }
                         }
                         Err(e) => {
-                            object.insert(
-                                "screenshotUnavailable".into(),
-                                serde_json::to_value(
-                                    axon_core::ScreenshotUnavailable::from_backend_error(e),
-                                )
-                                .map_err(internal_error)?,
-                            );
+                            if request.screen_text {
+                                let unavailable =
+                                    axon_core::ScreenshotUnavailable::from_backend_error(e);
+                                if screenshot_requested {
+                                    object.insert(
+                                        "screenshotUnavailable".into(),
+                                        serde_json::to_value(&unavailable)
+                                            .map_err(internal_error)?,
+                                    );
+                                }
+                                object.insert(
+                                    "screenTextUnavailable".into(),
+                                    serde_json::to_value(unavailable).map_err(internal_error)?,
+                                );
+                            } else {
+                                object.insert(
+                                    "screenshotUnavailable".into(),
+                                    serde_json::to_value(
+                                        axon_core::ScreenshotUnavailable::from_backend_error(e),
+                                    )
+                                    .map_err(internal_error)?,
+                                );
+                            }
                         }
                     }
                 }
@@ -1260,6 +1393,13 @@ impl<B: PointerTargetVerifier + BackgroundPixelInput> Router<B> {
 }
 
 impl<B: PointerTargetVerifier + BackgroundPixelInput> ToolDispatcher for Router<B> {
+    fn set_observation_redaction_context(
+        &mut self,
+        context: axon_core::ObservationRedactionContext,
+    ) {
+        self.observation_redaction = context;
+    }
+
     fn register_replay_target(
         &mut self,
         app: &str,
@@ -1407,7 +1547,13 @@ fn bounded_ms(
 }
 
 fn app_query(params: &Map<String, Value>) -> AppQuery {
-    let app = params.get("app").and_then(Value::as_str);
+    app_query_from_parts(
+        params.get("app").and_then(Value::as_str),
+        params.get("identifier").and_then(Value::as_str),
+    )
+}
+
+fn app_query_from_parts(app: Option<&str>, identifier: Option<&str>) -> AppQuery {
     let process_id = app.and_then(|value| value.strip_prefix("pid:").unwrap_or(value).parse().ok());
     AppQuery {
         process_id,
@@ -1415,10 +1561,7 @@ fn app_query(params: &Map<String, Value>) -> AppQuery {
             .is_none()
             .then(|| app.map(str::to_owned))
             .flatten(),
-        identifier: params
-            .get("identifier")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
+        identifier: identifier.map(str::to_owned),
     }
 }
 /// `keyboard` carries exactly one intent. Neither is an empty request and both at once is an
@@ -1516,6 +1659,26 @@ mod tests {
                 name: None,
                 identifier: None,
             }]
+        );
+    }
+
+    #[test]
+    fn text_location_and_look_share_bare_pid_parsing() {
+        assert_eq!(
+            app_query_from_parts(Some("12336"), None),
+            AppQuery {
+                process_id: Some(12336),
+                name: None,
+                identifier: None,
+            }
+        );
+        assert_eq!(
+            app_query_from_parts(Some("App"), None),
+            AppQuery {
+                process_id: None,
+                name: Some("App".into()),
+                identifier: None,
+            }
         );
     }
 
@@ -2095,6 +2258,45 @@ mod tests {
         assert!(success.result.get("screenshotUnavailable").is_none());
         assert!(success.result.get("screenshot").is_none());
     }
+
+    #[test]
+    fn look_preserves_semantics_when_screen_text_is_unavailable() {
+        let mut router = Router::new(backend(vec![node("semantic child")], None));
+        let response = router
+            .request(request(
+                "look",
+                json!({"app":"App","screenshot":false,"screenText":true}),
+            ))
+            .unwrap();
+        let JsonRpcResponse::Success(success) = response else {
+            panic!()
+        };
+        assert!(success.result.to_string().contains("semantic child"));
+        assert_eq!(
+            success.result["screenTextUnavailable"]["code"],
+            "portal-authorization-required"
+        );
+        assert!(success.result.get("screenText").is_none());
+    }
+
+    #[test]
+    fn combined_visual_failure_reports_both_missing_outputs() {
+        let mut router = Router::new(backend(vec![node("semantic child")], None));
+        let response = router
+            .request(request(
+                "look",
+                json!({"app":"App","screenshot":true,"screenText":true}),
+            ))
+            .unwrap();
+        let JsonRpcResponse::Success(success) = response else {
+            panic!()
+        };
+        assert!(success.result.get("screenshot").is_none());
+        assert!(success.result.get("screenText").is_none());
+        assert!(success.result.get("screenshotUnavailable").is_some());
+        assert!(success.result.get("screenTextUnavailable").is_some());
+    }
+
     #[test]
     fn unimplemented_tools_have_structured_errors_before_backend_dispatch() {
         // These are not delivery decisions: the Linux daemon has no code path for them at all, so

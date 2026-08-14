@@ -27,9 +27,11 @@
 #![cfg(target_os = "linux")]
 
 use atspi::{ObjectRef, ObjectRefOwned};
-use axon_core::{AppQuery, Node, PlatformBackend, Snapshot, reason};
+use axon_core::{
+    AppQuery, JsonRpcId, JsonRpcRequest, JsonRpcResponse, Node, PlatformBackend, Snapshot, reason,
+};
 use axon_linux::lifecycle::{SessionEnvironment, daemon_report};
-use axon_linux::{ACTIVATION_TIMEOUT, CHILD_NOT_PUBLISHED, LinuxBackend};
+use axon_linux::{ACTIVATION_TIMEOUT, CHILD_NOT_PUBLISHED, LinuxBackend, Router};
 use std::{
     collections::HashMap,
     io::{BufRead, BufReader},
@@ -38,8 +40,22 @@ use std::{
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, AtomicUsize, Ordering},
+        mpsc,
     },
+    thread,
     time::{Duration, Instant},
+};
+use x11rb::{
+    COPY_DEPTH_FROM_PARENT, COPY_FROM_PARENT,
+    connection::Connection,
+    protocol::{
+        Event,
+        xproto::{
+            AtomEnum, ChangeWindowAttributesAux, ConnectionExt as _, CreateGCAux, CreateWindowAux,
+            EventMask, PropMode, Rectangle, WindowClass,
+        },
+    },
+    wrapper::ConnectionExt as _,
 };
 use zbus::{connection, interface, names::UniqueName, zvariant::ObjectPath};
 
@@ -79,6 +95,8 @@ const INNER_RUN: &str = "AXON_ATSPI_HERMETIC_BUS";
 /// matching nothing is a passing libtest run.
 const ACTIVATION: &str = "a_withholding_provider_is_woken_at_its_root_waited_for_and_asked_once";
 const ACCESSIBILITY: &str = "a_session_that_switches_accessibility_off_reports_it_in_health";
+const OCR: &str = "look_ocr_coordinates_and_screenshot_text_click_cross_the_real_linux_route";
+const NO_OCR: &str = "missing_tesseract_preserves_semantics_and_reports_remediation";
 
 const WINDOW_NAME: &str = "Withholding Window";
 const INNER_NAME: &str = "Tool Bar";
@@ -207,6 +225,335 @@ fn a_withholding_provider_is_woken_at_its_root_waited_for_and_asked_once() {
     leave_proof_of_the_inner_run();
 }
 
+/// A deterministic X11 top-level which is simultaneously the OCR image, the EWMH process bridge,
+/// and the observable recipient of the foreground click.
+struct OcrWindow {
+    clicked: mpsc::Receiver<(i16, i16)>,
+    stop: mpsc::Sender<()>,
+    thread: Option<thread::JoinHandle<()>>,
+}
+
+impl OcrWindow {
+    const X: i16 = 211;
+    const Y: i16 = 173;
+    const WIDTH: i16 = 520;
+    const HEIGHT: i16 = 240;
+
+    fn start() -> Self {
+        let (stop, stopped) = mpsc::channel();
+        let (click, clicked) = mpsc::channel();
+        let (ready, waiting) = mpsc::channel();
+        let thread = thread::spawn(move || run_ocr_window(stopped, click, ready));
+        waiting
+            .recv_timeout(PROMPTLY)
+            .expect("the X11 window starts")
+            .expect("the X11 fixture initializes");
+        Self {
+            clicked,
+            stop,
+            thread: Some(thread),
+        }
+    }
+}
+
+impl Drop for OcrWindow {
+    fn drop(&mut self) {
+        let _ = self.stop.send(());
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+    }
+}
+
+fn run_ocr_window(
+    stopped: mpsc::Receiver<()>,
+    clicked: mpsc::Sender<(i16, i16)>,
+    ready: mpsc::Sender<Result<(), String>>,
+) {
+    let started = (|| -> Result<_, String> {
+        let (connection, screen) = x11rb::connect(None).map_err(|error| error.to_string())?;
+        let setup = &connection.setup().roots[screen];
+        let root = setup.root;
+        let atom = |name: &str| {
+            connection
+                .intern_atom(false, name.as_bytes())
+                .map_err(|error| error.to_string())?
+                .reply()
+                .map(|reply| reply.atom)
+                .map_err(|error| error.to_string())
+        };
+        let supported = atom("_NET_SUPPORTED")?;
+        let active = atom("_NET_ACTIVE_WINDOW")?;
+        let clients = atom("_NET_CLIENT_LIST")?;
+        let pid = atom("_NET_WM_PID")?;
+        connection
+            .change_window_attributes(
+                root,
+                &ChangeWindowAttributesAux::new()
+                    .event_mask(EventMask::SUBSTRUCTURE_REDIRECT | EventMask::SUBSTRUCTURE_NOTIFY),
+            )
+            .map_err(|error| error.to_string())?
+            .check()
+            .map_err(|_| "another window manager already owns this X server".to_string())?;
+        let window = connection
+            .generate_id()
+            .map_err(|error| error.to_string())?;
+        connection
+            .create_window(
+                COPY_DEPTH_FROM_PARENT,
+                window,
+                root,
+                OcrWindow::X,
+                OcrWindow::Y,
+                OcrWindow::WIDTH as u16,
+                OcrWindow::HEIGHT as u16,
+                0,
+                WindowClass::INPUT_OUTPUT,
+                COPY_FROM_PARENT,
+                &CreateWindowAux::new()
+                    .background_pixel(setup.white_pixel)
+                    .event_mask(EventMask::BUTTON_PRESS | EventMask::BUTTON_RELEASE),
+            )
+            .map_err(|error| error.to_string())?;
+        connection
+            .change_property32(
+                PropMode::REPLACE,
+                window,
+                pid,
+                AtomEnum::CARDINAL,
+                &[std::process::id()],
+            )
+            .map_err(|error| error.to_string())?;
+        let publish = |property, kind, values: &[u32]| -> Result<(), String> {
+            connection
+                .change_property32(PropMode::REPLACE, root, property, kind, values)
+                .map_err(|error| error.to_string())?;
+            Ok(())
+        };
+        publish(supported, AtomEnum::ATOM, &[active, clients, pid])?;
+        publish(clients, AtomEnum::WINDOW, &[window])?;
+        publish(active, AtomEnum::WINDOW, &[window])?;
+        connection
+            .map_window(window)
+            .map_err(|error| error.to_string())?;
+
+        let gc = connection
+            .generate_id()
+            .map_err(|error| error.to_string())?;
+        connection
+            .create_gc(
+                gc,
+                window,
+                &CreateGCAux::new()
+                    .foreground(setup.black_pixel)
+                    .background(setup.white_pixel),
+            )
+            .map_err(|error| error.to_string())?;
+        let glyph = |character| match character {
+            'A' => [
+                0b01110, 0b10001, 0b10001, 0b11111, 0b10001, 0b10001, 0b10001,
+            ],
+            'X' => [
+                0b10001, 0b10001, 0b01010, 0b00100, 0b01010, 0b10001, 0b10001,
+            ],
+            'O' => [
+                0b01110, 0b10001, 0b10001, 0b10001, 0b10001, 0b10001, 0b01110,
+            ],
+            'N' => [
+                0b10001, 0b11001, 0b10101, 0b10011, 0b10001, 0b10001, 0b10001,
+            ],
+            'C' => [
+                0b01110, 0b10001, 0b10000, 0b10000, 0b10000, 0b10001, 0b01110,
+            ],
+            'L' => [
+                0b10000, 0b10000, 0b10000, 0b10000, 0b10000, 0b10000, 0b11111,
+            ],
+            'I' => [
+                0b11111, 0b00100, 0b00100, 0b00100, 0b00100, 0b00100, 0b11111,
+            ],
+            'K' => [
+                0b10001, 0b10010, 0b10100, 0b11000, 0b10100, 0b10010, 0b10001,
+            ],
+            _ => [0; 7],
+        };
+        let scale = 7i16;
+        let mut rectangles = Vec::new();
+        for (index, character) in "AXON CLICK".chars().enumerate() {
+            for (row, bits) in glyph(character).into_iter().enumerate() {
+                for column in 0..5 {
+                    if bits & (1 << (4 - column)) != 0 {
+                        rectangles.push(Rectangle {
+                            x: 45 + index as i16 * 6 * scale + column * scale,
+                            y: 85 + row as i16 * scale,
+                            width: scale as u16,
+                            height: scale as u16,
+                        });
+                    }
+                }
+            }
+        }
+        connection
+            .poly_fill_rectangle(window, gc, &rectangles)
+            .map_err(|error| error.to_string())?;
+        connection.flush().map_err(|error| error.to_string())?;
+        connection.sync().map_err(|error| error.to_string())?;
+        Ok((connection, root, window, [supported, active, clients]))
+    })();
+    let Ok((connection, root, window, properties)) = started else {
+        let _ = ready.send(started.map(|_| ()));
+        return;
+    };
+    let _ = ready.send(Ok(()));
+    while stopped.try_recv().is_err() {
+        match connection.poll_for_event() {
+            Ok(Some(Event::ClientMessage(message))) if message.type_ == properties[1] => {
+                let _ = connection.change_property32(
+                    PropMode::REPLACE,
+                    root,
+                    properties[1],
+                    AtomEnum::WINDOW,
+                    &[message.window],
+                );
+                let _ = connection.flush();
+            }
+            Ok(Some(Event::ButtonPress(event))) => {
+                let _ = clicked.send((event.root_x, event.root_y));
+            }
+            Ok(Some(_)) | Ok(None) => thread::sleep(Duration::from_millis(5)),
+            Err(_) => break,
+        }
+    }
+    for property in properties {
+        let _ = connection.delete_property(root, property);
+    }
+    let _ = connection.destroy_window(window);
+    let _ = connection.flush();
+    let _ = connection.sync();
+}
+
+#[test]
+#[ignore = "requires dbus-daemon, Xvfb, and Tesseract; run in the hermetic Linux lane"]
+fn look_ocr_coordinates_and_screenshot_text_click_cross_the_real_linux_route() {
+    if std::env::var_os(INNER_RUN).is_none() {
+        return supervise_an_inner_run(OCR);
+    }
+
+    let _desktop = Desktop::start();
+    let window = OcrWindow::start();
+    let mut router = Router::new(
+        LinuxBackend::start().expect("the backend reaches both halves of the fake desktop"),
+    );
+    let looked = success(router.request(JsonRpcRequest::new(
+        Some(JsonRpcId::Integer(1)),
+        "look",
+        Some(serde_json::json!({
+            "app": WAKES,
+            "screenText": true,
+            "screenshot": false,
+            "frames": true
+        })),
+    )));
+    assert!(
+        looked.get("screenshot").is_none(),
+        "OCR-only look must not return PNG bytes"
+    );
+    let recognized = looked["screenText"]
+        .as_array()
+        .expect("screenText is the shared array")
+        .iter()
+        .find(|item| {
+            item["text"]
+                .as_str()
+                .is_some_and(|text| text.contains("CLICK"))
+        })
+        .unwrap_or_else(|| panic!("Tesseract recognizes the deterministic label: {looked:#}"));
+    let recognized_text = recognized["text"]
+        .as_str()
+        .expect("recognized text is a string")
+        .to_owned();
+    let frame = &recognized["frame"];
+    let (x, y, width, height) = (
+        frame["x"].as_f64().unwrap(),
+        frame["y"].as_f64().unwrap(),
+        frame["width"].as_f64().unwrap(),
+        frame["height"].as_f64().unwrap(),
+    );
+    assert!(
+        x >= f64::from(OcrWindow::X) && y >= f64::from(OcrWindow::Y),
+        "OCR coordinates are absolute screen coordinates, not window-relative: {frame}"
+    );
+    assert!(
+        x + width <= f64::from(OcrWindow::X + OcrWindow::WIDTH)
+            && y + height <= f64::from(OcrWindow::Y + OcrWindow::HEIGHT),
+        "the absolute frame remains inside the captured top-level window: {frame}"
+    );
+
+    let clicked = success(router.request(JsonRpcRequest::new(
+        Some(JsonRpcId::Integer(2)),
+        "click",
+        Some(serde_json::json!({
+            "target": {"location": {"app": WAKES, "text": recognized_text, "source": "screenshot"}},
+            "deliveryPolicy": "foregroundPermitted"
+        })),
+    )));
+    assert_eq!(clicked["resolution"]["best"]["source"], "screenshot");
+    let event = window
+        .clicked
+        .recv_timeout(PROMPTLY)
+        .expect("the existing Linux foreground XTest path delivers the OCR click");
+    let expected = (
+        (x + width / 2.0).round() as i16,
+        (y + height / 2.0).round() as i16,
+    );
+    assert_eq!(
+        event, expected,
+        "the click effect lands at the center of the absolute frame returned by look"
+    );
+    leave_proof_of_the_inner_run();
+}
+
+#[test]
+#[ignore = "requires dbus-daemon and Xvfb; run in the hermetic Linux lane"]
+fn missing_tesseract_preserves_semantics_and_reports_remediation() {
+    if std::env::var_os(INNER_RUN).is_none() {
+        return supervise_an_inner_run(NO_OCR);
+    }
+    let _desktop = Desktop::start();
+    let _window = OcrWindow::start();
+    let mut router =
+        Router::new(LinuxBackend::start().expect("the semantic daemon remains healthy"));
+    let looked = success(router.request(JsonRpcRequest::new(
+        Some(JsonRpcId::Integer(1)),
+        "look",
+        Some(serde_json::json!({
+            "app": WAKES,
+            "screenText": true,
+            "screenshot": false,
+            "frames": true
+        })),
+    )));
+    assert!(
+        looked.to_string().contains(WINDOW_NAME),
+        "the semantic observation survives an unavailable OCR engine: {looked:#}"
+    );
+    assert!(looked.get("screenText").is_none());
+    let unavailable = &looked["screenTextUnavailable"];
+    assert_eq!(unavailable["code"], "capture-failed");
+    let explanation = unavailable.to_string();
+    assert!(
+        explanation.contains("tesseract") && explanation.contains("install Tesseract OCR"),
+        "the explicit remediation names the missing executable and how to restore OCR: {unavailable}"
+    );
+    leave_proof_of_the_inner_run();
+}
+
+fn success(response: Option<JsonRpcResponse>) -> serde_json::Value {
+    let JsonRpcResponse::Success(success) = response.expect("the router answers") else {
+        panic!("the request succeeds")
+    };
+    success.result
+}
+
 /// The session gate, from the bus it lives on to the document that publishes it.
 ///
 /// `org.a11y.Status.IsEnabled` is a property of the running session, not a fact about this build,
@@ -298,12 +645,15 @@ fn leave_proof_of_the_inner_run() {
 fn supervise_an_inner_run(test: &str) {
     let bus = SessionBus::start();
     let ran = bus.directory.join("inner-run-completed");
-    let status = Command::new(std::env::current_exe().expect("this test binary's own path"))
+    let mut command = Command::new(std::env::current_exe().expect("this test binary's own path"));
+    command
         .args([test, "--exact", "--ignored", "--nocapture"])
         .env(INNER_RUN, &ran)
-        .env("DBUS_SESSION_BUS_ADDRESS", &bus.address)
-        .status()
-        .expect("this test binary re-executes");
+        .env("DBUS_SESSION_BUS_ADDRESS", &bus.address);
+    if test == NO_OCR {
+        command.env("PATH", bus.directory.join("no-executables"));
+    }
+    let status = command.status().expect("this test binary re-executes");
     assert!(
         status.success(),
         "the run against the private bus failed; its output is above"

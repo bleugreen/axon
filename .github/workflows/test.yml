@@ -248,7 +248,7 @@ jobs:
       - name: Install AT-SPI build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libdbus-1-dev pkg-config xvfb x11-utils dbus
+          sudo apt-get install -y libdbus-1-dev pkg-config xvfb x11-utils dbus tesseract-ocr tesseract-ocr-eng
 
       # The lifecycle, session classification, status assembly, keysym translation, and the whole
       # router are pure and run headlessly. Only the systemd and socket calls need a real desktop.
@@ -261,9 +261,9 @@ jobs:
       # is reading the answer back, so it needs a real X server. Chromium-family activation is an
       # attributes call that crosses D-Bus and is answered late, so it needs a real bus. Each test
       # brings its own miniature server -- an EWMH window manager, an AT-SPI provider built to
-      # withhold like Chromium -- so a bare Xvfb and dbus-daemon are the entire requirement: no
-      # desktop, no toolkit, nothing to vary between runs. `--ignored` sweeps both, and whatever
-      # hermetic test is written next.
+      # withhold like Chromium -- so a bare Xvfb and dbus-daemon are the entire requirement for
+      # those paths. OCR additionally renders a fixed X11 label and crosses production Tesseract
+      # plus foreground click. `--ignored` sweeps every hermetic desktop test together.
       #
       # This runs for pull requests, unlike the live lane. It has to: the project's only real Linux
       # desktop is a GNOME Wayland session, which is the worst possible place to verify X11
@@ -282,7 +282,7 @@ jobs:
             sleep 0.1
           done
           xdpyinfo -display :99 >/dev/null
-          cargo test -p axon-linux -- --ignored
+          cargo test -p axon-linux -- --ignored --test-threads=1
 
       - name: Build axon-linux in release mode
         working-directory: rust

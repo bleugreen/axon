@@ -68,6 +68,7 @@ pub struct Router<B> {
     backend: B,
     snapshot: Option<Snapshot>,
     semantic_names: SemanticNameRegistry,
+    observation_redaction: axon_core::ObservationRedactionContext,
 }
 fn capability_unavailable(tool: &str, capability: &str, reason: &str) -> JsonRpcError {
     JsonRpcError {
@@ -325,6 +326,7 @@ impl<
             backend,
             snapshot: None,
             semantic_names: SemanticNameRegistry::default(),
+            observation_redaction: Default::default(),
         }
     }
 
@@ -347,11 +349,7 @@ impl<
         if target.app.is_empty() {
             return Err(rpc_error(-32602, "location app must not be empty"));
         }
-        let app = AppQuery {
-            process_id: None,
-            name: Some(target.app.clone()),
-            identifier: None,
-        };
+        let app = app_query_from_parts(Some(&target.app), None);
         let snapshot = self.backend.capture(&app).map_err(backend_error)?;
         let initial = TextLocationResolver::resolve(&target, &snapshot, &[]);
         let resolution = if target.source == TextLocationSource::Screenshot
@@ -1003,7 +1001,14 @@ impl<
                     }));
                 }
                 if let Some(text) = visuals.and_then(|v| v.recognized_text) {
-                    object.insert("screenText".into(), json!(text));
+                    object.insert(
+                        "screenText".into(),
+                        axon_core::format_screen_text(
+                            &text,
+                            request.display.frames,
+                            &self.observation_redaction,
+                        ),
+                    );
                 }
                 if let Some(unavailable) = screenshot_unavailable {
                     object.insert(
@@ -1307,6 +1312,13 @@ impl<
         + WindowsScrollProvider,
 > ToolDispatcher for Router<B>
 {
+    fn set_observation_redaction_context(
+        &mut self,
+        context: axon_core::ObservationRedactionContext,
+    ) {
+        self.observation_redaction = context;
+    }
+
     fn register_replay_target(
         &mut self,
         app: &str,
@@ -1454,7 +1466,13 @@ fn bounded_ms(
 }
 
 fn app_query(params: &Map<String, Value>) -> AppQuery {
-    let app = params.get("app").and_then(Value::as_str);
+    app_query_from_parts(
+        params.get("app").and_then(Value::as_str),
+        params.get("identifier").and_then(Value::as_str),
+    )
+}
+
+fn app_query_from_parts(app: Option<&str>, identifier: Option<&str>) -> AppQuery {
     let process_id = app.and_then(|value| value.strip_prefix("pid:").unwrap_or(value).parse().ok());
     AppQuery {
         process_id,
@@ -1462,10 +1480,7 @@ fn app_query(params: &Map<String, Value>) -> AppQuery {
             .is_none()
             .then(|| app.map(str::to_owned))
             .flatten(),
-        identifier: params
-            .get("identifier")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
+        identifier: identifier.map(str::to_owned),
     }
 }
 /// `keyboard` carries exactly one intent. Neither is an empty request and both at once is an
@@ -2405,8 +2420,38 @@ mod tests {
         assert_eq!(screenshot["width"], 640);
         assert_eq!(screenshot["height"], 480);
         assert_eq!(success.result["screenText"][0]["text"], "Save");
+        assert!(success.result["screenText"][0].get("frame").is_none());
         assert_eq!(*captures.borrow(), 1);
     }
+
+    #[test]
+    fn look_screen_text_includes_frames_only_when_requested() {
+        let mut backend = backend(vec![], None);
+        backend.recognized = vec![recognized("Save", 100.0)];
+        let captures = backend.visual_captures.clone();
+        let mut router = Router::new(backend);
+        let response = router
+            .request(request(
+                "look",
+                json!({
+                    "app":"App",
+                    "screenshot":false,
+                    "screenText":true,
+                    "frames":true
+                }),
+            ))
+            .unwrap();
+        let JsonRpcResponse::Success(success) = response else {
+            panic!()
+        };
+        assert!(success.result.get("screenshot").is_none());
+        assert_eq!(
+            success.result["screenText"][0]["frame"],
+            json!({"x":100.0,"y":10.0,"width":40.0,"height":20.0})
+        );
+        assert_eq!(*captures.borrow(), 1);
+    }
+
     #[test]
     fn ambiguous_text_location_fails_closed() {
         let mut router = Router::new(backend(vec![node("Save"), node("Save")], None));
@@ -2434,6 +2479,23 @@ mod tests {
         assert!(matches!(response, JsonRpcResponse::Success(_)));
         assert_eq!(*calls.borrow(), 0);
     }
+    #[test]
+    fn text_location_uses_the_canonical_bare_pid_app_query() {
+        let backend = backend(vec![node("Save")], None);
+        let queries = backend.capture_queries.clone();
+        let mut router = Router::new(backend);
+        let response = router
+            .request(request(
+                "click",
+                json!({"target":{"location":{"app":"12336","text":"save","source":"auto"}}, "deliveryPolicy":"foregroundPermitted"}),
+            ))
+            .unwrap();
+
+        assert!(matches!(response, JsonRpcResponse::Success(_)));
+        assert_eq!(queries.borrow()[0].process_id, Some(12336));
+        assert_eq!(queries.borrow()[0].name, None);
+    }
+
     #[test]
     fn forced_screenshot_uses_ocr_even_when_uia_matches() {
         let mut backend = backend(vec![node("Save")], None);

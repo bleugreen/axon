@@ -1,7 +1,7 @@
 use crate::lifecycle::ACCESSIBILITY_DISABLED;
 use crate::{
     BackgroundPixelInput, PixelAim, PixelDispatch, PixelDispatchError, PixelPlan, PixelTarget,
-    PointerTargetVerifier,
+    PointerTargetVerifier, VisualObservation,
     pixel::{self, PixelAction},
     x11::{X11Session, coordinate},
 };
@@ -861,6 +861,46 @@ fn observe(session: &X11Session) -> Result<SessionState, BackendError> {
 }
 
 impl BackgroundPixelInput for LinuxBackend {
+    fn capture_visuals(
+        &mut self,
+        app: &AppQuery,
+        screenshot: bool,
+        screen_text: bool,
+    ) -> Result<VisualObservation, BackendError> {
+        if let InputSession::Unavailable(reason) = &self.screenshot {
+            return Err(capability(Capability::Screenshot, reason));
+        }
+        let identity = self
+            .ask(|r| Command::Identity(app.clone(), r))?
+            .ok_or_else(|| operation("capture X11 window", "no AT-SPI application matched"))?;
+        let process_id = self
+            .lookup(|candidate| (candidate.identity == identity).then_some(candidate.process_id))?
+            .ok_or_else(|| {
+                operation(
+                    "capture X11 window",
+                    "the matched application has no process id",
+                )
+            })?;
+        let captured = match &self.screenshot {
+            InputSession::Available(session) => session.screenshot_for_pid(process_id)?,
+            InputSession::Unavailable(reason) => {
+                return Err(capability(Capability::Screenshot, reason));
+            }
+        };
+        let recognized_text = if screen_text {
+            crate::ocr::recognize_png(
+                &captured.bytes,
+                (captured.width, captured.height),
+                captured.frame,
+            )?
+        } else {
+            Vec::new()
+        };
+        Ok(VisualObservation {
+            screenshot: screenshot.then_some(captured),
+            recognized_text,
+        })
+    }
     fn plan_pixel_click(
         &mut self,
         application: &str,

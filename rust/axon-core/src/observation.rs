@@ -1,5 +1,5 @@
 use crate::{
-    AppQuery, BackendError, DiffClassification, SemanticDiff, Snapshot, SnapshotId,
+    AppQuery, BackendError, DiffClassification, RecognizedText, SemanticDiff, Snapshot, SnapshotId,
     WireElementTarget,
 };
 use serde::{Deserialize, Deserializer, Serialize};
@@ -9,6 +9,86 @@ use serde_json::{Map, Value};
 pub const OBSERVATION_SCREENSHOT_MAX_DIMENSION: u32 = 1280;
 pub const OBSERVATION_SCREENSHOT_QUALITY: &str = "lossless";
 pub const OBSERVATION_SCREENSHOT_MEDIA_TYPE: &str = "image/png";
+
+pub const OBSERVATION_SCREEN_TEXT_MAX_ITEMS: usize = 100;
+
+/// Formats platform OCR results for the public observation contract.
+///
+/// Geometry remains on RecognizedText for text-location resolution even when frames is false;
+/// this boundary alone controls whether frames appear on the wire.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ObservationRedactionContext {
+    active_secrets: Vec<String>,
+}
+
+impl ObservationRedactionContext {
+    pub fn from_active_secrets(secrets: impl IntoIterator<Item = String>) -> Self {
+        Self {
+            active_secrets: secrets
+                .into_iter()
+                .filter(|value| !value.is_empty())
+                .collect(),
+        }
+    }
+
+    fn redacts(&self, value: &str) -> bool {
+        !value.is_empty() && self.active_secrets.iter().any(|secret| secret == value)
+    }
+}
+
+pub fn format_screen_text(
+    recognized: &[RecognizedText],
+    frames: bool,
+    redaction: &ObservationRedactionContext,
+) -> Value {
+    let mut items: Vec<&RecognizedText> = recognized
+        .iter()
+        .filter(|item| {
+            !item.text.is_empty()
+                && item.frame.x.is_finite()
+                && item.frame.y.is_finite()
+                && item.frame.width.is_finite()
+                && item.frame.height.is_finite()
+                && item.frame.width > 0.0
+                && item.frame.height > 0.0
+        })
+        .collect();
+    items.sort_by(|left, right| {
+        left.frame
+            .y
+            .total_cmp(&right.frame.y)
+            .then_with(|| left.frame.x.total_cmp(&right.frame.x))
+    });
+
+    Value::Array(
+        items
+            .into_iter()
+            .take(OBSERVATION_SCREEN_TEXT_MAX_ITEMS)
+            .map(|item| {
+                let mut object = Map::new();
+                if redaction.redacts(&item.text) {
+                    object.insert(
+                        "text".into(),
+                        Value::String("<redacted: active-credential>".into()),
+                    );
+                } else {
+                    object.insert("text".into(), Value::String(item.text.clone()));
+                }
+                if let Some(confidence) = item.confidence.filter(|value| value.is_finite()) {
+                    object.insert("confidence".into(), Value::from(confidence));
+                }
+                if frames {
+                    object.insert(
+                        "frame".into(),
+                        serde_json::to_value(item.frame)
+                            .expect("recognized text frame serialization cannot fail"),
+                    );
+                }
+                Value::Object(object)
+            })
+            .collect(),
+    )
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LookObservationKind {
