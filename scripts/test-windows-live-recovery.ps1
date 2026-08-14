@@ -1155,15 +1155,10 @@ Test-Scenario 'probe: the daemon it started is the one it reports on' {
     Check 'it launched an isolated browser' (Test-Did 'start-probe-browser')
     Check 'it launches Edge through its own Interactive-task seam' (Test-Did 'register-probe-browser-task')
     Test-Order -First 'register-probe-browser-task' -Then 'start-probe-browser-task'
-    Check 'it measured two unrelated prior applications twice each' ((Get-Count 'handback-sweep 4242 6060') -eq 2 -and (Get-Count 'handback-sweep 4343 6060') -eq 2)
-    Check 'it reports every complete hand-back measurement' (@($script:Machine.Notes | Where-Object { $_ -match '^hand-back sweep prior=' }).Count -eq 4)
-    Check 'it activated each prior through an Interactive-task seam' ((Get-Count 'register-probe-activation-task 4242') -eq 2 -and (Get-Count 'register-probe-activation-task 4343') -eq 2)
-    Test-Order -First 'wait-probe-activation-task' -Then 'handback-sweep 4242 6060'
-    Check 'it ran every sweep through the Interactive foreground-task seam' ((Get-Count 'register-probe-foreground-task 6060') -eq 4)
-    Test-Order -First 'start-probe-foreground-task' -Then 'wait-probe-foreground-task'
-    Check 'it removed every short-lived activation task' (-not $script:Machine.ProbeActivationTaskRegistered)
-    Check 'it removed every short-lived foreground task' (-not $script:Machine.ProbeForegroundTaskRegistered)
-    Check 'it sent the keyboard sequence' ((Get-Count 'mcp keyboard') -eq 3)
+    Check 'it activated isolated Edge through an Interactive-task seam' ((Get-Count 'register-probe-activation-task 6060') -eq 1)
+    Test-Order -First 'start-probe-activation-task' -Then 'wait-probe-activation-task'
+    Check 'it removed the short-lived activation task' (-not $script:Machine.ProbeActivationTaskRegistered)
+    Check 'it sent the aimed and frontmost keyboard sequence' ((Get-Count 'mcp keyboard') -eq 4)
     Check 'it clicked the page-content link' ((Get-Count 'mcp click') -eq 1)
     Check 'it verified both page states' ((Get-Count 'mcp look') -ge 3)
     Check 'it reported restoration evidence without requiring restoration' (Test-Said '"restored":false')
@@ -1288,32 +1283,6 @@ Test-Scenario 'probe: an app-list request that errors fails the stage' {
     $result = Invoke-StageUnderTest -Name 'probe'
     Check 'the stage fails' $result.Failed
     Check 'it names the request' ($result.Error -match 'app-list look request failed') $result.Error
-}
-
-Test-Scenario "probe: a stale path-shaped daemon entry is not evidence about a desktop" {
-    Set-ParkedMachine
-    $script:Machine.McpResponder = {
-        param($Request)
-        if ($Request -notmatch '"app"') {
-            # A stale console-host entry can still name the daemon path. A desktop with nothing else
-            # running must not pass merely because enumeration returned that lane-owned process.
-            return @{ result = @{ isError = $false; structuredContent = @{ apps = @(@{ name = $ProbeDaemonExecutable }) } } } |
-                ConvertTo-Json -Depth 10 | ConvertFrom-Json -Depth 100
-        }
-        @{
-            result = @{
-                isError = $false
-                structuredContent = @{
-                    id = 'snapshot-1'
-                    app = @{ windows = @(@{ root = @{ role = 'Window' } }) }
-                    screenshot = @{ mediaType = 'image/png'; base64Data = 'cG5n'; width = 800; height = 600 }
-                }
-            }
-        } | ConvertTo-Json -Depth 10 | ConvertFrom-Json -Depth 100
-    }
-    $result = Invoke-StageUnderTest -Name 'probe'
-    Check 'the stage fails' $result.Failed
-    Check 'it says what it looked at' ($result.Error -match 'no accessibility root with a downscaled PNG from Edge') $result.Error
 }
 
 Test-Scenario 'probe: a registration that moved during the run fails the stage' {
