@@ -46,6 +46,16 @@ public struct AppIdentity: Codable, Equatable, Sendable {
         self.name = name
         self.processIdentifier = processIdentifier
     }
+
+    /// How to name this application so a resolver finds the same process again.
+    ///
+    /// The bundle identifier when there is one, because it survives localization and renames; a
+    /// process without one is named by pid, which `AppResolver` accepts and which cannot be
+    /// confused with another running application. Deliberately not `name`, whose own fallback
+    /// (`"pid 42"`) does not parse back.
+    public var resolverQuery: String {
+        bundleIdentifier ?? "pid:\(processIdentifier)"
+    }
 }
 
 public struct EncodedScreenshot: Codable, Equatable, Sendable {
@@ -147,6 +157,26 @@ public struct AppSnapshot: Codable, Equatable, Sendable {
             append(window, to: &nodes)
         }
         return nodes
+    }
+
+    /// The frame of the window whose subtree contains this node, when that window states one.
+    ///
+    /// A point derived from a node's frame is only correct while that node's window is where it
+    /// was, so this is the provenance such a point carries.
+    public func windowFrame(containing nodeIndex: Int) -> AXFrame? {
+        var start = 0
+        for window in windows {
+            let size = Self.subtreeSize(of: window)
+            if nodeIndex >= start, nodeIndex < start + size {
+                return window.frame
+            }
+            start += size
+        }
+        return nil
+    }
+
+    private static func subtreeSize(of node: AXNode) -> Int {
+        1 + node.children.reduce(0) { $0 + subtreeSize(of: $1) }
     }
 
     public func handle(for nodeIndex: Int) -> SnapshotHandle? {
