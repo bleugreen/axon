@@ -264,9 +264,18 @@ public struct LaunchAgentManager {
     /// Clears the finisher job, which the successor calls once it is serving.
     ///
     /// Idempotent and harmless when nothing is registered: the scaffolding of an update is the
-    /// successor's to tidy, and a job that never ran leaves nothing behind to find.
-    public static func reapUpdateFinisher(fileManager: FileManager = .default) {
-        try? updateFinisher(cliPath: "/usr/bin/false", fileManager: fileManager).uninstall()
+    /// successor's to tidy, and a job that never ran leaves nothing behind to find. It takes no
+    /// program, because retiring a job needs only its label.
+    public static func reapUpdateFinisher(
+        plistPath: URL? = nil,
+        fileManager: FileManager = .default,
+        runProcess: ([String]) throws -> ProcessResult = LaunchAgentManager.runLaunchctl(arguments:)
+    ) {
+        let label = LaunchAgentConfiguration.updateFinisherLabel
+        _ = try? runProcess(["bootout", "\(launchctlDomain())/\(label)"])
+        let path = plistPath ?? URL(fileURLWithPath: NSHomeDirectory())
+            .appendingPathComponent("Library/LaunchAgents/\(label).plist")
+        try? fileManager.removeItem(at: path)
     }
 
     public func install() throws {
@@ -354,8 +363,12 @@ public struct LaunchAgentManager {
         return .present(mechanism: .launchd, path: executable)
     }
 
-    private func launchctlDomain() -> String {
+    static func launchctlDomain() -> String {
         "gui/\(getuid())"
+    }
+
+    private func launchctlDomain() -> String {
+        Self.launchctlDomain()
     }
 
     private func isMissingServiceOutput(_ output: String) -> Bool {
