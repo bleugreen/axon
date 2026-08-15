@@ -926,6 +926,7 @@ mod tests {
         assert_eq!(actor.state(), PortalState::AuthorizationRequired);
         assert!(
             actor
+                .0
                 .signal
                 .shared
                 .lock()
