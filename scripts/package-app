@@ -17,7 +17,11 @@ EDITOR_APP_NAME="Axon Editor"
 DAEMON_BUNDLE_ID="${AXON_BUNDLE_ID:-com.bleugreen.axon}"
 EDITOR_BUNDLE_ID="${AXON_EDITOR_BUNDLE_ID:-com.bleugreen.axon.editor}"
 DAEMON_APP_DIR="$DIST_DIR/$DAEMON_APP_NAME.app"
-EDITOR_APP_DIR="$DIST_DIR/$EDITOR_APP_NAME.app"
+# The editor ships nested inside the daemon bundle. One draggable app means a Finder replace on an
+# existing install, one bundle for the in-app updater to swap, and no way for the two halves to
+# reach different versions. The outer bundle keeps the identity every TCC grant is recorded
+# against, so nesting costs no permission.
+EDITOR_APP_DIR="$DAEMON_APP_DIR/Contents/Library/Applications/$EDITOR_APP_NAME.app"
 ICON_SOURCE="$ROOT/Assets/Axon.icns"
 MENU_BAR_ICON_SOURCE="$ROOT/Assets/AxonMenuBarTemplate.png"
 
@@ -27,7 +31,9 @@ cd "$ROOT"
 "$SWIFT" build -c release --product AxonDaemonApp
 "$SWIFT" build -c release --product AxonEditorApp
 
-rm -rf "$DAEMON_APP_DIR" "$EDITOR_APP_DIR"
+# The sibling editor path is where releases before the nesting change left a bundle. Clearing it
+# keeps a stale copy out of the archive and out of the release job's verification.
+rm -rf "$DAEMON_APP_DIR" "$DIST_DIR/$EDITOR_APP_NAME.app"
 
 write_daemon_info_plist() {
   local plist_path="$1"
@@ -166,6 +172,7 @@ copy_common_resources "$DAEMON_APP_DIR/Contents/Resources"
 write_daemon_info_plist "$DAEMON_APP_DIR/Contents/Info.plist"
 
 mkdir -p "$EDITOR_APP_DIR/Contents/MacOS" "$EDITOR_APP_DIR/Contents/Resources"
+
 cp "$ROOT/.build/release/AxonEditorApp" "$EDITOR_APP_DIR/Contents/MacOS/AxonEditor"
 chmod 755 "$EDITOR_APP_DIR/Contents/MacOS/AxonEditor"
 copy_common_resources "$EDITOR_APP_DIR/Contents/Resources"
@@ -185,11 +192,14 @@ if [[ "$SIGN_IDENTITY" != "-" ]]; then
   SIGN_ARGS+=(--timestamp)
 fi
 
+# Signed inside-out: every nested piece is sealed before the code that contains it, so the outer
+# signature covers final bytes. Signing the outer bundle before the nested editor would invalidate
+# it the moment the editor was signed.
 /usr/bin/codesign "${SIGN_ARGS[@]}" "$DAEMON_APP_DIR/Contents/Resources/bin/axon"
-/usr/bin/codesign "${SIGN_ARGS[@]}" "$DAEMON_APP_DIR/Contents/MacOS/Axon"
-/usr/bin/codesign "${SIGN_ARGS[@]}" "$DAEMON_APP_DIR"
 /usr/bin/codesign "${SIGN_ARGS[@]}" "$EDITOR_APP_DIR/Contents/MacOS/AxonEditor"
 /usr/bin/codesign "${SIGN_ARGS[@]}" "$EDITOR_APP_DIR"
+/usr/bin/codesign "${SIGN_ARGS[@]}" "$DAEMON_APP_DIR/Contents/MacOS/Axon"
+/usr/bin/codesign "${SIGN_ARGS[@]}" "$DAEMON_APP_DIR"
 
 # Named with the version and the target, matching the Rust archives, so a consumer pinning a
 # release can name every artifact it needs without guessing. The staging directory keeps the bare
