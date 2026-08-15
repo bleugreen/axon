@@ -1145,13 +1145,41 @@ ambiguous.
 ## macOS browser Automation attribution
 
 The Swift daemon sends Safari and Google Chrome events directly through
-`NSAppleScript.executeAndReturnError`; it does not launch `osascript`. Before each browser operation,
-`BrowserAutomation.swift` calls `AEDeterminePermissionToAutomateTarget` for that browser's bundle
-identifier, first without prompting and then, only for a not-yet-determined grant, with prompting
-enabled. The intended sender is `Axon.app/Contents/MacOS/Axon`, registered in launchd's `gui/<uid>`
-domain with `LimitLoadToSessionType=Aqua`; the daemon bundle also carries
-`NSAppleEventsUsageDescription`. The coordinated bglab-mac trial must still verify that this context
-presents the prompt and that macOS attributes and persists the grant as expected.
+`NSAppleScript.executeAndReturnError`; it does not launch `osascript`. Authorization is split by who
+is asking. Agent-facing verbs call `AEDeterminePermissionToAutomateTarget` with
+`askUserIfNeeded: false` and refuse on anything but `noErr`: the prompting call blocks its thread
+until a person dismisses the dialog, and browser verbs run synchronously on the socket-handling
+thread, so prompting from there would stall an agent's call indefinitely on a dialog nobody asked
+for. The prompting leg belongs to one deliberate gesture — the daemon menu's Browser Automation item,
+which requests consent off the main thread for each supported browser that is running. The intended
+sender is `Axon.app/Contents/MacOS/Axon`, registered in launchd's `gui/<uid>` domain with
+`LimitLoadToSessionType=Aqua`; the daemon bundle also carries `NSAppleEventsUsageDescription`.
+
+Every decision names the leg that produced it — `checked`, `prompted`, or `executed` — in the
+JSON-RPC error's `data.leg` and in one stderr line per decision, which the LaunchAgent routes to
+`~/Library/Logs/Axon/daemon.err.log`. A field report should be readable without a bench protocol.
+
+An Automation trial must restart the daemon after resetting a grant. macOS resolves an authorization
+inside the sending process once that process holds an answer for a sender/target pair, and `tccutil
+reset` rewrites the TCC database without reaching into a running process. The 2026-08-14 trial ran
+denial, reset, and retry against a daemon that never restarted (`launchctl print` reported `runs = 1`
+and a single `exec` throughout), so the retry could not have consulted tccd; the absence of any
+`kTCCServiceAppleEvents` request for Axon in that window is what an answer resolved inside the
+process looks like, not evidence of a suppressed prompt. The daemon therefore records, per process
+lifetime, whether it has already answered for a target — from either leg, since it was a silent-leg
+answer that got reused — and a repeat denial names a daemon restart as the remediation instead of
+pointing at System Settings.
+
+What remains unverified is whether the consent dialog appears at all for this launchd-started
+process. The menu-bar gesture is the discriminating test, on a machine whose daemon has restarted
+since the reset. If no dialog appears there, the next evidence is `launchctl procinfo <pid>` for the
+responsible-process attribution — the job is `trampolined`, started via `xpcproxy`, which is a
+platform binary — and the candidate fix is registering the bundle with `SMAppService.mainApp` so
+LaunchServices starts the app rather than launchd exec'ing the binary. If prompting proves
+impossible from this context, the honest answer is that browser Automation needs an MDM PPPC profile
+(`kTCCServiceAppleEvents` with `AEReceiverIdentifier` per browser) on managed Macs and is
+unavailable elsewhere, reported as a capability restriction rather than a permission the user can
+fix.
 
 Apple Events TCC evidence must be attributed by client bundle identifier, indirect target bundle
 identifier, and the code-signing requirement stored in the row. A path or PID alone is not identity.
