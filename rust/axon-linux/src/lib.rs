@@ -1908,6 +1908,11 @@ mod tests {
         /// prove the identity the router bound with, and that a refusal sent nothing.
         planned: Rc<RefCell<Vec<PlanRequest>>>,
         pixel_dispatches: Rc<RefCell<Vec<PixelTarget>>>,
+        /// What OCR finds on screen, in the same coordinate space as accessibility frames.
+        recognized_text: Rc<RefCell<Vec<RecognizedText>>>,
+        /// Where the target's window is *now*. `None` models an accessibility read that did not
+        /// answer, which is not the same as a window that does not cover the point.
+        window_rect: Rc<RefCell<Option<Rect>>>,
     }
     /// One planning request the router made: the application identity it bound against, and the
     /// element and point when the action had one.
@@ -1926,8 +1931,24 @@ mod tests {
             self.verified_handles.borrow_mut().push(handle.clone());
             Ok(self.pointer_target_matches)
         }
+
+        fn element_rect(&mut self, _: &SnapshotHandle) -> Result<Option<Rect>, BackendError> {
+            Ok(*self.window_rect.borrow())
+        }
     }
     impl BackgroundPixelInput for FakeBackend {
+        fn capture_visuals(
+            &mut self,
+            _: &AppQuery,
+            _: bool,
+            _: bool,
+        ) -> Result<VisualObservation, BackendError> {
+            Ok(VisualObservation {
+                screenshot: None,
+                recognized_text: self.recognized_text.borrow().clone(),
+            })
+        }
+
         fn plan_pixel_click(
             &mut self,
             application: &str,
@@ -2187,6 +2208,8 @@ mod tests {
                 input_focus_unchanged: true,
                 pointer_unchanged: true,
             }))),
+            recognized_text: Rc::new(RefCell::new(vec![])),
+            window_rect: Rc::new(RefCell::new(None)),
             planned: Rc::new(RefCell::new(vec![])),
             pixel_dispatches: Rc::new(RefCell::new(vec![])),
         }
