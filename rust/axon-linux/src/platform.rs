@@ -1865,11 +1865,11 @@ pub(crate) fn capability(capability: Capability, reason: &str) -> BackendError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use atspi::ObjectRef;
     use crate::{
         portal::{PackedFormat, PipeWireFrame, RestoreToken},
         screencast::{DriverError, ScreenCastDriver, StartedSession, StopController},
     };
+    use atspi::ObjectRef;
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     fn real(path: &'static str) -> ObjectRefOwned {
