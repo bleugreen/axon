@@ -237,6 +237,24 @@ location carries the owning process; a point carries one only when its `app` is
 named. A bare screen point cannot be bound to a window without guessing, so
 under `backgroundOnly` it is refused rather than delivered globally.
 
+A point Axon *derived* — from recognized text, or from a `window` or `screenshot`
+coordinate — carries more than an application: it also remembers the window frame
+its coordinates were computed against. That provenance is what lets delivery ask,
+immediately before dispatch, whether the coordinates still mean what they meant
+when they were computed. The question each rung asks is the one its mechanism
+makes relevant. The pixel rung posts to the process, which converts the screen
+point through its own window, so it requires the point to still fall inside one of
+that application's windows; occlusion cannot affect a targeted post and is not
+consulted. The foreground rung posts to the shared devices, where whatever the
+window server puts on top receives the event, so it requires the element at the
+point to belong to the target application, re-checked across the settle budget so
+a window still being raised is not mistaken for the wrong one. Either way a
+mismatch is refused with the measurement behind it — the resolved point, the frame
+the coordinates were computed against, and the target's window bounds now — rather
+than dispatched into whatever now occupies those coordinates. A window whose
+geometry cannot be read is not treated as evidence either way. A point the caller
+supplied has no provenance to check, and is unaffected.
+
 A refusal is an action result, not a transport error: the request was well
 formed and the target resolved, and the daemon declined. It carries a stable
 `reason`, the `requiredRung` it would have needed, the responsible `capability`,
@@ -272,7 +290,11 @@ one action. It hands the session back when the backend can prove doing so will n
 redirect pending input; pre-dispatch exits always restore. The result reports that
 evidence under `foreground`: prior app identity, whether the target was already
 frontmost, whether activation was proved, whether the prior app was restored, and
-whether the real pointer was put back. If activation cannot be proved, nothing is
+whether the real pointer was put back. `activationProved` is null when the action
+named no application: there was no target to raise, so nothing was activated and
+nothing was proved. That is a different statement from `false`, which means an
+activation was attempted and did not take, and from `true`, which means a target
+was observed frontmost. If activation cannot be proved, nothing is
 posted and the action refuses. Failed or deliberately withheld restoration is
 reported independently and does not erase dispatch or verification evidence.
 
@@ -295,7 +317,15 @@ coordinates may explicitly use `screen`, `window`, or `screenshot` coordinate
 spaces. `screen` and `window` coordinates are logical macOS points, the same units
 used by Accessibility frames and dispatched `CGEvent` locations. `screenshot`
 coordinates are pixels in the encoded image returned by `look`, after Retina
-capture and any downscaling. Axon converts screenshot pixels using the encoded
+capture and any downscaling. Each space converts through a specific window, and
+which one is part of the contract: `window` coordinates convert through the
+application's frontmost window, while `screenshot` coordinates convert through the
+window the image actually depicts, which capture records with the image. Those are
+not always the same window, and mapping an image coordinate through a window the
+image never showed produces a point that looks plausible and lands nowhere near
+the pixel that was named. An image with no recorded source window yields no
+recognized text and no screenshot-space conversion, because there is no safe guess
+to make. Axon converts screenshot pixels using the encoded
 image-to-window ratios independently on each axis; callers must not assume a
 fixed 2x scale. For example, the center of a 1280 by 720 encoded image is
 `{x: 640, y: 360, coordinateSpace: "screenshot"}` regardless of the window's
@@ -307,6 +337,16 @@ element identity, so they dispatch as unverified coordinates; use an app-scoped
 semantic name when fail-closed target validation is required. Raw snapshot handles
 and standalone locator objects are invalid public targets, including handles shown
 by `look(format: "debug")`.
+
+A text location is delivered by what it resolved to, not by the fact that it was
+named as text. A match found in the accessibility tree names a real element, so
+`click` presses that element: it takes the semantic rung, proves its own outcome,
+and never touches the foreground. A match found by OCR has no element behind it
+and is delivered as a coordinate carrying its application and provenance. The
+result's `strategy` and `delivery` always name which of the two ran, so a caller
+that specifically needs a pixel-level click can see when it did not get one.
+`drag` and `scroll` keep coordinate delivery for text locations, since neither can
+be expressed as an element press.
 
 Pointer results separate dispatch from semantic success. A click on an element
 that advertises `AXPress` is a semantic action and proves its own outcome, but a
