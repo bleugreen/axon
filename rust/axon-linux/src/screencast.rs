@@ -103,7 +103,8 @@ impl ScreenCastActor {
         }))
     }
     pub fn state(&self) -> PortalState {
-        self.0.signal
+        self.0
+            .signal
             .shared
             .lock()
             .expect("ScreenCast state poisoned")
@@ -344,14 +345,17 @@ fn actor_main<D: ScreenCastDriver>(
                             return;
                         }
                         let persisted = match session.restore_token {
-                            Some(token) => started_store.replace(session.source_id.as_deref(), token),
+                            Some(token) => {
+                                started_store.replace(session.source_id.as_deref(), token)
+                            }
                             None if clear_missing => started_store.clear(),
                             None => Ok(()),
                         };
                         if let Err(error) = persisted {
                             let message = format!("could not persist portal token: {error}");
-                            *started_error.lock().expect("persistence error lock poisoned") =
-                                Some(message.clone());
+                            *started_error
+                                .lock()
+                                .expect("persistence error lock poisoned") = Some(message.clone());
                             set_state(&started_signal, PortalState::Failed(message));
                         }
                     });
@@ -588,8 +592,7 @@ mod production {
                 let offset = data.chunk().offset() as usize;
                 let length = data.chunk().size() as usize;
                 let Some(bytes) = data.data() else { return };
-                if let Some((data, stride)) =
-                    extract_pipewire_chunk(bytes, offset, length, stride)
+                if let Some((data, stride)) = extract_pipewire_chunk(bytes, offset, length, stride)
                 {
                     publish(PipeWireFrame {
                         width: size.width,
@@ -782,7 +785,10 @@ mod tests {
         let capture = actor.capture(false, Duration::from_secs(1)).unwrap();
         assert_eq!(capture.image.width, 1);
         assert_eq!(capture.source.source_type, ScreenCaptureSourceType::Window);
-        assert_eq!(serde_json::to_value(&capture).unwrap()["source"]["type"], "window");
+        assert_eq!(
+            serde_json::to_value(&capture).unwrap()["source"]["type"],
+            "window"
+        );
         assert_eq!(
             actor
                 .capture(false, Duration::from_secs(1))

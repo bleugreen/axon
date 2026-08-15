@@ -94,13 +94,19 @@ fn dispatch_capture(
 #[cfg(target_os = "linux")]
 fn dispatch_capture_with(
     request: JsonRpcRequest,
-    capture: impl FnOnce(bool) -> Result<crate::screencast::ScreenCapture, crate::screencast::CaptureError>,
+    capture: impl FnOnce(
+        bool,
+    )
+        -> Result<crate::screencast::ScreenCapture, crate::screencast::CaptureError>,
 ) -> (Value, bool) {
     let Some(id) = request.id else {
         return (Value::Null, false);
     };
     let params = request.params.as_ref().and_then(Value::as_object);
-    let invalid = request.params.as_ref().is_some_and(|value| !value.is_object())
+    let invalid = request
+        .params
+        .as_ref()
+        .is_some_and(|value| !value.is_object())
         || params.is_some_and(|values| values.keys().any(|key| key != "reauthorize"))
         || params
             .and_then(|values| values.get("reauthorize"))
@@ -397,11 +403,9 @@ fn dispatch(
     };
     let method = request.method.clone();
     match method.as_str() {
-        "capture_screen" => {
-            dispatch_capture_with(request, |reauthorize| {
-                router.backend().capture_screen(reauthorize)
-            })
-        }
+        "capture_screen" => dispatch_capture_with(request, |reauthorize| {
+            router.backend().capture_screen(reauthorize)
+        }),
         "health" => {
             let capabilities =
                 merge_screenshot_capability(reported, router.backend().screenshot_capability());
@@ -577,7 +581,10 @@ mod tests {
             .map(|v| v["name"].as_str().unwrap().to_owned())
             .collect::<Vec<_>>();
         assert!(names.contains(&"invoke".into()));
-        let capture = tools.iter().find(|tool| tool["name"] == "capture_screen").unwrap();
+        let capture = tools
+            .iter()
+            .find(|tool| tool["name"] == "capture_screen")
+            .unwrap();
         assert_eq!(
             capture["inputSchema"]["properties"]["reauthorize"]["default"],
             false
@@ -609,7 +616,10 @@ mod tests {
             Err(crate::screencast::CaptureError::AuthorizationRequired)
         })
         .0;
-        assert_eq!(response["error"]["data"]["reason"], "portal-authorization-required");
+        assert_eq!(
+            response["error"]["data"]["reason"],
+            "portal-authorization-required"
+        );
     }
 
     #[cfg(target_os = "linux")]
@@ -636,7 +646,12 @@ mod tests {
             let response = dispatch_capture_with(request, |_| Err(error)).0;
             assert_eq!(response["error"]["data"]["reason"], reason);
             if reason == "capability-unavailable" {
-                assert!(response["error"]["message"].as_str().unwrap().contains("look"));
+                assert!(
+                    response["error"]["message"]
+                        .as_str()
+                        .unwrap()
+                        .contains("look")
+                );
             }
         }
     }
