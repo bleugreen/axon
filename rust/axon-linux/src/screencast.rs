@@ -209,15 +209,14 @@ impl Drop for ActorHandle {
             .expect("ScreenCast completion lock poisoned")
             .recv_timeout(Duration::from_millis(250))
             .is_ok();
-        if finished {
-            if let Some(thread) = self
+        if finished
+            && let Some(thread) = self
                 .thread
                 .get_mut()
                 .expect("ScreenCast thread lock poisoned")
                 .take()
-            {
-                let _ = thread.join();
-            }
+        {
+            let _ = thread.join();
         }
         // A custom driver can violate the cancellation contract. Detaching after the short bound
         // keeps daemon teardown safe and responsive; production setup futures are dropped by select.
@@ -571,10 +570,10 @@ mod production {
                 raw: Default::default(),
             })
             .param_changed(|_, f, id, pod| {
-                if id == spa::param::ParamType::Format.as_raw() {
-                    if let Some(pod) = pod {
-                        let _ = f.raw.parse(pod);
-                    }
+                if id == spa::param::ParamType::Format.as_raw()
+                    && let Some(pod) = pod
+                {
+                    let _ = f.raw.parse(pod);
                 }
             })
             .process(move |stream, f| {
