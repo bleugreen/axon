@@ -22,16 +22,21 @@ private let strayPoint = CGPoint(x: 1_575, y: 420)
 
 /// A scripted application: which windows it currently has, and what sits at the clicked point.
 private final class FakeDesktop: @unchecked Sendable {
-    /// Nil models a window query that did not answer, which is not evidence about the point.
-    var windows: [AXFrame]?
+    /// Successive answers to "where are this application's windows"; the last one repeats. A nil
+    /// answer models a window query that did not answer, which is not evidence about the point.
+    var windowReadings: [[AXFrame]?]
     /// Successive answers to "what is at this point"; the last one repeats.
     var hitOwners: [pid_t]
     /// Who holds the foreground. Activation moves it, so an escalation can prove itself.
     var frontmost: pid_t = 7
     private(set) var posted: [CGEventType] = []
 
-    init(windows: [AXFrame]?, hitOwners: [pid_t]) {
-        self.windows = windows
+    convenience init(windows: [AXFrame]?, hitOwners: [pid_t]) {
+        self.init(windowReadings: [windows], hitOwners: hitOwners)
+    }
+
+    init(windowReadings: [[AXFrame]?], hitOwners: [pid_t]) {
+        self.windowReadings = windowReadings
         self.hitOwners = hitOwners
     }
 
@@ -39,11 +44,17 @@ private final class FakeDesktop: @unchecked Sendable {
         hitOwners.count > 1 ? hitOwners.removeFirst() : (hitOwners.first ?? 0)
     }
 
+    private func nextWindows() -> [AXFrame]? {
+        windowReadings.count > 1 ? windowReadings.removeFirst() : (windowReadings.first ?? nil)
+    }
+
     func executor() -> AXPrimitiveActionExecutor {
-        // One synthetic element per window, so a frame read can be answered per window.
-        let windowElements = (windows ?? []).indices.map { AXUIElementCreateApplication(pid_t(9_100 + $0)) }
-        let frames = windows ?? []
+        // One synthetic element per window position any reading can produce, so a frame read can be
+        // answered per window. The reading in force decides which frames those elements report.
+        let widest = windowReadings.map { ($0 ?? []).count }.max() ?? 0
+        let windowElements = (0..<widest).map { AXUIElementCreateApplication(pid_t(9_100 + $0)) }
         let hitElement = AXUIElementCreateSystemWide()
+        var currentFrames: [AXFrame] = []
         return AXPrimitiveActionExecutor(
             elementStore: AXElementStore(),
             overlay: nil,
@@ -52,13 +63,18 @@ private final class FakeDesktop: @unchecked Sendable {
             sleepMilliseconds: { _ in },
             hitTest: { _ in hitElement },
             frameProvider: { element in
-                windowElements.firstIndex { CFEqual($0, element) }.map { frames[$0] }
+                windowElements.firstIndex { CFEqual($0, element) }
+                    .flatMap { currentFrames.indices.contains($0) ? currentFrames[$0] : nil }
             },
             parentProvider: { _ in nil },
             processProvider: { _ in self.nextOwner() },
             attributeProvider: { _, attribute in
-                guard attribute == kAXWindowsAttribute, self.windows != nil else { return nil }
-                return windowElements as AnyObject
+                guard attribute == kAXWindowsAttribute else { return nil }
+                // One reading is consumed per window-list query, which is what lets a test model a
+                // window that is still being moved when the first look happens.
+                guard let reading = self.nextWindows() else { return nil }
+                currentFrames = reading
+                return Array(windowElements.prefix(reading.count)) as AnyObject
             },
             frontmostApp: {
                 ForegroundApp(
