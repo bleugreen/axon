@@ -367,6 +367,19 @@ impl LinuxBackend {
         }
     }
 
+    pub(crate) fn screen_capture_handle(&self) -> Option<ScreenCastActor> {
+        self.screen_capture.clone()
+    }
+
+    pub(crate) fn capture_screen(&self, reauthorize: bool) -> Result<ScreenCapture, CaptureError> {
+        match &self.screen_capture {
+            Some(actor) => actor.capture(reauthorize, INTERACTIVE_TIMEOUT),
+            None => Err(CaptureError::Unavailable(
+                "capture_screen is available only in a Wayland session; use look screenshot for application-targeted X11 capture".into(),
+            )),
+        }
+    }
+
     /// Whether this session has accessibility switched on, or `None` when the bus will not say.
     ///
     /// Read on demand rather than remembered. An assistive technology can switch it on at any
@@ -1395,18 +1408,6 @@ impl Actor {
             }
         }
         false
-    }
-    pub(crate) fn screen_capture_handle(&self) -> Option<ScreenCastActor> {
-        self.screen_capture.clone()
-    }
-
-    pub(crate) fn capture_screen(&self, reauthorize: bool) -> Result<ScreenCapture, CaptureError> {
-        match &self.screen_capture {
-            Some(actor) => actor.capture(reauthorize, INTERACTIVE_TIMEOUT),
-            None => Err(CaptureError::Unavailable(
-                "capture_screen is available only in a Wayland session; use look screenshot for application-targeted X11 capture".into(),
-            )),
-        }
     }
 
     /// Whether this session has accessibility switched on, or `None` when the bus will not say.
