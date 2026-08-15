@@ -403,6 +403,16 @@ fn actor_main<D: ScreenCastDriver>(
     }
 }
 
+fn extract_pipewire_chunk(
+    bytes: &[u8],
+    offset: usize,
+    size: usize,
+    stride: isize,
+) -> Option<(Vec<u8>, isize)> {
+    let end = offset.checked_add(size)?;
+    (end <= bytes.len()).then(|| (bytes[offset..end].to_vec(), stride))
+}
+
 struct ProductionDriver;
 impl ScreenCastDriver for ProductionDriver {
     fn run(
@@ -572,9 +582,8 @@ mod production {
                 let offset = data.chunk().offset() as usize;
                 let length = data.chunk().size() as usize;
                 let Some(bytes) = data.data() else { return };
-                if offset
-                    .checked_add(length)
-                    .is_some_and(|end| end <= bytes.len())
+                if let Some((data, stride)) =
+                    extract_pipewire_chunk(bytes, offset, length, stride)
                 {
                     publish(PipeWireFrame {
                         width: size.width,
@@ -582,7 +591,7 @@ mod production {
                         offset: 0,
                         stride,
                         format,
-                        data: bytes[offset..offset + length].to_vec(),
+                        data,
                     });
                 }
             })
@@ -743,6 +752,15 @@ mod tests {
             },
         );
         (actor, calls, tokens)
+    }
+
+    #[test]
+    fn pipewire_chunk_extraction_honors_offset_size_and_negative_stride() {
+        assert_eq!(
+            extract_pipewire_chunk(&[9, 9, 1, 2, 3, 4, 8], 2, 4, -4),
+            Some((vec![1, 2, 3, 4], -4))
+        );
+        assert_eq!(extract_pipewire_chunk(&[1, 2], 1, 2, 4), None);
     }
 
     #[test]
