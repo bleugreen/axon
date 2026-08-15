@@ -3,7 +3,7 @@ use crate::{
     BackgroundPixelInput, PixelAim, PixelDispatch, PixelDispatchError, PixelPlan, PixelTarget,
     PointerTargetVerifier, VisualObservation,
     pixel::{self, PixelAction},
-    portal::{AUTHORIZATION_REQUIRED, TokenStore},
+    portal::TokenStore,
     screencast::{CaptureError, INTERACTIVE_TIMEOUT, ScreenCapture, ScreenCastActor},
     x11::{X11Session, coordinate},
 };
@@ -1785,26 +1785,6 @@ fn identity(object: &ObjectRefOwned) -> String {
     match object.name_as_str() {
         Some(bus) => format!("{bus}{}", object.path_as_str()),
         None => object.path_as_str().to_string(),
-    }
-}
-
-fn portal_capture_error(error: CaptureError) -> BackendError {
-    match error {
-        CaptureError::AuthorizationRequired => BackendError::CapabilityReason {
-            capability: Capability::Screenshot,
-            code: AUTHORIZATION_REQUIRED,
-            reason: "a desktop portal authorization flow is required; request a screenshot and approve the desktop chooser".into(),
-            diagnostic: None,
-        },
-        CaptureError::TimedOut => BackendError::CapabilityReason {
-            capability: Capability::Screenshot,
-            code: AUTHORIZATION_REQUIRED,
-            reason: "the desktop portal authorization flow timed out; fresh authorization is required".into(),
-            diagnostic: None,
-        },
-        CaptureError::Unavailable(reason) => capability(Capability::Screenshot, &reason),
-        CaptureError::Failed(reason) => operation("capture screenshot", reason),
-        CaptureError::NoFrame => operation("capture screenshot", "the portal stream published no frame"),
     }
 }
 

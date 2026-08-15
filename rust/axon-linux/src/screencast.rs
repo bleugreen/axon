@@ -260,7 +260,12 @@ fn actor_main<D: ScreenCastDriver>(
             Command::Capture(reauthorize) => {
                 // A stop belongs only to the generation that observed it. Drain any signal left by
                 // a caller whose timeout raced with driver completion before starting a retry.
-                while stopped.lock().expect("ScreenCast stop signal poisoned").try_recv().is_ok() {}
+                while stopped
+                    .lock()
+                    .expect("ScreenCast stop signal poisoned")
+                    .try_recv()
+                    .is_ok()
+                {}
                 let stored = if reauthorize {
                     None
                 } else {
