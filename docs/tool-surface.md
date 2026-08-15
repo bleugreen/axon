@@ -78,6 +78,18 @@ lossless PNGs, never upscaled, with their longest edge bounded to 1280 pixels. I
 backend cannot capture the requested image, the accessibility observation still succeeds:
 `screenshot` is absent and `screenshotUnavailable` reports a stable code and reason.
 `screenText: true` OCRs visible text from the screenshot.
+
+Text-location targets resolve visible text to a point from either source; the
+`source` parameter's own description carries the exact fallback rule. The
+empirical rule worth knowing before picking one: for rendered web content, prefer
+`auto` or `screenshot`. AX text matching can only match text the application
+actually exposes through accessibility, and browser web content routinely renders
+links whose accessibility nodes carry a correct role and frame but no text in any
+attribute. Such a node is the same node an observation summarises as
+`⟨N unreadable nodes⟩` — unreadable and unmatchable are one fact, because both
+surfaces read the same attribute list. When `source: "ax"` finds nothing in a
+browser, that is the expected shape, and the failure message reports how many
+opaque nodes the capture held.
 App observations also report `focus`. `available` includes the focused element's
 role and label plus its semantic name when that element belongs to the captured
 tree. `none` means the app reported no focused UI element. `inaccessible` means

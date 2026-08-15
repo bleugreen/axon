@@ -74,6 +74,12 @@ pub struct TextLocationResolution {
     pub best: Option<TextLocationCandidate>,
     pub point: Option<ActionPoint>,
     pub candidates: Vec<TextLocationCandidate>,
+    /// Nodes carrying a usable frame that expose no readable text in any matched
+    /// attribute. Mirrors the Swift resolution field of the same name: a non-zero
+    /// count on a missing AX result means the text may be rendered inside nodes
+    /// accessibility cannot describe, and only screenshot OCR can reach it.
+    #[serde(default)]
+    pub opaque_node_count: usize,
 }
 
 pub struct TextLocationResolver;
