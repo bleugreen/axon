@@ -3374,6 +3374,7 @@ mod tests {
                     DeliveryPolicy::BackgroundOnly,
                     &candidate,
                     &pixel_target(true),
+                    PointerContract::Asserted,
                     verified,
                     |backend, target| backend.dispatch_pixel_click(target),
                 )
