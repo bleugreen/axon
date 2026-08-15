@@ -104,7 +104,7 @@ public enum ReleaseInstallError: Error, CustomStringConvertible {
 /// `daemon install` from. That last step is the one the field report proved carries both privacy
 /// grants across with no prompt, so the updater performs it rather than inventing its own
 /// registration.
-public struct ReleaseInstaller: Sendable {
+public struct ReleaseInstaller {
     public typealias Fetch = @Sendable (URL) async throws -> Data
     public typealias Download = @Sendable (URL, URL, @Sendable @escaping (Double) -> Void) async throws -> Void
     public typealias VerifySignature = @Sendable (URL) throws -> Void
