@@ -108,7 +108,7 @@ import Testing
 @Test func textLocationSchemaPublishesFallbackAndWebContentSemantics() throws {
     let click = try #require(ToolSurfaceSpec.tools.first { $0.name == "click" })
     let encoded = String(
-        decoding: try JSONEncoder().encode(ToolSurfaceSpec.inputSchema(for: click)),
+        decoding: try JSONEncoder().encode(ToolSurfaceSchema.inputSchema(for: click)),
         as: UTF8.self
     )
 

@@ -597,7 +597,7 @@
               },
               {
                 "additionalProperties" : false,
-                "description" : "Text location target object: { location: { app, text, source? } }. Resolves visible text to a click/drag/scroll point using AX text or screenshot OCR without callers providing coordinates.",
+                "description" : "Text location target object: { location: { app, text, source? } }. Resolves visible text to a click/drag/scroll point using AX text or screenshot OCR without callers providing coordinates. Rendered web content frequently exposes no accessibility text at all, so auto or screenshot is the reliable path for web links on macOS.",
                 "properties" : {
                   "location" : {
                     "additionalProperties" : false,
@@ -608,7 +608,7 @@
                       },
                       "source" : {
                         "default" : "auto",
-                        "description" : "Text source. Defaults to auto.",
+                        "description" : "Text source. auto, the default, matches accessibility text first and falls back to screenshot OCR when accessibility matches nothing. ax and screenshot use only that source and never fall back.",
                         "enum" : [
                           "auto",
                           "ax",
@@ -928,7 +928,7 @@
               },
               {
                 "additionalProperties" : false,
-                "description" : "Text location target object: { location: { app, text, source? } }. Resolves visible text to a click/drag/scroll point using AX text or screenshot OCR without callers providing coordinates.",
+                "description" : "Text location target object: { location: { app, text, source? } }. Resolves visible text to a click/drag/scroll point using AX text or screenshot OCR without callers providing coordinates. Rendered web content frequently exposes no accessibility text at all, so auto or screenshot is the reliable path for web links on macOS.",
                 "properties" : {
                   "location" : {
                     "additionalProperties" : false,
@@ -939,7 +939,7 @@
                       },
                       "source" : {
                         "default" : "auto",
-                        "description" : "Text source. Defaults to auto.",
+                        "description" : "Text source. auto, the default, matches accessibility text first and falls back to screenshot OCR when accessibility matches nothing. ax and screenshot use only that source and never fall back.",
                         "enum" : [
                           "auto",
                           "ax",
@@ -1156,7 +1156,7 @@
               },
               {
                 "additionalProperties" : false,
-                "description" : "Text location target object: { location: { app, text, source? } }. Resolves visible text to a click/drag/scroll point using AX text or screenshot OCR without callers providing coordinates.",
+                "description" : "Text location target object: { location: { app, text, source? } }. Resolves visible text to a click/drag/scroll point using AX text or screenshot OCR without callers providing coordinates. Rendered web content frequently exposes no accessibility text at all, so auto or screenshot is the reliable path for web links on macOS.",
                 "properties" : {
                   "location" : {
                     "additionalProperties" : false,
@@ -1167,7 +1167,7 @@
                       },
                       "source" : {
                         "default" : "auto",
-                        "description" : "Text source. Defaults to auto.",
+                        "description" : "Text source. auto, the default, matches accessibility text first and falls back to screenshot OCR when accessibility matches nothing. ax and screenshot use only that source and never fall back.",
                         "enum" : [
                           "auto",
                           "ax",
@@ -1345,7 +1345,7 @@
               },
               {
                 "additionalProperties" : false,
-                "description" : "Text location target object: { location: { app, text, source? } }. Resolves visible text to a click/drag/scroll point using AX text or screenshot OCR without callers providing coordinates.",
+                "description" : "Text location target object: { location: { app, text, source? } }. Resolves visible text to a click/drag/scroll point using AX text or screenshot OCR without callers providing coordinates. Rendered web content frequently exposes no accessibility text at all, so auto or screenshot is the reliable path for web links on macOS.",
                 "properties" : {
                   "location" : {
                     "additionalProperties" : false,
@@ -1356,7 +1356,7 @@
                       },
                       "source" : {
                         "default" : "auto",
-                        "description" : "Text source. Defaults to auto.",
+                        "description" : "Text source. auto, the default, matches accessibility text first and falls back to screenshot OCR when accessibility matches nothing. ax and screenshot use only that source and never fall back.",
                         "enum" : [
                           "auto",
                           "ax",
