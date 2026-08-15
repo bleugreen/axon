@@ -344,15 +344,10 @@ public protocol BrowserAutomationServing {
 }
 
 public final class AppleScriptBrowserAutomation: BrowserAutomationServing {
-    private enum Browser: String {
-        case safari = "com.apple.Safari"
-        case chrome = "com.google.Chrome"
-
-        var name: String { self == .safari ? "Safari" : "Google Chrome" }
-    }
-
     private let authorizer: any AppleEventAuthorizing
     private let isRunning: (String) -> Bool
+    private let ledger: AppleEventAnswerLedger
+    private let log: (String) -> Void
 
     public convenience init() {
         self.init(authorizer: SystemAppleEventAuthorizer(), isRunning: { bundleIdentifier in
@@ -360,9 +355,16 @@ public final class AppleScriptBrowserAutomation: BrowserAutomationServing {
         })
     }
 
-    init(authorizer: any AppleEventAuthorizing, isRunning: @escaping (String) -> Bool) {
+    init(
+        authorizer: any AppleEventAuthorizing,
+        isRunning: @escaping (String) -> Bool,
+        ledger: AppleEventAnswerLedger = .shared,
+        log: @escaping (String) -> Void = AppleEventAuthorizationService.logToStandardError
+    ) {
         self.authorizer = authorizer
         self.isRunning = isRunning
+        self.ledger = ledger
+        self.log = log
     }
 
     public func navigate(app: String, url: String) throws -> BrowserNavigationResult {
@@ -429,27 +431,17 @@ public final class AppleScriptBrowserAutomation: BrowserAutomationServing {
         }
     }
 
-    private func resolve(_ query: String) throws -> Browser {
-        let normalized = query.lowercased()
-        let browser: Browser?
-        switch normalized {
-        case "safari", Browser.safari.rawValue.lowercased(): browser = .safari
-        case "google chrome", "chrome", Browser.chrome.rawValue.lowercased(): browser = .chrome
-        default: browser = nil
-        }
-        guard let browser else { throw BrowserAutomationError.unsupportedApp(query) }
+    private func resolve(_ query: String) throws -> SupportedBrowser {
+        guard let browser = SupportedBrowser.named(query) else { throw BrowserAutomationError.unsupportedApp(query) }
         guard isRunning(browser.rawValue) else {
             throw BrowserAutomationError.appNotRunning(browser.name)
         }
-        try authorize(browser)
-        return browser
-    }
-
-    private func authorize(_ browser: Browser) throws {
-        try AppleEventAuthorizationService(authorizer: authorizer).authorize(
+        // Check only: an agent's call must never block on a consent dialog it did not ask for.
+        try AppleEventAuthorizationService(authorizer: authorizer, ledger: ledger, log: log).check(
             bundleIdentifier: browser.rawValue,
             appName: browser.name
         )
+        return browser
     }
 
     static func validatedURL(_ raw: String) throws -> String {
@@ -481,7 +473,11 @@ public final class AppleScriptBrowserAutomation: BrowserAutomationServing {
         let boundedSource = "with timeout of 15 seconds\n\(source)\nend timeout"
         guard let script = NSAppleScript(source: boundedSource), let result = script.executeAndReturnError(&error) as NSAppleEventDescriptor? else {
             let number = error?[NSAppleScript.errorNumber] as? Int
-            if number == Int(errAEEventNotPermitted) { throw BrowserAutomationError.automationNotGranted(app: appName, authorization: .denied, status: Int32(number!)) }
+            if let number, number == Int(errAEEventNotPermitted) {
+                throw BrowserAutomationError.automationNotGranted(BrowserAutomationDenial(
+                    app: appName, authorization: .denied, leg: .executed, status: Int32(number)
+                ))
+            }
             if number == -1712 { throw BrowserAutomationError.timeout(appName) }
             throw BrowserAutomationError.executionFailed((error?[NSAppleScript.errorMessage] as? String) ?? "unknown Apple event error")
         }
