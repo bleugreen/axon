@@ -375,17 +375,32 @@ impl X11Session {
         image
             .write_to(&mut bytes, ImageFormat::Png)
             .map_err(|error| operation("encode X11 screenshot PNG", error))?;
-        Ok(Screenshot {
-            bytes: bytes.into_inner(),
-            media_type: axon_core::OBSERVATION_SCREENSHOT_MEDIA_TYPE.into(),
-            width: image.width(),
-            height: image.height(),
-            frame: Rect {
-                x: f64::from(geometry.origin.0),
-                y: f64::from(geometry.origin.1),
-                width: f64::from(width),
-                height: f64::from(height),
+        Ok((
+            Screenshot {
+                bytes: bytes.into_inner(),
+                media_type: axon_core::OBSERVATION_SCREENSHOT_MEDIA_TYPE.into(),
+                width: image.width(),
+                height: image.height(),
+                frame: Rect {
+                    x: f64::from(geometry.origin.0),
+                    y: f64::from(geometry.origin.1),
+                    width: f64::from(width),
+                    height: f64::from(height),
+                },
             },
+            captured_window,
+        ))
+    }
+
+    /// One window's current screen rectangle, or `None` when it can no longer be read — which a
+    /// caller must not read as "it moved", only as "the X server did not say".
+    pub fn window_rect(&self, window: Window) -> Option<Rect> {
+        let geometry = self.window_geometry(window).ok()?;
+        Some(Rect {
+            x: f64::from(geometry.origin.0),
+            y: f64::from(geometry.origin.1),
+            width: f64::from(geometry.size.0),
+            height: f64::from(geometry.size.1),
         })
     }
 

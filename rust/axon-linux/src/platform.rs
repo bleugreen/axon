@@ -1,7 +1,7 @@
 use crate::lifecycle::ACCESSIBILITY_DISABLED;
 use crate::{
     BackgroundPixelInput, PixelAim, PixelDispatch, PixelDispatchError, PixelPlan, PixelTarget,
-    PointerTargetVerifier, VisualObservation,
+    PointerTargetVerifier, SourceWindow, VisualObservation,
     pixel::{self, PixelAction},
     portal::TokenStore,
     screencast::{CaptureError, INTERACTIVE_TIMEOUT, ScreenCapture, ScreenCastActor},
@@ -626,7 +626,9 @@ impl PlatformBackend for LinuxBackend {
                 )
             })?;
         match &self.screenshot {
-            ScreenshotProvider::X11(session) => session.screenshot_for_pid(process_id),
+            ScreenshotProvider::X11(session) => {
+                session.screenshot_for_pid(process_id).map(|(image, _)| image)
+            }
             ScreenshotProvider::Unavailable(_) => unreachable!(),
         }
     }
@@ -713,8 +715,8 @@ impl PointerTargetVerifier for LinuxBackend {
             .is_some_and(|extents| covers(extents, point)))
     }
 
-    fn element_rect(&mut self, handle: &SnapshotHandle) -> Result<Option<Rect>, BackendError> {
-        self.element_extents(handle)
+    fn window_rect(&mut self, window: u32) -> Result<Option<Rect>, BackendError> {
+        Ok(self.x11(Capability::PointerInput)?.window_rect(window))
     }
 }
 
@@ -984,7 +986,7 @@ impl BackgroundPixelInput for LinuxBackend {
                     "the matched application has no process id",
                 )
             })?;
-        let captured = match &self.screenshot {
+        let (captured, window) = match &self.screenshot {
             ScreenshotProvider::X11(session) => session.screenshot_for_pid(process_id)?,
             ScreenshotProvider::Unavailable(reason) => {
                 return Err(screenshot_error(reason));
@@ -999,9 +1001,16 @@ impl BackgroundPixelInput for LinuxBackend {
         } else {
             Vec::new()
         };
+        // Every recognized frame was placed against this window's geometry, so the window travels
+        // with them. Re-deriving it later would repeat a selection that can answer differently.
+        let source_window = SourceWindow {
+            id: window,
+            frame: captured.frame,
+        };
         Ok(VisualObservation {
             screenshot: screenshot.then_some(captured),
             recognized_text,
+            source_window: Some(source_window),
         })
     }
     fn plan_pixel_click(
