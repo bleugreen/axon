@@ -14,7 +14,45 @@ use std::{
 };
 
 pub const INTERACTIVE_TIMEOUT: Duration = Duration::from_secs(15);
-type StopSignal = Arc<Mutex<mpsc::Receiver<()>>>;
+
+#[derive(Default)]
+struct StopController {
+    requested: AtomicBool,
+    wake: Mutex<Option<Arc<dyn Fn() + Send + Sync>>>,
+}
+
+impl StopController {
+    fn request(&self) {
+        self.requested.store(true, Ordering::Release);
+        let wake = self
+            .wake
+            .lock()
+            .expect("ScreenCast stop wake poisoned")
+            .clone();
+        if let Some(wake) = wake {
+            wake();
+        }
+    }
+
+    fn clear(&self) {
+        self.requested.store(false, Ordering::Release);
+    }
+
+    fn take(&self) -> bool {
+        self.requested.swap(false, Ordering::AcqRel)
+    }
+
+    fn install_wake(&self, wake: Option<Arc<dyn Fn() + Send + Sync>>) {
+        *self.wake.lock().expect("ScreenCast stop wake poisoned") = wake.clone();
+        if self.requested.load(Ordering::Acquire)
+            && let Some(wake) = wake
+        {
+            wake();
+        }
+    }
+}
+
+type StopSignal = Arc<StopController>;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum CaptureError {
@@ -47,7 +85,7 @@ pub struct ScreenCastActor(Arc<ActorHandle>);
 struct ActorHandle {
     signal: Arc<Signal>,
     command: mpsc::Sender<Command>,
-    stop: mpsc::Sender<()>,
+    stop: StopSignal,
     shutting_down: Arc<AtomicBool>,
     request_lock: Mutex<()>,
     thread: Mutex<Option<thread::JoinHandle<()>>>,
@@ -73,7 +111,7 @@ impl ScreenCastActor {
             changed: Condvar::new(),
         });
         let (command, commands) = mpsc::channel();
-        let (stop, stopped) = mpsc::channel();
+        let stop = Arc::new(StopController::default());
         let shutting_down = Arc::new(AtomicBool::new(false));
         let actor_signal = signal.clone();
         let actor_shutting_down = shutting_down.clone();
@@ -86,7 +124,7 @@ impl ScreenCastActor {
                     store,
                     actor_signal,
                     commands,
-                    Arc::new(Mutex::new(stopped)),
+                    stop.clone(),
                     actor_shutting_down,
                 );
                 let _ = finished_tx.send(());
@@ -133,7 +171,7 @@ impl ScreenCastActor {
             && shared.frame.snapshot().is_some();
         if !reusable {
             if matches!(shared.state, PortalState::Starting | PortalState::Streaming) {
-                let _ = self.0.stop.send(());
+                self.0.stop.request();
             }
             shared.frame.clear();
             shared.generation = shared.generation.wrapping_add(1);
@@ -157,7 +195,7 @@ impl ScreenCastActor {
             if now >= deadline {
                 shared.generation = shared.generation.wrapping_add(1);
                 shared.state = PortalState::AuthorizationRequired;
-                let _ = self.0.stop.send(());
+                self.0.stop.request();
                 return Err(CaptureError::AuthorizationRequired);
             }
             let (next, wait) = self
@@ -170,7 +208,7 @@ impl ScreenCastActor {
             if wait.timed_out() && shared.frame.snapshot().is_none() {
                 shared.generation = shared.generation.wrapping_add(1);
                 shared.state = PortalState::AuthorizationRequired;
-                let _ = self.0.stop.send(());
+                self.0.stop.request();
                 return Err(CaptureError::AuthorizationRequired);
             }
         }
@@ -203,7 +241,7 @@ impl ScreenCastActor {
 impl Drop for ActorHandle {
     fn drop(&mut self) {
         self.shutting_down.store(true, Ordering::Release);
-        let _ = self.stop.send(());
+        self.stop.request();
         let _ = self.command.send(Command::Stop);
         let finished = self
             .finished
@@ -307,12 +345,7 @@ fn actor_main<D: ScreenCastDriver>(
             } => {
                 // A stop belongs only to the generation that observed it. Drain any signal left by
                 // a caller whose timeout raced with driver completion before starting a retry.
-                while stopped
-                    .lock()
-                    .expect("ScreenCast stop signal poisoned")
-                    .try_recv()
-                    .is_ok()
-                {}
+                stopped.clear();
                 let stored = if reauthorize {
                     None
                 } else {
@@ -479,7 +512,7 @@ mod production {
                     result = &mut setup => break Ok(result),
                     _ = &mut deadline => break Err(DriverError::TimedOut),
                     _ = tokio::time::sleep(Duration::from_millis(25)) => {
-                        if stopped.lock().expect("ScreenCast stop signal poisoned").try_recv().is_ok() {
+                        if stopped.take() {
                             break Err(DriverError::Cancelled);
                         }
                     }
@@ -657,25 +690,15 @@ mod production {
                 &mut params,
             )
             .map_err(fail)?;
+        let (stop_sender, stop_receiver) = pw::channel::channel();
+        stopped.install_wake(Some(Arc::new(move || {
+            let _ = stop_sender.send(());
+        })));
         let quit = mainloop.clone();
-        let timer = mainloop.loop_().add_timer(move |_| {
-            if stopped
-                .lock()
-                .expect("stop signal poisoned")
-                .try_recv()
-                .is_ok()
-            {
-                quit.quit();
-            }
-        });
-        timer
-            .update_timer(
-                Some(Duration::from_millis(50)),
-                Some(Duration::from_millis(50)),
-            )
-            .into_result()
-            .map_err(fail)?;
+        let _stop_receiver = stop_receiver.attach(mainloop.loop_(), move |_| quit.quit());
         mainloop.run();
+        stopped.install_wake(None);
+        stopped.clear();
         Ok(())
     }
     fn fail(e: impl ToString) -> DriverError {
@@ -748,7 +771,9 @@ mod tests {
                     if let Some(ended) = ended {
                         let _ = ended.recv();
                     } else {
-                        let _ = stopped.lock().unwrap().recv();
+                        while !stopped.take() {
+                            thread::sleep(Duration::from_millis(1));
+                        }
                     }
                     Ok(())
                 }
