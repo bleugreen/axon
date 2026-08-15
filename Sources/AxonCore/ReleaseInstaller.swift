@@ -54,20 +54,18 @@ public enum InstallPruning {
     /// release can be rolled back to by hand.
     public static let keepCount = 2
 
-    /// Version directories under `root` that may be removed, oldest first.
+    /// The default root `install.sh` installs into.
+    public static var defaultRoot: URL {
+        URL(fileURLWithPath: NSHomeDirectory()).appendingPathComponent(".local/lib/axon", isDirectory: true)
+    }
+
+    /// Version directories under `root` that Axon itself installed, newest first.
     ///
-    /// A candidate must be version-shaped, carry Axon's completion marker, and contain an
-    /// `Axon.app`. That precondition stays strict on purpose: a hand-assembled layout has no marker
-    /// and pruning is right to leave it alone. Anything holding a protected path — the live
-    /// registration, the running bundle — is never a candidate no matter how old it looks.
-    public static func superseded(
-        root: URL,
-        keeping keepCount: Int = InstallPruning.keepCount,
-        protecting protectedPaths: [String],
-        fileManager: FileManager = .default
-    ) -> [URL] {
-        let contents = (try? fileManager.contentsOfDirectory(atPath: root.path)) ?? []
-        let installs = contents
+    /// A directory qualifies only when it is version-shaped, carries Axon's completion marker, and
+    /// contains an `Axon.app`. That precondition stays strict on purpose: a hand-assembled layout
+    /// has no marker, and every caller here is either deleting or accusing.
+    public static func completeInstalls(root: URL, fileManager: FileManager = .default) -> [URL] {
+        ((try? fileManager.contentsOfDirectory(atPath: root.path)) ?? [])
             .filter { InstallLayout.isVersionShaped($0) }
             .map { root.appendingPathComponent($0, isDirectory: true) }
             .filter { directory in
@@ -75,14 +73,48 @@ public enum InstallPruning {
                     && fileManager.fileExists(atPath: directory.appendingPathComponent("Axon.app").path)
             }
             .sorted { ReleaseUpdateChecker.isVersion($0.lastPathComponent, newerThan: $1.lastPathComponent) }
+    }
 
-        let protected = protectedPaths.map { URL(fileURLWithPath: $0).standardizedFileURL.path }
-        return installs.dropFirst(keepCount)
-            .filter { directory in
-                let prefix = directory.standardizedFileURL.path + "/"
-                return !protected.contains { $0 == directory.standardizedFileURL.path || $0.hasPrefix(prefix) }
-            }
+    /// Version directories under `root` that may be removed, oldest first.
+    ///
+    /// Anything holding a protected path — the live registration, the running bundle — is never a
+    /// candidate no matter how old it looks.
+    public static func superseded(
+        root: URL,
+        keeping keepCount: Int = InstallPruning.keepCount,
+        protecting protectedPaths: [String],
+        fileManager: FileManager = .default
+    ) -> [URL] {
+        completeInstalls(root: root, fileManager: fileManager)
+            .dropFirst(keepCount)
+            .filter { !$0.contains(anyOf: protectedPaths) }
             .reversed()
+    }
+
+    /// Complete installs that nothing points at, newest first.
+    ///
+    /// These are what silently keep serving: a client that recorded an absolute CLI path three
+    /// releases ago still launches that release's MCP bridge, with that release's tool surface.
+    /// Reporting them is not deleting them — a path outside this install's own history may be one
+    /// someone still depends on, so `axon status` names them and leaves the decision.
+    public static func orphaned(
+        root: URL,
+        referencedPaths: [String],
+        fileManager: FileManager = .default
+    ) -> [URL] {
+        completeInstalls(root: root, fileManager: fileManager)
+            .filter { !$0.contains(anyOf: referencedPaths) }
+    }
+}
+
+private extension URL {
+    /// Whether any of `paths` is this directory or lives inside it.
+    func contains(anyOf paths: [String]) -> Bool {
+        let directory = standardizedFileURL.path
+        let prefix = directory + "/"
+        return paths
+            .map { URL(fileURLWithPath: $0).standardizedFileURL.path }
+            .contains { $0 == directory || $0.hasPrefix(prefix) }
     }
 }
 
@@ -148,7 +180,10 @@ public enum ReleaseInstallError: Error, CustomStringConvertible {
 /// `daemon install` from. That last step is the one the field report proved carries both privacy
 /// grants across with no prompt, so the updater performs it rather than inventing its own
 /// registration.
-public struct ReleaseInstaller {
+// `FileManager` is not `Sendable`, but the operations used here (existence checks, copies, moves)
+// are safe to call from any thread on `FileManager.default`, and an installer is created for one
+// update and used by one task.
+public struct ReleaseInstaller: @unchecked Sendable {
     public typealias Fetch = @Sendable (URL) async throws -> Data
     public typealias Download = @Sendable (URL, URL, @Sendable @escaping (Double) -> Void) async throws -> Void
     public typealias VerifySignature = @Sendable (URL) throws -> Void

@@ -352,6 +352,20 @@ public struct LaunchAgentManager {
     /// process would register, so a consumer can see when a registration still points at a build
     /// directory that has since been deleted.
     public func registration() -> RegistrationHealth {
+        Self.registration(atPlistPath: plistPath)
+    }
+
+    /// The daemon registration as it exists on disk, without needing a program to describe.
+    ///
+    /// A reader asking "what is registered" — the menu bar checking whether it is the copy launchd
+    /// runs, `axon status` naming orphaned installs — has no business resolving a program of its
+    /// own first, because doing so answers a different question.
+    public static func daemonRegistration(label: String = LaunchAgentConfiguration.daemonLabel) -> RegistrationHealth {
+        registration(atPlistPath: URL(fileURLWithPath: NSHomeDirectory())
+            .appendingPathComponent("Library/LaunchAgents/\(label).plist"))
+    }
+
+    public static func registration(atPlistPath plistPath: URL) -> RegistrationHealth {
         guard
             let data = try? Data(contentsOf: plistPath),
             let plist = try? PropertyListSerialization.propertyList(from: data, options: [], format: nil),
