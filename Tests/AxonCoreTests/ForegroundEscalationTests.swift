@@ -1,4 +1,5 @@
 import ApplicationServices
+import AppKit
 import CoreGraphics
 import Foundation
 import Testing
@@ -18,6 +19,13 @@ private final class FakeSession: @unchecked Sendable {
     /// True when posting drags the real pointer somewhere it will not return from.
     var pointerIsStuck = false
     var pointerAfterPost: CGPoint?
+    /// Where the pointer ends up while a *background* dispatch is in flight. Posting to a process
+    /// cannot move the cursor — that is the rung's whole promise — so this models the ordinary
+    /// condition of a personal machine: someone using the mouse while Axon delivers.
+    var pointerMovedDuringBackgroundPost: CGPoint?
+    /// Successive answers to "where is the pointer", for the case where it is moving while Axon
+    /// reads it. Each reading consumes one; afterwards the session answers `pointer` again.
+    var pointerReadings: [CGPoint] = []
     private(set) var log: [String] = []
     private(set) var globalPosts = 0
     private(set) var targetedPosts: [pid_t] = []
@@ -30,6 +38,11 @@ private final class FakeSession: @unchecked Sendable {
         }
         frontmost = pid
         return true
+    }
+
+    func readPointer() -> CGPoint {
+        guard !pointerReadings.isEmpty else { return pointer }
+        return pointerReadings.removeFirst()
     }
 
     func movePointer(to point: CGPoint) {
@@ -65,6 +78,9 @@ private final class FakeSession: @unchecked Sendable {
                 self.log.append("postToPid:\(pid)")
                 self.targetedPosts.append(pid)
                 self.frontmostDuringDispatch.append(self.frontmost)
+                if let moved = self.pointerMovedDuringBackgroundPost {
+                    self.pointer = moved
+                }
             },
             sleepMilliseconds: { _ in },
             // A fixed layout, because the Carbon input-source lookup behind the real one is not
@@ -94,7 +110,7 @@ private final class FakeSession: @unchecked Sendable {
                 )
             },
             activateProcess: { self.activate($0) },
-            pointerLocation: { self.pointer },
+            pointerLocation: { self.readPointer() },
             movePointer: { self.movePointer(to: $0) },
             settleTimeoutMs: 40,
             settleIntervalMs: 10
@@ -257,6 +273,66 @@ private func escalationStore() -> (AXElementStore, AXUIElement) {
     #expect(evidence?["pointerUnchanged"] == .bool(true))
     // The window the input was bound to, and the coordinates it was converted through.
     #expect(result.details["targetWindow"] == nil || result.details["targetWindow"]?["frame"] != nil)
+}
+
+@Test func backgroundKeyboardDeliveryReportsPointerMotionItCannotHaveCausedWithoutFailing() throws {
+    // The field case this exists for: an agent types a URL and presses Return while the person at
+    // the machine is using the mouse. The keystrokes land, the pointer moves for reasons of its
+    // own, and calling that a broken contract is a false negative on an action that worked.
+    let session = FakeSession()
+    session.pointerMovedDuringBackgroundPost = CGPoint(x: 900, y: 900)
+    let (store, element) = escalationStore()
+    let executor = session.typeExecutor(store: store, element: element)
+    // The frontmost application is always resolvable by pid, which gives the pixel rung a real
+    // identity to bind to without depending on any particular app being installed.
+    let target = try #require(NSWorkspace.shared.frontmostApplication?.processIdentifier)
+
+    let result = try executor.keyboard(app: String(target), intent: .key("End"), policy: .backgroundOnly)
+
+    #expect(result.delivery == .pixel)
+    #expect(result.dispatchSuccess)
+    #expect(result.message?.contains("could not prove it stayed in the background") != true)
+    let evidence = result.details["backgroundDelivery"]
+    // The motion is reported rather than hidden; what changes is that it is not a verdict.
+    #expect(evidence?["pointerUnchanged"] == .bool(false))
+    #expect(evidence?["pointerAsserted"] == .bool(false))
+    #expect(evidence?["frontmostAppUnchanged"] == .bool(true))
+}
+
+@Test func backgroundPointerDeliveryStillFailsWhenTheRealPointerMoves() throws {
+    // The clause stays where the dispatch synthesizes pointer input: a pixel rung whose events
+    // reached the shared devices would move the real cursor, and nothing on this side can tell that
+    // from the hand on the mouse. So the observation stands as a failure to prove the rung, which
+    // is the fail-safe direction — unlike a keyboard dispatch, which could not have done it.
+    let session = FakeSession()
+    session.pointerMovedDuringBackgroundPost = CGPoint(x: 900, y: 900)
+    let (store, element) = escalationStore()
+    let executor = session.typeExecutor(store: store, element: element)
+
+    let result = try executor.type(target: "fg:0", value: "hello", policy: .backgroundOnly)
+
+    #expect(result.delivery == .pixel)
+    #expect(result.dispatchSuccess)
+    #expect(result.success == false)
+    #expect(result.message?.contains("the real pointer moved across the dispatch") == true)
+    let evidence = result.details["backgroundDelivery"]
+    #expect(evidence?["pointerUnchanged"] == .bool(false))
+    #expect(evidence?["pointerAsserted"] == .bool(true))
+}
+
+@Test func backgroundDeliveryEvidenceAndVerdictComeFromOneReading() throws {
+    // A pointer that is still moving answers two questions differently. Reading the session once
+    // for the verdict and again for the evidence let a result call the pointer unchanged in the
+    // same breath as the message saying it moved; both now quote the same observation.
+    let session = FakeSession()
+    session.pointerReadings = [CGPoint(x: 500, y: 500), CGPoint(x: 900, y: 900)]
+    let (store, element) = escalationStore()
+    let executor = session.typeExecutor(store: store, element: element)
+
+    let result = try executor.type(target: "fg:0", value: "hello", policy: .backgroundOnly)
+
+    #expect(result.message?.contains("the real pointer moved across the dispatch") == true)
+    #expect(result.details["backgroundDelivery"]?["pointerUnchanged"] == .bool(false))
 }
 
 @Test func foregroundEscalationWaitsForTheRaisedWindowBeforeValidatingTheTarget() throws {

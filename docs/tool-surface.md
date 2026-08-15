@@ -173,7 +173,7 @@ rather than by the API that produced it:
 | rung | meaning on macOS |
 | --- | --- |
 | `semantic` | `AXPress`, `AXValue`, `AXScrollToVisible` — no focus change, no activation |
-| `pixel` | `CGEventPostToPid` against the target's process, with the frontmost app and the real pointer proved unchanged afterwards |
+| `pixel` | `CGEventPostToPid` against the target's process, with the frontmost app proved unchanged afterwards, and the real pointer too wherever the action synthesizes pointer input |
 | `foreground` | Global `CGEvent` on the shared devices, allowed only by explicit opt-in |
 
 Actions climb that ladder in order and stop at the first rung their policy and

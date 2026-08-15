@@ -4,11 +4,12 @@ use axon_core::{
     AppQuery, AxnRunner, Capability, DeliveryCandidate, DeliveryCapability, DeliveryOutcome,
     DeliveryPolicy, DeliveryRefusal, DeliveryRefusalReason, DeliveryRung, DeliverySelection,
     DiffPolicy, DispatchOutcome, ExpectedFact, ForegroundTarget, JsonRpcError, JsonRpcId,
-    JsonRpcRequest, JsonRpcResponse, KeyboardIntent, PlatformBackend, ResolutionStatus,
-    RunEnvelope, SemanticElementName, SemanticLookup, SemanticNameRegistry, SemanticSelection,
-    SinceToken, Snapshot, SnapshotHandle, TextLocationResolver, TextLocationSource,
-    TextLocationTarget, TextRecognitionProvider, ToolDispatcher, classify_semantic_diff,
-    dispatch_in_foreground, goal_success, look_since_response, prepare_run, select_delivery,
+    JsonRpcRequest, JsonRpcResponse, KeyboardIntent, PlatformBackend, PointerContract,
+    ResolutionStatus, RunEnvelope, SemanticElementName, SemanticLookup, SemanticNameRegistry,
+    SemanticSelection, SinceToken, Snapshot, SnapshotHandle, TextLocationResolver,
+    TextLocationSource, TextLocationTarget, TextRecognitionProvider, ToolDispatcher,
+    classify_semantic_diff, dispatch_in_foreground, goal_success, look_since_response, prepare_run,
+    select_delivery,
 };
 use serde_json::{Map, Value, json};
 use std::{
@@ -473,7 +474,13 @@ impl<
             let PixelPlan::Bound(bound) = plan else {
                 unreachable!("the pixel rung is only offered for a bound plan")
             };
-            return self.dispatch_pixel(policy, &candidate, &bound, verification);
+            return self.dispatch_pixel(
+                policy,
+                &candidate,
+                &bound,
+                PointerContract::Asserted,
+                verification,
+            );
         }
         // Owning-application identity is a foreground concern. Refusing on it while a bound pixel
         // plan was available would decline an action that had a perfectly good target-bound path.
@@ -501,11 +508,15 @@ impl<
     }
 
     /// Posts one bound sequence to one verified window, and reports what that proved.
+    /// `pointer` is `Asserted` for every caller here because `click` is the only action with a
+    /// pixel rung in this router: `keyboard` binds to an application rather than a window, so it
+    /// takes the semantic or foreground path and never reaches this one.
     fn dispatch_pixel(
         &mut self,
         policy: DeliveryPolicy,
         candidate: &DeliveryCandidate,
         target: &PixelTarget,
+        pointer: PointerContract,
         verification: Value,
     ) -> Result<Value, JsonRpcError> {
         let dispatch = match self.backend.dispatch_pixel_click(target) {
@@ -524,7 +535,7 @@ impl<
         if !dispatch.frontmost_unchanged {
             problems.push("the foreground window changed across the dispatch".to_string());
         }
-        if !dispatch.pointer_unchanged {
+        if pointer.is_asserted() && !dispatch.pointer_unchanged {
             problems.push("the real pointer moved across the dispatch".to_string());
         }
         // Mechanism acceptance and goal success are kept apart because at this rung the gap between
@@ -542,6 +553,9 @@ impl<
                 "targetProcessIdentifier": target.process_identifier,
                 "frontmostAppUnchanged": dispatch.frontmost_unchanged,
                 "pointerUnchanged": dispatch.pointer_unchanged,
+                // Whether that reading is a promise this dispatch made or an observation of the
+                // desktop it ran on.
+                "pointerAsserted": pointer.is_asserted(),
             },
             "targetWindow": target.evidence(),
         });

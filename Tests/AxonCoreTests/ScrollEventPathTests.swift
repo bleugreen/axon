@@ -132,6 +132,34 @@ private let scrollFrame = AXFrame(x: 10, y: 20, width: 100, height: 40)
     #expect(posted.allSatisfy { $0.location == CGPoint(x: 60, y: 40) })
 }
 
+@Test func backgroundScrollReportsPointerMotionItCannotHaveCausedWithoutFailing() throws {
+    // A wheel burst carries a location for routing and no cursor position, which is why neither
+    // rung has a pointer to put back. Motion observed around a background scroll is therefore the
+    // person at the machine, and reporting it as a broken promise would fail a scroll that worked.
+    let store = AXElementStore()
+    store.store(snapshotID: SnapshotID("scroll"), elements: [AXUIElementCreateApplication(123)])
+    var pointer = CGPoint(x: 500, y: 500)
+    let executor = AXPrimitiveActionExecutor(
+        elementStore: store,
+        overlay: nil,
+        postEvent: { _ in },
+        postEventToProcess: { _, _ in pointer = CGPoint(x: 900, y: 900) },
+        sleepMilliseconds: { _ in },
+        hitTest: { _ in nil },
+        frameProvider: { _ in scrollFrame },
+        parentProvider: { _ in nil },
+        pointerLocation: { pointer }
+    )
+
+    let result = try executor.scroll(target: .handle("scroll:0"), app: nil, deltaX: 0, deltaY: -240, policy: .backgroundOnly)
+
+    #expect(result.delivery == .pixel)
+    #expect(result.dispatchSuccess)
+    #expect(result.message?.contains("could not prove it stayed in the background") != true)
+    #expect(result.details["backgroundDelivery"]?["pointerUnchanged"] == .bool(false))
+    #expect(result.details["backgroundDelivery"]?["pointerAsserted"] == .bool(false))
+}
+
 @Test func scrollReportsUnresolvableScreenPointRatherThanAMissingDescendant() throws {
     let store = AXElementStore()
     store.store(snapshotID: SnapshotID("scroll"), elements: [AXUIElementCreateApplication(123)])
