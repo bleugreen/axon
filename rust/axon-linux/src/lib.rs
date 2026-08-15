@@ -579,6 +579,9 @@ impl<B: PointerTargetVerifier + BackgroundPixelInput> Router<B> {
         let app = app_query_from_parts(Some(&target.app), None);
         let snapshot = self.backend.capture(&app).map_err(backend_error)?;
         let initial = TextLocationResolver::resolve(&target, &snapshot, &[]);
+        // Set only when the resolution came from recognized text, because only then are the
+        // coordinates relative to a photographed window rather than to the accessibility tree.
+        let mut source_window = None;
         let resolution = if target.source == TextLocationSource::Screenshot
             || (target.source == TextLocationSource::Auto
                 && initial.status == ResolutionStatus::Missing)
@@ -587,6 +590,7 @@ impl<B: PointerTargetVerifier + BackgroundPixelInput> Router<B> {
                 .backend
                 .capture_visuals(&app, false, true)
                 .map_err(backend_error)?;
+            source_window = visual.source_window;
             TextLocationResolver::resolve(&target, &snapshot, &visual.recognized_text)
         } else {
             initial
@@ -632,7 +636,7 @@ impl<B: PointerTargetVerifier + BackgroundPixelInput> Router<B> {
         // Freshness is checked after selection, so the planner still decides before anything
         // happens and a target that moved under the request stays a stale-target error rather than
         // becoming a delivery refusal. Until here nothing native has run.
-        if let Some(stale) = self.ocr_bounds_failure(&snapshot, candidate.frame, point)? {
+        if let Some(stale) = self.ocr_bounds_failure(source_window, candidate.frame, point)? {
             return Err(rpc_error(-32003, stale));
         }
         self.snapshot = Some(snapshot);
@@ -1924,10 +1928,11 @@ mod tests {
         pixel_dispatches: Rc<RefCell<Vec<PixelTarget>>>,
         /// What OCR finds on screen, in the same coordinate space as accessibility frames.
         recognized_text: Rc<RefCell<Vec<RecognizedText>>>,
-        /// Where each window is *now*, keyed by the window root's flattened node index. A missing
-        /// entry models an accessibility read that did not answer, which is not the same as a
-        /// window that has moved.
-        window_rects: Rc<RefCell<std::collections::HashMap<usize, Rect>>>,
+        /// Where each window is *now*, keyed by native window id. A missing entry models a
+        /// geometry read that did not answer, which is not the same as a window that has moved.
+        window_rects: Rc<RefCell<std::collections::HashMap<u32, Rect>>>,
+        /// The window a visual observation reports it was taken from.
+        source_window: Rc<RefCell<Option<SourceWindow>>>,
     }
     /// One planning request the router made: the application identity it bound against, and the
     /// element and point when the action had one.
@@ -1947,13 +1952,8 @@ mod tests {
             Ok(self.pointer_target_matches)
         }
 
-        fn element_rect(&mut self, handle: &SnapshotHandle) -> Result<Option<Rect>, BackendError> {
-            let index: usize = handle
-                .0
-                .split_once(':')
-                .and_then(|(_, index)| index.parse().ok())
-                .expect("a fake handle carries an index");
-            Ok(self.window_rects.borrow().get(&index).copied())
+        fn window_rect(&mut self, window: u32) -> Result<Option<Rect>, BackendError> {
+            Ok(self.window_rects.borrow().get(&window).copied())
         }
     }
     impl BackgroundPixelInput for FakeBackend {
@@ -1978,6 +1978,7 @@ mod tests {
             Ok(VisualObservation {
                 screenshot: image,
                 recognized_text: recognized,
+                source_window: *self.source_window.borrow(),
             })
         }
 
@@ -2242,6 +2243,7 @@ mod tests {
             }))),
             recognized_text: Rc::new(RefCell::new(vec![])),
             window_rects: Rc::new(RefCell::new(std::collections::HashMap::new())),
+            source_window: Rc::new(RefCell::new(None)),
             planned: Rc::new(RefCell::new(vec![])),
             pixel_dispatches: Rc::new(RefCell::new(vec![])),
         }
