@@ -446,6 +446,20 @@ than equating “Linux” with one uniform tree.
   child. A node the walk never asked about reports no child count at all rather
   than a count of zero, because a node nobody asked is not a node with no
   children.
+- Bounding the walk bounds what is captured, not what describing it costs, and
+  those are separate budgets. Naming the elements of an observation once copied
+  the whole observation per element — quadratic in tree size, and retained,
+  because the semantic registry keeps its records. A bounded 2,000-node capture
+  of GNOME Shell therefore took a Linux daemon from 8 MiB to a gigabyte in seven
+  seconds and the kernel killed it, with the tree itself never exceeding a few
+  megabytes. The path is shared by every backend, so the cost was the same
+  everywhere; only a desktop shell was wide enough to make it fatal. The
+  invariant is now asserted as scaling rather than as a memory figure in
+  `axon-core/tests/observation_memory.rs`: describing an observation costs a
+  bounded number of copies of it, and the cost per element does not grow with
+  the number of elements. A resident-memory bound would have been a fact about
+  one machine's allocator; this one holds anywhere and names the defect when it
+  fails.
 - Under X11, XTest is the practical synthetic-input mechanism and global
   observation is feasible. Reaching either requires an X11 client layer in the
   backend, separate from the AT-SPI connection that carries capture and the
@@ -468,6 +482,17 @@ than equating “Linux” with one uniform tree.
   timeouts, malformed output, and execution failures are explicit OCR
   unavailability while semantic AT-SPI remains usable.
 - Application screenshots under Wayland remain unavailable because ScreenCast source metadata cannot be bound to an AT-SPI application. `capture_screen` separately requests a user-authorized WINDOW source, persists its restore token immediately after successful Start, and reports timeout, cancellation, or stale restoration as authorization-required. Portal access never gates semantic AT-SPI capture or makes global screenshot health usable.
+- A ScreenCast session is closed on every path that ends a capture, not only on
+  the successful one. The session is created immediately before an interactive
+  wait that races a deadline and a stop signal, so whichever of those wins drops
+  the future holding it, and `ashpd`'s session cannot close itself on `Drop`
+  because closing is an async D-Bus call. It therefore leaves the negotiation
+  through an out-parameter, which is what keeps the single close reachable from
+  success, refusal, timeout, and cancellation alike. The handshake is split by
+  who is being waited on: reaching the portal and creating a session are
+  machine-speed and get their own short bound, so a portal that is not there is
+  reported quickly instead of spending the interactive budget; only the source
+  chooser waits on a person.
 - `save` can still serialize calls already known to Axon, but recording user
   input into a session depends on global observation and may therefore be
   unavailable on Wayland. The capability report must distinguish these facets.
