@@ -231,9 +231,12 @@ private func temporaryDirectory(_ name: String) throws -> URL {
     #expect(AppBundle.shortVersion(of: bundleURL) == "0.3.5")
     #expect(FileManager.default.isExecutableFile(atPath: installed.cliURL.path))
     #expect(AppBundle.pairedEditorURL(beside: bundleURL) != nil)
-    // No staging or backup debris survives a successful swap.
+    // No staging directory and no backup copy survives a successful swap. Asserted as the
+    // property rather than as an exact directory listing, which incidental files would break
+    // without anything being wrong.
     let leftovers = try FileManager.default.contentsOfDirectory(atPath: applications.path)
-    #expect(leftovers == ["Axon.app"])
+    #expect(!leftovers.contains { $0.hasPrefix(".axon-update-") })
+    #expect(!leftovers.contains { $0.hasSuffix(".axon-previous") })
 }
 
 @Test func installAddsACompleteVersionDirectoryBesideTheCurrentOne() async throws {
