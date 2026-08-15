@@ -2260,7 +2260,7 @@ mod tests {
         };
         assert_eq!(
             success.result["screenshotUnavailable"]["code"],
-            "portal-authorization-required"
+            "capability-unavailable"
         );
         assert!(success.result.get("screenshot").is_none());
 
@@ -2290,7 +2290,7 @@ mod tests {
         assert!(success.result.to_string().contains("semantic child"));
         assert_eq!(
             success.result["screenTextUnavailable"]["code"],
-            "portal-authorization-required"
+            "capability-unavailable"
         );
         assert!(success.result.get("screenText").is_none());
     }

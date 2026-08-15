@@ -155,6 +155,7 @@ impl ScreenCastActor {
         while matches!(shared.state, PortalState::Starting) && shared.frame.snapshot().is_none() {
             let now = Instant::now();
             if now >= deadline {
+                shared.generation = shared.generation.wrapping_add(1);
                 shared.state = PortalState::AuthorizationRequired;
                 let _ = self.0.stop.send(());
                 return Err(CaptureError::AuthorizationRequired);
@@ -167,6 +168,7 @@ impl ScreenCastActor {
                 .expect("ScreenCast state poisoned");
             shared = next;
             if wait.timed_out() && shared.frame.snapshot().is_none() {
+                shared.generation = shared.generation.wrapping_add(1);
                 shared.state = PortalState::AuthorizationRequired;
                 let _ = self.0.stop.send(());
                 return Err(CaptureError::AuthorizationRequired);
@@ -698,6 +700,7 @@ mod tests {
     enum Action {
         Fail(DriverError),
         Delay(Duration),
+        LateStream(Duration),
         Stream(Option<mpsc::Receiver<()>>),
     }
 
@@ -722,6 +725,15 @@ mod tests {
                 Action::Delay(duration) => {
                     thread::sleep(duration);
                     Err(DriverError::TimedOut)
+                }
+                Action::LateStream(duration) => {
+                    thread::sleep(duration);
+                    started(StartedSession {
+                        restore_token: Some(RestoreToken::new("late")),
+                        source_id: Some("late-source".into()),
+                    });
+                    publish(frame());
+                    Ok(())
                 }
                 Action::Stream(ended) => {
                     started(StartedSession {
@@ -833,6 +845,29 @@ mod tests {
             actor.capture(false, Duration::from_millis(10)),
             Err(CaptureError::AuthorizationRequired)
         );
+    }
+
+    #[test]
+    fn callbacks_after_timeout_cannot_resurrect_the_cancelled_generation() {
+        let (actor, calls, _) = actor(vec![
+            Action::LateStream(Duration::from_millis(50)),
+            Action::Stream(None),
+        ]);
+        assert_eq!(
+            actor.capture(false, Duration::from_millis(10)),
+            Err(CaptureError::AuthorizationRequired)
+        );
+        thread::sleep(Duration::from_millis(75));
+        assert_eq!(actor.state(), PortalState::AuthorizationRequired);
+        assert_eq!(
+            actor
+                .capture(false, Duration::from_secs(1))
+                .unwrap()
+                .image
+                .width,
+            1
+        );
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
     }
 
     #[test]
