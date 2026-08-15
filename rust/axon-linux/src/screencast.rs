@@ -114,6 +114,7 @@ impl ScreenCastActor {
         let stop = Arc::new(StopController::default());
         let shutting_down = Arc::new(AtomicBool::new(false));
         let actor_signal = signal.clone();
+        let actor_stop = stop.clone();
         let actor_shutting_down = shutting_down.clone();
         let (finished_tx, finished) = mpsc::channel();
         let thread = thread::Builder::new()
@@ -124,7 +125,7 @@ impl ScreenCastActor {
                     store,
                     actor_signal,
                     commands,
-                    stop.clone(),
+                    actor_stop,
                     actor_shutting_down,
                 );
                 let _ = finished_tx.send(());
