@@ -40,11 +40,17 @@ final class AppleEventAnswerLedger: @unchecked Sendable {
     private let lock = NSLock()
     private var answered: Set<String> = []
 
-    /// Records an answer for `bundleIdentifier`, reporting whether one had already been recorded.
-    func recordAnswer(for bundleIdentifier: String) -> Bool {
+    /// Whether macOS has already answered this process for `bundleIdentifier`.
+    func hasAnswer(for bundleIdentifier: String) -> Bool {
         lock.lock()
         defer { lock.unlock() }
-        return !answered.insert(bundleIdentifier).inserted
+        return answered.contains(bundleIdentifier)
+    }
+
+    func recordAnswer(for bundleIdentifier: String) {
+        lock.lock()
+        defer { lock.unlock() }
+        answered.insert(bundleIdentifier)
     }
 }
 
@@ -77,10 +83,9 @@ struct AppleEventAuthorizationService {
     /// asked for, possibly while the machine is unattended. An agent gets a decision immediately;
     /// consent is minted by the menu bar's Browser Automation item instead.
     func check(bundleIdentifier: String, appName: String) throws {
-        let answeredEarlier = ledger.recordAnswer(for: bundleIdentifier)
+        let answeredEarlier = ledger.hasAnswer(for: bundleIdentifier)
         let decision = determine(
             bundleIdentifier: bundleIdentifier,
-            appName: appName,
             askUserIfNeeded: false,
             answeredEarlierInThisProcess: answeredEarlier
         )
@@ -92,10 +97,12 @@ struct AppleEventAuthorizationService {
     /// This is the only path that passes `askUserIfNeeded: true`, and it blocks for as long as the
     /// dialog is on screen. Call it from a deliberate user gesture, off the main thread.
     func requestConsent(bundleIdentifier: String, appName: String) throws {
-        let answeredEarlier = ledger.recordAnswer(for: bundleIdentifier)
+        // Read once, before the first leg: the silent leg of this very request must not read back as
+        // an earlier answer, or a fresh refusal would tell the user to restart a daemon that just
+        // asked them the question.
+        let answeredEarlier = ledger.hasAnswer(for: bundleIdentifier)
         let initial = determine(
             bundleIdentifier: bundleIdentifier,
-            appName: appName,
             askUserIfNeeded: false,
             answeredEarlierInThisProcess: answeredEarlier
         )
@@ -107,7 +114,6 @@ struct AppleEventAuthorizationService {
         try resolve(
             determine(
                 bundleIdentifier: bundleIdentifier,
-                appName: appName,
                 askUserIfNeeded: true,
                 answeredEarlierInThisProcess: answeredEarlier
             ),
@@ -117,12 +123,16 @@ struct AppleEventAuthorizationService {
 
     private func determine(
         bundleIdentifier: String,
-        appName: String,
         askUserIfNeeded: Bool,
         answeredEarlierInThisProcess: Bool
     ) -> Decision {
         let status = authorizer.determinePermission(bundleIdentifier: bundleIdentifier, askUserIfNeeded: askUserIfNeeded)
         let leg: BrowserAutomationAuthorizationLeg = askUserIfNeeded ? .prompted : .checked
+        // An unexpected status means the call failed, not that macOS answered the authorization, so
+        // it must not make the next denial claim this process is holding a stale answer.
+        if [noErr, OSStatus(errAEEventNotPermitted), OSStatus(errAEEventWouldRequireUserConsent)].contains(status) {
+            ledger.recordAnswer(for: bundleIdentifier)
+        }
         log("automation authorization target=\(bundleIdentifier) leg=\(leg.rawValue) status=\(status) answeredEarlierInThisProcess=\(answeredEarlierInThisProcess)")
         return Decision(status: status, leg: leg, answeredEarlierInThisProcess: answeredEarlierInThisProcess)
     }
