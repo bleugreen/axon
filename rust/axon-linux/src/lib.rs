@@ -351,6 +351,10 @@ impl<B: PointerTargetVerifier + BackgroundPixelInput> Router<B> {
     pub fn backend(&self) -> &B {
         &self.backend
     }
+
+    pub(crate) fn backend_mut(&mut self) -> &mut B {
+        &mut self.backend
+    }
     pub fn request(&mut self, request: JsonRpcRequest) -> Option<JsonRpcResponse> {
         let id = request.id?;
         let params = request

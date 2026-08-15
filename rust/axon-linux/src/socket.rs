@@ -332,6 +332,24 @@ fn dispatch(
         return (Value::Null, false);
     };
     match request.method.as_str() {
+        "capture_screen" => {
+            let reauthorize = request.params.as_ref()
+                .and_then(|params| params.get("reauthorize"))
+                .and_then(Value::as_bool)
+                .unwrap_or(false);
+            let response = match router.backend_mut().capture_screen(reauthorize) {
+                Ok(capture) => JsonRpcResponse::success(id, json!({"capture": capture})),
+                Err(crate::screencast::CaptureError::AuthorizationRequired | crate::screencast::CaptureError::TimedOut) =>
+                    JsonRpcResponse::failure(id, axon_core::JsonRpcError { code: -32004, message: "desktop portal authorization is required; retry capture_screen and approve the desktop chooser".into(), data: Some(json!({"reason":"portal-authorization-required","capability":"screenCapture"})) }),
+                Err(crate::screencast::CaptureError::Unavailable(reason)) =>
+                    JsonRpcResponse::failure(id, axon_core::JsonRpcError { code: -32004, message: reason, data: Some(json!({"reason":"capability-unavailable","capability":"screenCapture"})) }),
+                Err(crate::screencast::CaptureError::Failed(reason)) =>
+                    JsonRpcResponse::failure(id, axon_core::JsonRpcError { code: -32003, message: reason, data: Some(json!({"reason":"capture-failed","capability":"screenCapture"})) }),
+                Err(crate::screencast::CaptureError::NoFrame) =>
+                    JsonRpcResponse::failure(id, axon_core::JsonRpcError { code: -32003, message: "the ScreenCast session did not produce a frame".into(), data: Some(json!({"reason":"capture-failed","capability":"screenCapture"})) }),
+            };
+            (serde_json::to_value(response).unwrap(), false)
+        }
         "health" => {
             let capabilities =
                 merge_screenshot_capability(reported, router.backend().screenshot_capability());
