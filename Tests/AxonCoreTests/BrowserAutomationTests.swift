@@ -127,6 +127,20 @@ private func authorizationService(
     }
 }
 
+/// A failed call is not macOS answering the authorization, so it must not make the next denial claim
+/// this process is holding an answer it never received.
+@Test func anUndeterminableStatusDoesNotCountAsAnAnswer() throws {
+    let authorizer = AppleEventAuthorizerStub(results: [-50, OSStatus(errAEEventNotPermitted)])
+    let browser = browserAutomation(authorizer: authorizer)
+
+    #expect(throws: BrowserAutomationError.authorizationFailed(app: "Safari", status: -50)) {
+        _ = try browser.windows(app: "Safari")
+    }
+    let denial = try automationDenial { _ = try browser.windows(app: "Safari") }
+
+    #expect(denial.answeredEarlierInThisProcess == false)
+}
+
 @Test func consentPromptsOnlyForAnUndeterminedGrant() throws {
     let firstUse = AppleEventAuthorizerStub(results: [OSStatus(errAEEventWouldRequireUserConsent), noErr])
     try authorizationService(firstUse).requestConsent(bundleIdentifier: "com.apple.Safari", appName: "Safari")
