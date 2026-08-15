@@ -258,6 +258,9 @@ fn actor_main<D: ScreenCastDriver>(
         match command {
             Command::Stop => break,
             Command::Capture(reauthorize) => {
+                // A stop belongs only to the generation that observed it. Drain any signal left by
+                // a caller whose timeout raced with driver completion before starting a retry.
+                while stopped.lock().expect("ScreenCast stop signal poisoned").try_recv().is_ok() {}
                 let stored = if reauthorize {
                     None
                 } else {
@@ -362,13 +365,27 @@ mod production {
             .enable_time()
             .build()
             .map_err(|e| DriverError::Failed(e.to_string()))?;
-        let setup = runtime.block_on(async {
-            tokio::time::timeout(INTERACTIVE_TIMEOUT, setup(token.as_ref())).await
+        let setup_result = runtime.block_on(async {
+            let setup = setup(token.as_ref());
+            tokio::pin!(setup);
+            let deadline = tokio::time::sleep(INTERACTIVE_TIMEOUT);
+            tokio::pin!(deadline);
+            loop {
+                tokio::select! {
+                    result = &mut setup => break Ok(result),
+                    _ = &mut deadline => break Err(DriverError::TimedOut),
+                    _ = tokio::time::sleep(Duration::from_millis(25)) => {
+                        if stopped.lock().expect("ScreenCast stop signal poisoned").try_recv().is_ok() {
+                            break Err(DriverError::Cancelled);
+                        }
+                    }
+                }
+            }
         });
-        let (session, fd, node, next_token, source_id) = match setup {
-            Err(_) => return Err(DriverError::TimedOut),
-            Ok(Err(e)) => return Err(classify(e, token.is_some())),
-            Ok(Ok(v)) => v,
+        let (session, fd, node, next_token, source_id) = match setup_result {
+            Err(error) => return Err(error),
+            Ok(Err(error)) => return Err(classify(error, token.is_some())),
+            Ok(Ok(value)) => value,
         };
         started(StartedSession {
             restore_token: next_token.map(RestoreToken::new),
