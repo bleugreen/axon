@@ -24,12 +24,8 @@ pub struct StopController {
 impl StopController {
     fn request(&self) {
         self.requested.store(true, Ordering::Release);
-        let wake = self
-            .wake
-            .lock()
-            .expect("ScreenCast stop wake poisoned")
-            .clone();
-        if let Some(wake) = wake {
+        let wake = self.wake.lock().expect("ScreenCast stop wake poisoned");
+        if let Some(wake) = wake.as_ref() {
             wake();
         }
     }
@@ -690,12 +686,12 @@ mod production {
                 &mut params,
             )
             .map_err(fail)?;
-        let (stop_sender, stop_receiver) = pw::channel::channel();
-        stopped.install_wake(Some(Arc::new(move || {
-            let _ = stop_sender.send(());
+        let raw_mainloop = mainloop.as_raw_ptr() as usize;
+        // Keep the wake closure under StopController's mutex while it runs, so uninstalling it
+        // below proves the raw main-loop pointer is no longer reachable before MainLoopRc drops.
+        stopped.install_wake(Some(Arc::new(move || unsafe {
+            pw::sys::pw_main_loop_quit(raw_mainloop as *mut pw::sys::pw_main_loop);
         })));
-        let quit = mainloop.clone();
-        let _stop_receiver = stop_receiver.attach(mainloop.loop_(), move |_| quit.quit());
         mainloop.run();
         stopped.install_wake(None);
         stopped.clear();
