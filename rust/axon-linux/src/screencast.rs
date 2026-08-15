@@ -635,14 +635,6 @@ mod tests {
         }
     }
 
-    fn app(name: &str) -> AppQuery {
-        AppQuery {
-            process_id: None,
-            name: Some(name.into()),
-            identifier: None,
-        }
-    }
-
     fn actor(actions: Vec<Action>) -> (ScreenCastActor, Arc<AtomicUsize>, Arc<Mutex<Vec<bool>>>) {
         let calls = Arc::new(AtomicUsize::new(0));
         let tokens = Arc::new(Mutex::new(Vec::new()));
@@ -670,15 +662,17 @@ mod tests {
         let (actor, calls, _) = actor(vec![Action::Stream(None)]);
         assert_eq!(
             actor
-                .capture(&app("A"), Duration::from_secs(1))
+                .capture(false, Duration::from_secs(1))
                 .unwrap()
+                .image
                 .width,
             1
         );
         assert_eq!(
             actor
-                .capture(&app("A"), Duration::from_secs(1))
+                .capture(false, Duration::from_secs(1))
                 .unwrap()
+                .image
                 .width,
             1
         );
@@ -687,19 +681,21 @@ mod tests {
     }
 
     #[test]
-    fn changing_apps_stops_old_stream_and_starts_a_fresh_session() {
+    fn reauthorize_stops_old_stream_and_starts_a_fresh_session() {
         let (actor, calls, _) = actor(vec![Action::Stream(None), Action::Stream(None)]);
         assert_eq!(
             actor
-                .capture(&app("A"), Duration::from_secs(1))
+                .capture(false, Duration::from_secs(1))
                 .unwrap()
+                .image
                 .width,
             1
         );
         assert_eq!(
             actor
-                .capture(&app("B"), Duration::from_secs(1))
+                .capture(true, Duration::from_secs(1))
                 .unwrap()
+                .image
                 .width,
             1
         );
@@ -710,7 +706,7 @@ mod tests {
     fn setup_timeout_is_authorization_required_not_capture_failed() {
         let (actor, _, _) = actor(vec![Action::Delay(Duration::from_millis(50))]);
         assert_eq!(
-            actor.capture(&app("A"), Duration::from_millis(10)),
+            actor.capture(false, Duration::from_millis(10)),
             Err(CaptureError::AuthorizationRequired)
         );
     }
@@ -722,13 +718,14 @@ mod tests {
             Action::Stream(None),
         ]);
         assert_eq!(
-            actor.capture(&app("A"), Duration::from_secs(1)),
+            actor.capture(false, Duration::from_secs(1)),
             Err(CaptureError::Failed("session failed".into()))
         );
         assert_eq!(
             actor
-                .capture(&app("A"), Duration::from_secs(1))
+                .capture(false, Duration::from_secs(1))
                 .unwrap()
+                .image
                 .width,
             1
         );
@@ -739,13 +736,7 @@ mod tests {
     fn stale_restore_falls_back_to_fresh_authorization() {
         let dir = tempfile::tempdir().unwrap();
         let store = TokenStore::at(dir.path().join("token"));
-        store
-            .replace(
-                AppAuthorizationKey::Name("A".into()),
-                None,
-                RestoreToken::new("stale"),
-            )
-            .unwrap();
+        store.replace(None, RestoreToken::new("stale")).unwrap();
         let calls = Arc::new(AtomicUsize::new(0));
         let tokens = Arc::new(Mutex::new(Vec::new()));
         let actor = ScreenCastActor::spawn_with_driver(
@@ -762,8 +753,9 @@ mod tests {
         );
         assert_eq!(
             actor
-                .capture(&app("A"), Duration::from_secs(1))
+                .capture(false, Duration::from_secs(1))
                 .unwrap()
+                .image
                 .width,
             1
         );
@@ -784,16 +776,8 @@ mod tests {
                 tokens,
             },
         );
-        actor.capture(&app("A"), Duration::from_secs(1)).unwrap();
-        assert_eq!(
-            store
-                .load(&AppAuthorizationKey::Name("A".into()))
-                .unwrap()
-                .unwrap()
-                .1
-                .expose(),
-            "next"
-        );
+        actor.capture(false, Duration::from_secs(1)).unwrap();
+        assert_eq!(store.load().unwrap().unwrap().1.expose(), "next");
         assert_eq!(actor.state(), PortalState::Streaming);
     }
 
@@ -804,8 +788,9 @@ mod tests {
         assert_eq!(actor.state(), PortalState::AuthorizationRequired);
         assert_eq!(
             actor
-                .capture(&app("A"), Duration::from_secs(1))
+                .capture(false, Duration::from_secs(1))
                 .unwrap()
+                .image
                 .width,
             1
         );

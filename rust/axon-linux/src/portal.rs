@@ -300,50 +300,18 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let store = TokenStore::at(root.path().join("axon/portal/screencast.json"));
         store
-            .replace(
-                AppAuthorizationKey::Name("App".into()),
-                Some("portal-source"),
-                RestoreToken::new("secret-one"),
-            )
+            .replace(Some("portal-source"), RestoreToken::new("secret-one"))
             .unwrap();
-        assert_eq!(
-            store
-                .load(&AppAuthorizationKey::Name("App".into()))
-                .unwrap()
-                .unwrap()
-                .1
-                .expose(),
-            "secret-one"
-        );
+        assert_eq!(store.load().unwrap().unwrap().1.expose(), "secret-one");
         store
-            .replace(
-                AppAuthorizationKey::Name("App".into()),
-                Some("portal-source"),
-                RestoreToken::new("secret-two"),
-            )
+            .replace(Some("portal-source"), RestoreToken::new("secret-two"))
             .unwrap();
-        assert_eq!(
-            store
-                .load(&AppAuthorizationKey::Name("App".into()))
-                .unwrap()
-                .unwrap()
-                .1
-                .expose(),
-            "secret-two"
-        );
+        assert_eq!(store.load().unwrap().unwrap().1.expose(), "secret-two");
         assert_eq!(
             fs::metadata(store.path()).unwrap().permissions().mode() & 0o777,
             0o600
         );
-        assert!(
-            !format!(
-                "{:?}",
-                store
-                    .load(&AppAuthorizationKey::Name("App".into()))
-                    .unwrap()
-            )
-            .contains("secret-two")
-        );
+        assert!(!format!("{:?}", store.load().unwrap()).contains("secret-two"));
         assert_eq!(
             fs::read_dir(store.path().parent().unwrap())
                 .unwrap()
@@ -358,13 +326,7 @@ mod tests {
         let path = root.path().join("screencast.json");
         fs::write(&path, r#"{"version":99,"source_id":null,"token":"old"}"#).unwrap();
         let store = TokenStore::at(path.clone());
-        assert_eq!(
-            store
-                .load(&AppAuthorizationKey::Name("App".into()))
-                .unwrap_err()
-                .kind(),
-            io::ErrorKind::InvalidData
-        );
+        assert_eq!(store.load().unwrap_err().kind(), io::ErrorKind::InvalidData);
         assert!(path.exists());
     }
 
@@ -385,48 +347,18 @@ mod tests {
     }
 
     #[test]
-    fn authorization_key_uses_canonical_stable_priority() {
-        let query = AppQuery {
-            identifier: Some(" org.example.App ".into()),
-            name: Some("Example".into()),
-            process_id: Some(42),
-        };
-        assert_eq!(
-            AppAuthorizationKey::from_query(&query),
-            Some(AppAuthorizationKey::Identifier("org.example.App".into()))
-        );
-        assert!(
-            AppAuthorizationKey::from_query(&AppQuery {
-                identifier: None,
-                name: Some("  ".into()),
-                process_id: None,
-            })
-            .is_none()
-        );
-    }
-
-    #[test]
-    fn tokens_are_scoped_to_requested_application() {
+    fn successful_start_replaces_the_single_source_token() {
         let root = tempfile::tempdir().unwrap();
         let store = TokenStore::at(root.path().join("token"));
-        let app_a = AppAuthorizationKey::Name("A".into());
-        let app_b = AppAuthorizationKey::Name("B".into());
         store
-            .replace(
-                app_a.clone(),
-                Some("source-a"),
-                RestoreToken::new("token-a"),
-            )
+            .replace(Some("source-a"), RestoreToken::new("token-a"))
             .unwrap();
         store
-            .replace(
-                app_b.clone(),
-                Some("source-b"),
-                RestoreToken::new("token-b"),
-            )
+            .replace(Some("source-b"), RestoreToken::new("token-b"))
             .unwrap();
-        assert_eq!(store.load(&app_a).unwrap().unwrap().1.expose(), "token-a");
-        assert_eq!(store.load(&app_b).unwrap().unwrap().1.expose(), "token-b");
+        let (source, token) = store.load().unwrap().unwrap();
+        assert_eq!(source.as_deref(), Some("source-b"));
+        assert_eq!(token.expose(), "token-b");
     }
 
     #[test]
