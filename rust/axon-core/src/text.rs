@@ -91,6 +91,15 @@ impl TextLocationResolver {
         recognized: &[RecognizedText],
     ) -> TextLocationResolution {
         let ax = ax_candidates(&target.text, snapshot);
+        // An empty AX result is the only case worth explaining, so the opaque-node walk
+        // is confined to it and the common path pays nothing for the diagnostic.
+        let opaque_node_count = match target.source {
+            TextLocationSource::Screenshot => 0,
+            TextLocationSource::Ax | TextLocationSource::Auto if ax.is_empty() => {
+                opaque_node_count(snapshot)
+            }
+            _ => 0,
+        };
         let candidates = match target.source {
             TextLocationSource::Ax => ax,
             TextLocationSource::Auto if !ax.is_empty() => ax,
@@ -111,8 +120,41 @@ impl TextLocationResolver {
             best,
             point,
             candidates,
+            opaque_node_count,
         }
     }
+}
+
+/// The accessibility attributes treated as a node's readable text, in the order they
+/// are consulted. The Swift port carries the same ordered list as
+/// `ReadableTextAttribute`, plus `help`, which this `Node` does not model. A node with
+/// none of them populated is one `source: "ax"` can never match, however the text
+/// renders to a human.
+fn readable_attributes(node: &Node) -> [(&'static str, Option<&str>); 4] {
+    [
+        ("title", node.title.as_deref()),
+        ("value", node.value.as_deref()),
+        ("description", node.description.as_deref()),
+        ("identifier", node.identifier.as_deref()),
+    ]
+}
+
+/// Counts nodes that occupy space on screen yet expose no readable text at all.
+fn opaque_node_count(snapshot: &Snapshot) -> usize {
+    let mut nodes = Vec::new();
+    for window in &snapshot.app.windows {
+        flatten(&window.root, &mut nodes);
+    }
+    nodes
+        .into_iter()
+        .filter(|node| {
+            node.frame
+                .is_some_and(|frame| frame.width > 0.0 && frame.height > 0.0)
+                && readable_attributes(node)
+                    .iter()
+                    .all(|(_, value)| value.is_none_or(str::is_empty))
+        })
+        .count()
 }
 
 fn ax_candidates(text: &TextMatcher, snapshot: &Snapshot) -> Vec<TextLocationCandidate> {
@@ -127,18 +169,13 @@ fn ax_candidates(text: &TextMatcher, snapshot: &Snapshot) -> Vec<TextLocationCan
             let frame = node
                 .frame
                 .filter(|frame| frame.width > 0.0 && frame.height > 0.0)?;
-            let (field, matched_text) = [
-                ("title", node.title.as_deref()),
-                ("value", node.value.as_deref()),
-                ("description", node.description.as_deref()),
-                ("identifier", node.identifier.as_deref()),
-            ]
-            .into_iter()
-            .find_map(|(field, value)| {
-                value
-                    .filter(|value| text.matches(Some(value)))
-                    .map(|value| (field, value))
-            })?;
+            let (field, matched_text) = readable_attributes(node)
+                .into_iter()
+                .find_map(|(field, value)| {
+                    value
+                        .filter(|value| text.matches(Some(value)))
+                        .map(|value| (field, value))
+                })?;
             Some(TextLocationCandidate {
                 index,
                 handle: Some(snapshot.handle(index)),
