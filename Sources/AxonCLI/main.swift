@@ -488,6 +488,18 @@ private func printStatus(arguments: [String]) throws {
         }
         let unusable = status.capabilities.filter { !$0.usable }.map(\.capability)
         line("Unusable:", unusable.isEmpty ? "none" : unusable.joined(separator: ", "))
+        // An install nothing points at is invisible until a client launches its stale CLI, so say
+        // it out loud where someone is already looking.
+        let orphans = InstallPruning.orphaned(
+            root: InstallPruning.defaultRoot,
+            referencedPaths: [status.registration.path].compactMap { $0 }
+        )
+        if !orphans.isEmpty {
+            line("Orphaned:", "\(orphans.count) install\(orphans.count == 1 ? "" : "s") nothing points at")
+            for orphan in orphans {
+                line("", "\(orphan.path) (safe to remove)")
+            }
+        }
         return
     }
     print(try status.jsonLine())
