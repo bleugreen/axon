@@ -26,6 +26,8 @@ private final class FakeDesktop: @unchecked Sendable {
     var windows: [AXFrame]?
     /// Successive answers to "what is at this point"; the last one repeats.
     var hitOwners: [pid_t]
+    /// Who holds the foreground. Activation moves it, so an escalation can prove itself.
+    var frontmost: pid_t = 7
     private(set) var posted: [CGEventType] = []
 
     init(windows: [AXFrame]?, hitOwners: [pid_t]) {
@@ -58,8 +60,17 @@ private final class FakeDesktop: @unchecked Sendable {
                 guard attribute == kAXWindowsAttribute, self.windows != nil else { return nil }
                 return windowElements as AnyObject
             },
-            frontmostApp: { ForegroundApp(processIdentifier: 7, name: "Prior", bundleIdentifier: "com.example.prior") },
-            activateProcess: { _ in true },
+            frontmostApp: {
+                ForegroundApp(
+                    processIdentifier: self.frontmost,
+                    name: "pid \(self.frontmost)",
+                    bundleIdentifier: "com.example.p\(self.frontmost)"
+                )
+            },
+            activateProcess: {
+                self.frontmost = $0
+                return true
+            },
             pointerLocation: { .zero },
             movePointer: { _ in },
             settleTimeoutMs: 40,
@@ -82,4 +93,106 @@ private func resolvedPoint(at point: CGPoint, app: pid_t, provenance: AXFrame? =
         app: String(app),
         sourceWindowFrame: provenance
     )
+}
+
+@Test func resolvedPointDispatchesInTheBackgroundWhileItStillLandsInTheTargetWindow() throws {
+    let process = try resolvableProcess()
+    let desktop = FakeDesktop(windows: [resolutionWindow], hitOwners: [process])
+
+    let result = try desktop.executor().click(
+        point: resolvedPoint(at: insidePoint, app: process),
+        policy: .backgroundOnly
+    )
+
+    // The point still means what it meant, so the quiet rung carries it and nothing is activated.
+    #expect(result.dispatchSuccess)
+    #expect(result.delivery == .pixel)
+    #expect(desktop.posted == [.leftMouseDown, .leftMouseUp])
+}
+
+@Test func resolvedPointOutsideEveryTargetWindowIsRefusedWithTheMeasuredDiscrepancy() throws {
+    // The field failure, reproduced: coordinates computed against a 1251-wide window, dispatched at
+    // x=1575. Before this guard the click went out and silently did nothing.
+    let process = try resolvableProcess()
+    let desktop = FakeDesktop(windows: [resolutionWindow], hitOwners: [process])
+
+    let result = try desktop.executor().click(
+        point: resolvedPoint(at: strayPoint, app: process),
+        policy: .backgroundOnly
+    )
+
+    #expect(result.success == false)
+    #expect(result.dispatchSuccess == false)
+    #expect(desktop.posted.isEmpty)
+    let message = try #require(result.message)
+    #expect(message.contains("outside every window"))
+    // The three measurements that make the next occurrence diagnosable from the result alone.
+    #expect(message.contains("{x:1575,y:420}"))
+    #expect(message.contains("computed against {x:100,y:80,width:1251,height:900}"))
+    #expect(message.contains("bounds now {x:100,y:80,width:1251,height:900}"))
+}
+
+@Test func resolvedPointRefusesGlobalDeliveryWhenAnotherApplicationOwnsThePoint() throws {
+    // Having failed the quiet rung, the ladder tries the loud one — where the question changes from
+    // containment to ownership, because a global event goes to whatever is on top.
+    let process = try resolvableProcess()
+    let desktop = FakeDesktop(windows: [resolutionWindow], hitOwners: [4_242])
+
+    let result = try desktop.executor().click(
+        point: resolvedPoint(at: strayPoint, app: process),
+        policy: .foregroundPermitted
+    )
+
+    #expect(result.success == false)
+    #expect(result.dispatchSuccess == false)
+    #expect(desktop.posted.isEmpty)
+    let message = try #require(result.message)
+    #expect(message.contains("belongs to process 4242"))
+    #expect(message.contains("{x:1575,y:420}"))
+}
+
+@Test func resolvedPointWaitsOutAWindowThatIsStillBeingRaised() throws {
+    // The reason the check runs inside a settle budget: an application is reported frontmost before
+    // the window server finishes raising its window, so the first look still sees the old stack.
+    let process = try resolvableProcess()
+    let desktop = FakeDesktop(windows: [resolutionWindow], hitOwners: [4_242, 4_242, process])
+
+    let result = try desktop.executor().click(
+        point: resolvedPoint(at: strayPoint, app: process),
+        policy: .foregroundPermitted
+    )
+
+    #expect(result.dispatchSuccess)
+    #expect(result.delivery == .foreground)
+    #expect(desktop.posted == [.leftMouseDown, .leftMouseUp])
+}
+
+@Test func resolvedPointIsNotRefusedWhenTheWindowListDidNotAnswer() throws {
+    // An unanswered accessibility query is not evidence that the point is wrong. Refusing on it
+    // would ground a working click on a transient fault.
+    let process = try resolvableProcess()
+    let desktop = FakeDesktop(windows: nil, hitOwners: [process])
+
+    let result = try desktop.executor().click(
+        point: resolvedPoint(at: strayPoint, app: process),
+        policy: .backgroundOnly
+    )
+
+    #expect(result.dispatchSuccess)
+    #expect(desktop.posted == [.leftMouseDown, .leftMouseUp])
+}
+
+@Test func aPointWithoutProvenanceIsDispatchedWithoutGeometricValidation() throws {
+    // A coordinate the caller supplied has nothing to be measured against, so there is nothing to
+    // check and the guard must not invent a claim about it.
+    let process = try resolvableProcess()
+    let desktop = FakeDesktop(windows: [resolutionWindow], hitOwners: [4_242])
+
+    let result = try desktop.executor().click(
+        point: resolvedPoint(at: strayPoint, app: process, provenance: nil),
+        policy: .backgroundOnly
+    )
+
+    #expect(result.dispatchSuccess)
+    #expect(desktop.posted == [.leftMouseDown, .leftMouseUp])
 }
