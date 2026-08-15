@@ -42,6 +42,50 @@ public enum InstallLayout: Equatable, Sendable {
     }
 }
 
+/// Which superseded install directories are safe to remove.
+///
+/// Every release before the stable-alias work left its own directory under `~/.local/lib/axon` and
+/// nothing ever removed one, so a CLI three releases old was still on disk and still serving MCP to
+/// whatever client held its absolute path. Pruning is the answer, and it is deliberately timid: it
+/// removes only directories Axon itself created, only after a newer one is proven to work, and
+/// never one anything still points at.
+public enum InstallPruning {
+    /// How many version directories survive: the current one and the one before it, so a bad
+    /// release can be rolled back to by hand.
+    public static let keepCount = 2
+
+    /// Version directories under `root` that may be removed, oldest first.
+    ///
+    /// A candidate must be version-shaped, carry Axon's completion marker, and contain an
+    /// `Axon.app`. That precondition stays strict on purpose: a hand-assembled layout has no marker
+    /// and pruning is right to leave it alone. Anything holding a protected path — the live
+    /// registration, the running bundle — is never a candidate no matter how old it looks.
+    public static func superseded(
+        root: URL,
+        keeping keepCount: Int = InstallPruning.keepCount,
+        protecting protectedPaths: [String],
+        fileManager: FileManager = .default
+    ) -> [URL] {
+        let contents = (try? fileManager.contentsOfDirectory(atPath: root.path)) ?? []
+        let installs = contents
+            .filter { InstallLayout.isVersionShaped($0) }
+            .map { root.appendingPathComponent($0, isDirectory: true) }
+            .filter { directory in
+                fileManager.fileExists(atPath: directory.appendingPathComponent(InstallLayout.markerName).path)
+                    && fileManager.fileExists(atPath: directory.appendingPathComponent("Axon.app").path)
+            }
+            .sorted { ReleaseUpdateChecker.isVersion($0.lastPathComponent, newerThan: $1.lastPathComponent) }
+
+        let protected = protectedPaths.map { URL(fileURLWithPath: $0).standardizedFileURL.path }
+        return installs.dropFirst(keepCount)
+            .filter { directory in
+                let prefix = directory.standardizedFileURL.path + "/"
+                return !protected.contains { $0 == directory.standardizedFileURL.path || $0.hasPrefix(prefix) }
+            }
+            .reversed()
+    }
+}
+
 /// Where an update landed, and the CLI that finishes it.
 public struct InstalledUpdate: Equatable, Sendable {
     public let version: String
