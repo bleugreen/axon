@@ -440,7 +440,6 @@ jobs:
       cancel-in-progress: false
     timeout-minutes: 20
     env:
-      BINDGEN_EXTRA_CLANG_ARGS: -I/usr/include -I/usr/include/x86_64-linux-gnu
       XDG_RUNTIME_DIR: /run/user/1000
       DBUS_SESSION_BUS_ADDRESS: unix:path=/run/user/1000/bus
       DISPLAY: ":0"
@@ -453,6 +452,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libpipewire-0.3-dev libclang-dev clang
+          echo "BINDGEN_EXTRA_CLANG_ARGS=-I/usr/include -I$(gcc -print-file-name=include)" >> "$GITHUB_ENV"
 
       # Built once and named as its own step rather than as a side effect of the first probe,
       # because every step below runs this binary and each one is a claim about it.

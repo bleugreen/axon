@@ -252,8 +252,6 @@ jobs:
   rust-linux:
     name: Rust Linux
     runs-on: ubuntu-latest
-    env:
-      BINDGEN_EXTRA_CLANG_ARGS: -I/usr/include -I/usr/include/x86_64-linux-gnu
     steps:
       - name: Check out Axon
         uses: actions/checkout@v4
@@ -271,6 +269,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y libdbus-1-dev libpipewire-0.3-dev libclang-dev clang pkg-config xvfb x11-utils dbus tesseract-ocr tesseract-ocr-eng
+          echo "BINDGEN_EXTRA_CLANG_ARGS=-I/usr/include -I$(gcc -print-file-name=include)" >> "$GITHUB_ENV"
 
       # The lifecycle, session classification, status assembly, keysym translation, and the whole
       # router are pure and run headlessly. Only the systemd and socket calls need a real desktop.
