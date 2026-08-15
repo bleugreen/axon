@@ -281,7 +281,11 @@ impl X11Session {
     /// Captures the process's first managed top-level window without involving a desktop portal.
     /// This path is valid only on a real X11 session; the platform layer refuses XWayland before it
     /// can reach here because it cannot capture Wayland-native windows honestly.
-    pub fn screenshot_for_pid(&self, pid: u32) -> Result<Screenshot, BackendError> {
+    ///
+    /// Returns the window alongside the image. Which window was photographed is not something a
+    /// caller can re-derive later without repeating this selection and risking a different answer,
+    /// so it travels with the capture instead.
+    pub fn screenshot_for_pid(&self, pid: u32) -> Result<(Screenshot, Window), BackendError> {
         let window = self
             .windows_for_pid(pid)?
             .into_iter()
@@ -292,6 +296,7 @@ impl X11Session {
                     "the application owns no managed window",
                 )
             })?;
+        let captured_window = window;
         let geometry = self.window_geometry(window)?;
         let (width, height) = geometry.size;
         let attributes = self
