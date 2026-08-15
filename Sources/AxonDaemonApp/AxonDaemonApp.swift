@@ -349,39 +349,84 @@ final class AxonDaemonAppDelegate: NSObject, NSApplicationDelegate, @unchecked S
                     updateMenuState = .upToDate(version: update.currentVersion)
                 }
             } catch {
-                updateMenuState = .failed(String(describing: error))
+                updateMenuState = .failed(reason: String(describing: error), update: nil)
             }
             installMenu()
         }
     }
 
+    @objc private func openReleasePage() {
+        guard case let .failed(_, update) = updateMenuState, let update else {
+            return
+        }
+        NSWorkspace.shared.open(update.releaseURL)
+    }
+
+    /// Installs the available update, by whichever mechanism owns this install.
+    ///
+    /// Homebrew's copy is Homebrew's to replace. Every other install is Axon's own responsibility,
+    /// and opening a web page was never an update: it handed the user an archive and a decision.
     @objc private func performAvailableUpdate() {
         guard case let .available(update, brewManaged) = updateMenuState else {
             return
         }
-
-        guard let installer = homebrewInstaller, brewManaged else {
-            NSWorkspace.shared.open(update.releaseURL)
+        guard confirmInstall(update: update, brewManaged: brewManaged) else {
             return
         }
 
-        guard confirmInstall(update: update) else {
-            return
-        }
-
-        updateMenuState = .installing(version: update.latestVersion)
-        installMenu()
-
-        Task.detached(priority: .userInitiated) { [weak self] in
-            let outcome: Result<Void, Error>
-            do {
-                _ = try installer.upgradeCask(name: Self.homebrewCaskName)
-                outcome = .success(())
-            } catch {
-                outcome = .failure(error)
+        if let installer = homebrewInstaller, brewManaged {
+            updateMenuState = .installing(version: update.latestVersion)
+            installMenu()
+            Task.detached(priority: .userInitiated) { [weak self] in
+                let outcome: Result<Void, Error>
+                do {
+                    _ = try installer.upgradeCask(name: Self.homebrewCaskName)
+                    outcome = .success(())
+                } catch {
+                    outcome = .failure(error)
+                }
+                await self?.finishUpgrade(outcome: outcome, update: update)
             }
-            await self?.finishUpgrade(outcome: outcome, update: update)
+            return
         }
+
+        updateMenuState = .downloading(version: update.latestVersion, progress: 0)
+        installMenu()
+        Task { await performSelfUpdate(update) }
+    }
+
+    /// Downloads, verifies, and places the release, then hands the restart to launchd.
+    ///
+    /// Nothing here terminates this process. `daemon install` bootstraps the daemon job, boots it
+    /// out, and bootstraps it again; that bootout is what retires this copy, at the moment its
+    /// successor is ready to take the socket.
+    private func performSelfUpdate(_ update: ReleaseUpdate) async {
+        let bundleURL = Bundle.main.bundleURL
+        let version = update.latestVersion
+        do {
+            let installed = try await ReleaseInstaller().install(update: update, replacing: bundleURL) { fraction in
+                Task { @MainActor [weak self] in
+                    self?.reportDownloadProgress(version: version, fraction: fraction)
+                }
+            }
+            updateMenuState = .installing(version: installed.version)
+            installMenu()
+            try LaunchAgentManager.armUpdateFinisher(cliPath: installed.cliURL.path, socketPath: socketPath)
+            updateMenuState = .restarting(version: installed.version)
+            installMenu()
+        } catch {
+            let reason = (error as? CustomStringConvertible)?.description ?? String(describing: error)
+            updateMenuState = .failed(reason: reason, update: update)
+            installMenu()
+            showAlert(title: "Update Failed", message: reason)
+        }
+    }
+
+    private func reportDownloadProgress(version: String, fraction: Double) {
+        guard case .downloading = updateMenuState else {
+            return
+        }
+        updateMenuState = .downloading(version: version, progress: min(max(fraction, 0), 1))
     }
 
     private func finishUpgrade(outcome: Result<Void, Error>, update: ReleaseUpdate) {
@@ -398,13 +443,41 @@ final class AxonDaemonAppDelegate: NSObject, NSApplicationDelegate, @unchecked S
         }
     }
 
-    private func confirmInstall(update: ReleaseUpdate) -> Bool {
+    private func confirmInstall(update: ReleaseUpdate, brewManaged: Bool) -> Bool {
         let alert = NSAlert()
         alert.messageText = "Update Axon to \(update.latestVersion)?"
-        alert.informativeText = "Axon will quit, install the update via Homebrew, and relaunch."
+        alert.informativeText = brewManaged
+            ? "Axon will quit, install the update via Homebrew, and relaunch."
+            : """
+            Axon will download \(update.latestVersion), verify its checksum and signature, \
+            replace \(Bundle.main.bundleURL.path), and restart. Your permissions are kept.
+            """
         alert.addButton(withTitle: "Update")
         alert.addButton(withTitle: "Cancel")
         return alert.runModal() == .alertFirstButtonReturn
+    }
+
+    /// Makes this copy the registered one, which is the repair a person otherwise performs by hand.
+    ///
+    /// It runs `daemon install` from this bundle through the same finisher job an update uses, so
+    /// the registration moves here and both privacy grants ride the bundle identifier across
+    /// untouched. This copy then quits: launchd owns the registration now, and it points here.
+    @objc private func useThisCopy() {
+        let cliURL = Bundle.main.bundleURL.appendingPathComponent(AppBundle.bundledCLIRelativePath)
+        guard FileManager.default.isExecutableFile(atPath: cliURL.path) else {
+            showAlert(
+                title: "Cannot Use This Copy",
+                message: "This bundle has no CLI at \(cliURL.path), so it cannot register itself."
+            )
+            return
+        }
+        do {
+            try LaunchAgentManager.armUpdateFinisher(cliPath: cliURL.path, socketPath: socketPath)
+        } catch {
+            showAlert(title: "Cannot Use This Copy", message: String(describing: error))
+            return
+        }
+        NSApp.terminate(nil)
     }
 
     private func spawnRelaunchHelper() {
