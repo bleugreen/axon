@@ -161,6 +161,32 @@ private func authorizationService(
     #expect(recordedDenial.requests == [false])
 }
 
+/// The normal path the UI directs users along: an agent verb refuses an undetermined grant, which
+/// leaves an answer in the ledger, and the user then chooses Browser Automation and denies the
+/// dialog. That denial is the answer they just gave, so it must not tell them to restart the daemon.
+@Test func consentDeniedAfterAnAgentVerbAlreadyCheckedIsNotReportedAsStale() throws {
+    let ledger = AppleEventAnswerLedger()
+    let authorizer = AppleEventAuthorizerStub(results: [
+        OSStatus(errAEEventWouldRequireUserConsent),
+        OSStatus(errAEEventWouldRequireUserConsent),
+        OSStatus(errAEEventNotPermitted)
+    ])
+
+    let refusal = try automationDenial {
+        _ = try browserAutomation(authorizer: authorizer, ledger: ledger).windows(app: "Safari")
+    }
+    let denial = try automationDenial {
+        try authorizationService(authorizer, ledger: ledger)
+            .requestConsent(bundleIdentifier: "com.apple.Safari", appName: "Safari")
+    }
+
+    #expect(refusal.leg == .checked)
+    #expect(denial.leg == .prompted)
+    #expect(denial.answeredEarlierInThisProcess == false)
+    #expect(denial.message.contains("launchctl kickstart") == false)
+    #expect(authorizer.requests == [false, false, true])
+}
+
 @Test func consentRefusedAtTheDialogReportsThePromptedLeg() throws {
     let authorizer = AppleEventAuthorizerStub(results: [OSStatus(errAEEventWouldRequireUserConsent), OSStatus(errAEEventNotPermitted)])
 

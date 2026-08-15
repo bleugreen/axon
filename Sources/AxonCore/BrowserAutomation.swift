@@ -97,9 +97,8 @@ struct AppleEventAuthorizationService {
     /// This is the only path that passes `askUserIfNeeded: true`, and it blocks for as long as the
     /// dialog is on screen. Call it from a deliberate user gesture, off the main thread.
     func requestConsent(bundleIdentifier: String, appName: String) throws {
-        // Read once, before the first leg: the silent leg of this very request must not read back as
-        // an earlier answer, or a fresh refusal would tell the user to restart a daemon that just
-        // asked them the question.
+        // Read once, before the first leg, so the silent leg of this very request does not read back
+        // as an earlier answer.
         let answeredEarlier = ledger.hasAnswer(for: bundleIdentifier)
         let initial = determine(
             bundleIdentifier: bundleIdentifier,
@@ -128,13 +127,18 @@ struct AppleEventAuthorizationService {
     ) -> Decision {
         let status = authorizer.determinePermission(bundleIdentifier: bundleIdentifier, askUserIfNeeded: askUserIfNeeded)
         let leg: BrowserAutomationAuthorizationLeg = askUserIfNeeded ? .prompted : .checked
+        // Staleness is only ever a property of the silent leg. A prompted decision is macOS putting
+        // the question to the user in this moment, so its answer is the one they just gave and no
+        // restart can change it — even though the refusal that sent them to the menu did leave an
+        // earlier answer in the ledger, which is the normal path to this line.
+        let holdsEarlierAnswer = askUserIfNeeded ? false : answeredEarlierInThisProcess
         // An unexpected status means the call failed, not that macOS answered the authorization, so
         // it must not make the next denial claim this process is holding a stale answer.
         if [noErr, OSStatus(errAEEventNotPermitted), OSStatus(errAEEventWouldRequireUserConsent)].contains(status) {
             ledger.recordAnswer(for: bundleIdentifier)
         }
-        log("automation authorization target=\(bundleIdentifier) leg=\(leg.rawValue) status=\(status) answeredEarlierInThisProcess=\(answeredEarlierInThisProcess)")
-        return Decision(status: status, leg: leg, answeredEarlierInThisProcess: answeredEarlierInThisProcess)
+        log("automation authorization target=\(bundleIdentifier) leg=\(leg.rawValue) status=\(status) answeredEarlierInThisProcess=\(holdsEarlierAnswer)")
+        return Decision(status: status, leg: leg, answeredEarlierInThisProcess: holdsEarlierAnswer)
     }
 
     private func resolve(_ decision: Decision, appName: String) throws {
