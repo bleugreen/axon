@@ -112,6 +112,41 @@ OIDC credential scoped to a GitHub environment, so the release path holds no sig
 macOS already had the equivalent — Developer ID plus notarization — and Linux has no comparable
 desktop trust check, so the checksum remains the whole story there.
 
+## Window-less Observations
+
+Decision: an observation states the absence of a window with `note: "no-windows"`, and macOS
+capture keeps the application's menu bar in the tree rather than returning nothing.
+
+Field evidence from a 0.3.5 daemon: `look(app: "Safari")` with no Safari window open returned a
+tree holding only the menu bar and a 1280x15 screenshot. Every fact in that response was true, and
+the one that mattered was unsaid. The agent reading it had to infer "no window is open" from two
+absences — no window entry, and a screenshot height too small to be a window — which is the kind of
+inference that works until it doesn't.
+
+The tree cannot carry this by itself, and that is the point. Capture falls back to the application's
+children when `AXWindows` is empty, so the menu bar becomes a tree root and the snapshot's window
+list claims one window that is not one. Keeping that chrome is deliberate rather than accidental:
+File > New Window is native, unambiguous, and the recovery path a caller needs precisely in this
+state, so removing the root to make the count honest would delete the useful half of the response.
+The honest count therefore comes from asking the application directly — `AXWindows`'s value count on
+the application element — and is carried on the snapshot as `windowCount`, independent of whichever
+capture strategy chose the roots. `windowCount == 0` is what emits the note.
+
+`note` was chosen over a `windows: 0` count because the vocabulary already exists: `look(since:)`
+fallbacks carry `note: "baseline-expired"` and `note: "diff-exceeded-threshold"`, stable kebab-case
+statements about a response as a whole. A second count field would also have sat awkwardly beside
+the Rust envelope's `app.windows` array, which is the same fact in a different shape. One key, one
+vocabulary, both surfaces: the note rides on the snapshot itself, so socket clients and `format:
+"debug"` see it, and the compact observation envelope copies it up for MCP and CLI callers.
+
+The reach is uneven across backends, and that is recorded rather than smoothed over. The Swift and
+Rust macOS backends both produce a window-less observation and both state the note. The Windows
+backend roots capture at a matched top-level window and refuses an application that has none, so it
+never reaches the state. The Linux backend roots capture at the AT-SPI application object and
+presents it as one window whether or not a frame is open, so its window count is never zero. Making
+those two answer the same question is a change to what each backend calls a window, which is a
+larger piece of work than stating a fact the macOS backends already know.
+
 ## Deferred Design Notes
 
 These are not blocking questions. They are details that should be decided when implementation reaches the relevant layer.
