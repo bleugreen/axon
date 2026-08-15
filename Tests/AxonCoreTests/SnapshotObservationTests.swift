@@ -1,3 +1,4 @@
+import ApplicationServices
 import Foundation
 import Testing
 @testable import AxonCore
@@ -36,7 +37,7 @@ import Testing
             ])
         ],
         screenshot: nil,
-        windowCount: 0
+        windowCount: .counted(0)
     )
 
     let formatter = SnapshotObservationFormatter()
@@ -62,6 +63,35 @@ import Testing
     #expect(snapshot.jsonValue["note"] == nil)
     #expect(observation["note"] == nil)
     #expect(!formatter.text(from: observation).contains("note:"))
+}
+
+@Test func anUnansweredWindowQueryIsNeverStatedAsNoWindows() {
+    // A busy application can time out the window query. Reading that silence as zero would report
+    // a windowed application as having none, which is the same mistake as inferring the fact from
+    // the tree's shape -- only louder, because the envelope would be asserting it.
+    let snapshot = AppSnapshot(
+        id: SnapshotID("obs"),
+        app: AppIdentity(bundleIdentifier: "com.apple.Safari", name: "Safari", processIdentifier: 7),
+        windows: [AXNode(role: "AXMenuBar")],
+        screenshot: nil,
+        windowCount: .inaccessible
+    )
+
+    let formatter = SnapshotObservationFormatter()
+    let observation = formatter.observation(from: snapshot.jsonValue, frames: false)
+
+    #expect(snapshot.jsonValue["note"] == nil)
+    #expect(observation["note"] == nil)
+    #expect(!formatter.text(from: observation).contains("note:"))
+}
+
+@Test func aWindowQueryThatCannotBeAnsweredReportsInaccessibleRatherThanZero() {
+    // The one place a failed query could become a false fact is the query itself, so it is asked
+    // of an application element that cannot answer: no process owns this pid.
+    let unreachable = AXUIElementCreateApplication(-1)
+
+    #expect(WindowCountObservation.query(application: unreachable) == .inaccessible)
+    #expect(WindowCountObservation.query(application: unreachable).count == nil)
 }
 
 @Test func observationPagesBroadSiblingSetsWithoutDroppingFollowingContent() {
