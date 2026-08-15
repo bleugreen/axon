@@ -110,11 +110,13 @@ impl ScreenCastActor {
         timeout: Duration,
     ) -> Result<ScreenCapture, CaptureError> {
         let _request = self
+            .0
             .request_lock
             .lock()
             .expect("ScreenCast request lock poisoned");
         let deadline = Instant::now() + timeout.min(INTERACTIVE_TIMEOUT);
         let mut shared = self
+            .0
             .signal
             .shared
             .lock()
@@ -131,6 +133,7 @@ impl ScreenCastActor {
             let generation = shared.generation;
             shared.state = PortalState::Starting;
             if self
+                .0
                 .command
                 .send(Command::Capture {
                     generation,
@@ -150,6 +153,7 @@ impl ScreenCastActor {
                 return Err(CaptureError::AuthorizationRequired);
             }
             let (next, wait) = self
+                .0
                 .signal
                 .changed
                 .wait_timeout(shared, deadline - now)
@@ -190,8 +194,8 @@ impl ScreenCastActor {
 impl Drop for ActorHandle {
     fn drop(&mut self) {
         self.shutting_down.store(true, Ordering::Release);
-        let _ = self.0.stop.send(());
-        let _ = self.0.command.send(Command::Stop);
+        let _ = self.stop.send(());
+        let _ = self.command.send(Command::Stop);
         let finished = self
             .finished
             .get_mut()
