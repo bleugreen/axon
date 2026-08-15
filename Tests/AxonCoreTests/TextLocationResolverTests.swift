@@ -93,8 +93,8 @@ import Testing
 
 @Test func textLocationResolverCountsFramedNodesWithNoReadableText() {
     // The Safari shape from the field report: a link with a correct role and frame whose
-    // every readable attribute is empty. This is exactly the node an observation renders
-    // as ⟨1 unreadable node⟩, and it is unmatchable for the same reason it is unreadable.
+    // every matched attribute is empty. No text in the captured node means nothing for
+    // source:'ax' to match, whatever a human sees rendered in its place.
     let snapshot = textLocationFixtureSnapshot([
         AXNode(role: "AXLink", frame: AXFrame(x: 100, y: 50, width: 80, height: 20))
     ])

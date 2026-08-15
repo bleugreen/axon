@@ -1122,15 +1122,15 @@ private struct PrimitiveActionCommandHandler {
         case .ax where resolution.opaqueNodeCount > 0:
             return """
             No AX text matched, and \(resolution.opaqueNodeCount) visible \
-            \(resolution.opaqueNodeCount == 1 ? "node carries" : "nodes carry") no accessibility text at all \
-            — the same nodes an observation reports as unreadable, and the target may be rendered inside them. \
+            \(resolution.opaqueNodeCount == 1 ? "node carries" : "nodes carry") no text in any attribute \
+            AX matching reads, so the target may be rendered inside them. \
             source:'ax' does not fall back; retry with source:'screenshot' or the default source:'auto' \
             to match by screenshot OCR.
             """
         case .ax:
             return """
-            Every visible node carries accessibility text and none of it matched, \
-            so this text is absent from accessibility rather than hidden inside unreadable nodes. \
+            Every visible node carries text in an attribute AX matching reads and none of it matched, \
+            so this text is absent from accessibility rather than hidden inside nodes AX cannot read. \
             source:'ax' does not fall back; retry with source:'screenshot' or the default source:'auto' \
             to match by screenshot OCR.
             """

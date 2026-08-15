@@ -12,15 +12,17 @@ public enum TextLocationSource: String, Codable, Equatable, Sendable {
 /// The accessibility attributes Axon treats as a node's readable text, in the order
 /// every surface consults them.
 ///
-/// Two surfaces read this list and they must never fork. `TextLocationResolver`
-/// matches `source: "ax"` text against exactly these fields, and
-/// `SnapshotObservation.label(in:)` builds a node's rendered label from them. The
-/// agreement is load-bearing rather than incidental: a node an observation summarises
-/// as `⟨N unreadable nodes⟩` is one whose label came back nil, which means every
-/// attribute here was nil or empty — and those are precisely the attributes AX text
-/// matching consults. An unreadable node is therefore, by construction, an unmatchable
-/// one. Extending or reordering this list on one surface alone would break that
-/// equivalence and leave the opacity marker lying about what `source: "ax"` can reach.
+/// `TextLocationResolver` matches `source: "ax"` text against these attributes, and
+/// `SnapshotObservation.label(in:)` builds a node's rendered label from them. Sharing one
+/// list keeps the two from disagreeing about *which* attributes carry text, which until
+/// now held only because two hand-maintained copies happened to agree.
+///
+/// Sharing the list does not make the two predicates identical, and nothing should assume
+/// it does. The observation additionally rejects AX pointer descriptions as labels, and
+/// its `⟨N unreadable nodes⟩` marker reports children that vanished from the observation
+/// for any reason at all — coalesced into a parent's label, far offscreen, filtered as
+/// low-information — rather than children that lack text. A node the observation calls
+/// unreadable is frequently still matchable, which `TextLocationResolverTests` pins down.
 public enum ReadableTextAttribute: String, CaseIterable, Sendable {
     case title
     case value
@@ -103,10 +105,14 @@ public struct TextLocationResolution: Codable, Equatable, Sendable {
     public let snapshotID: SnapshotID
     public let best: TextLocationCandidate?
     public let candidates: [TextLocationCandidate]
-    /// Nodes carrying a usable frame that expose no readable text in any matched
-    /// attribute. This is the same condition an observation renders as
-    /// ⟨N unreadable nodes⟩, so a non-zero count on a missing AX result means the
-    /// text may be rendered inside nodes accessibility cannot describe.
+    /// Nodes carrying a usable frame that expose no text in any attribute AX matching
+    /// reads. A non-zero count on a missing AX result means the text may be rendered
+    /// inside nodes accessibility describes with nothing, which only screenshot OCR
+    /// can reach.
+    ///
+    /// This is the resolver's own measure of matchability, deliberately not the
+    /// observation's ⟨N unreadable nodes⟩ count. The two answer different questions
+    /// and routinely disagree; see `ReadableTextAttribute`.
     public let opaqueNodeCount: Int
 
     public init(
@@ -177,9 +183,10 @@ public struct TextLocationResolver: Sendable {
         )
     }
 
-    /// Counts nodes that occupy space on screen yet expose no readable text at all.
-    /// These are exactly the nodes an observation summarises as unreadable, and exactly
-    /// the nodes `source: "ax"` can never match, however the text renders to a human.
+    /// Counts nodes that occupy space on screen yet expose no text in any attribute the
+    /// matcher reads. These are the nodes `source: "ax"` can never match however the text
+    /// renders to a human — a statement about matching, not about what an observation
+    /// chose to render.
     private func opaqueNodeCount(in snapshot: AppSnapshot) -> Int {
         snapshot.indexedNodes.reduce(into: 0) { total, indexed in
             guard let frame = indexed.node.frame, frame.width > 0, frame.height > 0 else {

@@ -674,7 +674,7 @@ private func stabilitySnapshot(id: String, title: String) -> AppSnapshot {
     let message = response.error?.message ?? ""
     #expect(response.error?.code == -32602)
     #expect(message.contains("did not resolve uniquely: missing"))
-    #expect(message.contains("2 visible nodes carry no accessibility text"))
+    #expect(message.contains("2 visible nodes carry no text in any attribute AX matching reads"))
     #expect(message.contains("source:'ax' does not fall back"))
     #expect(message.contains("source:'screenshot'"))
     #expect(message.contains("source:'auto'"))

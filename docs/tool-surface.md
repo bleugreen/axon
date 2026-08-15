@@ -85,11 +85,12 @@ empirical rule worth knowing before picking one: for rendered web content, prefe
 `auto` or `screenshot`. AX text matching can only match text the application
 actually exposes through accessibility, and browser web content routinely renders
 links whose accessibility nodes carry a correct role and frame but no text in any
-attribute. Such a node is the same node an observation summarises as
-`⟨N unreadable nodes⟩` — unreadable and unmatchable are one fact, because both
-surfaces read the same attribute list. When `source: "ax"` finds nothing in a
-browser, that is the expected shape, and the failure message reports how many
-opaque nodes the capture held.
+attribute. When `source: "ax"` finds nothing it reports how many framed nodes
+carried no matchable text. That count is the resolver's own measure and is
+deliberately not the observation's `⟨N unreadable nodes⟩` marker: the marker
+reports children the observation dropped for any reason, including readable ones
+folded into a parent's label, so the two answer different questions and can
+disagree in both directions.
 App observations also report `focus`. `available` includes the focused element's
 role and label plus its semantic name when that element belongs to the captured
 tree. `none` means the app reported no focused UI element. `inaccessible` means
