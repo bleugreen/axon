@@ -126,7 +126,7 @@ private func resolvedPoint(at point: CGPoint, app: pid_t, provenance: AXFrame? =
     #expect(desktop.posted == [.leftMouseDown, .leftMouseUp])
 }
 
-@Test func resolvedPointOutsideEveryTargetWindowIsRefusedWithTheMeasuredDiscrepancy() throws {
+@Test func resolvedPointOutsideTheWindowItWasComputedAgainstIsRefusedWithTheMeasuredDiscrepancy() throws {
     // The field failure, reproduced: coordinates computed against a 1251-wide window, dispatched at
     // x=1575. Before this guard the click went out and silently did nothing.
     let process = try resolvableProcess()
@@ -141,18 +141,25 @@ private func resolvedPoint(at point: CGPoint, app: pid_t, provenance: AXFrame? =
     #expect(result.dispatchSuccess == false)
     #expect(desktop.posted.isEmpty)
     let message = try #require(result.message)
-    #expect(message.contains("outside every window"))
+    #expect(message.contains("outside the window these coordinates were computed against"))
     // The three measurements that make the next occurrence diagnosable from the result alone.
     #expect(message.contains("{x:1575,y:420}"))
     #expect(message.contains("computed against {x:100,y:80,width:1251,height:900}"))
     #expect(message.contains("bounds now {x:100,y:80,width:1251,height:900}"))
 }
 
-@Test func resolvedPointRefusesGlobalDeliveryWhenAnotherApplicationOwnsThePoint() throws {
-    // Having failed the quiet rung, the ladder tries the loud one — where the question changes from
-    // containment to ownership, because a global event goes to whatever is on top.
+@Test func resolvedPointIsRefusedWhenAnotherWindowOfTheSameApplicationCoversIt() throws {
+    // The case that makes "inside some window of the app" the wrong question. The window the
+    // coordinates were computed from has moved away, and a *different* window of the same
+    // application now covers the old point. Delivering there would click something the caller never
+    // named — and two windows of one application is the exact configuration this came from.
     let process = try resolvableProcess()
-    let desktop = FakeDesktop(windows: [resolutionWindow], hitOwners: [4_242])
+    let movedSource = AXFrame(x: 100, y: 900, width: 1_251, height: 900)
+    let otherWindowCoveringTheStalePoint = AXFrame(x: 1_500, y: 380, width: 400, height: 300)
+    let desktop = FakeDesktop(
+        windows: [movedSource, otherWindowCoveringTheStalePoint],
+        hitOwners: [process]
+    )
 
     let result = try desktop.executor().click(
         point: resolvedPoint(at: strayPoint, app: process),
@@ -161,20 +168,44 @@ private func resolvedPoint(at point: CGPoint, app: pid_t, provenance: AXFrame? =
 
     #expect(result.success == false)
     #expect(result.dispatchSuccess == false)
-    #expect(desktop.posted.isEmpty)
+    #expect(desktop.posted.isEmpty, "nothing may be posted into a window the point was never computed from")
     let message = try #require(result.message)
-    #expect(message.contains("belongs to process 4242"))
-    #expect(message.contains("{x:1575,y:420}"))
+    #expect(message.contains("no longer at that frame"))
+    #expect(message.contains("computed against {x:100,y:80,width:1251,height:900}"))
+    #expect(message.contains("{x:100,y:900,width:1251,height:900}"))
+    #expect(message.contains("{x:1500,y:380,width:400,height:300}"))
+}
+
+@Test func resolvedPointAcceptsTheSourceWindowWithinTheToleranceCaptureItselfUses() throws {
+    // Accessibility and capture report one coordinate space but not to the last fraction of a
+    // point, so window identity is proximity. This is the same 4-point tolerance capture uses to
+    // match an accessibility frame to the window it photographed.
+    let process = try resolvableProcess()
+    let jittered = AXFrame(x: 102, y: 81, width: 1_250, height: 899)
+    let desktop = FakeDesktop(windows: [jittered], hitOwners: [process])
+
+    let result = try desktop.executor().click(
+        point: resolvedPoint(at: insidePoint, app: process),
+        policy: .backgroundOnly
+    )
+
+    #expect(result.dispatchSuccess)
+    #expect(desktop.posted == [.leftMouseDown, .leftMouseUp])
 }
 
 @Test func resolvedPointWaitsOutAWindowThatIsStillBeingRaised() throws {
     // The reason the check runs inside a settle budget: an application is reported frontmost before
-    // the window server finishes raising its window, so the first look still sees the old stack.
+    // the window server has finished moving its window, so the first look still sees the old
+    // geometry. Validating once there would refuse the very target the escalation is settling.
     let process = try resolvableProcess()
-    let desktop = FakeDesktop(windows: [resolutionWindow], hitOwners: [4_242, 4_242, process])
+    let notYetSettled = AXFrame(x: 100, y: 900, width: 1_251, height: 900)
+    let desktop = FakeDesktop(
+        windowReadings: [[notYetSettled], [notYetSettled], [resolutionWindow]],
+        hitOwners: [process]
+    )
 
     let result = try desktop.executor().click(
-        point: resolvedPoint(at: strayPoint, app: process),
+        point: resolvedPoint(at: insidePoint, app: process),
         policy: .foregroundPermitted
     )
 
