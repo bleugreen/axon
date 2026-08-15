@@ -1121,16 +1121,18 @@ private struct PrimitiveActionCommandHandler {
         switch source {
         case .ax where resolution.opaqueNodeCount > 0:
             return """
-            No accessibility text matched, and \(resolution.opaqueNodeCount) visible \
-            \(resolution.opaqueNodeCount == 1 ? "node exposes" : "nodes expose") no accessibility text at all, \
-            so the text may be rendered inside them. source:'ax' does not fall back; \
-            retry with source:'screenshot' or the default source:'auto' to match it by screenshot OCR.
+            No AX text matched, and \(resolution.opaqueNodeCount) visible \
+            \(resolution.opaqueNodeCount == 1 ? "node carries" : "nodes carry") no accessibility text at all \
+            — the same nodes an observation reports as unreadable, and the target may be rendered inside them. \
+            source:'ax' does not fall back; retry with source:'screenshot' or the default source:'auto' \
+            to match by screenshot OCR.
             """
         case .ax:
             return """
-            Every visible node exposed accessibility text and none of it matched, \
-            so this text is absent from accessibility. source:'ax' does not fall back; \
-            retry with source:'screenshot' or the default source:'auto' to match it by screenshot OCR.
+            Every visible node carries accessibility text and none of it matched, \
+            so this text is absent from accessibility rather than hidden inside unreadable nodes. \
+            source:'ax' does not fall back; retry with source:'screenshot' or the default source:'auto' \
+            to match by screenshot OCR.
             """
         case .screenshot:
             return "Screenshot OCR recognized no matching text. source:'screenshot' does not fall back to accessibility text."
