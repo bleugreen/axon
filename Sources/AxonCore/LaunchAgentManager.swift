@@ -91,15 +91,30 @@ public struct DaemonProgram: Equatable, Sendable {
 }
 
 public struct LaunchAgentConfiguration: Equatable, Sendable {
+    /// The launchd label of the daemon job.
+    ///
+    /// This is the identity `launchctl` takes, and it is not the bundle identifier every
+    /// operator-facing surface shows. Anyone reaching for `launchctl bootout` needs this string, so
+    /// `axon status` prints it.
+    public static let daemonLabel = "dev.axon.daemon"
+
+    /// The launchd label of the one-shot job that finishes an update.
+    public static let updateFinisherLabel = "dev.axon.updater"
+
     public let label: String
     public let program: DaemonProgram
     public let socketPath: String
     public let environmentVariables: [String: String]
     public let standardOutPath: String
     public let standardErrorPath: String
+    /// Everything after the program path in `ProgramArguments`.
+    public let arguments: [String]
+    /// Whether launchd restarts the job when it exits. The daemon is supervised; a one-shot job
+    /// that finishes an update must never be, or a failure would loop forever.
+    public let keepAlive: Bool
 
     public init(
-        label: String = "dev.axon.daemon",
+        label: String = LaunchAgentConfiguration.daemonLabel,
         program: DaemonProgram,
         socketPath: String = AxonEnvironment.defaultSocketPath,
         environment: [String: String] = ProcessInfo.processInfo.environment
@@ -107,6 +122,8 @@ public struct LaunchAgentConfiguration: Equatable, Sendable {
         self.label = label
         self.program = program
         self.socketPath = socketPath
+        self.arguments = program.arguments
+        self.keepAlive = true
 
         var daemonEnvironment: [String: String] = [
             "AXON_SOCKET_PATH": socketPath,
@@ -128,13 +145,58 @@ public struct LaunchAgentConfiguration: Equatable, Sendable {
         self.standardErrorPath = "\(logDirectory)/daemon.err.log"
     }
 
+    private init(
+        label: String,
+        program: DaemonProgram,
+        arguments: [String],
+        keepAlive: Bool,
+        socketPath: String,
+        environmentVariables: [String: String],
+        standardOutPath: String,
+        standardErrorPath: String
+    ) {
+        self.label = label
+        self.program = program
+        self.arguments = arguments
+        self.keepAlive = keepAlive
+        self.socketPath = socketPath
+        self.environmentVariables = environmentVariables
+        self.standardOutPath = standardOutPath
+        self.standardErrorPath = standardErrorPath
+    }
+
+    /// The one-shot job that re-registers the daemon from a newly placed bundle.
+    ///
+    /// Re-registration means booting out `dev.axon.daemon`, and the app performing the update *is*
+    /// that job's process: it cannot survive its own bootout to issue the follow-up bootstrap. A
+    /// separate launchd job is precisely the thing that outlives it. It runs the new bundle's CLI
+    /// with `daemon install`, which is the operation the field report proved carries both privacy
+    /// grants across with no prompt, and it is emphatically not kept alive — it runs once and is
+    /// reaped by the successor it started.
+    public static func updateFinisher(
+        cliPath: String,
+        socketPath: String = AxonEnvironment.defaultSocketPath
+    ) -> LaunchAgentConfiguration {
+        let logDirectory = "\(NSHomeDirectory())/Library/Logs/Axon"
+        return LaunchAgentConfiguration(
+            label: updateFinisherLabel,
+            program: DaemonProgram(executablePath: cliPath, identity: .executablePath),
+            arguments: ["daemon", "install"],
+            keepAlive: false,
+            socketPath: socketPath,
+            environmentVariables: ["AXON_SOCKET_PATH": socketPath],
+            standardOutPath: "\(logDirectory)/updater.out.log",
+            standardErrorPath: "\(logDirectory)/updater.err.log"
+        )
+    }
+
     public var propertyListObject: [String: Any] {
         [
             "Label": label,
-            "ProgramArguments": [program.executablePath] + program.arguments,
+            "ProgramArguments": [program.executablePath] + arguments,
             "EnvironmentVariables": environmentVariables,
             "RunAtLoad": true,
-            "KeepAlive": true,
+            "KeepAlive": keepAlive,
             "LimitLoadToSessionType": "Aqua",
             "ProcessType": "Interactive",
             "StandardOutPath": standardOutPath,
@@ -169,6 +231,51 @@ public struct LaunchAgentManager {
             .appendingPathComponent("Library/LaunchAgents/\(configuration.label).plist")
         self.fileManager = fileManager
         self.runProcess = runProcess
+    }
+
+    /// A manager for the one-shot update finisher, sharing this type's plist and launchctl paths.
+    public static func updateFinisher(
+        cliPath: String,
+        socketPath: String = AxonEnvironment.defaultSocketPath,
+        plistPath: URL? = nil,
+        fileManager: FileManager = .default,
+        runProcess: @escaping ([String]) throws -> ProcessResult = LaunchAgentManager.runLaunchctl(arguments:)
+    ) -> LaunchAgentManager {
+        LaunchAgentManager(
+            configuration: LaunchAgentConfiguration.updateFinisher(cliPath: cliPath, socketPath: socketPath),
+            plistPath: plistPath,
+            fileManager: fileManager,
+            runProcess: runProcess
+        )
+    }
+
+    /// Hands the rest of the update to launchd and returns.
+    ///
+    /// The caller does not terminate itself afterwards. `daemon install` bootstraps, boots out, and
+    /// bootstraps again; that bootout is what retires this process, at the moment its successor is
+    /// ready to take the socket.
+    public static func armUpdateFinisher(
+        cliPath: String,
+        socketPath: String = AxonEnvironment.defaultSocketPath
+    ) throws {
+        try updateFinisher(cliPath: cliPath, socketPath: socketPath).start()
+    }
+
+    /// Clears the finisher job, which the successor calls once it is serving.
+    ///
+    /// Idempotent and harmless when nothing is registered: the scaffolding of an update is the
+    /// successor's to tidy, and a job that never ran leaves nothing behind to find. It takes no
+    /// program, because retiring a job needs only its label.
+    public static func reapUpdateFinisher(
+        plistPath: URL? = nil,
+        fileManager: FileManager = .default,
+        runProcess: ([String]) throws -> ProcessResult = LaunchAgentManager.runLaunchctl(arguments:)
+    ) {
+        let label = LaunchAgentConfiguration.updateFinisherLabel
+        _ = try? runProcess(["bootout", "\(launchctlDomain())/\(label)"])
+        let path = plistPath ?? URL(fileURLWithPath: NSHomeDirectory())
+            .appendingPathComponent("Library/LaunchAgents/\(label).plist")
+        try? fileManager.removeItem(at: path)
     }
 
     public func install() throws {
@@ -245,6 +352,20 @@ public struct LaunchAgentManager {
     /// process would register, so a consumer can see when a registration still points at a build
     /// directory that has since been deleted.
     public func registration() -> RegistrationHealth {
+        Self.registration(atPlistPath: plistPath)
+    }
+
+    /// The daemon registration as it exists on disk, without needing a program to describe.
+    ///
+    /// A reader asking "what is registered" — the menu bar checking whether it is the copy launchd
+    /// runs, `axon status` naming orphaned installs — has no business resolving a program of its
+    /// own first, because doing so answers a different question.
+    public static func daemonRegistration(label: String = LaunchAgentConfiguration.daemonLabel) -> RegistrationHealth {
+        registration(atPlistPath: URL(fileURLWithPath: NSHomeDirectory())
+            .appendingPathComponent("Library/LaunchAgents/\(label).plist"))
+    }
+
+    public static func registration(atPlistPath plistPath: URL) -> RegistrationHealth {
         guard
             let data = try? Data(contentsOf: plistPath),
             let plist = try? PropertyListSerialization.propertyList(from: data, options: [], format: nil),
@@ -256,8 +377,12 @@ public struct LaunchAgentManager {
         return .present(mechanism: .launchd, path: executable)
     }
 
-    private func launchctlDomain() -> String {
+    static func launchctlDomain() -> String {
         "gui/\(getuid())"
+    }
+
+    private func launchctlDomain() -> String {
+        Self.launchctlDomain()
     }
 
     private func isMissingServiceOutput(_ output: String) -> Bool {

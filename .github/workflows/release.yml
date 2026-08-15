@@ -115,12 +115,12 @@ jobs:
         run: |
           set -euo pipefail
           ./scripts/package-app
+          # One bundle to verify: --deep and the stapled ticket both cover the nested editor.
           codesign --verify --deep --strict "dist/Axon.app"
-          codesign --verify --deep --strict "dist/Axon Editor.app"
           spctl -a -vvv -t install "dist/Axon.app"
-          spctl -a -vvv -t install "dist/Axon Editor.app"
+          xcrun stapler validate "dist/Axon.app"
 
-      - name: Verify the packaged CLI reports the release version
+      - name: Verify the packaged CLI and nested editor report the release version
         env:
           VERSION: ${{ needs.version.outputs.version }}
         run: |
@@ -129,6 +129,13 @@ jobs:
           ACTUAL="$("$PACKAGED" version)"
           if [[ "$ACTUAL" != "$VERSION" ]]; then
             echo "::error::packaged CLI reports $ACTUAL, expected $VERSION"
+            exit 1
+          fi
+          # A skewed pair is the failure nesting exists to prevent; assert it rather than trust it.
+          EDITOR_PLIST="dist/Axon.app/Contents/Library/Applications/Axon Editor.app/Contents/Info.plist"
+          EDITOR_VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$EDITOR_PLIST")"
+          if [[ "$EDITOR_VERSION" != "$VERSION" ]]; then
+            echo "::error::nested editor reports $EDITOR_VERSION, expected $VERSION"
             exit 1
           fi
 
@@ -384,8 +391,7 @@ jobs:
 
             depends_on macos: ">= :sonoma"
 
-            app "Axon-#{version}/Axon.app"
-            app "Axon-#{version}/Axon Editor.app"
+            app "Axon.app"
             binary "#{appdir}/Axon.app/Contents/Resources/bin/axon"
 
             zap trash: [

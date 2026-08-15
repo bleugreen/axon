@@ -67,9 +67,13 @@ case "$OS" in
   macos)
     ARCHIVE="Axon-$VERSION-macos-aarch64.zip"
     ARCHIVE_KIND="zip"
-    CONTENT_DIR="Axon-$VERSION"
+    # Resolved after extraction: the archive root is Axon.app itself from the release that nested
+    # the editor onward, and a version-named directory holding two apps before it. AXON_VERSION
+    # pins an older release, so both layouts stay installable.
+    CONTENT_DIR=""
     RELATIVE_CLI="Axon.app/Contents/Resources/bin/axon"
-    RELATIVE_EDITOR="Axon Editor.app/Contents/MacOS/AxonEditor"
+    RELATIVE_EDITOR_NESTED="Axon.app/Contents/Library/Applications/Axon Editor.app/Contents/MacOS/AxonEditor"
+    RELATIVE_EDITOR_SIBLING="Axon Editor.app/Contents/MacOS/AxonEditor"
     ;;
   linux)
     ARCHIVE="axon-linux-$VERSION-linux-x86_64.tar.gz"
@@ -78,6 +82,12 @@ case "$OS" in
     RELATIVE_CLI="axon-linux"
     ;;
 esac
+
+# An Axon install directory is complete only with an editor in it, in whichever place the release
+# it came from put one.
+macos_editor_present() {
+  [ -x "$1/$RELATIVE_EDITOR_NESTED" ] || [ -x "$1/$RELATIVE_EDITOR_SIBLING" ]
+}
 
 INSTALL_DIR="$HOME/.local/lib/axon/$VERSION"
 INSTALL_ROOT="$HOME/.local/lib/axon"
@@ -89,7 +99,7 @@ CLI="$INSTALL_DIR/$RELATIVE_CLI"
 ALREADY_INSTALLED=0
 if [ -f "$MARKER" ] && [ -x "$CLI" ]; then
   ALREADY_INSTALLED=1
-  if [ "$OS" = macos ] && [ ! -x "$INSTALL_DIR/$RELATIVE_EDITOR" ]; then
+  if [ "$OS" = macos ] && ! macos_editor_present "$INSTALL_DIR"; then
     ALREADY_INSTALLED=0
   fi
 fi
@@ -142,11 +152,20 @@ if [ "$ALREADY_INSTALLED" -eq 0 ]; then
   else
     tar -xzf "$ARCHIVE_PATH" -C "$EXTRACT_DIR" || fail "could not unpack $ARCHIVE with tar"
   fi
-  SOURCE_DIR="$EXTRACT_DIR/$CONTENT_DIR"
-  [ -d "$SOURCE_DIR" ] || fail "$ARCHIVE did not contain the expected directory $CONTENT_DIR"
+  if [ "$OS" = macos ]; then
+    if [ -d "$EXTRACT_DIR/Axon.app" ]; then
+      SOURCE_DIR="$EXTRACT_DIR"
+    else
+      SOURCE_DIR="$EXTRACT_DIR/Axon-$VERSION"
+    fi
+    [ -d "$SOURCE_DIR" ] || fail "$ARCHIVE did not contain Axon.app at its root or in Axon-$VERSION"
+  else
+    SOURCE_DIR="$EXTRACT_DIR/$CONTENT_DIR"
+    [ -d "$SOURCE_DIR" ] || fail "$ARCHIVE did not contain the expected directory $CONTENT_DIR"
+  fi
   [ -x "$SOURCE_DIR/$RELATIVE_CLI" ] || fail "$ARCHIVE did not contain the expected executable $RELATIVE_CLI"
   if [ "$OS" = macos ]; then
-    [ -x "$SOURCE_DIR/$RELATIVE_EDITOR" ] || fail "$ARCHIVE did not contain the expected executable $RELATIVE_EDITOR"
+    macos_editor_present "$SOURCE_DIR" || fail "$ARCHIVE did not contain an Axon Editor.app executable"
   fi
 
   STAGED_INSTALL="$INSTALL_DIR.installing"
@@ -155,7 +174,7 @@ if [ "$ALREADY_INSTALLED" -eq 0 ]; then
   cp -R "$SOURCE_DIR"/. "$STAGED_INSTALL"/ || fail "could not stage Axon beside permanent install directory $INSTALL_DIR"
   [ -x "$STAGED_INSTALL/$RELATIVE_CLI" ] || fail "the staged CLI is not executable"
   if [ "$OS" = macos ]; then
-    [ -x "$STAGED_INSTALL/$RELATIVE_EDITOR" ] || fail "the staged editor is not executable"
+    macos_editor_present "$STAGED_INSTALL" || fail "the staged editor is not executable"
   fi
   if [ -e "$INSTALL_DIR" ]; then
     rm -rf "$INSTALL_DIR" || fail "could not replace incomplete install directory $INSTALL_DIR"

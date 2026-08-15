@@ -8,21 +8,34 @@ The release artifact is a signed and preferably notarized zip:
 
 ```text
 Axon-<version>-macos-aarch64.zip
-└── Axon-<version>
-    ├── Axon.app
-    │   └── Contents
-    │       ├── MacOS
-    │       │   └── Axon
-    │       └── Resources
-    │           └── bin
-    │               └── axon
-    └── Axon Editor.app
-        └── Contents
-            └── MacOS
-                └── AxonEditor
+└── Axon.app
+    └── Contents
+        ├── MacOS
+        │   └── Axon
+        ├── Library
+        │   └── Applications
+        │       └── Axon Editor.app
+        │           └── Contents
+        │               └── MacOS
+        │                   └── AxonEditor
+        └── Resources
+            └── bin
+                └── axon
 ```
 
-The Homebrew cask installs both apps and links `Axon.app/Contents/Resources/bin/axon`.
+The archive root is the application itself, so extracting it yields one `Axon.app` to drag into
+`/Applications`, where Finder offers to replace an existing install. The editor is nested rather
+than shipped beside it: one bundle to move, one bundle for the in-app updater to swap, and no way
+for the recorder and editor to reach different versions. The outer bundle is signed last so its
+signature seals the nested code, and only the outer bundle is stapled — its notarization ticket
+covers everything inside.
+
+The Homebrew cask installs the one app and links `Axon.app/Contents/Resources/bin/axon`.
+
+The archive layout and its consumers — `site/public/install.sh`, the tap cask written by
+`release.yml`, and the site's instructions — must ship in one release cut. `install.sh` accepts both
+this layout and the older `Axon-<version>/` directory holding two apps, so a pinned `AXON_VERSION`
+still resolves.
 
 `Axon.app` uses bundle id:
 

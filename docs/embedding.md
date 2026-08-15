@@ -17,7 +17,7 @@ exact version and upgrade deliberately; nothing in the contract resolves a mutab
 
 | Target | Artifact | Contains |
 | --- | --- | --- |
-| macos/aarch64 | `Axon-<version>-macos-aarch64.zip` | signed `Axon.app`, `Axon Editor.app`, and the bundled `axon` CLI |
+| macos/aarch64 | `Axon-<version>-macos-aarch64.zip` | a signed `Axon.app` at the archive root, containing the nested `Axon Editor.app` and the bundled `axon` CLI |
 | windows/x86_64 | `axon-win-<version>-windows-x86_64.zip` | Authenticode-signed `axon-win.exe` |
 | linux/x86_64 | `axon-linux-<version>-linux-x86_64.tar.gz` | `axon-linux` and its systemd user unit template |
 
@@ -117,7 +117,7 @@ Registration is platform-native:
 
 | Platform | Mechanism | Where |
 | --- | --- | --- |
-| macOS | LaunchAgent | `~/Library/LaunchAgents/dev.axon.daemon.plist`, `LimitLoadToSessionType=Aqua` |
+| macOS | LaunchAgent | `dev.axon.daemon` at `~/Library/LaunchAgents/dev.axon.daemon.plist`, `LimitLoadToSessionType=Aqua` |
 | Windows | Scheduled task | `Axon Windows Daemon`, `ONLOGON`, restricted to the current interactive user |
 | Linux | systemd user unit | `~/.config/systemd/user/axon.service`, bound to `graphical-session.target` |
 
@@ -127,9 +127,10 @@ Registration is platform-native:
 copies the binary anywhere. Which executable of that install it names depends on the platform, and
 on macOS the answer is decided by the operating system's privacy model rather than by convenience.
 
-On macOS the release ships one `Axon.app` holding two executables: the daemon app at
-`Contents/MacOS/Axon` and the CLI at `Contents/Resources/bin/axon`. **`daemon install` registers the
-app**, argument-less. macOS attributes a privacy grant — Accessibility, Screen Recording — to a
+On macOS the release ships one `Axon.app` holding two executables — the daemon app at
+`Contents/MacOS/Axon` and the CLI at `Contents/Resources/bin/axon` — plus the editor nested at
+`Contents/Library/Applications/Axon Editor.app`. **`daemon install` registers the app**,
+argument-less. macOS attributes a privacy grant — Accessibility, Screen Recording — to a
 bundle identity only for that bundle's *main* executable; anything else, including a helper binary
 under `Contents/Resources`, is recorded against its absolute path. Because every release installs
 at its own versioned path, registering the CLI made each upgrade a new subject in System Settings
@@ -151,6 +152,25 @@ and decides whether the next upgrade needs a human in System Settings.
 
 Windows and Linux have no equivalent per-application grant, and register the invoking executable
 with `serve`.
+
+### The launchd label is not the bundle identifier
+
+On macOS two different identities name Axon, and each tool accepts exactly one of them:
+`launchctl` takes the launchd label `dev.axon.daemon`, while `tccutil` and `open -b` take the
+bundle identifier `com.bleugreen.axon`. Only the identifier is visible in ordinary use — it is what
+System Settings shows and what privacy grants are recorded against — so an operator reaching for
+`launchctl bootout` will guess it and be told there is no such service. `axon status` therefore
+prints the label with the registered path (`Registration: dev.axon.daemon -> ...`), which is the
+exact string `launchctl bootout gui/$UID/<label>` wants.
+
+### Finishing an update
+
+The in-app updater on macOS ends every non-Homebrew update the same way: it places the new bundle,
+then hands the re-registration to a second, one-shot LaunchAgent labelled `dev.axon.updater` that
+runs the new bundle's CLI with `daemon install`. A separate job is structurally necessary —
+re-registering means booting out `dev.axon.daemon`, and the running app *is* that job's process, so
+it cannot survive its own bootout to issue the follow-up bootstrap. The finisher is never kept
+alive, and the successor it starts removes it once it is serving.
 
 The release installers keep external client paths separate from that registration truth. Windows
 maintains `%LOCALAPPDATA%\Axon\current` as a junction to the active versioned directory and includes

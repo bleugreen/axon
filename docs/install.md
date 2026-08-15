@@ -2,11 +2,13 @@
 
 Axon runs locally on your computer and gives an agent access to the accessibility layer already built into macOS, Windows, and Linux. The service is visible, inspectable, and communicates with agent clients over a local socket.
 
-On macOS, the install includes:
+On macOS the install is one application, `Axon.app`, containing:
 
-- `Axon.app`, the menu bar service that owns accessibility access.
-- `Axon Editor.app`, for opening and editing `.axn` files.
-- `axon`, the command-line and MCP entrypoint.
+- the menu bar service that owns accessibility access,
+- `Axon Editor.app`, for opening and editing `.axn` files, nested at `Contents/Library/Applications`,
+- `axon`, the command-line and MCP entrypoint, at `Contents/Resources/bin/axon`.
+
+One application means the release archive extracts to a single bundle you drag into `/Applications`, replacing any copy already there, and the recorder and the editor can never reach different versions.
 
 ## Install
 
@@ -28,7 +30,13 @@ The installer registers a per-user Task Scheduler entry and both steady-state in
 
 The installers verify the release checksum, install into a permanent versioned directory, register the daemon from that immutable location, and put a stable CLI entry point on `PATH`. Linux maintains `~/.local/lib/axon/current`; Windows maintains `%LOCALAPPDATA%\Axon\current` and the stable command name `axon.exe`. Upgrades repoint these aliases, so external MCP configurations do not retain an older bridge. Pin a release with `AXON_VERSION=0.3.1` on macOS or Linux. In PowerShell, set `$env:AXON_VERSION = '0.3.1'` before running the installer.
 
-On macOS, `Axon.app` and its sibling `Axon Editor.app` are one versioned unit. The daemon opens only the editor shipped beside it with the same version and bundle identities; it never falls back to an older Launch Services registration. If either application is missing or mismatched, reinstall Axon rather than copying one application independently.
+On macOS, `Axon.app` and the editor nested inside it are one versioned unit. The daemon opens only the editor shipped inside it with the same version and bundle identities; it never falls back to an older Launch Services registration. If the nested editor is missing or mismatched, reinstall Axon rather than copying applications around by hand.
+
+### Updating
+
+The menu bar's **Check for Updates** performs the update itself on every install that Homebrew does not manage. It resolves the newest release from GitHub, downloads the archive, verifies its published checksum and that it is signed by the same developer identity as the copy asking, and then replaces the install in place: a bundle at a fixed path such as `/Applications/Axon.app` is swapped where it stands, and an `install.sh` install gets a new version directory beside the current one. It finishes by re-registering the daemon from the new bundle, which is what carries the Accessibility and Screen Recording approvals across without a new prompt. If any check fails, nothing is replaced and the menu offers both another attempt and the release page.
+
+A Homebrew-managed install still updates through `brew upgrade --cask bleugreen/tap/axon`, which the menu item runs for you.
 
 External MCP clients should use the stable path rather than a versioned directory. Register it from
 your shell so the home-directory variable is resolved into the absolute executable path stored by
@@ -116,6 +124,39 @@ from the CLI asking it. That is what an upgrade in place looks like before a res
 `accessibility: not granted` means macOS has not approved the `com.bleugreen.axon` app identity.
 Approve it in System Settings > Privacy & Security > Accessibility. `screenRecording: not granted`
 costs screenshots and nothing else.
+
+`Orphaned:` lists install directories under `~/.local/lib/axon` that nothing points at. They are
+harmless until an MCP client launches one by its absolute path, at which point that client is
+talking to whatever release the directory holds. Remove the ones you recognize as old.
+
+### Two identities, two tools
+
+Axon answers to two different names, and using the wrong one is the most common dead end when
+repairing an install:
+
+- `dev.axon.daemon` is the **launchd label**. It is what `launchctl` takes, and `axon status`
+  prints it beside the registered path: `Registration: dev.axon.daemon -> /Applications/Axon.app/Contents/MacOS/Axon`.
+- `com.bleugreen.axon` is the **bundle identifier**. It is what macOS records privacy grants
+  against, and what `tccutil` and `open -b` take.
+
+So a full stop-and-reset uses one of each, and neither command accepts the other's name:
+
+```sh
+launchctl bootout gui/$(id -u)/dev.axon.daemon      # stop and unregister the login item
+tccutil reset Accessibility com.bleugreen.axon      # revoke the Accessibility approval
+```
+
+### Two menu bar icons
+
+Two icons means two copies of Axon are running and only one of them owns the socket. The copy that
+lost says so: its menu names the version, path, and process id of the copy that is serving, and
+offers **Use This Copy**, which re-registers the daemon from the bundle you are looking at and
+quits. That is the same repair as running `daemon install` from that bundle's CLI by hand, and it
+keeps both privacy grants because the grants follow the bundle identifier rather than the path.
+
+The menu also says **Login item points at ...** when the copy that is serving is not the copy
+launchd starts at login, and names a leftover standalone `Axon Editor.app` from before the editor
+shipped nested.
 
 ### Removing a duplicate server
 

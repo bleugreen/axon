@@ -314,8 +314,7 @@ private func openAxnEditor(arguments: [String]) throws {
     process.executableURL = URL(fileURLWithPath: "/usr/bin/open")
     if let daemonURL = bundledAxonAppURL() {
         guard let editorURL = AppBundle.pairedEditorURL(beside: daemonURL) else {
-            let expected = daemonURL.deletingLastPathComponent()
-                .appendingPathComponent("Axon Editor.app", isDirectory: true)
+            let expected = daemonURL.appendingPathComponent(AppBundle.nestedEditorRelativePath, isDirectory: true)
             throw CLIError.missingArguments(
                 "The matching Axon Editor.app was not found at \(expected.path). Reinstall Axon to restore the paired applications."
             )
@@ -380,6 +379,10 @@ private func handleDaemonCommand(arguments: [String]) throws {
         // System Settings.
         print("identity: \(program.identityDescription)")
         print("daemon ready (pid \(report.processId), version \(report.version))")
+        // Only once this install is proven to answer. Both entry points reach here — the installer
+        // script and the in-app update finisher both run `daemon install` — so neither has to carry
+        // its own cleanup.
+        pruneSupersededInstalls(program: program, registrationPath: manager.registration().path)
     case "restart":
         // Restart deliberately does not re-register. It restarts the daemon that is installed,
         // whatever binary is asking, so restarting from a build directory cannot repoint a
@@ -394,6 +397,30 @@ private func handleDaemonCommand(arguments: [String]) throws {
         print("unregistered \(manager.configuration.label)")
     default:
         throw CLIError.missingArguments("daemon requires install, uninstall, or restart")
+    }
+}
+
+/// Removes install directories this install superseded, once it is serving.
+///
+/// Applies only to the versioned layout `install.sh` writes, which is the one that accumulates: a
+/// bundle at a fixed location is replaced in place and has nothing to leave behind. Failures are
+/// reported and never fatal — an install that works must not be undone by a cleanup that does not.
+private func pruneSupersededInstalls(program: DaemonProgram, registrationPath: String?) {
+    guard let bundle = AppBundle.enclosing(program.executablePath) else {
+        return
+    }
+    let bundleURL = URL(fileURLWithPath: bundle.path, isDirectory: true)
+    guard case let .versioned(root, _) = InstallLayout.detect(bundleURL: bundleURL) else {
+        return
+    }
+    let protectedPaths = [bundleURL.path] + (registrationPath.map { [$0] } ?? [])
+    for directory in InstallPruning.superseded(root: root, protecting: protectedPaths) {
+        do {
+            try FileManager.default.removeItem(at: directory)
+            print("pruned superseded install \(directory.path)")
+        } catch {
+            print("could not prune \(directory.path): \(error)")
+        }
     }
 }
 
@@ -447,7 +474,12 @@ private func printStatus(arguments: [String]) throws {
         line("Version:", status.version)
         line("Daemon:", daemonState)
         line("Endpoint:", status.daemon.endpoint)
-        line("Registration:", status.registration.registered ? status.registration.path ?? "registered" : "not registered")
+        // The launchd label and the bundle identifier are different identities, and only one of
+        // them works with `launchctl`. Printing the label beside the path is what saves an operator
+        // from guessing `com.bleugreen.axon` — the only identity the product otherwise shows them.
+        line("Registration:", status.registration.registered
+            ? "\(LaunchAgentConfiguration.daemonLabel) -> \(status.registration.path ?? "registered")"
+            : "not registered")
         line("Session:", status.session.graphical
             ? "graphical"
             : "\(status.session.interactive ? "interactive, no desktop" : "not interactive") (\(status.session.reason ?? HealthReason.unknown))")
@@ -456,6 +488,18 @@ private func printStatus(arguments: [String]) throws {
         }
         let unusable = status.capabilities.filter { !$0.usable }.map(\.capability)
         line("Unusable:", unusable.isEmpty ? "none" : unusable.joined(separator: ", "))
+        // An install nothing points at is invisible until a client launches its stale CLI, so say
+        // it out loud where someone is already looking.
+        let orphans = InstallPruning.orphaned(
+            root: InstallPruning.defaultRoot,
+            referencedPaths: [status.registration.path].compactMap { $0 }
+        )
+        if !orphans.isEmpty {
+            line("Orphaned:", "\(orphans.count) install\(orphans.count == 1 ? "" : "s") nothing points at")
+            for orphan in orphans {
+                line("", "\(orphan.path) (safe to remove)")
+            }
+        }
         return
     }
     print(try status.jsonLine())

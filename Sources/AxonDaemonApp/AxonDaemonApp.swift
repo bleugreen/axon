@@ -1,7 +1,52 @@
 import AppKit
 import AxonCore
+import Darwin
 import Foundation
 import UniformTypeIdentifiers
+
+/// The copy of Axon that already owns the socket, named exactly.
+///
+/// Losing the socket race used to surface as the word `failed` in a menu, which told the person
+/// looking at two menu bar icons nothing they could act on. The lock file records the incumbent's
+/// pid and the incumbent answers `health`, so the copy that lost can say precisely which Axon,
+/// which version, and which path is in its way.
+struct IncumbentCopy: Sendable {
+    let version: String?
+    let executablePath: String?
+    let processId: Int?
+
+    static func resolve(from error: Error, socketPath: String) -> IncumbentCopy? {
+        guard case let SocketError.socketAlreadyServed(_, pid) = error else {
+            return nil
+        }
+        let response = try? SocketClient(path: socketPath, responseTimeoutSeconds: 2)
+            .send(JSONRPCRequest(id: .string("incumbent"), method: "health"))
+        let report = response.flatMap { try? DaemonReport(jsonObject: $0.result ?? [:]) }
+        let processId = pid ?? report?.processId
+        return IncumbentCopy(
+            version: report?.version,
+            executablePath: processId.flatMap(Self.executablePath(ofProcess:)),
+            processId: processId
+        )
+    }
+
+    /// The executable behind a pid. The health protocol does not carry the incumbent's own path,
+    /// and asking the kernel is both simpler and true of a daemon too old to have been asked.
+    private static func executablePath(ofProcess processId: Int) -> String? {
+        var buffer = [CChar](repeating: 0, count: 4096)
+        guard proc_pidpath(Int32(processId), &buffer, UInt32(buffer.count)) > 0 else {
+            return nil
+        }
+        return String(cString: buffer)
+    }
+
+    var summary: String {
+        let identity = version.map { "Axon \($0)" } ?? "Another Axon"
+        let location = executablePath.map { " at \($0)" } ?? ""
+        let owner = processId.map { " (pid \($0))" } ?? ""
+        return "\(identity)\(location)\(owner) is already serving"
+    }
+}
 
 @MainActor
 final class AxonDaemonAppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
@@ -10,8 +55,11 @@ final class AxonDaemonAppDelegate: NSObject, NSApplicationDelegate, @unchecked S
         case checking
         case upToDate(version: String)
         case available(ReleaseUpdate, brewManaged: Bool)
+        case downloading(version: String, progress: Double)
         case installing(version: String)
-        case failed(String)
+        /// The new bundle is in place and launchd has been handed the re-registration.
+        case restarting(version: String)
+        case failed(reason: String, update: ReleaseUpdate?)
     }
 
     private enum RecordingDestination {
@@ -35,6 +83,8 @@ final class AxonDaemonAppDelegate: NSObject, NSApplicationDelegate, @unchecked S
     private var recordingScope: UserRecordingScope?
     private var recordingDestination: RecordingDestination?
     private let appRecency = RecordingAppRecencyStore()
+    private var incumbent: IncumbentCopy?
+    private var strayEditorNotice: String?
 
     func applicationWillFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
@@ -47,6 +97,11 @@ final class AxonDaemonAppDelegate: NSObject, NSApplicationDelegate, @unchecked S
         configureStatusItem()
         ScreenCaptureRuntime.bootstrapSynchronously()
         Doctor.warmUp()
+        // Whatever started this copy, the update scaffolding is the successor's to clear. Doing it
+        // here means a finisher that ran, and one that failed and left its plist behind, both end
+        // the same way.
+        LaunchAgentManager.reapUpdateFinisher()
+        strayEditorNotice = Self.strayEditorNotice()
         startServer()
         installMenu()
         refreshTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
@@ -89,9 +144,13 @@ final class AxonDaemonAppDelegate: NSObject, NSApplicationDelegate, @unchecked S
         serverQueue.async { [socketPath] in
             do {
                 try SocketServer(path: socketPath, router: router).run()
-                Self.serverEnded("socket server stopped accepting connections", app: self)
+                Self.serverEnded("socket server stopped accepting connections", incumbent: nil, app: self)
             } catch {
-                Self.serverEnded("socket server failed: \(String(describing: error))", app: self)
+                Self.serverEnded(
+                    "socket server failed: \(String(describing: error))",
+                    incumbent: IncumbentCopy.resolve(from: error, socketPath: socketPath),
+                    app: self
+                )
             }
         }
         serverState = "running"
@@ -107,7 +166,11 @@ final class AxonDaemonAppDelegate: NSObject, NSApplicationDelegate, @unchecked S
     ///
     /// Hand-launched there is nobody to restart it, so the failure belongs in the menu where
     /// someone can read it rather than in a process that vanishes.
-    nonisolated private static func serverEnded(_ message: String, app: AxonDaemonAppDelegate) {
+    nonisolated private static func serverEnded(
+        _ message: String,
+        incumbent: IncumbentCopy?,
+        app: AxonDaemonAppDelegate
+    ) {
         if AxonEnvironment.isLaunchdManaged() {
             FileHandle.standardError.write(Data("axon: \(message)\n".utf8))
             exit(1)
@@ -115,6 +178,7 @@ final class AxonDaemonAppDelegate: NSObject, NSApplicationDelegate, @unchecked S
         Task { @MainActor in
             app.serverState = "failed"
             app.serverError = message
+            app.incumbent = incumbent
             app.installMenu()
         }
     }
@@ -122,8 +186,28 @@ final class AxonDaemonAppDelegate: NSObject, NSApplicationDelegate, @unchecked S
     private func installMenu() {
         let menu = NSMenu()
         menu.addItem(disabledItem("Axon"))
+
+        // A copy that lost the socket race serves nothing, so offering it recording and updates
+        // would be theatre. It gets the two things that are actually true of it: who is in its way,
+        // and the two ways out.
+        if let incumbent {
+            menu.addItem(disabledItem(incumbent.summary))
+            menu.addItem(.separator())
+            menu.addItem(menuItem(title: "Use This Copy", action: #selector(useThisCopy)))
+            menu.addItem(menuItem(title: "Quit", action: #selector(quit), keyEquivalent: "q"))
+            statusItem.menu = menu
+            updateStatusItemAppearance()
+            return
+        }
+
         if let serverError {
             menu.addItem(disabledItem("Error: \(serverError)"))
+        }
+        if let warning = registrationWarning() {
+            menu.addItem(disabledItem(warning))
+        }
+        if let strayEditorNotice {
+            menu.addItem(disabledItem(strayEditorNotice))
         }
         menu.addItem(.separator())
         if !AccessibilityPermission.isTrusted() {
@@ -151,15 +235,54 @@ final class AxonDaemonAppDelegate: NSObject, NSApplicationDelegate, @unchecked S
         case .checking:
             menu.addItem(disabledItem("Checking for Updates..."))
         case let .upToDate(version):
+            // Never a dead end: a check that raced a release must be repeatable without relaunching.
             menu.addItem(disabledItem("Up to Date (\(version))"))
+            menu.addItem(menuItem(title: "Check Again", action: #selector(checkForUpdates)))
         case let .available(update, _):
             menu.addItem(menuItem(title: "Update to \(update.latestVersion)...", action: #selector(performAvailableUpdate)))
+        case let .downloading(version, progress):
+            menu.addItem(disabledItem("Downloading \(version)... \(Int((progress * 100).rounded()))%"))
         case let .installing(version):
             menu.addItem(disabledItem("Installing \(version)..."))
-        case .failed:
-            menu.addItem(disabledItem("Update Check Failed"))
+        case let .restarting(version):
+            menu.addItem(disabledItem("Restarting into \(version)..."))
+        case let .failed(reason, update):
+            menu.addItem(disabledItem("Update Failed"))
+            menu.addItem(disabledItem(reason))
             menu.addItem(menuItem(title: "Check Again", action: #selector(checkForUpdates)))
+            if update != nil {
+                menu.addItem(menuItem(title: "Open Release Page", action: #selector(openReleasePage)))
+            }
         }
+    }
+
+    /// Says so when the copy that is serving is not the copy launchd will start next login.
+    private func registrationWarning() -> String? {
+        guard let registered = LaunchAgentManager.daemonRegistration().path else {
+            return nil
+        }
+        let bundlePath = Bundle.main.bundleURL.standardizedFileURL.path
+        guard !registered.hasPrefix(bundlePath + "/") else {
+            return nil
+        }
+        return "Login item points at \(registered)"
+    }
+
+    /// Names an `Axon Editor.app` standing on its own outside this bundle.
+    ///
+    /// The editor ships nested, so a standalone copy is residue: either from the releases that
+    /// shipped two apps, or from someone who dragged both out of one of those archives. It is
+    /// harmless but it is another Launch Services claimant on `.axn`, which is worth saying.
+    nonisolated private static func strayEditorNotice() -> String? {
+        let candidates = [
+            URL(fileURLWithPath: "/Applications/Axon Editor.app"),
+            Bundle.main.bundleURL.deletingLastPathComponent().appendingPathComponent("Axon Editor.app")
+        ]
+        for candidate in candidates where FileManager.default.fileExists(atPath: candidate.path) {
+            let version = AppBundle.shortVersion(of: candidate).map { " \($0)" } ?? ""
+            return "Leftover Axon Editor\(version) at \(candidate.path)"
+        }
+        return nil
     }
 
     private func menuItem(title: String, action: Selector, keyEquivalent: String = "") -> NSMenuItem {
@@ -226,39 +349,84 @@ final class AxonDaemonAppDelegate: NSObject, NSApplicationDelegate, @unchecked S
                     updateMenuState = .upToDate(version: update.currentVersion)
                 }
             } catch {
-                updateMenuState = .failed(String(describing: error))
+                updateMenuState = .failed(reason: String(describing: error), update: nil)
             }
             installMenu()
         }
     }
 
+    @objc private func openReleasePage() {
+        guard case let .failed(_, update) = updateMenuState, let update else {
+            return
+        }
+        NSWorkspace.shared.open(update.releaseURL)
+    }
+
+    /// Installs the available update, by whichever mechanism owns this install.
+    ///
+    /// Homebrew's copy is Homebrew's to replace. Every other install is Axon's own responsibility,
+    /// and opening a web page was never an update: it handed the user an archive and a decision.
     @objc private func performAvailableUpdate() {
         guard case let .available(update, brewManaged) = updateMenuState else {
             return
         }
-
-        guard let installer = homebrewInstaller, brewManaged else {
-            NSWorkspace.shared.open(update.releaseURL)
+        guard confirmInstall(update: update, brewManaged: brewManaged) else {
             return
         }
 
-        guard confirmInstall(update: update) else {
-            return
-        }
-
-        updateMenuState = .installing(version: update.latestVersion)
-        installMenu()
-
-        Task.detached(priority: .userInitiated) { [weak self] in
-            let outcome: Result<Void, Error>
-            do {
-                _ = try installer.upgradeCask(name: Self.homebrewCaskName)
-                outcome = .success(())
-            } catch {
-                outcome = .failure(error)
+        if let installer = homebrewInstaller, brewManaged {
+            updateMenuState = .installing(version: update.latestVersion)
+            installMenu()
+            Task.detached(priority: .userInitiated) { [weak self] in
+                let outcome: Result<Void, Error>
+                do {
+                    _ = try installer.upgradeCask(name: Self.homebrewCaskName)
+                    outcome = .success(())
+                } catch {
+                    outcome = .failure(error)
+                }
+                await self?.finishUpgrade(outcome: outcome, update: update)
             }
-            await self?.finishUpgrade(outcome: outcome, update: update)
+            return
         }
+
+        updateMenuState = .downloading(version: update.latestVersion, progress: 0)
+        installMenu()
+        Task { await performSelfUpdate(update) }
+    }
+
+    /// Downloads, verifies, and places the release, then hands the restart to launchd.
+    ///
+    /// Nothing here terminates this process. `daemon install` bootstraps the daemon job, boots it
+    /// out, and bootstraps it again; that bootout is what retires this copy, at the moment its
+    /// successor is ready to take the socket.
+    private func performSelfUpdate(_ update: ReleaseUpdate) async {
+        let bundleURL = Bundle.main.bundleURL
+        let version = update.latestVersion
+        do {
+            let installed = try await ReleaseInstaller().install(update: update, replacing: bundleURL) { fraction in
+                Task { @MainActor [weak self] in
+                    self?.reportDownloadProgress(version: version, fraction: fraction)
+                }
+            }
+            updateMenuState = .installing(version: installed.version)
+            installMenu()
+            try LaunchAgentManager.armUpdateFinisher(cliPath: installed.cliURL.path, socketPath: socketPath)
+            updateMenuState = .restarting(version: installed.version)
+            installMenu()
+        } catch {
+            let reason = (error as? CustomStringConvertible)?.description ?? String(describing: error)
+            updateMenuState = .failed(reason: reason, update: update)
+            installMenu()
+            showAlert(title: "Update Failed", message: reason)
+        }
+    }
+
+    private func reportDownloadProgress(version: String, fraction: Double) {
+        guard case .downloading = updateMenuState else {
+            return
+        }
+        updateMenuState = .downloading(version: version, progress: min(max(fraction, 0), 1))
     }
 
     private func finishUpgrade(outcome: Result<Void, Error>, update: ReleaseUpdate) {
@@ -275,13 +443,41 @@ final class AxonDaemonAppDelegate: NSObject, NSApplicationDelegate, @unchecked S
         }
     }
 
-    private func confirmInstall(update: ReleaseUpdate) -> Bool {
+    private func confirmInstall(update: ReleaseUpdate, brewManaged: Bool) -> Bool {
         let alert = NSAlert()
         alert.messageText = "Update Axon to \(update.latestVersion)?"
-        alert.informativeText = "Axon will quit, install the update via Homebrew, and relaunch."
+        alert.informativeText = brewManaged
+            ? "Axon will quit, install the update via Homebrew, and relaunch."
+            : """
+            Axon will download \(update.latestVersion), verify its checksum and signature, \
+            replace \(Bundle.main.bundleURL.path), and restart. Your permissions are kept.
+            """
         alert.addButton(withTitle: "Update")
         alert.addButton(withTitle: "Cancel")
         return alert.runModal() == .alertFirstButtonReturn
+    }
+
+    /// Makes this copy the registered one, which is the repair a person otherwise performs by hand.
+    ///
+    /// It runs `daemon install` from this bundle through the same finisher job an update uses, so
+    /// the registration moves here and both privacy grants ride the bundle identifier across
+    /// untouched. This copy then quits: launchd owns the registration now, and it points here.
+    @objc private func useThisCopy() {
+        let cliURL = Bundle.main.bundleURL.appendingPathComponent(AppBundle.bundledCLIRelativePath)
+        guard FileManager.default.isExecutableFile(atPath: cliURL.path) else {
+            showAlert(
+                title: "Cannot Use This Copy",
+                message: "This bundle has no CLI at \(cliURL.path), so it cannot register itself."
+            )
+            return
+        }
+        do {
+            try LaunchAgentManager.armUpdateFinisher(cliPath: cliURL.path, socketPath: socketPath)
+        } catch {
+            showAlert(title: "Cannot Use This Copy", message: String(describing: error))
+            return
+        }
+        NSApp.terminate(nil)
     }
 
     private func spawnRelaunchHelper() {
@@ -485,8 +681,8 @@ final class AxonDaemonAppDelegate: NSObject, NSApplicationDelegate, @unchecked S
     }
 
     private func openEditor(url: URL) throws {
-        let expectedEditorURL = Bundle.main.bundleURL.deletingLastPathComponent()
-            .appendingPathComponent("Axon Editor.app", isDirectory: true)
+        let expectedEditorURL = Bundle.main.bundleURL
+            .appendingPathComponent(AppBundle.nestedEditorRelativePath, isDirectory: true)
         guard let editorAppURL = AppBundle.pairedEditorURL(beside: Bundle.main.bundleURL) else {
             throw CocoaError(.executableNotLoadable, userInfo: [
                 NSLocalizedDescriptionKey: "The matching Axon Editor.app was not found at \(expectedEditorURL.path). Reinstall Axon to restore the paired applications."

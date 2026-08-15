@@ -123,7 +123,14 @@ jobs:
           # Listed once into a variable for the same reason as the Linux archive check below:
           # `grep -q` short-circuits, and under `pipefail` that fails the pipeline on EPIPE.
           LISTING="$(unzip -l "$ZIP")"
-          grep -q "Axon-$VERSION/Axon.app/" <<<"$LISTING"
+          # The archive root is the application itself, so extracting it yields one Axon.app to
+          # drag into /Applications. Assert the absence of the superseded version-named directory
+          # too: a layout regression that reintroduced it would otherwise still satisfy a check
+          # that only looks for what should be there.
+          grep -q " Axon.app/" <<<"$LISTING"
+          ! grep -q "Axon-$VERSION/" <<<"$LISTING"
+          NESTED_EDITOR="Contents/Library/Applications/Axon Editor.app"
+          test -x "dist/Axon.app/$NESTED_EDITOR/Contents/MacOS/AxonEditor"
           ACTUAL="$(dist/Axon.app/Contents/Resources/bin/axon version)"
           [[ "$ACTUAL" == "$VERSION" ]]
           assert_daemon_plist() {
@@ -134,11 +141,24 @@ jobs:
             [[ "$(plutil -extract CFBundleVersion raw "$plist")" == "$VERSION" ]]
             [[ "$(plutil -extract NSAppleEventsUsageDescription raw "$plist")" == "Axon uses browser automation to navigate and enumerate browser windows and tabs." ]]
           }
+          # Version skew between the recorder and the editor is the failure nesting exists to make
+          # impossible, so the packaged pair is asserted rather than assumed.
+          assert_editor_plist() {
+            local plist="$1"
+            [[ "$(plutil -extract CFBundleIdentifier raw "$plist")" == "com.bleugreen.axon.editor" ]]
+            [[ "$(plutil -extract CFBundleExecutable raw "$plist")" == "AxonEditor" ]]
+            [[ "$(plutil -extract CFBundleShortVersionString raw "$plist")" == "$VERSION" ]]
+            [[ "$(plutil -extract CFBundleVersion raw "$plist")" == "$VERSION" ]]
+          }
           assert_daemon_plist "dist/Axon.app/Contents/Info.plist"
+          assert_editor_plist "dist/Axon.app/$NESTED_EDITOR/Contents/Info.plist"
           archive_dir="$(mktemp -d)"
           trap 'rm -rf "$archive_dir"' EXIT
           ditto -x -k "$ZIP" "$archive_dir"
-          assert_daemon_plist "$archive_dir/Axon-$VERSION/Axon.app/Contents/Info.plist"
+          assert_daemon_plist "$archive_dir/Axon.app/Contents/Info.plist"
+          assert_editor_plist "$archive_dir/Axon.app/$NESTED_EDITOR/Contents/Info.plist"
+          test -x "$archive_dir/Axon.app/Contents/Resources/bin/axon"
+          test -x "$archive_dir/Axon.app/$NESTED_EDITOR/Contents/MacOS/AxonEditor"
 
   rust-macos:
     name: Rust macOS
