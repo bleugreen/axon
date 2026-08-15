@@ -3525,7 +3525,10 @@ mod tests {
                 json!({
                     "targetProcessIdentifier": 4812,
                     "frontmostAppUnchanged": true,
-                    "pointerUnchanged": true
+                    "pointerUnchanged": true,
+                    // A click sends pointer messages, so where the cursor ended up is a promise
+                    // this dispatch made rather than a reading taken beside it.
+                    "pointerAsserted": true
                 })
             );
         }

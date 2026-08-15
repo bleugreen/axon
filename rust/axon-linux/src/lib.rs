@@ -3644,6 +3644,73 @@ mod tests {
         }
 
         #[test]
+        fn a_keyboard_dispatch_reports_pointer_motion_it_cannot_have_caused_without_failing() {
+            // Someone was using their mouse while the keystrokes were delivered. `XSendEvent`
+            // keyboard events touch no pointing device, so that motion says nothing about the
+            // delivery, and calling it a broken promise would fail an action that worked.
+            let backend = bound_backend(false);
+            *backend.pixel_result.borrow_mut() = Ok(PixelDispatch {
+                complete: true,
+                partial: None,
+                frontmost_unchanged: true,
+                input_focus_unchanged: true,
+                pointer_unchanged: false,
+            });
+            let mut router = router_for(backend);
+
+            let response = router
+                .request(request("keyboard", json!({"app": "App", "text": "axon"})))
+                .unwrap();
+
+            let result = refusal(&response);
+            assert_eq!(result["delivery"], json!("pixel"));
+            assert_eq!(result["dispatchSuccess"], json!(true));
+            assert_eq!(
+                result["message"],
+                Value::Null,
+                "nothing this dispatch could have done went wrong"
+            );
+            // The observation is reported rather than hidden; what it is not is a verdict.
+            let background = &result["backgroundDelivery"];
+            assert_eq!(background["pointerUnchanged"], json!(false));
+            assert_eq!(background["pointerAsserted"], json!(false));
+        }
+
+        #[test]
+        fn a_click_dispatch_that_moved_the_pointer_is_still_not_a_background_delivery() {
+            // The same reading, held against a dispatch that sends pointer events. One that
+            // reached the shared devices would move the real cursor, and nothing here can tell
+            // that from the hand on the mouse, so the rung reports what it could not prove.
+            let backend = bound_backend(true);
+            *backend.pixel_result.borrow_mut() = Ok(PixelDispatch {
+                complete: true,
+                partial: None,
+                frontmost_unchanged: true,
+                input_focus_unchanged: true,
+                pointer_unchanged: false,
+            });
+            let _handle = backend.snapshot.handle(0);
+            let mut router = router_for(backend);
+
+            let response = router
+                .request(request("click", json!({"target": {"x": 10.0, "y": 10.0}})))
+                .unwrap();
+
+            let result = refusal(&response);
+            assert_eq!(result["dispatchSuccess"], json!(true));
+            assert_eq!(result["success"], json!(false));
+            assert!(
+                result["message"]
+                    .as_str()
+                    .unwrap()
+                    .contains("the real pointer moved across the dispatch"),
+                "{}",
+                result["message"]
+            );
+            assert_eq!(result["backgroundDelivery"]["pointerAsserted"], json!(true));
+        }
+
+        #[test]
         fn keyboard_naming_no_application_has_no_target_window_to_bind() {
             // Not a gap being papered over: a request addressed at whatever holds the foreground
             // is a request with no target, and the pixel rung is target-bound by definition.
