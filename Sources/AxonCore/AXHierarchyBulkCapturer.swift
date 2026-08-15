@@ -191,7 +191,8 @@ public struct AXFullTreeCapturer {
             app: appIdentity,
             windows: capture.windows,
             screenshot: encodedScreenshot,
-            focus: focus
+            focus: focus,
+            windowCount: WindowCountObservation.query(application: appElement)
         )
         elementStore?.store(snapshotID: snapshot.id, elements: capture.retainedElements, summary: SnapshotSummary(snapshot: snapshot))
         return snapshot

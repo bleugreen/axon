@@ -1,3 +1,4 @@
+import ApplicationServices
 import Foundation
 import Testing
 @testable import AxonCore
@@ -16,6 +17,81 @@ import Testing
     #expect(formatter.observation(from: focused.jsonValue, frames: false)["focus"]?["target"]?["locator"]?["title"] == .string("Search"))
     #expect(formatter.text(from: formatter.observation(from: missing.jsonValue, frames: false)).contains("focus: none"))
     #expect(formatter.text(from: formatter.observation(from: inaccessible.jsonValue, frames: false)).contains("focus: inaccessible \"AX query failed\""))
+}
+
+@Test func observationStatesNoWindowsWhenOnlyApplicationChromeWasCaptured() {
+    // Field evidence, 2026-08-14: looking at Safari with no window open returned a tree holding
+    // only the menu bar, and nothing said so. Capture keeps that chrome on purpose -- File > New
+    // Window is the recovery path -- so the absence of a window has to be stated by the envelope
+    // instead of inferred from a tree that still has a root.
+    let snapshot = AppSnapshot(
+        id: SnapshotID("obs"),
+        app: AppIdentity(bundleIdentifier: "com.apple.Safari", name: "Safari", processIdentifier: 7),
+        windows: [
+            AXNode(role: "AXMenuBar", children: [
+                AXNode(role: "AXMenuBarItem", title: "File", actions: ["AXPress"], children: [
+                    AXNode(role: "AXMenu", children: [
+                        AXNode(role: "AXMenuItem", title: "New Window", actions: ["AXPress"])
+                    ])
+                ])
+            ])
+        ],
+        screenshot: nil,
+        windowCount: .counted(0)
+    )
+
+    let formatter = SnapshotObservationFormatter()
+    let observation = formatter.observation(from: snapshot.jsonValue, frames: false)
+
+    #expect(snapshot.jsonValue["note"] == .string(ObservationNote.noWindows))
+    #expect(observation["note"] == .string(ObservationNote.noWindows))
+    #expect(formatter.text(from: observation).contains("note: no-windows"))
+    #expect(treeString(in: observation).contains("\"New Window\""))
+}
+
+@Test func observationOmitsTheNoWindowsNoteWhileAWindowIsOpen() {
+    let snapshot = AppSnapshot(
+        id: SnapshotID("obs"),
+        app: AppIdentity(bundleIdentifier: "com.apple.Safari", name: "Safari", processIdentifier: 7),
+        windows: [AXNode(role: "AXWindow", title: "Start Page")],
+        screenshot: nil
+    )
+
+    let formatter = SnapshotObservationFormatter()
+    let observation = formatter.observation(from: snapshot.jsonValue, frames: false)
+
+    #expect(snapshot.jsonValue["note"] == nil)
+    #expect(observation["note"] == nil)
+    #expect(!formatter.text(from: observation).contains("note:"))
+}
+
+@Test func anUnansweredWindowQueryIsNeverStatedAsNoWindows() {
+    // A busy application can time out the window query. Reading that silence as zero would report
+    // a windowed application as having none, which is the same mistake as inferring the fact from
+    // the tree's shape -- only louder, because the envelope would be asserting it.
+    let snapshot = AppSnapshot(
+        id: SnapshotID("obs"),
+        app: AppIdentity(bundleIdentifier: "com.apple.Safari", name: "Safari", processIdentifier: 7),
+        windows: [AXNode(role: "AXMenuBar")],
+        screenshot: nil,
+        windowCount: .inaccessible
+    )
+
+    let formatter = SnapshotObservationFormatter()
+    let observation = formatter.observation(from: snapshot.jsonValue, frames: false)
+
+    #expect(snapshot.jsonValue["note"] == nil)
+    #expect(observation["note"] == nil)
+    #expect(!formatter.text(from: observation).contains("note:"))
+}
+
+@Test func aWindowQueryThatCannotBeAnsweredReportsInaccessibleRatherThanZero() {
+    // The one place a failed query could become a false fact is the query itself, so it is asked
+    // of an application element that cannot answer: no process owns this pid.
+    let unreachable = AXUIElementCreateApplication(-1)
+
+    #expect(WindowCountObservation.query(application: unreachable) == .inaccessible)
+    #expect(WindowCountObservation.query(application: unreachable).count == nil)
 }
 
 @Test func observationPagesBroadSiblingSetsWithoutDroppingFollowingContent() {

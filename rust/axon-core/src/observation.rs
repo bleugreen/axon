@@ -12,6 +12,14 @@ pub const OBSERVATION_SCREENSHOT_MEDIA_TYPE: &str = "image/png";
 
 pub const OBSERVATION_SCREEN_TEXT_MAX_ITEMS: usize = 100;
 
+/// The stable statement a full-application observation carries when the captured application is
+/// running with no open top-level window.
+///
+/// A window-less application still observes successfully — its application-level chrome is what a
+/// caller uses to open a window again — so the absence of a window is a fact the envelope has to
+/// state rather than something a caller infers from the tree's shape.
+pub const OBSERVATION_NOTE_NO_WINDOWS: &str = "no-windows";
+
 /// Formats platform OCR results for the public observation contract.
 ///
 /// Geometry remains on RecognizedText for text-location resolution even when frames is false;
@@ -126,6 +134,14 @@ pub fn format_snapshot(snapshot: &Snapshot, options: &LookDisplayOptions) -> Val
                 format_node(root, depth, options);
             }
         }
+    }
+    if snapshot.app.windows.is_empty()
+        && let Some(object) = value.as_object_mut()
+    {
+        object.insert(
+            "note".into(),
+            Value::String(OBSERVATION_NOTE_NO_WINDOWS.into()),
+        );
     }
     if options.format == LookFormat::Debug {
         let mut envelope = Map::new();

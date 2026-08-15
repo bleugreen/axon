@@ -155,7 +155,7 @@ public enum ToolSurfaceSpec {
     public static let tools: [ToolSpec] = [
         ToolSpec(
             name: "look",
-            description: "Observe Axon's current surface: no app lists apps, app captures state, a semantic target pages children, and since returns a change check.",
+            description: "Observe Axon's current surface: no app lists apps, app captures state, a semantic target pages children, and since returns a change check. An observation whose note is no-windows means the application is running with no window open; the tree still holds its menu bar, so open one through the application's own File > New Window item before acting.",
             params: [
                 ToolParameterSpec("app", .string, description: "Bundle id, pid, app name, or partial app name. Omit with target to list apps."),
                 ToolParameterSpec("target", .target(.element), description: "App-scoped semantic name returned by a prior look; pages that element's children."),

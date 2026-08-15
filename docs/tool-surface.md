@@ -61,7 +61,7 @@ processes, bundle identifiers, or pids are needed.
 `look(app: ...)` captures an accessibility snapshot. MCP returns a compact
 agent-facing observation by default; `format: "debug"` returns the raw snapshot.
 The MCP observation is the `structuredContent` object itself: `app`, `snapshot`,
-`tree`, `focus`, `screenshot`, `screenshotUnavailable`, `screenText`, redaction,
+`tree`, `note`, `focus`, `screenshot`, `screenshotUnavailable`, `screenText`, redaction,
 and warnings are top-level siblings. There is no `structuredContent.snapshot`
 wrapper. Screenshot metadata stays at `structuredContent.screenshot`; its base64
 bytes travel in a sibling MCP image content item.
@@ -94,6 +94,25 @@ as scroll bars, sliders, and value indicators are excluded from card detection;
 their digits describe control state rather than financial data.
 When a screenshot request is known to contain an active credential through AX or
 OCR text, Axon omits the image and returns a warning instead of sending pixels.
+
+An application running with no open window still observes successfully, and the
+observation says so with `note: "no-windows"`. The note is the authority, not the
+tree's shape: macOS capture deliberately keeps the application's menu bar as a tree
+root when there is no window, because that chrome is how a caller opens one again
+(File > New Window). Without the note, a menu-bar-only tree and a one-window tree
+look alike from the outside, and a caller has to guess from a degenerate screenshot
+height. `note` shares the vocabulary of the `look(since:)` fallback notes: a stable
+kebab-case statement about the response as a whole.
+
+The note states an answer, never a silence. When the window query itself fails — an
+application busy enough to time it out — the observation says nothing about windows
+rather than reporting zero, so `no-windows` always means the application answered
+that it has none.
+
+Only the two macOS backends reach this state today. The Windows backend roots capture
+at a matched top-level window and refuses an application that has none, and the Linux
+backend roots capture at the AT-SPI application object, which is presented as a single
+window whether or not any frame is open.
 
 When every child of a rendered node is filtered out of the observation, the tree says so
 with a marker naming what disappeared, such as
