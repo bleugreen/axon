@@ -43,8 +43,7 @@ fn target(source: TextLocationSource) -> TextLocationTarget {
 #[test]
 fn ax_source_counts_opaque_nodes_when_nothing_matches() {
     let snapshot = opaque_link_snapshot();
-    let resolution =
-        TextLocationResolver::resolve(&target(TextLocationSource::Ax), &snapshot, &[]);
+    let resolution = TextLocationResolver::resolve(&target(TextLocationSource::Ax), &snapshot, &[]);
 
     assert_eq!(resolution.status, ResolutionStatus::Missing);
     // The window carries a title, so only the link itself is opaque.
@@ -65,8 +64,7 @@ fn screenshot_source_never_pays_for_the_opaque_count() {
 fn a_successful_ax_match_reports_no_opaque_nodes() {
     let mut snapshot = opaque_link_snapshot();
     snapshot.app.windows[0].root.children[0].title = Some("719 comments".into());
-    let resolution =
-        TextLocationResolver::resolve(&target(TextLocationSource::Ax), &snapshot, &[]);
+    let resolution = TextLocationResolver::resolve(&target(TextLocationSource::Ax), &snapshot, &[]);
 
     assert_eq!(resolution.status, ResolutionStatus::Unique);
     assert_eq!(resolution.opaque_node_count, 0);
@@ -76,12 +74,13 @@ fn a_successful_ax_match_reports_no_opaque_nodes() {
 fn text_in_value_still_matches_after_the_shared_attribute_list_refactor() {
     let mut snapshot = opaque_link_snapshot();
     snapshot.app.windows[0].root.children[0].value = Some("719 comments".into());
-    let resolution =
-        TextLocationResolver::resolve(&target(TextLocationSource::Ax), &snapshot, &[]);
+    let resolution = TextLocationResolver::resolve(&target(TextLocationSource::Ax), &snapshot, &[]);
 
     assert_eq!(resolution.status, ResolutionStatus::Unique);
     assert_eq!(
-        resolution.best.expect("unique match").reasons[0].split(' ').next(),
+        resolution.best.expect("unique match").reasons[0]
+            .split(' ')
+            .next(),
         Some("value")
     );
 }

@@ -169,13 +169,14 @@ fn ax_candidates(text: &TextMatcher, snapshot: &Snapshot) -> Vec<TextLocationCan
             let frame = node
                 .frame
                 .filter(|frame| frame.width > 0.0 && frame.height > 0.0)?;
-            let (field, matched_text) = readable_attributes(node)
-                .into_iter()
-                .find_map(|(field, value)| {
-                    value
-                        .filter(|value| text.matches(Some(value)))
-                        .map(|value| (field, value))
-                })?;
+            let (field, matched_text) =
+                readable_attributes(node)
+                    .into_iter()
+                    .find_map(|(field, value)| {
+                        value
+                            .filter(|value| text.matches(Some(value)))
+                            .map(|value| (field, value))
+                    })?;
             Some(TextLocationCandidate {
                 index,
                 handle: Some(snapshot.handle(index)),
