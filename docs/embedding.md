@@ -382,10 +382,12 @@ expect to see in production.
   reach an application that is already running, so the fix is to enable accessibility for the
   session and restart the applications; Axon reports the state and does not change it.
 - **Linux under Wayland.** The daemon is ready, but `pointerInput` and `keyboardInput` are unusable
-  with reason `wayland-restricted`, and `screenshot` is unusable with reason
-  `portal-authorization-required`. `observeGlobalInput` is unusable with reason `not-implemented`,
-  because that one is a gap in this build rather than something the compositor withholds — an X11
-  session reports it exactly the same way.
+  with reason `wayland-restricted`. Screenshot capability is dynamic: it begins unusable with
+  `portal-authorization-required`, becomes usable while the desktop portal stream is live, and
+  returns to unusable if that stream ends. Request `look` with screenshots enabled and approve the
+  desktop chooser to authorize it; Axon stores the portal restore token for later sessions but never
+  opens the chooser at daemon startup. `observeGlobalInput` remains unusable with reason
+  `not-implemented`, because that is a build gap rather than something the compositor withholds.
 
 ### Compatibility
 

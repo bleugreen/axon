@@ -3,6 +3,8 @@ use crate::{
     BackgroundPixelInput, PixelAim, PixelDispatch, PixelDispatchError, PixelPlan, PixelTarget,
     PointerTargetVerifier, VisualObservation,
     pixel::{self, PixelAction},
+    portal::{AUTHORIZATION_REQUIRED, PortalState, TokenStore},
+    screencast::{CaptureError, INTERACTIVE_TIMEOUT, ScreenCastActor},
     x11::{X11Session, coordinate},
 };
 use atspi::{
@@ -161,6 +163,36 @@ enum InputSession {
     Unavailable(&'static str),
 }
 
+trait PortalScreenshot: Send {
+    fn state(&self) -> PortalState;
+    fn capture(&self, app: &AppQuery, timeout: Duration) -> Result<Screenshot, CaptureError>;
+}
+
+impl PortalScreenshot for ScreenCastActor {
+    fn state(&self) -> PortalState {
+        ScreenCastActor::state(self)
+    }
+
+    fn capture(&self, app: &AppQuery, timeout: Duration) -> Result<Screenshot, CaptureError> {
+        ScreenCastActor::capture(self, app, timeout)
+    }
+}
+
+/// Screenshot capture is independent of input delivery. Wayland owns a lazy portal actor while X11
+/// keeps the existing window-targeted capture path.
+enum ScreenshotProvider {
+    X11(Box<X11Session>),
+    Wayland(Box<dyn PortalScreenshot>),
+    Unavailable(&'static str),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ScreenshotProviderKind {
+    X11,
+    Wayland,
+    Unavailable(&'static str),
+}
+
 /// What this session can be observed to provide. Every one of these is required, and each is
 /// missing for its own reason, so a caller is told which.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -201,34 +233,23 @@ fn input_restriction(facts: SessionFacts) -> Option<&'static str> {
 }
 
 /// Why an application window cannot be located and captured in this session.
-fn screenshot_restriction(facts: SessionFacts) -> Option<&'static str> {
+fn screenshot_provider_kind(facts: SessionFacts) -> ScreenshotProviderKind {
     if facts.wayland {
-        return Some("a desktop portal authorization flow is required");
+        ScreenshotProviderKind::Wayland
+    } else if !facts.x_display {
+        ScreenshotProviderKind::Unavailable(NO_X_DISPLAY)
+    } else if !facts.screenshot_windows {
+        ScreenshotProviderKind::Unavailable(NO_WINDOW_MANAGER)
+    } else {
+        ScreenshotProviderKind::X11
     }
-    if !facts.x_display {
-        return Some(NO_X_DISPLAY);
-    }
-    if !facts.screenshot_windows {
-        return Some(NO_WINDOW_MANAGER);
-    }
-    None
 }
 
-/// Observes the session once, at startup, and classifies it.
-fn input_session() -> InputSession {
-    classify_x11_session(input_restriction)
-}
-
-fn screenshot_session() -> InputSession {
-    classify_x11_session(screenshot_restriction)
-}
-
-fn classify_x11_session(restriction: fn(SessionFacts) -> Option<&'static str>) -> InputSession {
-    // Asked before an X connection is attempted, because a Wayland session is one whether or not
-    // XWayland happens to answer, and what XWayland could answer is about X11 clients alone.
+/// Observes the desktop once. Both provider selections consume this same immutable snapshot.
+fn session_facts() -> SessionFacts {
     let wayland = std::env::var_os("WAYLAND_DISPLAY").is_some();
     let x11 = (!wayland).then(X11Session::connect).flatten();
-    let facts = SessionFacts {
+    SessionFacts {
         wayland,
         x_display: x11.is_some(),
         window_manager: x11.as_ref().is_some_and(X11Session::supports_ewmh),
@@ -236,19 +257,39 @@ fn classify_x11_session(restriction: fn(SessionFacts) -> Option<&'static str>) -
             .as_ref()
             .is_some_and(X11Session::supports_screenshot_capture),
         xtest: x11.as_ref().is_some_and(X11Session::supports_xtest),
-    };
-    match (restriction(facts), x11) {
-        (None, Some(session)) => InputSession::Available(Box::new(session)),
-        (Some(reason), _) => InputSession::Unavailable(reason),
-        // Unreachable: no session is exactly what NO_X_DISPLAY reports.
-        (None, None) => InputSession::Unavailable(NO_X_DISPLAY),
+    }
+}
+
+fn input_session(facts: SessionFacts) -> InputSession {
+    match input_restriction(facts) {
+        None => X11Session::connect()
+            .map(Box::new)
+            .map(InputSession::Available)
+            .unwrap_or(InputSession::Unavailable(NO_X_DISPLAY)),
+        Some(reason) => InputSession::Unavailable(reason),
+    }
+}
+
+fn screenshot_provider(facts: SessionFacts) -> ScreenshotProvider {
+    match screenshot_provider_kind(facts) {
+        ScreenshotProviderKind::Wayland => match TokenStore::from_environment() {
+            Ok(store) => {
+                ScreenshotProvider::Wayland(Box::new(ScreenCastActor::spawn_production(store)))
+            }
+            Err(_) => ScreenshotProvider::Unavailable("the portal token store is unavailable"),
+        },
+        ScreenshotProviderKind::X11 => X11Session::connect()
+            .map(Box::new)
+            .map(ScreenshotProvider::X11)
+            .unwrap_or(ScreenshotProvider::Unavailable(NO_X_DISPLAY)),
+        ScreenshotProviderKind::Unavailable(reason) => ScreenshotProvider::Unavailable(reason),
     }
 }
 
 pub struct LinuxBackend {
     tx: mpsc::Sender<Command>,
     input: InputSession,
-    screenshot: InputSession,
+    screenshot: ScreenshotProvider,
     /// AT-SPI identity to process id, read on demand and refreshed when stale or missed.
     identities: Vec<AppIdentity>,
     identities_read: Option<Instant>,
@@ -285,12 +326,13 @@ impl LinuxBackend {
         ready_rx
             .recv()
             .map_err(|_| operation("start AT-SPI actor", "actor exited"))??;
-        // Missing X11 mechanisms are ordinary states, not startup failures: the semantic rung runs
-        // on AT-SPI alone, while health and look retain the precise restriction for each mechanism.
+        // Missing desktop mechanisms are ordinary states: semantic capture runs on AT-SPI alone.
+        // Probe once so input and screenshot provider selection cannot disagree about the session.
+        let facts = session_facts();
         Ok(Self {
             tx,
-            input: input_session(),
-            screenshot: screenshot_session(),
+            input: input_session(facts),
+            screenshot: screenshot_provider(facts),
             identities: Vec::new(),
             identities_read: None,
         })
@@ -310,6 +352,24 @@ impl LinuxBackend {
         match &self.input {
             InputSession::Available(session) => Ok(session.as_ref()),
             InputSession::Unavailable(reason) => Err(capability(capability_needed, reason)),
+        }
+    }
+
+    pub(crate) fn screenshot_capability(&self) -> CapabilityInfo {
+        let (usable, restriction) = match &self.screenshot {
+            ScreenshotProvider::X11(_) => (true, None),
+            ScreenshotProvider::Unavailable(reason) => (false, Some((*reason).to_string())),
+            ScreenshotProvider::Wayland(actor) => match actor.state() {
+                PortalState::Streaming => (true, None),
+                PortalState::AuthorizationRequired => (false, Some("a desktop portal authorization flow is required; request a screenshot and approve the desktop chooser".into())),
+                PortalState::Starting => (false, Some("the desktop portal authorization flow is in progress".into())),
+                PortalState::Unavailable(reason) | PortalState::Failed(reason) => (false, Some(reason)),
+            },
+        };
+        CapabilityInfo {
+            capability: Capability::Screenshot,
+            usable,
+            restriction,
         }
     }
 
@@ -405,18 +465,7 @@ impl PlatformBackend for LinuxBackend {
                 restriction: restriction.map(str::to_string),
             }
         });
-        let screenshot = match &self.screenshot {
-            InputSession::Available(_) => CapabilityInfo {
-                capability: Capability::Screenshot,
-                usable: true,
-                restriction: None,
-            },
-            InputSession::Unavailable(reason) => CapabilityInfo {
-                capability: Capability::Screenshot,
-                usable: false,
-                restriction: Some((*reason).to_string()),
-            },
-        };
+        let screenshot = self.screenshot_capability();
         Ok(usable
             .into_iter()
             .map(|capability| CapabilityInfo {
@@ -512,9 +561,16 @@ impl PlatformBackend for LinuxBackend {
         self.x11(Capability::KeyboardInput)?.keyboard(intent)
     }
     fn screenshot(&mut self, app: &AppQuery) -> Result<Screenshot, BackendError> {
-        if let InputSession::Unavailable(reason) = &self.screenshot {
+        if let ScreenshotProvider::Wayland(actor) = &self.screenshot {
+            return actor
+                .capture(app, INTERACTIVE_TIMEOUT)
+                .map_err(portal_capture_error);
+        }
+        if let ScreenshotProvider::Unavailable(reason) = &self.screenshot {
             return Err(capability(Capability::Screenshot, reason));
         }
+
+        // X11 capture remains application-targeted and unchanged.
         let identity = self
             .ask(|r| Command::Identity(app.clone(), r))?
             .ok_or_else(|| operation("capture screenshot", "no AT-SPI application matched"))?;
@@ -527,9 +583,8 @@ impl PlatformBackend for LinuxBackend {
                 )
             })?;
         match &self.screenshot {
-            InputSession::Available(session) => session.screenshot_for_pid(process_id),
-            // Availability was checked before the AT-SPI identity refresh and is immutable.
-            InputSession::Unavailable(reason) => Err(capability(Capability::Screenshot, reason)),
+            ScreenshotProvider::X11(session) => session.screenshot_for_pid(process_id),
+            ScreenshotProvider::Wayland(_) | ScreenshotProvider::Unavailable(_) => unreachable!(),
         }
     }
     fn hit_test(&mut self, _: (f64, f64)) -> Result<Option<Node>, BackendError> {
@@ -1739,6 +1794,26 @@ fn identity(object: &ObjectRefOwned) -> String {
     }
 }
 
+fn portal_capture_error(error: CaptureError) -> BackendError {
+    match error {
+        CaptureError::AuthorizationRequired => BackendError::CapabilityReason {
+            capability: Capability::Screenshot,
+            code: AUTHORIZATION_REQUIRED,
+            reason: "a desktop portal authorization flow is required; request a screenshot and approve the desktop chooser".into(),
+            diagnostic: None,
+        },
+        CaptureError::TimedOut => BackendError::CapabilityReason {
+            capability: Capability::Screenshot,
+            code: AUTHORIZATION_REQUIRED,
+            reason: "the desktop portal authorization flow timed out; fresh authorization is required".into(),
+            diagnostic: None,
+        },
+        CaptureError::Unavailable(reason) => capability(Capability::Screenshot, &reason),
+        CaptureError::Failed(reason) => operation("capture screenshot", reason),
+        CaptureError::NoFrame => operation("capture screenshot", "the portal stream published no frame"),
+    }
+}
+
 pub(crate) fn operation(name: &str, error: impl std::fmt::Display) -> BackendError {
     BackendError::Operation {
         operation: name.into(),
@@ -1924,21 +1999,31 @@ mod tests {
     }
 
     #[test]
-    fn screenshots_need_ewmh_window_discovery_but_not_xtest() {
-        assert_eq!(screenshot_restriction(USABLE), None);
+    fn screenshot_provider_selection_is_independent_of_input() {
         assert_eq!(
-            screenshot_restriction(SessionFacts {
+            screenshot_provider_kind(USABLE),
+            ScreenshotProviderKind::X11
+        );
+        assert_eq!(
+            screenshot_provider_kind(SessionFacts {
                 screenshot_windows: false,
                 ..USABLE
             }),
-            Some(NO_WINDOW_MANAGER)
+            ScreenshotProviderKind::Unavailable(NO_WINDOW_MANAGER)
         );
         assert_eq!(
-            screenshot_restriction(SessionFacts {
+            screenshot_provider_kind(SessionFacts {
                 xtest: false,
                 ..USABLE
             }),
-            None
+            ScreenshotProviderKind::X11
+        );
+        assert_eq!(
+            screenshot_provider_kind(SessionFacts {
+                wayland: true,
+                ..USABLE
+            }),
+            ScreenshotProviderKind::Wayland
         );
     }
 

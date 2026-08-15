@@ -100,6 +100,13 @@ pub enum BackendError {
         reason: String,
         diagnostic: Option<String>,
     },
+    #[error("capability {capability:?} is unavailable: {reason}")]
+    CapabilityReason {
+        capability: Capability,
+        code: &'static str,
+        reason: String,
+        diagnostic: Option<String>,
+    },
     #[error("operation {operation} failed: {message}")]
     Operation {
         operation: String,

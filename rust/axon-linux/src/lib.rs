@@ -31,6 +31,10 @@ pub mod socket;
 #[cfg(target_os = "linux")]
 mod platform;
 #[cfg(target_os = "linux")]
+pub mod portal;
+#[cfg(target_os = "linux")]
+pub mod screencast;
+#[cfg(target_os = "linux")]
 pub use platform::LinuxBackend;
 /// The bound a withholding provider is given to publish, and the marker carried by a subtree it
 /// never published. Public so the hermetic AT-SPI test asserts against the values the backend uses

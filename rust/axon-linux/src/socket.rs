@@ -281,8 +281,8 @@ pub fn serve() -> io::Result<()> {
         }
     }
     let backend = LinuxBackend::start().map_err(|error| io::Error::other(error.to_string()))?;
-    // Captured once: the backend's capability list describes the build, not the moment, and
-    // rebuilding it per request would add an AT-SPI round trip to every health check.
+    // Cache the build/static capabilities. Health replaces only screenshot from the live provider;
+    // this avoids rebuilding anything that could require AT-SPI while preserving portal changes.
     let reported: Vec<CapabilityInfo> = backend.capabilities().unwrap_or_default();
     let listener = UnixListener::bind(&path)?;
     fs::set_permissions(&path, fs::Permissions::from_mode(0o600))?;
@@ -296,6 +296,19 @@ pub fn serve() -> io::Result<()> {
     });
     let _ = fs::remove_file(path);
     result
+}
+
+#[cfg(target_os = "linux")]
+fn merge_screenshot_capability(
+    reported: &[CapabilityInfo],
+    current: CapabilityInfo,
+) -> Vec<CapabilityInfo> {
+    reported
+        .iter()
+        .filter(|info| info.capability != axon_core::Capability::Screenshot)
+        .cloned()
+        .chain([current])
+        .collect()
 }
 
 /// Routes one request, answering `health` and `shutdown` here and everything else through the
@@ -320,10 +333,12 @@ fn dispatch(
     };
     match request.method.as_str() {
         "health" => {
+            let capabilities =
+                merge_screenshot_capability(reported, router.backend().screenshot_capability());
             let report = daemon_report(
                 endpoint.to_owned(),
                 std::process::id(),
-                reported,
+                &capabilities,
                 &SessionEnvironment::from_env(),
                 true,
                 // Asked per request rather than captured with the capability list beside it: the
@@ -444,6 +459,39 @@ mod tests {
             fixture["result"]
         );
     }
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn health_merges_mutable_screenshot_state_false_true_false() {
+        use axon_core::Capability;
+        let cached = vec![CapabilityInfo {
+            capability: Capability::Enumerate,
+            usable: true,
+            restriction: None,
+        }];
+        for usable in [false, true, false] {
+            let merged = merge_screenshot_capability(
+                &cached,
+                CapabilityInfo {
+                    capability: Capability::Screenshot,
+                    usable,
+                    restriction: (!usable).then(|| "authorization required".into()),
+                },
+            );
+            let screenshot = merged
+                .iter()
+                .find(|info| info.capability == Capability::Screenshot)
+                .unwrap();
+            assert_eq!(screenshot.usable, usable);
+            assert_eq!(
+                merged
+                    .iter()
+                    .filter(|info| info.capability == Capability::Screenshot)
+                    .count(),
+                1
+            );
+        }
+    }
+
     #[test]
     fn socket_lives_in_private_runtime_directory() {
         unsafe {
