@@ -14,7 +14,7 @@ use std::{
     sync::{Arc, RwLock},
 };
 
-const TOKEN_SCHEMA_VERSION: u32 = 2;
+const TOKEN_SCHEMA_VERSION: u32 = 3;
 pub const AUTHORIZATION_REQUIRED: &str = "portal-authorization-required";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
