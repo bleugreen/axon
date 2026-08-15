@@ -1,7 +1,52 @@
 import AppKit
 import AxonCore
+import Darwin
 import Foundation
 import UniformTypeIdentifiers
+
+/// The copy of Axon that already owns the socket, named exactly.
+///
+/// Losing the socket race used to surface as the word `failed` in a menu, which told the person
+/// looking at two menu bar icons nothing they could act on. The lock file records the incumbent's
+/// pid and the incumbent answers `health`, so the copy that lost can say precisely which Axon,
+/// which version, and which path is in its way.
+struct IncumbentCopy: Sendable {
+    let version: String?
+    let executablePath: String?
+    let processId: Int?
+
+    static func resolve(from error: Error, socketPath: String) -> IncumbentCopy? {
+        guard case let SocketError.socketAlreadyServed(_, pid) = error else {
+            return nil
+        }
+        let response = try? SocketClient(path: socketPath, responseTimeoutSeconds: 2)
+            .send(JSONRPCRequest(id: .string("incumbent"), method: "health"))
+        let report = response.flatMap { try? DaemonReport(jsonObject: $0.result ?? [:]) }
+        let processId = pid ?? report?.processId
+        return IncumbentCopy(
+            version: report?.version,
+            executablePath: processId.flatMap(Self.executablePath(ofProcess:)),
+            processId: processId
+        )
+    }
+
+    /// The executable behind a pid. The health protocol does not carry the incumbent's own path,
+    /// and asking the kernel is both simpler and true of a daemon too old to have been asked.
+    private static func executablePath(ofProcess processId: Int) -> String? {
+        var buffer = [CChar](repeating: 0, count: 4096)
+        guard proc_pidpath(Int32(processId), &buffer, UInt32(buffer.count)) > 0 else {
+            return nil
+        }
+        return String(cString: buffer)
+    }
+
+    var summary: String {
+        let identity = version.map { "Axon \($0)" } ?? "Another Axon"
+        let location = executablePath.map { " at \($0)" } ?? ""
+        let owner = processId.map { " (pid \($0))" } ?? ""
+        return "\(identity)\(location)\(owner) is already serving"
+    }
+}
 
 @MainActor
 final class AxonDaemonAppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
@@ -10,8 +55,11 @@ final class AxonDaemonAppDelegate: NSObject, NSApplicationDelegate, @unchecked S
         case checking
         case upToDate(version: String)
         case available(ReleaseUpdate, brewManaged: Bool)
+        case downloading(version: String, progress: Double)
         case installing(version: String)
-        case failed(String)
+        /// The new bundle is in place and launchd has been handed the re-registration.
+        case restarting(version: String)
+        case failed(reason: String, update: ReleaseUpdate?)
     }
 
     private enum RecordingDestination {
@@ -35,6 +83,8 @@ final class AxonDaemonAppDelegate: NSObject, NSApplicationDelegate, @unchecked S
     private var recordingScope: UserRecordingScope?
     private var recordingDestination: RecordingDestination?
     private let appRecency = RecordingAppRecencyStore()
+    private var incumbent: IncumbentCopy?
+    private var strayEditorNotice: String?
 
     func applicationWillFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
@@ -47,6 +97,11 @@ final class AxonDaemonAppDelegate: NSObject, NSApplicationDelegate, @unchecked S
         configureStatusItem()
         ScreenCaptureRuntime.bootstrapSynchronously()
         Doctor.warmUp()
+        // Whatever started this copy, the update scaffolding is the successor's to clear. Doing it
+        // here means a finisher that ran, and one that failed and left its plist behind, both end
+        // the same way.
+        LaunchAgentManager.reapUpdateFinisher()
+        strayEditorNotice = Self.strayEditorNotice()
         startServer()
         installMenu()
         refreshTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] _ in
@@ -89,9 +144,13 @@ final class AxonDaemonAppDelegate: NSObject, NSApplicationDelegate, @unchecked S
         serverQueue.async { [socketPath] in
             do {
                 try SocketServer(path: socketPath, router: router).run()
-                Self.serverEnded("socket server stopped accepting connections", app: self)
+                Self.serverEnded("socket server stopped accepting connections", incumbent: nil, app: self)
             } catch {
-                Self.serverEnded("socket server failed: \(String(describing: error))", app: self)
+                Self.serverEnded(
+                    "socket server failed: \(String(describing: error))",
+                    incumbent: IncumbentCopy.resolve(from: error, socketPath: socketPath),
+                    app: self
+                )
             }
         }
         serverState = "running"
@@ -107,7 +166,11 @@ final class AxonDaemonAppDelegate: NSObject, NSApplicationDelegate, @unchecked S
     ///
     /// Hand-launched there is nobody to restart it, so the failure belongs in the menu where
     /// someone can read it rather than in a process that vanishes.
-    nonisolated private static func serverEnded(_ message: String, app: AxonDaemonAppDelegate) {
+    nonisolated private static func serverEnded(
+        _ message: String,
+        incumbent: IncumbentCopy?,
+        app: AxonDaemonAppDelegate
+    ) {
         if AxonEnvironment.isLaunchdManaged() {
             FileHandle.standardError.write(Data("axon: \(message)\n".utf8))
             exit(1)
@@ -115,6 +178,7 @@ final class AxonDaemonAppDelegate: NSObject, NSApplicationDelegate, @unchecked S
         Task { @MainActor in
             app.serverState = "failed"
             app.serverError = message
+            app.incumbent = incumbent
             app.installMenu()
         }
     }
