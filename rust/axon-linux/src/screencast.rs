@@ -496,7 +496,10 @@ mod production {
             source_id,
         });
         let result = run_pipewire(fd, node, publish, stopped);
-        let _ = runtime.block_on(session.close());
+        let _ = runtime.block_on(tokio::time::timeout(
+            Duration::from_secs(1),
+            session.close(),
+        ));
         result
     }
 
