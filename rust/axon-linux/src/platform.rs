@@ -712,11 +712,16 @@ impl PointerTargetVerifier for LinuxBackend {
             .element_extents(handle)?
             .is_some_and(|extents| covers(extents, point)))
     }
+
+    fn element_rect(&mut self, handle: &SnapshotHandle) -> Result<Option<Rect>, BackendError> {
+        self.element_extents(handle)
+    }
 }
 
-/// Whether a rectangle covers a point, on the half-open convention a window's own edge follows.
-fn covers(rect: Rect, (x, y): (f64, f64)) -> bool {
-    x >= rect.x && y >= rect.y && x < rect.x + rect.width && y < rect.y + rect.height
+/// Whether a rectangle covers a point. The convention lives on `Rect` so every backend and every
+/// guard answers this the same way.
+fn covers(rect: Rect, point: (f64, f64)) -> bool {
+    rect.contains(point)
 }
 
 /// What the session looked like at one instant: the three facts a background delivery must leave

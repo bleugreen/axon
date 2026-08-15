@@ -139,6 +139,17 @@ pub trait PointerTargetVerifier: PlatformBackend {
         handle: &SnapshotHandle,
         point: (f64, f64),
     ) -> Result<bool, axon_core::BackendError>;
+
+    /// One element's current on-screen rectangle, or `None` when the element did not answer.
+    ///
+    /// Deliberately not expressed through `verify_pointer_target`, which collapses "did not answer"
+    /// into "does not cover". A bounds guard has to keep those apart: refusing a click because an
+    /// accessibility read failed would ground a working action on a transient fault, while treating
+    /// a real miss as an unanswered query would dispatch into another window's territory.
+    fn element_rect(
+        &mut self,
+        handle: &SnapshotHandle,
+    ) -> Result<Option<axon_core::Rect>, axon_core::BackendError>;
 }
 
 /// A target-bound input mechanism: events delivered to one verified window, without activating the

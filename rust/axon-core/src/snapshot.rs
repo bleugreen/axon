@@ -87,6 +87,17 @@ pub struct Rect {
     pub height: f64,
 }
 
+impl Rect {
+    /// Whether this rectangle covers a point, on the half-open convention a window's own edge
+    /// follows: the leading edge belongs to the window, the trailing edge to whatever is beyond it.
+    ///
+    /// One definition, because every backend asks this question of a screen point and two answers
+    /// that disagree on an edge disagree about which window a click belongs to.
+    pub fn contains(&self, (x, y): (f64, f64)) -> bool {
+        x >= self.x && y >= self.y && x < self.x + self.width && y < self.y + self.height
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Node {
