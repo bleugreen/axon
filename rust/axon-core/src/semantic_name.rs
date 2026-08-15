@@ -352,10 +352,33 @@ pub struct SemanticCandidate {
     pub label: String,
     pub locator: Locator,
 }
+/// The application facts a retained record resolves against.
+///
+/// Deliberately not the [`crate::Application`] itself. One record exists per named element, and an
+/// application owns its whole window tree, so keeping the application in a record retained a
+/// complete copy of the observation for every element in it. Only these three fields are ever
+/// read; the tree was dead weight, and it was quadratic dead weight.
+#[derive(Clone)]
+struct RecordedApp {
+    name: String,
+    identifier: Option<String>,
+    process_id: Option<crate::ProcessId>,
+}
+
+impl From<&crate::Application> for RecordedApp {
+    fn from(app: &crate::Application) -> Self {
+        Self {
+            name: app.name.clone(),
+            identifier: app.identifier.clone(),
+            process_id: app.process_id,
+        }
+    }
+}
+
 #[derive(Clone)]
 struct Record {
     target: WireElementTarget,
-    app: crate::Application,
+    app: RecordedApp,
     snapshot_id: crate::SnapshotId,
     candidate_label: Option<String>,
     role: String,
@@ -490,7 +513,7 @@ impl SemanticNameRegistry {
         is_process_live: impl Fn(crate::ProcessId) -> bool,
     ) -> Vec<SemanticElementName> {
         if let Some(replacement_pid) = snapshot.app.process_id {
-            let identity = app_identity(&snapshot.app);
+            let identity = app_identity(&RecordedApp::from(&snapshot.app));
             let stale: HashSet<_> = self
                 .records
                 .iter()
@@ -520,16 +543,18 @@ impl SemanticNameRegistry {
                 contexts
                     .get(name.source_index)
                     .map(|(node, ancestors, window)| Record {
+                        // `window` is already borrowed from the observation, so nothing here
+                        // copies out of the tree.
                         target: WireElementTarget {
                             app: snapshot.app.name.clone(),
                             name: name.name.clone(),
                         },
-                        app: snapshot.app.clone(),
+                        app: RecordedApp::from(&snapshot.app),
                         snapshot_id: snapshot.id.clone(),
                         candidate_label: name.candidate_label.clone(),
                         role: name.role.clone(),
                         label: name.label.clone(),
-                        locator: locator(node, ancestors, window.as_deref()),
+                        locator: locator(node, ancestors, *window),
                         handle: snapshot.handle(name.source_index),
                     })
             })
@@ -721,14 +746,14 @@ fn parse_process_id(query: &str) -> Option<crate::ProcessId> {
     query.strip_prefix("pid:").unwrap_or(query).parse().ok()
 }
 
-fn app_identity(app: &crate::Application) -> String {
+fn app_identity(app: &RecordedApp) -> String {
     app.identifier
         .as_deref()
         .unwrap_or(&app.name)
         .to_ascii_lowercase()
 }
 
-fn app_matches(query: &str, app: &crate::Application) -> bool {
+fn app_matches(query: &str, app: &RecordedApp) -> bool {
     if let Some(pid) = parse_process_id(query) {
         return app.process_id == Some(pid);
     }
@@ -753,7 +778,7 @@ fn scope(n: &crate::Node) -> AncestorLocator {
         label: exact(n.label.as_deref()),
     }
 }
-pub(crate) fn locator(n: &crate::Node, a: &[crate::Node], window: Option<&str>) -> Locator {
+pub(crate) fn locator(n: &crate::Node, a: &[&crate::Node], window: Option<&str>) -> Locator {
     Locator {
         role: Some(n.role.clone()),
         subrole: n.subrole.clone(),
@@ -764,7 +789,7 @@ pub(crate) fn locator(n: &crate::Node, a: &[crate::Node], window: Option<&str>) 
         identifier: exact(n.identifier.as_deref())
             .filter(|_| n.identifier.as_deref().is_some_and(|v| !generated(v))),
         actions: n.actions.clone(),
-        ancestors: a.iter().rev().take(2).rev().map(scope).collect(),
+        ancestors: a.iter().rev().take(2).rev().map(|n| scope(n)).collect(),
         window: window.map(|v| AncestorLocator {
             title: exact(Some(v)),
             ..Default::default()
@@ -773,15 +798,24 @@ pub(crate) fn locator(n: &crate::Node, a: &[crate::Node], window: Option<&str>) 
         frame: n.frame,
     }
 }
-pub(crate) fn walk_context(
-    n: &crate::Node,
-    a: &[crate::Node],
-    w: Option<&str>,
-    out: &mut Vec<(crate::Node, Vec<crate::Node>, Option<String>)>,
+/// One node of an observation with the ancestry and window title a locator is built from.
+///
+/// Borrowed rather than owned, because a [`crate::Node`] owns its descendants: cloning one copies
+/// its entire subtree. Collecting an owned node and an owned ancestor chain per node therefore
+/// copied the root's whole subtree once for every element beneath it, which is quadratic in the
+/// size of the tree. On a desktop shell with a couple of thousand elements that reached a gigabyte
+/// before the observation had been rendered at all.
+pub(crate) type NodeContext<'a> = (&'a crate::Node, Vec<&'a crate::Node>, Option<&'a str>);
+
+pub(crate) fn walk_context<'a>(
+    n: &'a crate::Node,
+    a: &[&'a crate::Node],
+    w: Option<&'a str>,
+    out: &mut Vec<NodeContext<'a>>,
 ) {
-    out.push((n.clone(), a.to_vec(), w.map(str::to_owned)));
+    out.push((n, a.to_vec(), w));
     let mut next = a.to_vec();
-    next.push(n.clone());
+    next.push(n);
     for c in &n.children {
         walk_context(c, &next, w, out)
     }

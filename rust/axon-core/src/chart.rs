@@ -219,11 +219,7 @@ impl ChartStore {
                     .map(|(node, ancestors, window)| {
                         new_element(
                             name,
-                            ChartLocator::from(&runtime_locator(
-                                node,
-                                ancestors,
-                                window.as_deref(),
-                            )),
+                            ChartLocator::from(&runtime_locator(node, ancestors, *window)),
                             app_version,
                             now,
                         )
