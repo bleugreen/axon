@@ -5,6 +5,29 @@
     {
       "availability" : {
         "linux" : true,
+        "mac" : false,
+        "swift" : false,
+        "windows" : false
+      },
+      "description" : "Capture the user-authorized desktop ScreenCast source. The selected source is not associated with any application.",
+      "inputSchema" : {
+        "additionalProperties" : false,
+        "properties" : {
+          "reauthorize" : {
+            "default" : false,
+            "description" : "Ignore any stored restore token and request fresh portal authorization. The token is replaced only after ScreenCast Start succeeds.",
+            "type" : "boolean"
+          }
+        },
+        "type" : "object"
+      },
+      "name" : "capture_screen",
+      "socketMethod" : "capture_screen",
+      "title" : "capture_screen"
+    },
+    {
+      "availability" : {
+        "linux" : true,
         "mac" : true,
         "swift" : true,
         "windows" : true

@@ -193,6 +193,14 @@ jobs:
         with:
           components: clippy,rustfmt
 
+      # Workspace Clippy compiles the Linux backend too, so this otherwise platform-neutral job
+      # needs the same native build boundary as the dedicated Linux job.
+      - name: Install Linux workspace build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libdbus-1-dev libpipewire-0.3-dev libclang-dev clang pkg-config
+          echo "BINDGEN_EXTRA_CLANG_ARGS=-I/usr/include -I$(gcc -print-file-name=include)" >> "$GITHUB_ENV"
+
       - name: Cache Cargo
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
@@ -268,7 +276,8 @@ jobs:
       - name: Install AT-SPI build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libdbus-1-dev pkg-config xvfb x11-utils dbus tesseract-ocr tesseract-ocr-eng
+          sudo apt-get install -y libdbus-1-dev libpipewire-0.3-dev libclang-dev clang pkg-config xvfb x11-utils dbus tesseract-ocr tesseract-ocr-eng
+          echo "BINDGEN_EXTRA_CLANG_ARGS=-I/usr/include -I$(gcc -print-file-name=include)" >> "$GITHUB_ENV"
 
       # The lifecycle, session classification, status assembly, keysym translation, and the whole
       # router are pure and run headlessly. Only the systemd and socket calls need a real desktop.

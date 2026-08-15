@@ -381,11 +381,7 @@ expect to see in production.
   or browser-less desktop as an Axon fault should read this field first. Switching it on does not
   reach an application that is already running, so the fix is to enable accessibility for the
   session and restart the applications; Axon reports the state and does not change it.
-- **Linux under Wayland.** The daemon is ready, but `pointerInput` and `keyboardInput` are unusable
-  with reason `wayland-restricted`, and `screenshot` is unusable with reason
-  `portal-authorization-required`. `observeGlobalInput` is unusable with reason `not-implemented`,
-  because that one is a gap in this build rather than something the compositor withholds — an X11
-  session reports it exactly the same way.
+- **Linux under Wayland.** The daemon is ready, but `pointerInput` and `keyboardInput` are unusable with reason `wayland-restricted`. App-scoped screenshot health remains unusable with `portal-authorization-required`; an authorized ScreenCast stream cannot prove it belongs to an application and never changes that global fact. The separate Linux-only `capture_screen` operation captures a user-selected WINDOW source without app or tree fields. It may prompt on first use or stale restoration, but never at daemon startup or during health. `observeGlobalInput` remains unusable with reason `not-implemented`, because that is a build gap rather than something the compositor withholds.
 
 ### Compatibility
 

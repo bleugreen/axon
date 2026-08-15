@@ -31,6 +31,10 @@ pub mod socket;
 #[cfg(target_os = "linux")]
 mod platform;
 #[cfg(target_os = "linux")]
+pub mod portal;
+#[cfg(target_os = "linux")]
+pub mod screencast;
+#[cfg(target_os = "linux")]
 pub use platform::LinuxBackend;
 /// The bound a withholding provider is given to publish, and the marker carried by a subtree it
 /// never published. Public so the hermetic AT-SPI test asserts against the values the backend uses
@@ -347,6 +351,7 @@ impl<B: PointerTargetVerifier + BackgroundPixelInput> Router<B> {
     pub fn backend(&self) -> &B {
         &self.backend
     }
+
     pub fn request(&mut self, request: JsonRpcRequest) -> Option<JsonRpcResponse> {
         let id = request.id?;
         let params = request
@@ -2255,7 +2260,7 @@ mod tests {
         };
         assert_eq!(
             success.result["screenshotUnavailable"]["code"],
-            "portal-authorization-required"
+            "capability-unavailable"
         );
         assert!(success.result.get("screenshot").is_none());
 
@@ -2285,7 +2290,7 @@ mod tests {
         assert!(success.result.to_string().contains("semantic child"));
         assert_eq!(
             success.result["screenTextUnavailable"]["code"],
-            "portal-authorization-required"
+            "capability-unavailable"
         );
         assert!(success.result.get("screenText").is_none());
     }

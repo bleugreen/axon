@@ -642,6 +642,7 @@ mod tests {
         assert_eq!(
             names(ToolBackend::Linux),
             [
+                "capture_screen",
                 "look",
                 "find",
                 "wait_for_value",
@@ -657,6 +658,16 @@ mod tests {
 
     #[test]
     fn validates_before_applying_defaults() {
+        let capture =
+            validate_tool_arguments(ToolBackend::Linux, "capture_screen", json!({})).unwrap();
+        assert_eq!(capture["reauthorize"], false);
+        assert!(
+            validate_tool_arguments(ToolBackend::Linux, "capture_screen", json!({"app":"Notes"}))
+                .is_err()
+        );
+        for backend in [ToolBackend::Swift, ToolBackend::Mac, ToolBackend::Windows] {
+            assert!(validate_tool_arguments(backend, "capture_screen", json!({})).is_err());
+        }
         let value = validate_tool_arguments(ToolBackend::Linux, "look", json!({})).unwrap();
         assert_eq!(value["screenshot"], true);
         assert_eq!(value["offset"], 0);

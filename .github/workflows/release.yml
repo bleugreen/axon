@@ -287,7 +287,8 @@ jobs:
       - name: Install AT-SPI build dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y libdbus-1-dev pkg-config
+          sudo apt-get install -y libdbus-1-dev libpipewire-0.3-dev libclang-dev clang pkg-config
+          echo "BINDGEN_EXTRA_CLANG_ARGS=-I/usr/include -I$(gcc -print-file-name=include)" >> "$GITHUB_ENV"
 
       - name: Package axon-linux
         run: ./scripts/package-rust axon-linux

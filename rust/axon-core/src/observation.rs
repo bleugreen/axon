@@ -625,14 +625,11 @@ pub struct ScreenshotUnavailable {
 impl ScreenshotUnavailable {
     pub fn from_backend_error(error: BackendError) -> Self {
         match error {
-            BackendError::Capability { reason, .. } => {
-                let code = if reason.contains("portal") {
-                    "portal-authorization-required"
-                } else {
-                    "capability-unavailable"
-                };
-                Self { code, reason }
-            }
+            BackendError::Capability { reason, .. } => Self {
+                code: "capability-unavailable",
+                reason,
+            },
+            BackendError::CapabilityReason { code, reason, .. } => Self { code, reason },
             BackendError::Operation { message, .. } => Self {
                 code: "capture-failed",
                 reason: message,
@@ -644,6 +641,25 @@ impl ScreenshotUnavailable {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn screenshot_unavailability_uses_explicit_backend_reason_codes() {
+        let unavailable =
+            ScreenshotUnavailable::from_backend_error(BackendError::CapabilityReason {
+                capability: crate::Capability::Screenshot,
+                code: "portal-authorization-required",
+                reason: "authorization is required".into(),
+                diagnostic: None,
+            });
+        assert_eq!(unavailable.code, "portal-authorization-required");
+
+        let ordinary = ScreenshotUnavailable::from_backend_error(BackendError::Capability {
+            capability: crate::Capability::Screenshot,
+            reason: "a portal-like word is not classification".into(),
+            diagnostic: None,
+        });
+        assert_eq!(ordinary.code, "capability-unavailable");
+    }
 
     #[test]
     fn defaults_only_full_app_observations_to_screenshot() {

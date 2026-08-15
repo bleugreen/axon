@@ -52,6 +52,10 @@ single ordered contract and filter its explicit platform availability; runtime h
 the authority for whether an advertised operation is currently usable. Run
 `scripts/check-tool-surface` to detect generated-artifact drift, or pass `--write` to regenerate it.
 
+### Capture a user-authorized Wayland source
+
+On Linux Wayland, `capture_screen(reauthorize?: false)` captures the WINDOW source selected through the desktop ScreenCast portal. It returns source type and dimensions separately from the encoded PNG and never names an app, process, title, or accessibility tree. `reauthorize: true` ignores the existing restore token and replaces it only after a successful portal Start. App-scoped screenshots remain the responsibility of `look`, which honestly refuses them on Wayland.
+
 ### See what an app exposes
 
 `look()` lists regular running UI apps by default. Use `all: true` or
@@ -395,6 +399,7 @@ actions.
 #### MCP
 
 ```text
+capture_screen(reauthorize?)
 look(app?, target?, since?, screenshot?, screenText?, tree?, offset?, limit?, direct?, childDepth?, depth?, all?, format?, frames?)
 navigate(app, url)
 windows(app)

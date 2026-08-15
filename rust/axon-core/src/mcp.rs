@@ -54,4 +54,16 @@ mod tests {
             serde_json::to_string(&fixture["result"]).unwrap()
         );
     }
+
+    #[test]
+    fn capture_screen_uses_the_shared_image_transport() {
+        let fixture: Value = serde_json::from_str(include_str!(
+            "../../../schema/fixtures/capture-screen-envelope.json"
+        ))
+        .unwrap();
+        assert_eq!(
+            mcp_tool_result(fixture["socketResult"].clone(), false),
+            fixture["mcpResult"]
+        );
+    }
 }

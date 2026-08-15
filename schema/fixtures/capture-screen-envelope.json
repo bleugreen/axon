@@ -1,0 +1,48 @@
+{
+  "socketResult": {
+    "capture": {
+      "source": {
+        "kind": "userAuthorizedScreenCast",
+        "type": "window",
+        "width": 1920,
+        "height": 1080
+      },
+      "image": {
+        "mediaType": "image/png",
+        "width": 1280,
+        "height": 720,
+        "base64Data": "AQID"
+      }
+    }
+  },
+  "mcpResult": {
+    "content": [
+      {
+        "type": "text",
+        "text": "{\"capture\":{\"image\":{\"contentTransport\":\"mcp_image\",\"height\":720,\"mediaType\":\"image/png\",\"width\":1280},\"source\":{\"height\":1080,\"kind\":\"userAuthorizedScreenCast\",\"type\":\"window\",\"width\":1920}}}"
+      },
+      {
+        "type": "image",
+        "data": "AQID",
+        "mimeType": "image/png"
+      }
+    ],
+    "structuredContent": {
+      "capture": {
+        "source": {
+          "kind": "userAuthorizedScreenCast",
+          "type": "window",
+          "width": 1920,
+          "height": 1080
+        },
+        "image": {
+          "mediaType": "image/png",
+          "width": 1280,
+          "height": 720,
+          "contentTransport": "mcp_image"
+        }
+      }
+    },
+    "isError": false
+  }
+}
