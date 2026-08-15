@@ -435,13 +435,12 @@ jobs:
   linux:
     name: Linux live loop
     runs-on: [self-hosted, axon-live-linux]
-    env:
-      BINDGEN_EXTRA_CLANG_ARGS: -I/usr/include -I/usr/include/x86_64-linux-gnu
     concurrency:
       group: axon-live-linux
       cancel-in-progress: false
     timeout-minutes: 20
     env:
+      BINDGEN_EXTRA_CLANG_ARGS: -I/usr/include -I/usr/include/x86_64-linux-gnu
       XDG_RUNTIME_DIR: /run/user/1000
       DBUS_SESSION_BUS_ADDRESS: unix:path=/run/user/1000/bus
       DISPLAY: ":0"

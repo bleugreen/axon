@@ -381,13 +381,7 @@ expect to see in production.
   or browser-less desktop as an Axon fault should read this field first. Switching it on does not
   reach an application that is already running, so the fix is to enable accessibility for the
   session and restart the applications; Axon reports the state and does not change it.
-- **Linux under Wayland.** The daemon is ready, but `pointerInput` and `keyboardInput` are unusable
-  with reason `wayland-restricted`. Screenshot capability is dynamic: it begins unusable with
-  `portal-authorization-required`, becomes usable while the desktop portal stream is live, and
-  returns to unusable if that stream ends. Request `look` with screenshots enabled and approve the
-  desktop chooser to authorize it; Axon stores the portal restore token for later sessions but never
-  opens the chooser at daemon startup. `observeGlobalInput` remains unusable with reason
-  `not-implemented`, because that is a build gap rather than something the compositor withholds.
+- **Linux under Wayland.** The daemon is ready, but `pointerInput` and `keyboardInput` are unusable with reason `wayland-restricted`. App-scoped screenshot health remains unusable with `portal-authorization-required`; an authorized ScreenCast stream cannot prove it belongs to an application and never changes that global fact. The separate Linux-only `capture_screen` operation captures a user-selected WINDOW source without app or tree fields. It may prompt on first use or stale restoration, but never at daemon startup or during health. `observeGlobalInput` remains unusable with reason `not-implemented`, because that is a build gap rather than something the compositor withholds.
 
 ### Compatibility
 
