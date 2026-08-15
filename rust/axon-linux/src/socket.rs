@@ -395,7 +395,8 @@ fn dispatch(
     let Some(id) = request.id.clone() else {
         return (Value::Null, false);
     };
-    match request.method.as_str() {
+    let method = request.method.clone();
+    match method.as_str() {
         "capture_screen" => {
             dispatch_capture_with(request, |reauthorize| {
                 router.backend().capture_screen(reauthorize)
