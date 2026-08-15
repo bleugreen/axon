@@ -28,6 +28,7 @@ atspi = { version = "0.30.0", default-features = false, features = [
 ] }
 tokio = { version = "1.47.1", features = ["rt", "sync", "time", "macros"] }
 ashpd = { version = "0.13.13", default-features = false, features = ["tokio", "screencast"] }
+enumflags2 = "0.7"
 pipewire = "0.9.2"
 # Pure Rust, so no libxtst development package is needed to build this crate anywhere.
 x11rb = { version = "0.14", features = ["xtest"] }

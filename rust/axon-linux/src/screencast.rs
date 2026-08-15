@@ -445,6 +445,7 @@ mod production {
             StartCastOptions,
         },
     };
+    use enumflags2::BitFlags;
     use pipewire as pw;
     use pw::spa::{self, pod::Pod};
     use std::os::fd::OwnedFd;
@@ -518,7 +519,7 @@ mod production {
             .select_sources(
                 &session,
                 SelectSourcesOptions::default()
-                    .set_sources(SourceType::Window)
+                    .set_sources(BitFlags::from_flag(SourceType::Window))
                     .set_multiple(false)
                     .set_persist_mode(PersistMode::ExplicitlyRevoked)
                     .set_restore_token(token.map(RestoreToken::expose)),
