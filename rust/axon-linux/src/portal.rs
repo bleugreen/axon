@@ -116,7 +116,7 @@ impl TokenStore {
             .map(|record| (record.source_id, record.token)))
     }
 
-    fn clear(&self) -> io::Result<()> {
+    pub(crate) fn clear(&self) -> io::Result<()> {
         match fs::remove_file(&self.path) {
             Ok(()) => {
                 if let Some(parent) = self.path.parent() {
@@ -357,6 +357,19 @@ mod tests {
         let shot = frame.screenshot().unwrap();
         assert_eq!((shot.width, shot.height), (2, 1));
         assert_eq!(&shot.bytes[..8], b"\x89PNG\r\n\x1a\n");
+    }
+
+    #[test]
+    fn clearing_a_token_is_private_atomic_and_idempotent() {
+        let root = tempfile::tempdir().unwrap();
+        let store = TokenStore::at(root.path().join("axon/portal/screencast.json"));
+        store
+            .replace(Some("source"), RestoreToken::new("never-serialize-me"))
+            .unwrap();
+        store.clear().unwrap();
+        assert_eq!(store.load().unwrap(), None);
+        store.clear().unwrap();
+        assert!(!format!("{store:?}").contains("never-serialize-me"));
     }
 
     #[test]
