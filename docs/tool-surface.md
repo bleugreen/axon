@@ -241,18 +241,26 @@ A point Axon *derived* — from recognized text, or from a `window` or `screensh
 coordinate — carries more than an application: it also remembers the window frame
 its coordinates were computed against. That provenance is what lets delivery ask,
 immediately before dispatch, whether the coordinates still mean what they meant
-when they were computed. The question each rung asks is the one its mechanism
-makes relevant. The pixel rung posts to the process, which converts the screen
-point through its own window, so it requires the point to still fall inside one of
-that application's windows; occlusion cannot affect a targeted post and is not
-consulted. The foreground rung posts to the shared devices, where whatever the
-window server puts on top receives the event, so it requires the element at the
-point to belong to the target application, re-checked across the settle budget so
-a window still being raised is not mistaken for the wrong one. Either way a
-mismatch is refused with the measurement behind it — the resolved point, the frame
-the coordinates were computed against, and the target's window bounds now — rather
-than dispatched into whatever now occupies those coordinates. A window whose
-geometry cannot be read is not treated as evidence either way. A point the caller
+when they were computed.
+
+The question is about one specific window, not about the application. Such a point
+means "this position inside *that* window", so delivery requires the application to
+still report a window at the frame the coordinates were measured against, and the
+point to still fall inside it. Containment in some other window of the same
+application is not a passing answer: an application with several windows can have a
+different one covering the old coordinates, and a point that now lands in a window
+it was never computed from is precisely a stale coordinate. A mismatch is refused
+with the measurement behind it — the resolved point, the frame the coordinates were
+computed against, and the target's window bounds now — rather than dispatched into
+whatever now occupies those coordinates.
+
+The check runs immediately before a background dispatch, and inside the settle
+budget before a foreground one, because an activation that has just been performed
+may still be moving the window. Nothing here is a claim about stacking: a window
+still exactly where it was, with something drawn on top of it, keeps its
+coordinates meaningful for a targeted post. A window whose geometry cannot be read
+is not treated as evidence in either direction, since refusing on an unanswered
+query would ground a working action on a transient fault. A point the caller
 supplied has no provenance to check, and is unaffected.
 
 A refusal is an action result, not a transport error: the request was well
