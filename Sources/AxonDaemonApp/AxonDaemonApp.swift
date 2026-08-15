@@ -186,8 +186,28 @@ final class AxonDaemonAppDelegate: NSObject, NSApplicationDelegate, @unchecked S
     private func installMenu() {
         let menu = NSMenu()
         menu.addItem(disabledItem("Axon"))
+
+        // A copy that lost the socket race serves nothing, so offering it recording and updates
+        // would be theatre. It gets the two things that are actually true of it: who is in its way,
+        // and the two ways out.
+        if let incumbent {
+            menu.addItem(disabledItem(incumbent.summary))
+            menu.addItem(.separator())
+            menu.addItem(menuItem(title: "Use This Copy", action: #selector(useThisCopy)))
+            menu.addItem(menuItem(title: "Quit", action: #selector(quit), keyEquivalent: "q"))
+            statusItem.menu = menu
+            updateStatusItemAppearance()
+            return
+        }
+
         if let serverError {
             menu.addItem(disabledItem("Error: \(serverError)"))
+        }
+        if let warning = registrationWarning() {
+            menu.addItem(disabledItem(warning))
+        }
+        if let strayEditorNotice {
+            menu.addItem(disabledItem(strayEditorNotice))
         }
         menu.addItem(.separator())
         if !AccessibilityPermission.isTrusted() {
@@ -215,15 +235,54 @@ final class AxonDaemonAppDelegate: NSObject, NSApplicationDelegate, @unchecked S
         case .checking:
             menu.addItem(disabledItem("Checking for Updates..."))
         case let .upToDate(version):
+            // Never a dead end: a check that raced a release must be repeatable without relaunching.
             menu.addItem(disabledItem("Up to Date (\(version))"))
+            menu.addItem(menuItem(title: "Check Again", action: #selector(checkForUpdates)))
         case let .available(update, _):
             menu.addItem(menuItem(title: "Update to \(update.latestVersion)...", action: #selector(performAvailableUpdate)))
+        case let .downloading(version, progress):
+            menu.addItem(disabledItem("Downloading \(version)... \(Int((progress * 100).rounded()))%"))
         case let .installing(version):
             menu.addItem(disabledItem("Installing \(version)..."))
-        case .failed:
-            menu.addItem(disabledItem("Update Check Failed"))
+        case let .restarting(version):
+            menu.addItem(disabledItem("Restarting into \(version)..."))
+        case let .failed(reason, update):
+            menu.addItem(disabledItem("Update Failed"))
+            menu.addItem(disabledItem(reason))
             menu.addItem(menuItem(title: "Check Again", action: #selector(checkForUpdates)))
+            if update != nil {
+                menu.addItem(menuItem(title: "Open Release Page", action: #selector(openReleasePage)))
+            }
         }
+    }
+
+    /// Says so when the copy that is serving is not the copy launchd will start next login.
+    private func registrationWarning() -> String? {
+        guard let registered = LaunchAgentManager.daemonRegistration().path else {
+            return nil
+        }
+        let bundlePath = Bundle.main.bundleURL.standardizedFileURL.path
+        guard !registered.hasPrefix(bundlePath + "/") else {
+            return nil
+        }
+        return "Login item points at \(registered)"
+    }
+
+    /// Names an `Axon Editor.app` standing on its own outside this bundle.
+    ///
+    /// The editor ships nested, so a standalone copy is residue: either from the releases that
+    /// shipped two apps, or from someone who dragged both out of one of those archives. It is
+    /// harmless but it is another Launch Services claimant on `.axn`, which is worth saying.
+    nonisolated private static func strayEditorNotice() -> String? {
+        let candidates = [
+            URL(fileURLWithPath: "/Applications/Axon Editor.app"),
+            Bundle.main.bundleURL.deletingLastPathComponent().appendingPathComponent("Axon Editor.app")
+        ]
+        for candidate in candidates where FileManager.default.fileExists(atPath: candidate.path) {
+            let version = AppBundle.shortVersion(of: candidate).map { " \($0)" } ?? ""
+            return "Leftover Axon Editor\(version) at \(candidate.path)"
+        }
+        return nil
     }
 
     private func menuItem(title: String, action: Selector, keyEquivalent: String = "") -> NSMenuItem {
