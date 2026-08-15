@@ -2510,18 +2510,21 @@ mod tests {
         )
     }
 
+    /// The window the text was recognized in, and the text inside it. The resolved point is the
+    /// text's centre, {x:1575,y:410}.
+    const OCR_WINDOW: Rect = Rect { x: 1400.0, y: 100.0, width: 500.0, height: 900.0 };
+    const OCR_TEXT: Rect = Rect { x: 1500.0, y: 400.0, width: 150.0, height: 20.0 };
+
     #[test]
-    fn ocr_click_dispatches_while_the_point_still_lands_in_the_target_window() {
-        let window = Rect { x: 100.0, y: 80.0, width: 1251.0, height: 900.0 };
-        let text = Rect { x: 300.0, y: 400.0, width: 200.0, height: 20.0 };
-        let mut router = ocr_router(text, Some(window));
+    fn ocr_click_dispatches_while_the_point_still_lands_in_the_window_it_was_recognized_in() {
+        let mut router = ocr_router(OCR_TEXT, vec![OCR_WINDOW], vec![Some(OCR_WINDOW)]);
         let clicks = router.backend.clicks.clone();
 
         let response = router.request(ocr_click_request()).unwrap();
 
         assert!(
             matches!(response, JsonRpcResponse::Success(_)),
-            "an OCR point inside the target's window must still dispatch: {response:?}"
+            "an OCR point in a window that has not moved must still dispatch: {response:?}"
         );
         assert_eq!(*clicks.borrow(), 1);
     }
@@ -2529,10 +2532,9 @@ mod tests {
     #[test]
     fn ocr_click_refuses_with_the_measured_discrepancy_when_the_window_moved() {
         // The coordinates were computed from a capture; by dispatch time the window has moved and
-        // the same numbers name someone else's territory. Nothing may be posted at them.
-        let moved_window = Rect { x: 100.0, y: 80.0, width: 400.0, height: 300.0 };
-        let text = Rect { x: 1500.0, y: 400.0, width: 150.0, height: 20.0 };
-        let mut router = ocr_router(text, Some(moved_window));
+        // the same numbers name somewhere else. Nothing may be posted at them.
+        let moved = Rect { x: 100.0, y: 80.0, width: 500.0, height: 900.0 };
+        let mut router = ocr_router(OCR_TEXT, vec![OCR_WINDOW], vec![Some(moved)]);
         let clicks = router.backend.clicks.clone();
 
         let response = router.request(ocr_click_request()).unwrap();
@@ -2544,16 +2546,44 @@ mod tests {
         // The measurements that make the next occurrence diagnosable from the refusal alone.
         assert!(failure.error.message.contains("{x:1500,y:400,width:150,height:20}"));
         assert!(failure.error.message.contains("{x:1575,y:410}"));
-        assert!(failure.error.message.contains("{x:100,y:80,width:400,height:300}"));
+        assert!(failure.error.message.contains("{x:1400,y:100,width:500,height:900}"));
+        assert!(failure.error.message.contains("{x:100,y:80,width:500,height:900}"));
         assert_eq!(*clicks.borrow(), 0, "nothing may be posted at a stale point");
     }
 
     #[test]
-    fn ocr_click_is_not_refused_when_no_window_reports_its_rectangle() {
+    fn ocr_click_refuses_when_another_window_of_the_same_application_covers_the_point() {
+        // The case that makes "inside some window of the app" the wrong question. The window the
+        // text was recognized in has moved away, and a second window of the same application now
+        // covers the old coordinates. Delivering there clicks something the caller never named.
+        let moved = Rect { x: 0.0, y: 0.0, width: 500.0, height: 900.0 };
+        let other_window_over_the_stale_point = Rect { x: 1500.0, y: 380.0, width: 400.0, height: 300.0 };
+        let mut router = ocr_router(
+            OCR_TEXT,
+            vec![OCR_WINDOW, other_window_over_the_stale_point],
+            vec![Some(moved), Some(other_window_over_the_stale_point)],
+        );
+        let clicks = router.backend.clicks.clone();
+
+        let response = router.request(ocr_click_request()).unwrap();
+
+        let JsonRpcResponse::Failure(failure) = response else {
+            panic!("a point that landed in a window it was never computed from must refuse")
+        };
+        assert_eq!(failure.error.code, -32003);
+        assert!(failure.error.message.contains("{x:1400,y:100,width:500,height:900}"));
+        assert_eq!(
+            *clicks.borrow(),
+            0,
+            "nothing may be posted into a window the point was never computed from"
+        );
+    }
+
+    #[test]
+    fn ocr_click_is_not_refused_when_the_window_does_not_report_its_rectangle() {
         // An unanswered accessibility read is not evidence that the point is wrong, and grounding a
         // working click on a transient fault would be the worse failure.
-        let text = Rect { x: 1500.0, y: 400.0, width: 150.0, height: 20.0 };
-        let mut router = ocr_router(text, None);
+        let mut router = ocr_router(OCR_TEXT, vec![OCR_WINDOW], vec![None]);
         let clicks = router.backend.clicks.clone();
 
         let response = router.request(ocr_click_request()).unwrap();
