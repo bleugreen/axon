@@ -104,6 +104,11 @@ look alike from the outside, and a caller has to guess from a degenerate screens
 height. `note` shares the vocabulary of the `look(since:)` fallback notes: a stable
 kebab-case statement about the response as a whole.
 
+The note states an answer, never a silence. When the window query itself fails — an
+application busy enough to time it out — the observation says nothing about windows
+rather than reporting zero, so `no-windows` always means the application answered
+that it has none.
+
 Only the two macOS backends reach this state today. The Windows backend roots capture
 at a matched top-level window and refuses an application that has none, and the Linux
 backend roots capture at the AT-SPI application object, which is presented as a single

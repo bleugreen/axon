@@ -123,6 +123,14 @@ the one that mattered was unsaid. The agent reading it had to infer "no window i
 absences — no window entry, and a screenshot height too small to be a window — which is the kind of
 inference that works until it doesn't.
 
+A query that did not answer is not a count of zero, and the two are kept apart for the same reason
+`FocusObservation` separates `none` from `inaccessible`. `AXUIElementGetAttributeValueCount` fails
+for an application busy enough to time out, and reading that silence as zero would report a
+windowed application as having no window — the same wrong inference the note exists to remove, made
+worse by the envelope asserting it. `WindowCountObservation` therefore carries `counted(n)` or
+`inaccessible`, only `counted(0)` states the note, and an unanswered query leaves the observation
+silent about windows rather than confident about them.
+
 The tree cannot carry this by itself, and that is the point. Capture falls back to the application's
 children when `AXWindows` is empty, so the menu bar becomes a tree root and the snapshot's window
 list claims one window that is not one. Keeping that chrome is deliberate rather than accidental:
