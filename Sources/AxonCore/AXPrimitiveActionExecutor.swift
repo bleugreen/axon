@@ -528,11 +528,14 @@ public final class AXPrimitiveActionExecutor {
             if candidate.rung == .pixel, let process {
                 base = self.backgroundDispatch(
                     action: "scroll", target: target, policy: policy, strategy: candidate.strategy,
-                    process: process, details: wheelDetails, message: message, post: post
+                    process: process, movesPointer: false, details: wheelDetails, message: message,
+                    post: post
                 )
             } else {
                 // Deliberately no process to activate: a wheel routes by the event's location, so
-                // raising the app would cost the user their focus and buy the scroll nothing.
+                // raising the app would cost the user their focus and buy the scroll nothing. A
+                // wheel carries no cursor position either, which is why neither rung has a pointer
+                // to restore or to be held to.
                 base = self.inForeground(
                     action: "scroll", target: target, policy: policy, process: nil,
                     restoresPointer: false, details: wheelDetails
@@ -767,13 +770,30 @@ public final class AXPrimitiveActionExecutor {
         SessionInvariants(frontmost: frontmostApp()?.processIdentifier, pointer: pointerLocation())
     }
 
-    /// What the pixel rung promised not to do. Checked after every background dispatch so the
-    /// reported rung is a claim Axon has actually verified rather than one it assumed.
-    private func invariantViolation(since before: SessionInvariants) -> String? {
-        if frontmostApp()?.processIdentifier != before.frontmost {
+    /// What the pixel rung promised not to do, measured across one dispatch so the reported rung is
+    /// a claim Axon has verified rather than one it assumed.
+    ///
+    /// A clause belongs here only when this dispatch could have caused it to fail. Someone using
+    /// the machine while Axon delivers is the normal condition on a personal desktop rather than an
+    /// anomaly, and a hand on the physical mouse moves the pointer for reasons that have nothing to
+    /// do with the synthesis. A dispatch that posts no pointer events cannot have moved it, so
+    /// every motion observed around such a dispatch is exogenous by construction, and asserting the
+    /// pointer there reports a broken contract on evidence the delivery cannot have produced. The
+    /// motion is still reported — an application that warps the cursor in response to delivered
+    /// input shows up in `pointerUnchanged` — but it does not gate success, because nothing on this
+    /// side can tell that application apart from the person at the machine.
+    ///
+    /// The frontmost clause has no such exemption: delivered input can genuinely provoke an
+    /// application into activating itself, so every rung stays accountable for it.
+    private static func invariantViolation(
+        from before: SessionInvariants,
+        to after: SessionInvariants,
+        assertsPointer: Bool
+    ) -> String? {
+        if after.frontmost != before.frontmost {
             return "background delivery changed the frontmost application"
         }
-        if !Self.pointsMatch(pointerLocation(), before.pointer) {
+        if assertsPointer, !pointsMatch(after.pointer, before.pointer) {
             return "background delivery moved the real pointer"
         }
         return nil
@@ -842,7 +862,7 @@ public final class AXPrimitiveActionExecutor {
             }
             return backgroundDispatch(
                 action: action, target: target, policy: policy, strategy: candidate.strategy,
-                process: process, details: evidence, message: message
+                process: process, movesPointer: true, details: evidence, message: message
             ) { sink in
                 self.postMouseClick(at: point, sink: sink)
             }
@@ -900,9 +920,11 @@ public final class AXPrimitiveActionExecutor {
             if let failure = validationFailure(settling: false) {
                 return failure
             }
+            // The fallback clicks the field before it types into it, so this dispatch does
+            // synthesize pointer input and is held to leaving the real pointer alone.
             base = backgroundDispatch(
                 action: "type", target: target, policy: policy, strategy: candidate.strategy,
-                process: process, details: evidence, message: message, post: post
+                process: process, movesPointer: true, details: evidence, message: message, post: post
             )
         } else {
             base = inForeground(
@@ -953,9 +975,12 @@ public final class AXPrimitiveActionExecutor {
             }
         }
         if candidate.rung == .pixel, let process {
+            // Keystrokes touch no pointing device, so the pointer is reported around this dispatch
+            // rather than asserted across it: on a machine someone is using, the mouse moving
+            // during the delivery window says nothing about what the delivery did.
             return backgroundDispatch(
                 action: "keyboard", target: target, policy: policy, strategy: candidate.strategy,
-                process: process, details: details, message: message, post: post
+                process: process, movesPointer: false, details: details, message: message, post: post
             )
         }
         return inForeground(
@@ -993,7 +1018,7 @@ public final class AXPrimitiveActionExecutor {
         if candidate.rung == .pixel, let process {
             base = backgroundDispatch(
                 action: "drag", target: target, policy: policy, strategy: candidate.strategy,
-                process: process, details: details, message: message, post: post
+                process: process, movesPointer: true, details: details, message: message, post: post
             )
         } else {
             base = inForeground(
@@ -1030,26 +1055,37 @@ public final class AXPrimitiveActionExecutor {
         ])])
     }
 
-    /// Delivers through the target process without activating it or moving the real pointer, then
-    /// proves both promises were kept.
+    /// Delivers through the target process without activating it, then proves the promises this
+    /// dispatch is accountable for.
+    ///
+    /// `movesPointer` says whether this dispatch synthesizes pointer input, which is the same fact
+    /// the foreground rung uses to decide whether it has a pointer to put back. Only a dispatch
+    /// that answers yes is held to leaving the real pointer where it found it.
     private func backgroundDispatch(
         action: String,
         target: String,
         policy: DeliveryPolicy,
         strategy: String,
         process: pid_t,
+        movesPointer: Bool,
         details: [String: JSONValue],
         message: String,
         post: ((CGEvent) -> Void) -> Bool
     ) -> PrimitiveActionResult {
         let before = captureInvariants()
         let dispatched = post(sink(for: .pixel, process: process))
-        let violation = invariantViolation(since: before)
+        // One reading answers both the contract check and the reported evidence, so a result can
+        // never call an invariant intact in the same breath as the message saying it broke.
+        let after = captureInvariants()
+        let violation = Self.invariantViolation(from: before, to: after, assertsPointer: movesPointer)
         var evidence = details
         evidence["backgroundDelivery"] = .object([
             "targetProcessIdentifier": .int(Int(process)),
-            "frontmostAppUnchanged": .bool(frontmostApp()?.processIdentifier == before.frontmost),
-            "pointerUnchanged": .bool(Self.pointsMatch(pointerLocation(), before.pointer))
+            "frontmostAppUnchanged": .bool(after.frontmost == before.frontmost),
+            "pointerUnchanged": .bool(Self.pointsMatch(after.pointer, before.pointer)),
+            // Whether that reading is a promise this dispatch made or an observation of the desktop
+            // it ran on.
+            "pointerAsserted": .bool(movesPointer)
         ])
         guard dispatched else {
             return PrimitiveActionResult(
