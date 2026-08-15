@@ -477,14 +477,15 @@ private struct PerceptionCommandHandler {
         } catch let error as BrowserAutomationError {
             let invalid: Bool
             switch error { case .unsupportedApp, .invalidURL, .invalidWindow: invalid = true; default: invalid = false }
-            if case let .automationNotGranted(app, authorization, status) = error {
+            if case let .automationNotGranted(denial) = error {
                 var data: [String: JSONValue] = [
                     "capability": .string("browserAutomation"),
                     "reason": .string(HealthReason.automationNotGranted),
-                    "app": .string(app),
-                    "authorization": .string(authorization.rawValue)
+                    "app": .string(denial.app),
+                    "authorization": .string(denial.authorization.rawValue),
+                    "leg": .string(denial.leg.rawValue)
                 ]
-                if let status { data["nativeStatus"] = .int(Int(status)) }
+                if let status = denial.status { data["nativeStatus"] = .int(Int(status)) }
                 return JSONRPCResponse(id: request.id, error: .internalError(error.description, data: .object(data)))
             }
             return JSONRPCResponse(id: request.id, error: invalid ? .invalidParams(error.description) : .internalError(error.description))

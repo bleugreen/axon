@@ -34,30 +34,213 @@ private final class AppleEventAuthorizerStub: AppleEventAuthorizing {
     }
 }
 
-@Test func appleEventAuthorizationPreflightsBeforePromptingAndPromptsOnlyWhenNeeded() throws {
-    let alreadyGranted = AppleEventAuthorizerStub(results: [noErr])
-    try AppleEventAuthorizationService(authorizer: alreadyGranted).authorize(bundleIdentifier: "com.apple.Safari", appName: "Safari")
-    #expect(alreadyGranted.requests == [false])
-
-    let firstUse = AppleEventAuthorizerStub(results: [OSStatus(errAEEventWouldRequireUserConsent), noErr])
-    try AppleEventAuthorizationService(authorizer: firstUse).authorize(bundleIdentifier: "com.apple.Safari", appName: "Safari")
-    #expect(firstUse.requests == [false, true])
-    #expect(firstUse.bundleIdentifiers == ["com.apple.Safari", "com.apple.Safari"])
+private final class LogCollector {
+    var lines: [String] = []
+    func append(_ line: String) { lines.append(line) }
 }
 
-@Test func appleEventAuthorizationClassifiesDeniedUndeterminedAndUnexpectedStatuses() {
-    let cases: [([OSStatus], BrowserAutomationError)] = [
-        ([OSStatus(errAEEventNotPermitted)], .automationNotGranted(app: "Safari", authorization: .denied, status: OSStatus(errAEEventNotPermitted))),
-        ([OSStatus(errAEEventWouldRequireUserConsent), OSStatus(errAEEventNotPermitted)], .automationNotGranted(app: "Safari", authorization: .denied, status: OSStatus(errAEEventNotPermitted))),
-        ([OSStatus(errAEEventWouldRequireUserConsent), OSStatus(errAEEventWouldRequireUserConsent)], .automationNotGranted(app: "Safari", authorization: .notDetermined, status: OSStatus(errAEEventWouldRequireUserConsent))),
-        ([-50], .authorizationFailed(app: "Safari", status: -50))
-    ]
-    for (results, expected) in cases {
-        let authorizer = AppleEventAuthorizerStub(results: results)
-        #expect(throws: expected) {
-            try AppleEventAuthorizationService(authorizer: authorizer).authorize(bundleIdentifier: "com.apple.Safari", appName: "Safari")
-        }
+private struct NoRefusalRecorded: Error {}
+
+/// Runs `body` and returns the Automation denial it refused with, so a test can assert on the whole
+/// decision rather than only on the fact that something was thrown.
+private func automationDenial(_ body: () throws -> Void) throws -> BrowserAutomationDenial {
+    do {
+        try body()
+    } catch let error as BrowserAutomationError {
+        guard case let .automationNotGranted(denial) = error else { throw error }
+        return denial
     }
+    throw NoRefusalRecorded()
+}
+
+private func browserAutomation(
+    authorizer: AppleEventAuthorizerStub,
+    ledger: AppleEventAnswerLedger = AppleEventAnswerLedger()
+) -> AppleScriptBrowserAutomation {
+    AppleScriptBrowserAutomation(authorizer: authorizer, isRunning: { _ in true }, ledger: ledger, log: { _ in })
+}
+
+private func authorizationService(
+    _ authorizer: AppleEventAuthorizerStub,
+    ledger: AppleEventAnswerLedger = AppleEventAnswerLedger(),
+    log: @escaping (String) -> Void = { _ in }
+) -> AppleEventAuthorizationService {
+    AppleEventAuthorizationService(authorizer: authorizer, ledger: ledger, log: log)
+}
+
+@Test func grantedAutomationLetsABrowserVerbProceedWithoutEverPrompting() throws {
+    let authorizer = AppleEventAuthorizerStub(results: [noErr])
+    try authorizationService(authorizer).check(bundleIdentifier: "com.apple.Safari", appName: "Safari")
+    #expect(authorizer.requests == [false])
+}
+
+@Test func anUndeterminedGrantRefusesAnAgentVerbInsteadOfPrompting() throws {
+    let authorizer = AppleEventAuthorizerStub(results: [OSStatus(errAEEventWouldRequireUserConsent)])
+    let browser = browserAutomation(authorizer: authorizer)
+
+    let denial = try automationDenial { _ = try browser.windows(app: "Safari") }
+
+    #expect(denial.authorization == .notDetermined)
+    #expect(denial.leg == .checked)
+    #expect(denial.status == OSStatus(errAEEventWouldRequireUserConsent))
+    // The prompting leg blocks until a person answers the dialog, so an agent's call must not reach
+    // it: exactly one determination, and it did not ask for consent.
+    #expect(authorizer.requests == [false])
+    #expect(denial.message.contains("choose Browser Automation..."))
+}
+
+@Test func aDeniedGrantRefusesAtTheCheckedLegWithSettingsGuidance() throws {
+    let authorizer = AppleEventAuthorizerStub(results: [OSStatus(errAEEventNotPermitted)])
+    let browser = browserAutomation(authorizer: authorizer)
+
+    let denial = try automationDenial { _ = try browser.windows(app: "Safari") }
+
+    #expect(denial.authorization == .denied)
+    #expect(denial.leg == .checked)
+    #expect(denial.answeredEarlierInThisProcess == false)
+    #expect(denial.message.contains("System Settings > Privacy & Security > Automation"))
+    #expect(authorizer.requests == [false])
+}
+
+/// The confounded 2026-08-14 trial, reproduced: two denials for the same target in one process with
+/// no prompt in between. macOS can answer the second from what the process already holds, so a
+/// `tccutil reset` between them changes nothing and the only remediation is restarting the daemon.
+/// The stub recording `[false, false]` is the point — a flag that tracked prompt attempts would
+/// have stayed silent through the exact sequence it exists to catch.
+@Test func aSecondDenialInOneProcessNamesTheDaemonRestartRemediation() throws {
+    let authorizer = AppleEventAuthorizerStub(results: [OSStatus(errAEEventNotPermitted), OSStatus(errAEEventNotPermitted)])
+    let browser = browserAutomation(authorizer: authorizer)
+
+    let first = try automationDenial { _ = try browser.windows(app: "Safari") }
+    let second = try automationDenial { _ = try browser.windows(app: "Safari") }
+
+    #expect(first.answeredEarlierInThisProcess == false)
+    #expect(second.answeredEarlierInThisProcess)
+    #expect(second.message.contains("launchctl kickstart -k gui/$(id -u)/dev.axon.daemon"))
+    #expect(authorizer.requests == [false, false])
+}
+
+@Test func anUnexpectedStatusIsReportedAsAnUndeterminableAuthorization() {
+    let authorizer = AppleEventAuthorizerStub(results: [-50])
+    #expect(throws: BrowserAutomationError.authorizationFailed(app: "Safari", status: -50)) {
+        try authorizationService(authorizer).check(bundleIdentifier: "com.apple.Safari", appName: "Safari")
+    }
+}
+
+/// A failed call is not macOS answering the authorization, so it must not make the next denial claim
+/// this process is holding an answer it never received.
+@Test func anUndeterminableStatusDoesNotCountAsAnAnswer() throws {
+    let authorizer = AppleEventAuthorizerStub(results: [-50, OSStatus(errAEEventNotPermitted)])
+    let browser = browserAutomation(authorizer: authorizer)
+
+    #expect(throws: BrowserAutomationError.authorizationFailed(app: "Safari", status: -50)) {
+        _ = try browser.windows(app: "Safari")
+    }
+    let denial = try automationDenial { _ = try browser.windows(app: "Safari") }
+
+    #expect(denial.answeredEarlierInThisProcess == false)
+}
+
+@Test func consentPromptsOnlyForAnUndeterminedGrant() throws {
+    let firstUse = AppleEventAuthorizerStub(results: [OSStatus(errAEEventWouldRequireUserConsent), noErr])
+    try authorizationService(firstUse).requestConsent(bundleIdentifier: "com.apple.Safari", appName: "Safari")
+    #expect(firstUse.requests == [false, true])
+    #expect(firstUse.bundleIdentifiers == ["com.apple.Safari", "com.apple.Safari"])
+
+    let alreadyGranted = AppleEventAuthorizerStub(results: [noErr])
+    try authorizationService(alreadyGranted).requestConsent(bundleIdentifier: "com.apple.Safari", appName: "Safari")
+    #expect(alreadyGranted.requests == [false])
+
+    // macOS does not re-present the dialog for a recorded denial, so prompting would only repeat the
+    // same answer.
+    let recordedDenial = AppleEventAuthorizerStub(results: [OSStatus(errAEEventNotPermitted)])
+    let denial = try automationDenial {
+        try authorizationService(recordedDenial).requestConsent(bundleIdentifier: "com.apple.Safari", appName: "Safari")
+    }
+    #expect(denial.leg == .checked)
+    #expect(recordedDenial.requests == [false])
+}
+
+/// The normal path the UI directs users along: an agent verb refuses an undetermined grant, which
+/// leaves an answer in the ledger, and the user then chooses Browser Automation and denies the
+/// dialog. That denial is the answer they just gave, so it must not tell them to restart the daemon.
+@Test func consentDeniedAfterAnAgentVerbAlreadyCheckedIsNotReportedAsStale() throws {
+    let ledger = AppleEventAnswerLedger()
+    let authorizer = AppleEventAuthorizerStub(results: [
+        OSStatus(errAEEventWouldRequireUserConsent),
+        OSStatus(errAEEventWouldRequireUserConsent),
+        OSStatus(errAEEventNotPermitted)
+    ])
+
+    let refusal = try automationDenial {
+        _ = try browserAutomation(authorizer: authorizer, ledger: ledger).windows(app: "Safari")
+    }
+    let denial = try automationDenial {
+        try authorizationService(authorizer, ledger: ledger)
+            .requestConsent(bundleIdentifier: "com.apple.Safari", appName: "Safari")
+    }
+
+    #expect(refusal.leg == .checked)
+    #expect(denial.leg == .prompted)
+    #expect(denial.answeredEarlierInThisProcess == false)
+    #expect(denial.message.contains("launchctl kickstart") == false)
+    #expect(authorizer.requests == [false, false, true])
+}
+
+@Test func consentRefusedAtTheDialogReportsThePromptedLeg() throws {
+    let authorizer = AppleEventAuthorizerStub(results: [OSStatus(errAEEventWouldRequireUserConsent), OSStatus(errAEEventNotPermitted)])
+
+    let denial = try automationDenial {
+        try authorizationService(authorizer).requestConsent(bundleIdentifier: "com.apple.Safari", appName: "Safari")
+    }
+
+    #expect(denial.leg == .prompted)
+    #expect(denial.authorization == .denied)
+    #expect(authorizer.requests == [false, true])
+    // The silent leg of this same request must not read as an earlier answer, or a fresh refusal
+    // would tell the user to restart a daemon that just asked them the question.
+    #expect(denial.answeredEarlierInThisProcess == false)
+    #expect(denial.message.contains("launchctl kickstart") == false)
+}
+
+@Test func consentCoversEveryRunningBrowserAndReportsEachOutcome() {
+    let authorizer = AppleEventAuthorizerStub(results: [OSStatus(errAEEventWouldRequireUserConsent), noErr, OSStatus(errAEEventNotPermitted)])
+    let outcomes = BrowserAutomationConsentRequester(
+        authorizer: authorizer,
+        isRunning: { _ in true },
+        ledger: AppleEventAnswerLedger(),
+        log: { _ in }
+    ).requestForRunningBrowsers()
+
+    #expect(outcomes.map(\.bundleIdentifier) == ["com.apple.Safari", "com.google.Chrome"])
+    #expect(outcomes.map(\.granted) == [true, false])
+    #expect(outcomes[1].detail?.contains("Google Chrome") == true)
+}
+
+@Test func consentSkipsBrowsersThatAreNotRunning() {
+    let authorizer = AppleEventAuthorizerStub(results: [noErr])
+    let outcomes = BrowserAutomationConsentRequester(
+        authorizer: authorizer,
+        isRunning: { $0 == "com.apple.Safari" },
+        ledger: AppleEventAnswerLedger(),
+        log: { _ in }
+    ).requestForRunningBrowsers()
+
+    #expect(outcomes.map(\.app) == ["Safari"])
+    #expect(authorizer.bundleIdentifiers == ["com.apple.Safari"])
+}
+
+@Test func everyAuthorizationDecisionIsLoggedWithItsLegAndStatus() throws {
+    let collector = LogCollector()
+    let authorizer = AppleEventAuthorizerStub(results: [OSStatus(errAEEventWouldRequireUserConsent), noErr])
+
+    try authorizationService(authorizer, log: collector.append)
+        .requestConsent(bundleIdentifier: "com.apple.Safari", appName: "Safari")
+
+    #expect(collector.lines == [
+        "automation authorization target=com.apple.Safari leg=checked status=-1744 answeredEarlierInThisProcess=false",
+        "automation authorization target=com.apple.Safari leg=prompted status=0 answeredEarlierInThisProcess=false"
+    ])
 }
 
 @Test func tabsReturnsApplicationScriptingShapeWithoutClaimingAXAuthority() {
@@ -142,7 +325,7 @@ private final class AppleEventAuthorizerStub: AppleEventAuthorizing {
     ))
     #expect(invalid.error?.code == -32602)
 
-    browser.error = .automationNotGranted(app: "Safari", authorization: .denied, status: -1743)
+    browser.error = .automationNotGranted(BrowserAutomationDenial(app: "Safari", authorization: .denied, leg: .checked, status: -1743))
     let denied = CommandRouter(browserAutomation: browser).handle(JSONRPCRequest(
         id: .int(2), method: "windows", params: .object(["app": .string("Safari")])
     ))
@@ -153,11 +336,12 @@ private final class AppleEventAuthorizerStub: AppleEventAuthorizing {
     #expect(denied.error?.data?["app"] == .string("Safari"))
     #expect(denied.error?.data?["authorization"] == .string("denied"))
     #expect(denied.error?.data?["nativeStatus"] == .int(-1743))
+    #expect(denied.error?.data?["leg"] == .string("checked"))
 }
 
 @Test func automationDenialContractIsSharedByEveryBrowserVerbAndRoundTrips() throws {
     let browser = BrowserAutomationStub()
-    browser.error = .automationNotGranted(app: "Google Chrome", authorization: .notDetermined, status: -1744)
+    browser.error = .automationNotGranted(BrowserAutomationDenial(app: "Google Chrome", authorization: .notDetermined, leg: .checked, status: -1744))
     let router = CommandRouter(browserAutomation: browser)
     let requests = [
         JSONRPCRequest(id: .int(1), method: "navigate", params: .object(["app": .string("Chrome"), "url": .string("https://example.com")])),
@@ -170,6 +354,9 @@ private final class AppleEventAuthorizerStub: AppleEventAuthorizing {
         #expect(response.error?.code == -32603)
         #expect(response.error?.data?["reason"] == .string("automation-not-granted"))
         #expect(response.error?.data?["authorization"] == .string("notDetermined"))
+        #expect(response.error?.data?["app"] == .string("Google Chrome"))
+        #expect(response.error?.data?["nativeStatus"] == .int(-1744))
+        #expect(response.error?.data?["leg"] == .string("checked"))
         let encoded = try JSONEncoder().encode(response)
         #expect(try JSONDecoder().decode(JSONRPCResponse.self, from: encoded) == response)
     }
