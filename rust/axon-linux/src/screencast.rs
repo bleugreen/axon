@@ -35,13 +35,17 @@ struct Signal {
     changed: Condvar,
 }
 
-pub struct ScreenCastActor {
+#[derive(Clone)]
+pub struct ScreenCastActor(Arc<ActorHandle>);
+
+struct ActorHandle {
     signal: Arc<Signal>,
     command: mpsc::Sender<Command>,
     stop: mpsc::Sender<()>,
     shutting_down: Arc<AtomicBool>,
     request_lock: Mutex<()>,
-    thread: Option<thread::JoinHandle<()>>,
+    thread: Mutex<Option<thread::JoinHandle<()>>>,
+    finished: Mutex<mpsc::Receiver<()>>,
 }
 
 enum Command {
@@ -67,6 +71,7 @@ impl ScreenCastActor {
         let shutting_down = Arc::new(AtomicBool::new(false));
         let actor_signal = signal.clone();
         let actor_shutting_down = shutting_down.clone();
+        let (finished_tx, finished) = mpsc::channel();
         let thread = thread::Builder::new()
             .name("axon-screencast".into())
             .spawn(move || {
@@ -77,17 +82,19 @@ impl ScreenCastActor {
                     commands,
                     Arc::new(Mutex::new(stopped)),
                     actor_shutting_down,
-                )
+                );
+                let _ = finished_tx.send(());
             })
             .expect("spawn ScreenCast actor");
-        Self {
+        Self(Arc::new(ActorHandle {
             signal,
             command,
             stop,
             shutting_down,
             request_lock: Mutex::new(()),
-            thread: Some(thread),
-        }
+            thread: Mutex::new(Some(thread)),
+            finished: Mutex::new(finished),
+        }))
     }
     pub fn state(&self) -> PortalState {
         self.signal
@@ -180,14 +187,36 @@ impl ScreenCastActor {
         }
     }
 }
-impl Drop for ScreenCastActor {
+impl std::ops::Deref for ScreenCastActor {
+    type Target = ActorHandle;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl Drop for ActorHandle {
     fn drop(&mut self) {
         self.shutting_down.store(true, Ordering::Release);
         let _ = self.stop.send(());
         let _ = self.command.send(Command::Stop);
-        if let Some(thread) = self.thread.take() {
-            let _ = thread.join();
+        let finished = self
+            .finished
+            .get_mut()
+            .expect("ScreenCast completion lock poisoned")
+            .recv_timeout(Duration::from_millis(250))
+            .is_ok();
+        if finished {
+            if let Some(thread) = self
+                .thread
+                .get_mut()
+                .expect("ScreenCast thread lock poisoned")
+                .take()
+            {
+                let _ = thread.join();
+            }
         }
+        // A custom driver can violate the cancellation contract. Detaching after the short bound
+        // keeps daemon teardown safe and responsive; production setup futures are dropped by select.
     }
 }
 
