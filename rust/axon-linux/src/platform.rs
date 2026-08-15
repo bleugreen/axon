@@ -108,6 +108,47 @@ enum Command {
     Extents(SnapshotHandle, Reply<Option<Rect>>),
 }
 
+#[derive(Clone)]
+pub(crate) struct ScreenCaptureProvider {
+    actor: Arc<Mutex<ScreenCastActor>>,
+    factory: Arc<dyn Fn() -> ScreenCastActor + Send + Sync>,
+    request_lock: Arc<Mutex<()>>,
+}
+
+impl ScreenCaptureProvider {
+    fn production(store: TokenStore) -> Self {
+        let factory: Arc<dyn Fn() -> ScreenCastActor + Send + Sync> =
+            Arc::new(move || ScreenCastActor::spawn_production(store.clone()));
+        Self {
+            actor: Arc::new(Mutex::new(factory())),
+            factory,
+            request_lock: Arc::new(Mutex::new(())),
+        }
+    }
+
+    pub(crate) fn capture(&self, reauthorize: bool) -> Result<ScreenCapture, CaptureError> {
+        let _request = self
+            .request_lock
+            .lock()
+            .expect("screen capture provider request lock poisoned");
+        let actor = if reauthorize {
+            let replacement = (self.factory)();
+            let previous = std::mem::replace(
+                &mut *self.actor.lock().expect("screen capture provider poisoned"),
+                replacement.clone(),
+            );
+            drop(previous);
+            replacement
+        } else {
+            self.actor
+                .lock()
+                .expect("screen capture provider poisoned")
+                .clone()
+        };
+        actor.capture(reauthorize, INTERACTIVE_TIMEOUT)
+    }
+}
+
 /// Selects the requested direct-child range before any of those children are traversed.
 fn child_page<T>(children: Vec<T>, offset: usize, limit: Option<usize>) -> (Vec<T>, usize, usize) {
     let offset = offset.min(children.len());
@@ -284,7 +325,7 @@ pub struct LinuxBackend {
     tx: mpsc::Sender<Command>,
     input: InputSession,
     screenshot: ScreenshotProvider,
-    screen_capture: Option<ScreenCastActor>,
+    screen_capture: Option<ScreenCaptureProvider>,
     /// AT-SPI identity to process id, read on demand and refreshed when stale or missed.
     identities: Vec<AppIdentity>,
     identities_read: Option<Instant>,
@@ -332,7 +373,7 @@ impl LinuxBackend {
                 .wayland
                 .then(|| TokenStore::from_environment().ok())
                 .flatten()
-                .map(ScreenCastActor::spawn_production),
+                .map(ScreenCaptureProvider::production),
             identities: Vec::new(),
             identities_read: None,
         })
@@ -367,13 +408,13 @@ impl LinuxBackend {
         }
     }
 
-    pub(crate) fn screen_capture_handle(&self) -> Option<ScreenCastActor> {
+    pub(crate) fn screen_capture_handle(&self) -> Option<ScreenCaptureProvider> {
         self.screen_capture.clone()
     }
 
     pub(crate) fn capture_screen(&self, reauthorize: bool) -> Result<ScreenCapture, CaptureError> {
         match &self.screen_capture {
-            Some(actor) => actor.capture(reauthorize, INTERACTIVE_TIMEOUT),
+            Some(provider) => provider.capture(reauthorize),
             None => Err(CaptureError::Unavailable(
                 "capture_screen is available only in a Wayland session; use look screenshot for application-targeted X11 capture".into(),
             )),

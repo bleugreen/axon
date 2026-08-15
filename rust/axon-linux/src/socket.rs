@@ -80,14 +80,14 @@ fn dispatch_shared(
 #[cfg(target_os = "linux")]
 fn dispatch_capture(
     request: JsonRpcRequest,
-    capture: Option<crate::screencast::ScreenCastActor>,
+    capture: Option<crate::platform::ScreenCaptureProvider>,
 ) -> (Value, bool) {
     dispatch_capture_with(request, move |reauthorize| {
         capture
             .ok_or_else(|| crate::screencast::CaptureError::Unavailable(
                 "capture_screen is available only in a Wayland session; use look screenshot for application-targeted X11 capture".into(),
             ))
-            .and_then(|actor| actor.capture(reauthorize, crate::screencast::INTERACTIVE_TIMEOUT))
+            .and_then(|provider| provider.capture(reauthorize))
     })
 }
 
