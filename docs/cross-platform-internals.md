@@ -730,6 +730,46 @@ the same rule through a different shape: `PrimitiveActionResult.unverifiedDispat
 constructs the delivered-but-unproved result directly, rather than computing it
 at each call site.
 
+That verdict then has to survive the trip into `.axn`. Each router hands the
+result's own `success` to the runner rather than restating it, and says
+separately, through `DispatchOutcome`'s
+`dispatched_without_semantic_verification`, whether the input reached the target
+without its effect being proved. Keeping those two answers apart is what lets
+the runner tell a delivered-but-unproved action from one that never landed. A
+router that reported every completed dispatch as a successful step would hide
+the first case from the postcondition that exists to judge it, and would leave
+`success` meaning "the mechanism ran" on one platform and "the action worked" on
+another.
+
+What the runner may then do with that verdict is also shared. A dispatched action
+that cannot prove its own goal may have its verdict decided by a declared
+`expects` postcondition, but only when that postcondition is causal evidence:
+the runner probes the facts *before* dispatch, and an expectation that already
+held cannot promote anything. `docs/axn.md` describes the rule and
+`schema/fixtures/axn/dispatch-verification.json` fixes every case of it, read by
+`rust/axon-core/tests/conformance.rs` and
+`Tests/AxonCoreTests/SharedDispatchVerificationConformanceTests.swift` so the two
+runtimes cannot drift apart on it.
+
+The probe's input is shared for the same reason its verdict is. Deciding a
+declared fact against observed state is one question with one answer, so
+`verify_expected_fact_state` answers it in core and each Rust router supplies
+only the platform-specific part: capturing the app and reading the element.
+
+What that keeps singular is the classification, which `FactError` carries. A
+value that differs or a target that did not resolve is evidence the expected
+state does not hold, so the action still has something to cause. A fact that is
+malformed, of a kind the runtime does not know, or whose observation simply
+failed is *unevaluable* — silence about the world rather than evidence about it.
+Only the first kind may open the causal probe. An unevaluable probe fails the
+action before it dispatches, because an action that acts on no before-state
+leaves a side effect no postcondition can describe. macOS draws the identical
+line in `RecordedFactError`, recovering from `.mismatch` and
+`.unresolvedLocator` and rethrowing the rest; the Rust variants are that split
+ported rather than reinvented. A backend that quietly reclassified one as the
+other would change which actions may be judged by their postcondition without
+failing anywhere visible.
+
 ### Windows session and integrity constraints
 
 `SendInput` is the foreground rung and needs the explicit opt-in. It also needs a

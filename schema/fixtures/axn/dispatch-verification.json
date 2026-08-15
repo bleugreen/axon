@@ -1,0 +1,173 @@
+{
+  "comment": "When an action dispatched cleanly but cannot observe its own goal, the runner may let a declared postcondition decide it instead. Every case here fixes that decision. `postconditionDecides` is whether the runner hands this action's verdict to its declared facts. That requires the input to have reached the target (`dispatchSucceeded`) and requires the postcondition to be causal evidence, which the runner establishes by probing the facts BEFORE dispatch: a postcondition that already held beforehand proves nothing about what the action caused. Its observable signature is whether the runner goes on to consult those facts after dispatch at all, which is what each language asserts. A probe that cannot be evaluated is not an answer either, and the action fails without dispatching at all, which `dispatched` records. `actionSuccess` is what the resulting trace entry reports. macOS and every Rust backend run this same table, because a click that reports success on one platform and failure on another is two contracts wearing one field name.",
+  "cases": [
+    {
+      "name": "a dispatched click with no postcondition stays unproven",
+      "tool": "click",
+      "factKinds": [],
+      "dispatchSucceeded": true,
+      "expectationHeldBeforeDispatch": false,
+      "expectationHoldsAfterDispatch": false,
+      "dispatched": true,
+      "postconditionDecides": false,
+      "actionSuccess": false
+    },
+    {
+      "name": "a changed fact makes a dispatched click answerable",
+      "tool": "click",
+      "factKinds": [
+        "changed"
+      ],
+      "dispatchSucceeded": true,
+      "expectationHeldBeforeDispatch": false,
+      "expectationHoldsAfterDispatch": true,
+      "dispatched": true,
+      "postconditionDecides": true,
+      "actionSuccess": true
+    },
+    {
+      "name": "a changed fact that never materialises leaves the click failed",
+      "tool": "click",
+      "factKinds": [
+        "changed"
+      ],
+      "dispatchSucceeded": true,
+      "expectationHeldBeforeDispatch": false,
+      "expectationHoldsAfterDispatch": false,
+      "dispatched": true,
+      "postconditionDecides": true,
+      "actionSuccess": false
+    },
+    {
+      "name": "a changed fact carries its own before-state, so it is causal for type too",
+      "tool": "type",
+      "factKinds": [
+        "changed"
+      ],
+      "dispatchSucceeded": true,
+      "expectationHeldBeforeDispatch": false,
+      "expectationHoldsAfterDispatch": true,
+      "dispatched": true,
+      "postconditionDecides": true,
+      "actionSuccess": true
+    },
+    {
+      "name": "a value fact is not causal evidence for type, which reads its own value back",
+      "tool": "type",
+      "factKinds": [
+        "value"
+      ],
+      "dispatchSucceeded": true,
+      "expectationHeldBeforeDispatch": false,
+      "expectationHoldsAfterDispatch": true,
+      "dispatched": true,
+      "postconditionDecides": false,
+      "actionSuccess": false
+    },
+    {
+      "name": "a value fact already true before dispatch proves no transition",
+      "tool": "click",
+      "factKinds": [
+        "value"
+      ],
+      "dispatchSucceeded": true,
+      "expectationHeldBeforeDispatch": true,
+      "expectationHoldsAfterDispatch": true,
+      "dispatched": true,
+      "postconditionDecides": false,
+      "actionSuccess": false
+    },
+    {
+      "name": "a value fact false before and true after upgrades the click",
+      "tool": "click",
+      "factKinds": [
+        "value"
+      ],
+      "dispatchSucceeded": true,
+      "expectationHeldBeforeDispatch": false,
+      "expectationHoldsAfterDispatch": true,
+      "dispatched": true,
+      "postconditionDecides": true,
+      "actionSuccess": true
+    },
+    {
+      "name": "a value fact false before and still false after leaves the click failed",
+      "tool": "click",
+      "factKinds": [
+        "value"
+      ],
+      "dispatchSucceeded": true,
+      "expectationHeldBeforeDispatch": false,
+      "expectationHoldsAfterDispatch": false,
+      "dispatched": true,
+      "postconditionDecides": true,
+      "actionSuccess": false
+    },
+    {
+      "name": "a fact neither runtime can evaluate is not read as room to act",
+      "comment": "The expectation would pass if it were read after dispatch, so a runner that treated an unevaluable probe as room to act would promote this action on no causal evidence at all. Failing to observe a fact is silence about the world, not evidence about it, so the action fails without dispatching.",
+      "tool": "click",
+      "factKinds": [
+        "unknown"
+      ],
+      "dispatchSucceeded": true,
+      "expectationHeldBeforeDispatch": false,
+      "expectationHoldsAfterDispatch": true,
+      "dispatched": false,
+      "postconditionDecides": false,
+      "actionSuccess": false
+    },
+    {
+      "name": "keyboard is answerable by the same value fact as click",
+      "tool": "keyboard",
+      "factKinds": [
+        "value"
+      ],
+      "dispatchSucceeded": true,
+      "expectationHeldBeforeDispatch": false,
+      "expectationHoldsAfterDispatch": true,
+      "dispatched": true,
+      "postconditionDecides": true,
+      "actionSuccess": true
+    },
+    {
+      "name": "scroll is answerable by the same value fact as click",
+      "tool": "scroll",
+      "factKinds": [
+        "value"
+      ],
+      "dispatchSucceeded": true,
+      "expectationHeldBeforeDispatch": false,
+      "expectationHoldsAfterDispatch": true,
+      "dispatched": true,
+      "postconditionDecides": true,
+      "actionSuccess": true
+    },
+    {
+      "name": "invoke is outside the causal tools, so its value fact cannot upgrade it",
+      "tool": "invoke",
+      "factKinds": [
+        "value"
+      ],
+      "dispatchSucceeded": true,
+      "expectationHeldBeforeDispatch": false,
+      "expectationHoldsAfterDispatch": true,
+      "dispatched": true,
+      "postconditionDecides": false,
+      "actionSuccess": false
+    },
+    {
+      "name": "a click that never reached the target is not a postcondition's to decide",
+      "tool": "click",
+      "factKinds": [
+        "value"
+      ],
+      "dispatchSucceeded": false,
+      "expectationHeldBeforeDispatch": false,
+      "expectationHoldsAfterDispatch": true,
+      "dispatched": true,
+      "postconditionDecides": false,
+      "actionSuccess": false
+    }
+  ]
+}

@@ -25,6 +25,38 @@ pub struct AxnDocument {
     pub flags: Map<String, Value>,
 }
 
+/// Why a declared fact did not verify.
+///
+/// Replay asks these exactly one question: does this failure prove the expected end-state is *not*
+/// currently established? `Mismatch` and `Unresolved` do — a value that differs, or a target that
+/// cannot be found, is not in the state the fact asserts, so the action still has something to
+/// cause. `Unevaluable` does not: failing to *observe* a fact is silence about the world, not
+/// evidence about it, and reading silence as room to act would let a postcondition promote an
+/// action that changed nothing.
+///
+/// The split is macOS's, ported rather than invented. `RecordedFactError` recovers from `.mismatch`
+/// and `.unresolvedLocator` and rethrows `.invalidFact`, `.missingDependency`, and `.unsupported`;
+/// these three variants carry that same line so both runtimes decide identically.
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+pub enum FactError {
+    /// The observed state differs from what the fact asserts.
+    #[error("{0}")]
+    Mismatch(String),
+    /// The fact's target could not be resolved, so its state is not established either.
+    #[error("{0}")]
+    Unresolved(String),
+    /// The fact could not be evaluated at all: malformed, unsupported, or the observation failed.
+    #[error("{0}")]
+    Unevaluable(String),
+}
+
+impl FactError {
+    /// Whether this failure is evidence that the expected end-state is not already established.
+    pub fn leaves_transition_available(&self) -> bool {
+        matches!(self, FactError::Mismatch(_) | FactError::Unresolved(_))
+    }
+}
+
 pub struct PreparedRun {
     pub document: AxnDocument,
     pub arg_values: Map<String, Value>,
@@ -89,18 +121,18 @@ pub fn prepare_run(params: &Map<String, Value>) -> Result<PreparedRun, AxnError>
 pub fn unique_expected_fact_candidate<'a>(
     fact: &ExpectedFact,
     resolution: &'a crate::Resolution,
-) -> Result<&'a crate::Candidate, String> {
+) -> Result<&'a crate::Candidate, FactError> {
     if resolution.status != crate::ResolutionStatus::Unique {
-        return Err(format!(
+        return Err(FactError::Unresolved(format!(
             "fact {} locator did not resolve uniquely: {:?}",
             fact.id, resolution.status
-        ));
+        )));
     }
     resolution.best.as_ref().ok_or_else(|| {
-        format!(
+        FactError::Unresolved(format!(
             "fact {} locator reported unique without a best candidate",
             fact.id
-        )
+        ))
     })
 }
 
@@ -108,26 +140,29 @@ pub fn changed_snapshot_baseline(snapshot: &crate::Snapshot) -> Result<Value, St
     serde_json::to_value(crate::SnapshotSummary::from(snapshot)).map_err(|error| error.to_string())
 }
 
-pub fn expected_fact_target(fact: &ExpectedFact) -> Result<(String, crate::Locator), String> {
+pub fn expected_fact_target(fact: &ExpectedFact) -> Result<(String, crate::Locator), FactError> {
     let target = fact
         .fields
         .get("target")
         .and_then(Value::as_object)
-        .ok_or_else(|| format!("fact {} target must be an object", fact.id))?;
+        .ok_or_else(|| {
+            FactError::Unevaluable(format!("fact {} target must be an object", fact.id))
+        })?;
     let app = target
         .get("app")
         .and_then(Value::as_str)
         .filter(|app| !app.is_empty())
-        .ok_or_else(|| format!("fact {} target requires app", fact.id))?;
-    let locator = target
-        .get("locator")
-        .ok_or_else(|| format!("fact {} target requires locator", fact.id))?;
-    let locator = serde_json::from_value(locator.clone())
-        .map_err(|error| format!("fact {} has invalid locator: {error}", fact.id))?;
+        .ok_or_else(|| FactError::Unevaluable(format!("fact {} target requires app", fact.id)))?;
+    let locator = target.get("locator").ok_or_else(|| {
+        FactError::Unevaluable(format!("fact {} target requires locator", fact.id))
+    })?;
+    let locator = serde_json::from_value(locator.clone()).map_err(|error| {
+        FactError::Unevaluable(format!("fact {} has invalid locator: {error}", fact.id))
+    })?;
     Ok((app.to_owned(), locator))
 }
 
-pub fn expected_fact_app(fact: &ExpectedFact) -> Result<String, String> {
+pub fn expected_fact_app(fact: &ExpectedFact) -> Result<String, FactError> {
     fact.fields
         .get("target")
         .and_then(Value::as_object)
@@ -135,7 +170,7 @@ pub fn expected_fact_app(fact: &ExpectedFact) -> Result<String, String> {
         .and_then(Value::as_str)
         .filter(|app| !app.is_empty())
         .map(str::to_owned)
-        .ok_or_else(|| format!("fact {} target requires app", fact.id))
+        .ok_or_else(|| FactError::Unevaluable(format!("fact {} target requires app", fact.id)))
 }
 
 fn same_path(left: &str, right: &str) -> bool {
@@ -495,7 +530,7 @@ pub trait ToolDispatcher {
         Ok(())
     }
     fn dispatch(&mut self, tool: &str, params: &Map<String, Value>) -> DispatchOutcome;
-    fn verify(&mut self, fact: &ExpectedFact) -> Result<(), String>;
+    fn verify(&mut self, fact: &ExpectedFact) -> Result<(), FactError>;
     fn capture_changed_baseline(&mut self, fact: &ExpectedFact) -> Result<Value, String> {
         Err(format!("changed fact {} is unsupported", fact.id))
     }
@@ -534,18 +569,18 @@ pub trait ToolDispatcher {
     }
 }
 
-pub fn expected_fact_kind(fact: &ExpectedFact) -> Result<&str, String> {
+pub fn expected_fact_kind(fact: &ExpectedFact) -> Result<&str, FactError> {
     fact.fields
         .get("kind")
         .and_then(Value::as_str)
         .filter(|kind| !kind.is_empty())
-        .ok_or_else(|| format!("fact {} requires kind", fact.id))
+        .ok_or_else(|| FactError::Unevaluable(format!("fact {} requires kind", fact.id)))
 }
 
 pub fn verify_expected_fact_state(
     fact: &ExpectedFact,
     observed: &Map<String, Value>,
-) -> Result<(), String> {
+) -> Result<(), FactError> {
     let kind = expected_fact_kind(fact)?;
     if matches!(
         kind,
@@ -556,13 +591,18 @@ pub fn verify_expected_fact_state(
             .and_then(Value::as_bool)
             .unwrap_or(true)
             .then_some(())
-            .ok_or_else(|| format!("fact {} did not verify: target does not exist", fact.id));
+            .ok_or_else(|| {
+                FactError::Mismatch(format!(
+                    "fact {} did not verify: target does not exist",
+                    fact.id
+                ))
+            });
     }
     if kind == "changed" {
-        return Err(format!(
+        return Err(FactError::Unevaluable(format!(
             "changed fact {} requires a pre-dispatch baseline",
             fact.id
-        ));
+        )));
     }
     let key = match kind {
         "focused" => "focused",
@@ -570,10 +610,10 @@ pub fn verify_expected_fact_state(
         "value" => "value",
         "selected" => "selected",
         other => {
-            return Err(format!(
+            return Err(FactError::Unevaluable(format!(
                 "fact {} is unsupported: unknown kind {other}",
                 fact.id
-            ));
+            )));
         }
     };
     let expected = fact
@@ -589,18 +629,17 @@ pub fn verify_expected_fact_state(
         return (actual.and_then(Value::as_bool) == Some(expected))
             .then_some(())
             .ok_or_else(|| {
-                format!(
+                FactError::Mismatch(format!(
                     "fact {} did not verify: {key} expected {expected}, got {actual:?}",
                     fact.id
-                )
+                ))
             });
     }
     let actual = actual.and_then(Value::as_str);
     let Some(expected) = expected else {
-        return actual
-            .is_some()
-            .then_some(())
-            .ok_or_else(|| format!("fact {} did not verify: {key} was nil", fact.id));
+        return actual.is_some().then_some(()).ok_or_else(|| {
+            FactError::Mismatch(format!("fact {} did not verify: {key} was nil", fact.id))
+        });
     };
     let (needle, contains, case_sensitive) = if let Some(value) = expected.as_str() {
         (value, false, false)
@@ -618,16 +657,16 @@ pub fn verify_expected_fact_state(
         {
             (value, false, case_sensitive)
         } else {
-            return Err(format!(
+            return Err(FactError::Unevaluable(format!(
                 "fact {} {key} expectation must include equals, exact, or contains",
                 fact.id
-            ));
+            )));
         }
     } else {
-        return Err(format!(
+        return Err(FactError::Unevaluable(format!(
             "fact {} {key} expectation must be a string or object",
             fact.id
-        ));
+        )));
     };
     let matched = actual.is_some_and(|actual| {
         let (actual, needle) = if case_sensitive {
@@ -642,10 +681,10 @@ pub fn verify_expected_fact_state(
         }
     });
     matched.then_some(()).ok_or_else(|| {
-        format!(
+        FactError::Mismatch(format!(
             "fact {} did not verify: {key} expectation failed, got {actual:?}",
             fact.id
-        )
+        ))
     })
 }
 
@@ -781,6 +820,7 @@ impl<'a, D: ToolDispatcher> AxnRunner<'a, D> {
                     (expected_fact_kind(fact).ok() != Some("changed"))
                         .then(|| self.dispatcher.verify(fact).err())
                         .flatten()
+                        .map(|error| error.to_string())
                 })
             }) {
                 trace.push(TraceEntry {
@@ -823,10 +863,28 @@ impl<'a, D: ToolDispatcher> AxnRunner<'a, D> {
                 action.tool.as_str(),
                 "click" | "keyboard" | "drag" | "scroll"
             ) {
-                action
-                    .expects
-                    .iter()
-                    .any(|fact| self.dispatcher.verify(fact).is_err())
+                match causal_transition_available(&mut *self.dispatcher, &action.expects) {
+                    Ok(available) => available,
+                    Err(error) => {
+                        // The probe could not be evaluated, so there is no before-state and
+                        // nothing this action does afterwards could be read as having caused
+                        // anything. macOS rethrows here rather than dispatching blind, and
+                        // dispatching anyway would leave a side effect no postcondition can
+                        // describe.
+                        trace.push(TraceEntry {
+                            index,
+                            tool: action.tool.clone(),
+                            success: false,
+                            action_id: action.id.clone(),
+                            result: None,
+                            error: Some(redact_error(error.to_string(), &active_secrets)),
+                            resolution: None,
+                            heal: None,
+                        });
+                        success = false;
+                        if !continue_on_error { break } else { continue }
+                    }
+                }
             } else {
                 false
             };
@@ -858,7 +916,7 @@ impl<'a, D: ToolDispatcher> AxnRunner<'a, D> {
                     .iter()
                     .find_map(|fact| match changed_baselines.get(&fact.id) {
                         Some(baseline) => self.dispatcher.verify_changed(fact, baseline).err(),
-                        None => self.dispatcher.verify(fact).err(),
+                        None => self.dispatcher.verify(fact).err().map(|e| e.to_string()),
                     })
             } else {
                 None
@@ -1218,6 +1276,30 @@ fn semantically_verified_result(tool: &str, mut result: Value) -> Value {
     );
     action.insert("refusal".into(), Value::Null);
     result
+}
+
+/// Whether a dispatched-but-unverified action still has a semantic transition left to cause.
+///
+/// Probed *before* dispatch, which is the entire point: a postcondition is causal evidence only
+/// when the state it asserts was not already established beforehand. Consulted afterwards alone it
+/// would promote an action that did nothing at all, which is the false confidence that letting a
+/// postcondition decide exists to remove.
+///
+/// Only a fact that verifiably does not hold answers that question. A fact that could not be
+/// evaluated is not an answer, and is returned so the caller can fail the action rather than read
+/// silence as room to act.
+fn causal_transition_available<D: ToolDispatcher + ?Sized>(
+    dispatcher: &mut D,
+    facts: &[ExpectedFact],
+) -> Result<bool, FactError> {
+    for fact in facts {
+        match dispatcher.verify(fact) {
+            Ok(()) => {}
+            Err(error) if error.leaves_transition_available() => return Ok(true),
+            Err(error) => return Err(error),
+        }
+    }
+    Ok(false)
 }
 
 fn document_flag(doc: &AxnDocument, key: &str) -> bool {

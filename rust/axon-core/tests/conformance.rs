@@ -86,7 +86,13 @@ fn semantic_facts_reject_ambiguous_resolution_before_consuming_best() {
         }))
         .unwrap();
         let error = unique_expected_fact_candidate(&fact, &tied_fact_resolution()).unwrap_err();
-        assert!(error.contains("Ambiguous"), "{kind}: {error}");
+        assert!(error.to_string().contains("Ambiguous"), "{kind}: {error}");
+        // A target that cannot be pinned down is not in the state the fact asserts, so it is
+        // evidence the action still has something to cause — macOS's `.unresolvedLocator`.
+        assert!(
+            matches!(error, FactError::Unresolved(_)),
+            "{kind}: {error:?}"
+        );
     }
 }
 
@@ -106,7 +112,7 @@ impl ToolDispatcher for AmbiguousFactDispatcher {
         }
     }
 
-    fn verify(&mut self, fact: &ExpectedFact) -> Result<(), String> {
+    fn verify(&mut self, fact: &ExpectedFact) -> Result<(), FactError> {
         unique_expected_fact_candidate(fact, &tied_fact_resolution()).map(|_| ())
     }
 }
@@ -605,7 +611,7 @@ impl ToolDispatcher for Dispatcher {
             }
         }
     }
-    fn verify(&mut self, _fact: &ExpectedFact) -> Result<(), String> {
+    fn verify(&mut self, _fact: &ExpectedFact) -> Result<(), FactError> {
         Ok(())
     }
 }
@@ -704,7 +710,7 @@ impl ToolDispatcher for NoDispatch {
     fn dispatch(&mut self, _tool: &str, _params: &Map<String, Value>) -> DispatchOutcome {
         panic!("dry run dispatched")
     }
-    fn verify(&mut self, _fact: &ExpectedFact) -> Result<(), String> {
+    fn verify(&mut self, _fact: &ExpectedFact) -> Result<(), FactError> {
         panic!("dry run verified")
     }
 }
@@ -865,7 +871,7 @@ impl ToolDispatcher for SemanticDispatcher {
             resolution: None,
         }
     }
-    fn verify(&mut self, fact: &ExpectedFact) -> Result<(), String> {
+    fn verify(&mut self, fact: &ExpectedFact) -> Result<(), FactError> {
         let state = &self.states[self.cursor.min(self.states.len() - 1)];
         self.cursor += 1;
         verify_expected_fact_state(fact, state)
@@ -920,6 +926,172 @@ fn changed_captures_before_dispatch_and_dispatch_only_can_succeed_causally() {
     assert_eq!(dispatcher.dispatched, 1);
 }
 
+/// Conformance between the Rust runner and the shared dispatch-verification contract.
+///
+/// `Tests/AxonCoreTests/SharedDispatchVerificationConformanceTests.swift` runs the equivalent
+/// checks against the same file. Both languages reading the same bytes is what keeps a dispatched
+/// click meaning one thing on macOS and one thing on Windows, rather than `success` carrying a
+/// different promise per platform.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DispatchVerificationFixture {
+    cases: Vec<DispatchVerificationCase>,
+}
+
+#[derive(Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct DispatchVerificationCase {
+    name: String,
+    tool: String,
+    fact_kinds: Vec<String>,
+    dispatch_succeeded: bool,
+    expectation_held_before_dispatch: bool,
+    expectation_holds_after_dispatch: bool,
+    dispatched: bool,
+    postcondition_decides: bool,
+    action_success: bool,
+}
+
+struct SharedCaseDispatcher {
+    case: DispatchVerificationCase,
+    dispatched: bool,
+    post_dispatch_observations: usize,
+}
+
+impl SharedCaseDispatcher {
+    /// The one element whose value every state fact in the table asserts.
+    fn observed(&self) -> Map<String, Value> {
+        let holds = if self.dispatched {
+            self.case.expectation_holds_after_dispatch
+        } else {
+            self.case.expectation_held_before_dispatch
+        };
+        json!({"exists": true, "value": if holds { "After" } else { "Before" }})
+            .as_object()
+            .cloned()
+            .unwrap()
+    }
+}
+
+impl ToolDispatcher for SharedCaseDispatcher {
+    fn dispatch(&mut self, _tool: &str, _params: &Map<String, Value>) -> DispatchOutcome {
+        self.dispatched = true;
+        DispatchOutcome {
+            success: false,
+            dispatched_without_semantic_verification: self.case.dispatch_succeeded,
+            result: json!({"action":{
+                "success": false,
+                "dispatchSuccess": self.case.dispatch_succeeded,
+                "semanticSuccess": null,
+                "semanticStatus": "unverified"
+            }}),
+            error: (!self.case.dispatch_succeeded)
+                .then(|| "input never reached the target".to_string()),
+            resolution: None,
+        }
+    }
+
+    fn verify(&mut self, fact: &ExpectedFact) -> Result<(), FactError> {
+        if self.dispatched {
+            self.post_dispatch_observations += 1;
+        }
+        verify_expected_fact_state(fact, &self.observed())
+    }
+
+    fn capture_changed_baseline(&mut self, _fact: &ExpectedFact) -> Result<Value, String> {
+        if self.dispatched {
+            self.post_dispatch_observations += 1;
+        }
+        Ok(Value::Object(self.observed()))
+    }
+
+    fn change_poll_interval(&self) -> std::time::Duration {
+        std::time::Duration::ZERO
+    }
+
+    fn change_timeout(&self) -> std::time::Duration {
+        std::time::Duration::from_millis(20)
+    }
+}
+
+fn dispatch_verification_fact(kind: &str, index: usize) -> Value {
+    if kind == "changed" {
+        return json!({
+            "id": format!("fact-{index}"),
+            "kind": "changed",
+            "target": {"app": "Example", "locator": {"role": "AXList"}}
+        });
+    }
+    json!({
+        "id": format!("fact-{index}"),
+        "kind": kind,
+        "target": {"app": "Example", "locator": {"role": "AXList"}},
+        "state": {"value": {"equals": "After"}}
+    })
+}
+
+#[test]
+fn every_shared_case_agrees_on_when_a_postcondition_decides_a_dispatched_action() {
+    let fixture: DispatchVerificationFixture = serde_json::from_str(include_str!(
+        "../../../schema/fixtures/axn/dispatch-verification.json"
+    ))
+    .expect("the shared dispatch fixture parses");
+    assert!(!fixture.cases.is_empty());
+
+    for case in fixture.cases {
+        let expected = case.clone();
+        let mut action = json!({
+            "id": "a",
+            "tool": expected.tool,
+            "target": {"app":"Example","name":"main/subject","locator":{"role":"AXList"}}
+        });
+        if !expected.fact_kinds.is_empty() {
+            action["expects"] = Value::Array(
+                expected
+                    .fact_kinds
+                    .iter()
+                    .enumerate()
+                    .map(|(index, kind)| dispatch_verification_fact(kind, index))
+                    .collect(),
+            );
+        }
+        let doc = semantic_doc(json!([action]));
+        let mut dispatcher = SharedCaseDispatcher {
+            case,
+            dispatched: false,
+            post_dispatch_observations: 0,
+        };
+        let result = AxnRunner::new(&mut dispatcher)
+            .run(
+                &doc,
+                &Map::new(),
+                RunOptions {
+                    dry_run: Some(false),
+                    continue_on_error: Some(false),
+                },
+            )
+            .unwrap();
+
+        let name = &expected.name;
+        assert_eq!(
+            dispatcher.dispatched, expected.dispatched,
+            "{name}: dispatched"
+        );
+        // The runner consults a postcondition after dispatch exactly when it handed that action's
+        // verdict to it, so consultation is the observable signature of that decision.
+        assert_eq!(
+            dispatcher.post_dispatch_observations > 0,
+            expected.postcondition_decides,
+            "{name}: postcondition consulted after dispatch"
+        );
+        assert_eq!(
+            result.trace[0].success, expected.action_success,
+            "{name}: trace"
+        );
+        assert_eq!(result.success, expected.action_success, "{name}: run");
+    }
+}
+
 struct TransportFailureDispatcher {
     changed_captures: Vec<Value>,
     changed_cursor: usize,
@@ -936,7 +1108,7 @@ impl ToolDispatcher for TransportFailureDispatcher {
         }
     }
 
-    fn verify(&mut self, _fact: &ExpectedFact) -> Result<(), String> {
+    fn verify(&mut self, _fact: &ExpectedFact) -> Result<(), FactError> {
         Ok(())
     }
 

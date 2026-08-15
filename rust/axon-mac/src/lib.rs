@@ -3,8 +3,8 @@
 use axon_core::{
     AppQuery, AxnRunner, Capability, DeliveryCandidate, DeliveryCapability, DeliveryOutcome,
     DeliveryPolicy, DeliveryRefusal, DeliveryRefusalReason, DeliveryRung, DeliverySelection,
-    DiffPolicy, DispatchOutcome, ExpectedFact, ForegroundTarget, JsonRpcError, JsonRpcId,
-    JsonRpcRequest, JsonRpcResponse, KeyboardIntent, PlatformBackend, PointerContract,
+    DiffPolicy, DispatchOutcome, ExpectedFact, FactError, ForegroundTarget, JsonRpcError,
+    JsonRpcId, JsonRpcRequest, JsonRpcResponse, KeyboardIntent, PlatformBackend, PointerContract,
     ResolutionStatus, RunEnvelope, SemanticElementName, SemanticLookup, SemanticNameRegistry,
     SemanticSelection, SinceToken, Snapshot, SnapshotHandle, TextLocationResolver,
     TextLocationSource, TextLocationTarget, TextRecognitionProvider, ToolDispatcher,
@@ -1465,7 +1465,7 @@ impl<
             },
         }
     }
-    fn verify(&mut self, fact: &ExpectedFact) -> Result<(), String> {
+    fn verify(&mut self, fact: &ExpectedFact) -> Result<(), FactError> {
         let (app, locator) = axon_core::expected_fact_target(fact)?;
         let snapshot = self
             .backend
@@ -1474,15 +1474,15 @@ impl<
                 name: Some(app),
                 identifier: None,
             })
-            .map_err(|error| error.to_string())?;
+            .map_err(|error| FactError::Unevaluable(error.to_string()))?;
         let resolution = axon_core::LocatorResolver::resolve(&locator, &snapshot);
         let candidate = axon_core::unique_expected_fact_candidate(fact, &resolution)?;
         let handle = snapshot.handle(candidate.index);
-        let node = snapshot
-            .node(candidate.index)
-            .ok_or_else(|| format!("fact {} resolved outside snapshot", fact.id))?;
+        let node = snapshot.node(candidate.index).ok_or_else(|| {
+            FactError::Unevaluable(format!("fact {} resolved outside snapshot", fact.id))
+        })?;
         let mut observed = serde_json::to_value(node)
-            .map_err(|error| error.to_string())?
+            .map_err(|error| FactError::Unevaluable(error.to_string()))?
             .as_object()
             .cloned()
             .unwrap_or_default();
@@ -1491,7 +1491,7 @@ impl<
             && let Some(value) = self
                 .backend
                 .read_value(&handle)
-                .map_err(|error| error.to_string())?
+                .map_err(|error| FactError::Unevaluable(error.to_string()))?
         {
             observed.insert(
                 axon_core::expected_fact_kind(fact)?.into(),
@@ -1501,7 +1501,7 @@ impl<
         axon_core::verify_expected_fact_state(fact, &observed)
     }
     fn capture_changed_baseline(&mut self, fact: &ExpectedFact) -> Result<Value, String> {
-        let app = axon_core::expected_fact_app(fact)?;
+        let app = axon_core::expected_fact_app(fact).map_err(|error| error.to_string())?;
         let snapshot = self
             .backend
             .capture(&AppQuery {

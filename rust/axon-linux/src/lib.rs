@@ -3,12 +3,12 @@
 use axon_core::{
     AppQuery, AxnRunner, Capability, Confidence, DeliveryCandidate, DeliveryCapability,
     DeliveryOutcome, DeliveryPolicy, DeliveryRefusal, DeliveryRefusalReason, DeliveryRung,
-    DeliverySelection, DiffPolicy, DispatchOutcome, ExpectedFact, ForegroundTarget, JsonRpcError,
-    JsonRpcId, JsonRpcRequest, JsonRpcResponse, KeyboardIntent, PlatformBackend, PointerContract,
-    RecognizedText, Resolution, ResolutionStatus, RunEnvelope, Screenshot, SemanticLookup,
-    SemanticNameRegistry, SemanticSelection, Snapshot, SnapshotHandle, TextLocationResolver,
-    TextLocationSource, TextLocationTarget, ToolDispatcher, classify_semantic_diff,
-    dispatch_in_foreground, goal_success, prepare_run, select_delivery,
+    DeliverySelection, DiffPolicy, DispatchOutcome, ExpectedFact, FactError, ForegroundTarget,
+    JsonRpcError, JsonRpcId, JsonRpcRequest, JsonRpcResponse, KeyboardIntent, PlatformBackend,
+    PointerContract, RecognizedText, Resolution, ResolutionStatus, RunEnvelope, Screenshot,
+    SemanticLookup, SemanticNameRegistry, SemanticSelection, Snapshot, SnapshotHandle,
+    TextLocationResolver, TextLocationSource, TextLocationTarget, ToolDispatcher,
+    classify_semantic_diff, dispatch_in_foreground, goal_success, prepare_run, select_delivery,
 };
 use serde_json::{Map, Value, json};
 use std::{
@@ -1563,7 +1563,7 @@ impl<B: PointerTargetVerifier + BackgroundPixelInput> ToolDispatcher for Router<
             },
         }
     }
-    fn verify(&mut self, fact: &ExpectedFact) -> Result<(), String> {
+    fn verify(&mut self, fact: &ExpectedFact) -> Result<(), FactError> {
         let (app, locator) = axon_core::expected_fact_target(fact)?;
         let snapshot = self
             .backend
@@ -1572,15 +1572,15 @@ impl<B: PointerTargetVerifier + BackgroundPixelInput> ToolDispatcher for Router<
                 name: Some(app),
                 identifier: None,
             })
-            .map_err(|error| error.to_string())?;
+            .map_err(|error| FactError::Unevaluable(error.to_string()))?;
         let resolution = axon_core::LocatorResolver::resolve(&locator, &snapshot);
         let candidate = axon_core::unique_expected_fact_candidate(fact, &resolution)?;
         let handle = snapshot.handle(candidate.index);
-        let node = snapshot
-            .node(candidate.index)
-            .ok_or_else(|| format!("fact {} resolved outside snapshot", fact.id))?;
+        let node = snapshot.node(candidate.index).ok_or_else(|| {
+            FactError::Unevaluable(format!("fact {} resolved outside snapshot", fact.id))
+        })?;
         let mut observed = serde_json::to_value(node)
-            .map_err(|error| error.to_string())?
+            .map_err(|error| FactError::Unevaluable(error.to_string()))?
             .as_object()
             .cloned()
             .unwrap_or_default();
@@ -1589,7 +1589,7 @@ impl<B: PointerTargetVerifier + BackgroundPixelInput> ToolDispatcher for Router<
             && let Some(value) = self
                 .backend
                 .read_value(&handle)
-                .map_err(|error| error.to_string())?
+                .map_err(|error| FactError::Unevaluable(error.to_string()))?
         {
             observed.insert(
                 axon_core::expected_fact_kind(fact)?.into(),
@@ -1599,7 +1599,7 @@ impl<B: PointerTargetVerifier + BackgroundPixelInput> ToolDispatcher for Router<
         axon_core::verify_expected_fact_state(fact, &observed)
     }
     fn capture_changed_baseline(&mut self, fact: &ExpectedFact) -> Result<Value, String> {
-        let app = axon_core::expected_fact_app(fact)?;
+        let app = axon_core::expected_fact_app(fact).map_err(|error| error.to_string())?;
         let snapshot = self
             .backend
             .capture(&AppQuery {
