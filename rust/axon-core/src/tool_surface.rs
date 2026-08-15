@@ -658,9 +658,13 @@ mod tests {
 
     #[test]
     fn validates_before_applying_defaults() {
-        let capture = validate_tool_arguments(ToolBackend::Linux, "capture_screen", json!({})).unwrap();
+        let capture =
+            validate_tool_arguments(ToolBackend::Linux, "capture_screen", json!({})).unwrap();
         assert_eq!(capture["reauthorize"], false);
-        assert!(validate_tool_arguments(ToolBackend::Linux, "capture_screen", json!({"app":"Notes"})).is_err());
+        assert!(
+            validate_tool_arguments(ToolBackend::Linux, "capture_screen", json!({"app":"Notes"}))
+                .is_err()
+        );
         for backend in [ToolBackend::Swift, ToolBackend::Mac, ToolBackend::Windows] {
             assert!(validate_tool_arguments(backend, "capture_screen", json!({})).is_err());
         }

@@ -334,15 +334,23 @@ fn dispatch(
     match request.method.as_str() {
         "capture_screen" => {
             let params = request.params.as_ref().and_then(Value::as_object);
-            let invalid = request.params.as_ref().is_some_and(|value| !value.is_object())
+            let invalid = request
+                .params
+                .as_ref()
+                .is_some_and(|value| !value.is_object())
                 || params.is_some_and(|values| values.keys().any(|key| key != "reauthorize"))
-                || params.and_then(|values| values.get("reauthorize")).is_some_and(|value| !value.is_boolean());
+                || params
+                    .and_then(|values| values.get("reauthorize"))
+                    .is_some_and(|value| !value.is_boolean());
             if invalid {
-                let response = JsonRpcResponse::failure(id, axon_core::JsonRpcError {
-                    code: -32602,
-                    message: "capture_screen accepts only optional boolean reauthorize".into(),
-                    data: Some(json!({"path":"params"})),
-                });
+                let response = JsonRpcResponse::failure(
+                    id,
+                    axon_core::JsonRpcError {
+                        code: -32602,
+                        message: "capture_screen accepts only optional boolean reauthorize".into(),
+                        data: Some(json!({"path":"params"})),
+                    },
+                );
                 return (serde_json::to_value(response).unwrap(), false);
             }
             let reauthorize = params
