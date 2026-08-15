@@ -30,6 +30,28 @@ impl PortalState {
     pub fn usable(&self) -> bool {
         matches!(self, Self::Streaming)
     }
+
+    #[test]
+    fn fresh_authorization_replaces_malformed_token_file() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("axon/portal/screencast.json");
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, b"not json").unwrap();
+        let store = TokenStore::at(path);
+        assert_eq!(store.load().unwrap_err().kind(), io::ErrorKind::InvalidData);
+
+        store
+            .replace(Some("fresh-source"), RestoreToken::new("fresh-secret"))
+            .unwrap();
+
+        let (source, token) = store.load().unwrap().unwrap();
+        assert_eq!(source.as_deref(), Some("fresh-source"));
+        assert_eq!(token.expose(), "fresh-secret");
+        assert_eq!(
+            fs::metadata(store.path()).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+    }
 }
 
 /// Opaque capability material. Its custom `Debug` prevents accidental token disclosure.
@@ -130,20 +152,12 @@ impl TokenStore {
     }
 
     pub fn replace(&self, source_id: Option<&str>, token: RestoreToken) -> io::Result<()> {
-        let mut records = match self.records() {
-            Ok(records) => records,
-            // Do not destroy an old or malformed capability file. A successful fresh selection is
-            // kept separately until an operator can inspect or remove the incompatible file.
-            Err(error) if error.kind() == io::ErrorKind::InvalidData && self.path.exists() => {
-                return Err(error);
-            }
-            Err(error) => return Err(error),
-        };
-        records.clear();
-        records.push(TokenRecord {
+        // Replacement follows a successful portal Start response, which is the authority to
+        // supersede malformed or old-schema capability material without first parsing it.
+        let records = vec![TokenRecord {
             source_id: source_id.map(str::to_owned),
             token,
-        });
+        }];
         let parent = self.path.parent().ok_or_else(|| {
             io::Error::new(io::ErrorKind::InvalidInput, "token path has no parent")
         })?;

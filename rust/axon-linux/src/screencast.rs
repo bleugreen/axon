@@ -25,6 +25,12 @@ pub enum CaptureError {
     NoFrame,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ScreenCaptureSourceType {
+    Window,
+}
+
 struct Shared {
     state: PortalState,
     frame: LatestFrame,
@@ -174,7 +180,7 @@ impl ScreenCastActor {
             return Ok(ScreenCapture {
                 source: ScreenCaptureSource {
                     kind: "userAuthorizedScreenCast",
-                    source_type: "window",
+                    source_type: ScreenCaptureSourceType::Window,
                     width: source_width,
                     height: source_height,
                 },
@@ -229,7 +235,7 @@ pub struct ScreenCapture {
 pub struct ScreenCaptureSource {
     pub kind: &'static str,
     #[serde(rename = "type")]
-    pub source_type: &'static str,
+    pub source_type: ScreenCaptureSourceType,
     pub width: u32,
     pub height: u32,
 }
