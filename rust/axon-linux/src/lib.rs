@@ -1930,9 +1930,10 @@ mod tests {
         pixel_dispatches: Rc<RefCell<Vec<PixelTarget>>>,
         /// What OCR finds on screen, in the same coordinate space as accessibility frames.
         recognized_text: Rc<RefCell<Vec<RecognizedText>>>,
-        /// Where the target's window is *now*. `None` models an accessibility read that did not
-        /// answer, which is not the same as a window that does not cover the point.
-        window_rect: Rc<RefCell<Option<Rect>>>,
+        /// Where each window is *now*, keyed by the window root's flattened node index. A missing
+        /// entry models an accessibility read that did not answer, which is not the same as a
+        /// window that has moved.
+        window_rects: Rc<RefCell<std::collections::HashMap<usize, Rect>>>,
     }
     /// One planning request the router made: the application identity it bound against, and the
     /// element and point when the action had one.
@@ -1952,8 +1953,13 @@ mod tests {
             Ok(self.pointer_target_matches)
         }
 
-        fn element_rect(&mut self, _: &SnapshotHandle) -> Result<Option<Rect>, BackendError> {
-            Ok(*self.window_rect.borrow())
+        fn element_rect(&mut self, handle: &SnapshotHandle) -> Result<Option<Rect>, BackendError> {
+            let index: usize = handle
+                .0
+                .split_once(':')
+                .and_then(|(_, index)| index.parse().ok())
+                .expect("a fake handle carries an index");
+            Ok(self.window_rects.borrow().get(&index).copied())
         }
     }
     impl BackgroundPixelInput for FakeBackend {
@@ -2241,7 +2247,7 @@ mod tests {
                 pointer_unchanged: true,
             }))),
             recognized_text: Rc::new(RefCell::new(vec![])),
-            window_rect: Rc::new(RefCell::new(None)),
+            window_rects: Rc::new(RefCell::new(std::collections::HashMap::new())),
             planned: Rc::new(RefCell::new(vec![])),
             pixel_dispatches: Rc::new(RefCell::new(vec![])),
         }
@@ -2458,9 +2464,12 @@ mod tests {
         assert!(success.result.get("screenTextUnavailable").is_some());
     }
 
-    /// A router whose OCR finds one line of text, with the target application's window reported to
-    /// be wherever `window_rect` says it is right now.
-    fn ocr_router(recognized: Rect, window_rect: Option<Rect>) -> Router<FakeBackend> {
+    /// A router whose OCR finds one line of text inside the first window.
+    ///
+    /// `captured` is where each window was when the capture was taken, in window order; `live` is
+    /// where each window is now, keyed the same way, with an absent entry modelling a geometry read
+    /// that did not answer.
+    fn ocr_router(recognized: Rect, captured: Vec<Rect>, live: Vec<Option<Rect>>) -> Router<FakeBackend> {
         let mut backend = backend(vec![], None);
         backend.pointer_capability_usable = true;
         backend.foreground_transaction = true;
@@ -2469,7 +2478,25 @@ mod tests {
             frame: recognized,
             confidence: Some(0.95),
         }];
-        *backend.window_rect.borrow_mut() = window_rect;
+        // Childless window roots, so each window occupies exactly one flattened index and a handle
+        // index is the window's ordinal.
+        backend.snapshot.app.windows = captured
+            .iter()
+            .map(|frame| Window {
+                title: None,
+                root: Node {
+                    children: vec![],
+                    child_count: Some(0),
+                    frame: Some(*frame),
+                    ..node("window")
+                },
+            })
+            .collect();
+        *backend.window_rects.borrow_mut() = live
+            .into_iter()
+            .enumerate()
+            .filter_map(|(index, rect)| rect.map(|rect| (index, rect)))
+            .collect();
         Router::new(backend)
     }
 
