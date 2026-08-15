@@ -98,6 +98,21 @@ pub struct Router<B> {
 pub struct VisualObservation {
     pub screenshot: Option<Screenshot>,
     pub recognized_text: Vec<RecognizedText>,
+    /// The window every recognized frame was placed against.
+    ///
+    /// Recognized coordinates are only meaningful relative to the window that was photographed, and
+    /// which window that was cannot be re-derived downstream: repeating the selection can answer
+    /// differently, and picking the first window that happens to contain a point is wrong exactly
+    /// when two windows of one application overlap. So provenance travels with the observation.
+    pub source_window: Option<SourceWindow>,
+}
+
+/// The window a visual observation was taken from: durable identity, and the geometry it had then.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SourceWindow {
+    /// The native window identity, which survives the window moving.
+    pub id: u32,
+    pub frame: axon_core::Rect,
 }
 
 fn application_enumeration<T: serde::Serialize>(apps: Vec<T>) -> Value {
@@ -140,15 +155,16 @@ pub trait PointerTargetVerifier: PlatformBackend {
         point: (f64, f64),
     ) -> Result<bool, axon_core::BackendError>;
 
-    /// One element's current on-screen rectangle, or `None` when the element did not answer.
+    /// One window's current on-screen rectangle, by the identity capture recorded for it, or `None`
+    /// when the window server did not answer.
     ///
     /// Deliberately not expressed through `verify_pointer_target`, which collapses "did not answer"
-    /// into "does not cover". A bounds guard has to keep those apart: refusing a click because an
-    /// accessibility read failed would ground a working action on a transient fault, while treating
-    /// a real miss as an unanswered query would dispatch into another window's territory.
-    fn element_rect(
+    /// into "does not cover". A bounds guard has to keep those apart: refusing a click because a
+    /// geometry read failed would ground a working action on a transient fault, while treating a
+    /// real miss as an unanswered query would dispatch into another window's territory.
+    fn window_rect(
         &mut self,
-        handle: &SnapshotHandle,
+        window: u32,
     ) -> Result<Option<axon_core::Rect>, axon_core::BackendError>;
 }
 
@@ -178,6 +194,7 @@ pub trait BackgroundPixelInput: PlatformBackend {
         Ok(VisualObservation {
             screenshot: image,
             recognized_text: Vec::new(),
+            source_window: None,
         })
     }
     /// Resolves a delivery plan for one click at a point inside a resolved element. Pure
@@ -637,47 +654,39 @@ impl<B: PointerTargetVerifier + BackgroundPixelInput> Router<B> {
     /// transient accessibility fault.
     fn ocr_bounds_failure(
         &mut self,
-        snapshot: &Snapshot,
+        source: Option<SourceWindow>,
         recognized: axon_core::Rect,
         point: (f64, f64),
     ) -> Result<Option<String>, JsonRpcError> {
-        // Which window the text was recognized in, according to the same capture the coordinates
-        // came from. Correlating to that one window is the whole point: an application with several
-        // windows can have a *different* one covering the old coordinates by now, and clicking that
-        // is the stale-coordinate failure rather than an escape from it.
-        let source = window_root_indices(snapshot)
-            .into_iter()
-            .zip(&snapshot.app.windows)
-            .find_map(|(index, window)| {
-                window
-                    .root
-                    .frame
-                    .filter(|frame| frame.contains(point))
-                    .map(|frame| (index, frame))
-            });
-        let Some((index, captured)) = source else {
+        // The window the text was read from, by the identity capture recorded — not by asking which
+        // window contains the point now. That question has the wrong answer exactly when it matters:
+        // two windows of one application overlapping, the photographed one moved away, and another
+        // sitting over the stale coordinates.
+        let Some(source) = source else {
             return Ok(Some(format!(
-                "OCR click target is outside every window the capture reported: the text was \
-                 recognized at {}, and the resolved point is {}",
+                "OCR click cannot be validated: the capture did not report which window the text \
+                 was recognized in. The text was recognized at {}, and the resolved point is {}",
                 describe_rect(recognized),
                 describe_point(point)
             )));
         };
         let Some(live) = self
             .backend
-            .element_rect(&snapshot.handle(index))
+            .window_rect(source.id)
             .map_err(backend_error)?
         else {
+            // The window server did not answer. That is not evidence the point is wrong, and
+            // refusing on it would ground a working click on a transient fault.
             return Ok(None);
         };
-        if live.is_close(&captured, WINDOW_IDENTITY_TOLERANCE) && live.contains(point) {
+        if live.is_close(&source.frame, WINDOW_IDENTITY_TOLERANCE) && live.contains(point) {
             return Ok(None);
         }
         Ok(Some(format!(
             "OCR click target moved before dispatch: the text was recognized at {} in a window at \
              {}, the resolved point is {}, and that window is now at {}",
             describe_rect(recognized),
-            describe_rect(captured),
+            describe_rect(source.frame),
             describe_point(point),
             describe_rect(live)
         )))
@@ -1607,21 +1616,6 @@ impl<B: PointerTargetVerifier + BackgroundPixelInput> ToolDispatcher for Router<
 /// same window. Matches the tolerance macOS capture uses to pair an accessibility frame with the
 /// window it photographed.
 const WINDOW_IDENTITY_TOLERANCE: f64 = 4.0;
-
-/// The flattened index of each window's root node, which is what turns a window into a handle the
-/// backend can be asked about.
-fn window_root_indices(snapshot: &Snapshot) -> Vec<usize> {
-    fn size(node: &axon_core::Node) -> usize {
-        1 + node.children.iter().map(size).sum::<usize>()
-    }
-    let mut indices = Vec::new();
-    let mut next = 0;
-    for window in &snapshot.app.windows {
-        indices.push(next);
-        next += size(&window.root);
-    }
-    indices
-}
 
 /// A rectangle as a refusal quotes it.
 fn describe_rect(rect: axon_core::Rect) -> String {
