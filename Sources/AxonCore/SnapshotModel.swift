@@ -62,17 +62,41 @@ public struct EncodedScreenshot: Codable, Equatable, Sendable {
     }
 }
 
+/// Stable machine-readable statements an observation carries about itself.
+///
+/// A note states a fact the tree cannot state, so a caller branches on the note rather than on
+/// the tree's shape.
+public enum ObservationNote {
+    /// The captured application is running with no open top-level window.
+    public static let noWindows = "no-windows"
+}
+
 public struct AppSnapshot: Codable, Equatable, Sendable {
     public let id: SnapshotID
     public let app: AppIdentity
     public let windows: [AXNode]
+    /// How many top-level windows the application actually has open.
+    ///
+    /// Deliberately not `windows.count`. When an application exposes no windows, capture still
+    /// roots the tree at its application-level chrome — the menu bar — because that chrome is how
+    /// a caller opens a window again. Only this count distinguishes "one window" from "no window,
+    /// menu bar only", so it is the authority for `ObservationNote.noWindows`.
+    public let windowCount: Int
     public let screenshot: EncodedScreenshot?
     public let focus: FocusObservation
 
-    public init(id: SnapshotID, app: AppIdentity, windows: [AXNode], screenshot: EncodedScreenshot?, focus: FocusObservation = .none) {
+    public init(
+        id: SnapshotID,
+        app: AppIdentity,
+        windows: [AXNode],
+        screenshot: EncodedScreenshot?,
+        focus: FocusObservation = .none,
+        windowCount: Int? = nil
+    ) {
         self.id = id
         self.app = app
         self.windows = windows
+        self.windowCount = windowCount ?? windows.count
         self.screenshot = screenshot
         self.focus = focus
     }

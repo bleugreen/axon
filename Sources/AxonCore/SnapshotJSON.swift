@@ -57,6 +57,9 @@ public extension AppSnapshot {
             "screenshot": screenshot.map(\.jsonValue) ?? .null
         ]
         object["focus"] = focus.jsonValue(snapshotID: id, app: app, activeSecretRedactor: activeSecretRedactor)
+        if windowCount == 0 {
+            object["note"] = .string(ObservationNote.noWindows)
+        }
         if includeTree {
             var nextIndex = 0
             object["windows"] = .array(windows.map {
