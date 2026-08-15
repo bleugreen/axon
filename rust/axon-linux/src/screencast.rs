@@ -263,7 +263,6 @@ fn actor_main<D: ScreenCastDriver>(
     commands: mpsc::Receiver<Command>,
     stopped: StopSignal,
     shutting_down: Arc<AtomicBool>,
-    request_lock: Mutex<()>,
 ) {
     while let Ok(command) = commands.recv() {
         match command {
@@ -453,7 +452,7 @@ mod production {
             .select_sources(
                 &session,
                 SelectSourcesOptions::default()
-                    .set_sources(SourceType::Window | SourceType::Window)
+                    .set_sources(SourceType::Window)
                     .set_multiple(false)
                     .set_persist_mode(PersistMode::ExplicitlyRevoked)
                     .set_restore_token(token.map(RestoreToken::expose)),
