@@ -30,28 +30,6 @@ impl PortalState {
     pub fn usable(&self) -> bool {
         matches!(self, Self::Streaming)
     }
-
-    #[test]
-    fn fresh_authorization_replaces_malformed_token_file() {
-        let root = tempfile::tempdir().unwrap();
-        let path = root.path().join("axon/portal/screencast.json");
-        fs::create_dir_all(path.parent().unwrap()).unwrap();
-        fs::write(&path, b"not json").unwrap();
-        let store = TokenStore::at(path);
-        assert_eq!(store.load().unwrap_err().kind(), io::ErrorKind::InvalidData);
-
-        store
-            .replace(Some("fresh-source"), RestoreToken::new("fresh-secret"))
-            .unwrap();
-
-        let (source, token) = store.load().unwrap().unwrap();
-        assert_eq!(source.as_deref(), Some("fresh-source"));
-        assert_eq!(token.expose(), "fresh-secret");
-        assert_eq!(
-            fs::metadata(store.path()).unwrap().permissions().mode() & 0o777,
-            0o600
-        );
-    }
 }
 
 /// Opaque capability material. Its custom `Debug` prevents accidental token disclosure.
@@ -355,6 +333,28 @@ mod tests {
         let store = TokenStore::at(path.clone());
         assert_eq!(store.load().unwrap_err().kind(), io::ErrorKind::InvalidData);
         assert!(path.exists());
+    }
+
+    #[test]
+    fn fresh_authorization_replaces_malformed_token_file() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("axon/portal/screencast.json");
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(&path, b"not json").unwrap();
+        let store = TokenStore::at(path);
+        assert_eq!(store.load().unwrap_err().kind(), io::ErrorKind::InvalidData);
+
+        store
+            .replace(Some("fresh-source"), RestoreToken::new("fresh-secret"))
+            .unwrap();
+
+        let (source, token) = store.load().unwrap().unwrap();
+        assert_eq!(source.as_deref(), Some("fresh-source"));
+        assert_eq!(token.expose(), "fresh-secret");
+        assert_eq!(
+            fs::metadata(store.path()).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
     }
 
     #[test]
