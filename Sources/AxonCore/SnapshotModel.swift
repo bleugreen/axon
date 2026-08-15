@@ -71,17 +71,38 @@ public enum ObservationNote {
     public static let noWindows = "no-windows"
 }
 
+/// What capture learned about an application's open top-level windows.
+///
+/// A failed query is a separate case from a count of zero, for the reason `FocusObservation`
+/// separates `none` from `inaccessible`: an accessibility query that did not answer is not
+/// evidence about the application. A windowed application that was busy enough to time out must
+/// not be reported as having no window, so only `counted(0)` ever states `ObservationNote.noWindows`.
+public enum WindowCountObservation: Codable, Equatable, Sendable {
+    /// The application answered the window query with this many top-level windows.
+    case counted(Int)
+    /// The window query itself failed, so the window count is unknown.
+    case inaccessible
+
+    /// The answered count, or `nil` when the query did not answer.
+    public var count: Int? {
+        guard case let .counted(count) = self else {
+            return nil
+        }
+        return count
+    }
+}
+
 public struct AppSnapshot: Codable, Equatable, Sendable {
     public let id: SnapshotID
     public let app: AppIdentity
     public let windows: [AXNode]
-    /// How many top-level windows the application actually has open.
+    /// What the application itself said about how many top-level windows it has open.
     ///
-    /// Deliberately not `windows.count`. When an application exposes no windows, capture still
-    /// roots the tree at its application-level chrome — the menu bar — because that chrome is how
-    /// a caller opens a window again. Only this count distinguishes "one window" from "no window,
-    /// menu bar only", so it is the authority for `ObservationNote.noWindows`.
-    public let windowCount: Int
+    /// Deliberately not derived from `windows`. When an application exposes no windows, capture
+    /// still roots the tree at its application-level chrome — the menu bar — because that chrome
+    /// is how a caller opens a window again. Only this answer distinguishes "one window" from "no
+    /// window, menu bar only", so it is the authority for `ObservationNote.noWindows`.
+    public let windowCount: WindowCountObservation
     public let screenshot: EncodedScreenshot?
     public let focus: FocusObservation
 
@@ -91,12 +112,13 @@ public struct AppSnapshot: Codable, Equatable, Sendable {
         windows: [AXNode],
         screenshot: EncodedScreenshot?,
         focus: FocusObservation = .none,
-        windowCount: Int? = nil
+        windowCount: WindowCountObservation? = nil
     ) {
         self.id = id
         self.app = app
         self.windows = windows
-        self.windowCount = windowCount ?? windows.count
+        // A synthetic snapshot's roots are its windows; only live capture can answer otherwise.
+        self.windowCount = windowCount ?? .counted(windows.count)
         self.screenshot = screenshot
         self.focus = focus
     }
