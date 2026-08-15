@@ -17,6 +17,8 @@ private final class FakeSession: @unchecked Sendable {
     var refusesActivation: Set<pid_t> = []
     /// True when posting drags the real pointer somewhere it will not return from.
     var pointerIsStuck = false
+    /// Where the pointer ends up across a dispatch. For a global post that is the posting itself
+    /// moving it; for a background post, which cannot, it is a hand on the physical mouse.
     var pointerAfterPost: CGPoint?
     private(set) var log: [String] = []
     private(set) var globalPosts = 0
@@ -65,6 +67,9 @@ private final class FakeSession: @unchecked Sendable {
                 self.log.append("postToPid:\(pid)")
                 self.targetedPosts.append(pid)
                 self.frontmostDuringDispatch.append(self.frontmost)
+                if let pointerAfterPost = self.pointerAfterPost {
+                    self.pointer = pointerAfterPost
+                }
             },
             sleepMilliseconds: { _ in },
             // A fixed layout, because the Carbon input-source lookup behind the real one is not
@@ -257,6 +262,64 @@ private func escalationStore() -> (AXElementStore, AXUIElement) {
     #expect(evidence?["pointerUnchanged"] == .bool(true))
     // The window the input was bound to, and the coordinates it was converted through.
     #expect(result.details["targetWindow"] == nil || result.details["targetWindow"]?["frame"] != nil)
+}
+
+@Test func backgroundKeyboardDeliveryReportsPointerMotionItCannotHaveCausedWithoutFailing() throws {
+    // The field case this exists for: an agent types a URL and presses Return while the person at
+    // the machine is using the mouse. The keystrokes land, the pointer moves for reasons of its
+    // own, and calling that a broken contract is a false negative on an action that worked.
+    let session = FakeSession()
+    session.pointerAfterPost = CGPoint(x: 900, y: 900)
+    let (store, element) = escalationStore()
+    let executor = session.typeExecutor(store: store, element: element)
+    // The frontmost application is always resolvable by pid, which gives the pixel rung a real
+    // identity to bind to without depending on any particular app being installed.
+    let target = try #require(NSWorkspace.shared.frontmostApplication?.processIdentifier)
+
+    let result = try executor.keyboard(app: String(target), intent: .key("End"), policy: .backgroundOnly)
+
+    #expect(result.delivery == .pixel)
+    #expect(result.dispatchSuccess)
+    #expect(result.message?.contains("broke its own contract") != true)
+    let evidence = result.details["backgroundDelivery"]
+    // The motion is reported rather than hidden; what changes is that it is not a verdict.
+    #expect(evidence?["pointerUnchanged"] == .bool(false))
+    #expect(evidence?["pointerAsserted"] == .bool(false))
+    #expect(evidence?["frontmostAppUnchanged"] == .bool(true))
+}
+
+@Test func backgroundPointerDeliveryStillFailsWhenTheRealPointerMoves() throws {
+    // The clause stays load-bearing where the dispatch synthesizes pointer input: a pixel rung that
+    // moved the real cursor was not background delivery, whatever it managed to deliver.
+    let session = FakeSession()
+    session.pointerAfterPost = CGPoint(x: 900, y: 900)
+    let (store, element) = escalationStore()
+    let executor = session.typeExecutor(store: store, element: element)
+
+    let result = try executor.type(target: "fg:0", value: "hello", policy: .backgroundOnly)
+
+    #expect(result.delivery == .pixel)
+    #expect(result.dispatchSuccess)
+    #expect(result.success == false)
+    #expect(result.message?.contains("moved the real pointer") == true)
+    let evidence = result.details["backgroundDelivery"]
+    #expect(evidence?["pointerUnchanged"] == .bool(false))
+    #expect(evidence?["pointerAsserted"] == .bool(true))
+}
+
+@Test func backgroundDeliveryEvidenceAndVerdictComeFromOneReading() throws {
+    // Sampling the session twice let a result call the pointer unchanged in the same breath as the
+    // message saying it moved. Both now read the same observation.
+    let session = FakeSession()
+    session.pointerAfterPost = CGPoint(x: 900, y: 900)
+    let (store, element) = escalationStore()
+    let executor = session.typeExecutor(store: store, element: element)
+
+    let result = try executor.type(target: "fg:0", value: "hello", policy: .backgroundOnly)
+    session.pointer = CGPoint(x: 500, y: 500)
+
+    #expect(result.details["backgroundDelivery"]?["pointerUnchanged"] == .bool(false))
+    #expect(result.message?.contains("moved the real pointer") == true)
 }
 
 @Test func foregroundEscalationWaitsForTheRaisedWindowBeforeValidatingTheTarget() throws {
