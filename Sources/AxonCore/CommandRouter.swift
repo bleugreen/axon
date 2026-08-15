@@ -847,10 +847,20 @@ private struct PrimitiveActionCommandHandler {
                     )
                 case let .textLocation(location):
                     let resolution = try resolveTextLocationTarget(location)
-                    return try withLocationResolution(
-                        services.actions.clickPoint(resolution.point, policy),
+                    // An accessibility match names a real element, so it is clicked as one: that
+                    // path can press the element natively, prove its own outcome, and never touch
+                    // the foreground. Recognized text has no element behind it and stays a point.
+                    guard let handle = resolution.resolution.best?.handle else {
+                        return try withLocationResolution(
+                            services.actions.clickPoint(resolution.point, policy),
+                            resolution: resolution
+                        )
+                    }
+                    observations?.begin(tool: "click", handle: handle.rawValue)
+                    return observed(withLocationResolution(
+                        try services.actions.click(handle.rawValue, policy),
                         resolution: resolution
-                    )
+                    ))
                 case .semanticName:
                     let resolved = try resolveElementTarget(target)
                     observations?.begin(tool: "click", handle: resolved.handle)
