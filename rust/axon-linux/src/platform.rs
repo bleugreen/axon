@@ -254,6 +254,19 @@ fn input_session(facts: SessionFacts) -> InputSession {
     }
 }
 
+fn screenshot_error(reason: &'static str) -> BackendError {
+    if reason == WAYLAND_SCREENSHOT {
+        BackendError::CapabilityReason {
+            capability: Capability::Screenshot,
+            code: crate::portal::AUTHORIZATION_REQUIRED,
+            reason: reason.into(),
+            diagnostic: None,
+        }
+    } else {
+        capability(Capability::Screenshot, reason)
+    }
+}
+
 fn screenshot_provider(facts: SessionFacts) -> ScreenshotProvider {
     match screenshot_provider_kind(facts) {
         ScreenshotProviderKind::Unavailable(WAYLAND_SCREENSHOT) => {
@@ -898,8 +911,8 @@ impl BackgroundPixelInput for LinuxBackend {
         screenshot: bool,
         screen_text: bool,
     ) -> Result<VisualObservation, BackendError> {
-        if let InputSession::Unavailable(reason) = &self.screenshot {
-            return Err(capability(Capability::Screenshot, reason));
+        if let ScreenshotProvider::Unavailable(reason) = &self.screenshot {
+            return Err(screenshot_error(reason));
         }
         let identity = self
             .ask(|r| Command::Identity(app.clone(), r))?
@@ -913,9 +926,9 @@ impl BackgroundPixelInput for LinuxBackend {
                 )
             })?;
         let captured = match &self.screenshot {
-            InputSession::Available(session) => session.screenshot_for_pid(process_id)?,
-            InputSession::Unavailable(reason) => {
-                return Err(capability(Capability::Screenshot, reason));
+            ScreenshotProvider::X11(session) => session.screenshot_for_pid(process_id)?,
+            ScreenshotProvider::Unavailable(reason) => {
+                return Err(screenshot_error(reason));
             }
         };
         let recognized_text = if screen_text {
