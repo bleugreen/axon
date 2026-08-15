@@ -249,12 +249,52 @@ struct SystemAppleEventAuthorizer: AppleEventAuthorizing {
     }
 }
 
+/// One refused Apple Events authorization, described well enough to act on.
+public struct BrowserAutomationDenial: Equatable, Sendable {
+    public let app: String
+    public let authorization: BrowserAutomationAuthorization
+    public let leg: BrowserAutomationAuthorizationLeg
+    public let status: Int32?
+    /// True when this process had already resolved an authorization for the same target before this
+    /// request. macOS may answer from what the process holds, so such a denial does not necessarily
+    /// describe the current TCC database.
+    public let answeredEarlierInThisProcess: Bool
+
+    public init(
+        app: String,
+        authorization: BrowserAutomationAuthorization,
+        leg: BrowserAutomationAuthorizationLeg,
+        status: Int32?,
+        answeredEarlierInThisProcess: Bool = false
+    ) {
+        self.app = app
+        self.authorization = authorization
+        self.leg = leg
+        self.status = status
+        self.answeredEarlierInThisProcess = answeredEarlierInThisProcess
+    }
+
+    /// Remediation the user can actually perform from the state they are actually in. Until consent
+    /// has been requested once there is no Axon row in System Settings and no way to add one, so
+    /// pointing an undetermined grant at that pane describes an impossible action.
+    var message: String {
+        let observed = "Automation permission for \(app) \(authorization == .denied ? "is denied" : "has not been granted")."
+        if answeredEarlierInThisProcess {
+            return "\(observed) The Axon daemon already resolved Automation for \(app) earlier in this session and macOS can answer from what the process holds, so this may not reflect current system state. Restart the daemon with `launchctl kickstart -k gui/$(id -u)/dev.axon.daemon`, then try again."
+        }
+        if authorization == .notDetermined {
+            return "\(observed) Open the Axon menu bar item and choose Browser Automation... to grant it. Axon does not appear in System Settings > Privacy & Security > Automation until consent has been requested once."
+        }
+        return "\(observed) If Axon is listed in System Settings > Privacy & Security > Automation, enable \(app) beneath it. If it is not listed, open the Axon menu bar item and choose Browser Automation... to request consent."
+    }
+}
+
 public enum BrowserAutomationError: Error, Equatable, CustomStringConvertible {
     case unsupportedApp(String)
     case appNotRunning(String)
     case invalidURL(String)
     case invalidWindow(Int)
-    case automationNotGranted(app: String, authorization: BrowserAutomationAuthorization, status: Int32?)
+    case automationNotGranted(BrowserAutomationDenial)
     case authorizationFailed(app: String, status: Int32)
     case timeout(String)
     case executionFailed(String)
@@ -265,7 +305,7 @@ public enum BrowserAutomationError: Error, Equatable, CustomStringConvertible {
         case let .appNotRunning(app): return "Browser is not running: \(app)"
         case let .invalidURL(reason): return "Invalid navigation URL: \(reason)"
         case let .invalidWindow(index): return "Window index must be greater than zero: \(index)"
-        case let .automationNotGranted(app, authorization, _): return "Automation permission for \(app) is \(authorization.rawValue). Allow Axon to control it in System Settings > Privacy & Security > Automation."
+        case let .automationNotGranted(denial): return denial.message
         case let .authorizationFailed(app, status): return "Could not determine Automation permission for \(app) (OSStatus \(status))"
         case let .timeout(app): return "Browser automation timed out waiting for \(app)"
         case let .executionFailed(message): return "Browser automation failed: \(message)"
