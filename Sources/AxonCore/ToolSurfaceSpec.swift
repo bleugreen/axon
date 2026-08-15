@@ -42,7 +42,7 @@ public enum ToolTargetKind: String, CaseIterable, Sendable {
         case .point:
             return "Point target object: { point: { x, y, coordinateSpace } } or { x, y, coordinateSpace }. screen and window coordinates are logical points in the platform accessibility coordinate system and are converted to native pointer coordinates for dispatch. screenshot coordinates are pixels in the returned encoded image after capture and any downscaling; Axon converts them by the encoded-image-to-window size ratios, never by assuming a fixed display scale. window and screenshot points require app when no top-level app is provided. Raw points dispatch without element identity or occlusion verification; use a semantic name when fail-closed target validation is required."
         case .textLocation:
-            return "Text location target object: { location: { app, text, source? } }. Resolves visible text to a click/drag/scroll point using AX text or screenshot OCR without callers providing coordinates."
+            return "Text location target object: { location: { app, text, source? } }. Resolves visible text to a click/drag/scroll point using AX text or screenshot OCR without callers providing coordinates. Rendered web content frequently exposes no accessibility text at all, so auto or screenshot is the reliable path for web links on macOS."
         }
     }
 }
@@ -524,7 +524,8 @@ public enum ToolSurfaceSchema {
                     ])
                 ]),
                 "source": enumStringSchema(values: ["auto", "ax", "screenshot"],
-                                           description: "Text source. Defaults to auto.", defaultValue: "auto")
+                                           description: "Text source. auto, the default, matches accessibility text first and falls back to screenshot OCR when accessibility matches nothing. ax and screenshot use only that source and never fall back.",
+                                           defaultValue: "auto")
             ]),
             "required": .array([.string("app"), .string("text")]), "additionalProperties": .bool(false)
         ])]),
