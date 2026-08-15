@@ -419,6 +419,64 @@ fn look_since_response_forms_are_byte_exact() {
     }
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct LookObservationNotesFixture {
+    no_windows: String,
+    cases: Vec<LookObservationNoteCase>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct LookObservationNoteCase {
+    name: String,
+    window_count: usize,
+    note: Option<String>,
+}
+
+#[test]
+fn full_app_observations_state_the_shared_no_windows_note() {
+    let fixture: LookObservationNotesFixture = serde_json::from_str(include_str!(
+        "../../../schema/fixtures/look-observation-notes.json"
+    ))
+    .unwrap();
+    assert_eq!(fixture.no_windows, OBSERVATION_NOTE_NO_WINDOWS);
+
+    for case in fixture.cases {
+        let windows = (0..case.window_count)
+            .map(|index| json!({"title": format!("Window {index}"), "root": {"role": "window"}}))
+            .collect::<Vec<Value>>();
+        let snapshot: Snapshot = serde_json::from_value(json!({
+            "id": "fixture-1",
+            "app": {"name": "Fixture", "identifier": "fixture.app", "windows": windows},
+        }))
+        .unwrap();
+
+        // Both formats: an agent diagnosing with format:"debug" needs the same stated fact.
+        for format in [LookFormat::Observation, LookFormat::Debug] {
+            let rendered = format_snapshot(
+                &snapshot,
+                &LookDisplayOptions {
+                    depth: None,
+                    tree: true,
+                    frames: false,
+                    format,
+                },
+            );
+            let observation = match format {
+                LookFormat::Debug => &rendered["observation"],
+                LookFormat::Observation => &rendered,
+            };
+            assert_eq!(
+                observation.get("note").and_then(Value::as_str),
+                case.note.as_deref(),
+                "{} ({format:?})",
+                case.name
+            );
+        }
+    }
+}
+
 #[test]
 fn wire_element_targets_are_strictly_app_scoped_semantic_names() {
     let target: WireElementTarget = serde_json::from_value(json!({
