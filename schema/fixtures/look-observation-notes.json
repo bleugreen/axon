@@ -1,0 +1,20 @@
+{
+  "noWindows": "no-windows",
+  "cases": [
+    {
+      "name": "application running with no open window",
+      "windowCount": 0,
+      "note": "no-windows"
+    },
+    {
+      "name": "application with one open window",
+      "windowCount": 1,
+      "note": null
+    },
+    {
+      "name": "application with several open windows",
+      "windowCount": 3,
+      "note": null
+    }
+  ]
+}
