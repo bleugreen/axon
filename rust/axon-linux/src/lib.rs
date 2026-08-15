@@ -641,30 +641,45 @@ impl<B: PointerTargetVerifier + BackgroundPixelInput> Router<B> {
         recognized: axon_core::Rect,
         point: (f64, f64),
     ) -> Result<Option<String>, JsonRpcError> {
-        let mut answered = Vec::new();
-        for index in window_root_indices(snapshot) {
-            if let Some(rect) = self
-                .backend
-                .element_rect(&snapshot.handle(index))
-                .map_err(backend_error)?
-            {
-                answered.push(rect);
-            }
-        }
-        if answered.is_empty() || answered.iter().any(|rect| rect.contains(point)) {
+        // Which window the text was recognized in, according to the same capture the coordinates
+        // came from. Correlating to that one window is the whole point: an application with several
+        // windows can have a *different* one covering the old coordinates by now, and clicking that
+        // is the stale-coordinate failure rather than an escape from it.
+        let source = window_root_indices(snapshot)
+            .into_iter()
+            .zip(&snapshot.app.windows)
+            .find_map(|(index, window)| {
+                window
+                    .root
+                    .frame
+                    .filter(|frame| frame.contains(point))
+                    .map(|frame| (index, frame))
+            });
+        let Some((index, captured)) = source else {
+            return Ok(Some(format!(
+                "OCR click target is outside every window the capture reported: the text was \
+                 recognized at {}, and the resolved point is {}",
+                describe_rect(recognized),
+                describe_point(point)
+            )));
+        };
+        let Some(live) = self
+            .backend
+            .element_rect(&snapshot.handle(index))
+            .map_err(backend_error)?
+        else {
+            return Ok(None);
+        };
+        if live.is_close(&captured, WINDOW_IDENTITY_TOLERANCE) && live.contains(point) {
             return Ok(None);
         }
         Ok(Some(format!(
-            "OCR click target moved before dispatch: the text was recognized at {}, \
-             the resolved point is {}, and no window of the target application covers it now \
-             (current windows: {})",
+            "OCR click target moved before dispatch: the text was recognized at {} in a window at \
+             {}, the resolved point is {}, and that window is now at {}",
             describe_rect(recognized),
+            describe_rect(captured),
             describe_point(point),
-            answered
-                .iter()
-                .map(|rect| describe_rect(*rect))
-                .collect::<Vec<_>>()
-                .join(", ")
+            describe_rect(live)
         )))
     }
 
@@ -1587,6 +1602,11 @@ impl<B: PointerTargetVerifier + BackgroundPixelInput> ToolDispatcher for Router<
         axon_core::changed_snapshot_baseline(&snapshot)
     }
 }
+
+/// How far a window may have drifted between capture and dispatch and still be recognized as the
+/// same window. Matches the tolerance macOS capture uses to pair an accessibility frame with the
+/// window it photographed.
+const WINDOW_IDENTITY_TOLERANCE: f64 = 4.0;
 
 /// The flattened index of each window's root node, which is what turns a window into a handle the
 /// backend can be asked about.
