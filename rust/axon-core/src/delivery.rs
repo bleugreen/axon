@@ -110,6 +110,33 @@ impl DeliveryRung {
     }
 }
 
+/// Whether a background dispatch is accountable for where the real pointer ends up.
+///
+/// A contract clause is only worth checking where the delivery could have caused it to fail.
+/// Someone using the machine while Axon delivers is the normal condition on a personal desktop
+/// rather than an anomaly, and a hand on the physical mouse moves the pointer for reasons that
+/// have nothing to do with the synthesis. A dispatch that sends no pointer events cannot have
+/// moved it, so motion observed around one is exogenous by construction, and asserting the pointer
+/// there reports a broken contract on evidence the delivery cannot have produced — a false failure
+/// on an action that worked. The observation is reported either way, in `pointerUnchanged`; what
+/// this decides is whether it also gates success.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum PointerContract {
+    /// This dispatch synthesizes pointer input, so where the pointer ends up is a promise it made.
+    /// An event that reached the global devices instead of the target would move the real cursor,
+    /// and nothing on this side can tell that apart from the person at the machine, so the
+    /// observation stands as a failure to prove the rung.
+    Asserted,
+    /// This dispatch touches no pointing device. Motion around it is reported and judged by nobody.
+    Observed,
+}
+
+impl PointerContract {
+    pub fn is_asserted(self) -> bool {
+        matches!(self, PointerContract::Asserted)
+    }
+}
+
 /// The mechanism class a candidate depends on, so a refusal can name the missing faculty rather
 /// than only the blocked rung.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
