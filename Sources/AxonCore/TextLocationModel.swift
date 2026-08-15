@@ -9,6 +9,26 @@ public enum TextLocationSource: String, Codable, Equatable, Sendable {
     case screenshot
 }
 
+/// The accessibility attributes Axon treats as a node's readable text, in the order
+/// every surface consults them.
+///
+/// Two surfaces read this list and they must never fork. `TextLocationResolver`
+/// matches `source: "ax"` text against exactly these fields, and
+/// `SnapshotObservation.label(in:)` builds a node's rendered label from them. The
+/// agreement is load-bearing rather than incidental: a node an observation summarises
+/// as `⟨N unreadable nodes⟩` is one whose label came back nil, which means every
+/// attribute here was nil or empty — and those are precisely the attributes AX text
+/// matching consults. An unreadable node is therefore, by construction, an unmatchable
+/// one. Extending or reordering this list on one surface alone would break that
+/// equivalence and leave the opacity marker lying about what `source: "ax"` can reach.
+public enum ReadableTextAttribute: String, CaseIterable, Sendable {
+    case title
+    case value
+    case description
+    case identifier
+    case help
+}
+
 public struct TextLocationTarget: Codable, Equatable, Sendable {
     public let app: String
     public let text: TextMatch
@@ -83,17 +103,24 @@ public struct TextLocationResolution: Codable, Equatable, Sendable {
     public let snapshotID: SnapshotID
     public let best: TextLocationCandidate?
     public let candidates: [TextLocationCandidate]
+    /// Nodes carrying a usable frame that expose no readable text in any matched
+    /// attribute. This is the same condition an observation renders as
+    /// ⟨N unreadable nodes⟩, so a non-zero count on a missing AX result means the
+    /// text may be rendered inside nodes accessibility cannot describe.
+    public let opaqueNodeCount: Int
 
     public init(
         status: LocatorResolutionStatus,
         snapshotID: SnapshotID,
         best: TextLocationCandidate?,
-        candidates: [TextLocationCandidate]
+        candidates: [TextLocationCandidate],
+        opaqueNodeCount: Int = 0
     ) {
         self.status = status
         self.snapshotID = snapshotID
         self.best = best
         self.candidates = candidates
+        self.opaqueNodeCount = opaqueNodeCount
     }
 
     public var point: ActionPoint? {
@@ -112,11 +139,16 @@ public struct TextLocationResolver: Sendable {
 
     public func resolve(_ target: TextLocationTarget, in snapshot: AppSnapshot) -> TextLocationResolution {
         let candidates: [TextLocationCandidate]
+        // An empty AX result is the only case worth explaining, so the opaque-node walk
+        // is confined to it and the common path pays nothing for the diagnostic.
+        var axMatchingCameBackEmpty = false
         switch target.source {
         case .ax:
             candidates = axCandidates(matching: target.text, in: snapshot)
+            axMatchingCameBackEmpty = candidates.isEmpty
         case .auto:
             let axCandidates = axCandidates(matching: target.text, in: snapshot)
+            axMatchingCameBackEmpty = axCandidates.isEmpty
             candidates = axCandidates.isEmpty ? screenshotCandidates(matching: target.text, in: snapshot) : axCandidates
         case .screenshot:
             candidates = screenshotCandidates(matching: target.text, in: snapshot)
@@ -136,7 +168,30 @@ public struct TextLocationResolver: Sendable {
             best = nil
         }
 
-        return TextLocationResolution(status: status, snapshotID: snapshot.id, best: best, candidates: candidates)
+        return TextLocationResolution(
+            status: status,
+            snapshotID: snapshot.id,
+            best: best,
+            candidates: candidates,
+            opaqueNodeCount: axMatchingCameBackEmpty ? opaqueNodeCount(in: snapshot) : 0
+        )
+    }
+
+    /// Counts nodes that occupy space on screen yet expose no readable text at all.
+    /// These are exactly the nodes an observation summarises as unreadable, and exactly
+    /// the nodes `source: "ax"` can never match, however the text renders to a human.
+    private func opaqueNodeCount(in snapshot: AppSnapshot) -> Int {
+        snapshot.indexedNodes.reduce(into: 0) { total, indexed in
+            guard let frame = indexed.node.frame, frame.width > 0, frame.height > 0 else {
+                return
+            }
+            let isOpaque = ReadableTextAttribute.allCases.allSatisfy { attribute in
+                readableText(attribute, of: indexed.node)?.isEmpty != false
+            }
+            if isOpaque {
+                total += 1
+            }
+        }
     }
 
     private func axCandidates(matching text: TextMatch, in snapshot: AppSnapshot) -> [TextLocationCandidate] {
@@ -164,19 +219,22 @@ public struct TextLocationResolver: Sendable {
     }
 
     private func firstTextMatch(in node: AXNode, matching text: TextMatch) -> (field: String, value: String)? {
-        let fields: [(String, String?)] = [
-            ("title", node.title),
-            ("value", node.value),
-            ("description", node.description),
-            ("identifier", node.identifier),
-            ("help", node.help)
-        ]
-        for (field, value) in fields {
-            if let value, text.matches(value) {
-                return (field, value)
+        for attribute in ReadableTextAttribute.allCases {
+            if let value = readableText(attribute, of: node), text.matches(value) {
+                return (attribute.rawValue, value)
             }
         }
         return nil
+    }
+
+    private func readableText(_ attribute: ReadableTextAttribute, of node: AXNode) -> String? {
+        switch attribute {
+        case .title: return node.title
+        case .value: return node.value
+        case .description: return node.description
+        case .identifier: return node.identifier
+        case .help: return node.help
+        }
     }
 
     private func screenshotCandidates(matching text: TextMatch, in snapshot: AppSnapshot) -> [TextLocationCandidate] {
@@ -274,7 +332,8 @@ public extension TextLocationResolution {
             "snapshotID": .string(snapshotID.rawValue),
             "best": best.map { $0.jsonValue(activeSecretRedactor: activeSecretRedactor) } ?? .null,
             "point": point.map(\.jsonValue) ?? .null,
-            "candidates": .array(candidates.map { $0.jsonValue(activeSecretRedactor: activeSecretRedactor) })
+            "candidates": .array(candidates.map { $0.jsonValue(activeSecretRedactor: activeSecretRedactor) }),
+            "opaqueNodeCount": .int(opaqueNodeCount)
         ])
     }
 }

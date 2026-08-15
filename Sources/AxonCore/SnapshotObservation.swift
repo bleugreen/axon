@@ -707,9 +707,12 @@ public struct SnapshotObservationFormatter {
         return x != nil && x! < -1_000
     }
 
+    // Shares `ReadableTextAttribute` with `TextLocationResolver` deliberately: a node this
+    // renders as unreadable is one the resolver cannot match, and the two surfaces must not
+    // be able to drift into disagreeing about that.
     private func label(in object: [String: JSONValue]) -> String? {
-        for key in ["title", "value", "description", "identifier", "help"] {
-            if let value = string(key, in: object), !value.isEmpty, !isAXPointerDescription(value) {
+        for attribute in ReadableTextAttribute.allCases {
+            if let value = string(attribute.rawValue, in: object), !value.isEmpty, !isAXPointerDescription(value) {
                 return value
             }
         }
