@@ -83,6 +83,11 @@ public struct AppBundle: Equatable, Sendable {
         return cliURL
     }
 
+    /// `CFBundleShortVersionString` of the bundle at `bundleURL`, when it declares one.
+    public static func shortVersion(of bundleURL: URL) -> String? {
+        infoDictionary(at: bundleURL.appendingPathComponent("Contents/Info.plist"))?["CFBundleShortVersionString"] as? String
+    }
+
     /// The bundle directory, such as `/Applications/Axon.app`.
     public let path: String
 
