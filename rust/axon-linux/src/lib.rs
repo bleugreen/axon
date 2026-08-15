@@ -1937,15 +1937,27 @@ mod tests {
         }
     }
     impl BackgroundPixelInput for FakeBackend {
+        /// A fake given no recognized text behaves like the trait default: a backend that cannot
+        /// recognize screen text says so rather than reporting none. Only a test that supplies text
+        /// turns this into an OCR-capable backend.
         fn capture_visuals(
             &mut self,
-            _: &AppQuery,
-            _: bool,
-            _: bool,
+            app: &AppQuery,
+            screenshot: bool,
+            screen_text: bool,
         ) -> Result<VisualObservation, BackendError> {
+            let recognized = self.recognized_text.borrow().clone();
+            if screen_text && recognized.is_empty() {
+                return Err(BackendError::Capability {
+                    capability: Capability::Screenshot,
+                    reason: "screen text recognition is unavailable on this backend".into(),
+                    diagnostic: None,
+                });
+            }
+            let image = screenshot.then(|| self.screenshot(app)).transpose()?;
             Ok(VisualObservation {
-                screenshot: None,
-                recognized_text: self.recognized_text.borrow().clone(),
+                screenshot: image,
+                recognized_text: recognized,
             })
         }
 
@@ -2424,6 +2436,83 @@ mod tests {
         assert!(success.result.get("screenText").is_none());
         assert!(success.result.get("screenshotUnavailable").is_some());
         assert!(success.result.get("screenTextUnavailable").is_some());
+    }
+
+    /// A router whose OCR finds one line of text, with the target application's window reported to
+    /// be wherever `window_rect` says it is right now.
+    fn ocr_router(recognized: Rect, window_rect: Option<Rect>) -> Router<FakeBackend> {
+        let mut backend = backend(vec![], None);
+        backend.pointer_capability_usable = true;
+        backend.foreground_transaction = true;
+        *backend.recognized_text.borrow_mut() = vec![RecognizedText {
+            text: "Backlog".into(),
+            frame: recognized,
+            confidence: Some(0.95),
+        }];
+        *backend.window_rect.borrow_mut() = window_rect;
+        Router::new(backend)
+    }
+
+    fn ocr_click_request() -> JsonRpcRequest {
+        request(
+            "click",
+            json!({
+                "target": {"location": {"app": "App", "text": "Backlog", "source": "screenshot"}},
+                "deliveryPolicy": "foregroundPermitted"
+            }),
+        )
+    }
+
+    #[test]
+    fn ocr_click_dispatches_while_the_point_still_lands_in_the_target_window() {
+        let window = Rect { x: 100.0, y: 80.0, width: 1251.0, height: 900.0 };
+        let text = Rect { x: 300.0, y: 400.0, width: 200.0, height: 20.0 };
+        let mut router = ocr_router(text, Some(window));
+        let clicks = router.backend.clicks.clone();
+
+        let response = router.request(ocr_click_request()).unwrap();
+
+        assert!(
+            matches!(response, JsonRpcResponse::Success(_)),
+            "an OCR point inside the target's window must still dispatch: {response:?}"
+        );
+        assert_eq!(*clicks.borrow(), 1);
+    }
+
+    #[test]
+    fn ocr_click_refuses_with_the_measured_discrepancy_when_the_window_moved() {
+        // The coordinates were computed from a capture; by dispatch time the window has moved and
+        // the same numbers name someone else's territory. Nothing may be posted at them.
+        let moved_window = Rect { x: 100.0, y: 80.0, width: 400.0, height: 300.0 };
+        let text = Rect { x: 1500.0, y: 400.0, width: 150.0, height: 20.0 };
+        let mut router = ocr_router(text, Some(moved_window));
+        let clicks = router.backend.clicks.clone();
+
+        let response = router.request(ocr_click_request()).unwrap();
+
+        let JsonRpcResponse::Failure(failure) = response else {
+            panic!("a stale OCR target must refuse")
+        };
+        assert_eq!(failure.error.code, -32003);
+        // The measurements that make the next occurrence diagnosable from the refusal alone.
+        assert!(failure.error.message.contains("{x:1500,y:400,width:150,height:20}"));
+        assert!(failure.error.message.contains("{x:1575,y:410}"));
+        assert!(failure.error.message.contains("{x:100,y:80,width:400,height:300}"));
+        assert_eq!(*clicks.borrow(), 0, "nothing may be posted at a stale point");
+    }
+
+    #[test]
+    fn ocr_click_is_not_refused_when_no_window_reports_its_rectangle() {
+        // An unanswered accessibility read is not evidence that the point is wrong, and grounding a
+        // working click on a transient fault would be the worse failure.
+        let text = Rect { x: 1500.0, y: 400.0, width: 150.0, height: 20.0 };
+        let mut router = ocr_router(text, None);
+        let clicks = router.backend.clicks.clone();
+
+        let response = router.request(ocr_click_request()).unwrap();
+
+        assert!(matches!(response, JsonRpcResponse::Success(_)));
+        assert_eq!(*clicks.borrow(), 1);
     }
 
     #[test]
