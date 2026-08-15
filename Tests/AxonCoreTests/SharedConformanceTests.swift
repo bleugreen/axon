@@ -85,6 +85,39 @@ private struct SharedScreenshotEncoding: Decodable {
     #expect(fixture.encoding.quality == "lossless")
 }
 
+private struct SharedLookObservationNotes: Decodable {
+    struct Case: Decodable {
+        let name: String
+        let windowCount: Int
+        let note: String?
+    }
+
+    let noWindows: String
+    let cases: [Case]
+}
+
+@Test func sharedLookObservationNotesFixture() throws {
+    let fixtureURL = URL(fileURLWithPath: #filePath)
+        .deletingLastPathComponent()
+        .appendingPathComponent("../../schema/fixtures/look-observation-notes.json")
+        .standardizedFileURL
+    let fixture = try JSONDecoder().decode(SharedLookObservationNotes.self, from: Data(contentsOf: fixtureURL))
+    #expect(fixture.noWindows == ObservationNote.noWindows)
+
+    let formatter = SnapshotObservationFormatter()
+    for testCase in fixture.cases {
+        let snapshot = AppSnapshot(
+            id: SnapshotID("obs"),
+            app: AppIdentity(bundleIdentifier: "com.example.App", name: "Example", processIdentifier: 7),
+            windows: (0..<testCase.windowCount).map { AXNode(role: "AXWindow", title: "Window \($0)") },
+            screenshot: nil
+        )
+        let observation = formatter.observation(from: snapshot.jsonValue, frames: false)
+
+        #expect(observation["note"]?.stringValue == testCase.note, Comment(rawValue: testCase.name))
+    }
+}
+
 private struct SharedLocatorCase: Decodable {
     let name: String
     let locator: JSONValue

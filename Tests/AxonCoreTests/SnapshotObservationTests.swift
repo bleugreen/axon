@@ -18,6 +18,52 @@ import Testing
     #expect(formatter.text(from: formatter.observation(from: inaccessible.jsonValue, frames: false)).contains("focus: inaccessible \"AX query failed\""))
 }
 
+@Test func observationStatesNoWindowsWhenOnlyApplicationChromeWasCaptured() {
+    // Field evidence, 2026-08-14: looking at Safari with no window open returned a tree holding
+    // only the menu bar, and nothing said so. Capture keeps that chrome on purpose -- File > New
+    // Window is the recovery path -- so the absence of a window has to be stated by the envelope
+    // instead of inferred from a tree that still has a root.
+    let snapshot = AppSnapshot(
+        id: SnapshotID("obs"),
+        app: AppIdentity(bundleIdentifier: "com.apple.Safari", name: "Safari", processIdentifier: 7),
+        windows: [
+            AXNode(role: "AXMenuBar", children: [
+                AXNode(role: "AXMenuBarItem", title: "File", actions: ["AXPress"], children: [
+                    AXNode(role: "AXMenu", children: [
+                        AXNode(role: "AXMenuItem", title: "New Window", actions: ["AXPress"])
+                    ])
+                ])
+            ])
+        ],
+        screenshot: nil,
+        windowCount: 0
+    )
+
+    let formatter = SnapshotObservationFormatter()
+    let observation = formatter.observation(from: snapshot.jsonValue, frames: false)
+
+    #expect(snapshot.jsonValue["note"] == .string(ObservationNote.noWindows))
+    #expect(observation["note"] == .string(ObservationNote.noWindows))
+    #expect(formatter.text(from: observation).contains("note: no-windows"))
+    #expect(treeString(in: observation).contains("\"New Window\""))
+}
+
+@Test func observationOmitsTheNoWindowsNoteWhileAWindowIsOpen() {
+    let snapshot = AppSnapshot(
+        id: SnapshotID("obs"),
+        app: AppIdentity(bundleIdentifier: "com.apple.Safari", name: "Safari", processIdentifier: 7),
+        windows: [AXNode(role: "AXWindow", title: "Start Page")],
+        screenshot: nil
+    )
+
+    let formatter = SnapshotObservationFormatter()
+    let observation = formatter.observation(from: snapshot.jsonValue, frames: false)
+
+    #expect(snapshot.jsonValue["note"] == nil)
+    #expect(observation["note"] == nil)
+    #expect(!formatter.text(from: observation).contains("note:"))
+}
+
 @Test func observationPagesBroadSiblingSetsWithoutDroppingFollowingContent() {
     let tabs = (1...30).map { index in
         AXNode(role: "AXRadioButton", title: "Tab \(index)", actions: ["AXPress"], children: [
