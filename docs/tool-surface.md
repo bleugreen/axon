@@ -263,6 +263,13 @@ is not treated as evidence in either direction, since refusing on an unanswered
 query would ground a working action on a transient fault. A point the caller
 supplied has no provenance to check, and is unaffected.
 
+On Linux the same rule is enforced through the native window identity rather than
+through its geometry: capture reports which window it photographed, and the guard
+asks the X server for that window's current rectangle. Recognized text whose
+capture could not state its source window is refused rather than validated against
+an inferred one — asking which window contains the point today is the guess this
+rule exists to remove.
+
 A refusal is an action result, not a transport error: the request was well
 formed and the target resolved, and the daemon declined. It carries a stable
 `reason`, the `requiredRung` it would have needed, the responsible `capability`,
