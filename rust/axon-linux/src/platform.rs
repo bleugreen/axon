@@ -86,6 +86,7 @@ const NO_X_DISPLAY: &str = "no X display is reachable from this session, so ther
 const WAYLAND_SESSION: &str = "this is a Wayland session: the compositor does not permit \
      unrestricted synthetic input, and X11 cannot read or set the Wayland foreground even where \
      XWayland is running alongside";
+const WAYLAND_SCREENSHOT: &str = "a desktop portal authorization flow is required";
 const NO_WINDOW_MANAGER: &str = "this X11 session has no EWMH-capable window manager, so the \
      foreground application can be neither read nor activated";
 const NO_XTEST: &str = "this X server does not provide the XTEST extension, so there is no way to \
@@ -218,7 +219,7 @@ fn input_restriction(facts: SessionFacts) -> Option<&'static str> {
 /// Why an application window cannot be located and captured in this session.
 fn screenshot_provider_kind(facts: SessionFacts) -> ScreenshotProviderKind {
     if facts.wayland {
-        ScreenshotProviderKind::Unavailable(AUTHORIZATION_REQUIRED)
+        ScreenshotProviderKind::Unavailable(WAYLAND_SCREENSHOT)
     } else if !facts.x_display {
         ScreenshotProviderKind::Unavailable(NO_X_DISPLAY)
     } else if !facts.screenshot_windows {
@@ -255,8 +256,8 @@ fn input_session(facts: SessionFacts) -> InputSession {
 
 fn screenshot_provider(facts: SessionFacts) -> ScreenshotProvider {
     match screenshot_provider_kind(facts) {
-        ScreenshotProviderKind::Unavailable(AUTHORIZATION_REQUIRED) => {
-            ScreenshotProvider::Unavailable(AUTHORIZATION_REQUIRED)
+        ScreenshotProviderKind::Unavailable(WAYLAND_SCREENSHOT) => {
+            ScreenshotProvider::Unavailable(WAYLAND_SCREENSHOT)
         }
         ScreenshotProviderKind::X11 => X11Session::connect()
             .map(Box::new)
@@ -2016,7 +2017,7 @@ mod tests {
                 wayland: true,
                 ..USABLE
             }),
-            ScreenshotProviderKind::Unavailable(AUTHORIZATION_REQUIRED)
+            ScreenshotProviderKind::Unavailable(WAYLAND_SCREENSHOT)
         );
     }
 

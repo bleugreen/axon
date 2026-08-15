@@ -81,7 +81,7 @@
       "capability": "screenshot",
       "usable": false,
       "reason": "portal-authorization-required",
-      "restriction": "a desktop portal authorization flow is required; request a screenshot and approve the desktop chooser"
+      "restriction": "a desktop portal authorization flow is required"
     },
     {
       "capability": "hitTest",
