@@ -97,7 +97,7 @@ impl ScreenCastActor {
         }))
     }
     pub fn state(&self) -> PortalState {
-        self.signal
+        self.0.signal
             .shared
             .lock()
             .expect("ScreenCast state poisoned")
@@ -124,7 +124,7 @@ impl ScreenCastActor {
             && shared.frame.snapshot().is_some();
         if !reusable {
             if matches!(shared.state, PortalState::Starting | PortalState::Streaming) {
-                let _ = self.stop.send(());
+                let _ = self.0.stop.send(());
             }
             shared.frame.clear();
             shared.generation = shared.generation.wrapping_add(1);
@@ -140,13 +140,13 @@ impl ScreenCastActor {
             {
                 shared.state = PortalState::Failed("ScreenCast actor stopped".into());
             }
-            self.signal.changed.notify_all();
+            self.0.signal.changed.notify_all();
         }
         while matches!(shared.state, PortalState::Starting) && shared.frame.snapshot().is_none() {
             let now = Instant::now();
             if now >= deadline {
                 shared.state = PortalState::AuthorizationRequired;
-                let _ = self.stop.send(());
+                let _ = self.0.stop.send(());
                 return Err(CaptureError::AuthorizationRequired);
             }
             let (next, wait) = self
@@ -157,7 +157,7 @@ impl ScreenCastActor {
             shared = next;
             if wait.timed_out() && shared.frame.snapshot().is_none() {
                 shared.state = PortalState::AuthorizationRequired;
-                let _ = self.stop.send(());
+                let _ = self.0.stop.send(());
                 return Err(CaptureError::AuthorizationRequired);
             }
         }
@@ -187,18 +187,11 @@ impl ScreenCastActor {
         }
     }
 }
-impl std::ops::Deref for ScreenCastActor {
-    type Target = ActorHandle;
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
 impl Drop for ActorHandle {
     fn drop(&mut self) {
         self.shutting_down.store(true, Ordering::Release);
-        let _ = self.stop.send(());
-        let _ = self.command.send(Command::Stop);
+        let _ = self.0.stop.send(());
+        let _ = self.0.command.send(Command::Stop);
         let finished = self
             .finished
             .get_mut()
