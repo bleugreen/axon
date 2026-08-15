@@ -2465,7 +2465,11 @@ mod tests {
     /// `captured` is where each window was when the capture was taken, in window order; `live` is
     /// where each window is now, keyed the same way, with an absent entry modelling a geometry read
     /// that did not answer.
-    fn ocr_router(recognized: Rect, captured: Vec<Rect>, live: Vec<Option<Rect>>) -> Router<FakeBackend> {
+    fn ocr_router(
+        recognized: Rect,
+        source: Option<SourceWindow>,
+        live: Vec<(u32, Rect)>,
+    ) -> Router<FakeBackend> {
         let mut backend = backend(vec![], None);
         backend.pointer_capability_usable = true;
         backend.foreground_transaction = true;
@@ -2474,25 +2478,8 @@ mod tests {
             frame: recognized,
             confidence: Some(0.95),
         }];
-        // Childless window roots, so each window occupies exactly one flattened index and a handle
-        // index is the window's ordinal.
-        backend.snapshot.app.windows = captured
-            .iter()
-            .map(|frame| Window {
-                title: None,
-                root: Node {
-                    children: vec![],
-                    child_count: Some(0),
-                    frame: Some(*frame),
-                    ..node("window")
-                },
-            })
-            .collect();
-        *backend.window_rects.borrow_mut() = live
-            .into_iter()
-            .enumerate()
-            .filter_map(|(index, rect)| rect.map(|rect| (index, rect)))
-            .collect();
+        *backend.source_window.borrow_mut() = source;
+        *backend.window_rects.borrow_mut() = live.into_iter().collect();
         Router::new(backend)
     }
 
@@ -2506,14 +2493,20 @@ mod tests {
         )
     }
 
-    /// The window the text was recognized in, and the text inside it. The resolved point is the
-    /// text's centre, {x:1575,y:410}.
+    /// The window the text was read from, and the text inside it. The resolved point is the text's
+    /// centre, {x:1575,y:410}.
+    const PHOTOGRAPHED: u32 = 7;
+    const OTHER_WINDOW: u32 = 8;
     const OCR_WINDOW: Rect = Rect { x: 1400.0, y: 100.0, width: 500.0, height: 900.0 };
     const OCR_TEXT: Rect = Rect { x: 1500.0, y: 400.0, width: 150.0, height: 20.0 };
 
+    fn photographed() -> Option<SourceWindow> {
+        Some(SourceWindow { id: PHOTOGRAPHED, frame: OCR_WINDOW })
+    }
+
     #[test]
-    fn ocr_click_dispatches_while_the_point_still_lands_in_the_window_it_was_recognized_in() {
-        let mut router = ocr_router(OCR_TEXT, vec![OCR_WINDOW], vec![Some(OCR_WINDOW)]);
+    fn ocr_click_dispatches_while_the_point_still_lands_in_the_window_it_was_read_from() {
+        let mut router = ocr_router(OCR_TEXT, photographed(), vec![(PHOTOGRAPHED, OCR_WINDOW)]);
         let clicks = router.backend.clicks.clone();
 
         let response = router.request(ocr_click_request()).unwrap();
@@ -2530,7 +2523,7 @@ mod tests {
         // The coordinates were computed from a capture; by dispatch time the window has moved and
         // the same numbers name somewhere else. Nothing may be posted at them.
         let moved = Rect { x: 100.0, y: 80.0, width: 500.0, height: 900.0 };
-        let mut router = ocr_router(OCR_TEXT, vec![OCR_WINDOW], vec![Some(moved)]);
+        let mut router = ocr_router(OCR_TEXT, photographed(), vec![(PHOTOGRAPHED, moved)]);
         let clicks = router.backend.clicks.clone();
 
         let response = router.request(ocr_click_request()).unwrap();
@@ -2548,44 +2541,64 @@ mod tests {
     }
 
     #[test]
-    fn ocr_click_refuses_when_another_window_of_the_same_application_covers_the_point() {
-        // The case that makes "inside some window of the app" the wrong question. The window the
-        // text was recognized in has moved away, and a second window of the same application now
-        // covers the old coordinates. Delivering there clicks something the caller never named.
+    fn ocr_click_refuses_when_an_overlapping_window_of_the_same_application_covers_the_point() {
+        // The case that makes "which window contains the point now" the wrong question. Two windows
+        // of one application overlap at the recognized text. The photographed one has moved away,
+        // and the other still covers the stale coordinates — so a guard that asks about the point
+        // rather than about the window finds a perfectly stable window and dispatches into it.
         let moved = Rect { x: 0.0, y: 0.0, width: 500.0, height: 900.0 };
-        let other_window_over_the_stale_point = Rect { x: 1500.0, y: 380.0, width: 400.0, height: 300.0 };
+        let overlapping = Rect { x: 1450.0, y: 380.0, width: 400.0, height: 300.0 };
         let mut router = ocr_router(
             OCR_TEXT,
-            vec![OCR_WINDOW, other_window_over_the_stale_point],
-            vec![Some(moved), Some(other_window_over_the_stale_point)],
+            photographed(),
+            vec![(PHOTOGRAPHED, moved), (OTHER_WINDOW, overlapping)],
         );
         let clicks = router.backend.clicks.clone();
 
         let response = router.request(ocr_click_request()).unwrap();
 
         let JsonRpcResponse::Failure(failure) = response else {
-            panic!("a point that landed in a window it was never computed from must refuse")
+            panic!("a point whose own window moved must refuse, whatever else covers it")
         };
         assert_eq!(failure.error.code, -32003);
+        // The refusal is about the photographed window, not about the one that happens to cover it.
         assert!(failure.error.message.contains("{x:1400,y:100,width:500,height:900}"));
+        assert!(failure.error.message.contains("{x:0,y:0,width:500,height:900}"));
         assert_eq!(
             *clicks.borrow(),
             0,
-            "nothing may be posted into a window the point was never computed from"
+            "nothing may be posted into a window the text was never read from"
         );
     }
 
     #[test]
     fn ocr_click_is_not_refused_when_the_window_does_not_report_its_rectangle() {
-        // An unanswered accessibility read is not evidence that the point is wrong, and grounding a
+        // An unanswered geometry read is not evidence that the point is wrong, and grounding a
         // working click on a transient fault would be the worse failure.
-        let mut router = ocr_router(OCR_TEXT, vec![OCR_WINDOW], vec![None]);
+        let mut router = ocr_router(OCR_TEXT, photographed(), vec![]);
         let clicks = router.backend.clicks.clone();
 
         let response = router.request(ocr_click_request()).unwrap();
 
         assert!(matches!(response, JsonRpcResponse::Success(_)));
         assert_eq!(*clicks.borrow(), 1);
+    }
+
+    #[test]
+    fn ocr_click_refuses_when_the_capture_did_not_report_which_window_it_read() {
+        // Without provenance there is nothing to validate against, and inferring a window from the
+        // point is the guess this guard exists to remove.
+        let mut router = ocr_router(OCR_TEXT, None, vec![(PHOTOGRAPHED, OCR_WINDOW)]);
+        let clicks = router.backend.clicks.clone();
+
+        let response = router.request(ocr_click_request()).unwrap();
+
+        let JsonRpcResponse::Failure(failure) = response else {
+            panic!("an OCR click with no source window must refuse")
+        };
+        assert_eq!(failure.error.code, -32003);
+        assert!(failure.error.message.contains("did not report which window"));
+        assert_eq!(*clicks.borrow(), 0);
     }
 
     #[test]
