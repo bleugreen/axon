@@ -18,9 +18,11 @@ private final class FakeSession: @unchecked Sendable {
     var refusesActivation: Set<pid_t> = []
     /// True when posting drags the real pointer somewhere it will not return from.
     var pointerIsStuck = false
-    /// Where the pointer ends up across a dispatch. For a global post that is the posting itself
-    /// moving it; for a background post, which cannot, it is a hand on the physical mouse.
     var pointerAfterPost: CGPoint?
+    /// Where the pointer ends up while a *background* dispatch is in flight. Posting to a process
+    /// cannot move the cursor — that is the rung's whole promise — so this models the ordinary
+    /// condition of a personal machine: someone using the mouse while Axon delivers.
+    var pointerMovedDuringBackgroundPost: CGPoint?
     /// Successive answers to "where is the pointer", for the case where it is moving while Axon
     /// reads it. Each reading consumes one; afterwards the session answers `pointer` again.
     var pointerReadings: [CGPoint] = []
@@ -76,8 +78,8 @@ private final class FakeSession: @unchecked Sendable {
                 self.log.append("postToPid:\(pid)")
                 self.targetedPosts.append(pid)
                 self.frontmostDuringDispatch.append(self.frontmost)
-                if let pointerAfterPost = self.pointerAfterPost {
-                    self.pointer = pointerAfterPost
+                if let moved = self.pointerMovedDuringBackgroundPost {
+                    self.pointer = moved
                 }
             },
             sleepMilliseconds: { _ in },
@@ -278,7 +280,7 @@ private func escalationStore() -> (AXElementStore, AXUIElement) {
     // the machine is using the mouse. The keystrokes land, the pointer moves for reasons of its
     // own, and calling that a broken contract is a false negative on an action that worked.
     let session = FakeSession()
-    session.pointerAfterPost = CGPoint(x: 900, y: 900)
+    session.pointerMovedDuringBackgroundPost = CGPoint(x: 900, y: 900)
     let (store, element) = escalationStore()
     let executor = session.typeExecutor(store: store, element: element)
     // The frontmost application is always resolvable by pid, which gives the pixel rung a real
@@ -289,7 +291,7 @@ private func escalationStore() -> (AXElementStore, AXUIElement) {
 
     #expect(result.delivery == .pixel)
     #expect(result.dispatchSuccess)
-    #expect(result.message?.contains("broke its own contract") != true)
+    #expect(result.message?.contains("could not prove it stayed in the background") != true)
     let evidence = result.details["backgroundDelivery"]
     // The motion is reported rather than hidden; what changes is that it is not a verdict.
     #expect(evidence?["pointerUnchanged"] == .bool(false))
@@ -298,10 +300,12 @@ private func escalationStore() -> (AXElementStore, AXUIElement) {
 }
 
 @Test func backgroundPointerDeliveryStillFailsWhenTheRealPointerMoves() throws {
-    // The clause stays load-bearing where the dispatch synthesizes pointer input: a pixel rung that
-    // moved the real cursor was not background delivery, whatever it managed to deliver.
+    // The clause stays where the dispatch synthesizes pointer input: a pixel rung whose events
+    // reached the shared devices would move the real cursor, and nothing on this side can tell that
+    // from the hand on the mouse. So the observation stands as a failure to prove the rung, which
+    // is the fail-safe direction — unlike a keyboard dispatch, which could not have done it.
     let session = FakeSession()
-    session.pointerAfterPost = CGPoint(x: 900, y: 900)
+    session.pointerMovedDuringBackgroundPost = CGPoint(x: 900, y: 900)
     let (store, element) = escalationStore()
     let executor = session.typeExecutor(store: store, element: element)
 
@@ -310,7 +314,7 @@ private func escalationStore() -> (AXElementStore, AXUIElement) {
     #expect(result.delivery == .pixel)
     #expect(result.dispatchSuccess)
     #expect(result.success == false)
-    #expect(result.message?.contains("moved the real pointer") == true)
+    #expect(result.message?.contains("the real pointer moved across the dispatch") == true)
     let evidence = result.details["backgroundDelivery"]
     #expect(evidence?["pointerUnchanged"] == .bool(false))
     #expect(evidence?["pointerAsserted"] == .bool(true))
@@ -327,7 +331,7 @@ private func escalationStore() -> (AXElementStore, AXUIElement) {
 
     let result = try executor.type(target: "fg:0", value: "hello", policy: .backgroundOnly)
 
-    #expect(result.message?.contains("moved the real pointer") == true)
+    #expect(result.message?.contains("the real pointer moved across the dispatch") == true)
     #expect(result.details["backgroundDelivery"]?["pointerUnchanged"] == .bool(false))
 }
 

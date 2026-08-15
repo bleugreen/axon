@@ -791,10 +791,10 @@ public final class AXPrimitiveActionExecutor {
         assertsPointer: Bool
     ) -> String? {
         if after.frontmost != before.frontmost {
-            return "background delivery changed the frontmost application"
+            return "the frontmost application changed across the dispatch"
         }
         if assertsPointer, !pointsMatch(after.pointer, before.pointer) {
-            return "background delivery moved the real pointer"
+            return "the real pointer moved across the dispatch"
         }
         return nil
     }
@@ -1097,7 +1097,11 @@ public final class AXPrimitiveActionExecutor {
         if let violation {
             return PrimitiveActionResult(
                 action: action, target: target, strategy: strategy, success: false,
-                message: "Background delivery broke its own contract: \(violation)",
+                // What is reported is what was observed. A dispatch that synthesizes pointer input
+                // cannot tell its own leaked event from the hand on the mouse, so it claims the
+                // change it saw rather than blaming itself for one it may not have caused — and
+                // either way it has not proved it stayed in the background.
+                message: "Background delivery could not prove it stayed in the background: \(violation)",
                 deliveryPolicy: policy, delivery: .pixel, dispatchSuccess: true, details: evidence
             )
         }
