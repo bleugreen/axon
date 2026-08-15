@@ -91,6 +91,59 @@ import Testing
     #expect(resolution.best?.source == .screenshot)
 }
 
+@Test func textLocationResolverCountsFramedNodesWithNoReadableText() {
+    // The Safari shape from the field report: a link with a correct role and frame whose
+    // every readable attribute is empty. This is exactly the node an observation renders
+    // as ⟨1 unreadable node⟩, and it is unmatchable for the same reason it is unreadable.
+    let snapshot = textLocationFixtureSnapshot([
+        AXNode(role: "AXLink", frame: AXFrame(x: 100, y: 50, width: 80, height: 20))
+    ])
+    let target = TextLocationTarget(app: "cairn", text: .exact("719 comments"), source: .ax)
+
+    let resolution = TextLocationResolver().resolve(target, in: snapshot)
+
+    #expect(resolution.status == .missing)
+    #expect(resolution.opaqueNodeCount == 1)
+    #expect(resolution.jsonValue["opaqueNodeCount"] == .int(1))
+}
+
+@Test func textLocationResolverMatchesTextCarriedInValue() {
+    let snapshot = textLocationFixtureSnapshot([
+        AXNode(role: "AXStaticText", value: "Backlog", frame: AXFrame(x: 100, y: 50, width: 80, height: 20))
+    ])
+    let target = TextLocationTarget(app: "cairn", text: .exact("Backlog"), source: .ax)
+
+    let resolution = TextLocationResolver().resolve(target, in: snapshot)
+
+    #expect(resolution.status == .unique)
+    #expect(resolution.best?.reasons.first?.hasPrefix("value ") == true)
+}
+
+@Test func textLocationResolverReportsNoOpaqueNodesWhenAXMatchingSucceeds() {
+    let snapshot = textLocationFixtureSnapshot([
+        AXNode(role: "AXStaticText", title: "Backlog", frame: AXFrame(x: 100, y: 50, width: 80, height: 20)),
+        AXNode(role: "AXLink", frame: AXFrame(x: 300, y: 50, width: 80, height: 20))
+    ])
+    let target = TextLocationTarget(app: "cairn", text: .exact("Backlog"), source: .ax)
+
+    let resolution = TextLocationResolver().resolve(target, in: snapshot)
+
+    #expect(resolution.status == .unique)
+    #expect(resolution.opaqueNodeCount == 0)
+}
+
+@Test func textLocationResolverSkipsOpaqueCountForScreenshotSource() {
+    let snapshot = textLocationFixtureSnapshot([
+        AXNode(role: "AXLink", frame: AXFrame(x: 100, y: 50, width: 80, height: 20))
+    ])
+    let target = TextLocationTarget(app: "cairn", text: .exact("719 comments"), source: .screenshot)
+
+    let resolution = TextLocationResolver(recognizeText: { _ in [] }).resolve(target, in: snapshot)
+
+    #expect(resolution.status == .missing)
+    #expect(resolution.opaqueNodeCount == 0)
+}
+
 @Test func textLocationJSONParsesLocationTarget() throws {
     let target = try TextLocationTarget(jsonValue: .object([
         "app": .string("cairn"),
