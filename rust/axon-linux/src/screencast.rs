@@ -700,16 +700,30 @@ mod production {
     fn fail(e: impl ToString) -> DriverError {
         DriverError::Failed(e.to_string())
     }
-    fn classify(e: ashpd::Error, restoring: bool) -> DriverError {
-        let text = e.to_string();
-        if text.contains("cancel") || text.contains("denied") {
-            DriverError::Cancelled
-        } else if text.contains("WINDOW source unavailable") {
-            DriverError::Unavailable(text)
-        } else if restoring {
-            DriverError::StaleRestore
-        } else {
-            DriverError::Failed(text)
+    pub(super) fn classify(e: ashpd::Error, restoring: bool) -> DriverError {
+        use ashpd::PortalError;
+
+        match e {
+            // ashpd keeps the portal response-code type private. A Response error is the
+            // request-level cancellation/refusal boundary; transport and service failures use
+            // the distinct variants handled below.
+            ashpd::Error::Response(_) | ashpd::Error::Portal(PortalError::Cancelled(_)) => {
+                DriverError::Cancelled
+            }
+            ashpd::Error::Portal(PortalError::NotFound(message))
+                if message == "WINDOW source unavailable" =>
+            {
+                DriverError::Unavailable(message)
+            }
+            ashpd::Error::Portal(PortalError::InvalidArgument(_) | PortalError::NotFound(_))
+                if restoring =>
+            {
+                DriverError::StaleRestore
+            }
+            error @ (ashpd::Error::PortalNotFound(_) | ashpd::Error::RequiresVersion(_, _)) => {
+                DriverError::Unavailable(error.to_string())
+            }
+            error => DriverError::Failed(error.to_string()),
         }
     }
 }
@@ -944,6 +958,33 @@ mod tests {
             1
         );
         assert_eq!(*tokens.lock().unwrap(), vec![true, false]);
+    }
+
+    #[test]
+    fn restore_transport_failure_does_not_retry_without_token() {
+        let classified = production::classify(ashpd::Error::NoResponse, true);
+        assert!(matches!(classified, DriverError::Failed(_)));
+
+        let dir = tempfile::tempdir().unwrap();
+        let store = TokenStore::at(dir.path().join("token"));
+        store.replace(None, RestoreToken::new("stored")).unwrap();
+        let calls = Arc::new(AtomicUsize::new(0));
+        let tokens = Arc::new(Mutex::new(Vec::new()));
+        let actor = ScreenCastActor::spawn_with_driver(
+            store,
+            Mock {
+                actions: vec![Action::Fail(classified)].into(),
+                calls: calls.clone(),
+                tokens: tokens.clone(),
+            },
+        );
+
+        assert!(matches!(
+            actor.capture(false, Duration::from_secs(1)),
+            Err(CaptureError::Failed(_))
+        ));
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        assert_eq!(*tokens.lock().unwrap(), vec![true]);
     }
 
     #[test]
