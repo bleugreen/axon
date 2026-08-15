@@ -116,6 +116,19 @@ impl TokenStore {
             .map(|record| (record.source_id, record.token)))
     }
 
+    fn clear(&self) -> io::Result<()> {
+        match fs::remove_file(&self.path) {
+            Ok(()) => {
+                if let Some(parent) = self.path.parent() {
+                    fs::File::open(parent)?.sync_all()?;
+                }
+                Ok(())
+            }
+            Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(error),
+        }
+    }
+
     pub fn replace(&self, source_id: Option<&str>, token: RestoreToken) -> io::Result<()> {
         let mut records = match self.records() {
             Ok(records) => records,

@@ -308,9 +308,22 @@ fn actor_main<D: ScreenCastDriver>(
                 let stored = if reauthorize {
                     None
                 } else {
-                    store.load().ok().flatten().map(|(_, token)| token)
+                    match store.load() {
+                        Ok(stored) => stored.map(|(_, token)| token),
+                        Err(error) => {
+                            set_state(
+                                &signal,
+                                PortalState::Failed(format!(
+                                    "could not load portal token: {error}"
+                                )),
+                            );
+                            continue;
+                        }
+                    }
                 };
-                let run_once = |driver: &mut D, token| {
+                let run_once = |driver: &mut D, token, clear_missing: bool| {
+                    let persistence_error = Arc::new(Mutex::new(None::<String>));
+                    let started_error = persistence_error.clone();
                     let started_signal = signal.clone();
                     let started_generation = generation;
                     let started_store = store.clone();
@@ -324,22 +337,29 @@ fn actor_main<D: ScreenCastDriver>(
                         {
                             return;
                         }
-                        if let Some(token) = session.restore_token {
-                            if let Err(error) =
-                                started_store.replace(session.source_id.as_deref(), token)
-                            {
-                                set_state(
-                                    &started_signal,
-                                    PortalState::Failed(format!(
-                                        "could not persist portal token: {error}"
-                                    )),
-                                );
-                            }
+                        let persisted = match session.restore_token {
+                            Some(token) => started_store.replace(session.source_id.as_deref(), token),
+                            None if clear_missing => started_store.clear(),
+                            None => Ok(()),
+                        };
+                        if let Err(error) = persisted {
+                            let message = format!("could not persist portal token: {error}");
+                            *started_error.lock().expect("persistence error lock poisoned") =
+                                Some(message.clone());
+                            set_state(&started_signal, PortalState::Failed(message));
                         }
                     });
+                    let publish_error = persistence_error.clone();
                     let publish_signal = signal.clone();
                     let publish_generation = generation;
                     let publish = Arc::new(move |new_frame: PipeWireFrame| {
+                        if publish_error
+                            .lock()
+                            .expect("persistence error lock poisoned")
+                            .is_some()
+                        {
+                            return;
+                        }
                         let shared = publish_signal
                             .shared
                             .lock()
@@ -353,12 +373,12 @@ fn actor_main<D: ScreenCastDriver>(
                     });
                     driver.run(token, started, publish, stopped.clone())
                 };
-                let first = run_once(&mut driver, stored.clone());
+                let first = run_once(&mut driver, stored.clone(), reauthorize);
                 let result = if matches!(first, Err(DriverError::StaleRestore))
                     && stored.is_some()
                     && !shutting_down.load(Ordering::Acquire)
                 {
-                    run_once(&mut driver, None)
+                    run_once(&mut driver, None, true)
                 } else {
                     first
                 };
