@@ -129,6 +129,7 @@ final class AxonDaemonAppDelegate: NSObject, NSApplicationDelegate, @unchecked S
         if !AccessibilityPermission.isTrusted() {
             menu.addItem(menuItem(title: "Request Accessibility", action: #selector(requestAccessibility)))
         }
+        menu.addItem(menuItem(title: "Browser Automation...", action: #selector(requestBrowserAutomationConsent)))
         menu.addItem(menuItem(title: "Open .axn File...", action: #selector(openAxnFromMenu)))
         if let recordingScope {
             menu.addItem(disabledItem("Recording \(recordingScope.displayName)"))
@@ -176,6 +177,37 @@ final class AxonDaemonAppDelegate: NSObject, NSApplicationDelegate, @unchecked S
     @objc private func requestAccessibility() {
         _ = AccessibilityPermission.requestTrustPrompt()
         installMenu()
+    }
+
+    /// The one place Axon asks macOS for Apple Events consent.
+    ///
+    /// Browser verbs only ever check the existing grant, so this gesture is how a grant is minted at
+    /// a moment the user chose. The request blocks while the system dialog is up, so it runs off the
+    /// main thread — on the main queue it would freeze the menu bar app, including the menu the
+    /// dialog was opened from. Activating first keeps the dialog from opening behind other windows.
+    @objc private func requestBrowserAutomationConsent() {
+        NSApp.activate()
+        DispatchQueue.global(qos: .userInitiated).async {
+            let outcomes = BrowserAutomationConsentRequester().requestForRunningBrowsers()
+            DispatchQueue.main.async { [weak self] in
+                self?.presentBrowserAutomationConsent(outcomes)
+            }
+        }
+    }
+
+    private func presentBrowserAutomationConsent(_ outcomes: [BrowserAutomationConsentOutcome]) {
+        installMenu()
+        guard !outcomes.isEmpty else {
+            showAlert(
+                title: "No Supported Browser Running",
+                message: "macOS can only grant control of a browser that is running. Open Safari or Google Chrome, then choose Browser Automation... again."
+            )
+            return
+        }
+        let lines = outcomes.map { outcome in
+            outcome.granted ? "\(outcome.app): allowed" : "\(outcome.app): \(outcome.detail ?? "not granted")"
+        }
+        showAlert(title: "Browser Automation", message: lines.joined(separator: "\n\n"))
     }
 
     @objc private func checkForUpdates() {
