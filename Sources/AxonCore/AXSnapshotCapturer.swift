@@ -68,7 +68,7 @@ public struct AXSnapshotCapturer {
             processIdentifier: app.processIdentifier
         )
 
-        let windowCount = windowCount(from: appElement)
+        let windowCount = WindowCountObservation.query(application: appElement)
 
         if childDepth != 0, let snapshot = captureUsingBulkHierarchy(
             appElement: appElement,
@@ -90,7 +90,10 @@ public struct AXSnapshotCapturer {
                     childCaptureMode: childDepth == 0 ? .none : .normal
                 )
             }
-        let truncationReason = windowCount > windows.count ? "windows limited to \(maxWindows) of \(windowCount)" : nil
+        // An unanswered count is no reason to claim truncation, so it falls back to what capture
+        // actually produced.
+        let reportedWindows = windowCount.count ?? windows.count
+        let truncationReason = reportedWindows > windows.count ? "windows limited to \(maxWindows) of \(reportedWindows)" : nil
         let annotatedWindows = windows.enumerated().map { index, window in
             guard index == 0, let truncationReason else {
                 return window
@@ -114,7 +117,7 @@ public struct AXSnapshotCapturer {
         appIdentity: AppIdentity,
         snapshotID: SnapshotID,
         screenshot: Bool,
-        windowCount: Int
+        windowCount: WindowCountObservation
     ) -> AppSnapshot? {
         guard let capture = AXHierarchyBulkCapturer().capture(appElement: appElement) else {
             return nil
@@ -172,10 +175,6 @@ public struct AXSnapshotCapturer {
 
     private func windowElements(from appElement: AXUIElement) -> [AXUIElement] {
         rangedElements(kAXWindowsAttribute, from: appElement, start: 0, limit: maxWindows)
-    }
-
-    private func windowCount(from appElement: AXUIElement) -> Int {
-        attributeValueCount(kAXWindowsAttribute, from: appElement)
     }
 
     private func serialize(
@@ -319,5 +318,30 @@ public struct AXSnapshotCapturer {
             return number.stringValue
         }
         return String(describing: value)
+    }
+}
+
+public extension WindowCountObservation {
+    /// Asks the application element for its own window count.
+    ///
+    /// Deliberately asked of the application rather than counted from captured roots: neither
+    /// capture strategy guarantees its roots are windows, and both fall back to application chrome
+    /// when there are none. Every accessibility error becomes `inaccessible` rather than zero,
+    /// because a query that did not answer says nothing about the application.
+    static func query(application element: AXUIElement) -> WindowCountObservation {
+        var count: CFIndex = 0
+        if AXUIElementGetAttributeValueCount(element, kAXWindowsAttribute as CFString, &count) == .success {
+            return .counted(max(0, Int(count)))
+        }
+
+        // Some applications answer the copy but not the count, so a failed count is not yet an answer.
+        var value: CFTypeRef?
+        guard
+            AXUIElementCopyAttributeValue(element, kAXWindowsAttribute as CFString, &value) == .success,
+            let windows = value as? [AXUIElement]
+        else {
+            return .inaccessible
+        }
+        return .counted(windows.count)
     }
 }
