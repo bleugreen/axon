@@ -1086,14 +1086,17 @@ private struct PrimitiveActionCommandHandler {
             }
         }
         guard resolution.status == .unique, let point = resolution.point else {
-            throw JSONRPCError.invalidParams(textLocationFailureMessage(resolution))
+            throw JSONRPCError.invalidParams(textLocationFailureMessage(resolution, source: target.source))
         }
         return TextLocationResolvedPoint(point: point, resolution: resolution)
     }
 
-    private func textLocationFailureMessage(_ resolution: TextLocationResolution) -> String {
+    private func textLocationFailureMessage(_ resolution: TextLocationResolution, source: TextLocationSource) -> String {
         var message = "Text location did not resolve uniquely: \(resolution.status.rawValue)"
         guard !resolution.candidates.isEmpty else {
+            if resolution.status == .missing {
+                message += ". \(missingTextLocationGuidance(resolution, source: source))"
+            }
             return message
         }
 
@@ -1107,6 +1110,35 @@ private struct PrimitiveActionCommandHandler {
         }
         message += ")"
         return message
+    }
+
+    /// Explains a missing text location in terms of the source the caller actually asked
+    /// for. The costly mistake this exists to prevent is a caller reading a bare `missing`
+    /// from `source: "ax"` and concluding the text is not on screen, when what happened is
+    /// that the text renders inside nodes accessibility describes with nothing at all and
+    /// `ax` — unlike `auto` — does not fall back to OCR.
+    private func missingTextLocationGuidance(_ resolution: TextLocationResolution, source: TextLocationSource) -> String {
+        switch source {
+        case .ax where resolution.opaqueNodeCount > 0:
+            return """
+            No AX text matched, and \(resolution.opaqueNodeCount) visible \
+            \(resolution.opaqueNodeCount == 1 ? "node carries" : "nodes carry") no text in any attribute \
+            AX matching reads, so the target may be rendered inside them. \
+            source:'ax' does not fall back; retry with source:'screenshot' or the default source:'auto' \
+            to match by screenshot OCR.
+            """
+        case .ax:
+            return """
+            Every visible node carries text in an attribute AX matching reads and none of it matched, \
+            so this text is absent from accessibility rather than hidden inside nodes AX cannot read. \
+            source:'ax' does not fall back; retry with source:'screenshot' or the default source:'auto' \
+            to match by screenshot OCR.
+            """
+        case .screenshot:
+            return "Screenshot OCR recognized no matching text. source:'screenshot' does not fall back to accessibility text."
+        case .auto:
+            return "source:'auto' tried accessibility text and then screenshot OCR; neither matched, so no other source remains to retry."
+        }
     }
 
     private func redactedTextLocationSummaryText(_ candidate: TextLocationCandidate) -> String {

@@ -91,6 +91,113 @@ import Testing
     #expect(resolution.best?.source == .screenshot)
 }
 
+@Test func textLocationResolverCountsFramedNodesWithNoReadableText() {
+    // The Safari shape from the field report: a link with a correct role and frame whose
+    // every matched attribute is empty. No text in the captured node means nothing for
+    // source:'ax' to match, whatever a human sees rendered in its place.
+    let snapshot = textLocationFixtureSnapshot([
+        AXNode(role: "AXLink", frame: AXFrame(x: 100, y: 50, width: 80, height: 20))
+    ])
+    let target = TextLocationTarget(app: "cairn", text: .exact("719 comments"), source: .ax)
+
+    let resolution = TextLocationResolver().resolve(target, in: snapshot)
+
+    #expect(resolution.status == .missing)
+    #expect(resolution.opaqueNodeCount == 1)
+    #expect(resolution.jsonValue["opaqueNodeCount"] == .int(1))
+}
+
+@Test func textLocationResolverMatchesTextCarriedInValue() {
+    let snapshot = textLocationFixtureSnapshot([
+        AXNode(role: "AXStaticText", value: "Backlog", frame: AXFrame(x: 100, y: 50, width: 80, height: 20))
+    ])
+    let target = TextLocationTarget(app: "cairn", text: .exact("Backlog"), source: .ax)
+
+    let resolution = TextLocationResolver().resolve(target, in: snapshot)
+
+    #expect(resolution.status == .unique)
+    #expect(resolution.best?.reasons.first?.hasPrefix("value ") == true)
+}
+
+@Test func textLocationResolverReportsNoOpaqueNodesWhenAXMatchingSucceeds() {
+    let snapshot = textLocationFixtureSnapshot([
+        AXNode(role: "AXStaticText", title: "Backlog", frame: AXFrame(x: 100, y: 50, width: 80, height: 20)),
+        AXNode(role: "AXLink", frame: AXFrame(x: 300, y: 50, width: 80, height: 20))
+    ])
+    let target = TextLocationTarget(app: "cairn", text: .exact("Backlog"), source: .ax)
+
+    let resolution = TextLocationResolver().resolve(target, in: snapshot)
+
+    #expect(resolution.status == .unique)
+    #expect(resolution.opaqueNodeCount == 0)
+}
+
+@Test func textLocationResolverSkipsOpaqueCountForScreenshotSource() {
+    let snapshot = textLocationFixtureSnapshot([
+        AXNode(role: "AXLink", frame: AXFrame(x: 100, y: 50, width: 80, height: 20))
+    ])
+    let target = TextLocationTarget(app: "cairn", text: .exact("719 comments"), source: .screenshot)
+
+    let resolution = TextLocationResolver(recognizeText: { _ in [] }).resolve(target, in: snapshot)
+
+    #expect(resolution.status == .missing)
+    #expect(resolution.opaqueNodeCount == 0)
+}
+
+// The two surfaces share the ordered attribute list, not the whole predicate, and these
+// two tests exist to stop a reader from re-deriving the tempting-but-false claim that an
+// observation's ⟨N unreadable nodes⟩ marker and an unmatchable AX node are the same fact.
+// They are not: the marker reports children that vanished from the observation for any
+// reason, and thinning drops readable children too.
+
+@Test func observationMarksCoalescedChildrenUnreadableEvenThoughAXCanMatchThem() {
+    // A link with no text of its own and two labeled text children. The formatter folds the
+    // children's labels into the parent and empties the child list, which trips the opacity
+    // marker — while the children remain in the captured tree and remain matchable.
+    let snapshot = textLocationFixtureSnapshot([
+        AXNode(
+            role: "AXLink",
+            frame: AXFrame(x: 100, y: 50, width: 160, height: 20),
+            children: [
+                AXNode(role: "AXStaticText", title: "719 comments", frame: AXFrame(x: 100, y: 50, width: 80, height: 20)),
+                AXNode(role: "AXStaticText", title: "Reply", frame: AXFrame(x: 180, y: 50, width: 80, height: 20))
+            ]
+        )
+    ])
+    let formatter = SnapshotObservationFormatter()
+    let observationText = formatter.text(from: formatter.observation(from: snapshot.jsonValue, frames: false))
+
+    let resolution = TextLocationResolver().resolve(
+        TextLocationTarget(app: "cairn", text: .exact("719 comments"), source: .ax),
+        in: snapshot
+    )
+
+    #expect(observationText.contains("unreadable"))
+    #expect(resolution.status == .unique)
+    #expect(resolution.opaqueNodeCount == 0)
+}
+
+@Test func aPointerDescriptionIsReadableToTheMatcherAndUnreadableToTheObservation() {
+    // The observation rejects AX pointer descriptions as labels; the matcher does not filter
+    // them, so such a node is not opaque by the resolver's measure even when the observation
+    // has nothing to render for it.
+    let snapshot = textLocationFixtureSnapshot([
+        AXNode(
+            role: "AXGroup",
+            title: "<AXUIElement 0x600000123456> {pid=42}",
+            frame: AXFrame(x: 100, y: 50, width: 80, height: 20)
+        )
+    ])
+
+    let resolution = TextLocationResolver().resolve(
+        TextLocationTarget(app: "cairn", text: .exact("719 comments"), source: .ax),
+        in: snapshot
+    )
+
+    #expect(resolution.status == .missing)
+    #expect(resolution.opaqueNodeCount == 0)
+}
+
 @Test func textLocationJSONParsesLocationTarget() throws {
     let target = try TextLocationTarget(jsonValue: .object([
         "app": .string("cairn"),
