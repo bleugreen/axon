@@ -28,6 +28,7 @@ pub enum CaptureError {
 struct Shared {
     state: PortalState,
     frame: LatestFrame,
+    generation: u64,
 }
 struct Signal {
     shared: Mutex<Shared>,
@@ -44,7 +45,7 @@ pub struct ScreenCastActor {
 }
 
 enum Command {
-    Capture(bool),
+    Capture { generation: u64, reauthorize: bool },
     Stop,
 }
 
@@ -57,6 +58,7 @@ impl ScreenCastActor {
             shared: Mutex::new(Shared {
                 state: PortalState::AuthorizationRequired,
                 frame: LatestFrame::default(),
+                generation: 0,
             }),
             changed: Condvar::new(),
         });
@@ -118,8 +120,17 @@ impl ScreenCastActor {
                 let _ = self.stop.send(());
             }
             shared.frame.clear();
+            shared.generation = shared.generation.wrapping_add(1);
+            let generation = shared.generation;
             shared.state = PortalState::Starting;
-            if self.command.send(Command::Capture(reauthorize)).is_err() {
+            if self
+                .command
+                .send(Command::Capture {
+                    generation,
+                    reauthorize,
+                })
+                .is_err()
+            {
                 shared.state = PortalState::Failed("ScreenCast actor stopped".into());
             }
             self.signal.changed.notify_all();
@@ -257,7 +268,10 @@ fn actor_main<D: ScreenCastDriver>(
     while let Ok(command) = commands.recv() {
         match command {
             Command::Stop => break,
-            Command::Capture(reauthorize) => {
+            Command::Capture {
+                generation,
+                reauthorize,
+            } => {
                 // A stop belongs only to the generation that observed it. Drain any signal left by
                 // a caller whose timeout raced with driver completion before starting a retry.
                 while stopped
@@ -273,8 +287,18 @@ fn actor_main<D: ScreenCastDriver>(
                 };
                 let run_once = |driver: &mut D, token| {
                     let started_signal = signal.clone();
+                    let started_generation = generation;
                     let started_store = store.clone();
                     let started = Arc::new(move |session: StartedSession| {
+                        if started_signal
+                            .shared
+                            .lock()
+                            .expect("ScreenCast state poisoned")
+                            .generation
+                            != started_generation
+                        {
+                            return;
+                        }
                         if let Some(token) = session.restore_token {
                             if let Err(error) =
                                 started_store.replace(session.source_id.as_deref(), token)
@@ -289,11 +313,15 @@ fn actor_main<D: ScreenCastDriver>(
                         }
                     });
                     let publish_signal = signal.clone();
+                    let publish_generation = generation;
                     let publish = Arc::new(move |new_frame: PipeWireFrame| {
                         let shared = publish_signal
                             .shared
                             .lock()
                             .expect("ScreenCast state poisoned");
+                        if shared.generation != publish_generation {
+                            return;
+                        }
                         shared.frame.publish(new_frame);
                         drop(shared);
                         set_state(&publish_signal, PortalState::Streaming);
