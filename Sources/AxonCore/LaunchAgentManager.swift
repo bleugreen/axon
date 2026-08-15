@@ -91,15 +91,30 @@ public struct DaemonProgram: Equatable, Sendable {
 }
 
 public struct LaunchAgentConfiguration: Equatable, Sendable {
+    /// The launchd label of the daemon job.
+    ///
+    /// This is the identity `launchctl` takes, and it is not the bundle identifier every
+    /// operator-facing surface shows. Anyone reaching for `launchctl bootout` needs this string, so
+    /// `axon status` prints it.
+    public static let daemonLabel = "dev.axon.daemon"
+
+    /// The launchd label of the one-shot job that finishes an update.
+    public static let updateFinisherLabel = "dev.axon.updater"
+
     public let label: String
     public let program: DaemonProgram
     public let socketPath: String
     public let environmentVariables: [String: String]
     public let standardOutPath: String
     public let standardErrorPath: String
+    /// Everything after the program path in `ProgramArguments`.
+    public let arguments: [String]
+    /// Whether launchd restarts the job when it exits. The daemon is supervised; a one-shot job
+    /// that finishes an update must never be, or a failure would loop forever.
+    public let keepAlive: Bool
 
     public init(
-        label: String = "dev.axon.daemon",
+        label: String = LaunchAgentConfiguration.daemonLabel,
         program: DaemonProgram,
         socketPath: String = AxonEnvironment.defaultSocketPath,
         environment: [String: String] = ProcessInfo.processInfo.environment
@@ -107,6 +122,8 @@ public struct LaunchAgentConfiguration: Equatable, Sendable {
         self.label = label
         self.program = program
         self.socketPath = socketPath
+        self.arguments = program.arguments
+        self.keepAlive = true
 
         var daemonEnvironment: [String: String] = [
             "AXON_SOCKET_PATH": socketPath,
@@ -128,13 +145,58 @@ public struct LaunchAgentConfiguration: Equatable, Sendable {
         self.standardErrorPath = "\(logDirectory)/daemon.err.log"
     }
 
+    private init(
+        label: String,
+        program: DaemonProgram,
+        arguments: [String],
+        keepAlive: Bool,
+        socketPath: String,
+        environmentVariables: [String: String],
+        standardOutPath: String,
+        standardErrorPath: String
+    ) {
+        self.label = label
+        self.program = program
+        self.arguments = arguments
+        self.keepAlive = keepAlive
+        self.socketPath = socketPath
+        self.environmentVariables = environmentVariables
+        self.standardOutPath = standardOutPath
+        self.standardErrorPath = standardErrorPath
+    }
+
+    /// The one-shot job that re-registers the daemon from a newly placed bundle.
+    ///
+    /// Re-registration means booting out `dev.axon.daemon`, and the app performing the update *is*
+    /// that job's process: it cannot survive its own bootout to issue the follow-up bootstrap. A
+    /// separate launchd job is precisely the thing that outlives it. It runs the new bundle's CLI
+    /// with `daemon install`, which is the operation the field report proved carries both privacy
+    /// grants across with no prompt, and it is emphatically not kept alive — it runs once and is
+    /// reaped by the successor it started.
+    public static func updateFinisher(
+        cliPath: String,
+        socketPath: String = AxonEnvironment.defaultSocketPath
+    ) -> LaunchAgentConfiguration {
+        let logDirectory = "\(NSHomeDirectory())/Library/Logs/Axon"
+        return LaunchAgentConfiguration(
+            label: updateFinisherLabel,
+            program: DaemonProgram(executablePath: cliPath, identity: .executablePath),
+            arguments: ["daemon", "install"],
+            keepAlive: false,
+            socketPath: socketPath,
+            environmentVariables: ["AXON_SOCKET_PATH": socketPath],
+            standardOutPath: "\(logDirectory)/updater.out.log",
+            standardErrorPath: "\(logDirectory)/updater.err.log"
+        )
+    }
+
     public var propertyListObject: [String: Any] {
         [
             "Label": label,
-            "ProgramArguments": [program.executablePath] + program.arguments,
+            "ProgramArguments": [program.executablePath] + arguments,
             "EnvironmentVariables": environmentVariables,
             "RunAtLoad": true,
-            "KeepAlive": true,
+            "KeepAlive": keepAlive,
             "LimitLoadToSessionType": "Aqua",
             "ProcessType": "Interactive",
             "StandardOutPath": standardOutPath,
@@ -169,6 +231,42 @@ public struct LaunchAgentManager {
             .appendingPathComponent("Library/LaunchAgents/\(configuration.label).plist")
         self.fileManager = fileManager
         self.runProcess = runProcess
+    }
+
+    /// A manager for the one-shot update finisher, sharing this type's plist and launchctl paths.
+    public static func updateFinisher(
+        cliPath: String,
+        socketPath: String = AxonEnvironment.defaultSocketPath,
+        plistPath: URL? = nil,
+        fileManager: FileManager = .default,
+        runProcess: @escaping ([String]) throws -> ProcessResult = LaunchAgentManager.runLaunchctl(arguments:)
+    ) -> LaunchAgentManager {
+        LaunchAgentManager(
+            configuration: LaunchAgentConfiguration.updateFinisher(cliPath: cliPath, socketPath: socketPath),
+            plistPath: plistPath,
+            fileManager: fileManager,
+            runProcess: runProcess
+        )
+    }
+
+    /// Hands the rest of the update to launchd and returns.
+    ///
+    /// The caller does not terminate itself afterwards. `daemon install` bootstraps, boots out, and
+    /// bootstraps again; that bootout is what retires this process, at the moment its successor is
+    /// ready to take the socket.
+    public static func armUpdateFinisher(
+        cliPath: String,
+        socketPath: String = AxonEnvironment.defaultSocketPath
+    ) throws {
+        try updateFinisher(cliPath: cliPath, socketPath: socketPath).start()
+    }
+
+    /// Clears the finisher job, which the successor calls once it is serving.
+    ///
+    /// Idempotent and harmless when nothing is registered: the scaffolding of an update is the
+    /// successor's to tidy, and a job that never ran leaves nothing behind to find.
+    public static func reapUpdateFinisher(fileManager: FileManager = .default) {
+        try? updateFinisher(cliPath: "/usr/bin/false", fileManager: fileManager).uninstall()
     }
 
     public func install() throws {
