@@ -202,29 +202,22 @@ fi
 /usr/bin/codesign "${SIGN_ARGS[@]}" "$DAEMON_APP_DIR"
 
 # Named with the version and the target, matching the Rust archives, so a consumer pinning a
-# release can name every artifact it needs without guessing. The staging directory keeps the bare
-# version so the Homebrew cask's in-archive paths stay stable.
+# release can name every artifact it needs without guessing. The archive root is the app itself:
+# extracting it yields one Axon.app to drag into /Applications, where Finder offers a replace.
 ZIP_PATH="$DIST_DIR/Axon-$VERSION-macos-aarch64.zip"
-STAGING_DIR="$DIST_DIR/Axon-$VERSION"
-rm -f "$ZIP_PATH"
-rm -rf "$STAGING_DIR"
-mkdir -p "$STAGING_DIR"
-cp -R "$DAEMON_APP_DIR" "$STAGING_DIR/$DAEMON_APP_NAME.app"
-cp -R "$EDITOR_APP_DIR" "$STAGING_DIR/$EDITOR_APP_NAME.app"
-(cd "$DIST_DIR" && /usr/bin/ditto -c -k --norsrc --noextattr --keepParent "Axon-$VERSION" "$ZIP_PATH")
+archive_app() {
+  rm -f "$ZIP_PATH"
+  (cd "$DIST_DIR" && /usr/bin/ditto -c -k --norsrc --noextattr --keepParent "$DAEMON_APP_NAME.app" "$ZIP_PATH")
+}
+archive_app
 
 if [[ -n "${AXON_NOTARY_PROFILE:-}" ]]; then
   /usr/bin/xcrun notarytool submit "$ZIP_PATH" \
     --keychain-profile "$AXON_NOTARY_PROFILE" \
     --wait
+  # The outer bundle is the only stapling target: its ticket covers the nested editor.
   /usr/bin/xcrun stapler staple "$DAEMON_APP_DIR"
-  /usr/bin/xcrun stapler staple "$EDITOR_APP_DIR"
-  rm -f "$ZIP_PATH"
-  rm -rf "$STAGING_DIR"
-  mkdir -p "$STAGING_DIR"
-  cp -R "$DAEMON_APP_DIR" "$STAGING_DIR/$DAEMON_APP_NAME.app"
-  cp -R "$EDITOR_APP_DIR" "$STAGING_DIR/$EDITOR_APP_NAME.app"
-  (cd "$DIST_DIR" && /usr/bin/ditto -c -k --norsrc --noextattr --keepParent "Axon-$VERSION" "$ZIP_PATH")
+  archive_app
 elif [[ -n "${AXON_NOTARY_KEY_PATH:-}" || -n "${AXON_NOTARY_KEY_ID:-}" || -n "${AXON_NOTARY_ISSUER:-}" ]]; then
   if [[ -z "${AXON_NOTARY_KEY_PATH:-}" || -z "${AXON_NOTARY_KEY_ID:-}" || -z "${AXON_NOTARY_ISSUER:-}" ]]; then
     printf 'AXON_NOTARY_KEY_PATH, AXON_NOTARY_KEY_ID, and AXON_NOTARY_ISSUER must be set together\n' >&2
@@ -236,13 +229,7 @@ elif [[ -n "${AXON_NOTARY_KEY_PATH:-}" || -n "${AXON_NOTARY_KEY_ID:-}" || -n "${
     --issuer "$AXON_NOTARY_ISSUER" \
     --wait
   /usr/bin/xcrun stapler staple "$DAEMON_APP_DIR"
-  /usr/bin/xcrun stapler staple "$EDITOR_APP_DIR"
-  rm -f "$ZIP_PATH"
-  rm -rf "$STAGING_DIR"
-  mkdir -p "$STAGING_DIR"
-  cp -R "$DAEMON_APP_DIR" "$STAGING_DIR/$DAEMON_APP_NAME.app"
-  cp -R "$EDITOR_APP_DIR" "$STAGING_DIR/$EDITOR_APP_NAME.app"
-  (cd "$DIST_DIR" && /usr/bin/ditto -c -k --norsrc --noextattr --keepParent "Axon-$VERSION" "$ZIP_PATH")
+  archive_app
 fi
 
 SHA256="$(/usr/bin/shasum -a 256 "$ZIP_PATH" | awk '{ print $1 }')"
@@ -267,8 +254,7 @@ cask "axon" do
 
   depends_on macos: ">= :sonoma"
 
-  app "Axon-$VERSION/Axon.app"
-  app "Axon-$VERSION/Axon Editor.app"
+  app "Axon.app"
   binary "#{appdir}/Axon.app/Contents/Resources/bin/axon"
 
   zap trash: [
