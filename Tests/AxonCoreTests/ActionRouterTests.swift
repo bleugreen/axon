@@ -646,6 +646,91 @@ private func stabilitySnapshot(id: String, title: String) -> AppSnapshot {
     #expect(response.error?.message.contains("2 candidates") == true)
 }
 
+@Test func clickRequestNamesOpaqueNodesAndTheRemedyWhenAXTextLocationIsMissing() {
+    let router = CommandRouter(
+        captureSnapshot: { _, _ in actionOpaqueTextLocationFixtureSnapshot() },
+        actions: PrimitiveActionHandlers(
+            clickPoint: { _, _ in
+                Issue.record("missing text location should not dispatch a click")
+                return PrimitiveActionResult(action: "click", target: "bad", strategy: "bad", success: false)
+            }
+        )
+    )
+
+    let response = router.handle(JSONRPCRequest(
+        id: .string("click-location-opaque"),
+        method: "click",
+        params: .object([
+            "target": .object([
+                "location": .object([
+                    "app": .string("com.example.App"),
+                    "text": .string("719 comments"),
+                    "source": .string("ax")
+                ])
+            ])
+        ])
+    ))
+
+    let message = response.error?.message ?? ""
+    #expect(response.error?.code == -32602)
+    #expect(message.contains("did not resolve uniquely: missing"))
+    #expect(message.contains("2 visible nodes expose no accessibility text"))
+    #expect(message.contains("source:'ax' does not fall back"))
+    #expect(message.contains("source:'screenshot'"))
+    #expect(message.contains("source:'auto'"))
+}
+
+@Test func clickRequestResolvesTheSameOpaqueTargetThroughTheDocumentedAutoFallback() {
+    let router = CommandRouter(
+        captureSnapshot: { _, screenshot in
+            actionOpaqueTextLocationFixtureSnapshot(screenshot: screenshot ? EncodedScreenshot(
+                mediaType: "image/png",
+                base64Data: "fake",
+                width: 800,
+                height: 600
+            ) : nil)
+        },
+        actions: PrimitiveActionHandlers(
+            clickPoint: { point, _ in
+                #expect(point == ActionPoint(x: 225, y: 200))
+                return PrimitiveActionResult(
+                    action: "click",
+                    target: point.targetDescription,
+                    strategy: "CGEvent",
+                    success: true,
+                    details: ["point": point.jsonValue]
+                )
+            }
+        ),
+        recognizeText: { _ in
+            [
+                RecognizedTextObservation(
+                    text: "719 comments",
+                    boundingBox: NormalizedTextBoundingBox(x: 0.25, y: 0.60, width: 0.20, height: 0.10),
+                    confidence: 0.95
+                )
+            ]
+        }
+    )
+
+    let response = router.handle(JSONRPCRequest(
+        id: .string("click-location-auto-fallback"),
+        method: "click",
+        params: .object([
+            "target": .object([
+                "location": .object([
+                    "app": .string("com.example.App"),
+                    "text": .string("719 comments"),
+                    "source": .string("auto")
+                ])
+            ])
+        ])
+    ))
+
+    #expect(response.error == nil)
+    #expect(response.result?["action"]?["locationResolutions"]?[0]?["best"]?["source"] == .string("screenshot"))
+}
+
 @Test func clickRequestRedactsDeterministicSecretsInAmbiguousTextLocationError() {
     let token = "sk-proj-abcdef1234567890SECRET"
     let router = CommandRouter(
@@ -1245,6 +1330,31 @@ private func actionTextLocationFixtureSnapshot(
                     AXNode(
                         role: "AXStaticText",
                         title: label,
+                        frame: AXFrame(x: Double(100 + index * 100), y: 50, width: 80, height: 20)
+                    )
+                }
+            )
+        ],
+        screenshot: screenshot
+    )
+}
+
+/// A browser-shaped tree: links with correct roles and frames that expose no readable
+/// text in any attribute Axon matches, so `source: "ax"` can never reach them.
+private func actionOpaqueTextLocationFixtureSnapshot(
+    screenshot: EncodedScreenshot? = nil
+) -> AppSnapshot {
+    AppSnapshot(
+        id: SnapshotID("action-opaque-text-location-fixture"),
+        app: AppIdentity(bundleIdentifier: "com.example.App", name: "Example", processIdentifier: 42),
+        windows: [
+            AXNode(
+                role: "AXWindow",
+                title: "Main",
+                frame: AXFrame(x: 50, y: 60, width: 500, height: 400),
+                children: (0..<2).map { index in
+                    AXNode(
+                        role: "AXLink",
                         frame: AXFrame(x: Double(100 + index * 100), y: 50, width: 80, height: 20)
                     )
                 }

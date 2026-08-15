@@ -105,6 +105,19 @@ import Testing
     #expect(docs.contains("```text\n\(ToolSurfaceSpec.mcpSignatureBlock)\n```"))
 }
 
+@Test func textLocationSchemaPublishesFallbackAndWebContentSemantics() throws {
+    let click = try #require(ToolSurfaceSpec.tools.first { $0.name == "click" })
+    let encoded = String(
+        decoding: try JSONEncoder().encode(ToolSurfaceSpec.inputSchema(for: click)),
+        as: UTF8.self
+    )
+
+    #expect(encoded.contains("Text source. Defaults to auto.") == false)
+    #expect(encoded.contains("falls back to screenshot OCR when accessibility matches nothing"))
+    #expect(encoded.contains("ax and screenshot use only that source and never fall back"))
+    #expect(encoded.contains("Rendered web content frequently exposes no accessibility text"))
+}
+
 @Test func toolTargetParsesAllTargetKinds() throws {
     #expect(try ToolTarget(jsonValue: .object(["app": .string("Example"), "name": .string("main/submit")])) == .semanticName(app: "Example", name: "main/submit"))
     #expect(try ToolTarget(jsonValue: .object([
