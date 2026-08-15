@@ -4,7 +4,7 @@
 //! exposes a small, synchronous seam: callbacks publish complete frames into [`LatestFrame`], while
 //! the backend reads snapshots without ever waiting on a PipeWire callback.
 
-use axon_core::{AppQuery, Rect, Screenshot};
+use axon_core::{Rect, Screenshot};
 use image::{DynamicImage, ImageFormat, RgbaImage, imageops::FilterType};
 use serde::{Deserialize, Serialize};
 use std::{
@@ -52,37 +52,8 @@ impl std::fmt::Debug for RestoreToken {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(tag = "kind", content = "value", rename_all = "snake_case")]
-pub enum AppAuthorizationKey {
-    Identifier(String),
-    Name(String),
-    ProcessId(u32),
-}
-
-impl AppAuthorizationKey {
-    pub fn from_query(query: &AppQuery) -> Option<Self> {
-        query
-            .identifier
-            .as_deref()
-            .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(|value| Self::Identifier(value.to_owned()))
-            .or_else(|| {
-                query
-                    .name
-                    .as_deref()
-                    .map(str::trim)
-                    .filter(|value| !value.is_empty())
-                    .map(|value| Self::Name(value.to_owned()))
-            })
-            .or_else(|| query.process_id.map(|value| Self::ProcessId(value.into())))
-    }
-}
-
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 struct TokenRecord {
-    app: AppAuthorizationKey,
     source_id: Option<String>,
     token: RestoreToken,
 }
@@ -137,21 +108,13 @@ impl TokenStore {
         Ok(file.records)
     }
 
-    pub fn load(
-        &self,
-        app: &AppAuthorizationKey,
-    ) -> io::Result<Option<(Option<String>, RestoreToken)>> {
-        Ok(self
-            .records()?
-            .into_iter()
-            .find(|record| &record.app == app)
-            .map(|record| (record.source_id, record.token)))
+    pub fn load(&self) -> io::Result<Option<(Option<String>, RestoreToken)>> {
+        Ok(self.records()?.into_iter().next().map(|record| (record.source_id, record.token)))
     }
 
     pub fn replace(
         &self,
-        app: AppAuthorizationKey,
-        source_id: Option<&str>,
+            source_id: Option<&str>,
         token: RestoreToken,
     ) -> io::Result<()> {
         let mut records = match self.records() {
@@ -163,9 +126,8 @@ impl TokenStore {
             }
             Err(error) => return Err(error),
         };
-        records.retain(|record| record.app != app);
+        records.clear();
         records.push(TokenRecord {
-            app,
             source_id: source_id.map(str::to_owned),
             token,
         });
