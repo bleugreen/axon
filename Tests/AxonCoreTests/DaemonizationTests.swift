@@ -25,7 +25,7 @@ import Testing
         .appendingPathComponent("axon-paired-editor-\(UUID().uuidString)")
     defer { try? FileManager.default.removeItem(at: root) }
     let daemonURL = root.appendingPathComponent("Axon.app")
-    let editorURL = root.appendingPathComponent("Axon Editor.app")
+    let editorURL = daemonURL.appendingPathComponent(AppBundle.nestedEditorRelativePath)
 
     try makeAppBundle(at: daemonURL, identifier: AppBundle.axonDaemonIdentifier, version: "0.3.4", executable: "Axon")
     try makeAppBundle(at: editorURL, identifier: AppBundle.axonEditorIdentifier, version: "0.3.4", executable: "AxonEditor")
@@ -48,6 +48,42 @@ import Testing
 
     try FileManager.default.removeItem(at: editorURL)
     #expect(AppBundle.pairedEditorURL(beside: daemonURL) == nil)
+
+    // A sibling editor is the pre-nesting layout and is no longer the pair.
+    try makeAppBundle(
+        at: root.appendingPathComponent("Axon Editor.app"),
+        identifier: AppBundle.axonEditorIdentifier,
+        version: "0.3.4",
+        executable: "AxonEditor"
+    )
+    #expect(AppBundle.pairedEditorURL(beside: daemonURL) == nil)
+}
+
+@Test func pairedDaemonCLIWalksOutOfTheNestedEditorToTheEnclosingAxonApp() throws {
+    let root = FileManager.default.temporaryDirectory
+        .appendingPathComponent("axon-paired-cli-\(UUID().uuidString)")
+    defer { try? FileManager.default.removeItem(at: root) }
+    let daemonURL = root.appendingPathComponent("Axon.app")
+    let editorURL = daemonURL.appendingPathComponent(AppBundle.nestedEditorRelativePath)
+    let cliURL = daemonURL.appendingPathComponent(AppBundle.bundledCLIRelativePath)
+
+    try makeAppBundle(at: daemonURL, identifier: AppBundle.axonDaemonIdentifier, version: "0.3.6", executable: "Axon")
+    try makeAppBundle(at: editorURL, identifier: AppBundle.axonEditorIdentifier, version: "0.3.6", executable: "AxonEditor")
+
+    // Without the CLI in place there is nothing to return, even though the bundle is Axon's.
+    #expect(AppBundle.pairedDaemonCLIURL(from: editorURL) == nil)
+
+    try FileManager.default.createDirectory(at: cliURL.deletingLastPathComponent(), withIntermediateDirectories: true)
+    FileManager.default.createFile(atPath: cliURL.path, contents: Data())
+    try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: cliURL.path)
+    #expect(AppBundle.pairedDaemonCLIURL(from: editorURL)?.path == cliURL.path)
+
+    // A consumer embedding the editor in their own app is not Axon and gets nothing.
+    let foreignURL = root.appendingPathComponent("Consumer.app")
+    let foreignEditor = foreignURL.appendingPathComponent(AppBundle.nestedEditorRelativePath)
+    try makeAppBundle(at: foreignURL, identifier: "com.example.consumer", version: "1.0", executable: "Consumer")
+    try makeAppBundle(at: foreignEditor, identifier: AppBundle.axonEditorIdentifier, version: "0.3.6", executable: "AxonEditor")
+    #expect(AppBundle.pairedDaemonCLIURL(from: foreignEditor) == nil)
 }
 
 private func makeAppBundle(at url: URL, identifier: String, version: String, executable: String) throws {

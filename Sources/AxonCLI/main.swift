@@ -314,8 +314,7 @@ private func openAxnEditor(arguments: [String]) throws {
     process.executableURL = URL(fileURLWithPath: "/usr/bin/open")
     if let daemonURL = bundledAxonAppURL() {
         guard let editorURL = AppBundle.pairedEditorURL(beside: daemonURL) else {
-            let expected = daemonURL.deletingLastPathComponent()
-                .appendingPathComponent("Axon Editor.app", isDirectory: true)
+            let expected = daemonURL.appendingPathComponent(AppBundle.nestedEditorRelativePath, isDirectory: true)
             throw CLIError.missingArguments(
                 "The matching Axon Editor.app was not found at \(expected.path). Reinstall Axon to restore the paired applications."
             )
