@@ -66,8 +66,8 @@ public struct AppBundle: Equatable, Sendable {
         fileManager: FileManager = .default
     ) -> URL? {
         var daemonBundleURL = editorBundleURL.standardizedFileURL
-        // Contents/Library/Applications/Axon Editor.app -> the enclosing .app
-        for _ in 0..<3 {
+        // Axon Editor.app / Applications / Library / Contents -> the enclosing .app
+        for _ in 0..<4 {
             daemonBundleURL.deleteLastPathComponent()
         }
         guard daemonBundleURL.pathExtension == "app",
