@@ -552,7 +552,7 @@ private func stabilitySnapshot(id: String, title: String) -> AppSnapshot {
         actions: PrimitiveActionHandlers(
             click: { handle, _ in
                 clickedHandle = handle
-                return PrimitiveActionResult(
+                return PrimitiveActionResult.dispatched(
                     action: "AXPress",
                     target: handle,
                     strategy: "AXAction",
