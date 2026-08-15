@@ -1,0 +1,200 @@
+#!/usr/bin/env bash
+# Watches one Axon daemon's memory under a named load, on a real desktop session.
+#
+# This exists because the growth it hunts was twice observed only as a corpse: a journal line
+# saying the kernel had killed the daemon and a peak figure with no curve behind it. An arm here
+# produces the curve -- sampled from before the socket binds, at 100 ms, written to disk as it
+# goes -- so the next occurrence is attributed rather than merely survived.
+#
+# The daemon is always launched inside a transient unit with a hard memory bound and swap denied.
+# That is not a convenience: this machine class hosts CI runners beside the desktop, and an
+# unbounded probe has taken a runner down with it twice. `MemorySwapMax=0` matters as much as the
+# cap, because the instance that died at 1 GiB pushed 276 MB into swap on the way, which thrashes
+# every other tenant of the machine before the kill arrives.
+#
+# The probe daemon gets its own XDG_RUNTIME_DIR with the session's sockets symlinked in. That
+# keeps it off the installed daemon's socket path -- `serve` refuses to start when one is already
+# bound -- and it reproduces the arrangement both observed incidents ran under.
+#
+# usage: scripts/linux-memory-probe/run <arm> [options]
+#
+# arms:
+#   idle      launch and withhold every request. Settles whether growth is startup-side.
+#   look      one `look` at --app, then withhold. Settles whether one large walk is sufficient.
+#   capture   one `capture_screen`, with `look` calls issued during its interactive window.
+#             Doubles as the check on whether `look` starves behind a blocking capture.
+#
+# options:
+#   --binary PATH   daemon under test (default rust/target/release/axon-linux)
+#   --app NAME      application for the look arm (default gnome-shell)
+#   --depth N       look childDepth (default 30, matching the observed incident's calls)
+#   --seconds N     how long to watch (default 30)
+#   --out DIR       where the CSV and log land (default under TMPDIR)
+#   --max SIZE      MemoryMax for the probe unit (default 1G)
+set -euo pipefail
+
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+repository="$(cd "$here/../.." && pwd)"
+
+arm=""
+binary="$repository/rust/target/release/axon-linux"
+app="gnome-shell"
+depth=30
+seconds=30
+outdir=""
+memory_max="1G"
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    idle|look|capture) arm="$1"; shift ;;
+    --binary) binary="$2"; shift 2 ;;
+    --app) app="$2"; shift 2 ;;
+    --depth) depth="$2"; shift 2 ;;
+    --seconds) seconds="$2"; shift 2 ;;
+    --out) outdir="$2"; shift 2 ;;
+    --max) memory_max="$2"; shift 2 ;;
+    *) printf 'unknown argument: %s\n' "$1" >&2; exit 2 ;;
+  esac
+done
+
+[[ -n "$arm" ]] || { printf 'usage: %s <idle|look|capture> [options]\n' "$0" >&2; exit 2; }
+[[ -x "$binary" ]] || { printf 'not an executable daemon: %s\n' "$binary" >&2; exit 2; }
+command -v systemd-run >/dev/null || { printf 'systemd-run is required\n' >&2; exit 1; }
+
+stamp="$(date +%Y%m%d-%H%M%S)"
+outdir="${outdir:-${TMPDIR:-/tmp}/axn-memory-probe/$arm-$stamp}"
+mkdir -p "$outdir"
+csv="$outdir/memory.csv"
+log="$outdir/probe.log"
+
+# Everything the operator would otherwise have to reconstruct from shell history.
+exec > >(tee -a "$log") 2>&1
+
+uid="$(id -u)"
+session_runtime="${AXON_PROBE_SESSION_RUNTIME_DIR:-/run/user/$uid}"
+[[ -d "$session_runtime" ]] || { printf 'no session runtime dir at %s\n' "$session_runtime" >&2; exit 1; }
+
+# The desktop's display names are read off the session rather than inherited, because this is
+# normally run over ssh where none of them are set.
+wayland="${WAYLAND_DISPLAY:-}"
+if [[ -z "$wayland" ]]; then
+  for candidate in "$session_runtime"/wayland-*; do
+    [[ -S "$candidate" ]] && wayland="$(basename "$candidate")" && break
+  done
+fi
+x11="${DISPLAY:-}"
+if [[ -z "$x11" ]]; then
+  for candidate in /tmp/.X11-unix/X*; do
+    [[ -S "$candidate" ]] && x11=":${candidate##*/X}" && break
+  done
+fi
+
+staging="$outdir/staging"
+runtime="$staging/run"
+state="$staging/state"
+mkdir -p "$runtime" "$state"
+chmod 700 "$runtime"
+for name in "$wayland" pipewire-0 bus; do
+  [[ -n "$name" && -e "$session_runtime/$name" ]] && ln -sfn "$session_runtime/$name" "$runtime/$name"
+done
+
+unit="axn188-$arm"
+socket="$runtime/axon-v1.sock"
+
+stop_probe() {
+  systemctl --user stop "$unit" >/dev/null 2>&1 || true
+}
+trap stop_probe EXIT
+
+# A unit left failed from an earlier arm refuses to start again under the same name.
+systemctl --user reset-failed "$unit" >/dev/null 2>&1 || true
+systemctl --user stop "$unit" >/dev/null 2>&1 || true
+
+printf 'arm            %s\n' "$arm"
+printf 'binary         %s (%s)\n' "$binary" "$("$binary" version 2>/dev/null || echo 'version unknown')"
+printf 'unit           %s (MemoryMax=%s, MemorySwapMax=0)\n' "$unit" "$memory_max"
+printf 'runtime dir    %s -> sockets from %s\n' "$runtime" "$session_runtime"
+printf 'display        wayland=%s x11=%s\n' "${wayland:-none}" "${x11:-none}"
+printf 'output         %s\n\n' "$outdir"
+
+# The sampler starts first. The unit does not exist yet, which is fine and is the point: it polls
+# for the cgroup, so the first rows cover the window between exec and the socket appearing.
+python3 "$here/sample.py" --unit "$unit" --out "$csv" --seconds "$seconds" &
+sampler=$!
+
+systemd-run --user --unit="$unit" \
+  -p MemoryMax="$memory_max" \
+  -p MemorySwapMax=0 \
+  -p MemoryAccounting=yes \
+  --setenv=XDG_RUNTIME_DIR="$runtime" \
+  --setenv=XDG_STATE_HOME="$state" \
+  --setenv=DBUS_SESSION_BUS_ADDRESS="unix:path=$runtime/bus" \
+  --setenv=XDG_SESSION_TYPE="${XDG_SESSION_TYPE:-wayland}" \
+  ${wayland:+--setenv=WAYLAND_DISPLAY="$wayland"} \
+  ${x11:+--setenv=DISPLAY="$x11"} \
+  "$binary" serve >/dev/null
+
+ask() {
+  python3 "$here/client.py" --socket "$socket" "$@" || true
+}
+
+# Readiness is the health round trip, not the unit's state: Type=simple reports started as soon
+# as the process execs, which is earlier than the daemon can answer.
+ready=0
+for _ in $(seq 1 100); do
+  if [[ -S "$socket" ]] && python3 "$here/client.py" --socket "$socket" --method health --timeout 5 >/dev/null 2>&1; then
+    ready=1
+    break
+  fi
+  sleep 0.2
+done
+printf 'daemon ready:  %s\n\n' "$([[ "$ready" == 1 ]] && echo yes || echo 'NO - it never answered health')"
+
+case "$arm" in
+  idle)
+    printf 'withholding every request for the whole window\n'
+    ;;
+  look)
+    ask --method look --params "{\"app\":\"$app\",\"childDepth\":$depth}" --label "look $app"
+    printf 'withholding every further request\n'
+    ;;
+  capture)
+    ask --method capture_screen --params '{}' --label capture_screen &
+    capture_pid=$!
+    # Issued while the capture holds the interactive window: a tool call that cannot be answered
+    # during a capture is the concurrency defect, and it costs nothing to measure here.
+    for attempt in 1 2 3 4 5 6 7 8; do
+      sleep 1.5
+      ask --method look --params "{\"app\":\"$app\",\"childDepth\":2}" --label "look during capture #$attempt"
+    done
+    wait "$capture_pid" || true
+    ;;
+esac
+
+wait "$sampler" || true
+
+printf '\n--- unit result ---\n'
+systemctl --user show "$unit" -p Result -p MemoryPeak -p MemoryCurrent -p NRestarts 2>/dev/null || true
+printf '\n--- curve ---\n'
+python3 - "$csv" <<'SUMMARY'
+import csv, sys
+
+rows = list(csv.DictReader(open(sys.argv[1])))
+def series(column):
+    return [(int(r["elapsed_ms"]), int(r[column])) for r in rows if r[column]]
+
+for column, unit in (("cgroup_bytes", 1 << 20), ("rss_kb", 1 << 10), ("threads", 1), ("fds", 1)):
+    points = series(column)
+    if not points:
+        print(f"{column:<16} no samples")
+        continue
+    first, last, peak = points[0][1], points[-1][1], max(v for _, v in points)
+    span = max((points[-1][0] - points[0][0]) / 1000.0, 0.001)
+    scale = "MiB" if unit == 1 << 20 else ("MiB" if unit == 1 << 10 else "")
+    divide = unit if unit > 1 else 1
+    print(
+        f"{column:<16} first={first/divide:.1f}{scale} last={last/divide:.1f}{scale} "
+        f"peak={peak/divide:.1f}{scale} rate={(last-first)/divide/span:.2f}{scale}/s over {span:.1f}s"
+    )
+SUMMARY
+printf '\nCSV: %s\nlog: %s\n' "$csv" "$log"
