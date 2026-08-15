@@ -52,10 +52,7 @@ operation, and it is never silently replaced with global wheel input.
 carries the Linux live loop alone. Its two compositor-specific findings are
 separate claims with separate evidence: synthetic input is refused because
 the compositor forbids it (live-verified), and AT-SPI Component geometry is
-untrustworthy for GTK4 descendants (spike-recorded, dated). Mutter advertises
-the RemoteDesktop and ScreenCast portals; nothing about unattended
-authorization is proven, so portals keep screenshots and synthetic input out
-of the supported columns.
+untrustworthy for GTK4 descendants (spike-recorded, dated). Mutter advertises the RemoteDesktop and ScreenCast portals. AXN-172 measured WINDOW authorization and restore-token behavior, but the stream metadata has no application identity. Axon therefore keeps app-scoped `look` screenshots refused while the distinct `capture_screen` operation returns only an honestly labeled user-authorized source. Tokens are optimistic restoration hints, never global health proof.
 
 One thing about that runner is not a property of GNOME and must not be read as
 one: a screen reader runs on it, so its `toolkit-accessibility` is already true
@@ -470,9 +467,7 @@ than equating “Linux” with one uniform tree.
   coordinates with independent axis scaling. Missing engines or language data,
   timeouts, malformed output, and execution failures are explicit OCR
   unavailability while semantic AT-SPI remains usable.
-- Screenshots under Wayland require the screenshot or ScreenCast portal and user
-  authorization. Lack of portal access must not prevent semantic AT-SPI capture,
-  but it restricts screenshot, OCR, and screenshot-coordinate capabilities.
+- Application screenshots under Wayland remain unavailable because ScreenCast source metadata cannot be bound to an AT-SPI application. `capture_screen` separately requests a user-authorized WINDOW source, persists its restore token immediately after successful Start, and reports timeout, cancellation, or stale restoration as authorization-required. Portal access never gates semantic AT-SPI capture or makes global screenshot health usable.
 - `save` can still serialize calls already known to Axon, but recording user
   input into a session depends on global observation and may therefore be
   unavailable on Wayland. The capability report must distinguish these facets.

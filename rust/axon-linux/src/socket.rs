@@ -281,8 +281,8 @@ pub fn serve() -> io::Result<()> {
         }
     }
     let backend = LinuxBackend::start().map_err(|error| io::Error::other(error.to_string()))?;
-    // Cache the build/static capabilities. Health replaces only screenshot from the live provider;
-    // this avoids rebuilding anything that could require AT-SPI while preserving portal changes.
+    // Cache build/static capabilities. Health replaces screenshot from the session-specific X11
+    // provider; the separate ScreenCast operation never makes app-scoped screenshot health green.
     let reported: Vec<CapabilityInfo> = backend.capabilities().unwrap_or_default();
     let listener = UnixListener::bind(&path)?;
     fs::set_permissions(&path, fs::Permissions::from_mode(0o600))?;
