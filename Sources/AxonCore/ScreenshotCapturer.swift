@@ -47,12 +47,7 @@ public struct ScreenshotCapturer {
         // screen coordinate converts through this.
         return encode(
             scaledImage(image, maxDimension: maxEncodedDimension) ?? image,
-            sourceWindowFrame: AXFrame(
-                x: window.frame.origin.x,
-                y: window.frame.origin.y,
-                width: window.frame.size.width,
-                height: window.frame.size.height
-            )
+            sourceWindowFrame: window.frame.axFrame
         )
     }
 
@@ -80,7 +75,7 @@ public struct ScreenshotCapturer {
             }
 
             if let frame = axWindow.frame,
-               let match = windows.first(where: { $0.frame.isClose(to: frame.cgRect) }) {
+               let match = windows.first(where: { $0.frame.axFrame.isClose(to: frame) }) {
                 return match
             }
         }
@@ -246,17 +241,11 @@ private final class ScreenCaptureRuntimeState: @unchecked Sendable {
     }
 }
 
-private extension AXFrame {
-    var cgRect: CGRect {
-        CGRect(x: x, y: y, width: width, height: height)
-    }
-}
-
-private extension CGRect {
-    func isClose(to other: CGRect, tolerance: CGFloat = 4.0) -> Bool {
-        abs(origin.x - other.origin.x) <= tolerance &&
-            abs(origin.y - other.origin.y) <= tolerance &&
-            abs(size.width - other.size.width) <= tolerance &&
-            abs(size.height - other.size.height) <= tolerance
+extension CGRect {
+    /// The same rectangle in the vocabulary the rest of the module compares in. Capture and
+    /// Accessibility report window geometry in one coordinate space, and this is where that is
+    /// asserted once rather than at each comparison.
+    var axFrame: AXFrame {
+        AXFrame(x: origin.x, y: origin.y, width: size.width, height: size.height)
     }
 }

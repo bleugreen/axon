@@ -326,6 +326,19 @@ public extension AXFrame {
     func contains(x pointX: Double, y pointY: Double) -> Bool {
         pointX >= x && pointX < maxX && pointY >= y && pointY < maxY
     }
+
+    /// Whether two rectangles describe the same window position, within the tolerance capture
+    /// already uses to match an accessibility frame to the window it photographed.
+    ///
+    /// The two come from different subsystems — Accessibility and ScreenCaptureKit — which agree on
+    /// coordinate space but not always to the last fraction of a point, so identity here is
+    /// proximity rather than equality.
+    func isClose(to other: AXFrame, tolerance: Double = 4.0) -> Bool {
+        abs(x - other.x) <= tolerance
+            && abs(y - other.y) <= tolerance
+            && abs(width - other.width) <= tolerance
+            && abs(height - other.height) <= tolerance
+    }
 }
 
 public extension AXNode {

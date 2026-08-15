@@ -1325,58 +1325,52 @@ public final class AXPrimitiveActionExecutor {
         guard let process, let sourceWindowFrame else {
             return nil
         }
-        switch rung {
-        case .pixel:
-            // A targeted post reaches the application whatever is stacked above it, and the
-            // application converts the screen point through its own window. Occlusion is therefore
-            // not the question; whether the point still lands in one of that application's windows
-            // is.
-            return { self.windowContainmentFailure(point: point, process: process, sourceWindowFrame: sourceWindowFrame) }
-        case .semantic, .foreground:
-            // A global event goes to whatever the window server puts on top at that point, so the
-            // question is ownership: does the thing about to be clicked belong to the application
-            // the coordinates came from.
-            return { self.pointOwnershipFailure(point: point, process: process, sourceWindowFrame: sourceWindowFrame) }
-        }
+        // The same question at both rungs, because it is the same coordinate that has to still mean
+        // what it meant. Only *where* it is asked differs: the pixel rung asks once, immediately
+        // before a targeted post, while the foreground rung asks inside the settle budget, because
+        // an activation it just performed may still be moving the window.
+        //
+        // Ownership of whatever sits at the point is deliberately not a second question. A targeted
+        // post cannot be intercepted by a window stacked above, and the foreground rung is only ever
+        // reached for such a point after this check has already refused it, so asking would be
+        // answering something the ladder never gets to.
+        return { self.sourceWindowFailure(point: point, process: process, sourceWindowFrame: sourceWindowFrame) }
     }
 
-    private func windowContainmentFailure(point: CGPoint, process: pid_t, sourceWindowFrame: AXFrame) -> String? {
+    /// Whether the window these coordinates were computed against is still where it was, with the
+    /// point still inside it.
+    ///
+    /// Containment in *some* window of the application is not the same question and is not enough.
+    /// An application with several windows can have a different one covering the old coordinates —
+    /// two Safari windows is the configuration this whole guard came from — and a point that now
+    /// lands in a window it was never computed from is precisely a stale coordinate, not a valid
+    /// one. So the window has to be *the* window, identified by still reporting the frame the
+    /// coordinates were measured against.
+    ///
+    /// Nothing here is a claim about stacking. A window that is still exactly where it was, with
+    /// something else drawn on top, keeps its coordinates meaningful for a targeted post.
+    private func sourceWindowFailure(point: CGPoint, process: pid_t, sourceWindowFrame: AXFrame) -> String? {
         guard let frames = windowFrames(forProcess: process) else {
             // The window list did not answer. An unanswered query is not evidence that the point is
             // wrong, and refusing on it would ground a working click on a transient fault.
             return nil
         }
-        guard !frames.contains(where: { $0.contains(x: point.x, y: point.y) }) else {
+        guard let source = frames.first(where: { $0.isClose(to: sourceWindowFrame) }) else {
+            return discrepancy(
+                "the window these coordinates were computed against is no longer at that frame",
+                point: point,
+                sourceWindowFrame: sourceWindowFrame,
+                current: frames
+            )
+        }
+        guard !source.contains(x: point.x, y: point.y) else {
             return nil
         }
         return discrepancy(
-            "the point is outside every window of the target application",
+            "the point is outside the window these coordinates were computed against",
             point: point,
             sourceWindowFrame: sourceWindowFrame,
             current: frames
-        )
-    }
-
-    private func pointOwnershipFailure(point: CGPoint, process: pid_t, sourceWindowFrame: AXFrame) -> String? {
-        guard let hit = hitTest(point) else {
-            return "Pointer target validation failed: accessibility hit test was unresolvable"
-        }
-        guard let owner = processProvider(hit) else {
-            return discrepancy(
-                "the element at the point reports no owning process",
-                point: point,
-                sourceWindowFrame: sourceWindowFrame,
-                current: windowFrames(forProcess: process) ?? []
-            )
-        }
-        guard owner != process else {
-            return nil
-        }
-        return discrepancy(
-            "the point belongs to process \(owner) rather than the target application",
-            point: point,
-            sourceWindowFrame: sourceWindowFrame,
-            current: windowFrames(forProcess: process) ?? []
         )
     }
 
