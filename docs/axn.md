@@ -179,6 +179,27 @@ no `expects` postcondition can promote it to success. A step that *did* dispatch
 but could not prove its goal is exactly the case `expects` exists for, and a
 postcondition that verifies clears the declined escalation it no longer explains.
 
+A postcondition only gets that authority when it is *causal evidence*, and the
+runner establishes that before dispatching, not after. It probes the declared
+facts first: a fact that already holds beforehand says nothing about what the
+action caused, so an action whose expectation was already satisfied stays
+unproven no matter what a later read returns. Promoting it would manufacture
+exactly the false confidence `expects` exists to remove. Three rules ride along
+with the probe. A `changed` fact needs no probe, because it records its own
+before-state and compares against it. Only `click`, `keyboard`, `scroll`, and
+`drag` can be decided this way — `type` succeeds through exact `AXValue`
+readback, so its own result already answers what a postcondition would, and only
+an explicit `changed` fact may upgrade the keyboard fallback it degrades to. And
+a probe that cannot be *evaluated* — a malformed fact, an unknown kind, an
+observation that failed — is not an answer either: the step fails without
+dispatching, rather than treating the runner's own blindness as room for the
+action to act.
+
+This decision is one contract across platforms rather than one per backend.
+`schema/fixtures/axn/dispatch-verification.json` fixes every case of it, and the
+Swift and Rust runners are both tested against that same file, so `success` on a
+dispatched action means the same thing whichever backend produced it.
+
 `deliveryPolicy` needs no special version-2 syntax: `.axn` steps retain tool
 parameters verbatim, and the external `{"batch": ...}` envelope is untouched.
 
