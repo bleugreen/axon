@@ -2,10 +2,11 @@ import Foundation
 
 /// A macOS `.app` bundle on disk, found from a path inside it.
 ///
-/// Axon ships one bundle holding two executables: the daemon app at `Contents/MacOS/Axon` and the
-/// CLI at `Contents/Resources/bin/axon`. More than one decision depends on finding the enclosing
-/// bundle from whichever of them is running — locating the sibling editor app, and choosing the
-/// identity `daemon install` registers — so the walk lives here rather than once per caller.
+/// Axon ships one bundle. It holds two executables — the daemon app at `Contents/MacOS/Axon` and
+/// the CLI at `Contents/Resources/bin/axon` — and the editor app nested at
+/// `Contents/Library/Applications/Axon Editor.app`. More than one decision depends on finding one
+/// of these from another — locating the editor from the daemon, the CLI from the editor, and the
+/// identity `daemon install` registers — so the walks live here rather than once per caller.
 public struct AppBundle: Equatable, Sendable {
     /// The identifier of Axon's own daemon app bundle.
     ///
@@ -17,16 +18,26 @@ public struct AppBundle: Equatable, Sendable {
     /// The identifier of the sibling editor app bundle.
     public static let axonEditorIdentifier = "com.bleugreen.axon.editor"
 
-    /// Returns the editor shipped beside a daemon bundle only when both halves identify as Axon
-    /// and declare the same release version. Launch Services can retain older registrations for
-    /// years, so falling back by bundle identifier would silently pair a current recorder with an
-    /// incompatible editor.
+    /// Where the editor lives inside the daemon bundle.
+    ///
+    /// `Contents/Library/Applications` is the location macOS reserves for a nested application, and
+    /// nesting is what makes the pair inseparable: one bundle to drag, one bundle to replace, and
+    /// no way for the recorder and the editor to reach different versions.
+    public static let nestedEditorRelativePath = "Contents/Library/Applications/Axon Editor.app"
+
+    /// The relative path of the CLI inside the daemon bundle.
+    public static let bundledCLIRelativePath = "Contents/Resources/bin/axon"
+
+    /// Returns the editor nested inside a daemon bundle only when both halves identify as Axon and
+    /// declare the same release version. Launch Services can retain older registrations for years,
+    /// so falling back by bundle identifier would silently pair a current recorder with an
+    /// incompatible editor. Nesting makes version skew impossible to produce by installation, but
+    /// the guards still catch a bundle that was corrupted or assembled by hand.
     public static func pairedEditorURL(
         beside daemonBundleURL: URL,
         fileManager: FileManager = .default
     ) -> URL? {
-        let editorURL = daemonBundleURL.deletingLastPathComponent()
-            .appendingPathComponent("Axon Editor.app", isDirectory: true)
+        let editorURL = daemonBundleURL.appendingPathComponent(nestedEditorRelativePath, isDirectory: true)
         guard fileManager.fileExists(atPath: editorURL.path),
               let daemonInfo = infoDictionary(at: daemonBundleURL.appendingPathComponent("Contents/Info.plist")),
               let editorInfo = infoDictionary(at: editorURL.appendingPathComponent("Contents/Info.plist")),
@@ -41,6 +52,35 @@ public struct AppBundle: Equatable, Sendable {
             return nil
         }
         return editorURL
+    }
+
+    /// Returns the CLI of the daemon bundle that encloses a nested editor.
+    ///
+    /// The editor's only reliable route to a matching CLI is the bundle it was shipped inside. It
+    /// cannot ask Launch Services, which happily answers with whichever Axon it saw most recently,
+    /// and it cannot look for a sibling, which is the pre-nesting layout. Identity is checked on
+    /// the enclosing bundle for the same reason `DaemonProgram.resolved` checks it: any consumer
+    /// may embed the editor, and that layout is indistinguishable from Axon's own by shape alone.
+    public static func pairedDaemonCLIURL(
+        from editorBundleURL: URL,
+        fileManager: FileManager = .default
+    ) -> URL? {
+        var daemonBundleURL = editorBundleURL.standardizedFileURL
+        // Contents/Library/Applications/Axon Editor.app -> the enclosing .app
+        for _ in 0..<3 {
+            daemonBundleURL.deleteLastPathComponent()
+        }
+        guard daemonBundleURL.pathExtension == "app",
+              let bundle = AppBundle(bundleURL: daemonBundleURL, fileManager: fileManager),
+              bundle.identifier == axonDaemonIdentifier
+        else {
+            return nil
+        }
+        let cliURL = daemonBundleURL.appendingPathComponent(bundledCLIRelativePath)
+        guard fileManager.isExecutableFile(atPath: cliURL.path) else {
+            return nil
+        }
+        return cliURL
     }
 
     /// The bundle directory, such as `/Applications/Axon.app`.
@@ -61,14 +101,22 @@ public struct AppBundle: Equatable, Sendable {
         var url = URL(fileURLWithPath: path).deletingLastPathComponent()
         while url.path != "/" {
             if url.pathExtension == "app" {
-                return AppBundle(bundleURL: url, fileManager: fileManager)
+                return AppBundle(existingBundleURL: url, fileManager: fileManager)
             }
             url.deleteLastPathComponent()
         }
         return nil
     }
 
-    private init(bundleURL: URL, fileManager: FileManager) {
+    /// The bundle at `bundleURL`, or nil when nothing there declares itself one.
+    public init?(bundleURL: URL, fileManager: FileManager = .default) {
+        guard Self.infoDictionary(at: bundleURL.appendingPathComponent("Contents/Info.plist")) != nil else {
+            return nil
+        }
+        self.init(existingBundleURL: bundleURL, fileManager: fileManager)
+    }
+
+    private init(existingBundleURL bundleURL: URL, fileManager: FileManager) {
         path = bundleURL.path
         let info = Self.infoDictionary(at: bundleURL.appendingPathComponent("Contents/Info.plist"))
         identifier = info?["CFBundleIdentifier"] as? String
