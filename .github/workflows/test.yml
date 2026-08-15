@@ -193,6 +193,14 @@ jobs:
         with:
           components: clippy,rustfmt
 
+      # Workspace Clippy compiles the Linux backend too, so this otherwise platform-neutral job
+      # needs the same native build boundary as the dedicated Linux job.
+      - name: Install Linux workspace build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libdbus-1-dev libpipewire-0.3-dev libclang-dev clang pkg-config
+          echo "BINDGEN_EXTRA_CLANG_ARGS=-I/usr/include -I$(gcc -print-file-name=include)" >> "$GITHUB_ENV"
+
       - name: Cache Cargo
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:

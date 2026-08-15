@@ -2698,6 +2698,7 @@ impl Drop for ComApartment {
 #[derive(Clone)]
 struct CloneError {
     capability: Option<Capability>,
+    capability_reason_code: Option<&'static str>,
     operation: String,
     message: String,
 }
@@ -2708,6 +2709,18 @@ impl From<&BackendError> for CloneError {
                 capability, reason, ..
             } => Self {
                 capability: Some(*capability),
+                capability_reason_code: None,
+                operation: String::new(),
+                message: reason.clone(),
+            },
+            BackendError::CapabilityReason {
+                capability,
+                code,
+                reason,
+                ..
+            } => Self {
+                capability: Some(*capability),
+                capability_reason_code: Some(code),
                 operation: String::new(),
                 message: reason.clone(),
             },
@@ -2715,6 +2728,7 @@ impl From<&BackendError> for CloneError {
                 operation, message, ..
             } => Self {
                 capability: None,
+                capability_reason_code: None,
                 operation: operation.clone(),
                 message: message.clone(),
             },
@@ -2724,7 +2738,16 @@ impl From<&BackendError> for CloneError {
 impl From<CloneError> for BackendError {
     fn from(e: CloneError) -> Self {
         if let Some(capability) = e.capability {
-            cap(capability, e.message)
+            if let Some(code) = e.capability_reason_code {
+                BackendError::CapabilityReason {
+                    capability,
+                    code,
+                    reason: e.message,
+                    diagnostic: None,
+                }
+            } else {
+                cap(capability, e.message)
+            }
         } else {
             op(e.operation, e.message)
         }
