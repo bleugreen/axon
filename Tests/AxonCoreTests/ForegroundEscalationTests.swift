@@ -1,4 +1,5 @@
 import ApplicationServices
+import AppKit
 import CoreGraphics
 import Foundation
 import Testing
@@ -20,6 +21,9 @@ private final class FakeSession: @unchecked Sendable {
     /// Where the pointer ends up across a dispatch. For a global post that is the posting itself
     /// moving it; for a background post, which cannot, it is a hand on the physical mouse.
     var pointerAfterPost: CGPoint?
+    /// Successive answers to "where is the pointer", for the case where it is moving while Axon
+    /// reads it. Each reading consumes one; afterwards the session answers `pointer` again.
+    var pointerReadings: [CGPoint] = []
     private(set) var log: [String] = []
     private(set) var globalPosts = 0
     private(set) var targetedPosts: [pid_t] = []
@@ -32,6 +36,11 @@ private final class FakeSession: @unchecked Sendable {
         }
         frontmost = pid
         return true
+    }
+
+    func readPointer() -> CGPoint {
+        guard !pointerReadings.isEmpty else { return pointer }
+        return pointerReadings.removeFirst()
     }
 
     func movePointer(to point: CGPoint) {
@@ -99,7 +108,7 @@ private final class FakeSession: @unchecked Sendable {
                 )
             },
             activateProcess: { self.activate($0) },
-            pointerLocation: { self.pointer },
+            pointerLocation: { self.readPointer() },
             movePointer: { self.movePointer(to: $0) },
             settleTimeoutMs: 40,
             settleIntervalMs: 10
@@ -308,18 +317,18 @@ private func escalationStore() -> (AXElementStore, AXUIElement) {
 }
 
 @Test func backgroundDeliveryEvidenceAndVerdictComeFromOneReading() throws {
-    // Sampling the session twice let a result call the pointer unchanged in the same breath as the
-    // message saying it moved. Both now read the same observation.
+    // A pointer that is still moving answers two questions differently. Reading the session once
+    // for the verdict and again for the evidence let a result call the pointer unchanged in the
+    // same breath as the message saying it moved; both now quote the same observation.
     let session = FakeSession()
-    session.pointerAfterPost = CGPoint(x: 900, y: 900)
+    session.pointerReadings = [CGPoint(x: 500, y: 500), CGPoint(x: 900, y: 900)]
     let (store, element) = escalationStore()
     let executor = session.typeExecutor(store: store, element: element)
 
     let result = try executor.type(target: "fg:0", value: "hello", policy: .backgroundOnly)
-    session.pointer = CGPoint(x: 500, y: 500)
 
-    #expect(result.details["backgroundDelivery"]?["pointerUnchanged"] == .bool(false))
     #expect(result.message?.contains("moved the real pointer") == true)
+    #expect(result.details["backgroundDelivery"]?["pointerUnchanged"] == .bool(false))
 }
 
 @Test func foregroundEscalationWaitsForTheRaisedWindowBeforeValidatingTheTarget() throws {
