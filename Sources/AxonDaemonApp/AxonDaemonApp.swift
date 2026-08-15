@@ -485,8 +485,8 @@ final class AxonDaemonAppDelegate: NSObject, NSApplicationDelegate, @unchecked S
     }
 
     private func openEditor(url: URL) throws {
-        let expectedEditorURL = Bundle.main.bundleURL.deletingLastPathComponent()
-            .appendingPathComponent("Axon Editor.app", isDirectory: true)
+        let expectedEditorURL = Bundle.main.bundleURL
+            .appendingPathComponent(AppBundle.nestedEditorRelativePath, isDirectory: true)
         guard let editorAppURL = AppBundle.pairedEditorURL(beside: Bundle.main.bundleURL) else {
             throw CocoaError(.executableNotLoadable, userInfo: [
                 NSLocalizedDescriptionKey: "The matching Axon Editor.app was not found at \(expectedEditorURL.path). Reinstall Axon to restore the paired applications."

@@ -162,14 +162,14 @@ struct PreferencesView: View {
         }
     }
 
+    /// The CLI this editor was shipped with.
+    ///
+    /// The editor ships nested inside `Axon.app`, so the enclosing bundle is the one install whose
+    /// version is guaranteed to match. The `Bundle.main` fallback covers an editor built and run
+    /// standalone, which is what a development build is.
     nonisolated private static func bundledCLIURL() -> URL? {
-        let bundleURL = Bundle.main.bundleURL
-        let siblingDaemonCLI = bundleURL
-            .deletingLastPathComponent()
-            .appendingPathComponent("Axon.app", isDirectory: true)
-            .appendingPathComponent("Contents/Resources/bin/axon")
-        if FileManager.default.isExecutableFile(atPath: siblingDaemonCLI.path) {
-            return siblingDaemonCLI
+        if let nestedDaemonCLI = AppBundle.pairedDaemonCLIURL(from: Bundle.main.bundleURL) {
+            return nestedDaemonCLI
         }
         return Bundle.main.url(forResource: "axon", withExtension: nil, subdirectory: "bin")
     }
