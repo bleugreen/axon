@@ -612,9 +612,60 @@ impl<B: PointerTargetVerifier + BackgroundPixelInput> Router<B> {
         let Some(selected) = self.selected(&ladder, policy) else {
             return Ok(self.refusal(&ladder, policy));
         };
+        // Freshness is checked after selection, so the planner still decides before anything
+        // happens and a target that moved under the request stays a stale-target error rather than
+        // becoming a delivery refusal. Until here nothing native has run.
+        if let Some(stale) = self.ocr_bounds_failure(&snapshot, candidate.frame, point)? {
+            return Err(rpc_error(-32003, stale));
+        }
         self.snapshot = Some(snapshot);
         self.foreground_dispatch(ForegroundDispatch { policy, candidate: &selected, target: ForegroundTarget::Application(&identity), restores_pointer: true, verification: json!({"verified":false,"reason":"OCR click has no declared postcondition"}), resolution: None }, |backend| backend.pointer_click(point))
             .map(|mut result| { if let Some(object)=result.as_object_mut(){object.insert("resolution".into(),json!(resolution));} result })
+    }
+
+    /// Why an OCR-resolved point must not be dispatched, or `None` when it still lands where the
+    /// text was recognized.
+    ///
+    /// The coordinates come from a capture, and a bare screen point cannot say that the window
+    /// underneath it has since moved, resized, or closed — by dispatch time the same numbers can
+    /// name a different application's territory. AT-SPI has no portable point-to-element lookup, so
+    /// this is a freshness check against the target's own windows rather than a hit test: it says
+    /// nothing about what is stacked above them.
+    ///
+    /// A window whose rectangle cannot be read is not counted either way. An unanswered query is
+    /// not evidence that the point is wrong, and refusing on it would ground a working click on a
+    /// transient accessibility fault.
+    fn ocr_bounds_failure(
+        &mut self,
+        snapshot: &Snapshot,
+        recognized: axon_core::Rect,
+        point: (f64, f64),
+    ) -> Result<Option<String>, JsonRpcError> {
+        let mut answered = Vec::new();
+        for index in window_root_indices(snapshot) {
+            if let Some(rect) = self
+                .backend
+                .element_rect(&snapshot.handle(index))
+                .map_err(backend_error)?
+            {
+                answered.push(rect);
+            }
+        }
+        if answered.is_empty() || answered.iter().any(|rect| rect.contains(point)) {
+            return Ok(None);
+        }
+        Ok(Some(format!(
+            "OCR click target moved before dispatch: the text was recognized at {}, \
+             the resolved point is {}, and no window of the target application covers it now \
+             (current windows: {})",
+            describe_rect(recognized),
+            describe_point(point),
+            answered
+                .iter()
+                .map(|rect| describe_rect(*rect))
+                .collect::<Vec<_>>()
+                .join(", ")
+        )))
     }
 
     fn dispatch_resolved_click(
@@ -1535,6 +1586,34 @@ impl<B: PointerTargetVerifier + BackgroundPixelInput> ToolDispatcher for Router<
             .map_err(|error| error.to_string())?;
         axon_core::changed_snapshot_baseline(&snapshot)
     }
+}
+
+/// The flattened index of each window's root node, which is what turns a window into a handle the
+/// backend can be asked about.
+fn window_root_indices(snapshot: &Snapshot) -> Vec<usize> {
+    fn size(node: &axon_core::Node) -> usize {
+        1 + node.children.iter().map(size).sum::<usize>()
+    }
+    let mut indices = Vec::new();
+    let mut next = 0;
+    for window in &snapshot.app.windows {
+        indices.push(next);
+        next += size(&window.root);
+    }
+    indices
+}
+
+/// A rectangle as a refusal quotes it.
+fn describe_rect(rect: axon_core::Rect) -> String {
+    format!(
+        "{{x:{},y:{},width:{},height:{}}}",
+        rect.x, rect.y, rect.width, rect.height
+    )
+}
+
+/// A point as a refusal quotes it.
+fn describe_point((x, y): (f64, f64)) -> String {
+    format!("{{x:{x},y:{y}}}")
 }
 
 fn flattened(snapshot: &Snapshot) -> impl Iterator<Item = &axon_core::Node> {
