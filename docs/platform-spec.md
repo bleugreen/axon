@@ -121,9 +121,9 @@ explicit `expects` postcondition. A backend that cannot verify the effect report
 that honestly rather than promoting dispatch to success.
 
 A rung's own conditions narrow that further and never substitute for it. The
-pixel rung additionally requires that the send completed and left the foreground
-and the real pointer alone; the foreground rung, that the user's session was
-handed back. `success` is every applicable condition together, so an action whose
+pixel rung additionally requires that the send completed, left the foreground
+alone, and left the real pointer alone wherever the dispatch could have moved it;
+the foreground rung, that the user's session was handed back. `success` is every applicable condition together, so an action whose
 rung kept all of its own promises is still not successful while its goal is
 unverified. The rule has one home across the Rust backends, `goal_success` in
 `rust/axon-core/src/delivery.rs`, so no rung can hold half of it.
@@ -169,13 +169,34 @@ verified target. It must carry stable app and window identity, window-relative
 coordinates converted through resolved window geometry, and revalidation of a
 retained element, window, or text-location resolution immediately before
 dispatch. A target window may never be inferred from an unscoped screen point.
-After dispatch the backend proves that the frontmost application and the real
-pointer are unchanged. Relabelling a global input device as `pixel` because it
-was aimed narrowly is a contract violation, not an optimization.
+After dispatch the backend proves that the frontmost application is unchanged,
+and that the real pointer is unchanged wherever the dispatch synthesized pointer
+input. Relabelling a global input device as `pixel` because it was aimed
+narrowly is a contract violation, not an optimization.
+
+A clause is checked only against a dispatch that could have broken it. Someone
+using the machine while Axon delivers is the normal condition on a personal
+desktop rather than an anomaly, and a hand on the physical mouse moves the
+pointer for reasons that have nothing to do with the synthesis. Keystrokes and
+wheel bursts touch no pointing device, so motion around one of those is
+exogenous by construction, and failing on it would report a broken contract on
+evidence the delivery cannot have produced — a false negative on an action that
+worked, which is corrosive to exactly the honesty the contract exists to
+provide. The frontmost clause has no such exemption, because delivered input can
+genuinely provoke an application into activating itself.
 
 Dispatch at the pixel rung is evidence, not goal success: event acceptance sets
 `dispatchSuccess`, while `success` still requires readback or an `expects`
 postcondition.
+
+The result reports the rung's evidence under `backgroundDelivery`: the
+`targetProcessIdentifier` the events were bound to, `frontmostAppUnchanged`,
+`pointerUnchanged`, and `pointerAsserted` — whether that pointer reading is a
+promise this dispatch made or an observation of the desktop it ran on. The
+reading is always reported, so an application that warps the cursor in response
+to delivered input is visible either way; what `pointerAsserted` decides is
+whether it also gates the result. Linux adds `inputFocusUnchanged`, because the
+X input focus and the frontmost window are different facts.
 
 ### Result fields
 
@@ -344,7 +365,8 @@ its origin and size are unchanged, and the element still reports extents coverin
 the point. Afterwards the frontmost window, the X input focus and the real pointer
 are all read back — the input focus separately from the frontmost window, because
 they are different facts and Qt's click moved one of them while the other stood
-still.
+still. The pointer reading gates the click and only reports for the keystroke,
+which sends no pointer events and so could not have moved it.
 
 That key is only as precise as the toolkit chooses to be, and one entry is
 coarser than the rest. Chromium reports itself as toolkit `Chromium` version

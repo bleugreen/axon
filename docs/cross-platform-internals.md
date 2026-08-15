@@ -632,6 +632,14 @@ window, the X input focus and the real pointer back afterwards. The focus is rea
 separately from the frontmost window because they are different facts, and the
 harness caught Qt moving one of them while the other stood still.
 
+The pointer reading gates a click and only reports for a keystroke. `XSendEvent`
+keyboard events touch no pointing device, so motion around one is the person at
+the machine using their own mouse, and failing on it would reject deliveries that
+worked on evidence they cannot have caused. A click keeps the clause because an
+event that reached the global devices would move the real cursor, and nothing on
+this side can tell that from the hand on the mouse, so the fail-safe reading
+stands. Which of the two happened is on the wire as `pointerAsserted`.
+
 Unlike the Windows rung, this one has no completion boundary to read those
 invariants across: `XSendEvent` hands the events to the X server, and when the
 target's own main loop dequeues them is not observable from here. The readings are
