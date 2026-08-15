@@ -68,11 +68,14 @@ public struct AXSnapshotCapturer {
             processIdentifier: app.processIdentifier
         )
 
+        let windowCount = windowCount(from: appElement)
+
         if childDepth != 0, let snapshot = captureUsingBulkHierarchy(
             appElement: appElement,
             appIdentity: appIdentity,
             snapshotID: snapshotID,
-            screenshot: screenshot
+            screenshot: screenshot,
+            windowCount: windowCount
         ) {
             return snapshot
         }
@@ -87,7 +90,6 @@ public struct AXSnapshotCapturer {
                     childCaptureMode: childDepth == 0 ? .none : .normal
                 )
             }
-        let windowCount = windowCount(from: appElement)
         let truncationReason = windowCount > windows.count ? "windows limited to \(maxWindows) of \(windowCount)" : nil
         let annotatedWindows = windows.enumerated().map { index, window in
             guard index == 0, let truncationReason else {
@@ -100,7 +102,8 @@ public struct AXSnapshotCapturer {
             id: snapshotID,
             app: appIdentity,
             windows: annotatedWindows,
-            screenshot: encodedScreenshot
+            screenshot: encodedScreenshot,
+            windowCount: windowCount
         )
         elementStore?.store(snapshotID: snapshotID, elements: retainedElements, summary: SnapshotSummary(snapshot: snapshot))
         return snapshot
@@ -110,7 +113,8 @@ public struct AXSnapshotCapturer {
         appElement: AXUIElement,
         appIdentity: AppIdentity,
         snapshotID: SnapshotID,
-        screenshot: Bool
+        screenshot: Bool,
+        windowCount: Int
     ) -> AppSnapshot? {
         guard let capture = AXHierarchyBulkCapturer().capture(appElement: appElement) else {
             return nil
@@ -120,7 +124,8 @@ public struct AXSnapshotCapturer {
             id: snapshotID,
             app: appIdentity,
             windows: capture.windows,
-            screenshot: encodedScreenshot
+            screenshot: encodedScreenshot,
+            windowCount: windowCount
         )
         elementStore?.store(snapshotID: snapshotID, elements: capture.retainedElements, summary: SnapshotSummary(snapshot: snapshot))
         return snapshot

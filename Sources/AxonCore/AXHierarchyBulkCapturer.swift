@@ -191,7 +191,11 @@ public struct AXFullTreeCapturer {
             app: appIdentity,
             windows: capture.windows,
             screenshot: encodedScreenshot,
-            focus: focus
+            focus: focus,
+            // Asked of the application directly rather than counted from the captured roots:
+            // neither capture strategy guarantees its roots are windows, and both fall back to
+            // application chrome when there are none.
+            windowCount: childElements(kAXWindowsAttribute as String, from: appElement).count
         )
         elementStore?.store(snapshotID: snapshot.id, elements: capture.retainedElements, summary: SnapshotSummary(snapshot: snapshot))
         return snapshot
