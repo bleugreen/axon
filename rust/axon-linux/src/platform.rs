@@ -126,51 +126,6 @@ impl ScreenCaptureProvider {
         }
     }
 
-    struct ImmediateStream;
-
-    impl ScreenCastDriver for ImmediateStream {
-        fn run(
-            &mut self,
-            _restore_token: Option<RestoreToken>,
-            started: Arc<dyn Fn(StartedSession) + Send + Sync>,
-            publish: Arc<dyn Fn(PipeWireFrame) + Send + Sync>,
-            _stopped: Arc<StopController>,
-        ) -> Result<(), DriverError> {
-            started(StartedSession {
-                restore_token: Some(RestoreToken::new("replacement")),
-                source_id: Some("source".into()),
-            });
-            publish(PipeWireFrame {
-                width: 1,
-                height: 1,
-                offset: 0,
-                stride: 4,
-                format: PackedFormat::Rgba,
-                data: vec![1, 2, 3, 255],
-            });
-            thread::sleep(Duration::from_millis(100));
-            Ok(())
-        }
-    }
-
-    #[test]
-    fn reauthorization_replaces_the_actor_before_starting_fresh_capture() {
-        let created = Arc::new(AtomicUsize::new(0));
-        let factory_created = created.clone();
-        let directory = tempfile::tempdir().unwrap();
-        let store = TokenStore::at(directory.path().join("token"));
-        let factory: Arc<dyn Fn() -> ScreenCastActor + Send + Sync> = Arc::new(move || {
-            factory_created.fetch_add(1, Ordering::SeqCst);
-            ScreenCastActor::spawn_with_driver(store.clone(), ImmediateStream)
-        });
-        let provider = ScreenCaptureProvider::with_factory(factory);
-
-        let capture = provider.capture(true).unwrap();
-
-        assert_eq!(capture.image.width, 1);
-        assert_eq!(created.load(Ordering::SeqCst), 2);
-    }
-
     #[cfg(test)]
     fn with_factory(factory: Arc<dyn Fn() -> ScreenCastActor + Send + Sync>) -> Self {
         Self {
@@ -1923,6 +1878,51 @@ mod tests {
 
     fn null() -> ObjectRefOwned {
         ObjectRefOwned::new(ObjectRef::Null)
+    }
+
+    struct ImmediateStream;
+
+    impl ScreenCastDriver for ImmediateStream {
+        fn run(
+            &mut self,
+            _restore_token: Option<RestoreToken>,
+            started: Arc<dyn Fn(StartedSession) + Send + Sync>,
+            publish: Arc<dyn Fn(PipeWireFrame) + Send + Sync>,
+            _stopped: Arc<StopController>,
+        ) -> Result<(), DriverError> {
+            started(StartedSession {
+                restore_token: Some(RestoreToken::new("replacement")),
+                source_id: Some("source".into()),
+            });
+            publish(PipeWireFrame {
+                width: 1,
+                height: 1,
+                offset: 0,
+                stride: 4,
+                format: PackedFormat::Rgba,
+                data: vec![1, 2, 3, 255],
+            });
+            thread::sleep(Duration::from_millis(100));
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn reauthorization_replaces_the_actor_before_starting_fresh_capture() {
+        let created = Arc::new(AtomicUsize::new(0));
+        let factory_created = created.clone();
+        let directory = tempfile::tempdir().unwrap();
+        let store = TokenStore::at(directory.path().join("token"));
+        let factory: Arc<dyn Fn() -> ScreenCastActor + Send + Sync> = Arc::new(move || {
+            factory_created.fetch_add(1, Ordering::SeqCst);
+            ScreenCastActor::spawn_with_driver(store.clone(), ImmediateStream)
+        });
+        let provider = ScreenCaptureProvider::with_factory(factory);
+
+        let capture = provider.capture(true).unwrap();
+
+        assert_eq!(capture.image.width, 1);
+        assert_eq!(created.load(Ordering::SeqCst), 2);
     }
 
     #[test]
