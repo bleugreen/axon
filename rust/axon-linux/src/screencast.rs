@@ -1,9 +1,10 @@
 //! Dedicated ScreenCast/PipeWire capture actor.
 
 use crate::portal::{
-    AppAuthorizationKey, LatestFrame, PipeWireFrame, PortalState, RestoreToken, TokenStore,
+    LatestFrame, PipeWireFrame, PortalState, RestoreToken, TokenStore,
 };
-use axon_core::{AppQuery, Screenshot};
+use axon_core::Screenshot;
+use serde::Serialize;
 use std::{
     sync::{
         Arc, Condvar, Mutex,
@@ -29,7 +30,6 @@ pub enum CaptureError {
 struct Shared {
     state: PortalState,
     frame: LatestFrame,
-    requested: Option<AppAuthorizationKey>,
 }
 struct Signal {
     shared: Mutex<Shared>,
@@ -41,11 +41,12 @@ pub struct ScreenCastActor {
     command: mpsc::Sender<Command>,
     stop: mpsc::Sender<()>,
     shutting_down: Arc<AtomicBool>,
+    request_lock: Mutex<()>,
     thread: Option<thread::JoinHandle<()>>,
 }
 
 enum Command {
-    Capture(Option<AppAuthorizationKey>),
+    Capture(bool),
     Stop,
 }
 
@@ -58,7 +59,6 @@ impl ScreenCastActor {
             shared: Mutex::new(Shared {
                 state: PortalState::AuthorizationRequired,
                 frame: LatestFrame::default(),
-                requested: None,
             }),
             changed: Condvar::new(),
         });
@@ -85,6 +85,7 @@ impl ScreenCastActor {
             command,
             stop,
             shutting_down,
+            request_lock: Mutex::new(()),
             thread: Some(thread),
         }
     }
@@ -96,25 +97,19 @@ impl ScreenCastActor {
             .state
             .clone()
     }
-    pub fn capture(&self, app: &AppQuery, timeout: Duration) -> Result<Screenshot, CaptureError> {
+    pub fn capture(&self, reauthorize: bool, timeout: Duration) -> Result<ScreenCapture, CaptureError> {
+        let _request = self.request_lock.lock().expect("ScreenCast request lock poisoned");
         let deadline = Instant::now() + timeout.min(INTERACTIVE_TIMEOUT);
-        let requested = AppAuthorizationKey::from_query(app);
-        let mut shared = self
-            .signal
-            .shared
-            .lock()
-            .expect("ScreenCast state poisoned");
-        let reusable = requested.is_some()
-            && shared.requested == requested
-            && matches!(shared.state, PortalState::Starting | PortalState::Streaming);
+        let mut shared = self.signal.shared.lock().expect("ScreenCast state poisoned");
+        let reusable = !reauthorize && matches!(shared.state, PortalState::Streaming)
+            && shared.frame.snapshot().is_some();
         if !reusable {
             if matches!(shared.state, PortalState::Starting | PortalState::Streaming) {
                 let _ = self.stop.send(());
             }
             shared.frame.clear();
-            shared.requested = requested.clone();
             shared.state = PortalState::Starting;
-            if self.command.send(Command::Capture(requested)).is_err() {
+            if self.command.send(Command::Capture(reauthorize)).is_err() {
                 shared.state = PortalState::Failed("ScreenCast actor stopped".into());
             }
             self.signal.changed.notify_all();
@@ -126,10 +121,7 @@ impl ScreenCastActor {
                 let _ = self.stop.send(());
                 return Err(CaptureError::AuthorizationRequired);
             }
-            let (next, wait) = self
-                .signal
-                .changed
-                .wait_timeout(shared, deadline - now)
+            let (next, wait) = self.signal.changed.wait_timeout(shared, deadline - now)
                 .expect("ScreenCast state poisoned");
             shared = next;
             if wait.timed_out() && shared.frame.snapshot().is_none() {
@@ -139,15 +131,23 @@ impl ScreenCastActor {
             }
         }
         if let Some(frame) = shared.frame.snapshot() {
-            return frame
-                .screenshot()
-                .map_err(|e| CaptureError::Failed(format!("{e:?}")));
+            let source_width = frame.width;
+            let source_height = frame.height;
+            let image = frame.screenshot().map_err(|e| CaptureError::Failed(format!("{e:?}")))?;
+            return Ok(ScreenCapture {
+                source: ScreenCaptureSource {
+                    kind: "userAuthorizedScreenCast",
+                    source_type: "window",
+                    width: source_width,
+                    height: source_height,
+                },
+                image,
+            });
         }
         match &shared.state {
-            PortalState::AuthorizationRequired => Err(CaptureError::AuthorizationRequired),
+            PortalState::AuthorizationRequired | PortalState::Starting => Err(CaptureError::AuthorizationRequired),
             PortalState::Unavailable(r) => Err(CaptureError::Unavailable(r.clone())),
             PortalState::Failed(r) => Err(CaptureError::Failed(r.clone())),
-            PortalState::Starting => Err(CaptureError::AuthorizationRequired),
             PortalState::Streaming => Err(CaptureError::NoFrame),
         }
     }
@@ -163,6 +163,35 @@ impl Drop for ScreenCastActor {
     }
 }
 
+
+
+#[derive(Debug, Clone, Serialize)]
+pub struct ScreenCapture {
+    pub source: ScreenCaptureSource,
+    #[serde(serialize_with = "serialize_image")]
+    pub image: Screenshot,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScreenCaptureSource {
+    pub kind: &'static str,
+    #[serde(rename = "type")]
+    pub source_type: &'static str,
+    pub width: u32,
+    pub height: u32,
+}
+
+fn serialize_image<S: serde::Serializer>(image: &Screenshot, serializer: S) -> Result<S::Ok, S::Error> {
+    use serde::ser::SerializeStruct;
+    use base64::Engine;
+    let mut state = serializer.serialize_struct("ScreenCaptureImage", 4)?;
+    state.serialize_field("mediaType", &image.media_type)?;
+    state.serialize_field("width", &image.width)?;
+    state.serialize_field("height", &image.height)?;
+    state.serialize_field("base64Data", &base64::engine::general_purpose::STANDARD.encode(&image.bytes))?;
+    state.end()
+}
 #[derive(Debug, Clone)]
 pub enum DriverError {
     Cancelled,
@@ -202,25 +231,22 @@ fn actor_main<D: ScreenCastDriver>(
     commands: mpsc::Receiver<Command>,
     stopped: StopSignal,
     shutting_down: Arc<AtomicBool>,
+    request_lock: Mutex<()>,
 ) {
     while let Ok(command) = commands.recv() {
         match command {
             Command::Stop => break,
-            Command::Capture(key) => {
-                let stored = key
-                    .as_ref()
-                    .and_then(|key| store.load(key).ok().flatten())
-                    .map(|(_, token)| token);
-                let run_once = |driver: &mut D, token, key: Option<AppAuthorizationKey>| {
+            Command::Capture(reauthorize) => {
+                let stored = if reauthorize { None } else {
+                    store.load().ok().flatten().map(|(_, token)| token)
+                };
+                let run_once = |driver: &mut D, token| {
                     let started_signal = signal.clone();
                     let started_store = store.clone();
-                    let started_key = key.clone();
                     let started = Arc::new(move |session: StartedSession| {
-                        if let (Some(app), Some(token)) =
-                            (started_key.clone(), session.restore_token)
-                        {
+                        if let Some(token) = session.restore_token {
                             if let Err(error) =
-                                started_store.replace(app, session.source_id.as_deref(), token)
+                                started_store.replace(session.source_id.as_deref(), token)
                             {
                                 set_state(
                                     &started_signal,
@@ -232,27 +258,23 @@ fn actor_main<D: ScreenCastDriver>(
                         }
                     });
                     let publish_signal = signal.clone();
-                    let publish_key = key.clone();
                     let publish = Arc::new(move |new_frame: PipeWireFrame| {
                         let shared = publish_signal
                             .shared
                             .lock()
                             .expect("ScreenCast state poisoned");
-                        if shared.requested != publish_key {
-                            return;
-                        }
                         shared.frame.publish(new_frame);
                         drop(shared);
                         set_state(&publish_signal, PortalState::Streaming);
                     });
                     driver.run(token, started, publish, stopped.clone())
                 };
-                let first = run_once(&mut driver, stored.clone(), key.clone());
+                let first = run_once(&mut driver, stored.clone());
                 let result = if matches!(first, Err(DriverError::StaleRestore))
                     && stored.is_some()
                     && !shutting_down.load(Ordering::Acquire)
                 {
-                    run_once(&mut driver, None, key.clone())
+                    run_once(&mut driver, None)
                 } else {
                     first
                 };
@@ -260,9 +282,6 @@ fn actor_main<D: ScreenCastDriver>(
                     break;
                 }
                 let shared = signal.shared.lock().expect("ScreenCast state poisoned");
-                if shared.requested != key {
-                    continue;
-                }
                 shared.frame.clear();
                 drop(shared);
                 match result {
