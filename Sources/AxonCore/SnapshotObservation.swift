@@ -35,6 +35,9 @@ public struct SnapshotObservationFormatter {
         if let bundle = string("bundleIdentifier", in: app) {
             observation["bundle"] = .string(bundle)
         }
+        if let note = object["note"] {
+            observation["note"] = note
+        }
         if let focus = object["focus"] {
             observation["focus"] = compactFocus(focus, snapshotID: snapshotID, frames: frames)
         }
@@ -112,6 +115,10 @@ public struct SnapshotObservationFormatter {
         }
         if let snapshot = string("snapshot", in: object) {
             lines.append("snapshot: \(snapshot)")
+        }
+        // Ahead of focus, screenshot, and tree: a note qualifies everything below it.
+        if let note = string("note", in: object) {
+            lines.append("note: \(note)")
         }
         if let focus = object["focus"]?.objectValue {
             switch string("status", in: focus) {
