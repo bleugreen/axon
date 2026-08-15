@@ -23,12 +23,20 @@ The matrix below is the current user-facing contract. Contributors can consult t
 
 Axon is most complete at semantic actions such as pressing a button or setting a field value. Pointer, keyboard, and screenshot paths exist but remain experimental until they have live end-to-end verification.
 
-Browser `navigate`, `windows`, and `tabs` use Apple Events in addition to Accessibility. The first
-request for a browser can therefore show macOS's Automation consent prompt. Grants are per browser:
-allowing Axon to control Safari does not allow it to control Google Chrome. A rejected or unavailable
-grant returns JSON-RPC `-32603` with structured reason `automation-not-granted`, the target app, and
-an authorization state of `denied` or `notDetermined`. Axon does not collapse these independent
-target grants into the global health document.
+Browser `navigate`, `windows`, and `tabs` use Apple Events in addition to Accessibility. Those verbs
+only check the existing Automation grant; they never present macOS's consent prompt. The prompt
+blocks until a person answers it, and an agent's call must not hang on a dialog nobody asked for.
+Consent is a deliberate act instead: open the Axon menu bar item and choose **Browser Automation...**,
+which asks macOS for each supported browser that is running. Grants are per browser: allowing Axon to
+control Safari does not allow it to control Google Chrome. A missing grant returns JSON-RPC `-32603`
+with structured reason `automation-not-granted`, the target app, an authorization state of `denied`
+or `notDetermined`, and the `leg` that produced the decision. Axon does not collapse these
+independent target grants into the global health document.
+
+macOS resolves an Apple Events authorization inside the daemon process once that process holds an
+answer for a browser, so a grant changed after the daemon started — including by `tccutil reset` — is
+not visible until the daemon restarts. When Axon has already answered for that browser in the current
+session it says so, and names the restart as the remediation.
 
 ### Windows
 

@@ -130,8 +130,11 @@ index-based references and must be refreshed by enumerating again. Browser
 enumeration is authoritative from application scripting; `windows` also reports
 an AX title/count cross-check when Accessibility access is available, while
 `tabs` explicitly reports that a portable AX tab cross-check is unavailable.
-Automation consent is separate from Accessibility consent and permission errors
-direct callers to System Settings. Apple Events are bounded by a 15-second
+Automation consent is separate from Accessibility consent, and these verbs never
+prompt for it: they check the existing grant and refuse immediately without it.
+Consent is requested deliberately from the daemon menu's Browser Automation item,
+and a permission error names the state Axon observed and the remediation that
+matches it. Apple Events are bounded by a 15-second
 timeout. These operations never accept script source.
 
 `wait_for_value(target, contains|equals|matches)` repeatedly resolves an app-scoped

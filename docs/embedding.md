@@ -301,7 +301,7 @@ human-readable prose and must never be parsed.
 | `no-graphical-session` | The user session has no usable desktop |
 | `accessibility-not-granted` | macOS has not granted Accessibility trust to the daemon identity |
 | `screen-recording-not-granted` | macOS has not granted Screen Recording to the daemon identity |
-| `automation-not-granted` | The requested macOS browser has not granted Axon Apple Events Automation; operation errors include the target app and `denied` or `notDetermined` authorization state |
+| `automation-not-granted` | The requested macOS browser has not granted Axon Apple Events Automation; operation errors include the target app, `denied` or `notDetermined` authorization state, and the `leg` that produced the decision |
 | `session-bus-unavailable` | The user's session D-Bus is not reachable |
 | `atspi-unavailable` | The AT-SPI accessibility bus is absent or refused a connection |
 | `accessibility-disabled` | The session's accessibility switch is off, so every application that reads it at startup is missing from the bus |
@@ -319,7 +319,13 @@ degradation rather than a parse failure.
 Automation is intentionally not a process-global `health-v1` permission. macOS grants control of
 Safari and Google Chrome independently, so Axon reports `automation-not-granted` in the failing
 `navigate`, `windows`, or `tabs` JSON-RPC error. The error remains `-32603`; callers branch on its
-structured `data.reason`, not the human-readable System Settings guidance.
+structured `data.reason`, not the human-readable remediation text.
+
+`data.leg` names which call produced the decision: `checked` for the silent authorization check that
+every browser verb performs, `prompted` for the consent dialog that only the daemon menu's Browser
+Automation item can raise, and `executed` for an Apple event the target refused after a check had
+passed. Browser verbs never prompt, so a verb error always carries `checked` or `executed`; the field
+is additive and a consumer that has never seen it can ignore it.
 
 ### Capability vocabulary
 
