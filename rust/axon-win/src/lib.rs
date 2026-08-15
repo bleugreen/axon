@@ -6,10 +6,9 @@ use axon_core::{
     DiffPolicy, DispatchOutcome, ExpectedFact, ForegroundTarget, JsonRpcError, JsonRpcId,
     JsonRpcRequest, JsonRpcResponse, KeyboardIntent, PlatformBackend, PointerContract,
     ResolutionStatus, RunEnvelope, SemanticLookup, SemanticNameRegistry, SemanticSelection,
-    Snapshot, SnapshotHandle,
-    TextLocationResolver, TextLocationSource, TextLocationTarget, TextRecognitionProvider,
-    ToolDispatcher, classify_semantic_diff, dispatch_in_foreground, goal_success, prepare_run,
-    select_delivery,
+    Snapshot, SnapshotHandle, TextLocationResolver, TextLocationSource, TextLocationTarget,
+    TextRecognitionProvider, ToolDispatcher, classify_semantic_diff, dispatch_in_foreground,
+    goal_success, prepare_run, select_delivery,
 };
 use serde_json::{Map, Value, json};
 use std::{
