@@ -571,13 +571,94 @@ mod tests {
     }
     #[test]
     fn facade_exposes_supported_surface() {
-        let names = backend_tools(ToolBackend::Linux)
-            .unwrap()
-            .into_iter()
+        let tools = backend_tools(ToolBackend::Linux).unwrap();
+        let names = tools
+            .iter()
             .map(|v| v["name"].as_str().unwrap().to_owned())
             .collect::<Vec<_>>();
         assert!(names.contains(&"invoke".into()));
+        let capture = tools.iter().find(|tool| tool["name"] == "capture_screen").unwrap();
+        assert_eq!(
+            capture["inputSchema"]["properties"]["reauthorize"]["default"],
+            false
+        );
         assert!(!names.contains(&"drag".into()));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn capture_validation_precedes_backend_and_defaults_reauthorize_false() {
+        let invalid = JsonRpcRequest::new(
+            Some(JsonRpcId::Integer(1)),
+            "capture_screen",
+            Some(json!({"reauthorize":"yes"})),
+        );
+        let response = dispatch_capture_with(invalid, |_| {
+            panic!("invalid capture request reached backend")
+        })
+        .0;
+        assert_eq!(response["error"]["code"], -32602);
+
+        let valid = JsonRpcRequest::new(
+            Some(JsonRpcId::Integer(2)),
+            "capture_screen",
+            Some(json!({})),
+        );
+        let response = dispatch_capture_with(valid, |reauthorize| {
+            assert!(!reauthorize);
+            Err(crate::screencast::CaptureError::AuthorizationRequired)
+        })
+        .0;
+        assert_eq!(response["error"]["data"]["reason"], "portal-authorization-required");
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn capture_errors_have_stable_reason_codes_and_x11_remediation() {
+        for (error, reason) in [
+            (
+                crate::screencast::CaptureError::Unavailable(
+                    "use look screenshot for application-targeted X11 capture".into(),
+                ),
+                "capability-unavailable",
+            ),
+            (
+                crate::screencast::CaptureError::Failed("portal failed".into()),
+                "capture-failed",
+            ),
+            (crate::screencast::CaptureError::NoFrame, "capture-failed"),
+        ] {
+            let request = JsonRpcRequest::new(
+                Some(JsonRpcId::Integer(1)),
+                "capture_screen",
+                Some(json!({})),
+            );
+            let response = dispatch_capture_with(request, |_| Err(error)).0;
+            assert_eq!(response["error"]["data"]["reason"], reason);
+            if reason == "capability-unavailable" {
+                assert!(response["error"]["message"].as_str().unwrap().contains("look"));
+            }
+        }
+    }
+
+    #[test]
+    fn facade_forwards_capture_default_and_preserves_image_fixture() {
+        let fixture: Value = serde_json::from_str(include_str!(
+            "../../../schema/fixtures/capture-screen-envelope.json"
+        ))
+        .unwrap();
+        let response = mcp_response_with_request(
+            &json!({"jsonrpc":"2.0","id":12,"method":"tools/call","params":{"name":"capture_screen","arguments":{}}}),
+            |rpc| {
+                let forwarded: Value = serde_json::from_str(rpc).unwrap();
+                assert_eq!(forwarded["method"], "capture_screen");
+                assert_eq!(forwarded["params"]["reauthorize"], false);
+                Ok(json!({"jsonrpc":"2.0","id":1,"result":fixture["socketResult"]}).to_string())
+            },
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(response["result"], fixture["mcpResult"]);
     }
     #[test]
     fn tools_list_serializes_artifact_failures_as_internal_errors() {

@@ -779,14 +779,10 @@ mod tests {
     #[test]
     fn first_capture_starts_one_session_and_streaming_capture_reuses_it() {
         let (actor, calls, _) = actor(vec![Action::Stream(None)]);
-        assert_eq!(
-            actor
-                .capture(false, Duration::from_secs(1))
-                .unwrap()
-                .image
-                .width,
-            1
-        );
+        let capture = actor.capture(false, Duration::from_secs(1)).unwrap();
+        assert_eq!(capture.image.width, 1);
+        assert_eq!(capture.source.source_type, ScreenCaptureSourceType::Window);
+        assert_eq!(serde_json::to_value(&capture).unwrap()["source"]["type"], "window");
         assert_eq!(
             actor
                 .capture(false, Duration::from_secs(1))
