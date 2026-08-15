@@ -1047,25 +1047,41 @@ private struct PrimitiveActionCommandHandler {
                 throw JSONRPCError.invalidParams("\(fieldName) point coordinateSpace \(point.coordinateSpace.rawValue) requires app")
             }
             let snapshot = try services.captureSnapshot(app, point.coordinateSpace == .screenshot)
-            guard let windowFrame = snapshot.windows.compactMap(\.frame).first else {
-                throw JSONRPCError.invalidParams("\(fieldName) point coordinateSpace \(point.coordinateSpace.rawValue) requires a captured window frame")
-            }
             let screenX: Double
             let screenY: Double
+            let windowFrame: AXFrame
             switch point.coordinateSpace {
             case .window:
-                screenX = windowFrame.x + point.x
-                screenY = windowFrame.y + point.y
+                // Window coordinates name the application's frontmost window, which is the first
+                // window capture reports.
+                guard let frame = snapshot.windows.compactMap(\.frame).first else {
+                    throw JSONRPCError.invalidParams("\(fieldName) point coordinateSpace window requires a captured window frame")
+                }
+                windowFrame = frame
+                screenX = frame.x + point.x
+                screenY = frame.y + point.y
             case .screenshot:
+                // Screenshot coordinates are only meaningful against the window the image depicts,
+                // which is not necessarily the window the accessibility tree lists first.
                 guard let screenshot = snapshot.screenshot else {
                     throw JSONRPCError.invalidParams("\(fieldName) point coordinateSpace screenshot requires a screenshot capture")
                 }
-                screenX = windowFrame.x + point.x / Double(screenshot.width) * windowFrame.width
-                screenY = windowFrame.y + point.y / Double(screenshot.height) * windowFrame.height
+                guard let frame = screenshot.sourceWindowFrame else {
+                    throw JSONRPCError.invalidParams("\(fieldName) point coordinateSpace screenshot requires the frame of the window that was photographed")
+                }
+                windowFrame = frame
+                screenX = frame.x + point.x / Double(screenshot.width) * frame.width
+                screenY = frame.y + point.y / Double(screenshot.height) * frame.height
             case .screen, .legacyScreen:
                 fatalError("handled before conversion")
             }
-            return ActionPoint(x: screenX, y: screenY, coordinateSpace: .screen, app: app)
+            return ActionPoint(
+                x: screenX,
+                y: screenY,
+                coordinateSpace: .screen,
+                app: app,
+                sourceWindowFrame: windowFrame
+            )
         }
     }
 
