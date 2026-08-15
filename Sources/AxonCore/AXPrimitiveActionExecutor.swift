@@ -226,6 +226,7 @@ public final class AXPrimitiveActionExecutor {
                 point: cgPoint,
                 element: nil,
                 process: process,
+                sourceWindowFrame: point.sourceWindowFrame,
                 details: ["point": point.jsonValue]
             ))
         }
@@ -835,6 +836,7 @@ public final class AXPrimitiveActionExecutor {
         point: CGPoint,
         element: AXUIElement?,
         process: pid_t?,
+        sourceWindowFrame: AXFrame? = nil,
         details: [String: JSONValue]
     ) -> PrimitiveActionResult {
         var evidence = details
@@ -846,10 +848,16 @@ public final class AXPrimitiveActionExecutor {
         // foreground rung activates the app would test a window stack the dispatch is about to
         // change, and would refuse the very escalation that resolves it.
         func validationFailure(settling: Bool) -> PrimitiveActionResult? {
-            guard let element else { return nil }
-            let failure = settling
-                ? self.settledPointerValidationFailure(element: element, point: point)
-                : self.pointerValidationFailure(element: element, point: point)
+            guard let check = self.pointerValidationCheck(
+                point: point,
+                element: element,
+                process: process,
+                sourceWindowFrame: sourceWindowFrame,
+                rung: candidate.rung
+            ) else {
+                return nil
+            }
+            let failure = settling ? self.settledValidationFailure(check) : check()
             guard let failure else { return nil }
             return PrimitiveActionResult(
                 action: action, target: target, strategy: candidate.strategy, success: false,
@@ -897,9 +905,8 @@ public final class AXPrimitiveActionExecutor {
         evidence["semanticFallback"] = .string("AXValue did not take; the field was refilled by pointer and keystroke")
         let message = "Keyboard events were dispatched, but the field value could not be verified"
         func validationFailure(settling: Bool) -> PrimitiveActionResult? {
-            let failure = settling
-                ? self.settledPointerValidationFailure(element: element, point: point)
-                : self.pointerValidationFailure(element: element, point: point)
+            let check = { self.pointerValidationFailure(element: element, point: point) }
+            let failure = settling ? self.settledValidationFailure(check) : check()
             guard let failure else { return nil }
             return PrimitiveActionResult(
                 action: "type", target: target, strategy: candidate.strategy, success: false,
@@ -1273,11 +1280,14 @@ public final class AXPrimitiveActionExecutor {
     /// Waits, within the settle budget, for a just-activated window to actually reach the top.
     ///
     /// `NSRunningApplication` reports an app frontmost before the window server has finished
-    /// raising its window, so a hit test taken the instant activation is proved still sees the old
+    /// raising its window, so a check taken the instant activation is proved still sees the old
     /// window stack. Validating once at that moment would reject the target as occluded by the very
     /// window the escalation just moved out of the way.
-    private func settledPointerValidationFailure(element: AXUIElement, point: CGPoint) -> String? {
-        var failure = pointerValidationFailure(element: element, point: point)
+    ///
+    /// The check is a closure rather than an element, because a point that names no element has the
+    /// same problem and deserves the same budget rather than a second mechanism beside this one.
+    private func settledValidationFailure(_ check: () -> String?) -> String? {
+        var failure = check()
         guard failure != nil else {
             return nil
         }
@@ -1285,12 +1295,125 @@ public final class AXPrimitiveActionExecutor {
         while waited < settleTimeoutMs {
             sleepMilliseconds(settleIntervalMs)
             waited += settleIntervalMs
-            failure = pointerValidationFailure(element: element, point: point)
+            failure = check()
             if failure == nil {
                 return nil
             }
         }
         return failure
+    }
+
+    /// What this dispatch must confirm before it posts anything, or nil when there is nothing it
+    /// can honestly check.
+    ///
+    /// A point resolved from a capture is the interesting case. It has no element to hit-test
+    /// against, but it does know the window frame its coordinates were computed from, and that is
+    /// enough to catch the geometry having moved underneath it — which is the difference between
+    /// clicking the intended text and clicking a screen coordinate that has come to mean somewhere
+    /// else entirely. A point that carries neither element nor provenance is a bare caller-supplied
+    /// coordinate, and there is nothing to compare it against.
+    private func pointerValidationCheck(
+        point: CGPoint,
+        element: AXUIElement?,
+        process: pid_t?,
+        sourceWindowFrame: AXFrame?,
+        rung: DeliveryRung
+    ) -> (() -> String?)? {
+        if let element {
+            return { self.pointerValidationFailure(element: element, point: point) }
+        }
+        guard let process, let sourceWindowFrame else {
+            return nil
+        }
+        switch rung {
+        case .pixel:
+            // A targeted post reaches the application whatever is stacked above it, and the
+            // application converts the screen point through its own window. Occlusion is therefore
+            // not the question; whether the point still lands in one of that application's windows
+            // is.
+            return { self.windowContainmentFailure(point: point, process: process, sourceWindowFrame: sourceWindowFrame) }
+        case .semantic, .foreground:
+            // A global event goes to whatever the window server puts on top at that point, so the
+            // question is ownership: does the thing about to be clicked belong to the application
+            // the coordinates came from.
+            return { self.pointOwnershipFailure(point: point, process: process, sourceWindowFrame: sourceWindowFrame) }
+        }
+    }
+
+    private func windowContainmentFailure(point: CGPoint, process: pid_t, sourceWindowFrame: AXFrame) -> String? {
+        guard let frames = windowFrames(forProcess: process) else {
+            // The window list did not answer. An unanswered query is not evidence that the point is
+            // wrong, and refusing on it would ground a working click on a transient fault.
+            return nil
+        }
+        guard !frames.contains(where: { $0.contains(x: point.x, y: point.y) }) else {
+            return nil
+        }
+        return discrepancy(
+            "the point is outside every window of the target application",
+            point: point,
+            sourceWindowFrame: sourceWindowFrame,
+            current: frames
+        )
+    }
+
+    private func pointOwnershipFailure(point: CGPoint, process: pid_t, sourceWindowFrame: AXFrame) -> String? {
+        guard let hit = hitTest(point) else {
+            return "Pointer target validation failed: accessibility hit test was unresolvable"
+        }
+        guard let owner = processProvider(hit) else {
+            return discrepancy(
+                "the element at the point reports no owning process",
+                point: point,
+                sourceWindowFrame: sourceWindowFrame,
+                current: windowFrames(forProcess: process) ?? []
+            )
+        }
+        guard owner != process else {
+            return nil
+        }
+        return discrepancy(
+            "the point belongs to process \(owner) rather than the target application",
+            point: point,
+            sourceWindowFrame: sourceWindowFrame,
+            current: windowFrames(forProcess: process) ?? []
+        )
+    }
+
+    /// A refusal that carries its own measurements, so the next occurrence is diagnosable from the
+    /// result rather than from someone remembering this class of failure.
+    private func discrepancy(
+        _ reason: String,
+        point: CGPoint,
+        sourceWindowFrame: AXFrame,
+        current: [AXFrame]
+    ) -> String {
+        let bounds = current.isEmpty
+            ? "none"
+            : current.map(\.description).joined(separator: ", ")
+        return """
+            Pointer target validation failed: \(reason). \
+            Resolved point {x:\(Double(point.x).compactDescription),y:\(Double(point.y).compactDescription)}; \
+            coordinates were computed against \(sourceWindowFrame); \
+            target window bounds now \(bounds)
+            """
+    }
+
+    /// The current frames of the target application's windows, or nil when the window list did not
+    /// answer at all. An application that answered with no windows returns an empty list, which is
+    /// an answer and not the same thing.
+    private func windowFrames(forProcess process: pid_t) -> [AXFrame]? {
+        let application = AXUIElementCreateApplication(process)
+        guard let windows: [AXUIElement] = copyAttribute(kAXWindowsAttribute, from: application) else {
+            return nil
+        }
+        let frames = windows.compactMap { frame(of: $0) }
+        guard frames.isEmpty == windows.isEmpty else {
+            // Windows exist but none would state its geometry, which is a failed query rather than
+            // evidence about where the point landed.
+            return nil
+        }
+        return frames
     }
 
     private func pointerValidationFailure(element: AXUIElement, point: CGPoint) -> String? {
