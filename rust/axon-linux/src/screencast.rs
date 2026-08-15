@@ -493,7 +493,12 @@ mod production {
     /// Reaching the portal, asking what it can capture, and creating a session are machine-speed
     /// operations. Giving them the interactive budget makes a portal that is simply not there look
     /// like a user who has not answered yet, and delays the refusal by the whole of that budget.
-    const PORTAL_TIMEOUT: Duration = Duration::from_secs(5);
+    ///
+    /// Not as short as those calls are on a portal that is already running, where they return
+    /// immediately: the first one may have to start the service through D-Bus activation, and
+    /// reporting a portal unavailable while it is still starting would be a worse error than
+    /// waiting for it.
+    const PORTAL_TIMEOUT: Duration = Duration::from_secs(10);
 
     /// How long a session is given to close before the driver stops waiting for it.
     const CLOSE_TIMEOUT: Duration = Duration::from_secs(1);
