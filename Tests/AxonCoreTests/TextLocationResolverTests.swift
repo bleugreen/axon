@@ -11,7 +11,12 @@ import Testing
     let resolution = TextLocationResolver().resolve(target, in: snapshot)
 
     #expect(resolution.status == .unique)
-    #expect(resolution.point == ActionPoint(x: 140, y: 60))
+    #expect(resolution.point == ActionPoint(
+        x: 140,
+        y: 60,
+        app: "com.example.App",
+        sourceWindowFrame: textLocationFixtureWindowFrame
+    ))
     #expect(resolution.best?.matchedText == "Backlog")
     #expect(resolution.best?.source == .ax)
     #expect(resolution.best?.frame == AXFrame(x: 100, y: 50, width: 80, height: 20))
@@ -60,7 +65,12 @@ import Testing
     let resolution = resolver.resolve(target, in: snapshot)
 
     #expect(resolution.status == .unique)
-    #expect(resolution.point == ActionPoint(x: 225, y: 200))
+    #expect(resolution.point == ActionPoint(
+        x: 225,
+        y: 200,
+        app: "com.example.App",
+        sourceWindowFrame: textLocationFixtureWindowFrame
+    ))
     #expect(resolution.best?.source == .screenshot)
     #expect(resolution.best?.matchedText == "Backlog")
     #expect(resolution.best?.frame == AXFrame(x: 175, y: 180, width: 100, height: 40))

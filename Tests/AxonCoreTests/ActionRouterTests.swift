@@ -1107,7 +1107,9 @@ private func stabilitySnapshot(id: String, title: String) -> AppSnapshot {
         captureSnapshot: { _, _ in actionTextLocationFixtureSnapshot(labels: ["Backlog"]) },
         actions: PrimitiveActionHandlers(
             scroll: { target, _, _, _, _ in
-                #expect(target == .point(ActionPoint(x: 140, y: 60)))
+                // Scroll keeps coordinate delivery, and gains the identity that lets a wheel burst
+                // be bound to a process instead of aimed at an anonymous screen position.
+                #expect(target == .point(resolvedFixturePoint(x: 140, y: 60)))
                 return PrimitiveActionResult(action: "scroll", target: "point:140,60", strategy: "AXScrollToVisible", success: true)
             }
         )
@@ -1164,8 +1166,8 @@ private func stabilitySnapshot(id: String, title: String) -> AppSnapshot {
         captureSnapshot: { _, _ in actionTextLocationFixtureSnapshot(labels: ["Backlog", "Done"]) },
         actions: PrimitiveActionHandlers(
             drag: { from, to, _, _, _ in
-                #expect(from == .point(ActionPoint(x: 140, y: 60)))
-                #expect(to == .point(ActionPoint(x: 240, y: 60)))
+                #expect(from == .point(resolvedFixturePoint(x: 140, y: 60)))
+                #expect(to == .point(resolvedFixturePoint(x: 240, y: 60)))
                 return PrimitiveActionResult(action: "drag", target: "point:140,60->point:240,60", strategy: "CGEventDrag", success: true)
             }
         )
