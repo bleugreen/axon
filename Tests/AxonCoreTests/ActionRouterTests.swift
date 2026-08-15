@@ -219,7 +219,13 @@ private func stabilitySnapshot(id: String, title: String) -> AppSnapshot {
             return actionTextLocationFixtureSnapshot(labels: [])
         },
         actions: PrimitiveActionHandlers(clickPoint: { point, _ in
-            #expect(point == ActionPoint(x: 60, y: 80, coordinateSpace: .screen, app: "com.example.App"))
+            #expect(point == ActionPoint(
+                x: 60,
+                y: 80,
+                coordinateSpace: .screen,
+                app: "com.example.App",
+                sourceWindowFrame: actionFixtureWindowFrame
+            ))
             return PrimitiveActionResult(action: "click", target: "converted", strategy: "CGEvent", success: true)
         })
     )
@@ -241,11 +247,17 @@ private func stabilitySnapshot(id: String, title: String) -> AppSnapshot {
             #expect(screenshot == true)
             return actionTextLocationFixtureSnapshot(
                 labels: [],
-                screenshot: EncodedScreenshot(mediaType: "image/png", base64Data: "", width: 1_280, height: 720)
+                screenshot: actionFixtureScreenshot(width: 1_280, height: 720)
             )
         },
         actions: PrimitiveActionHandlers(clickPoint: { point, _ in
-            #expect(point == ActionPoint(x: 300, y: 260, coordinateSpace: .screen, app: "com.example.PointApp"))
+            #expect(point == ActionPoint(
+                x: 300,
+                y: 260,
+                coordinateSpace: .screen,
+                app: "com.example.PointApp",
+                sourceWindowFrame: actionFixtureWindowFrame
+            ))
             return PrimitiveActionResult(action: "click", target: "converted", strategy: "CGEvent", success: true)
         })
     )
@@ -569,12 +581,10 @@ private func stabilitySnapshot(id: String, title: String) -> AppSnapshot {
     let router = CommandRouter(
         captureSnapshot: { _, screenshot in
             #expect(screenshot == true)
-            return actionTextLocationFixtureSnapshot(labels: [], screenshot: EncodedScreenshot(
-                mediaType: "image/png",
-                base64Data: "fake",
-                width: 800,
-                height: 600
-            ))
+            return actionTextLocationFixtureSnapshot(
+                labels: [],
+                screenshot: actionFixtureScreenshot(base64Data: "fake", width: 800, height: 600)
+            )
         },
         actions: PrimitiveActionHandlers(
             clickPoint: { point, _ in
@@ -1182,8 +1192,14 @@ private func stabilitySnapshot(id: String, title: String) -> AppSnapshot {
         },
         actions: PrimitiveActionHandlers(
             drag: { from, to, _, _, _ in
-                #expect(from == .point(ActionPoint(x: 60, y: 80, coordinateSpace: .screen, app: "com.example.App")))
-                #expect(to == .point(ActionPoint(x: 150, y: 260, coordinateSpace: .screen, app: "com.example.App")))
+                #expect(from == .point(ActionPoint(
+                    x: 60, y: 80, coordinateSpace: .screen, app: "com.example.App",
+                    sourceWindowFrame: actionFixtureWindowFrame
+                )))
+                #expect(to == .point(ActionPoint(
+                    x: 150, y: 260, coordinateSpace: .screen, app: "com.example.App",
+                    sourceWindowFrame: actionFixtureWindowFrame
+                )))
                 return PrimitiveActionResult(action: "drag", target: "converted", strategy: "CGEventDrag", success: true)
             }
         )
@@ -1216,13 +1232,19 @@ private func stabilitySnapshot(id: String, title: String) -> AppSnapshot {
             #expect(screenshot == true)
             return actionTextLocationFixtureSnapshot(
                 labels: [],
-                screenshot: EncodedScreenshot(mediaType: "image/png", base64Data: "", width: 1_000, height: 800)
+                screenshot: actionFixtureScreenshot(width: 1_000, height: 800)
             )
         },
         actions: PrimitiveActionHandlers(
             drag: { from, to, _, _, _ in
-                #expect(from == .point(ActionPoint(x: 100, y: 85, coordinateSpace: .screen, app: "com.example.App")))
-                #expect(to == .point(ActionPoint(x: 550, y: 460, coordinateSpace: .screen, app: "com.example.App")))
+                #expect(from == .point(ActionPoint(
+                    x: 100, y: 85, coordinateSpace: .screen, app: "com.example.App",
+                    sourceWindowFrame: actionFixtureWindowFrame
+                )))
+                #expect(to == .point(ActionPoint(
+                    x: 550, y: 460, coordinateSpace: .screen, app: "com.example.App",
+                    sourceWindowFrame: actionFixtureWindowFrame
+                )))
                 return PrimitiveActionResult(action: "drag", target: "converted", strategy: "CGEventDrag", success: true)
             }
         )
@@ -1314,6 +1336,24 @@ private func actionLocatorFixtureSnapshot(buttons: [String]) -> AppSnapshot {
     )
 }
 
+/// The frame of the fixture's only window, and therefore of whatever a capture photographed.
+private let actionFixtureWindowFrame = AXFrame(x: 50, y: 60, width: 500, height: 400)
+
+private func actionFixtureScreenshot(
+    base64Data: String = "",
+    width: Int,
+    height: Int,
+    sourceWindowFrame: AXFrame? = actionFixtureWindowFrame
+) -> EncodedScreenshot {
+    EncodedScreenshot(
+        mediaType: "image/png",
+        base64Data: base64Data,
+        width: width,
+        height: height,
+        sourceWindowFrame: sourceWindowFrame
+    )
+}
+
 private func actionTextLocationFixtureSnapshot(
     labels: [String],
     screenshot: EncodedScreenshot? = nil
@@ -1325,7 +1365,7 @@ private func actionTextLocationFixtureSnapshot(
             AXNode(
                 role: "AXWindow",
                 title: "Main",
-                frame: AXFrame(x: 50, y: 60, width: 500, height: 400),
+                frame: actionFixtureWindowFrame,
                 children: labels.enumerated().map { index, label in
                     AXNode(
                         role: "AXStaticText",

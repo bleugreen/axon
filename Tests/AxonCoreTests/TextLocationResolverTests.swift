@@ -45,10 +45,7 @@ import Testing
 }
 
 @Test func textLocationResolverReturnsCenterPointForScreenshotText() {
-    let snapshot = textLocationFixtureSnapshot(
-        [],
-        screenshot: EncodedScreenshot(mediaType: "image/png", base64Data: "fake", width: 800, height: 600)
-    )
+    let snapshot = textLocationFixtureSnapshot([], screenshot: textLocationFixtureScreenshot())
     let target = TextLocationTarget(app: "cairn", text: .exact("Backlog"), source: .screenshot)
     let resolver = TextLocationResolver(recognizeText: { _ in
         [
@@ -72,7 +69,7 @@ import Testing
 @Test func textLocationResolverAutoFallsBackToScreenshotTextWhenAXTextIsMissing() {
     let snapshot = textLocationFixtureSnapshot(
         [AXNode(role: "AXStaticText", title: "Inbox", frame: AXFrame(x: 20, y: 20, width: 60, height: 20))],
-        screenshot: EncodedScreenshot(mediaType: "image/png", base64Data: "fake", width: 800, height: 600)
+        screenshot: textLocationFixtureScreenshot()
     )
     let target = TextLocationTarget(app: "cairn", text: .exact("Backlog"), source: .auto)
     let resolver = TextLocationResolver(recognizeText: { _ in
@@ -289,21 +286,39 @@ import Testing
     #expect(encodedString.contains(token) == false)
 }
 
+/// The frame of the fixture's only window, and therefore of whatever a capture photographed.
+private let textLocationFixtureWindowFrame = AXFrame(x: 50, y: 60, width: 500, height: 400)
+
+private func textLocationFixtureScreenshot(
+    width: Int = 800,
+    height: Int = 600,
+    sourceWindowFrame: AXFrame? = textLocationFixtureWindowFrame
+) -> EncodedScreenshot {
+    EncodedScreenshot(
+        mediaType: "image/png",
+        base64Data: "fake",
+        width: width,
+        height: height,
+        sourceWindowFrame: sourceWindowFrame
+    )
+}
+
 private func textLocationFixtureSnapshot(
     _ children: [AXNode],
-    screenshot: EncodedScreenshot? = nil
+    screenshot: EncodedScreenshot? = nil,
+    windowFrames: [AXFrame] = [textLocationFixtureWindowFrame]
 ) -> AppSnapshot {
     AppSnapshot(
         id: SnapshotID("text-location-fixture"),
         app: AppIdentity(bundleIdentifier: "com.example.App", name: "Example", processIdentifier: 42),
-        windows: [
+        windows: windowFrames.enumerated().map { index, frame in
             AXNode(
                 role: "AXWindow",
                 title: "Main",
-                frame: AXFrame(x: 50, y: 60, width: 500, height: 400),
-                children: children
+                frame: frame,
+                children: index == 0 ? children : []
             )
-        ],
+        },
         screenshot: screenshot
     )
 }
