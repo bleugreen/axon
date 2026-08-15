@@ -1383,6 +1383,10 @@ impl Actor {
         }
         false
     }
+    pub(crate) fn screen_capture_handle(&self) -> Option<ScreenCastActor> {
+        self.screen_capture.clone()
+    }
+
     pub(crate) fn capture_screen(&self, reauthorize: bool) -> Result<ScreenCapture, CaptureError> {
         match &self.screen_capture {
             Some(actor) => actor.capture(reauthorize, INTERACTIVE_TIMEOUT),

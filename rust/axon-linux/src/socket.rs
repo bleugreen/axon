@@ -57,6 +57,10 @@ fn dispatch_shared(
     let Ok(request) = parse_request(line) else {
         return dispatch(line, &mut router.lock().unwrap(), reported, endpoint);
     };
+    if request.method == "capture_screen" {
+        let capture = router.lock().unwrap().backend().screen_capture_handle();
+        return dispatch_capture(request, capture);
+    }
     if matches!(
         request.method.as_str(),
         "wait_for_value" | "wait_for_stability"
@@ -71,6 +75,57 @@ fn dispatch_shared(
     } else {
         dispatch(line, &mut router.lock().unwrap(), reported, endpoint)
     }
+}
+
+#[cfg(target_os = "linux")]
+fn dispatch_capture(
+    request: JsonRpcRequest,
+    capture: Option<crate::screencast::ScreenCastActor>,
+) -> (Value, bool) {
+    let Some(id) = request.id else {
+        return (Value::Null, false);
+    };
+    let params = request.params.as_ref().and_then(Value::as_object);
+    let invalid = request.params.as_ref().is_some_and(|value| !value.is_object())
+        || params.is_some_and(|values| values.keys().any(|key| key != "reauthorize"))
+        || params
+            .and_then(|values| values.get("reauthorize"))
+            .is_some_and(|value| !value.is_boolean());
+    if invalid {
+        return (
+            serde_json::to_value(JsonRpcResponse::failure(
+                id,
+                axon_core::JsonRpcError {
+                    code: -32602,
+                    message: "capture_screen accepts only optional boolean reauthorize".into(),
+                    data: Some(json!({"path":"params"})),
+                },
+            ))
+            .unwrap(),
+            false,
+        );
+    }
+    let reauthorize = params
+        .and_then(|values| values.get("reauthorize"))
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    let result = capture
+        .ok_or_else(|| crate::screencast::CaptureError::Unavailable(
+            "capture_screen is available only in a Wayland session; use look screenshot for application-targeted X11 capture".into(),
+        ))
+        .and_then(|actor| actor.capture(reauthorize, crate::screencast::INTERACTIVE_TIMEOUT));
+    let response = match result {
+        Ok(capture) => JsonRpcResponse::success(id, json!({"capture": capture})),
+        Err(crate::screencast::CaptureError::AuthorizationRequired | crate::screencast::CaptureError::TimedOut) =>
+            JsonRpcResponse::failure(id, axon_core::JsonRpcError { code: -32004, message: "desktop portal authorization is required; retry capture_screen and approve the desktop chooser".into(), data: Some(json!({"reason":"portal-authorization-required","capability":"screenCapture"})) }),
+        Err(crate::screencast::CaptureError::Unavailable(reason)) =>
+            JsonRpcResponse::failure(id, axon_core::JsonRpcError { code: -32004, message: reason, data: Some(json!({"reason":"capability-unavailable","capability":"screenCapture"})) }),
+        Err(crate::screencast::CaptureError::Failed(reason)) =>
+            JsonRpcResponse::failure(id, axon_core::JsonRpcError { code: -32003, message: reason, data: Some(json!({"reason":"capture-failed","capability":"screenCapture"})) }),
+        Err(crate::screencast::CaptureError::NoFrame) =>
+            JsonRpcResponse::failure(id, axon_core::JsonRpcError { code: -32003, message: "the ScreenCast session did not produce a frame".into(), data: Some(json!({"reason":"capture-failed","capability":"screenCapture"})) }),
+    };
+    (serde_json::to_value(response).unwrap(), false)
 }
 
 fn mcp_success_response(id: Value, result: Value) -> Value {
