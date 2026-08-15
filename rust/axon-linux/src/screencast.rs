@@ -396,6 +396,9 @@ fn actor_main<D: ScreenCastDriver>(
                     break;
                 }
                 let shared = signal.shared.lock().expect("ScreenCast state poisoned");
+                if shared.generation != generation {
+                    continue;
+                }
                 shared.frame.clear();
                 drop(shared);
                 match result {
