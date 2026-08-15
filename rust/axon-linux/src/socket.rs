@@ -333,10 +333,20 @@ fn dispatch(
     };
     match request.method.as_str() {
         "capture_screen" => {
-            let reauthorize = request
-                .params
-                .as_ref()
-                .and_then(|params| params.get("reauthorize"))
+            let params = request.params.as_ref().and_then(Value::as_object);
+            let invalid = request.params.as_ref().is_some_and(|value| !value.is_object())
+                || params.is_some_and(|values| values.keys().any(|key| key != "reauthorize"))
+                || params.and_then(|values| values.get("reauthorize")).is_some_and(|value| !value.is_boolean());
+            if invalid {
+                let response = JsonRpcResponse::failure(id, axon_core::JsonRpcError {
+                    code: -32602,
+                    message: "capture_screen accepts only optional boolean reauthorize".into(),
+                    data: Some(json!({"path":"params"})),
+                });
+                return (serde_json::to_value(response).unwrap(), false);
+            }
+            let reauthorize = params
+                .and_then(|values| values.get("reauthorize"))
                 .and_then(Value::as_bool)
                 .unwrap_or(false);
             let response = match router.backend_mut().capture_screen(reauthorize) {
