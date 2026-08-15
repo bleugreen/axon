@@ -4,7 +4,8 @@ use axon_core::{
     AppQuery, AxnRunner, Capability, Confidence, DeliveryCandidate, DeliveryCapability,
     DeliveryOutcome, DeliveryPolicy, DeliveryRefusal, DeliveryRefusalReason, DeliveryRung,
     DeliverySelection, DiffPolicy, DispatchOutcome, ExpectedFact, ForegroundTarget, JsonRpcError,
-    JsonRpcId, JsonRpcRequest, JsonRpcResponse, KeyboardIntent, PlatformBackend, RecognizedText,
+    JsonRpcId, JsonRpcRequest, JsonRpcResponse, KeyboardIntent, PlatformBackend, PointerContract,
+    RecognizedText,
     Resolution, ResolutionStatus, RunEnvelope, Screenshot, SemanticLookup, SemanticNameRegistry,
     SemanticSelection, Snapshot, SnapshotHandle, TextLocationResolver, TextLocationSource,
     TextLocationTarget, ToolDispatcher, classify_semantic_diff, dispatch_in_foreground,
@@ -476,6 +477,9 @@ impl<B: PointerTargetVerifier + BackgroundPixelInput> Router<B> {
                         policy,
                         &candidate,
                         &bound,
+                        // Keystrokes never touch the pointer, so its position around this dispatch
+                        // is the desktop's business and not a promise this rung made.
+                        PointerContract::Observed,
                         verification,
                         move |backend, bound| backend.dispatch_pixel_keyboard(bound, intent),
                     );
@@ -631,6 +635,7 @@ impl<B: PointerTargetVerifier + BackgroundPixelInput> Router<B> {
                 policy,
                 &candidate,
                 &target,
+                PointerContract::Asserted,
                 verification,
                 |backend, target| backend.dispatch_pixel_click(target),
             )?;
@@ -743,6 +748,7 @@ impl<B: PointerTargetVerifier + BackgroundPixelInput> Router<B> {
         policy: DeliveryPolicy,
         candidate: &DeliveryCandidate,
         target: &PixelTarget,
+        pointer: PointerContract,
         verification: Value,
         deliver: impl FnOnce(&mut B, &PixelTarget) -> Result<PixelDispatch, PixelDispatchError>,
     ) -> Result<Value, JsonRpcError> {
@@ -755,7 +761,10 @@ impl<B: PointerTargetVerifier + BackgroundPixelInput> Router<B> {
         };
         // This rung is defined by what it does not do. A dispatch that changed the foreground or
         // moved the real pointer was not background delivery, whatever it managed to deliver, so
-        // these gate success as well as being reported.
+        // these gate success as well as being reported — each one held against a dispatch that
+        // could have caused it. Keystrokes touch no pointing device, so the pointer clause would
+        // only ever catch the person at the machine using their mouse, and `PointerContract` is
+        // what keeps that from being reported as a broken promise.
         let mut problems = Vec::new();
         if let Some(partial) = &dispatch.partial {
             problems.push(partial.clone());
@@ -766,7 +775,7 @@ impl<B: PointerTargetVerifier + BackgroundPixelInput> Router<B> {
         if !dispatch.input_focus_unchanged {
             problems.push("the X input focus moved across the dispatch".to_string());
         }
-        if !dispatch.pointer_unchanged {
+        if pointer.is_asserted() && !dispatch.pointer_unchanged {
             problems.push("the real pointer moved across the dispatch".to_string());
         }
         // Mechanism acceptance and goal success are kept apart because at this rung the gap between
@@ -786,6 +795,9 @@ impl<B: PointerTargetVerifier + BackgroundPixelInput> Router<B> {
                 "frontmostAppUnchanged": dispatch.frontmost_unchanged,
                 "inputFocusUnchanged": dispatch.input_focus_unchanged,
                 "pointerUnchanged": dispatch.pointer_unchanged,
+                // Whether that reading is a promise this dispatch made or an observation of the
+                // desktop it ran on.
+                "pointerAsserted": pointer.is_asserted(),
             },
             "targetWindow": target.evidence(),
         });
