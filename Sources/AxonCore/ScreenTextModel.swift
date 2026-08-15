@@ -19,9 +19,18 @@ public struct ScreenTextExtractor: Sendable {
         self.recognizeText = recognizeText
     }
 
+    /// Recognized text placed on screen, or nothing when the image cannot say which window it came
+    /// from.
+    ///
+    /// A recognized box is normalized to the image, so it can only be placed against the frame of
+    /// the window that image depicts. Falling back to some window of the application — the first in
+    /// the accessibility tree, say — always produces a point *inside that other window*, which is
+    /// how a click lands hundreds of pixels outside the window it was aimed at with nothing in the
+    /// result to show for it. There is no safe guess here, so an image without provenance yields no
+    /// items.
     public func extract(in snapshot: AppSnapshot) -> [ScreenTextItem] {
         guard let screenshot = snapshot.screenshot,
-              let windowFrame = snapshot.windows.compactMap(\.frame).first
+              let windowFrame = screenshot.sourceWindowFrame
         else {
             return []
         }

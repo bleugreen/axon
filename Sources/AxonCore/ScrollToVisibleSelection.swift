@@ -92,9 +92,4 @@ public enum ScrollToVisibleSelector {
     }
 }
 
-extension AXFrame {
-    var maxX: Double { x + width }
-    var maxY: Double { y + height }
-    var midX: Double { x + width / 2 }
-    var midY: Double { y + height / 2 }
-}
+

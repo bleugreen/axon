@@ -42,7 +42,18 @@ public struct ScreenshotCapturer {
             return nil
         }
 
-        return encode(scaledImage(image, maxDimension: maxEncodedDimension) ?? image)
+        // The frame of the window that was actually photographed, not of whichever window another
+        // selection would have picked. Everything downstream that converts an image coordinate to a
+        // screen coordinate converts through this.
+        return encode(
+            scaledImage(image, maxDimension: maxEncodedDimension) ?? image,
+            sourceWindowFrame: AXFrame(
+                x: window.frame.origin.x,
+                y: window.frame.origin.y,
+                width: window.frame.size.width,
+                height: window.frame.size.height
+            )
+        )
     }
 
     private func matchingWindow(for app: AppIdentity, axWindows: [AXNode]) -> SCWindow? {
@@ -106,7 +117,7 @@ public struct ScreenshotCapturer {
         return result.get()
     }
 
-    private func encode(_ image: CGImage) -> EncodedScreenshot? {
+    private func encode(_ image: CGImage, sourceWindowFrame: AXFrame) -> EncodedScreenshot? {
         let data = NSMutableData()
         guard
             let destination = CGImageDestinationCreateWithData(data, UTType.png.identifier as CFString, 1, nil)
@@ -123,7 +134,8 @@ public struct ScreenshotCapturer {
             mediaType: "image/png",
             base64Data: (data as Data).base64EncodedString(),
             width: image.width,
-            height: image.height
+            height: image.height,
+            sourceWindowFrame: sourceWindowFrame
         )
     }
 

@@ -53,12 +53,30 @@ public struct EncodedScreenshot: Codable, Equatable, Sendable {
     public let base64Data: String
     public let width: Int
     public let height: Int
+    /// The screen-space frame of the window this image depicts, as of capture.
+    ///
+    /// Capture chooses one window out of the application's several, and every coordinate derived
+    /// from the image — an OCR box, a screenshot-space point — is only meaningful against that
+    /// window's origin. Recording the frame here is what lets a consumer convert through the window
+    /// that was actually photographed instead of re-guessing one from the accessibility tree, where
+    /// a different choice lands coordinates in a window the image never showed.
+    ///
+    /// Optional because a screenshot decoded from a recording made before this field existed cannot
+    /// state it. A consumer that needs it must decline rather than substitute a guess.
+    public let sourceWindowFrame: AXFrame?
 
-    public init(mediaType: String, base64Data: String, width: Int, height: Int) {
+    public init(
+        mediaType: String,
+        base64Data: String,
+        width: Int,
+        height: Int,
+        sourceWindowFrame: AXFrame? = nil
+    ) {
         self.mediaType = mediaType
         self.base64Data = base64Data
         self.width = width
         self.height = height
+        self.sourceWindowFrame = sourceWindowFrame
     }
 }
 
@@ -246,6 +264,19 @@ public struct AXFrame: Codable, Equatable, Sendable {
         self.y = y
         self.width = width
         self.height = height
+    }
+}
+
+public extension AXFrame {
+    var maxX: Double { x + width }
+    var maxY: Double { y + height }
+    var midX: Double { x + width / 2 }
+    var midY: Double { y + height / 2 }
+
+    /// Whether this rectangle covers a point, on the half-open convention a window's own edge
+    /// follows: the leading edge belongs to the window, the trailing edge to whatever is beyond it.
+    func contains(x pointX: Double, y pointY: Double) -> Bool {
+        pointX >= x && pointX < maxX && pointY >= y && pointY < maxY
     }
 }
 
