@@ -180,14 +180,14 @@ impl Drop for ScreenCastActor {
     }
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct ScreenCapture {
     pub source: ScreenCaptureSource,
     #[serde(serialize_with = "serialize_image")]
     pub image: Screenshot,
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ScreenCaptureSource {
     pub kind: &'static str,
