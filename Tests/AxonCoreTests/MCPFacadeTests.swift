@@ -430,7 +430,8 @@ import Testing
                     mediaType: "image/png",
                     base64Data: "internal-image-payload",
                     width: 800,
-                    height: 600
+                    height: 600,
+                    sourceWindowFrame: AXFrame(x: 100, y: 200, width: 800, height: 600)
                 )
             )
         },
@@ -498,7 +499,13 @@ import Testing
                         frame: AXFrame(x: 100, y: 200, width: 800, height: 600)
                     )
                 ],
-                screenshot: EncodedScreenshot(mediaType: "image/png", base64Data: "internal-image-payload", width: 800, height: 600)
+                screenshot: EncodedScreenshot(
+                    mediaType: "image/png",
+                    base64Data: "internal-image-payload",
+                    width: 800,
+                    height: 600,
+                    sourceWindowFrame: AXFrame(x: 100, y: 200, width: 800, height: 600)
+                )
             )
         },
         recognizeText: { _ in
@@ -639,7 +646,13 @@ import Testing
                         frame: AXFrame(x: 100, y: 200, width: 800, height: 600)
                     )
                 ],
-                screenshot: EncodedScreenshot(mediaType: "image/png", base64Data: "ocr-image-payload", width: 800, height: 600)
+                screenshot: EncodedScreenshot(
+                    mediaType: "image/png",
+                    base64Data: "ocr-image-payload",
+                    width: 800,
+                    height: 600,
+                    sourceWindowFrame: AXFrame(x: 100, y: 200, width: 800, height: 600)
+                )
             )
         },
         recognizeText: { _ in
@@ -747,7 +760,8 @@ import Testing
                     mediaType: "image/png",
                     base64Data: "raw-image-payload",
                     width: 1200,
-                    height: 800
+                    height: 800,
+                    sourceWindowFrame: AXFrame(x: 100, y: 200, width: 1200, height: 800)
                 )
             )
         },
@@ -876,7 +890,8 @@ import Testing
                     mediaType: "image/png",
                     base64Data: "raw-image",
                     width: 300,
-                    height: 200
+                    height: 200,
+                    sourceWindowFrame: AXFrame(x: 0, y: 0, width: 300, height: 200)
                 )
             )
         },
