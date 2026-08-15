@@ -465,6 +465,7 @@ mod production {
         stopped: StopSignal,
     ) -> Result<(), DriverError> {
         let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_io()
             .enable_time()
             .build()
             .map_err(|e| DriverError::Failed(e.to_string()))?;
