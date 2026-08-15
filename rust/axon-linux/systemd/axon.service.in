@@ -15,5 +15,14 @@ ExecStart=@EXEC@ serve
 Restart=on-failure
 RestartSec=2
 
+# A bound on the blast radius, not a tuning knob. Axon's honest working set is tens of megabytes:
+# the largest tree it will return is capped at 2,000 nodes and a capture holds one screenshot. A
+# process past 512M is misbehaving, and one past 1G has been observed taking the whole machine down
+# with it, so it is throttled first and killed second rather than allowed to exhaust the host. The
+# restart above brings it straight back, which is a better outcome for everything else on the
+# machine than a daemon that swaps a desktop to death.
+MemoryHigh=512M
+MemoryMax=1G
+
 [Install]
 WantedBy=graphical-session.target
