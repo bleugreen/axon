@@ -278,14 +278,16 @@ public struct BrowserAutomationDenial: Equatable, Sendable {
     /// has been requested once there is no Axon row in System Settings and no way to add one, so
     /// pointing an undetermined grant at that pane describes an impossible action.
     var message: String {
-        let observed = "Automation permission for \(app) \(authorization == .denied ? "is denied" : "has not been granted")."
-        if answeredEarlierInThisProcess {
-            return "\(observed) The Axon daemon already resolved Automation for \(app) earlier in this session and macOS can answer from what the process holds, so this may not reflect current system state. Restart the daemon with `launchctl kickstart -k gui/$(id -u)/dev.axon.daemon`, then try again."
-        }
+        var sentences = ["Automation permission for \(app) \(authorization == .denied ? "is denied" : "has not been granted")."]
         if authorization == .notDetermined {
-            return "\(observed) Open the Axon menu bar item and choose Browser Automation... to grant it. Axon does not appear in System Settings > Privacy & Security > Automation until consent has been requested once."
+            sentences.append("Open the Axon menu bar item and choose Browser Automation... to grant it. Axon does not appear in System Settings > Privacy & Security > Automation until consent has been requested once.")
+        } else {
+            sentences.append("If Axon is listed in System Settings > Privacy & Security > Automation, enable \(app) beneath it. If it is not listed, open the Axon menu bar item and choose Browser Automation... to request consent.")
         }
-        return "\(observed) If Axon is listed in System Settings > Privacy & Security > Automation, enable \(app) beneath it. If it is not listed, open the Axon menu bar item and choose Browser Automation... to request consent."
+        if answeredEarlierInThisProcess {
+            sentences.append("The Axon daemon already resolved Automation for \(app) earlier in this session and macOS can answer from what the process holds, so this may not reflect current settings. Restart the daemon with `launchctl kickstart -k gui/$(id -u)/dev.axon.daemon` to re-check.")
+        }
+        return sentences.joined(separator: " ")
     }
 }
 
