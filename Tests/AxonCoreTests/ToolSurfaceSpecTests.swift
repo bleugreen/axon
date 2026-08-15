@@ -61,6 +61,7 @@ import Testing
 @Test func toolSurfaceDeclaresFacadeAvailability() throws {
 
     let expected: [(String, String, Set<ToolFacade>)] = [
+        ("capture_screen", "capture_screen", [.linux]),
         ("look", "look", [.swift, .mac, .windows, .linux]),
         ("navigate", "navigate", [.swift]),
         ("windows", "windows", [.swift]),

@@ -435,6 +435,8 @@ jobs:
   linux:
     name: Linux live loop
     runs-on: [self-hosted, axon-live-linux]
+    env:
+      BINDGEN_EXTRA_CLANG_ARGS: -I/usr/include -I/usr/include/x86_64-linux-gnu
     concurrency:
       group: axon-live-linux
       cancel-in-progress: false

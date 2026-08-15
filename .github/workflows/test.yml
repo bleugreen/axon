@@ -252,6 +252,8 @@ jobs:
   rust-linux:
     name: Rust Linux
     runs-on: ubuntu-latest
+    env:
+      BINDGEN_EXTRA_CLANG_ARGS: -I/usr/include -I/usr/include/x86_64-linux-gnu
     steps:
       - name: Check out Axon
         uses: actions/checkout@v4

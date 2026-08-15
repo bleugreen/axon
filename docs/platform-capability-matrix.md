@@ -16,10 +16,11 @@ Static availability is not a claim that every runtime environment works. Permiss
 - For every **N/—** Rust cell, the platform router's excluded-tool test is refusal evidence: direct socket bypass returns `-32004`, reason `not-implemented`, and performs zero backend dispatch. Swift has no statically absent public tools.
 - For **P/A**, router/backend tests establish explicit refusal before unsafe native dispatch. Delivery restrictions use stable delivery reasons such as `wayland-restricted`, `no-graphical-session`, or target/session-specific unavailability. The detailed live and hermetic evidence ledger is [Cross-platform internals](cross-platform-internals.md).
 
-## Exhaustive 16 × 4 census
+## Exhaustive 17 × 4 census
 
 | tool (socket method) | Swift daemon | Rust macOS | Windows | Linux |
 | --- | --- | --- | --- | --- |
+| `capture_screen` (`capture_screen`) | **N/— S** | **N/— M** | **N/— W** | **P/A L** user-authorized ScreenCast WINDOW capture on Wayland; X11 explicitly redirects application screenshots to `look` |
 | `look` (`look`) | **I/A S** AX snapshot, screenshot, OCR | **P/A M** AX capture plus native Vision OCR; Screen Recording and observation-form limits remain bounded [P-M-LOOK] | **P/A W** UIA capture, Graphics Capture, and built-in OCR; session/elevation gates [P-W-LOOK] | **P/A L** AT-SPI plus X11 capture/Tesseract OCR; Wayland refused and XWayland remains Wayland-governed [P-L-LOOK] |
 | `navigate` (`navigate`) | **I/A S** browser Application Scripting | **N/— M** [N-M] | **N/— W** [N-W] | **N/— L** [N-L] |
 | `windows` (`windows`) | **I/A S** browser Application Scripting plus AX cross-check | **N/— M** [N-M] | **N/— W** [N-W] | **N/— L** [N-L] |

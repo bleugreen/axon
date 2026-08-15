@@ -280,6 +280,8 @@ jobs:
     name: Build Linux
     needs: version
     runs-on: ubuntu-latest
+    env:
+      BINDGEN_EXTRA_CLANG_ARGS: -I/usr/include -I/usr/include/x86_64-linux-gnu
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable

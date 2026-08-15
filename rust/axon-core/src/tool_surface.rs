@@ -642,6 +642,7 @@ mod tests {
         assert_eq!(
             names(ToolBackend::Linux),
             [
+                "capture_screen",
                 "look",
                 "find",
                 "wait_for_value",
