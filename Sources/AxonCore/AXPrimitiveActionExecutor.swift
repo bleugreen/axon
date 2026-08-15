@@ -1126,12 +1126,14 @@ public final class AXPrimitiveActionExecutor {
     ) -> PrimitiveActionResult {
         let prior = frontmostApp()
         let alreadyFrontmost = process == nil || prior?.processIdentifier == process
-        var activationProved = alreadyFrontmost
+        // Nil, not true, when there is no process: an action that names no application activates
+        // nothing, so there is no activation to have proved.
+        var activationProved: Bool? = process == nil ? nil : alreadyFrontmost
         if !alreadyFrontmost, let process {
             _ = activateProcess(process)
             activationProved = settle { self.frontmostApp()?.processIdentifier == process }
         }
-        guard activationProved else {
+        guard activationProved != false else {
             let cleanup = ForegroundCleanup(
                 priorApp: prior?.identity,
                 priorAppProcessIdentifier: prior.map { Int($0.processIdentifier) },
@@ -1163,7 +1165,7 @@ public final class AXPrimitiveActionExecutor {
                 priorApp: prior?.identity,
                 priorAppProcessIdentifier: prior.map { Int($0.processIdentifier) },
                 alreadyFrontmost: alreadyFrontmost,
-                activationProved: true,
+                activationProved: activationProved,
                 restored: restored,
                 pointerRestored: pointerRestored,
                 message: restored ? nil : "The prior application did not return to the foreground"
