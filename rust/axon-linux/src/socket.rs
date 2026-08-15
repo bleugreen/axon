@@ -333,7 +333,9 @@ fn dispatch(
     };
     match request.method.as_str() {
         "capture_screen" => {
-            let reauthorize = request.params.as_ref()
+            let reauthorize = request
+                .params
+                .as_ref()
                 .and_then(|params| params.get("reauthorize"))
                 .and_then(Value::as_bool)
                 .unwrap_or(false);

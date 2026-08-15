@@ -255,8 +255,9 @@ fn input_session(facts: SessionFacts) -> InputSession {
 
 fn screenshot_provider(facts: SessionFacts) -> ScreenshotProvider {
     match screenshot_provider_kind(facts) {
-        ScreenshotProviderKind::Unavailable(AUTHORIZATION_REQUIRED) =>
-            ScreenshotProvider::Unavailable(AUTHORIZATION_REQUIRED),
+        ScreenshotProviderKind::Unavailable(AUTHORIZATION_REQUIRED) => {
+            ScreenshotProvider::Unavailable(AUTHORIZATION_REQUIRED)
+        }
         ScreenshotProviderKind::X11 => X11Session::connect()
             .map(Box::new)
             .map(ScreenshotProvider::X11)
@@ -313,7 +314,11 @@ impl LinuxBackend {
             tx,
             input: input_session(facts),
             screenshot: screenshot_provider(facts),
-            screen_capture: facts.wayland.then(|| TokenStore::from_environment().ok()).flatten().map(ScreenCastActor::spawn_production),
+            screen_capture: facts
+                .wayland
+                .then(|| TokenStore::from_environment().ok())
+                .flatten()
+                .map(ScreenCastActor::spawn_production),
             identities: Vec::new(),
             identities_read: None,
         })
@@ -340,7 +345,6 @@ impl LinuxBackend {
         let (usable, restriction) = match &self.screenshot {
             ScreenshotProvider::X11(_) => (true, None),
             ScreenshotProvider::Unavailable(reason) => (false, Some((*reason).to_string())),
-
         };
         CapabilityInfo {
             capability: Capability::Screenshot,
@@ -546,7 +550,6 @@ impl PlatformBackend for LinuxBackend {
         self.x11(Capability::KeyboardInput)?.keyboard(intent)
     }
     fn screenshot(&mut self, app: &AppQuery) -> Result<Screenshot, BackendError> {
-
         if let ScreenshotProvider::Unavailable(reason) = &self.screenshot {
             return Err(capability(Capability::Screenshot, reason));
         }

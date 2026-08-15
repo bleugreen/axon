@@ -109,14 +109,14 @@ impl TokenStore {
     }
 
     pub fn load(&self) -> io::Result<Option<(Option<String>, RestoreToken)>> {
-        Ok(self.records()?.into_iter().next().map(|record| (record.source_id, record.token)))
+        Ok(self
+            .records()?
+            .into_iter()
+            .next()
+            .map(|record| (record.source_id, record.token)))
     }
 
-    pub fn replace(
-        &self,
-            source_id: Option<&str>,
-        token: RestoreToken,
-    ) -> io::Result<()> {
+    pub fn replace(&self, source_id: Option<&str>, token: RestoreToken) -> io::Result<()> {
         let mut records = match self.records() {
             Ok(records) => records,
             // Do not destroy an old or malformed capability file. A successful fresh selection is

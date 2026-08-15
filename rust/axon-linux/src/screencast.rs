@@ -1,8 +1,6 @@
 //! Dedicated ScreenCast/PipeWire capture actor.
 
-use crate::portal::{
-    LatestFrame, PipeWireFrame, PortalState, RestoreToken, TokenStore,
-};
+use crate::portal::{LatestFrame, PipeWireFrame, PortalState, RestoreToken, TokenStore};
 use axon_core::Screenshot;
 use serde::Serialize;
 use std::{
@@ -97,11 +95,23 @@ impl ScreenCastActor {
             .state
             .clone()
     }
-    pub fn capture(&self, reauthorize: bool, timeout: Duration) -> Result<ScreenCapture, CaptureError> {
-        let _request = self.request_lock.lock().expect("ScreenCast request lock poisoned");
+    pub fn capture(
+        &self,
+        reauthorize: bool,
+        timeout: Duration,
+    ) -> Result<ScreenCapture, CaptureError> {
+        let _request = self
+            .request_lock
+            .lock()
+            .expect("ScreenCast request lock poisoned");
         let deadline = Instant::now() + timeout.min(INTERACTIVE_TIMEOUT);
-        let mut shared = self.signal.shared.lock().expect("ScreenCast state poisoned");
-        let reusable = !reauthorize && matches!(shared.state, PortalState::Streaming)
+        let mut shared = self
+            .signal
+            .shared
+            .lock()
+            .expect("ScreenCast state poisoned");
+        let reusable = !reauthorize
+            && matches!(shared.state, PortalState::Streaming)
             && shared.frame.snapshot().is_some();
         if !reusable {
             if matches!(shared.state, PortalState::Starting | PortalState::Streaming) {
@@ -121,7 +131,10 @@ impl ScreenCastActor {
                 let _ = self.stop.send(());
                 return Err(CaptureError::AuthorizationRequired);
             }
-            let (next, wait) = self.signal.changed.wait_timeout(shared, deadline - now)
+            let (next, wait) = self
+                .signal
+                .changed
+                .wait_timeout(shared, deadline - now)
                 .expect("ScreenCast state poisoned");
             shared = next;
             if wait.timed_out() && shared.frame.snapshot().is_none() {
@@ -133,7 +146,9 @@ impl ScreenCastActor {
         if let Some(frame) = shared.frame.snapshot() {
             let source_width = frame.width;
             let source_height = frame.height;
-            let image = frame.screenshot().map_err(|e| CaptureError::Failed(format!("{e:?}")))?;
+            let image = frame
+                .screenshot()
+                .map_err(|e| CaptureError::Failed(format!("{e:?}")))?;
             return Ok(ScreenCapture {
                 source: ScreenCaptureSource {
                     kind: "userAuthorizedScreenCast",
@@ -145,7 +160,9 @@ impl ScreenCastActor {
             });
         }
         match &shared.state {
-            PortalState::AuthorizationRequired | PortalState::Starting => Err(CaptureError::AuthorizationRequired),
+            PortalState::AuthorizationRequired | PortalState::Starting => {
+                Err(CaptureError::AuthorizationRequired)
+            }
             PortalState::Unavailable(r) => Err(CaptureError::Unavailable(r.clone())),
             PortalState::Failed(r) => Err(CaptureError::Failed(r.clone())),
             PortalState::Streaming => Err(CaptureError::NoFrame),
@@ -162,8 +179,6 @@ impl Drop for ScreenCastActor {
         }
     }
 }
-
-
 
 #[derive(Debug, Clone, Serialize)]
 pub struct ScreenCapture {
@@ -182,14 +197,20 @@ pub struct ScreenCaptureSource {
     pub height: u32,
 }
 
-fn serialize_image<S: serde::Serializer>(image: &Screenshot, serializer: S) -> Result<S::Ok, S::Error> {
-    use serde::ser::SerializeStruct;
+fn serialize_image<S: serde::Serializer>(
+    image: &Screenshot,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
     use base64::Engine;
+    use serde::ser::SerializeStruct;
     let mut state = serializer.serialize_struct("ScreenCaptureImage", 4)?;
     state.serialize_field("mediaType", &image.media_type)?;
     state.serialize_field("width", &image.width)?;
     state.serialize_field("height", &image.height)?;
-    state.serialize_field("base64Data", &base64::engine::general_purpose::STANDARD.encode(&image.bytes))?;
+    state.serialize_field(
+        "base64Data",
+        &base64::engine::general_purpose::STANDARD.encode(&image.bytes),
+    )?;
     state.end()
 }
 #[derive(Debug, Clone)]
@@ -237,7 +258,9 @@ fn actor_main<D: ScreenCastDriver>(
         match command {
             Command::Stop => break,
             Command::Capture(reauthorize) => {
-                let stored = if reauthorize { None } else {
+                let stored = if reauthorize {
+                    None
+                } else {
                     store.load().ok().flatten().map(|(_, token)| token)
                 };
                 let run_once = |driver: &mut D, token| {
