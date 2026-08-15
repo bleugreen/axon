@@ -386,5 +386,25 @@ private func escalationStore() -> (AXElementStore, AXUIElement) {
     // Nothing to raise means nothing is raised, and the prior app keeps the session throughout.
     #expect(!session.log.contains { $0.hasPrefix("activate") })
     #expect(escalated.details["foreground"]?["alreadyFrontmost"] == .bool(true))
+    // And nothing is claimed about an activation that never had a target. Reporting `true` here
+    // read as proof that the escalation had raised something, which sent a field investigation
+    // after a mechanism this path never runs.
+    #expect(escalated.details["foreground"]?["activationProved"] == .null)
     #expect(session.frontmost == priorProcess)
+}
+
+@Test func aPointNamingNoApplicationReportsActivationAsNotApplicable() throws {
+    let session = FakeSession()
+    let (store, element) = escalationStore()
+    let executor = session.typeExecutor(store: store, element: element, process: nil)
+
+    let result = try executor.click(
+        point: ActionPoint(x: 10, y: 20, coordinateSpace: .screen),
+        policy: .foregroundPermitted
+    )
+
+    #expect(result.delivery == .foreground)
+    #expect(result.dispatchSuccess)
+    #expect(result.details["foreground"]?["activationProved"] == .null)
+    #expect(!session.log.contains { $0.hasPrefix("activate") })
 }
