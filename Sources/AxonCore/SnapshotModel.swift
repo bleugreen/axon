@@ -267,6 +267,24 @@ public struct AXFrame: Codable, Equatable, Sendable {
     }
 }
 
+extension AXFrame: CustomStringConvertible {
+    /// How a rectangle reads inside a diagnostic message, for example `{x:100,y:50,width:80,height:20}`.
+    public var description: String {
+        "{x:\(x.compactDescription),y:\(y.compactDescription),width:\(width.compactDescription),height:\(height.compactDescription)}"
+    }
+}
+
+extension Double {
+    /// Rendered for a human-readable message: a whole value loses its fractional part, so a frame
+    /// reads `{x:100,...}` rather than `{x:100.0,...}`.
+    var compactDescription: String {
+        guard rounded() == self, magnitude < 1e15 else {
+            return String(self)
+        }
+        return String(Int(self))
+    }
+}
+
 public extension AXFrame {
     var maxX: Double { x + width }
     var maxY: Double { y + height }

@@ -244,12 +244,8 @@ public struct ActionPoint: Codable, Equatable, Sendable {
     }
 
     public var targetDescription: String {
-        let base = "point:\(format(x)),\(format(y))"
+        let base = "point:\(x.compactDescription),\(y.compactDescription)"
         return coordinateSpace == .legacyScreen ? base : "\(base)[\(coordinateSpace.rawValue)]"
-    }
-
-    private func format(_ value: Double) -> String {
-        value.rounded() == value ? String(Int(value)) : String(value)
     }
 }
 
