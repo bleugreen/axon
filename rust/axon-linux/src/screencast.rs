@@ -16,7 +16,7 @@ use std::{
 pub const INTERACTIVE_TIMEOUT: Duration = Duration::from_secs(15);
 
 #[derive(Default)]
-struct StopController {
+pub struct StopController {
     requested: AtomicBool,
     wake: Mutex<Option<Arc<dyn Fn() + Send + Sync>>>,
 }
