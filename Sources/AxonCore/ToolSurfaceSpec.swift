@@ -16,6 +16,7 @@ public struct ToolFacadeSet: OptionSet, Equatable, Sendable {
     public static let linux = ToolFacadeSet(rawValue: 1 << 3)
     public static let swiftOnly: ToolFacadeSet = [.swift]
     public static let all: ToolFacadeSet = [.swift, .mac, .windows, .linux]
+    public static let linuxOnly: ToolFacadeSet = [.linux]
 
     public func contains(_ facade: ToolFacade) -> Bool {
         let mask: ToolFacadeSet
@@ -153,6 +154,14 @@ public struct ToolSpec: Equatable, Sendable {
 
 public enum ToolSurfaceSpec {
     public static let tools: [ToolSpec] = [
+        ToolSpec(
+            name: "capture_screen",
+            description: "Capture the user-authorized desktop ScreenCast source. The selected source is not associated with any application.",
+            params: [
+                ToolParameterSpec("reauthorize", .boolean, default: .bool(false), description: "Ignore any stored restore token and request fresh portal authorization. The token is replaced only after ScreenCast Start succeeds.")
+            ],
+            availability: .linuxOnly
+        ),
         ToolSpec(
             name: "look",
             description: "Observe Axon's current surface: no app lists apps, app captures state, a semantic target pages children, and since returns a change check. An observation whose note is no-windows means the application is running with no window open; the tree still holds its menu bar, so open one through the application's own File > New Window item before acting.",
