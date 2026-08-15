@@ -539,22 +539,31 @@ private func stabilitySnapshot(id: String, title: String) -> AppSnapshot {
     #expect(response.error == nil)
 }
 
-@Test func clickRequestAcceptsTextLocationTarget() {
+@Test func clickRequestClicksAnAccessibilityTextLocationThroughItsElement() {
+    // The resolver matched a real element, so the click presses it rather than aiming a pointer at
+    // its centre. The result still names the mechanism, because a caller who needs a pixel click
+    // has to be able to see that it did not get one.
+    var clickedHandle: String?
     let router = CommandRouter(
         captureSnapshot: { _, screenshot in
             #expect(screenshot == false)
             return actionTextLocationFixtureSnapshot(labels: ["Backlog"])
         },
         actions: PrimitiveActionHandlers(
-            clickPoint: { point, _ in
-                #expect(point == ActionPoint(x: 140, y: 60))
+            click: { handle, _ in
+                clickedHandle = handle
                 return PrimitiveActionResult(
-                    action: "click",
-                    target: point.targetDescription,
-                    strategy: "CGEvent",
-                    success: true,
-                    details: ["point": point.jsonValue]
+                    action: "AXPress",
+                    target: handle,
+                    strategy: "AXAction",
+                    policy: .backgroundOnly,
+                    delivery: .semantic,
+                    success: true
                 )
+            },
+            clickPoint: { point, _ in
+                Issue.record("an accessibility text location must not be clicked as a coordinate: \(point)")
+                return PrimitiveActionResult(action: "click", target: "unexpected", strategy: "CGEvent", success: false)
             }
         )
     )
@@ -573,8 +582,12 @@ private func stabilitySnapshot(id: String, title: String) -> AppSnapshot {
     ))
 
     #expect(response.error == nil)
-    #expect(response.result?["action"]?["target"] == .string("point:140,60"))
-    #expect(response.result?["action"]?["point"]?["x"] == .double(140))
+    // The matched node is the window's first child, so index 1 in the snapshot's flattened order.
+    #expect(clickedHandle == "action-text-location-fixture:1")
+    #expect(response.result?["action"]?["strategy"] == .string("AXAction"))
+    #expect(response.result?["action"]?["delivery"] == .string("semantic"))
+    // The evidence that made the element reachable still rides along.
+    #expect(response.result?["action"]?["locationResolutions"]?[0]?["best"]?["source"] == .string("ax"))
 }
 
 @Test func clickRequestAcceptsScreenshotTextLocationTarget() {
@@ -588,7 +601,9 @@ private func stabilitySnapshot(id: String, title: String) -> AppSnapshot {
         },
         actions: PrimitiveActionHandlers(
             clickPoint: { point, _ in
-                #expect(point == ActionPoint(x: 225, y: 200))
+                // Recognized text has no element behind it, so it stays a coordinate — but one that
+                // names the application it came from and the window it was measured against.
+                #expect(point == resolvedFixturePoint(x: 225, y: 200))
                 return PrimitiveActionResult(
                     action: "click",
                     target: point.targetDescription,
@@ -693,16 +708,13 @@ private func stabilitySnapshot(id: String, title: String) -> AppSnapshot {
 @Test func clickRequestResolvesTheSameOpaqueTargetThroughTheDocumentedAutoFallback() {
     let router = CommandRouter(
         captureSnapshot: { _, screenshot in
-            actionOpaqueTextLocationFixtureSnapshot(screenshot: screenshot ? EncodedScreenshot(
-                mediaType: "image/png",
-                base64Data: "fake",
-                width: 800,
-                height: 600
-            ) : nil)
+            actionOpaqueTextLocationFixtureSnapshot(
+                screenshot: screenshot ? actionFixtureScreenshot(base64Data: "fake", width: 800, height: 600) : nil
+            )
         },
         actions: PrimitiveActionHandlers(
             clickPoint: { point, _ in
-                #expect(point == ActionPoint(x: 225, y: 200))
+                #expect(point == resolvedFixturePoint(x: 225, y: 200))
                 return PrimitiveActionResult(
                     action: "click",
                     target: point.targetDescription,
@@ -1338,6 +1350,12 @@ private func actionLocatorFixtureSnapshot(buttons: [String]) -> AppSnapshot {
 
 /// The frame of the fixture's only window, and therefore of whatever a capture photographed.
 private let actionFixtureWindowFrame = AXFrame(x: 50, y: 60, width: 500, height: 400)
+
+/// What a point resolved from a capture carries: the application it came from, and the window
+/// frame its coordinates were computed against.
+private func resolvedFixturePoint(x: Double, y: Double) -> ActionPoint {
+    ActionPoint(x: x, y: y, app: "com.example.App", sourceWindowFrame: actionFixtureWindowFrame)
+}
 
 private func actionFixtureScreenshot(
     base64Data: String = "",
