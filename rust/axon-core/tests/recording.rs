@@ -7,14 +7,15 @@
 
 use axon_core::{
     ActionObservation, AxnAction, DerivedPostconditionCompiler, ObservedElementState,
-    PostconditionInput, RecordedUserAction, RecordedUserEventGroup, RedactionMarkerTaint,
-    UserRecordingTranslator,
+    PostconditionInput, RecordedAppIdentity, RecordedUserAction, RecordedUserEventGroup,
+    RedactionMarkerTaint, UserRecordingTranslator,
 };
 use serde_json::{Value, json};
 
 fn translate(groups: &[RecordedUserEventGroup]) -> Vec<AxnAction> {
     UserRecordingTranslator::new()
         .axn_document(groups, Vec::new(), &RedactionMarkerTaint)
+        .expect("authored document satisfies the replay contract")
         .actions
 }
 
@@ -208,8 +209,9 @@ fn a_recorded_flow_round_trips_through_the_shared_v2_codec() {
         target: button_target("Notes", "new-button", "New"),
     })];
 
-    let document =
-        UserRecordingTranslator::new().axn_document(&groups, Vec::new(), &RedactionMarkerTaint);
+    let document = UserRecordingTranslator::new()
+        .axn_document(&groups, Vec::new(), &RedactionMarkerTaint)
+        .expect("authored document satisfies the replay contract");
     let yaml = axon_core::AxnCodec::to_yaml(&document).expect("authored document serializes");
     let reparsed = axon_core::AxnCodec::parse(&yaml).expect("authored document reparses");
 
@@ -226,6 +228,81 @@ fn a_recorded_flow_round_trips_through_the_shared_v2_codec() {
         "unexpected scaffolding in {yaml}"
     );
     assert!(!yaml.contains("null"), "unexpected scaffolding in {yaml}");
+}
+
+#[test]
+fn authoring_refuses_a_target_its_own_replay_would_reject() {
+    // A provider that loses durable identity must fail here, not at the moment someone tries to
+    // use the recording.
+    let groups = [RecordedUserEventGroup::new(RecordedUserAction::Click {
+        target: json!({"app": "Notes", "name": "new-button"}),
+    })];
+
+    let error = UserRecordingTranslator::new()
+        .axn_document(&groups, Vec::new(), &RedactionMarkerTaint)
+        .expect_err("a target without an attached locator is not replayable");
+
+    assert!(
+        error.to_string().contains("attached locator"),
+        "unhelpful refusal: {error}"
+    );
+}
+
+#[test]
+fn an_honest_point_fallback_still_satisfies_the_replay_contract() {
+    // When semantic identity could not be captured the recorder keeps the physical point, and that
+    // recording has to stay usable rather than being refused as malformed.
+    let groups = [RecordedUserEventGroup::new(RecordedUserAction::Click {
+        target: json!({"app": "Notes", "point": {"x": 12.0, "y": 34.0}}),
+    })
+    .with_warnings(vec!["recorded point fallback".into()])];
+
+    let actions = translate(&groups);
+
+    assert_eq!(actions[0].params["target"]["point"]["x"], json!(12.0));
+    assert_eq!(
+        actions[0].params["warnings"],
+        json!(["recorded point fallback"])
+    );
+}
+
+#[test]
+fn a_redacted_value_is_carried_as_the_typed_value_but_never_asserted() {
+    // Redaction happens upstream, so a credential arrives here already a marker. Carrying it is
+    // what keeps a recording of a password field readable and parameterizable; asserting it back
+    // is what must never happen.
+    let groups = [RecordedUserEventGroup::new(RecordedUserAction::SetValue {
+        target: field_target("1Password", "password-field", "Password"),
+        value: "<redacted: active-credential>".into(),
+        fact_target: None,
+    })];
+
+    let yaml = UserRecordingTranslator::new()
+        .yaml(&groups, Vec::new(), &RedactionMarkerTaint)
+        .expect("authored document satisfies the replay contract");
+
+    assert!(yaml.contains("<redacted: active-credential>"), "{yaml}");
+    // Nothing depends on the guard, so it is pruned and the step asserts nothing at all.
+    assert!(translate(&groups)[0].expects.is_empty());
+}
+
+#[test]
+fn a_runtime_process_id_never_reaches_a_serialized_artifact() {
+    // Runtime scoping for the semantic-name registry must not be mistaken for durable identity by
+    // a later session that reads it back.
+    let identity = RecordedAppIdentity {
+        name: "Notes".into(),
+        bundle_identifier: Some("com.apple.Notes".into()),
+        process_id: Some(4321),
+    };
+
+    let encoded = serde_json::to_string(&identity).expect("identity serializes");
+
+    assert!(!encoded.contains("4321"), "pid leaked into {encoded}");
+    assert!(encoded.contains("com.apple.Notes"));
+    let decoded: RecordedAppIdentity = serde_json::from_str(&encoded).expect("identity reparses");
+    assert_eq!(decoded.process_id, None);
+    assert_eq!(decoded.name, "Notes");
 }
 
 // --- derived postconditions -------------------------------------------------------------------
