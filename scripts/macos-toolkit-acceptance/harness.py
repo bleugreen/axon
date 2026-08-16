@@ -382,7 +382,9 @@ class FixtureTarget(Target):
                 raise RuntimeError(
                     "the embedded WKWebView never loaded the measurement page"
                 )
-            point = geometry["widgets"]["link"]["center"]
+            # The web view fills the fixture's content view, so the rectangle
+            # the fixture published for that view is the viewport's rectangle.
+            point = web_point(self.reports, self.nonce, self.ready.get("window"))
         elif action == "click":
             point = self.ready["checkbox"]["center"]
         return Launched(
