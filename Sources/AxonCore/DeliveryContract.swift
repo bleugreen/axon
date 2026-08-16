@@ -183,10 +183,16 @@ public struct DeliveryRefusal: Codable, Equatable, Sendable {
 public struct ForegroundCleanup: Codable, Equatable, Sendable {
     public let priorApp: String?
     public let priorAppProcessIdentifier: Int?
-    /// True when the target already held the foreground, so no activation was performed.
+    /// True when no activation was performed: either the target already held the foreground, or the
+    /// action named no application and so had nothing to raise.
     public let alreadyFrontmost: Bool
-    /// True when the target was observed frontmost before anything was posted.
-    public let activationProved: Bool
+    /// True when the target was observed frontmost before anything was posted, and nil when the
+    /// action named no application, so there was no target to observe and nothing was proved.
+    ///
+    /// The nil case is the honest answer to a question that does not apply. Reporting `true` there
+    /// read as evidence that an activation had succeeded, which sent a field investigation after the
+    /// wrong mechanism entirely.
+    public let activationProved: Bool?
     /// True when the prior application was observed frontmost again afterwards. Also true when
     /// nothing needed restoring because the target already held the foreground.
     public let restored: Bool
@@ -198,7 +204,7 @@ public struct ForegroundCleanup: Codable, Equatable, Sendable {
         priorApp: String?,
         priorAppProcessIdentifier: Int?,
         alreadyFrontmost: Bool,
-        activationProved: Bool,
+        activationProved: Bool?,
         restored: Bool,
         pointerRestored: Bool? = nil,
         message: String? = nil
@@ -217,7 +223,7 @@ public struct ForegroundCleanup: Codable, Equatable, Sendable {
             "priorApp": priorApp.map(JSONValue.string) ?? .null,
             "priorAppProcessIdentifier": priorAppProcessIdentifier.map(JSONValue.int) ?? .null,
             "alreadyFrontmost": .bool(alreadyFrontmost),
-            "activationProved": .bool(activationProved),
+            "activationProved": activationProved.map(JSONValue.bool) ?? .null,
             "restored": .bool(restored),
             "pointerRestored": pointerRestored.map(JSONValue.bool) ?? .null,
             "message": message.map(JSONValue.string) ?? .null

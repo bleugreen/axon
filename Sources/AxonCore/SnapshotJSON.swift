@@ -244,12 +244,16 @@ private extension AXNode {
 
 public extension EncodedScreenshot {
     var jsonValue: JSONValue {
-        .object([
+        var object: [String: JSONValue] = [
             "mediaType": .string(mediaType),
             "base64Data": .string(base64Data),
             "width": .int(width),
             "height": .int(height)
-        ])
+        ]
+        if let sourceWindowFrame {
+            object["sourceWindowFrame"] = sourceWindowFrame.jsonValue
+        }
+        return .object(object)
     }
 }
 

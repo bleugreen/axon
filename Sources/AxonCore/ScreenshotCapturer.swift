@@ -42,7 +42,13 @@ public struct ScreenshotCapturer {
             return nil
         }
 
-        return encode(scaledImage(image, maxDimension: maxEncodedDimension) ?? image)
+        // The frame of the window that was actually photographed, not of whichever window another
+        // selection would have picked. Everything downstream that converts an image coordinate to a
+        // screen coordinate converts through this.
+        return encode(
+            scaledImage(image, maxDimension: maxEncodedDimension) ?? image,
+            sourceWindowFrame: window.frame.axFrame
+        )
     }
 
     private func matchingWindow(for app: AppIdentity, axWindows: [AXNode]) -> SCWindow? {
@@ -69,7 +75,7 @@ public struct ScreenshotCapturer {
             }
 
             if let frame = axWindow.frame,
-               let match = windows.first(where: { $0.frame.isClose(to: frame.cgRect) }) {
+               let match = windows.first(where: { $0.frame.axFrame.isClose(to: frame) }) {
                 return match
             }
         }
@@ -106,7 +112,7 @@ public struct ScreenshotCapturer {
         return result.get()
     }
 
-    private func encode(_ image: CGImage) -> EncodedScreenshot? {
+    private func encode(_ image: CGImage, sourceWindowFrame: AXFrame) -> EncodedScreenshot? {
         let data = NSMutableData()
         guard
             let destination = CGImageDestinationCreateWithData(data, UTType.png.identifier as CFString, 1, nil)
@@ -123,7 +129,8 @@ public struct ScreenshotCapturer {
             mediaType: "image/png",
             base64Data: (data as Data).base64EncodedString(),
             width: image.width,
-            height: image.height
+            height: image.height,
+            sourceWindowFrame: sourceWindowFrame
         )
     }
 
@@ -234,17 +241,11 @@ private final class ScreenCaptureRuntimeState: @unchecked Sendable {
     }
 }
 
-private extension AXFrame {
-    var cgRect: CGRect {
-        CGRect(x: x, y: y, width: width, height: height)
-    }
-}
-
-private extension CGRect {
-    func isClose(to other: CGRect, tolerance: CGFloat = 4.0) -> Bool {
-        abs(origin.x - other.origin.x) <= tolerance &&
-            abs(origin.y - other.origin.y) <= tolerance &&
-            abs(size.width - other.size.width) <= tolerance &&
-            abs(size.height - other.size.height) <= tolerance
+extension CGRect {
+    /// The same rectangle in the vocabulary the rest of the module compares in. Capture and
+    /// Accessibility report window geometry in one coordinate space, and this is where that is
+    /// asserted once rather than at each comparison.
+    var axFrame: AXFrame {
+        AXFrame(x: origin.x, y: origin.y, width: size.width, height: size.height)
     }
 }

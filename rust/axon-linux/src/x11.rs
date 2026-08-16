@@ -281,7 +281,11 @@ impl X11Session {
     /// Captures the process's first managed top-level window without involving a desktop portal.
     /// This path is valid only on a real X11 session; the platform layer refuses XWayland before it
     /// can reach here because it cannot capture Wayland-native windows honestly.
-    pub fn screenshot_for_pid(&self, pid: u32) -> Result<Screenshot, BackendError> {
+    ///
+    /// Returns the window alongside the image. Which window was photographed is not something a
+    /// caller can re-derive later without repeating this selection and risking a different answer,
+    /// so it travels with the capture instead.
+    pub fn screenshot_for_pid(&self, pid: u32) -> Result<(Screenshot, Window), BackendError> {
         let window = self
             .windows_for_pid(pid)?
             .into_iter()
@@ -292,6 +296,7 @@ impl X11Session {
                     "the application owns no managed window",
                 )
             })?;
+        let captured_window = window;
         let geometry = self.window_geometry(window)?;
         let (width, height) = geometry.size;
         let attributes = self
@@ -370,17 +375,32 @@ impl X11Session {
         image
             .write_to(&mut bytes, ImageFormat::Png)
             .map_err(|error| operation("encode X11 screenshot PNG", error))?;
-        Ok(Screenshot {
-            bytes: bytes.into_inner(),
-            media_type: axon_core::OBSERVATION_SCREENSHOT_MEDIA_TYPE.into(),
-            width: image.width(),
-            height: image.height(),
-            frame: Rect {
-                x: f64::from(geometry.origin.0),
-                y: f64::from(geometry.origin.1),
-                width: f64::from(width),
-                height: f64::from(height),
+        Ok((
+            Screenshot {
+                bytes: bytes.into_inner(),
+                media_type: axon_core::OBSERVATION_SCREENSHOT_MEDIA_TYPE.into(),
+                width: image.width(),
+                height: image.height(),
+                frame: Rect {
+                    x: f64::from(geometry.origin.0),
+                    y: f64::from(geometry.origin.1),
+                    width: f64::from(width),
+                    height: f64::from(height),
+                },
             },
+            captured_window,
+        ))
+    }
+
+    /// One window's current screen rectangle, or `None` when it can no longer be read — which a
+    /// caller must not read as "it moved", only as "the X server did not say".
+    pub fn window_rect(&self, window: Window) -> Option<Rect> {
+        let geometry = self.window_geometry(window).ok()?;
+        Some(Rect {
+            x: f64::from(geometry.origin.0),
+            y: f64::from(geometry.origin.1),
+            width: f64::from(geometry.size.0),
+            height: f64::from(geometry.size.1),
         })
     }
 

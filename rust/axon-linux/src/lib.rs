@@ -98,6 +98,21 @@ pub struct Router<B> {
 pub struct VisualObservation {
     pub screenshot: Option<Screenshot>,
     pub recognized_text: Vec<RecognizedText>,
+    /// The window every recognized frame was placed against.
+    ///
+    /// Recognized coordinates are only meaningful relative to the window that was photographed, and
+    /// which window that was cannot be re-derived downstream: repeating the selection can answer
+    /// differently, and picking the first window that happens to contain a point is wrong exactly
+    /// when two windows of one application overlap. So provenance travels with the observation.
+    pub source_window: Option<SourceWindow>,
+}
+
+/// The window a visual observation was taken from: durable identity, and the geometry it had then.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SourceWindow {
+    /// The native window identity, which survives the window moving.
+    pub id: u32,
+    pub frame: axon_core::Rect,
 }
 
 fn application_enumeration<T: serde::Serialize>(apps: Vec<T>) -> Value {
@@ -139,6 +154,18 @@ pub trait PointerTargetVerifier: PlatformBackend {
         handle: &SnapshotHandle,
         point: (f64, f64),
     ) -> Result<bool, axon_core::BackendError>;
+
+    /// One window's current on-screen rectangle, by the identity capture recorded for it, or `None`
+    /// when the window server did not answer.
+    ///
+    /// Deliberately not expressed through `verify_pointer_target`, which collapses "did not answer"
+    /// into "does not cover". A bounds guard has to keep those apart: refusing a click because a
+    /// geometry read failed would ground a working action on a transient fault, while treating a
+    /// real miss as an unanswered query would dispatch into another window's territory.
+    fn window_rect(
+        &mut self,
+        window: u32,
+    ) -> Result<Option<axon_core::Rect>, axon_core::BackendError>;
 }
 
 /// A target-bound input mechanism: events delivered to one verified window, without activating the
@@ -167,6 +194,7 @@ pub trait BackgroundPixelInput: PlatformBackend {
         Ok(VisualObservation {
             screenshot: image,
             recognized_text: Vec::new(),
+            source_window: None,
         })
     }
     /// Resolves a delivery plan for one click at a point inside a resolved element. Pure
@@ -551,6 +579,9 @@ impl<B: PointerTargetVerifier + BackgroundPixelInput> Router<B> {
         let app = app_query_from_parts(Some(&target.app), None);
         let snapshot = self.backend.capture(&app).map_err(backend_error)?;
         let initial = TextLocationResolver::resolve(&target, &snapshot, &[]);
+        // Set only when the resolution came from recognized text, because only then are the
+        // coordinates relative to a photographed window rather than to the accessibility tree.
+        let mut source_window = None;
         let resolution = if target.source == TextLocationSource::Screenshot
             || (target.source == TextLocationSource::Auto
                 && initial.status == ResolutionStatus::Missing)
@@ -559,6 +590,7 @@ impl<B: PointerTargetVerifier + BackgroundPixelInput> Router<B> {
                 .backend
                 .capture_visuals(&app, false, true)
                 .map_err(backend_error)?;
+            source_window = visual.source_window;
             TextLocationResolver::resolve(&target, &snapshot, &visual.recognized_text)
         } else {
             initial
@@ -601,9 +633,63 @@ impl<B: PointerTargetVerifier + BackgroundPixelInput> Router<B> {
         let Some(selected) = self.selected(&ladder, policy) else {
             return Ok(self.refusal(&ladder, policy));
         };
+        // Freshness is checked after selection, so the planner still decides before anything
+        // happens and a target that moved under the request stays a stale-target error rather than
+        // becoming a delivery refusal. Until here nothing native has run.
+        if let Some(stale) = self.ocr_bounds_failure(source_window, candidate.frame, point)? {
+            return Err(rpc_error(-32003, stale));
+        }
         self.snapshot = Some(snapshot);
         self.foreground_dispatch(ForegroundDispatch { policy, candidate: &selected, target: ForegroundTarget::Application(&identity), restores_pointer: true, verification: json!({"verified":false,"reason":"OCR click has no declared postcondition"}), resolution: None }, |backend| backend.pointer_click(point))
             .map(|mut result| { if let Some(object)=result.as_object_mut(){object.insert("resolution".into(),json!(resolution));} result })
+    }
+
+    /// Why an OCR-resolved point must not be dispatched, or `None` when it still lands where the
+    /// text was recognized.
+    ///
+    /// The coordinates come from a capture, and a bare screen point cannot say that the window
+    /// underneath it has since moved, resized, or closed — by dispatch time the same numbers can
+    /// name a different application's territory. AT-SPI has no portable point-to-element lookup, so
+    /// this is a freshness check against the target's own windows rather than a hit test: it says
+    /// nothing about what is stacked above them.
+    ///
+    /// A window whose rectangle cannot be read is not counted either way. An unanswered query is
+    /// not evidence that the point is wrong, and refusing on it would ground a working click on a
+    /// transient accessibility fault.
+    fn ocr_bounds_failure(
+        &mut self,
+        source: Option<SourceWindow>,
+        recognized: axon_core::Rect,
+        point: (f64, f64),
+    ) -> Result<Option<String>, JsonRpcError> {
+        // The window the text was read from, by the identity capture recorded — not by asking which
+        // window contains the point now. That question has the wrong answer exactly when it matters:
+        // two windows of one application overlapping, the photographed one moved away, and another
+        // sitting over the stale coordinates.
+        let Some(source) = source else {
+            return Ok(Some(format!(
+                "OCR click cannot be validated: the capture did not report which window the text \
+                 was recognized in. The text was recognized at {}, and the resolved point is {}",
+                describe_rect(recognized),
+                describe_point(point)
+            )));
+        };
+        let Some(live) = self.backend.window_rect(source.id).map_err(backend_error)? else {
+            // The window server did not answer. That is not evidence the point is wrong, and
+            // refusing on it would ground a working click on a transient fault.
+            return Ok(None);
+        };
+        if live.is_close(&source.frame, WINDOW_IDENTITY_TOLERANCE) && live.contains(point) {
+            return Ok(None);
+        }
+        Ok(Some(format!(
+            "OCR click target moved before dispatch: the text was recognized at {} in a window at \
+             {}, the resolved point is {}, and that window is now at {}",
+            describe_rect(recognized),
+            describe_rect(source.frame),
+            describe_point(point),
+            describe_rect(live)
+        )))
     }
 
     fn dispatch_resolved_click(
@@ -1526,6 +1612,24 @@ impl<B: PointerTargetVerifier + BackgroundPixelInput> ToolDispatcher for Router<
     }
 }
 
+/// How far a window may have drifted between capture and dispatch and still be recognized as the
+/// same window. Matches the tolerance macOS capture uses to pair an accessibility frame with the
+/// window it photographed.
+const WINDOW_IDENTITY_TOLERANCE: f64 = 4.0;
+
+/// A rectangle as a refusal quotes it.
+fn describe_rect(rect: axon_core::Rect) -> String {
+    format!(
+        "{{x:{},y:{},width:{},height:{}}}",
+        rect.x, rect.y, rect.width, rect.height
+    )
+}
+
+/// A point as a refusal quotes it.
+fn describe_point((x, y): (f64, f64)) -> String {
+    format!("{{x:{x},y:{y}}}")
+}
+
 fn flattened(snapshot: &Snapshot) -> impl Iterator<Item = &axon_core::Node> {
     fn add<'a>(node: &'a axon_core::Node, out: &mut Vec<&'a axon_core::Node>) {
         out.push(node);
@@ -1818,6 +1922,13 @@ mod tests {
         /// prove the identity the router bound with, and that a refusal sent nothing.
         planned: Rc<RefCell<Vec<PlanRequest>>>,
         pixel_dispatches: Rc<RefCell<Vec<PixelTarget>>>,
+        /// What OCR finds on screen, in the same coordinate space as accessibility frames.
+        recognized_text: Rc<RefCell<Vec<RecognizedText>>>,
+        /// Where each window is *now*, keyed by native window id. A missing entry models a
+        /// geometry read that did not answer, which is not the same as a window that has moved.
+        window_rects: Rc<RefCell<std::collections::HashMap<u32, Rect>>>,
+        /// The window a visual observation reports it was taken from.
+        source_window: Rc<RefCell<Option<SourceWindow>>>,
     }
     /// One planning request the router made: the application identity it bound against, and the
     /// element and point when the action had one.
@@ -1836,8 +1947,37 @@ mod tests {
             self.verified_handles.borrow_mut().push(handle.clone());
             Ok(self.pointer_target_matches)
         }
+
+        fn window_rect(&mut self, window: u32) -> Result<Option<Rect>, BackendError> {
+            Ok(self.window_rects.borrow().get(&window).copied())
+        }
     }
     impl BackgroundPixelInput for FakeBackend {
+        /// A fake given no recognized text behaves like the trait default: a backend that cannot
+        /// recognize screen text says so rather than reporting none. Only a test that supplies text
+        /// turns this into an OCR-capable backend.
+        fn capture_visuals(
+            &mut self,
+            app: &AppQuery,
+            screenshot: bool,
+            screen_text: bool,
+        ) -> Result<VisualObservation, BackendError> {
+            let recognized = self.recognized_text.borrow().clone();
+            if screen_text && recognized.is_empty() {
+                return Err(BackendError::Capability {
+                    capability: Capability::Screenshot,
+                    reason: "screen text recognition is unavailable on this backend".into(),
+                    diagnostic: None,
+                });
+            }
+            let image = screenshot.then(|| self.screenshot(app)).transpose()?;
+            Ok(VisualObservation {
+                screenshot: image,
+                recognized_text: recognized,
+                source_window: *self.source_window.borrow(),
+            })
+        }
+
         fn plan_pixel_click(
             &mut self,
             application: &str,
@@ -2097,6 +2237,9 @@ mod tests {
                 input_focus_unchanged: true,
                 pointer_unchanged: true,
             }))),
+            recognized_text: Rc::new(RefCell::new(vec![])),
+            window_rects: Rc::new(RefCell::new(std::collections::HashMap::new())),
+            source_window: Rc::new(RefCell::new(None)),
             planned: Rc::new(RefCell::new(vec![])),
             pixel_dispatches: Rc::new(RefCell::new(vec![])),
         }
@@ -2311,6 +2454,209 @@ mod tests {
         assert!(success.result.get("screenText").is_none());
         assert!(success.result.get("screenshotUnavailable").is_some());
         assert!(success.result.get("screenTextUnavailable").is_some());
+    }
+
+    /// A router whose OCR finds one line of text inside the first window.
+    ///
+    /// `captured` is where each window was when the capture was taken, in window order; `live` is
+    /// where each window is now, keyed the same way, with an absent entry modelling a geometry read
+    /// that did not answer.
+    fn ocr_router(
+        recognized: Rect,
+        source: Option<SourceWindow>,
+        live: Vec<(u32, Rect)>,
+    ) -> Router<FakeBackend> {
+        let mut backend = backend(vec![], None);
+        backend.pointer_capability_usable = true;
+        backend.foreground_transaction = true;
+        *backend.recognized_text.borrow_mut() = vec![RecognizedText {
+            text: "Backlog".into(),
+            frame: recognized,
+            confidence: Some(0.95),
+        }];
+        *backend.source_window.borrow_mut() = source;
+        *backend.window_rects.borrow_mut() = live.into_iter().collect();
+        Router::new(backend)
+    }
+
+    fn ocr_click_request() -> JsonRpcRequest {
+        request(
+            "click",
+            json!({
+                "target": {"location": {"app": "App", "text": "Backlog", "source": "screenshot"}},
+                "deliveryPolicy": "foregroundPermitted"
+            }),
+        )
+    }
+
+    /// The window the text was read from, and the text inside it. The resolved point is the text's
+    /// centre, {x:1575,y:410}.
+    const PHOTOGRAPHED: u32 = 7;
+    const OTHER_WINDOW: u32 = 8;
+    const OCR_WINDOW: Rect = Rect {
+        x: 1400.0,
+        y: 100.0,
+        width: 500.0,
+        height: 900.0,
+    };
+    const OCR_TEXT: Rect = Rect {
+        x: 1500.0,
+        y: 400.0,
+        width: 150.0,
+        height: 20.0,
+    };
+
+    fn photographed() -> Option<SourceWindow> {
+        Some(SourceWindow {
+            id: PHOTOGRAPHED,
+            frame: OCR_WINDOW,
+        })
+    }
+
+    #[test]
+    fn ocr_click_dispatches_while_the_point_still_lands_in_the_window_it_was_read_from() {
+        let mut router = ocr_router(OCR_TEXT, photographed(), vec![(PHOTOGRAPHED, OCR_WINDOW)]);
+        let clicks = router.backend.clicks.clone();
+
+        let response = router.request(ocr_click_request()).unwrap();
+
+        assert!(
+            matches!(response, JsonRpcResponse::Success(_)),
+            "an OCR point in a window that has not moved must still dispatch: {response:?}"
+        );
+        assert_eq!(*clicks.borrow(), 1);
+    }
+
+    #[test]
+    fn ocr_click_refuses_with_the_measured_discrepancy_when_the_window_moved() {
+        // The coordinates were computed from a capture; by dispatch time the window has moved and
+        // the same numbers name somewhere else. Nothing may be posted at them.
+        let moved = Rect {
+            x: 100.0,
+            y: 80.0,
+            width: 500.0,
+            height: 900.0,
+        };
+        let mut router = ocr_router(OCR_TEXT, photographed(), vec![(PHOTOGRAPHED, moved)]);
+        let clicks = router.backend.clicks.clone();
+
+        let response = router.request(ocr_click_request()).unwrap();
+
+        let JsonRpcResponse::Failure(failure) = response else {
+            panic!("a stale OCR target must refuse")
+        };
+        assert_eq!(failure.error.code, -32003);
+        // The measurements that make the next occurrence diagnosable from the refusal alone.
+        assert!(
+            failure
+                .error
+                .message
+                .contains("{x:1500,y:400,width:150,height:20}")
+        );
+        assert!(failure.error.message.contains("{x:1575,y:410}"));
+        assert!(
+            failure
+                .error
+                .message
+                .contains("{x:1400,y:100,width:500,height:900}")
+        );
+        assert!(
+            failure
+                .error
+                .message
+                .contains("{x:100,y:80,width:500,height:900}")
+        );
+        assert_eq!(
+            *clicks.borrow(),
+            0,
+            "nothing may be posted at a stale point"
+        );
+    }
+
+    #[test]
+    fn ocr_click_refuses_when_an_overlapping_window_of_the_same_application_covers_the_point() {
+        // The case that makes "which window contains the point now" the wrong question. Two windows
+        // of one application overlap at the recognized text. The photographed one has moved away,
+        // and the other still covers the stale coordinates — so a guard that asks about the point
+        // rather than about the window finds a perfectly stable window and dispatches into it.
+        let moved = Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 500.0,
+            height: 900.0,
+        };
+        let overlapping = Rect {
+            x: 1450.0,
+            y: 380.0,
+            width: 400.0,
+            height: 300.0,
+        };
+        let mut router = ocr_router(
+            OCR_TEXT,
+            photographed(),
+            vec![(PHOTOGRAPHED, moved), (OTHER_WINDOW, overlapping)],
+        );
+        let clicks = router.backend.clicks.clone();
+
+        let response = router.request(ocr_click_request()).unwrap();
+
+        let JsonRpcResponse::Failure(failure) = response else {
+            panic!("a point whose own window moved must refuse, whatever else covers it")
+        };
+        assert_eq!(failure.error.code, -32003);
+        // The refusal is about the photographed window, not about the one that happens to cover it.
+        assert!(
+            failure
+                .error
+                .message
+                .contains("{x:1400,y:100,width:500,height:900}")
+        );
+        assert!(
+            failure
+                .error
+                .message
+                .contains("{x:0,y:0,width:500,height:900}")
+        );
+        assert_eq!(
+            *clicks.borrow(),
+            0,
+            "nothing may be posted into a window the text was never read from"
+        );
+    }
+
+    #[test]
+    fn ocr_click_is_not_refused_when_the_window_does_not_report_its_rectangle() {
+        // An unanswered geometry read is not evidence that the point is wrong, and grounding a
+        // working click on a transient fault would be the worse failure.
+        let mut router = ocr_router(OCR_TEXT, photographed(), vec![]);
+        let clicks = router.backend.clicks.clone();
+
+        let response = router.request(ocr_click_request()).unwrap();
+
+        assert!(matches!(response, JsonRpcResponse::Success(_)));
+        assert_eq!(*clicks.borrow(), 1);
+    }
+
+    #[test]
+    fn ocr_click_refuses_when_the_capture_did_not_report_which_window_it_read() {
+        // Without provenance there is nothing to validate against, and inferring a window from the
+        // point is the guess this guard exists to remove.
+        let mut router = ocr_router(OCR_TEXT, None, vec![(PHOTOGRAPHED, OCR_WINDOW)]);
+        let clicks = router.backend.clicks.clone();
+
+        let response = router.request(ocr_click_request()).unwrap();
+
+        let JsonRpcResponse::Failure(failure) = response else {
+            panic!("an OCR click with no source window must refuse")
+        };
+        assert_eq!(failure.error.code, -32003);
+        assert!(
+            failure
+                .error
+                .message
+                .contains("did not report which window")
+        );
+        assert_eq!(*clicks.borrow(), 0);
     }
 
     #[test]

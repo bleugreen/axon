@@ -1,7 +1,7 @@
 use crate::lifecycle::ACCESSIBILITY_DISABLED;
 use crate::{
     BackgroundPixelInput, PixelAim, PixelDispatch, PixelDispatchError, PixelPlan, PixelTarget,
-    PointerTargetVerifier, VisualObservation,
+    PointerTargetVerifier, SourceWindow, VisualObservation,
     pixel::{self, PixelAction},
     portal::TokenStore,
     screencast::{CaptureError, INTERACTIVE_TIMEOUT, ScreenCapture, ScreenCastActor},
@@ -626,7 +626,9 @@ impl PlatformBackend for LinuxBackend {
                 )
             })?;
         match &self.screenshot {
-            ScreenshotProvider::X11(session) => session.screenshot_for_pid(process_id),
+            ScreenshotProvider::X11(session) => session
+                .screenshot_for_pid(process_id)
+                .map(|(image, _)| image),
             ScreenshotProvider::Unavailable(_) => unreachable!(),
         }
     }
@@ -712,11 +714,16 @@ impl PointerTargetVerifier for LinuxBackend {
             .element_extents(handle)?
             .is_some_and(|extents| covers(extents, point)))
     }
+
+    fn window_rect(&mut self, window: u32) -> Result<Option<Rect>, BackendError> {
+        Ok(self.x11(Capability::PointerInput)?.window_rect(window))
+    }
 }
 
-/// Whether a rectangle covers a point, on the half-open convention a window's own edge follows.
-fn covers(rect: Rect, (x, y): (f64, f64)) -> bool {
-    x >= rect.x && y >= rect.y && x < rect.x + rect.width && y < rect.y + rect.height
+/// Whether a rectangle covers a point. The convention lives on `Rect` so every backend and every
+/// guard answers this the same way.
+fn covers(rect: Rect, point: (f64, f64)) -> bool {
+    rect.contains(point)
 }
 
 /// What the session looked like at one instant: the three facts a background delivery must leave
@@ -979,7 +986,7 @@ impl BackgroundPixelInput for LinuxBackend {
                     "the matched application has no process id",
                 )
             })?;
-        let captured = match &self.screenshot {
+        let (captured, window) = match &self.screenshot {
             ScreenshotProvider::X11(session) => session.screenshot_for_pid(process_id)?,
             ScreenshotProvider::Unavailable(reason) => {
                 return Err(screenshot_error(reason));
@@ -994,9 +1001,16 @@ impl BackgroundPixelInput for LinuxBackend {
         } else {
             Vec::new()
         };
+        // Every recognized frame was placed against this window's geometry, so the window travels
+        // with them. Re-deriving it later would repeat a selection that can answer differently.
+        let source_window = SourceWindow {
+            id: window,
+            frame: captured.frame,
+        };
         Ok(VisualObservation {
             screenshot: screenshot.then_some(captured),
             recognized_text,
+            source_window: Some(source_window),
         })
     }
     fn plan_pixel_click(

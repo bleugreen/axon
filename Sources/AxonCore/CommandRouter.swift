@@ -847,10 +847,20 @@ private struct PrimitiveActionCommandHandler {
                     )
                 case let .textLocation(location):
                     let resolution = try resolveTextLocationTarget(location)
-                    return try withLocationResolution(
-                        services.actions.clickPoint(resolution.point, policy),
+                    // An accessibility match names a real element, so it is clicked as one: that
+                    // path can press the element natively, prove its own outcome, and never touch
+                    // the foreground. Recognized text has no element behind it and stays a point.
+                    guard let handle = resolution.resolution.best?.handle else {
+                        return try withLocationResolution(
+                            services.actions.clickPoint(resolution.point, policy),
+                            resolution: resolution
+                        )
+                    }
+                    observations?.begin(tool: "click", handle: handle.rawValue)
+                    return observed(withLocationResolution(
+                        try services.actions.click(handle.rawValue, policy),
                         resolution: resolution
-                    )
+                    ))
                 case .semanticName:
                     let resolved = try resolveElementTarget(target)
                     observations?.begin(tool: "click", handle: resolved.handle)
@@ -1047,25 +1057,41 @@ private struct PrimitiveActionCommandHandler {
                 throw JSONRPCError.invalidParams("\(fieldName) point coordinateSpace \(point.coordinateSpace.rawValue) requires app")
             }
             let snapshot = try services.captureSnapshot(app, point.coordinateSpace == .screenshot)
-            guard let windowFrame = snapshot.windows.compactMap(\.frame).first else {
-                throw JSONRPCError.invalidParams("\(fieldName) point coordinateSpace \(point.coordinateSpace.rawValue) requires a captured window frame")
-            }
             let screenX: Double
             let screenY: Double
+            let windowFrame: AXFrame
             switch point.coordinateSpace {
             case .window:
-                screenX = windowFrame.x + point.x
-                screenY = windowFrame.y + point.y
+                // Window coordinates name the application's frontmost window, which is the first
+                // window capture reports.
+                guard let frame = snapshot.windows.compactMap(\.frame).first else {
+                    throw JSONRPCError.invalidParams("\(fieldName) point coordinateSpace window requires a captured window frame")
+                }
+                windowFrame = frame
+                screenX = frame.x + point.x
+                screenY = frame.y + point.y
             case .screenshot:
+                // Screenshot coordinates are only meaningful against the window the image depicts,
+                // which is not necessarily the window the accessibility tree lists first.
                 guard let screenshot = snapshot.screenshot else {
                     throw JSONRPCError.invalidParams("\(fieldName) point coordinateSpace screenshot requires a screenshot capture")
                 }
-                screenX = windowFrame.x + point.x / Double(screenshot.width) * windowFrame.width
-                screenY = windowFrame.y + point.y / Double(screenshot.height) * windowFrame.height
+                guard let frame = screenshot.sourceWindowFrame else {
+                    throw JSONRPCError.invalidParams("\(fieldName) point coordinateSpace screenshot requires the frame of the window that was photographed")
+                }
+                windowFrame = frame
+                screenX = frame.x + point.x / Double(screenshot.width) * frame.width
+                screenY = frame.y + point.y / Double(screenshot.height) * frame.height
             case .screen, .legacyScreen:
                 fatalError("handled before conversion")
             }
-            return ActionPoint(x: screenX, y: screenY, coordinateSpace: .screen, app: app)
+            return ActionPoint(
+                x: screenX,
+                y: screenY,
+                coordinateSpace: .screen,
+                app: app,
+                sourceWindowFrame: windowFrame
+            )
         }
     }
 

@@ -87,6 +87,29 @@ pub struct Rect {
     pub height: f64,
 }
 
+impl Rect {
+    /// Whether this rectangle covers a point, on the half-open convention a window's own edge
+    /// follows: the leading edge belongs to the window, the trailing edge to whatever is beyond it.
+    ///
+    /// One definition, because every backend asks this question of a screen point and two answers
+    /// that disagree on an edge disagree about which window a click belongs to.
+    pub fn contains(&self, (x, y): (f64, f64)) -> bool {
+        x >= self.x && y >= self.y && x < self.x + self.width && y < self.y + self.height
+    }
+
+    /// Whether two rectangles describe the same window position, within a tolerance.
+    ///
+    /// Window geometry read at two moments, or through two subsystems, agrees on coordinate space
+    /// but not always to the last fraction of a point. Identity of a window across a capture and a
+    /// dispatch is therefore proximity rather than equality.
+    pub fn is_close(&self, other: &Rect, tolerance: f64) -> bool {
+        (self.x - other.x).abs() <= tolerance
+            && (self.y - other.y).abs() <= tolerance
+            && (self.width - other.width).abs() <= tolerance
+            && (self.height - other.height).abs() <= tolerance
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Node {

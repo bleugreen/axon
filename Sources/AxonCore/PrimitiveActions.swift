@@ -204,17 +204,28 @@ public struct ActionPoint: Codable, Equatable, Sendable {
     public let y: Double
     public let coordinateSpace: ActionPointCoordinateSpace
     public let app: String?
+    /// The window frame these coordinates were computed against, when they were derived rather than
+    /// given.
+    ///
+    /// A point resolved from a capture — recognized text, a screenshot-space coordinate — is only
+    /// correct while that window is still where it was. Carrying the frame lets delivery measure
+    /// the difference and refuse with it, instead of clicking a screen coordinate that has since
+    /// come to mean somewhere else. Never accepted from a caller: a point a caller supplies has no
+    /// provenance to record.
+    public let sourceWindowFrame: AXFrame?
 
     public init(
         x: Double,
         y: Double,
         coordinateSpace: ActionPointCoordinateSpace = .legacyScreen,
-        app: String? = nil
+        app: String? = nil,
+        sourceWindowFrame: AXFrame? = nil
     ) {
         self.x = x
         self.y = y
         self.coordinateSpace = coordinateSpace
         self.app = app
+        self.sourceWindowFrame = sourceWindowFrame
     }
 
     public var jsonValue: JSONValue {
@@ -226,16 +237,15 @@ public struct ActionPoint: Codable, Equatable, Sendable {
         if let app {
             object["app"] = .string(app)
         }
+        if let sourceWindowFrame {
+            object["sourceWindowFrame"] = sourceWindowFrame.jsonValue
+        }
         return .object(object)
     }
 
     public var targetDescription: String {
-        let base = "point:\(format(x)),\(format(y))"
+        let base = "point:\(x.compactDescription),\(y.compactDescription)"
         return coordinateSpace == .legacyScreen ? base : "\(base)[\(coordinateSpace.rawValue)]"
-    }
-
-    private func format(_ value: Double) -> String {
-        value.rounded() == value ? String(Int(value)) : String(value)
     }
 }
 

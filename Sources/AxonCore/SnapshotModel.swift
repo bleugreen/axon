@@ -46,6 +46,16 @@ public struct AppIdentity: Codable, Equatable, Sendable {
         self.name = name
         self.processIdentifier = processIdentifier
     }
+
+    /// How to name this application so a resolver finds the same process again.
+    ///
+    /// The bundle identifier when there is one, because it survives localization and renames; a
+    /// process without one is named by pid, which `AppResolver` accepts and which cannot be
+    /// confused with another running application. Deliberately not `name`, whose own fallback
+    /// (`"pid 42"`) does not parse back.
+    public var resolverQuery: String {
+        bundleIdentifier ?? "pid:\(processIdentifier)"
+    }
 }
 
 public struct EncodedScreenshot: Codable, Equatable, Sendable {
@@ -53,12 +63,30 @@ public struct EncodedScreenshot: Codable, Equatable, Sendable {
     public let base64Data: String
     public let width: Int
     public let height: Int
+    /// The screen-space frame of the window this image depicts, as of capture.
+    ///
+    /// Capture chooses one window out of the application's several, and every coordinate derived
+    /// from the image — an OCR box, a screenshot-space point — is only meaningful against that
+    /// window's origin. Recording the frame here is what lets a consumer convert through the window
+    /// that was actually photographed instead of re-guessing one from the accessibility tree, where
+    /// a different choice lands coordinates in a window the image never showed.
+    ///
+    /// Optional because a screenshot decoded from a recording made before this field existed cannot
+    /// state it. A consumer that needs it must decline rather than substitute a guess.
+    public let sourceWindowFrame: AXFrame?
 
-    public init(mediaType: String, base64Data: String, width: Int, height: Int) {
+    public init(
+        mediaType: String,
+        base64Data: String,
+        width: Int,
+        height: Int,
+        sourceWindowFrame: AXFrame? = nil
+    ) {
         self.mediaType = mediaType
         self.base64Data = base64Data
         self.width = width
         self.height = height
+        self.sourceWindowFrame = sourceWindowFrame
     }
 }
 
@@ -129,6 +157,26 @@ public struct AppSnapshot: Codable, Equatable, Sendable {
             append(window, to: &nodes)
         }
         return nodes
+    }
+
+    /// The frame of the window whose subtree contains this node, when that window states one.
+    ///
+    /// A point derived from a node's frame is only correct while that node's window is where it
+    /// was, so this is the provenance such a point carries.
+    public func windowFrame(containing nodeIndex: Int) -> AXFrame? {
+        var start = 0
+        for window in windows {
+            let size = Self.subtreeSize(of: window)
+            if nodeIndex >= start, nodeIndex < start + size {
+                return window.frame
+            }
+            start += size
+        }
+        return nil
+    }
+
+    private static func subtreeSize(of node: AXNode) -> Int {
+        1 + node.children.reduce(0) { $0 + subtreeSize(of: $1) }
     }
 
     public func handle(for nodeIndex: Int) -> SnapshotHandle? {
@@ -246,6 +294,50 @@ public struct AXFrame: Codable, Equatable, Sendable {
         self.y = y
         self.width = width
         self.height = height
+    }
+}
+
+extension AXFrame: CustomStringConvertible {
+    /// How a rectangle reads inside a diagnostic message, for example `{x:100,y:50,width:80,height:20}`.
+    public var description: String {
+        "{x:\(x.compactDescription),y:\(y.compactDescription),width:\(width.compactDescription),height:\(height.compactDescription)}"
+    }
+}
+
+extension Double {
+    /// Rendered for a human-readable message: a whole value loses its fractional part, so a frame
+    /// reads `{x:100,...}` rather than `{x:100.0,...}`.
+    var compactDescription: String {
+        guard rounded() == self, magnitude < 1e15 else {
+            return String(self)
+        }
+        return String(Int(self))
+    }
+}
+
+public extension AXFrame {
+    var maxX: Double { x + width }
+    var maxY: Double { y + height }
+    var midX: Double { x + width / 2 }
+    var midY: Double { y + height / 2 }
+
+    /// Whether this rectangle covers a point, on the half-open convention a window's own edge
+    /// follows: the leading edge belongs to the window, the trailing edge to whatever is beyond it.
+    func contains(x pointX: Double, y pointY: Double) -> Bool {
+        pointX >= x && pointX < maxX && pointY >= y && pointY < maxY
+    }
+
+    /// Whether two rectangles describe the same window position, within the tolerance capture
+    /// already uses to match an accessibility frame to the window it photographed.
+    ///
+    /// The two come from different subsystems — Accessibility and ScreenCaptureKit — which agree on
+    /// coordinate space but not always to the last fraction of a point, so identity here is
+    /// proximity rather than equality.
+    func isClose(to other: AXFrame, tolerance: Double = 4.0) -> Bool {
+        abs(x - other.x) <= tolerance
+            && abs(y - other.y) <= tolerance
+            && abs(width - other.width) <= tolerance
+            && abs(height - other.height) <= tolerance
     }
 }
 

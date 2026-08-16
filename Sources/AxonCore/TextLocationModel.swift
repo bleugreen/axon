@@ -211,7 +211,16 @@ public struct TextLocationResolver: Sendable {
                 return nil
             }
 
-            let point = ActionPoint(x: frame.x + frame.width / 2, y: frame.y + frame.height / 2)
+            // The point names the application it was resolved from. Without that it is an
+            // anonymous screen coordinate, which delivery cannot bind to a process: it cannot use
+            // the quiet target-bound rung, and it cannot check the coordinate still means what it
+            // meant. The frame it was computed against is the other half of that check.
+            let point = ActionPoint(
+                x: frame.x + frame.width / 2,
+                y: frame.y + frame.height / 2,
+                app: snapshot.app.resolverQuery,
+                sourceWindowFrame: snapshot.windowFrame(containing: indexed.index)
+            )
             return TextLocationCandidate(
                 index: indexed.index,
                 handle: snapshot.handle(for: indexed.index),
@@ -251,7 +260,14 @@ public struct TextLocationResolver: Sendable {
             }
 
             let frame = item.frame
-            let point = ActionPoint(x: frame.x + frame.width / 2, y: frame.y + frame.height / 2)
+            // Recognized text is placed against the window the image depicts, so that window is
+            // both this point's provenance and the frame a stale coordinate is measured against.
+            let point = ActionPoint(
+                x: frame.x + frame.width / 2,
+                y: frame.y + frame.height / 2,
+                app: snapshot.app.resolverQuery,
+                sourceWindowFrame: snapshot.screenshot?.sourceWindowFrame
+            )
             var reasons = ["ocr \(text.reasonFragment)"]
             if let confidence = item.confidence {
                 reasons.append("confidence \(confidence)")
