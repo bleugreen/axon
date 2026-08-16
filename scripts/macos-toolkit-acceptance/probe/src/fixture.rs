@@ -3,16 +3,22 @@
 //! have to move.
 //!
 //! Both are the same program in different roles, because they need the same
-//! thing — a window that reports every event it dequeues and every change to
-//! its own controls. That double reporting is what separates the three
-//! outcomes a sending side cannot tell apart: an event that never arrived, one
-//! that arrived and was declined, and one that was acted on.
+//! thing — a window that reports every event `NSApplication` is handed and
+//! every change to its own controls. That double reporting is what separates
+//! the three outcomes a sending side cannot tell apart: an event that never
+//! arrived, one that arrived and was declined, and one that was acted on.
 //!
-//! There is no Objective-C subclass here and no target/action wiring. The main
-//! loop is written out by hand — `nextEventMatchingMask:` then `sendEvent:` —
-//! so the arrival of an event is observable before AppKit decides what to do
-//! with it, and so the controls can be polled without a delegate.
+//! The event loop is AppKit's own `[NSApp run]`, not a hand-written one. That
+//! matters: an `NSButton` decides it was clicked inside a mouse-tracking loop
+//! it starts from `mouseDown:`, and a hand-written loop that dequeues the
+//! matching `mouseUp` first stops every control from ever acting — which would
+//! make the fixture report a refusal that belonged to the fixture rather than
+//! to macOS. So observation is added the way AppKit intends: an
+//! `NSApplication` subclass that records each event on its way through
+//! `sendEvent:` and then calls super, plus a timer that polls the controls.
 
+use std::cell::RefCell;
+use std::ffi::c_void;
 use std::io::Write;
 use std::net::TcpStream;
 use std::ptr::null_mut;
@@ -29,8 +35,29 @@ const NS_BACKING_STORE_BUFFERED: u64 = 2;
 const NS_BUTTON_TYPE_SWITCH: u64 = 3;
 const NS_APPLICATION_ACTIVATION_POLICY_REGULAR: i64 = 0;
 
+/// Everything the two callbacks need. Both run on the main thread, which is
+/// also where it is populated, so a thread local is the whole of the
+/// synchronisation story.
+struct Context {
+    report: Option<String>,
+    role: String,
+    nonce: String,
+    checkbox: Id,
+    field: Id,
+    last_checkbox: i64,
+    last_text: String,
+    counts: Vec<(u64, i64)>,
+    deadline: Instant,
+}
+
+thread_local! {
+    static CONTEXT: RefCell<Option<Context>> = const { RefCell::new(None) };
+}
+
 pub fn run(args: &Args) -> Result<(), String> {
-    let role = args.optional_string("role").unwrap_or_else(|| "target".into());
+    let role = args
+        .optional_string("role")
+        .unwrap_or_else(|| "target".into());
     let title = args
         .optional_string("title")
         .unwrap_or_else(|| format!("axon-acceptance-{role}"));
@@ -46,21 +73,30 @@ pub fn run(args: &Args) -> Result<(), String> {
         height: args.optional_f64("height").unwrap_or(220.0),
     };
 
-    let application = send(class("NSApplication"), "sharedApplication");
+    let application_class = define_class(
+        "AxonAcceptanceApplication",
+        "NSApplication",
+        &[
+            ("sendEvent:", observe_event as *const c_void, "v@:@"),
+            ("axonTick:", tick as *const c_void, "v@:@"),
+        ],
+    );
+    if application_class.is_null() {
+        return Err("the observing NSApplication subclass could not be registered".into());
+    }
+    // Sent to the subclass, so `NSApp` becomes an instance of it: AppKit builds
+    // the shared application out of whichever class first asks for it.
+    let application = send(application_class, "sharedApplication");
     send_i64_arg(
         application,
         "setActivationPolicy:",
         NS_APPLICATION_ACTIVATION_POLICY_REGULAR,
     );
 
-    let content = CGRect {
-        origin,
-        size,
-    };
     let window = send_rect_mask_backing_defer(
         send(class("NSWindow"), "alloc"),
         "initWithContentRect:styleMask:backing:defer:",
-        content,
+        CGRect { origin, size },
         NS_WINDOW_STYLE_TITLED | NS_WINDOW_STYLE_CLOSABLE | NS_WINDOW_STYLE_RESIZABLE,
         NS_BACKING_STORE_BUFFERED,
         false,
@@ -108,10 +144,6 @@ pub fn run(args: &Args) -> Result<(), String> {
     send_bool_arg(application, "activateIgnoringOtherApps:", true);
     send(application, "finishLaunching");
 
-    // One pass of the loop before geometry is read, so AppKit has laid the
-    // window out where the window server actually put it.
-    pump(application, 0.25);
-
     let ready = J::obj(vec![
         ("kind", J::str("ready")),
         ("role", J::str(role.clone())),
@@ -129,91 +161,100 @@ pub fn run(args: &Args) -> Result<(), String> {
         post(url, &ready.render());
     }
 
-    let mut last_checkbox = send_ret_i64(checkbox, "state");
-    let mut last_text = nsstring_to_string(send(field, "stringValue")).unwrap_or_default();
-    let mut counts: Vec<(u64, i64)> = Vec::new();
-    let deadline = Instant::now() + Duration::from_secs_f64(seconds);
+    CONTEXT.with(|context| {
+        *context.borrow_mut() = Some(Context {
+            report,
+            role,
+            nonce,
+            checkbox,
+            field,
+            last_checkbox: send_ret_i64(checkbox, "state"),
+            last_text: nsstring_to_string(send(field, "stringValue")).unwrap_or_default(),
+            counts: Vec::new(),
+            deadline: Instant::now() + Duration::from_secs_f64(seconds),
+        });
+    });
 
-    while Instant::now() < deadline {
-        let event = next_event(application, 0.03);
-        if !event.is_null() {
-            let kind = send_ret_u64(event, "type");
-            bump(&mut counts, kind);
-            if let Some(url) = &report {
-                if interesting(kind) {
-                    post(
-                        url,
-                        &J::obj(vec![
-                            ("kind", J::str("event")),
-                            ("role", J::str(role.clone())),
-                            ("nonce", J::str(nonce.clone())),
-                            ("eventType", J::Int(kind as i64)),
-                            ("eventName", J::str(name_of(kind))),
-                            (
-                                "windowNumber",
-                                J::Int(send_ret_i64(event, "windowNumber")),
-                            ),
-                            ("timestamp", J::Num(send_ret_f64(event, "timestamp"))),
-                            (
-                                "locationInWindow",
-                                point_json(send_ret_point(event, "locationInWindow")),
-                            ),
-                        ])
-                        .render(),
-                    );
-                }
-            }
-            send_id(application, "sendEvent:", event);
-        }
-
-        let checkbox_state = send_ret_i64(checkbox, "state");
-        let text = nsstring_to_string(send(field, "stringValue")).unwrap_or_default();
-        if checkbox_state != last_checkbox || text != last_text {
-            last_checkbox = checkbox_state;
-            last_text = text.clone();
-            if let Some(url) = &report {
-                post(
-                    url,
-                    &J::obj(vec![
-                        ("kind", J::str("state")),
-                        ("role", J::str(role.clone())),
-                        ("nonce", J::str(nonce.clone())),
-                        ("checkbox", J::Int(checkbox_state)),
-                        ("text", J::str(text)),
-                        ("eventCounts", counts_json(&counts)),
-                    ])
-                    .render(),
-                );
-            }
-        }
-    }
+    send_timer(
+        class("NSTimer"),
+        "scheduledTimerWithTimeInterval:target:selector:userInfo:repeats:",
+        0.05,
+        application,
+        sel("axonTick:"),
+        null_mut(),
+        true,
+    );
+    send(application, "run");
     Ok(())
 }
 
-fn pump(application: Id, seconds: f64) {
-    let until = Instant::now() + Duration::from_secs_f64(seconds);
-    while Instant::now() < until {
-        let event = next_event(application, 0.01);
-        if !event.is_null() {
-            send_id(application, "sendEvent:", event);
-        }
+/// Every event AppKit is about to dispatch, recorded and then passed on
+/// untouched. Recording before `super` is what makes "arrived but was declined"
+/// visible: an event this sees and no control reacts to did reach the
+/// application.
+extern "C" fn observe_event(this: Id, _command: Sel, event: Id) {
+    if !event.is_null() {
+        let kind = send_ret_u64(event, "type");
+        CONTEXT.with(|context| {
+            let mut borrowed = context.borrow_mut();
+            let Some(context) = borrowed.as_mut() else {
+                return;
+            };
+            bump(&mut context.counts, kind);
+            if !interesting(kind) {
+                return;
+            }
+            let record = J::obj(vec![
+                ("kind", J::str("event")),
+                ("role", J::str(context.role.clone())),
+                ("nonce", J::str(context.nonce.clone())),
+                ("eventType", J::Int(kind as i64)),
+                ("eventName", J::str(name_of(kind))),
+                ("windowNumber", J::Int(send_ret_i64(event, "windowNumber"))),
+                ("timestamp", J::Num(send_ret_f64(event, "timestamp"))),
+                (
+                    "locationInWindow",
+                    point_json(send_ret_point(event, "locationInWindow")),
+                ),
+            ]);
+            if let Some(url) = &context.report {
+                post(url, &record.render());
+            }
+        });
     }
+    send_super_id(this, "NSApplication", "sendEvent:", event);
 }
 
-fn next_event(application: Id, timeout: f64) -> Id {
-    let until = send_f64_arg(
-        class("NSDate"),
-        "dateWithTimeIntervalSinceNow:",
-        timeout,
-    );
-    send_next_event(
-        application,
-        "nextEventMatchingMask:untilDate:inMode:dequeue:",
-        u64::MAX,
-        until,
-        nsstring("kCFRunLoopDefaultMode"),
-        true,
-    )
+/// Polls the controls. A control's own state is the target-side mutation the
+/// campaign records; the event stream above only says what arrived.
+extern "C" fn tick(_this: Id, _command: Sel, _timer: Id) {
+    let expired = CONTEXT.with(|context| {
+        let mut borrowed = context.borrow_mut();
+        let Some(context) = borrowed.as_mut() else {
+            return false;
+        };
+        let checkbox = send_ret_i64(context.checkbox, "state");
+        let text = nsstring_to_string(send(context.field, "stringValue")).unwrap_or_default();
+        if checkbox != context.last_checkbox || text != context.last_text {
+            context.last_checkbox = checkbox;
+            context.last_text = text.clone();
+            let record = J::obj(vec![
+                ("kind", J::str("state")),
+                ("role", J::str(context.role.clone())),
+                ("nonce", J::str(context.nonce.clone())),
+                ("checkbox", J::Int(checkbox)),
+                ("text", J::str(text)),
+                ("eventCounts", counts_json(&context.counts)),
+            ]);
+            if let Some(url) = &context.report {
+                post(url, &record.render());
+            }
+        }
+        Instant::now() >= context.deadline
+    });
+    if expired {
+        std::process::exit(0);
+    }
 }
 
 /// Mouse-moved and cursor-update events arrive by the hundred and say nothing
