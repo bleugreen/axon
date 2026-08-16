@@ -201,22 +201,36 @@ public final class AXPrimitiveActionExecutor {
 
     public func click(point: ActionPoint, policy: DeliveryPolicy) throws -> PrimitiveActionResult {
         let cgPoint = CGPoint(x: point.x, y: point.y)
-        // A screen point only carries target identity when the caller named the application it came
-        // from. Inferring a window from a bare coordinate is exactly the guess background delivery
-        // must never make, so such a point can only travel on global input.
-        //
-        // An app the caller did name and that does not resolve throws rather than joining that
-        // case: a click aimed at an application must never quietly become a click aimed at nobody.
+        // An app the caller named and that does not resolve throws rather than becoming an
+        // anonymous coordinate: a click aimed at an application must never quietly become a click
+        // aimed at nobody.
         let process = try point.app.map(processIdentifier(forApp:))
+        // Naming the owner is what lets this click *activate* an application. It is not what lets
+        // it be delivered behind that application's back.
+        //
+        // Background delivery needs verified geometry, and an app name is not geometry: nothing has
+        // established that this coordinate lies in that application's window rather than in a
+        // window that has since moved, or in another application entirely. Inferring a window from
+        // a bare coordinate is exactly the guess background delivery must never make. A point that
+        // was *derived* — from a captured window, from recognized text — carries the frame it was
+        // measured against and can be checked against it, which is what earns it the targeted rung.
+        //
+        // Enforcing that is also what makes a click aimed at a background application land: posting
+        // a bare coordinate into a process is accepted and can do nothing at all, and a click has no
+        // postcondition to notice with. Declining the rung sends the point to global input at proved
+        // activation, where the coordinate means what the caller measured.
+        let backgroundIdentity = point.sourceWindowFrame == nil ? nil : process
         return deliver(
             action: "click",
             target: point.targetDescription,
             policy: policy,
             candidates: inputCandidates(
-                processIdentifier: process,
+                processIdentifier: backgroundIdentity,
                 hasGeometry: true,
                 geometryMessage: "",
-                identityMessage: "A raw screen point carries no application or window identity; background delivery needs a handle, locator, text location, or an app-scoped point",
+                identityMessage: point.app == nil
+                    ? "A raw screen point carries no application or window identity; background delivery needs a handle, locator, text location, or a point derived from a capture"
+                    : "A screen point names \(point.app ?? "") but carries no window provenance, so background delivery cannot establish that the coordinate belongs to it; use a text location or an element, or permit foreground delivery",
                 strategy: "CGEvent"
             ),
             details: ["point": point.jsonValue]
