@@ -187,7 +187,7 @@ public final class AXPrimitiveActionExecutor {
                 candidate: candidate,
                 point: point,
                 element: element,
-                process: process,
+                targeting: ForegroundTarget(resolved: process),
                 details: [:]
             ))
         }
@@ -204,7 +204,10 @@ public final class AXPrimitiveActionExecutor {
         // A screen point only carries target identity when the caller named the application it came
         // from. Inferring a window from a bare coordinate is exactly the guess background delivery
         // must never make, so such a point can only travel on global input.
-        let process = point.app.flatMap { processIdentifier(forApp: $0) }
+        //
+        // An app the caller did name and that does not resolve throws rather than joining that
+        // case: a click aimed at an application must never quietly become a click aimed at nobody.
+        let process = try point.app.map(processIdentifier(forApp:))
         return deliver(
             action: "click",
             target: point.targetDescription,
@@ -225,7 +228,7 @@ public final class AXPrimitiveActionExecutor {
                 candidate: candidate,
                 point: cgPoint,
                 element: nil,
-                process: process,
+                targeting: ForegroundTarget(resolved: process),
                 sourceWindowFrame: point.sourceWindowFrame,
                 details: ["point": point.jsonValue]
             ))
@@ -312,7 +315,7 @@ public final class AXPrimitiveActionExecutor {
                 candidate: candidate,
                 element: element,
                 point: point,
-                process: process,
+                targeting: ForegroundTarget(resolved: process),
                 value: value
             )
             return result.success ? .settled(result) : .advance(result)
@@ -321,7 +324,10 @@ public final class AXPrimitiveActionExecutor {
 
     public func keyboard(app: String?, intent: KeyboardIntent, policy: DeliveryPolicy) throws -> PrimitiveActionResult {
         let target = app ?? "frontmost"
-        let process = app.flatMap { processIdentifier(forApp: $0) }
+        let process = try app.map(processIdentifier(forApp:))
+        // An unaimed keystroke is aimed at the foreground on purpose; one that names an application
+        // is aimed at that process and nowhere else.
+        let foreground: ForegroundTarget = process.map(ForegroundTarget.process) ?? .currentForeground
         var intentDetails: [String: JSONValue]
         switch intent {
         case let .key(key):
@@ -339,9 +345,7 @@ public final class AXPrimitiveActionExecutor {
                 processIdentifier: process,
                 hasGeometry: true,
                 geometryMessage: "",
-                identityMessage: app == nil
-                    ? "keyboard without app has no target application, so input can only reach whatever holds the foreground"
-                    : "app \(app ?? "") is not running, so keystrokes cannot be bound to it",
+                identityMessage: "keyboard without app has no target application, so input can only reach whatever holds the foreground",
                 strategy: "CGEventKeyboard"
             ),
             details: intentDetails
@@ -350,7 +354,7 @@ public final class AXPrimitiveActionExecutor {
                 target: target,
                 policy: policy,
                 candidate: candidate,
-                process: process,
+                targeting: foreground,
                 intent: intent,
                 details: intentDetails
             ))
