@@ -28,7 +28,11 @@ only check the existing Automation grant; they never present macOS's consent pro
 blocks until a person answers it, and an agent's call must not hang on a dialog nobody asked for.
 Consent is a deliberate act instead: open the Axon menu bar item and choose **Browser Automation...**,
 which asks macOS for each supported browser that is running. Grants are per browser: allowing Axon to
-control Safari does not allow it to control Google Chrome. A missing grant returns JSON-RPC `-32603`
+control Safari does not allow it to control Google Chrome. The item is present only while consent has
+somewhere to go — a grant still to mint, or a standing denial macOS will not re-prompt over, which
+this gesture is the only place to explain. Once every running browser is allowed the item is gone,
+since a gesture with nothing to consent to leads nowhere. Presence is resolved as the menu opens, so
+a browser launched or a grant reset while the daemon runs brings it back. A missing grant returns JSON-RPC `-32603`
 with structured reason `automation-not-granted`, the target app, an authorization state of `denied`
 or `notDetermined`, and the `leg` that produced the decision. Axon does not collapse these
 independent target grants into the global health document.

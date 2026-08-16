@@ -1171,7 +1171,13 @@ is asking. Agent-facing verbs call `AEDeterminePermissionToAutomateTarget` with
 until a person dismisses the dialog, and browser verbs run synchronously on the socket-handling
 thread, so prompting from there would stall an agent's call indefinitely on a dialog nobody asked
 for. The prompting leg belongs to one deliberate gesture — the daemon menu's Browser Automation item,
-which requests consent off the main thread for each supported browser that is running. The intended
+which requests consent off the main thread for each supported browser that is running. That item
+exists only when the gesture has something to do: it is built from a non-prompting reading of the
+same per-process answer ledger, and a denial keeps it (the gesture is then the only surface carrying
+the remediation) while an all-allowed reading retires it. The reading happens as the menu opens
+rather than on the menu's two-second refresh, because a determination is not free — it costs a TCC
+round trip, and it is what makes the process start holding macOS's answer, which must not happen
+earlier than a person's own use of Axon would cause it. The intended
 sender is `Axon.app/Contents/MacOS/Axon`, registered in launchd's `gui/<uid>` domain with
 `LimitLoadToSessionType=Aqua`; the daemon bundle also carries `NSAppleEventsUsageDescription`.
 
@@ -1186,9 +1192,10 @@ denial, reset, and retry against a daemon that never restarted (`launchctl print
 and a single `exec` throughout), so the retry could not have consulted tccd; the absence of any
 `kTCCServiceAppleEvents` request for Axon in that window is what an answer resolved inside the
 process looks like, not evidence of a suppressed prompt. The daemon therefore records, per process
-lifetime, whether it has already answered for a target — from either leg, since it was a silent-leg
-answer that got reused — and a repeat denial names a daemon restart as the remediation instead of
-pointing at System Settings.
+lifetime, the answer it holds for each target — from either leg, since it was a silent-leg answer
+that got reused — and a repeat denial names a daemon restart as the remediation instead of pointing
+at System Settings. Keeping the answer and not merely the fact of one is what lets a surface that
+must not prompt, the menu, read a grant Axon has already seen.
 
 What remains unverified is whether the consent dialog appears at all for this launchd-started
 process. The menu-bar gesture is the discriminating test, on a machine whose daemon has restarted
