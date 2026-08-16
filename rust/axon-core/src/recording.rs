@@ -300,8 +300,10 @@ impl UserRecordingTranslator {
 
             // A scroll that only exists to bring the next step's target into view becomes that
             // step's `resolve` hint rather than a step of its own.
-            if let Some(scroll) = scroll_components(group.action()) {
-                if index + 1 < semantic_groups.len() {
+            if let Some(scroll) = scroll_components(group.action())
+                && index + 1 < semantic_groups.len()
+            {
+                {
                     let next = &semantic_groups[index + 1];
                     if target_bearing_action_target(next.action())
                         .is_some_and(|target| target.get("locator").is_some())
@@ -324,14 +326,14 @@ impl UserRecordingTranslator {
                 object.insert("resolve".into(), resolve);
             }
 
-            if let Some(required) = last_value_fact_id.clone() {
-                if requires_recorded_value(emitted.action()) {
-                    object.insert(
-                        "requires".into(),
-                        Value::Array(vec![Value::String(required)]),
-                    );
-                    last_value_fact_id = None;
-                }
+            if let Some(required) = last_value_fact_id.clone()
+                && requires_recorded_value(emitted.action())
+            {
+                object.insert(
+                    "requires".into(),
+                    Value::Array(vec![Value::String(required)]),
+                );
+                last_value_fact_id = None;
             }
 
             let mut expected_facts: Vec<Value> = Vec::new();
@@ -369,10 +371,10 @@ impl UserRecordingTranslator {
                 last_value_fact_id = Some(fact_id);
             }
 
-            if expects_app_change(emitted) {
-                if let Some(app) = app_name(emitted.action()) {
-                    expected_facts.push(changed_fact(&format!("{action_id}.changed.0"), &app));
-                }
+            if expects_app_change(emitted)
+                && let Some(app) = app_name(emitted.action())
+            {
+                expected_facts.push(changed_fact(&format!("{action_id}.changed.0"), &app));
             }
 
             if !expected_facts.is_empty() {
@@ -657,7 +659,7 @@ fn scroll_surface_target(groups: &[RecordedUserEventGroup]) -> Option<Value> {
         .iter()
         .filter_map(|group| group.action.as_ref().and_then(scroll_components))
         .filter_map(|scroll| scroll.target)
-        .find(|target| is_scroll_surface(target))
+        .find(is_scroll_surface)
 }
 
 fn is_scroll_surface(target: &Value) -> bool {

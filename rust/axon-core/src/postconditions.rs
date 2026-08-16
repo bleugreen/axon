@@ -274,18 +274,18 @@ impl<'a> DerivedPostconditionCompiler<'a> {
         let before = observation.target_before.as_ref();
         let after = observation.target_after.as_ref();
 
-        if let Some(after) = after {
-            if before.and_then(|state| state.focused) == Some(false) && after.focused == Some(true)
-            {
-                candidates.push(Candidate {
-                    kind: "focused",
-                    app: after.app.clone(),
-                    locator: after.locator.clone(),
-                    state: bool_state("focused", true),
-                    assertion: None,
-                    derived_from_input: false,
-                });
-            }
+        if let Some(after) = after
+            && before.and_then(|state| state.focused) == Some(false)
+            && after.focused == Some(true)
+        {
+            candidates.push(Candidate {
+                kind: "focused",
+                app: after.app.clone(),
+                locator: after.locator.clone(),
+                state: bool_state("focused", true),
+                assertion: None,
+                derived_from_input: false,
+            });
         }
 
         // Focus that landed somewhere other than the acted-on element is only visible in the
@@ -294,61 +294,57 @@ impl<'a> DerivedPostconditionCompiler<'a> {
         if let (Some(focus), Some(focus_before)) = (
             observation.focus_after.as_ref(),
             observation.focus_before.as_ref(),
-        ) {
-            if focus.locator.is_some()
-                && focus.locator != focus_before.locator
-                && focus.locator != after.and_then(|state| state.locator.clone())
-            {
-                candidates.push(Candidate {
-                    kind: "focused",
-                    app: focus.app.clone(),
-                    locator: focus.locator.clone(),
-                    state: bool_state("focused", true),
-                    assertion: None,
-                    derived_from_input: false,
-                });
-            }
+        ) && focus.locator.is_some()
+            && focus.locator != focus_before.locator
+            && focus.locator != after.and_then(|state| state.locator.clone())
+        {
+            candidates.push(Candidate {
+                kind: "focused",
+                app: focus.app.clone(),
+                locator: focus.locator.clone(),
+                state: bool_state("focused", true),
+                assertion: None,
+                derived_from_input: false,
+            });
         }
 
         if let Some(after) = after {
             if let (Some(enabled), Some(was_enabled)) =
                 (after.enabled, before.and_then(|state| state.enabled))
+                && was_enabled != enabled
             {
-                if was_enabled != enabled {
-                    candidates.push(Candidate {
-                        kind: "enabled",
-                        app: after.app.clone(),
-                        locator: after.locator.clone(),
-                        state: bool_state("enabled", enabled),
-                        assertion: None,
-                        derived_from_input: false,
-                    });
-                }
+                candidates.push(Candidate {
+                    kind: "enabled",
+                    app: after.app.clone(),
+                    locator: after.locator.clone(),
+                    state: bool_state("enabled", enabled),
+                    assertion: None,
+                    derived_from_input: false,
+                });
             }
 
             if let (Some(value), Some(was_value)) = (
                 after.value.as_deref(),
                 before.and_then(|state| state.value.as_deref()),
-            ) {
-                if was_value != value {
-                    let kind = if SELECTION_ROLES.contains(&after.role.as_str()) {
-                        "selected"
-                    } else {
-                        "value"
-                    };
-                    let mut state = Map::new();
-                    let mut equals = Map::new();
-                    equals.insert("equals".into(), Value::String(value.to_owned()));
-                    state.insert(kind.into(), Value::Object(equals));
-                    candidates.push(Candidate {
-                        kind,
-                        app: after.app.clone(),
-                        locator: after.locator.clone(),
-                        state,
-                        assertion: Some(value.to_owned()),
-                        derived_from_input: after.value_derived_from_input,
-                    });
-                }
+            ) && was_value != value
+            {
+                let kind = if SELECTION_ROLES.contains(&after.role.as_str()) {
+                    "selected"
+                } else {
+                    "value"
+                };
+                let mut state = Map::new();
+                let mut equals = Map::new();
+                equals.insert("equals".into(), Value::String(value.to_owned()));
+                state.insert(kind.into(), Value::Object(equals));
+                candidates.push(Candidate {
+                    kind,
+                    app: after.app.clone(),
+                    locator: after.locator.clone(),
+                    state,
+                    assertion: Some(value.to_owned()),
+                    derived_from_input: after.value_derived_from_input,
+                });
             }
         }
 
