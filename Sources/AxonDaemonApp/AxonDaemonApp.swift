@@ -185,6 +185,33 @@ final class AxonDaemonAppDelegate: NSObject, NSApplicationDelegate, @unchecked S
 
     private func installMenu() {
         let menu = NSMenu()
+        menu.delegate = self
+        populate(menu)
+        statusItem.menu = menu
+        updateStatusItemAppearance()
+    }
+
+    /// Rebuilds the menu that is about to be displayed, refreshing the state only an open menu can
+    /// act on.
+    ///
+    /// Whether the Browser Automation item exists depends on a grant macOS can change under a
+    /// running daemon, and resolving one costs a TCC round trip that also makes this process start
+    /// holding macOS's answer for the rest of its life. Deciding here binds both to a menu someone
+    /// opened, rather than to the two-second refresh timer rebuilding a menu nobody is looking at.
+    func menuNeedsUpdate(_ menu: NSMenu) {
+        refreshBrowserConsentNeed()
+        menu.removeAllItems()
+        populate(menu)
+    }
+
+    /// A copy that lost the socket race serves no browser verbs, so it has no reason to ask macOS
+    /// about grants for them.
+    private func refreshBrowserConsentNeed() {
+        guard incumbent == nil else { return }
+        browserConsentNeed = BrowserAutomationConsentRequester().outstandingConsent()
+    }
+
+    private func populate(_ menu: NSMenu) {
         menu.addItem(disabledItem("Axon"))
 
         // A copy that lost the socket race serves nothing, so offering it recording and updates
