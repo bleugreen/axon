@@ -292,7 +292,6 @@ impl UserRecordingTranslator {
         arguments: Vec<AxnArgument>,
         assertion_taint: &dyn crate::SecretTaint,
     ) -> Result<AxnDocument, crate::AxnError> {
-        let taint = assertion_taint;
         // Gathered across the whole recording before any step is compiled: an echo of typed text
         // can surface a step or two later, and every one of these strings is a parameterization
         // candidate no step may assert.
@@ -350,7 +349,7 @@ impl UserRecordingTranslator {
 
             let mut expected_facts: Vec<Value> = Vec::new();
             if let Some(observation) = emitted.observation.as_ref() {
-                expected_facts.extend(crate::DerivedPostconditionCompiler::new(taint).facts(
+                expected_facts.extend(crate::DerivedPostconditionCompiler::new(assertion_taint).facts(
                     &crate::PostconditionInput {
                         action_id: &action_id,
                         tool: tool_name(emitted.action()),
@@ -360,11 +359,17 @@ impl UserRecordingTranslator {
                 ));
             }
 
+            // A redacted value is carried as the step's value but never becomes a guard. The field
+            // holds the real credential at replay and never the marker, so a guard built from one
+            // is unsatisfiable, and a following submit that required it could never run. Dropping
+            // the guard leaves a valid, unverified step — the same outcome as any other transition
+            // with nothing safe to say.
             if let RecordedUserAction::SetValue {
                 target,
                 value,
                 fact_target,
             } = emitted.action()
+                && !assertion_taint.is_tainted(value)
             {
                 // The guard is indexed after any value facts the compiler derived for this step, so
                 // a formatted field value (a derived `equals` fact) and the typed input (the

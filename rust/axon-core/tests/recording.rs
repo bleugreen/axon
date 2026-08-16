@@ -270,20 +270,54 @@ fn an_honest_point_fallback_still_satisfies_the_replay_contract() {
 fn a_redacted_value_is_carried_as_the_typed_value_but_never_asserted() {
     // Redaction happens upstream, so a credential arrives here already a marker. Carrying it is
     // what keeps a recording of a password field readable and parameterizable; asserting it back
-    // is what must never happen.
-    let groups = [RecordedUserEventGroup::new(RecordedUserAction::SetValue {
-        target: field_target("1Password", "password-field", "Password"),
-        value: "<redacted: active-credential>".into(),
-        fact_target: None,
-    })];
+    // is what must never happen. The submit step is the case that matters: a guard built from the
+    // marker would make the field's real contents fail the check, so the recording would author
+    // cleanly and then never replay.
+    let groups = [
+        RecordedUserEventGroup::new(RecordedUserAction::SetValue {
+            target: field_target("1Password", "password-field", "Password"),
+            value: "<redacted: active-credential>".into(),
+            fact_target: None,
+        }),
+        RecordedUserEventGroup::new(RecordedUserAction::PressKey {
+            app: "1Password".into(),
+            key: "Return".into(),
+        }),
+    ];
 
     let yaml = UserRecordingTranslator::new()
         .yaml(&groups, Vec::new(), &RedactionMarkerTaint)
         .expect("authored document satisfies the replay contract");
+    let actions = translate(&groups);
 
     assert!(yaml.contains("<redacted: active-credential>"), "{yaml}");
-    // Nothing depends on the guard, so it is pruned and the step asserts nothing at all.
-    assert!(translate(&groups)[0].expects.is_empty());
+    assert!(actions[0].expects.is_empty());
+    assert!(
+        actions[1].requires.is_empty(),
+        "submit depends on an unsatisfiable guard: {:?}",
+        actions[1].requires
+    );
+}
+
+#[test]
+fn a_redacted_value_followed_by_a_submit_click_also_carries_no_guard() {
+    let groups = [
+        RecordedUserEventGroup::new(RecordedUserAction::SetValue {
+            target: field_target("1Password", "password-field", "Password"),
+            value: "<redacted: active-credential>".into(),
+            fact_target: None,
+        }),
+        RecordedUserEventGroup::new(RecordedUserAction::Click {
+            target: button_target("1Password", "signin-button", "Sign In"),
+        }),
+    ];
+
+    let actions = translate(&groups);
+
+    assert!(actions[0].expects.is_empty());
+    assert!(actions[1].requires.is_empty());
+    // The submit still expects the application to change; only the unsatisfiable guard is gone.
+    assert_eq!(expect_ids(&actions[1]), vec!["a002.changed.0"]);
 }
 
 #[test]
