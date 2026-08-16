@@ -41,8 +41,14 @@ public enum BrowserAutomationAuthorizationLeg: String, Equatable, Sendable {
 final class AppleEventAnswerLedger: @unchecked Sendable {
     static let shared = AppleEventAnswerLedger()
 
+    /// One answer macOS gave this process, and the leg that produced it.
+    struct Answer: Equatable {
+        let status: OSStatus
+        let leg: BrowserAutomationAuthorizationLeg
+    }
+
     private let lock = NSLock()
-    private var answers: [String: OSStatus] = [:]
+    private var answers: [String: Answer] = [:]
 
     /// Whether macOS has already answered this process for `bundleIdentifier`.
     func hasAnswer(for bundleIdentifier: String) -> Bool {
@@ -50,16 +56,28 @@ final class AppleEventAnswerLedger: @unchecked Sendable {
     }
 
     /// The most recent answer this process holds for `bundleIdentifier`, if any.
-    func answer(for bundleIdentifier: String) -> OSStatus? {
+    func answer(for bundleIdentifier: String) -> Answer? {
         lock.lock()
         defer { lock.unlock() }
         return answers[bundleIdentifier]
     }
 
-    func recordAnswer(_ status: OSStatus, for bundleIdentifier: String) {
+    /// Records an answer, except where that would let a preflight overwrite an event macOS actually
+    /// refused.
+    ///
+    /// An executed-leg denial is the one answer that contradicts a passing preflight for the same
+    /// target: the determination said yes and then the event itself was refused. For the rest of
+    /// this process's life the preflight is known to be answering wrongly there, so its `noErr` must
+    /// not retire the denial — and with it the menu item carrying the only remediation the user has.
+    /// Only the dialog replaces it, because that answer is a person deciding in this moment;
+    /// otherwise the daemon restarts and the ledger starts empty.
+    func recordAnswer(_ status: OSStatus, leg: BrowserAutomationAuthorizationLeg, for bundleIdentifier: String) {
         lock.lock()
         defer { lock.unlock() }
-        answers[bundleIdentifier] = status
+        if answers[bundleIdentifier]?.leg == .executed, leg != .prompted {
+            return
+        }
+        answers[bundleIdentifier] = Answer(status: status, leg: leg)
     }
 }
 
@@ -109,6 +127,20 @@ struct AppleEventAuthorizationService {
         // Read once, before the first leg, so the silent leg of this very request does not read back
         // as an earlier answer.
         let answeredEarlier = ledger.hasAnswer(for: bundleIdentifier)
+        // An event macOS refused after the preflight passed is a denial the preflight will not
+        // reproduce: asking it again returns the same `noErr` it already answered wrongly with. The
+        // gesture would then report the browser as granted and retire its own menu item, leaving the
+        // refusal the user came here from with nowhere to lead.
+        if let held = ledger.answer(for: bundleIdentifier),
+           held.leg == .executed, held.status == OSStatus(errAEEventNotPermitted) {
+            log("automation authorization target=\(bundleIdentifier) leg=\(held.leg.rawValue) status=\(held.status) answeredEarlierInThisProcess=true source=ledger")
+            throw denial(
+                .denied,
+                Decision(status: held.status, leg: .executed, answeredEarlierInThisProcess: answeredEarlier),
+                appName: appName,
+                origin: .consentGesture
+            )
+        }
         let initial = determine(
             bundleIdentifier: bundleIdentifier,
             askUserIfNeeded: false,
@@ -145,7 +177,7 @@ struct AppleEventAuthorizationService {
         // An unexpected status means the call failed, not that macOS answered the authorization, so
         // it must not make the next denial claim this process is holding a stale answer.
         if [noErr, OSStatus(errAEEventNotPermitted), OSStatus(errAEEventWouldRequireUserConsent)].contains(status) {
-            ledger.recordAnswer(status, for: bundleIdentifier)
+            ledger.recordAnswer(status, leg: leg, for: bundleIdentifier)
         }
         log("automation authorization target=\(bundleIdentifier) leg=\(leg.rawValue) status=\(status) answeredEarlierInThisProcess=\(holdsEarlierAnswer)")
         return Decision(status: status, leg: leg, answeredEarlierInThisProcess: holdsEarlierAnswer)
@@ -177,7 +209,7 @@ struct AppleEventAuthorizationService {
     /// answer any earlier than the person's own use of Axon already would.
     func settledStatus(bundleIdentifier: String) -> OSStatus {
         if let held = ledger.answer(for: bundleIdentifier) {
-            return held
+            return held.status
         }
         return determine(
             bundleIdentifier: bundleIdentifier,
@@ -608,7 +640,7 @@ public final class AppleScriptBrowserAutomation: BrowserAutomationServing {
     /// settled and retire its consent item, leaving this refusal — which names that item — pointing
     /// at a surface that is no longer there.
     func executedRefusal(browser: SupportedBrowser, status: Int32) -> BrowserAutomationError {
-        ledger.recordAnswer(OSStatus(errAEEventNotPermitted), for: browser.rawValue)
+        ledger.recordAnswer(OSStatus(errAEEventNotPermitted), leg: .executed, for: browser.rawValue)
         return .automationNotGranted(BrowserAutomationDenial(
             app: browser.name, authorization: .denied, leg: .executed, status: status,
             origin: .browserVerb
