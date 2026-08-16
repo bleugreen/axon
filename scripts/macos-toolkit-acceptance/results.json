@@ -1,0 +1,724 @@
+{
+  "schemaVersion": "macos-acceptance-v1",
+  "generatedAt": "2026-08-16T19:04:06-04:00",
+  "campaigns": [
+    {
+      "id": "bbl-2026-08-16",
+      "measuredAt": "2026-08-16T19:04:06-04:00",
+      "machine": "arm64 macOS bench",
+      "operatingSystem": "Version 26.4 (Build 25E246)",
+      "session": "interactive desktop session with a logged-in user",
+      "harness": "scripts/macos-toolkit-acceptance",
+      "permissions": {
+        "accessibility": "granted",
+        "automation": null,
+        "screenRecording": "notNeeded"
+      },
+      "rawEvidence": "raw/bbl-2026-08-16.json",
+      "notes": null
+    }
+  ],
+  "rows": [
+    {
+      "id": "safari-click-2026-08-16",
+      "campaign": "bbl-2026-08-16",
+      "target": {
+        "label": "safari",
+        "kind": "webkit-browser",
+        "identity": {
+          "bundleId": "com.apple.Safari",
+          "bundleShortVersion": "26.4",
+          "bundleVersion": "21624.1.16.11.4",
+          "versionSeries": "26.4",
+          "runtimeSignature": null,
+          "readableAtDispatch": true,
+          "source": "NSRunningApplication(processIdentifier:) then the bundle's Info.plist",
+          "processStartTime": "Sun Aug 16 15:18:08 2026"
+        }
+      },
+      "action": "click",
+      "mechanism": "CGEventPostToPid",
+      "variant": "leftMouseDown+leftMouseUp/source=null/gapMs=0",
+      "verdict": "blocked",
+      "reason": "the foreground control before the dispatch did not act, so this trial is measuring the campaign rather than the target",
+      "observations": {
+        "dispatchAccepted": true,
+        "targetMutated": false,
+        "mutationEvidence": "the page neither navigated nor reported a click",
+        "eventReachedTarget": false,
+        "arrivalDetail": "the page's event listeners recorded nothing",
+        "frontmostUnchanged": true,
+        "decoyFrontmost": true,
+        "pointerUnchanged": true,
+        "ownershipProved": false,
+        "pointerBefore": {
+          "x": 2554,
+          "y": 1434
+        },
+        "pointerAfter": {
+          "x": 2554,
+          "y": 1434
+        },
+        "frontmostBefore": "dev.axon.acceptance.decoy",
+        "frontmostAfter": "dev.axon.acceptance.decoy",
+        "targetPid": 94963,
+        "windowId": null,
+        "point": {
+          "x": 1093.2578125,
+          "y": 208.5
+        },
+        "nonce": "e8e8f15eddd6"
+      },
+      "controls": {
+        "before": {
+          "ran": true,
+          "acted": false,
+          "mechanism": "CGEventPost(kCGHIDEventTap) with the real pointer over the coordinate",
+          "detail": "the page neither navigated nor reported a click"
+        },
+        "after": {
+          "ran": true,
+          "acted": false,
+          "mechanism": "CGEventPost(kCGHIDEventTap) with the real pointer over the coordinate",
+          "detail": "the page neither navigated nor reported a click"
+        }
+      },
+      "freshState": {
+        "fresh": false,
+        "detail": "a foreground control click preceded the measured dispatch, which is what licenses the click trial; a keyboard verdict is never taken from a trial shaped this way"
+      },
+      "rawEvidence": "raw/bbl-2026-08-16.json#safari-click",
+      "remeasureWhen": "a Safari or macOS major release"
+    },
+    {
+      "id": "safari-keyboard-2026-08-16",
+      "campaign": "bbl-2026-08-16",
+      "target": {
+        "label": "safari",
+        "kind": "webkit-browser",
+        "identity": {
+          "bundleId": "com.apple.Safari",
+          "bundleShortVersion": "26.4",
+          "bundleVersion": "21624.1.16.11.4",
+          "versionSeries": "26.4",
+          "runtimeSignature": null,
+          "readableAtDispatch": true,
+          "source": "NSRunningApplication(processIdentifier:) then the bundle's Info.plist",
+          "processStartTime": "Sun Aug 16 15:18:08 2026"
+        }
+      },
+      "action": "keyboard",
+      "mechanism": "CGEventPostToPid",
+      "variant": "keyDown+keyUp/source=null",
+      "verdict": "blocked",
+      "reason": "the foreground control before the dispatch did not act, so this trial is measuring the campaign rather than the target",
+      "observations": {
+        "dispatchAccepted": true,
+        "targetMutated": false,
+        "mutationEvidence": "the page's input read '' before and '' after",
+        "eventReachedTarget": false,
+        "arrivalDetail": "the page's event listeners recorded nothing",
+        "frontmostUnchanged": true,
+        "decoyFrontmost": true,
+        "pointerUnchanged": true,
+        "ownershipProved": false,
+        "pointerBefore": {
+          "x": 2554,
+          "y": 1434
+        },
+        "pointerAfter": {
+          "x": 2554,
+          "y": 1434
+        },
+        "frontmostBefore": "dev.axon.acceptance.decoy",
+        "frontmostAfter": "dev.axon.acceptance.decoy",
+        "targetPid": 94963,
+        "windowId": null,
+        "point": {
+          "x": 1093.2578125,
+          "y": 208.5
+        },
+        "nonce": "c9ccdb2e22d1"
+      },
+      "controls": {
+        "before": {
+          "ran": true,
+          "acted": false,
+          "mechanism": "CGEventPost(kCGHIDEventTap) with the target activated",
+          "detail": "the page's input read '' before and '' after"
+        },
+        "after": {
+          "ran": true,
+          "acted": false,
+          "mechanism": "CGEventPost(kCGHIDEventTap) with the target activated",
+          "detail": "the page's input read '' before and '' after"
+        }
+      },
+      "freshState": {
+        "fresh": true,
+        "detail": "the measured keystrokes were the first synthetic input this target received: its foreground control was a keystroke, not a click"
+      },
+      "rawEvidence": "raw/bbl-2026-08-16.json#safari-keyboard",
+      "remeasureWhen": "a Safari or macOS major release"
+    },
+    {
+      "id": "chrome-click-2026-08-16",
+      "campaign": "bbl-2026-08-16",
+      "target": {
+        "label": "chrome",
+        "kind": "chromium-browser",
+        "identity": {
+          "bundleId": "com.google.Chrome",
+          "bundleShortVersion": "150.0.7871.186",
+          "bundleVersion": "7871.186",
+          "versionSeries": "150.0",
+          "runtimeSignature": null,
+          "readableAtDispatch": true,
+          "source": "NSRunningApplication(processIdentifier:) then the bundle's Info.plist",
+          "processStartTime": "Sun Aug 16 19:01:20 2026"
+        }
+      },
+      "action": "click",
+      "mechanism": "CGEventPostToPid",
+      "variant": "leftMouseDown+leftMouseUp/source=null/gapMs=0",
+      "verdict": "blocked",
+      "reason": "the foreground control before the dispatch did not act, so this trial is measuring the campaign rather than the target",
+      "observations": {
+        "dispatchAccepted": true,
+        "targetMutated": false,
+        "mutationEvidence": "the page neither navigated nor reported a click",
+        "eventReachedTarget": false,
+        "arrivalDetail": "the page's event listeners recorded nothing",
+        "frontmostUnchanged": true,
+        "decoyFrontmost": true,
+        "pointerUnchanged": true,
+        "ownershipProved": true,
+        "pointerBefore": {
+          "x": 2554,
+          "y": 1434
+        },
+        "pointerAfter": {
+          "x": 2554,
+          "y": 1434
+        },
+        "frontmostBefore": "dev.axon.acceptance.decoy",
+        "frontmostAfter": "dev.axon.acceptance.decoy",
+        "targetPid": 61675,
+        "windowId": null,
+        "point": {
+          "x": 152.02734375,
+          "y": 289.25
+        },
+        "nonce": "bb55f841c69f"
+      },
+      "controls": {
+        "before": {
+          "ran": true,
+          "acted": false,
+          "mechanism": "CGEventPost(kCGHIDEventTap) with the real pointer over the coordinate",
+          "detail": "the page neither navigated nor reported a click"
+        },
+        "after": {
+          "ran": true,
+          "acted": false,
+          "mechanism": "CGEventPost(kCGHIDEventTap) with the real pointer over the coordinate",
+          "detail": "the page neither navigated nor reported a click"
+        }
+      },
+      "freshState": {
+        "fresh": false,
+        "detail": "a foreground control click preceded the measured dispatch, which is what licenses the click trial; a keyboard verdict is never taken from a trial shaped this way"
+      },
+      "rawEvidence": "raw/bbl-2026-08-16.json#chrome-click",
+      "remeasureWhen": "a Chrome major release"
+    },
+    {
+      "id": "chrome-keyboard-2026-08-16",
+      "campaign": "bbl-2026-08-16",
+      "target": {
+        "label": "chrome",
+        "kind": "chromium-browser",
+        "identity": {
+          "bundleId": "com.google.Chrome",
+          "bundleShortVersion": "150.0.7871.186",
+          "bundleVersion": "7871.186",
+          "versionSeries": "150.0",
+          "runtimeSignature": null,
+          "readableAtDispatch": true,
+          "source": "NSRunningApplication(processIdentifier:) then the bundle's Info.plist",
+          "processStartTime": "Sun Aug 16 19:01:20 2026"
+        }
+      },
+      "action": "keyboard",
+      "mechanism": "CGEventPostToPid",
+      "variant": "keyDown+keyUp/source=null",
+      "verdict": "blocked",
+      "reason": "the foreground control before the dispatch did not act, so this trial is measuring the campaign rather than the target",
+      "observations": {
+        "dispatchAccepted": true,
+        "targetMutated": false,
+        "mutationEvidence": "the page's input read '' before and '' after",
+        "eventReachedTarget": false,
+        "arrivalDetail": "the page's event listeners recorded nothing",
+        "frontmostUnchanged": true,
+        "decoyFrontmost": true,
+        "pointerUnchanged": true,
+        "ownershipProved": true,
+        "pointerBefore": {
+          "x": 2554,
+          "y": 1434
+        },
+        "pointerAfter": {
+          "x": 2554,
+          "y": 1434
+        },
+        "frontmostBefore": "dev.axon.acceptance.decoy",
+        "frontmostAfter": "dev.axon.acceptance.decoy",
+        "targetPid": 61675,
+        "windowId": null,
+        "point": {
+          "x": 174.02734375,
+          "y": 311.25
+        },
+        "nonce": "39e394087328"
+      },
+      "controls": {
+        "before": {
+          "ran": true,
+          "acted": false,
+          "mechanism": "CGEventPost(kCGHIDEventTap) with the target activated",
+          "detail": "the page's input read '' before and '' after"
+        },
+        "after": {
+          "ran": true,
+          "acted": false,
+          "mechanism": "CGEventPost(kCGHIDEventTap) with the target activated",
+          "detail": "the page's input read '' before and '' after"
+        }
+      },
+      "freshState": {
+        "fresh": true,
+        "detail": "the measured keystrokes were the first synthetic input this target received: its foreground control was a keystroke, not a click"
+      },
+      "rawEvidence": "raw/bbl-2026-08-16.json#chrome-keyboard",
+      "remeasureWhen": "a Chrome major release"
+    },
+    {
+      "id": "electron-click-2026-08-16",
+      "campaign": "bbl-2026-08-16",
+      "target": {
+        "label": "electron",
+        "kind": "electron",
+        "identity": {
+          "bundleId": "com.github.Electron",
+          "bundleShortVersion": "43.4.0",
+          "bundleVersion": "43.4.0",
+          "versionSeries": "43.4",
+          "runtimeSignature": {
+            "kind": "electron-framework",
+            "version": null
+          },
+          "readableAtDispatch": true,
+          "source": "NSRunningApplication(processIdentifier:) then the bundle's Info.plist",
+          "processStartTime": "Sun Aug 16 19:01:55 2026"
+        }
+      },
+      "action": "click",
+      "mechanism": "CGEventPostToPid",
+      "variant": "leftMouseDown+leftMouseUp/source=null/gapMs=0",
+      "verdict": "blocked",
+      "reason": "the foreground control before the dispatch did not act, so this trial is measuring the campaign rather than the target",
+      "observations": {
+        "dispatchAccepted": true,
+        "targetMutated": false,
+        "mutationEvidence": "the page neither navigated nor reported a click",
+        "eventReachedTarget": false,
+        "arrivalDetail": "the page's event listeners recorded nothing",
+        "frontmostUnchanged": true,
+        "decoyFrontmost": true,
+        "pointerUnchanged": true,
+        "ownershipProved": true,
+        "pointerBefore": {
+          "x": 2554,
+          "y": 1434
+        },
+        "pointerAfter": {
+          "x": 2554,
+          "y": 1434
+        },
+        "frontmostBefore": "dev.axon.acceptance.decoy",
+        "frontmostAfter": "dev.axon.acceptance.decoy",
+        "targetPid": 69361,
+        "windowId": null,
+        "point": {
+          "x": 232.02734375,
+          "y": 298.25
+        },
+        "nonce": "e30876a8c497"
+      },
+      "controls": {
+        "before": {
+          "ran": true,
+          "acted": false,
+          "mechanism": "CGEventPost(kCGHIDEventTap) with the real pointer over the coordinate",
+          "detail": "the page neither navigated nor reported a click"
+        },
+        "after": {
+          "ran": true,
+          "acted": false,
+          "mechanism": "CGEventPost(kCGHIDEventTap) with the real pointer over the coordinate",
+          "detail": "the page neither navigated nor reported a click"
+        }
+      },
+      "freshState": {
+        "fresh": false,
+        "detail": "a foreground control click preceded the measured dispatch, which is what licenses the click trial; a keyboard verdict is never taken from a trial shaped this way"
+      },
+      "rawEvidence": "raw/bbl-2026-08-16.json#electron-click",
+      "remeasureWhen": "an Electron or Chromium major release"
+    },
+    {
+      "id": "electron-keyboard-2026-08-16",
+      "campaign": "bbl-2026-08-16",
+      "target": {
+        "label": "electron",
+        "kind": "electron",
+        "identity": {
+          "bundleId": "com.github.Electron",
+          "bundleShortVersion": "43.4.0",
+          "bundleVersion": "43.4.0",
+          "versionSeries": "43.4",
+          "runtimeSignature": {
+            "kind": "electron-framework",
+            "version": null
+          },
+          "readableAtDispatch": true,
+          "source": "NSRunningApplication(processIdentifier:) then the bundle's Info.plist",
+          "processStartTime": "Sun Aug 16 19:02:12 2026"
+        }
+      },
+      "action": "keyboard",
+      "mechanism": "CGEventPostToPid",
+      "variant": "keyDown+keyUp/source=null",
+      "verdict": "accepted",
+      "reason": "the target acted on input posted to its process while a decoy held the foreground and the real pointer did not move",
+      "observations": {
+        "dispatchAccepted": true,
+        "targetMutated": true,
+        "mutationEvidence": "the page's input read 'axon' before and 'axonaxon' after",
+        "eventReachedTarget": true,
+        "arrivalDetail": "the page observed keydown isTrusted=True, keyup isTrusted=True, keydown isTrusted=True, keyup isTrusted=True, keydown isTrusted=True, keyup isTrusted=True, keydown isTrusted=True, keyup isTrusted=True",
+        "frontmostUnchanged": true,
+        "decoyFrontmost": true,
+        "pointerUnchanged": true,
+        "ownershipProved": true,
+        "pointerBefore": {
+          "x": 2554,
+          "y": 1434
+        },
+        "pointerAfter": {
+          "x": 2554,
+          "y": 1434
+        },
+        "frontmostBefore": "dev.axon.acceptance.decoy",
+        "frontmostAfter": "dev.axon.acceptance.decoy",
+        "targetPid": 71222,
+        "windowId": null,
+        "point": {
+          "x": 232.02734375,
+          "y": 298.25
+        },
+        "nonce": "16c5a8aaebc4"
+      },
+      "controls": {
+        "before": {
+          "ran": true,
+          "acted": true,
+          "mechanism": "CGEventPost(kCGHIDEventTap) with the target activated",
+          "detail": "the page's input read '' before and 'axon' after"
+        },
+        "after": {
+          "ran": true,
+          "acted": true,
+          "mechanism": "CGEventPost(kCGHIDEventTap) with the target activated",
+          "detail": "the page's input read 'axonaxon' before and 'axonaxonaxon' after"
+        }
+      },
+      "freshState": {
+        "fresh": true,
+        "detail": "the measured keystrokes were the first synthetic input this target received: its foreground control was a keystroke, not a click"
+      },
+      "rawEvidence": "raw/bbl-2026-08-16.json#electron-keyboard",
+      "remeasureWhen": "an Electron or Chromium major release"
+    },
+    {
+      "id": "AxonAcceptanceTarget-click-2026-08-16",
+      "campaign": "bbl-2026-08-16",
+      "target": {
+        "label": "AxonAcceptanceTarget",
+        "kind": "appkit-native",
+        "identity": {
+          "bundleId": "dev.axon.acceptance.target",
+          "bundleShortVersion": "1.0.0",
+          "bundleVersion": "1",
+          "versionSeries": "1.0",
+          "runtimeSignature": null,
+          "readableAtDispatch": true,
+          "source": "NSRunningApplication(processIdentifier:) then the bundle's Info.plist",
+          "processStartTime": "Sun Aug 16 19:02:27 2026"
+        }
+      },
+      "action": "click",
+      "mechanism": "CGEventPostToPid",
+      "variant": "leftMouseDown+leftMouseUp/source=null/gapMs=0",
+      "verdict": "refused",
+      "reason": "the Core Graphics post completed and the target did nothing: dispatch was accepted by macOS and the action was not delivered",
+      "observations": {
+        "dispatchAccepted": true,
+        "targetMutated": false,
+        "mutationEvidence": "the fixture's checkbox read 1 before and 1 after",
+        "eventReachedTarget": true,
+        "arrivalDetail": "the application dequeued leftMouseDown on window 0, leftMouseUp on window 0",
+        "frontmostUnchanged": true,
+        "decoyFrontmost": true,
+        "pointerUnchanged": true,
+        "ownershipProved": true,
+        "pointerBefore": {
+          "x": 2554,
+          "y": 1434
+        },
+        "pointerAfter": {
+          "x": 2554,
+          "y": 1434
+        },
+        "frontmostBefore": "dev.axon.acceptance.decoy",
+        "frontmostAfter": "dev.axon.acceptance.decoy",
+        "targetPid": 76561,
+        "windowId": null,
+        "point": {
+          "x": 210.5,
+          "y": 940
+        },
+        "nonce": "8fed31316cd9"
+      },
+      "controls": {
+        "before": {
+          "ran": true,
+          "acted": true,
+          "mechanism": "CGEventPost(kCGHIDEventTap) with the real pointer over the coordinate",
+          "detail": "the fixture's checkbox read 0 before and 1 after"
+        },
+        "after": {
+          "ran": true,
+          "acted": true,
+          "mechanism": "CGEventPost(kCGHIDEventTap) with the real pointer over the coordinate",
+          "detail": "the fixture's checkbox read 1 before and 0 after"
+        }
+      },
+      "freshState": {
+        "fresh": false,
+        "detail": "a foreground control click preceded the measured dispatch, which is what licenses the click trial; a keyboard verdict is never taken from a trial shaped this way"
+      },
+      "rawEvidence": "raw/bbl-2026-08-16.json#AxonAcceptanceTarget-click",
+      "remeasureWhen": "a macOS major release, which is what changes how AppKit routes a posted event"
+    },
+    {
+      "id": "AxonAcceptanceTarget-keyboard-2026-08-16",
+      "campaign": "bbl-2026-08-16",
+      "target": {
+        "label": "AxonAcceptanceTarget",
+        "kind": "appkit-native",
+        "identity": {
+          "bundleId": "dev.axon.acceptance.target",
+          "bundleShortVersion": "1.0.0",
+          "bundleVersion": "1",
+          "versionSeries": "1.0",
+          "runtimeSignature": null,
+          "readableAtDispatch": true,
+          "source": "NSRunningApplication(processIdentifier:) then the bundle's Info.plist",
+          "processStartTime": "Sun Aug 16 19:02:43 2026"
+        }
+      },
+      "action": "keyboard",
+      "mechanism": "CGEventPostToPid",
+      "variant": "keyDown+keyUp/source=null",
+      "verdict": "accepted",
+      "reason": "the target acted on input posted to its process while a decoy held the foreground and the real pointer did not move",
+      "observations": {
+        "dispatchAccepted": true,
+        "targetMutated": true,
+        "mutationEvidence": "the fixture's text field read 'axon' before and 'axonaxon' after",
+        "eventReachedTarget": true,
+        "arrivalDetail": "the application dequeued keyDown on window 2744, keyUp on window 2744, keyDown on window 2744, keyUp on window 2744, keyDown on window 2744, keyUp on window 2744, keyDown on window 2744, keyUp on window 2744",
+        "frontmostUnchanged": true,
+        "decoyFrontmost": true,
+        "pointerUnchanged": true,
+        "ownershipProved": true,
+        "pointerBefore": {
+          "x": 2554,
+          "y": 1434
+        },
+        "pointerAfter": {
+          "x": 2554,
+          "y": 1434
+        },
+        "frontmostBefore": "dev.axon.acceptance.decoy",
+        "frontmostAfter": "dev.axon.acceptance.decoy",
+        "targetPid": 81625,
+        "windowId": null,
+        "point": null,
+        "nonce": "2273b67b2827"
+      },
+      "controls": {
+        "before": {
+          "ran": true,
+          "acted": true,
+          "mechanism": "CGEventPost(kCGHIDEventTap) with the target activated",
+          "detail": "the fixture's text field read '' before and 'axon' after"
+        },
+        "after": {
+          "ran": true,
+          "acted": true,
+          "mechanism": "CGEventPost(kCGHIDEventTap) with the target activated",
+          "detail": "the fixture's text field read 'axonaxon' before and 'axonaxonaxon' after"
+        }
+      },
+      "freshState": {
+        "fresh": true,
+        "detail": "the measured keystrokes were the first synthetic input this target received: its foreground control was a keystroke, not a click"
+      },
+      "rawEvidence": "raw/bbl-2026-08-16.json#AxonAcceptanceTarget-keyboard",
+      "remeasureWhen": "a macOS major release, which is what changes how AppKit routes a posted event"
+    },
+    {
+      "id": "AxonAcceptanceWebView-click-2026-08-16",
+      "campaign": "bbl-2026-08-16",
+      "target": {
+        "label": "AxonAcceptanceWebView",
+        "kind": "wkwebview",
+        "identity": {
+          "bundleId": null,
+          "bundleShortVersion": null,
+          "bundleVersion": null,
+          "versionSeries": null,
+          "runtimeSignature": null,
+          "readableAtDispatch": false,
+          "source": "not read: the trial did not reach a running target",
+          "processStartTime": null
+        }
+      },
+      "action": "click",
+      "mechanism": "CGEventPostToPid",
+      "variant": "leftMouseDown+leftMouseUp/source=null/gapMs=0",
+      "verdict": "blocked",
+      "reason": "the trial could not be established: 'NoneType' object is not subscriptable",
+      "observations": {
+        "dispatchAccepted": null,
+        "targetMutated": null,
+        "mutationEvidence": null,
+        "eventReachedTarget": null,
+        "arrivalDetail": null,
+        "frontmostUnchanged": null,
+        "decoyFrontmost": null,
+        "pointerUnchanged": null,
+        "ownershipProved": null,
+        "pointerBefore": null,
+        "pointerAfter": null,
+        "frontmostBefore": null,
+        "frontmostAfter": null,
+        "targetPid": null,
+        "windowId": null,
+        "point": null,
+        "nonce": null
+      },
+      "controls": {
+        "before": {
+          "ran": false,
+          "acted": null,
+          "mechanism": null,
+          "detail": null
+        },
+        "after": {
+          "ran": false,
+          "acted": null,
+          "mechanism": null,
+          "detail": null
+        }
+      },
+      "freshState": {
+        "fresh": false,
+        "detail": "a foreground control click preceded the measured dispatch, which is what licenses the click trial; a keyboard verdict is never taken from a trial shaped this way"
+      },
+      "rawEvidence": "raw/bbl-2026-08-16.json#AxonAcceptanceWebView-click",
+      "remeasureWhen": "a macOS major release, which is what changes how AppKit routes a posted event"
+    },
+    {
+      "id": "AxonAcceptanceWebView-keyboard-2026-08-16",
+      "campaign": "bbl-2026-08-16",
+      "target": {
+        "label": "AxonAcceptanceWebView",
+        "kind": "wkwebview",
+        "identity": {
+          "bundleId": "dev.axon.acceptance.webview",
+          "bundleShortVersion": "1.0.0",
+          "bundleVersion": "1",
+          "versionSeries": "1.0",
+          "runtimeSignature": null,
+          "readableAtDispatch": true,
+          "source": "NSRunningApplication(processIdentifier:) then the bundle's Info.plist",
+          "processStartTime": "Sun Aug 16 19:03:26 2026"
+        }
+      },
+      "action": "keyboard",
+      "mechanism": "CGEventPostToPid",
+      "variant": "keyDown+keyUp/source=null",
+      "verdict": "blocked",
+      "reason": "the foreground control before the dispatch did not act, so this trial is measuring the campaign rather than the target",
+      "observations": {
+        "dispatchAccepted": true,
+        "targetMutated": false,
+        "mutationEvidence": "the page's input read '' before and '' after",
+        "eventReachedTarget": false,
+        "arrivalDetail": "the page's event listeners recorded nothing",
+        "frontmostUnchanged": true,
+        "decoyFrontmost": true,
+        "pointerUnchanged": true,
+        "ownershipProved": true,
+        "pointerBefore": {
+          "x": 2554,
+          "y": 1434
+        },
+        "pointerAfter": {
+          "x": 2554,
+          "y": 1434
+        },
+        "frontmostBefore": "dev.axon.acceptance.decoy",
+        "frontmostAfter": "dev.axon.acceptance.decoy",
+        "targetPid": 87019,
+        "windowId": null,
+        "point": null,
+        "nonce": "e0b1fd2c0c7b"
+      },
+      "controls": {
+        "before": {
+          "ran": true,
+          "acted": false,
+          "mechanism": "CGEventPost(kCGHIDEventTap) with the target activated",
+          "detail": "the page's input read '' before and '' after"
+        },
+        "after": {
+          "ran": true,
+          "acted": false,
+          "mechanism": "CGEventPost(kCGHIDEventTap) with the target activated",
+          "detail": "the page's input read '' before and '' after"
+        }
+      },
+      "freshState": {
+        "fresh": true,
+        "detail": "the measured keystrokes were the first synthetic input this target received: its foreground control was a keystroke, not a click"
+      },
+      "rawEvidence": "raw/bbl-2026-08-16.json#AxonAcceptanceWebView-keyboard",
+      "remeasureWhen": "a macOS major release, which is what changes how AppKit routes a posted event"
+    }
+  ]
+}
