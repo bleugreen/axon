@@ -1,3 +1,4 @@
+import AppKit
 import ApplicationServices
 import CoreGraphics
 import Testing
@@ -210,6 +211,49 @@ private func pointerExecutor(
     #expect(result.dispatchSuccess)
     #expect(result.strategy == "CGEvent")
     #expect(posted == [.leftMouseDown, .leftMouseUp])
+}
+
+@Test func anApplicationNameIsNotGeometryAndDoesNotEarnTheTargetedRung() throws {
+    // `CGEventToPid` is a separate mechanism from foreground activation, and naming an application
+    // is not what qualifies a coordinate for it. Nothing here has established that this point lies
+    // in that application's window — an app name is an owner, not geometry — so the targeted rung is
+    // declined and the click goes where its coordinates mean what the caller measured, at proved
+    // activation. Not one event reaches the process behind its back.
+    var global: [CGEventType] = []
+    var targeted: [pid_t] = []
+    var activations: [pid_t] = []
+    // Resolvable by pid, so the point carries a genuine application identity without depending on
+    // any particular application being installed.
+    let target = try #require(NSWorkspace.shared.frontmostApplication?.processIdentifier)
+    var frontmost: pid_t = 7
+    let executor = AXPrimitiveActionExecutor(
+        elementStore: AXElementStore(),
+        overlay: nil,
+        postEvent: { global.append($0.type) },
+        postEventToProcess: { _, pid in targeted.append(pid) },
+        sleepMilliseconds: { _ in },
+        frameProvider: { _ in pointerFrame },
+        parentProvider: { _ in nil },
+        processProvider: { _ in nil },
+        frontmostApp: {
+            ForegroundApp(processIdentifier: frontmost, name: "p\(frontmost)", bundleIdentifier: "com.example.p\(frontmost)")
+        },
+        activateProcess: { activations.append($0); frontmost = $0; return true },
+        pointerLocation: { .zero }
+    )
+
+    let result = try executor.click(
+        point: ActionPoint(x: 30, y: 40, coordinateSpace: .screen, app: String(target)),
+        policy: .foregroundPermitted
+    )
+
+    #expect(result.delivery == .foreground)
+    #expect(result.strategy == "CGEvent")
+    #expect(targeted.isEmpty)
+    #expect(global == [.leftMouseDown, .leftMouseUp])
+    #expect(activations.first == target)
+    #expect(result.details["foreground"]?["alreadyFrontmost"] == .bool(false))
+    #expect(result.details["foreground"]?["activationProved"] == .bool(true))
 }
 
 @Test func typeFallbackRejectsMismatchedHitBeforeMouseOrKeyboardEvents() throws {

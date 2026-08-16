@@ -72,40 +72,58 @@ public enum ToolTarget: Equatable, Sendable {
         guard case let .object(object) = value else {
             throw JSONRPCError.invalidParams("\(fieldName) point target must be an object")
         }
-        if let point = object["point"] {
-            return try pointValue(point, fieldName: fieldName)
+        guard let point = object["point"] else {
+            return try pointValue(value, fieldName: fieldName)
         }
-        return try pointValue(value, fieldName: fieldName)
+        // A wrapped point is written `{app, coordinateSpace, point: {x, y}}` at least as often as
+        // `{point: {x, y, app, coordinateSpace}}`, and the two say the same thing. Reading only the
+        // nested object dropped whatever the wrapper said, and an app-scoped click that arrives
+        // without its app is indistinguishable from a bare coordinate: delivery has no process to
+        // bind or raise, so it posts global input into whichever application already holds the
+        // foreground.
+        return try pointValue(point, fieldName: fieldName, wrapper: object)
     }
 
-    private static func pointValue(_ value: JSONValue, fieldName: String) throws -> ActionPoint {
+    private static func pointValue(
+        _ value: JSONValue,
+        fieldName: String,
+        wrapper: [String: JSONValue] = [:]
+    ) throws -> ActionPoint {
         guard case let .object(object) = value else {
             throw JSONRPCError.invalidParams("\(fieldName) point must be an object")
         }
         guard let x = numericValue("x", in: object), let y = numericValue("y", in: object) else {
             throw JSONRPCError.invalidParams("\(fieldName) point requires numeric x and y")
         }
-        let coordinateSpace = try coordinateSpaceValue(in: object, fieldName: fieldName)
-        let app: String?
-        if case let .string(value)? = object["app"], !value.isEmpty {
-            app = value
-        } else {
-            app = nil
-        }
+        // The point is the most specific statement of what it means, so what it declares wins and
+        // the wrapper only fills in what the point left unsaid.
+        let coordinateSpace = try declaredCoordinateSpace(in: object, fieldName: fieldName)
+            ?? declaredCoordinateSpace(in: wrapper, fieldName: fieldName)
+            ?? .legacyScreen
+        let app = nonEmptyString("app", in: object) ?? nonEmptyString("app", in: wrapper)
         return ActionPoint(x: x, y: y, coordinateSpace: coordinateSpace, app: app)
     }
 
-    private static func coordinateSpaceValue(
+    private static func nonEmptyString(_ key: String, in object: [String: JSONValue]) -> String? {
+        guard case let .string(value)? = object[key], !value.isEmpty else {
+            return nil
+        }
+        return value
+    }
+
+    /// The coordinate space this object states, or nil when it states none. Nil and `legacyScreen`
+    /// are different answers: only the caller who said nothing anywhere gets the legacy default.
+    private static func declaredCoordinateSpace(
         in object: [String: JSONValue],
         fieldName: String
-    ) throws -> ActionPointCoordinateSpace {
-        let rawValue: String?
+    ) throws -> ActionPointCoordinateSpace? {
+        let rawValue: String
         if case let .string(value)? = object["coordinateSpace"] {
             rawValue = value
         } else if case let .string(value)? = object["space"] {
             rawValue = value
         } else {
-            return .legacyScreen
+            return nil
         }
         switch rawValue {
         case "screen":

@@ -116,6 +116,71 @@ private final class FakeSession: @unchecked Sendable {
             settleIntervalMs: 10
         )
     }
+
+    /// A click executor for a raw screen point. There is no element behind such a coordinate, so
+    /// the only identity it carries is the application the caller named, and the only thing there
+    /// is to validate is that the window its coordinates were measured against is still there.
+    ///
+    /// `windowFrame` is what that application's window currently reports. Modelling it as a
+    /// function is what lets a test raise the window into place only once the application is
+    /// actually frontmost, which is how the order of activation and validation becomes observable.
+    func pointExecutor(
+        targetProcess: pid_t,
+        windowFrame: @escaping () -> AXFrame = { escalationFrame }
+    ) -> AXPrimitiveActionExecutor {
+        AXPrimitiveActionExecutor(
+            elementStore: AXElementStore(),
+            overlay: nil,
+            postEvent: { _ in
+                self.log.append("post")
+                self.globalPosts += 1
+                self.frontmostDuringDispatch.append(self.frontmost)
+            },
+            postEventToProcess: { _, pid in
+                self.log.append("postToPid:\(pid)")
+                self.targetedPosts.append(pid)
+                self.frontmostDuringDispatch.append(self.frontmost)
+            },
+            sleepMilliseconds: { _ in },
+            frameProvider: { _ in windowFrame() },
+            parentProvider: { _ in nil },
+            processProvider: { _ in nil },
+            // The application's window list: how a point with provenance checks that the window its
+            // coordinates came from is still where they were taken.
+            attributeProvider: { _, attribute in
+                attribute == kAXWindowsAttribute
+                    ? [AXUIElementCreateApplication(targetProcess)] as AnyObject
+                    : nil
+            },
+            frontmostApp: {
+                ForegroundApp(
+                    processIdentifier: self.frontmost,
+                    name: "pid \(self.frontmost)",
+                    bundleIdentifier: "com.example.p\(self.frontmost)"
+                )
+            },
+            activateProcess: { self.activate($0) },
+            pointerLocation: { self.readPointer() },
+            movePointer: { self.movePointer(to: $0) },
+            settleTimeoutMs: 40,
+            settleIntervalMs: 10
+        )
+    }
+}
+
+/// The frame the click's coordinates were measured against, reported from somewhere else — a window
+/// that has not been raised into place yet.
+private let displacedFrame = AXFrame(x: 900, y: 900, width: 100, height: 40)
+
+/// A point inside `escalationFrame`, so the coordinate is valid once the window is where its
+/// provenance says it was.
+private let escalationPoint = CGPoint(x: 50, y: 30)
+
+/// An application identity the real resolver can answer, so a point carries a genuine process
+/// without this test depending on any particular application being installed. Everything the
+/// executor learns about the *foreground* still comes from the fake session.
+private func resolvableProcess() throws -> pid_t {
+    try #require(NSWorkspace.shared.frontmostApplication?.processIdentifier)
 }
 
 private func escalationStore() -> (AXElementStore, AXUIElement) {
@@ -385,7 +450,10 @@ private func escalationStore() -> (AXElementStore, AXUIElement) {
     #expect(session.globalPosts > 0)
     // Nothing to raise means nothing is raised, and the prior app keeps the session throughout.
     #expect(!session.log.contains { $0.hasPrefix("activate") })
-    #expect(escalated.details["foreground"]?["alreadyFrontmost"] == .bool(true))
+    // An element whose process cannot be read is a target this side cannot place, so there is no
+    // application of which "already frontmost" is either true or false. Answering `true` claimed
+    // the target was standing in a foreground that belongs to someone else.
+    #expect(escalated.details["foreground"]?["alreadyFrontmost"] == .null)
     // And nothing is claimed about an activation that never had a target. Reporting `true` here
     // read as proof that the escalation had raised something, which sent a field investigation
     // after a mechanism this path never runs.
@@ -406,5 +474,218 @@ private func escalationStore() -> (AXElementStore, AXUIElement) {
     #expect(result.delivery == .foreground)
     #expect(result.dispatchSuccess)
     #expect(result.details["foreground"]?["activationProved"] == .null)
+    // And no claim about a target that does not exist. Reporting `alreadyFrontmost: true` beside a
+    // foreign `priorApp` was the envelope refuting itself, and it read as confirmation that the
+    // click had reached an application it had never even named.
+    #expect(result.details["foreground"]?["alreadyFrontmost"] == .null)
+    #expect(result.details["foreground"]?["priorApp"] == .string("com.example.p\(priorProcess)"))
     #expect(!session.log.contains { $0.hasPrefix("activate") })
+}
+
+@Test func theFieldClickRaisesSafariAndPostsGloballyRatherThanSettlingOnABackgroundPost() throws {
+    // The reported request exactly: another application holds the foreground, and the caller clicks
+    // a screen coordinate it measured inside the one it names. Nothing about that coordinate has
+    // been checked against the named application's geometry, so the targeted rung must not take it
+    // — posting it into the process is accepted and can do nothing, and a click has no
+    // postcondition to notice with. What must happen instead is the transaction this issue is
+    // about: raise the target, prove it, then post where the caller measured.
+    let session = FakeSession()
+    let target = try resolvableProcess()
+    let executor = session.pointExecutor(targetProcess: target)
+
+    let result = try executor.click(
+        point: ActionPoint(
+            x: escalationPoint.x,
+            y: escalationPoint.y,
+            coordinateSpace: .screen,
+            app: String(target)
+        ),
+        policy: .foregroundPermitted
+    )
+
+    #expect(result.delivery == .foreground)
+    #expect(result.strategy == "CGEvent")
+    #expect(result.dispatchSuccess)
+    // Not one event went to the process behind its own back.
+    #expect(session.targetedPosts.isEmpty)
+    #expect(session.globalPosts > 0)
+    #expect(session.log.first == "activate:\(target)")
+    #expect(session.frontmostDuringDispatch.allSatisfy { $0 == target })
+
+    let cleanup = result.details["foreground"]
+    #expect(cleanup?["priorApp"] == .string("com.example.p\(priorProcess)"))
+    #expect(cleanup?["alreadyFrontmost"] == .bool(false))
+    #expect(cleanup?["activationProved"] == .bool(true))
+    #expect(cleanup?["restored"] == .bool(true))
+    #expect(session.frontmost == priorProcess)
+}
+
+@Test func theFieldClickUnderBackgroundOnlyRefusesInsteadOfPostingIntoTheProcess() throws {
+    // The same coordinate with the foreground withheld has no mechanism left, and says so. An
+    // accepted post into the process would be the silent no-op this whole issue came from, dressed
+    // as a delivery.
+    let session = FakeSession()
+    let target = try resolvableProcess()
+    let executor = session.pointExecutor(targetProcess: target)
+
+    let result = try executor.click(
+        point: ActionPoint(
+            x: escalationPoint.x,
+            y: escalationPoint.y,
+            coordinateSpace: .screen,
+            app: String(target)
+        ),
+        policy: .backgroundOnly
+    )
+
+    #expect(result.dispatchSuccess == false)
+    #expect(result.delivery == nil)
+    #expect(result.refusal?.reason == .foregroundNotPermitted)
+    #expect(result.refusal?.alsoRefused.contains { $0.message.contains("no window provenance") } == true)
+    #expect(session.targetedPosts.isEmpty)
+    #expect(session.globalPosts == 0)
+    #expect(!session.log.contains { $0.hasPrefix("activate") })
+}
+
+@Test func aPointDerivedFromACaptureKeepsTheTargetedRungItsProvenanceEarns() throws {
+    // The other half of the rule, so the fix above is a distinction and not a blanket ban: a point
+    // that carries the window frame it was measured against can be checked against that frame, and
+    // that check is what makes a targeted post honest. Such a point still delivers in the
+    // background, activating nothing.
+    let session = FakeSession()
+    let target = try resolvableProcess()
+    let executor = session.pointExecutor(targetProcess: target)
+
+    let result = try executor.click(
+        point: ActionPoint(
+            x: escalationPoint.x,
+            y: escalationPoint.y,
+            coordinateSpace: .screen,
+            app: String(target),
+            sourceWindowFrame: escalationFrame
+        ),
+        policy: .backgroundOnly
+    )
+
+    #expect(result.delivery == .pixel)
+    #expect(result.strategy == "CGEventToPid")
+    #expect(result.dispatchSuccess)
+    #expect(session.targetedPosts.allSatisfy { $0 == target })
+    #expect(session.globalPosts == 0)
+    #expect(!session.log.contains { $0.hasPrefix("activate") })
+    #expect(result.details["foreground"] == nil)
+}
+
+@Test func anAppScopedPointRaisesItsOwnApplicationBeforePostingGlobalInput() throws {
+    // The field case, at the rung it actually reaches: another application holds the foreground,
+    // the caller clicks a point measured inside its own, and the targeted rung refuses because the
+    // window is not where those coordinates were taken. What follows must be an activation that is
+    // proved before a single global event is posted.
+    let session = FakeSession()
+    let target = try resolvableProcess()
+    let executor = session.pointExecutor(
+        targetProcess: target,
+        windowFrame: { session.frontmost == target ? escalationFrame : displacedFrame }
+    )
+
+    let result = try executor.click(
+        point: ActionPoint(
+            x: escalationPoint.x,
+            y: escalationPoint.y,
+            coordinateSpace: .screen,
+            app: String(target),
+            sourceWindowFrame: escalationFrame
+        ),
+        policy: .foregroundPermitted
+    )
+
+    #expect(result.delivery == .foreground)
+    #expect(result.dispatchSuccess)
+    #expect(session.globalPosts > 0)
+    // The refused targeted rung posted nothing, and activation was the first thing that happened.
+    #expect(session.targetedPosts.isEmpty)
+    #expect(session.log.first == "activate:\(target)")
+    // Every global event landed while the target held the foreground — the whole point of raising
+    // it, and exactly what the field envelope claimed without ever doing it.
+    #expect(session.frontmostDuringDispatch.allSatisfy { $0 == target })
+
+    let cleanup = result.details["foreground"]
+    #expect(cleanup?["priorApp"] == .string("com.example.p\(priorProcess)"))
+    #expect(cleanup?["priorAppProcessIdentifier"] == .int(Int(priorProcess)))
+    // A foreign prior application and a resolved target can only mean this.
+    #expect(cleanup?["alreadyFrontmost"] == .bool(false))
+    #expect(cleanup?["activationProved"] == .bool(true))
+    #expect(cleanup?["restored"] == .bool(true))
+    #expect(session.frontmost == priorProcess)
+}
+
+@Test func anAppScopedPointRefusesWithoutPostingWhenItsApplicationWillNotComeForward() throws {
+    let session = FakeSession()
+    let target = try resolvableProcess()
+    session.refusesActivation = [target]
+    let executor = session.pointExecutor(
+        targetProcess: target,
+        windowFrame: { session.frontmost == target ? escalationFrame : displacedFrame }
+    )
+
+    let result = try executor.click(
+        point: ActionPoint(
+            x: escalationPoint.x,
+            y: escalationPoint.y,
+            coordinateSpace: .screen,
+            app: String(target),
+            sourceWindowFrame: escalationFrame
+        ),
+        policy: .foregroundPermitted
+    )
+
+    #expect(result.refusal?.reason == .activationNotProved)
+    #expect(result.dispatchSuccess == false)
+    #expect(session.globalPosts == 0)
+    #expect(session.targetedPosts.isEmpty)
+    #expect(result.details["foreground"]?["activationProved"] == .bool(false))
+    #expect(result.details["foreground"]?["alreadyFrontmost"] == .bool(false))
+    #expect(session.frontmost == priorProcess)
+}
+
+@Test func aPointNamingAnApplicationThatDoesNotResolveRefusesBeforeAnyDispatch() throws {
+    // A named application that cannot be found used to come back as "no application", which is the
+    // same answer a deliberately anonymous coordinate gives — and that answer sends the click to
+    // the global devices. A target the caller did name must fail as a target, not become one.
+    let session = FakeSession()
+    let executor = session.pointExecutor(targetProcess: targetProcess)
+
+    #expect(throws: AppResolverError.self) {
+        try executor.click(
+            point: ActionPoint(
+                x: escalationPoint.x,
+                y: escalationPoint.y,
+                coordinateSpace: .screen,
+                app: "com.example.not-running-\(UUID().uuidString)"
+            ),
+            policy: .foregroundPermitted
+        )
+    }
+
+    #expect(session.globalPosts == 0)
+    #expect(session.targetedPosts.isEmpty)
+    #expect(!session.log.contains { $0.hasPrefix("activate") })
+}
+
+@Test func anUnaimedKeystrokeIsAimedAtTheForegroundAndSaysSo() throws {
+    // The one case where "already frontmost" is honest without a resolved process: a keystroke that
+    // names no application is addressed to whoever holds the foreground, so the foreground is the
+    // target by definition. This is what separates it from a coordinate with no owner.
+    let session = FakeSession()
+    let (store, element) = escalationStore()
+    let executor = session.typeExecutor(store: store, element: element, process: nil)
+
+    let result = try executor.keyboard(app: nil, intent: .key("End"), policy: .foregroundPermitted)
+
+    #expect(result.delivery == .foreground)
+    #expect(result.dispatchSuccess)
+    #expect(result.details["foreground"]?["alreadyFrontmost"] == .bool(true))
+    #expect(result.details["foreground"]?["activationProved"] == .null)
+    #expect(!session.log.contains { $0.hasPrefix("activate") })
+    #expect(session.frontmost == priorProcess)
 }

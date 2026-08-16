@@ -284,5 +284,28 @@ private let foreground = DeliveryCandidate(rung: .foreground, capability: .globa
     )
     #expect(try decoder.decode(ForegroundCleanup.self, from: encoder.encode(cleanup)) == cleanup)
     #expect(cleanup.jsonValue["priorApp"] == .string("com.example.prior"))
+    #expect(cleanup.jsonValue["alreadyFrontmost"] == .bool(false))
     #expect(cleanup.jsonValue["pointerRestored"] == .bool(true))
+}
+
+@Test func foregroundEvidenceKeepsANotApplicableComparisonDistinctFromANegativeOne() throws {
+    // A dispatch with no application to compare against reports null — not false, and never true.
+    // `alreadyFrontmost: true` beside a `priorApp` naming a different application is an envelope
+    // refuting itself, and it read as confirmation that the input had reached the intended target
+    // when it had gone to whichever window owned those pixels.
+    let notApplicable = ForegroundCleanup(
+        priorApp: "com.example.prior",
+        priorAppProcessIdentifier: 4_321,
+        alreadyFrontmost: nil,
+        activationProved: nil,
+        restored: true
+    )
+
+    #expect(notApplicable.jsonValue["alreadyFrontmost"] == .null)
+    #expect(notApplicable.jsonValue["activationProved"] == .null)
+    #expect(notApplicable.jsonValue["priorApp"] == .string("com.example.prior"))
+    #expect(
+        try JSONDecoder().decode(ForegroundCleanup.self, from: JSONEncoder().encode(notApplicable))
+            == notApplicable
+    )
 }

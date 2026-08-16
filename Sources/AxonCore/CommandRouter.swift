@@ -924,13 +924,14 @@ private struct PrimitiveActionCommandHandler {
                 let params = try CommandRouterRequestSupport.paramsObject(in: request)
                 let decoder = ToolParamDecoder(toolName: "scroll", params: params)
                 let policy = try decoder.deliveryPolicy()
-                let target = try optionalResolvedPointerTarget("target", in: params)
+                let app = try decoder.string("app")
+                let target = try optionalResolvedPointerTarget("target", in: params, defaultApp: app)
                 if let handle = target?.target.handle {
                     observations?.begin(tool: "scroll", handle: handle)
                 }
                 let result = try services.actions.scroll(
                     target?.target,
-                    try decoder.string("app"),
+                    app,
                     try decoder.number("deltaX") ?? 0,
                     try decoder.number("deltaY") ?? -120,
                     policy
@@ -1012,11 +1013,15 @@ private struct PrimitiveActionCommandHandler {
         )
     }
 
-    private func optionalResolvedPointerTarget(_ key: String, in params: [String: JSONValue]) throws -> ResolvedPointerTarget? {
+    private func optionalResolvedPointerTarget(
+        _ key: String,
+        in params: [String: JSONValue],
+        defaultApp: String? = nil
+    ) throws -> ResolvedPointerTarget? {
         guard let target = try CommandRouterRequestSupport.optionalToolTarget(key, in: params, acceptedKinds: .pointer) else {
             return nil
         }
-        return try resolvedPointerTarget(from: target, fieldName: key)
+        return try resolvedPointerTarget(from: target, defaultApp: defaultApp, fieldName: key)
     }
 
     private func resolvedPointerTarget(
@@ -1051,7 +1056,20 @@ private struct PrimitiveActionCommandHandler {
     private func screenPoint(for point: ActionPoint, defaultApp: String?, fieldName: String) throws -> ActionPoint {
         switch point.coordinateSpace {
         case .screen, .legacyScreen:
-            return point
+            // A screen coordinate needs no conversion, but it still has an owner when the caller
+            // named one. Returning it untouched dropped the command-level app, and delivery reads a
+            // point with no app as a deliberately anonymous coordinate: nothing to bind to, nothing
+            // to raise, so the input goes to whichever application already holds the foreground.
+            guard point.app == nil, let defaultApp, !defaultApp.isEmpty else {
+                return point
+            }
+            return ActionPoint(
+                x: point.x,
+                y: point.y,
+                coordinateSpace: point.coordinateSpace,
+                app: defaultApp,
+                sourceWindowFrame: point.sourceWindowFrame
+            )
         case .window, .screenshot:
             let app = point.app ?? defaultApp
             guard let app, !app.isEmpty else {
@@ -1282,6 +1300,10 @@ private struct PrimitiveActionCommandHandler {
         } catch let error as JSONRPCError {
             return JSONRPCResponse(id: id, error: error)
         } catch let error as AXElementStoreError {
+            return JSONRPCResponse(id: id, error: .invalidParams(error.description))
+        } catch let error as AppResolverError {
+            // An application the caller named and that is not running is a target-resolution
+            // failure, which the contract reports as a bad request rather than as an internal fault.
             return JSONRPCResponse(id: id, error: .invalidParams(error.description))
         } catch {
             return JSONRPCResponse(id: id, error: .internalError(String(describing: error)))

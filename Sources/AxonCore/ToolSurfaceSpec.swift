@@ -40,7 +40,7 @@ public enum ToolTargetKind: String, CaseIterable, Sendable {
         case .semanticName:
             return "Semantic element target object with required app and name fields. Run look first to observe canonical names."
         case .point:
-            return "Point target object: { point: { x, y, coordinateSpace } } or { x, y, coordinateSpace }. screen and window coordinates are logical points in the platform accessibility coordinate system and are converted to native pointer coordinates for dispatch. screenshot coordinates are pixels in the returned encoded image after capture and any downscaling; Axon converts them by the encoded-image-to-window size ratios, never by assuming a fixed display scale. window and screenshot points require app when no top-level app is provided. Raw points dispatch without element identity or occlusion verification; use a semantic name when fail-closed target validation is required."
+            return "Point target object: { point: { x, y, coordinateSpace, app } }, { app, coordinateSpace, point: { x, y } }, or { x, y, coordinateSpace }. screen and window coordinates are logical points in the platform accessibility coordinate system and are converted to native pointer coordinates for dispatch. screenshot coordinates are pixels in the returned encoded image after capture and any downscaling; Axon converts them by the encoded-image-to-window size ratios, never by assuming a fixed display scale. app and coordinateSpace may be stated on the point itself or beside it on the target object, and the most specific statement wins: the point, then the target object around it, then the top-level app parameter. window and screenshot points require an app from one of those places. Naming the app is what lets a point activate that application before it is clicked; it does not by itself qualify the coordinate for background delivery. Background delivery needs the window frame a coordinate was measured against, which only a derived point carries — from a window or screenshot conversion, or from a text location. A caller-supplied screen point therefore reaches its target through foreground delivery, activating the named app and proving it before dispatch, and refuses under backgroundOnly rather than posting into a process that may accept the events and do nothing. Raw points dispatch without element identity or occlusion verification; use a semantic name when fail-closed target validation is required."
         case .textLocation:
             return "Text location target object: { location: { app, text, source? } }. Resolves visible text to a click/drag/scroll point using AX text or screenshot OCR without callers providing coordinates. Rendered web content frequently exposes no accessibility text at all, so auto or screenshot is the reliable path for web links on macOS."
         }
@@ -479,21 +479,30 @@ public enum ToolSurfaceSchema {
         "required": .array([.string("app"), .string("name")]), "additionalProperties": .bool(false)
     ])
 
+    /// What a point says about itself beyond its coordinates: which application owns it and which
+    /// space its numbers are in. Both are accepted on the point and on the target object wrapping
+    /// it, because callers write them in both places and they mean the same thing either way — a
+    /// wrapper that did not declare them made the shape the field actually sends schema-invalid,
+    /// and left the parser free to discard it.
+    private static let pointOwnershipProperties: [String: JSONValue] = [
+        "coordinateSpace": enumStringSchema(values: ["screen", "window", "screenshot"], description: "Coordinate space. Defaults to screen. screen and window use logical points in the platform accessibility coordinate system; screenshot uses returned encoded-image pixels."),
+        "space": enumStringSchema(values: ["screen", "window", "screenshot"], description: "Legacy alias for coordinateSpace."),
+        "app": scalarSchema(type: "string", description: "Application that owns this point. Required for a window or screenshot coordinate, and what binds a screen coordinate to a process instead of the shared input devices.")
+    ]
+
     private static let pointObjectSchema: JSONValue = .object([
         "type": .string("object"), "description": .string(ToolTargetKind.point.schemaDescription),
-        "properties": .object([
+        "properties": .object(pointOwnershipProperties.merging([
             "x": scalarSchema(type: "number", description: "Horizontal coordinate."),
-            "y": scalarSchema(type: "number", description: "Vertical coordinate."),
-            "coordinateSpace": enumStringSchema(values: ["screen", "window", "screenshot"], description: "Coordinate space. Defaults to screen. screen and window use logical points in the platform accessibility coordinate system; screenshot uses returned encoded-image pixels."),
-            "space": enumStringSchema(values: ["screen", "window", "screenshot"], description: "Legacy alias for coordinateSpace."),
-            "app": scalarSchema(type: "string", description: "App that owns a window or screenshot coordinate.")
-        ]),
+            "y": scalarSchema(type: "number", description: "Vertical coordinate.")
+        ]) { current, _ in current }),
         "required": .array([.string("x"), .string("y")]), "additionalProperties": .bool(false)
     ])
 
     private static let wrappedPointTargetSchema: JSONValue = .object([
         "type": .string("object"), "description": .string(ToolTargetKind.point.schemaDescription),
-        "properties": .object(["point": pointObjectSchema]), "required": .array([.string("point")]),
+        "properties": .object(pointOwnershipProperties.merging(["point": pointObjectSchema]) { current, _ in current }),
+        "required": .array([.string("point")]),
         "additionalProperties": .bool(false)
     ])
 

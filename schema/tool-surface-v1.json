@@ -505,14 +505,27 @@
               },
               {
                 "additionalProperties" : false,
-                "description" : "Point target object: { point: { x, y, coordinateSpace } } or { x, y, coordinateSpace }. screen and window coordinates are logical points in the platform accessibility coordinate system and are converted to native pointer coordinates for dispatch. screenshot coordinates are pixels in the returned encoded image after capture and any downscaling; Axon converts them by the encoded-image-to-window size ratios, never by assuming a fixed display scale. window and screenshot points require app when no top-level app is provided. Raw points dispatch without element identity or occlusion verification; use a semantic name when fail-closed target validation is required.",
+                "description" : "Point target object: { point: { x, y, coordinateSpace, app } }, { app, coordinateSpace, point: { x, y } }, or { x, y, coordinateSpace }. screen and window coordinates are logical points in the platform accessibility coordinate system and are converted to native pointer coordinates for dispatch. screenshot coordinates are pixels in the returned encoded image after capture and any downscaling; Axon converts them by the encoded-image-to-window size ratios, never by assuming a fixed display scale. app and coordinateSpace may be stated on the point itself or beside it on the target object, and the most specific statement wins: the point, then the target object around it, then the top-level app parameter. window and screenshot points require an app from one of those places. Naming the app is what lets a point activate that application before it is clicked; it does not by itself qualify the coordinate for background delivery. Background delivery needs the window frame a coordinate was measured against, which only a derived point carries — from a window or screenshot conversion, or from a text location. A caller-supplied screen point therefore reaches its target through foreground delivery, activating the named app and proving it before dispatch, and refuses under backgroundOnly rather than posting into a process that may accept the events and do nothing. Raw points dispatch without element identity or occlusion verification; use a semantic name when fail-closed target validation is required.",
                 "properties" : {
+                  "app" : {
+                    "description" : "Application that owns this point. Required for a window or screenshot coordinate, and what binds a screen coordinate to a process instead of the shared input devices.",
+                    "type" : "string"
+                  },
+                  "coordinateSpace" : {
+                    "description" : "Coordinate space. Defaults to screen. screen and window use logical points in the platform accessibility coordinate system; screenshot uses returned encoded-image pixels.",
+                    "enum" : [
+                      "screen",
+                      "window",
+                      "screenshot"
+                    ],
+                    "type" : "string"
+                  },
                   "point" : {
                     "additionalProperties" : false,
-                    "description" : "Point target object: { point: { x, y, coordinateSpace } } or { x, y, coordinateSpace }. screen and window coordinates are logical points in the platform accessibility coordinate system and are converted to native pointer coordinates for dispatch. screenshot coordinates are pixels in the returned encoded image after capture and any downscaling; Axon converts them by the encoded-image-to-window size ratios, never by assuming a fixed display scale. window and screenshot points require app when no top-level app is provided. Raw points dispatch without element identity or occlusion verification; use a semantic name when fail-closed target validation is required.",
+                    "description" : "Point target object: { point: { x, y, coordinateSpace, app } }, { app, coordinateSpace, point: { x, y } }, or { x, y, coordinateSpace }. screen and window coordinates are logical points in the platform accessibility coordinate system and are converted to native pointer coordinates for dispatch. screenshot coordinates are pixels in the returned encoded image after capture and any downscaling; Axon converts them by the encoded-image-to-window size ratios, never by assuming a fixed display scale. app and coordinateSpace may be stated on the point itself or beside it on the target object, and the most specific statement wins: the point, then the target object around it, then the top-level app parameter. window and screenshot points require an app from one of those places. Naming the app is what lets a point activate that application before it is clicked; it does not by itself qualify the coordinate for background delivery. Background delivery needs the window frame a coordinate was measured against, which only a derived point carries — from a window or screenshot conversion, or from a text location. A caller-supplied screen point therefore reaches its target through foreground delivery, activating the named app and proving it before dispatch, and refuses under backgroundOnly rather than posting into a process that may accept the events and do nothing. Raw points dispatch without element identity or occlusion verification; use a semantic name when fail-closed target validation is required.",
                     "properties" : {
                       "app" : {
-                        "description" : "App that owns a window or screenshot coordinate.",
+                        "description" : "Application that owns this point. Required for a window or screenshot coordinate, and what binds a screen coordinate to a process instead of the shared input devices.",
                         "type" : "string"
                       },
                       "coordinateSpace" : {
@@ -547,6 +560,15 @@
                       "y"
                     ],
                     "type" : "object"
+                  },
+                  "space" : {
+                    "description" : "Legacy alias for coordinateSpace.",
+                    "enum" : [
+                      "screen",
+                      "window",
+                      "screenshot"
+                    ],
+                    "type" : "string"
                   }
                 },
                 "required" : [
@@ -556,10 +578,10 @@
               },
               {
                 "additionalProperties" : false,
-                "description" : "Point target object: { point: { x, y, coordinateSpace } } or { x, y, coordinateSpace }. screen and window coordinates are logical points in the platform accessibility coordinate system and are converted to native pointer coordinates for dispatch. screenshot coordinates are pixels in the returned encoded image after capture and any downscaling; Axon converts them by the encoded-image-to-window size ratios, never by assuming a fixed display scale. window and screenshot points require app when no top-level app is provided. Raw points dispatch without element identity or occlusion verification; use a semantic name when fail-closed target validation is required.",
+                "description" : "Point target object: { point: { x, y, coordinateSpace, app } }, { app, coordinateSpace, point: { x, y } }, or { x, y, coordinateSpace }. screen and window coordinates are logical points in the platform accessibility coordinate system and are converted to native pointer coordinates for dispatch. screenshot coordinates are pixels in the returned encoded image after capture and any downscaling; Axon converts them by the encoded-image-to-window size ratios, never by assuming a fixed display scale. app and coordinateSpace may be stated on the point itself or beside it on the target object, and the most specific statement wins: the point, then the target object around it, then the top-level app parameter. window and screenshot points require an app from one of those places. Naming the app is what lets a point activate that application before it is clicked; it does not by itself qualify the coordinate for background delivery. Background delivery needs the window frame a coordinate was measured against, which only a derived point carries — from a window or screenshot conversion, or from a text location. A caller-supplied screen point therefore reaches its target through foreground delivery, activating the named app and proving it before dispatch, and refuses under backgroundOnly rather than posting into a process that may accept the events and do nothing. Raw points dispatch without element identity or occlusion verification; use a semantic name when fail-closed target validation is required.",
                 "properties" : {
                   "app" : {
-                    "description" : "App that owns a window or screenshot coordinate.",
+                    "description" : "Application that owns this point. Required for a window or screenshot coordinate, and what binds a screen coordinate to a process instead of the shared input devices.",
                     "type" : "string"
                   },
                   "coordinateSpace" : {
@@ -836,14 +858,27 @@
               },
               {
                 "additionalProperties" : false,
-                "description" : "Point target object: { point: { x, y, coordinateSpace } } or { x, y, coordinateSpace }. screen and window coordinates are logical points in the platform accessibility coordinate system and are converted to native pointer coordinates for dispatch. screenshot coordinates are pixels in the returned encoded image after capture and any downscaling; Axon converts them by the encoded-image-to-window size ratios, never by assuming a fixed display scale. window and screenshot points require app when no top-level app is provided. Raw points dispatch without element identity or occlusion verification; use a semantic name when fail-closed target validation is required.",
+                "description" : "Point target object: { point: { x, y, coordinateSpace, app } }, { app, coordinateSpace, point: { x, y } }, or { x, y, coordinateSpace }. screen and window coordinates are logical points in the platform accessibility coordinate system and are converted to native pointer coordinates for dispatch. screenshot coordinates are pixels in the returned encoded image after capture and any downscaling; Axon converts them by the encoded-image-to-window size ratios, never by assuming a fixed display scale. app and coordinateSpace may be stated on the point itself or beside it on the target object, and the most specific statement wins: the point, then the target object around it, then the top-level app parameter. window and screenshot points require an app from one of those places. Naming the app is what lets a point activate that application before it is clicked; it does not by itself qualify the coordinate for background delivery. Background delivery needs the window frame a coordinate was measured against, which only a derived point carries — from a window or screenshot conversion, or from a text location. A caller-supplied screen point therefore reaches its target through foreground delivery, activating the named app and proving it before dispatch, and refuses under backgroundOnly rather than posting into a process that may accept the events and do nothing. Raw points dispatch without element identity or occlusion verification; use a semantic name when fail-closed target validation is required.",
                 "properties" : {
+                  "app" : {
+                    "description" : "Application that owns this point. Required for a window or screenshot coordinate, and what binds a screen coordinate to a process instead of the shared input devices.",
+                    "type" : "string"
+                  },
+                  "coordinateSpace" : {
+                    "description" : "Coordinate space. Defaults to screen. screen and window use logical points in the platform accessibility coordinate system; screenshot uses returned encoded-image pixels.",
+                    "enum" : [
+                      "screen",
+                      "window",
+                      "screenshot"
+                    ],
+                    "type" : "string"
+                  },
                   "point" : {
                     "additionalProperties" : false,
-                    "description" : "Point target object: { point: { x, y, coordinateSpace } } or { x, y, coordinateSpace }. screen and window coordinates are logical points in the platform accessibility coordinate system and are converted to native pointer coordinates for dispatch. screenshot coordinates are pixels in the returned encoded image after capture and any downscaling; Axon converts them by the encoded-image-to-window size ratios, never by assuming a fixed display scale. window and screenshot points require app when no top-level app is provided. Raw points dispatch without element identity or occlusion verification; use a semantic name when fail-closed target validation is required.",
+                    "description" : "Point target object: { point: { x, y, coordinateSpace, app } }, { app, coordinateSpace, point: { x, y } }, or { x, y, coordinateSpace }. screen and window coordinates are logical points in the platform accessibility coordinate system and are converted to native pointer coordinates for dispatch. screenshot coordinates are pixels in the returned encoded image after capture and any downscaling; Axon converts them by the encoded-image-to-window size ratios, never by assuming a fixed display scale. app and coordinateSpace may be stated on the point itself or beside it on the target object, and the most specific statement wins: the point, then the target object around it, then the top-level app parameter. window and screenshot points require an app from one of those places. Naming the app is what lets a point activate that application before it is clicked; it does not by itself qualify the coordinate for background delivery. Background delivery needs the window frame a coordinate was measured against, which only a derived point carries — from a window or screenshot conversion, or from a text location. A caller-supplied screen point therefore reaches its target through foreground delivery, activating the named app and proving it before dispatch, and refuses under backgroundOnly rather than posting into a process that may accept the events and do nothing. Raw points dispatch without element identity or occlusion verification; use a semantic name when fail-closed target validation is required.",
                     "properties" : {
                       "app" : {
-                        "description" : "App that owns a window or screenshot coordinate.",
+                        "description" : "Application that owns this point. Required for a window or screenshot coordinate, and what binds a screen coordinate to a process instead of the shared input devices.",
                         "type" : "string"
                       },
                       "coordinateSpace" : {
@@ -878,6 +913,15 @@
                       "y"
                     ],
                     "type" : "object"
+                  },
+                  "space" : {
+                    "description" : "Legacy alias for coordinateSpace.",
+                    "enum" : [
+                      "screen",
+                      "window",
+                      "screenshot"
+                    ],
+                    "type" : "string"
                   }
                 },
                 "required" : [
@@ -887,10 +931,10 @@
               },
               {
                 "additionalProperties" : false,
-                "description" : "Point target object: { point: { x, y, coordinateSpace } } or { x, y, coordinateSpace }. screen and window coordinates are logical points in the platform accessibility coordinate system and are converted to native pointer coordinates for dispatch. screenshot coordinates are pixels in the returned encoded image after capture and any downscaling; Axon converts them by the encoded-image-to-window size ratios, never by assuming a fixed display scale. window and screenshot points require app when no top-level app is provided. Raw points dispatch without element identity or occlusion verification; use a semantic name when fail-closed target validation is required.",
+                "description" : "Point target object: { point: { x, y, coordinateSpace, app } }, { app, coordinateSpace, point: { x, y } }, or { x, y, coordinateSpace }. screen and window coordinates are logical points in the platform accessibility coordinate system and are converted to native pointer coordinates for dispatch. screenshot coordinates are pixels in the returned encoded image after capture and any downscaling; Axon converts them by the encoded-image-to-window size ratios, never by assuming a fixed display scale. app and coordinateSpace may be stated on the point itself or beside it on the target object, and the most specific statement wins: the point, then the target object around it, then the top-level app parameter. window and screenshot points require an app from one of those places. Naming the app is what lets a point activate that application before it is clicked; it does not by itself qualify the coordinate for background delivery. Background delivery needs the window frame a coordinate was measured against, which only a derived point carries — from a window or screenshot conversion, or from a text location. A caller-supplied screen point therefore reaches its target through foreground delivery, activating the named app and proving it before dispatch, and refuses under backgroundOnly rather than posting into a process that may accept the events and do nothing. Raw points dispatch without element identity or occlusion verification; use a semantic name when fail-closed target validation is required.",
                 "properties" : {
                   "app" : {
-                    "description" : "App that owns a window or screenshot coordinate.",
+                    "description" : "Application that owns this point. Required for a window or screenshot coordinate, and what binds a screen coordinate to a process instead of the shared input devices.",
                     "type" : "string"
                   },
                   "coordinateSpace" : {
@@ -1064,14 +1108,27 @@
               },
               {
                 "additionalProperties" : false,
-                "description" : "Point target object: { point: { x, y, coordinateSpace } } or { x, y, coordinateSpace }. screen and window coordinates are logical points in the platform accessibility coordinate system and are converted to native pointer coordinates for dispatch. screenshot coordinates are pixels in the returned encoded image after capture and any downscaling; Axon converts them by the encoded-image-to-window size ratios, never by assuming a fixed display scale. window and screenshot points require app when no top-level app is provided. Raw points dispatch without element identity or occlusion verification; use a semantic name when fail-closed target validation is required.",
+                "description" : "Point target object: { point: { x, y, coordinateSpace, app } }, { app, coordinateSpace, point: { x, y } }, or { x, y, coordinateSpace }. screen and window coordinates are logical points in the platform accessibility coordinate system and are converted to native pointer coordinates for dispatch. screenshot coordinates are pixels in the returned encoded image after capture and any downscaling; Axon converts them by the encoded-image-to-window size ratios, never by assuming a fixed display scale. app and coordinateSpace may be stated on the point itself or beside it on the target object, and the most specific statement wins: the point, then the target object around it, then the top-level app parameter. window and screenshot points require an app from one of those places. Naming the app is what lets a point activate that application before it is clicked; it does not by itself qualify the coordinate for background delivery. Background delivery needs the window frame a coordinate was measured against, which only a derived point carries — from a window or screenshot conversion, or from a text location. A caller-supplied screen point therefore reaches its target through foreground delivery, activating the named app and proving it before dispatch, and refuses under backgroundOnly rather than posting into a process that may accept the events and do nothing. Raw points dispatch without element identity or occlusion verification; use a semantic name when fail-closed target validation is required.",
                 "properties" : {
+                  "app" : {
+                    "description" : "Application that owns this point. Required for a window or screenshot coordinate, and what binds a screen coordinate to a process instead of the shared input devices.",
+                    "type" : "string"
+                  },
+                  "coordinateSpace" : {
+                    "description" : "Coordinate space. Defaults to screen. screen and window use logical points in the platform accessibility coordinate system; screenshot uses returned encoded-image pixels.",
+                    "enum" : [
+                      "screen",
+                      "window",
+                      "screenshot"
+                    ],
+                    "type" : "string"
+                  },
                   "point" : {
                     "additionalProperties" : false,
-                    "description" : "Point target object: { point: { x, y, coordinateSpace } } or { x, y, coordinateSpace }. screen and window coordinates are logical points in the platform accessibility coordinate system and are converted to native pointer coordinates for dispatch. screenshot coordinates are pixels in the returned encoded image after capture and any downscaling; Axon converts them by the encoded-image-to-window size ratios, never by assuming a fixed display scale. window and screenshot points require app when no top-level app is provided. Raw points dispatch without element identity or occlusion verification; use a semantic name when fail-closed target validation is required.",
+                    "description" : "Point target object: { point: { x, y, coordinateSpace, app } }, { app, coordinateSpace, point: { x, y } }, or { x, y, coordinateSpace }. screen and window coordinates are logical points in the platform accessibility coordinate system and are converted to native pointer coordinates for dispatch. screenshot coordinates are pixels in the returned encoded image after capture and any downscaling; Axon converts them by the encoded-image-to-window size ratios, never by assuming a fixed display scale. app and coordinateSpace may be stated on the point itself or beside it on the target object, and the most specific statement wins: the point, then the target object around it, then the top-level app parameter. window and screenshot points require an app from one of those places. Naming the app is what lets a point activate that application before it is clicked; it does not by itself qualify the coordinate for background delivery. Background delivery needs the window frame a coordinate was measured against, which only a derived point carries — from a window or screenshot conversion, or from a text location. A caller-supplied screen point therefore reaches its target through foreground delivery, activating the named app and proving it before dispatch, and refuses under backgroundOnly rather than posting into a process that may accept the events and do nothing. Raw points dispatch without element identity or occlusion verification; use a semantic name when fail-closed target validation is required.",
                     "properties" : {
                       "app" : {
-                        "description" : "App that owns a window or screenshot coordinate.",
+                        "description" : "Application that owns this point. Required for a window or screenshot coordinate, and what binds a screen coordinate to a process instead of the shared input devices.",
                         "type" : "string"
                       },
                       "coordinateSpace" : {
@@ -1106,6 +1163,15 @@
                       "y"
                     ],
                     "type" : "object"
+                  },
+                  "space" : {
+                    "description" : "Legacy alias for coordinateSpace.",
+                    "enum" : [
+                      "screen",
+                      "window",
+                      "screenshot"
+                    ],
+                    "type" : "string"
                   }
                 },
                 "required" : [
@@ -1115,10 +1181,10 @@
               },
               {
                 "additionalProperties" : false,
-                "description" : "Point target object: { point: { x, y, coordinateSpace } } or { x, y, coordinateSpace }. screen and window coordinates are logical points in the platform accessibility coordinate system and are converted to native pointer coordinates for dispatch. screenshot coordinates are pixels in the returned encoded image after capture and any downscaling; Axon converts them by the encoded-image-to-window size ratios, never by assuming a fixed display scale. window and screenshot points require app when no top-level app is provided. Raw points dispatch without element identity or occlusion verification; use a semantic name when fail-closed target validation is required.",
+                "description" : "Point target object: { point: { x, y, coordinateSpace, app } }, { app, coordinateSpace, point: { x, y } }, or { x, y, coordinateSpace }. screen and window coordinates are logical points in the platform accessibility coordinate system and are converted to native pointer coordinates for dispatch. screenshot coordinates are pixels in the returned encoded image after capture and any downscaling; Axon converts them by the encoded-image-to-window size ratios, never by assuming a fixed display scale. app and coordinateSpace may be stated on the point itself or beside it on the target object, and the most specific statement wins: the point, then the target object around it, then the top-level app parameter. window and screenshot points require an app from one of those places. Naming the app is what lets a point activate that application before it is clicked; it does not by itself qualify the coordinate for background delivery. Background delivery needs the window frame a coordinate was measured against, which only a derived point carries — from a window or screenshot conversion, or from a text location. A caller-supplied screen point therefore reaches its target through foreground delivery, activating the named app and proving it before dispatch, and refuses under backgroundOnly rather than posting into a process that may accept the events and do nothing. Raw points dispatch without element identity or occlusion verification; use a semantic name when fail-closed target validation is required.",
                 "properties" : {
                   "app" : {
-                    "description" : "App that owns a window or screenshot coordinate.",
+                    "description" : "Application that owns this point. Required for a window or screenshot coordinate, and what binds a screen coordinate to a process instead of the shared input devices.",
                     "type" : "string"
                   },
                   "coordinateSpace" : {
@@ -1253,14 +1319,27 @@
               },
               {
                 "additionalProperties" : false,
-                "description" : "Point target object: { point: { x, y, coordinateSpace } } or { x, y, coordinateSpace }. screen and window coordinates are logical points in the platform accessibility coordinate system and are converted to native pointer coordinates for dispatch. screenshot coordinates are pixels in the returned encoded image after capture and any downscaling; Axon converts them by the encoded-image-to-window size ratios, never by assuming a fixed display scale. window and screenshot points require app when no top-level app is provided. Raw points dispatch without element identity or occlusion verification; use a semantic name when fail-closed target validation is required.",
+                "description" : "Point target object: { point: { x, y, coordinateSpace, app } }, { app, coordinateSpace, point: { x, y } }, or { x, y, coordinateSpace }. screen and window coordinates are logical points in the platform accessibility coordinate system and are converted to native pointer coordinates for dispatch. screenshot coordinates are pixels in the returned encoded image after capture and any downscaling; Axon converts them by the encoded-image-to-window size ratios, never by assuming a fixed display scale. app and coordinateSpace may be stated on the point itself or beside it on the target object, and the most specific statement wins: the point, then the target object around it, then the top-level app parameter. window and screenshot points require an app from one of those places. Naming the app is what lets a point activate that application before it is clicked; it does not by itself qualify the coordinate for background delivery. Background delivery needs the window frame a coordinate was measured against, which only a derived point carries — from a window or screenshot conversion, or from a text location. A caller-supplied screen point therefore reaches its target through foreground delivery, activating the named app and proving it before dispatch, and refuses under backgroundOnly rather than posting into a process that may accept the events and do nothing. Raw points dispatch without element identity or occlusion verification; use a semantic name when fail-closed target validation is required.",
                 "properties" : {
+                  "app" : {
+                    "description" : "Application that owns this point. Required for a window or screenshot coordinate, and what binds a screen coordinate to a process instead of the shared input devices.",
+                    "type" : "string"
+                  },
+                  "coordinateSpace" : {
+                    "description" : "Coordinate space. Defaults to screen. screen and window use logical points in the platform accessibility coordinate system; screenshot uses returned encoded-image pixels.",
+                    "enum" : [
+                      "screen",
+                      "window",
+                      "screenshot"
+                    ],
+                    "type" : "string"
+                  },
                   "point" : {
                     "additionalProperties" : false,
-                    "description" : "Point target object: { point: { x, y, coordinateSpace } } or { x, y, coordinateSpace }. screen and window coordinates are logical points in the platform accessibility coordinate system and are converted to native pointer coordinates for dispatch. screenshot coordinates are pixels in the returned encoded image after capture and any downscaling; Axon converts them by the encoded-image-to-window size ratios, never by assuming a fixed display scale. window and screenshot points require app when no top-level app is provided. Raw points dispatch without element identity or occlusion verification; use a semantic name when fail-closed target validation is required.",
+                    "description" : "Point target object: { point: { x, y, coordinateSpace, app } }, { app, coordinateSpace, point: { x, y } }, or { x, y, coordinateSpace }. screen and window coordinates are logical points in the platform accessibility coordinate system and are converted to native pointer coordinates for dispatch. screenshot coordinates are pixels in the returned encoded image after capture and any downscaling; Axon converts them by the encoded-image-to-window size ratios, never by assuming a fixed display scale. app and coordinateSpace may be stated on the point itself or beside it on the target object, and the most specific statement wins: the point, then the target object around it, then the top-level app parameter. window and screenshot points require an app from one of those places. Naming the app is what lets a point activate that application before it is clicked; it does not by itself qualify the coordinate for background delivery. Background delivery needs the window frame a coordinate was measured against, which only a derived point carries — from a window or screenshot conversion, or from a text location. A caller-supplied screen point therefore reaches its target through foreground delivery, activating the named app and proving it before dispatch, and refuses under backgroundOnly rather than posting into a process that may accept the events and do nothing. Raw points dispatch without element identity or occlusion verification; use a semantic name when fail-closed target validation is required.",
                     "properties" : {
                       "app" : {
-                        "description" : "App that owns a window or screenshot coordinate.",
+                        "description" : "Application that owns this point. Required for a window or screenshot coordinate, and what binds a screen coordinate to a process instead of the shared input devices.",
                         "type" : "string"
                       },
                       "coordinateSpace" : {
@@ -1295,6 +1374,15 @@
                       "y"
                     ],
                     "type" : "object"
+                  },
+                  "space" : {
+                    "description" : "Legacy alias for coordinateSpace.",
+                    "enum" : [
+                      "screen",
+                      "window",
+                      "screenshot"
+                    ],
+                    "type" : "string"
                   }
                 },
                 "required" : [
@@ -1304,10 +1392,10 @@
               },
               {
                 "additionalProperties" : false,
-                "description" : "Point target object: { point: { x, y, coordinateSpace } } or { x, y, coordinateSpace }. screen and window coordinates are logical points in the platform accessibility coordinate system and are converted to native pointer coordinates for dispatch. screenshot coordinates are pixels in the returned encoded image after capture and any downscaling; Axon converts them by the encoded-image-to-window size ratios, never by assuming a fixed display scale. window and screenshot points require app when no top-level app is provided. Raw points dispatch without element identity or occlusion verification; use a semantic name when fail-closed target validation is required.",
+                "description" : "Point target object: { point: { x, y, coordinateSpace, app } }, { app, coordinateSpace, point: { x, y } }, or { x, y, coordinateSpace }. screen and window coordinates are logical points in the platform accessibility coordinate system and are converted to native pointer coordinates for dispatch. screenshot coordinates are pixels in the returned encoded image after capture and any downscaling; Axon converts them by the encoded-image-to-window size ratios, never by assuming a fixed display scale. app and coordinateSpace may be stated on the point itself or beside it on the target object, and the most specific statement wins: the point, then the target object around it, then the top-level app parameter. window and screenshot points require an app from one of those places. Naming the app is what lets a point activate that application before it is clicked; it does not by itself qualify the coordinate for background delivery. Background delivery needs the window frame a coordinate was measured against, which only a derived point carries — from a window or screenshot conversion, or from a text location. A caller-supplied screen point therefore reaches its target through foreground delivery, activating the named app and proving it before dispatch, and refuses under backgroundOnly rather than posting into a process that may accept the events and do nothing. Raw points dispatch without element identity or occlusion verification; use a semantic name when fail-closed target validation is required.",
                 "properties" : {
                   "app" : {
-                    "description" : "App that owns a window or screenshot coordinate.",
+                    "description" : "Application that owns this point. Required for a window or screenshot coordinate, and what binds a screen coordinate to a process instead of the shared input devices.",
                     "type" : "string"
                   },
                   "coordinateSpace" : {

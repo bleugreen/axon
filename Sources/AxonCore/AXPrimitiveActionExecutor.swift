@@ -187,7 +187,7 @@ public final class AXPrimitiveActionExecutor {
                 candidate: candidate,
                 point: point,
                 element: element,
-                process: process,
+                targeting: ForegroundTarget(resolved: process),
                 details: [:]
             ))
         }
@@ -201,19 +201,36 @@ public final class AXPrimitiveActionExecutor {
 
     public func click(point: ActionPoint, policy: DeliveryPolicy) throws -> PrimitiveActionResult {
         let cgPoint = CGPoint(x: point.x, y: point.y)
-        // A screen point only carries target identity when the caller named the application it came
-        // from. Inferring a window from a bare coordinate is exactly the guess background delivery
-        // must never make, so such a point can only travel on global input.
-        let process = point.app.flatMap { processIdentifier(forApp: $0) }
+        // An app the caller named and that does not resolve throws rather than becoming an
+        // anonymous coordinate: a click aimed at an application must never quietly become a click
+        // aimed at nobody.
+        let process = try point.app.map(processIdentifier(forApp:))
+        // Naming the owner is what lets this click *activate* an application. It is not what lets
+        // it be delivered behind that application's back.
+        //
+        // Background delivery needs verified geometry, and an app name is not geometry: nothing has
+        // established that this coordinate lies in that application's window rather than in a
+        // window that has since moved, or in another application entirely. Inferring a window from
+        // a bare coordinate is exactly the guess background delivery must never make. A point that
+        // was *derived* — from a captured window, from recognized text — carries the frame it was
+        // measured against and can be checked against it, which is what earns it the targeted rung.
+        //
+        // Enforcing that is also what makes a click aimed at a background application land: posting
+        // a bare coordinate into a process is accepted and can do nothing at all, and a click has no
+        // postcondition to notice with. Declining the rung sends the point to global input at proved
+        // activation, where the coordinate means what the caller measured.
+        let backgroundIdentity = point.sourceWindowFrame == nil ? nil : process
         return deliver(
             action: "click",
             target: point.targetDescription,
             policy: policy,
             candidates: inputCandidates(
-                processIdentifier: process,
+                processIdentifier: backgroundIdentity,
                 hasGeometry: true,
                 geometryMessage: "",
-                identityMessage: "A raw screen point carries no application or window identity; background delivery needs a handle, locator, text location, or an app-scoped point",
+                identityMessage: point.app == nil
+                    ? "A raw screen point carries no application or window identity; background delivery needs a handle, locator, text location, or a point derived from a capture"
+                    : "A screen point names \(point.app ?? "") but carries no window provenance, so background delivery cannot establish that the coordinate belongs to it; use a text location or an element, or permit foreground delivery",
                 strategy: "CGEvent"
             ),
             details: ["point": point.jsonValue]
@@ -225,7 +242,7 @@ public final class AXPrimitiveActionExecutor {
                 candidate: candidate,
                 point: cgPoint,
                 element: nil,
-                process: process,
+                targeting: ForegroundTarget(resolved: process),
                 sourceWindowFrame: point.sourceWindowFrame,
                 details: ["point": point.jsonValue]
             ))
@@ -312,7 +329,7 @@ public final class AXPrimitiveActionExecutor {
                 candidate: candidate,
                 element: element,
                 point: point,
-                process: process,
+                targeting: ForegroundTarget(resolved: process),
                 value: value
             )
             return result.success ? .settled(result) : .advance(result)
@@ -321,7 +338,10 @@ public final class AXPrimitiveActionExecutor {
 
     public func keyboard(app: String?, intent: KeyboardIntent, policy: DeliveryPolicy) throws -> PrimitiveActionResult {
         let target = app ?? "frontmost"
-        let process = app.flatMap { processIdentifier(forApp: $0) }
+        let process = try app.map(processIdentifier(forApp:))
+        // An unaimed keystroke is aimed at the foreground on purpose; one that names an application
+        // is aimed at that process and nowhere else.
+        let foreground: ForegroundTarget = process.map(ForegroundTarget.process) ?? .currentForeground
         var intentDetails: [String: JSONValue]
         switch intent {
         case let .key(key):
@@ -339,9 +359,7 @@ public final class AXPrimitiveActionExecutor {
                 processIdentifier: process,
                 hasGeometry: true,
                 geometryMessage: "",
-                identityMessage: app == nil
-                    ? "keyboard without app has no target application, so input can only reach whatever holds the foreground"
-                    : "app \(app ?? "") is not running, so keystrokes cannot be bound to it",
+                identityMessage: "keyboard without app has no target application, so input can only reach whatever holds the foreground",
                 strategy: "CGEventKeyboard"
             ),
             details: intentDetails
@@ -350,7 +368,7 @@ public final class AXPrimitiveActionExecutor {
                 target: target,
                 policy: policy,
                 candidate: candidate,
-                process: process,
+                targeting: foreground,
                 intent: intent,
                 details: intentDetails
             ))
@@ -406,7 +424,7 @@ public final class AXPrimitiveActionExecutor {
             return scrollWheelResult(
                 target: description,
                 at: CGPoint(x: point.x, y: point.y),
-                process: point.app.flatMap { processIdentifier(forApp: $0) },
+                process: try point.app.map(processIdentifier(forApp:)),
                 policy: policy,
                 identityMessage: "A raw screen point carries no application identity, so a wheel burst cannot be bound to a process",
                 deltaX: deltaX,
@@ -533,12 +551,13 @@ public final class AXPrimitiveActionExecutor {
                     post: post
                 )
             } else {
-                // Deliberately no process to activate: a wheel routes by the event's location, so
-                // raising the app would cost the user their focus and buy the scroll nothing. A
-                // wheel carries no cursor position either, which is why neither rung has a pointer
-                // to restore or to be held to.
+                // Unattributed even when the process is known: a wheel routes by the event's
+                // location, so raising the app would cost the user their focus and buy the scroll
+                // nothing, and a transaction that will not raise anything has no business claiming
+                // the target was already forward. A wheel carries no cursor position either, which
+                // is why neither rung has a pointer to restore or to be held to.
                 base = self.inForeground(
-                    action: "scroll", target: target, policy: policy, process: nil,
+                    action: "scroll", target: target, policy: policy, targeting: .unattributed,
                     restoresPointer: false, details: wheelDetails
                 ) {
                     let dispatched = post(self.postEvent)
@@ -608,7 +627,7 @@ public final class AXPrimitiveActionExecutor {
         case let .handle(handle):
             return processProvider(try elementStore.element(for: handle))
         case let .point(point):
-            return point.app.flatMap { processIdentifier(forApp: $0) }
+            return try point.app.map(processIdentifier(forApp:))
         case nil:
             return app?.processIdentifier
         }
@@ -626,7 +645,9 @@ public final class AXPrimitiveActionExecutor {
         let target = "\(from.targetDescription)->\(to.targetDescription)"
         // A drag has to stay inside one application for its whole path, so the identity that binds
         // background delivery is the app the caller named, or the process owning the start element.
-        let process = app.flatMap { processIdentifier(forApp: $0) }
+        // An app that was named and did not resolve throws: falling back to an endpoint's process
+        // would silently drag inside an application the caller never asked for.
+        let process = try app.map(processIdentifier(forApp:))
             ?? start.element.flatMap(processProvider)
             ?? end.element.flatMap(processProvider)
         let details: [String: JSONValue] = [
@@ -653,7 +674,7 @@ public final class AXPrimitiveActionExecutor {
                 target: target,
                 policy: policy,
                 candidate: candidate,
-                process: process,
+                targeting: ForegroundTarget(resolved: process),
                 start: start,
                 end: end,
                 durationMs: durationMs,
@@ -674,6 +695,41 @@ public final class AXPrimitiveActionExecutor {
         case settled(PrimitiveActionResult)
         /// This rung did not take. The ladder advances if the policy and runtime allow it.
         case advance(PrimitiveActionResult)
+    }
+
+    /// Whose foreground one dispatch is accountable for.
+    ///
+    /// These three are not interchangeable, and collapsing them into "a process or nothing" is what
+    /// let a click report `alreadyFrontmost: true` in the same envelope that named a foreign
+    /// application as the prior one — and then skip the activation that reading implied had already
+    /// happened.
+    private enum ForegroundTarget {
+        /// A resolved process. Whether it holds the foreground is a comparison this dispatch can
+        /// make, and raising it is a claim it must prove before anything is posted.
+        case process(pid_t)
+        /// The action addresses whoever holds the foreground rather than a named application, as an
+        /// unaimed keystroke does. The foreground is the target by definition, so there is nothing
+        /// to raise and nothing to prove.
+        case currentForeground
+        /// No application-level claim is available: either nothing named an application, or the
+        /// mechanism routes by the event's location rather than by application, as a wheel burst
+        /// does. Answering `alreadyFrontmost` here would answer a question nobody asked.
+        case unattributed
+
+        /// A target identified by a process when one was resolved, and explicitly unattributed when
+        /// it was not. Never the current foreground by default: that is a claim only an action
+        /// aimed at the foreground itself gets to make.
+        init(resolved process: pid_t?) {
+            self = process.map(ForegroundTarget.process) ?? .unattributed
+        }
+
+        /// The process background delivery binds to, which exists only for a resolved target.
+        var process: pid_t? {
+            guard case let .process(process) = self else {
+                return nil
+            }
+            return process
+        }
     }
 
     /// Walks an action's ladder, dispatching at the first rung the policy and runtime allow.
@@ -749,8 +805,15 @@ public final class AXPrimitiveActionExecutor {
         ]
     }
 
-    private func processIdentifier(forApp query: String) -> pid_t? {
-        (try? appResolver.resolve(query))?.processIdentifier
+    /// The process behind an application a caller named.
+    ///
+    /// Throwing is the point. Swallowing the resolver's failure returned `nil`, which is the same
+    /// answer a deliberately anonymous coordinate gives, so a target the caller *did* name became a
+    /// target with no identity — and delivery reads that as licence to post global input at
+    /// whatever holds the foreground. A named application that cannot be found is a resolution
+    /// failure, reported before any event is created.
+    private func processIdentifier(forApp query: String) throws -> pid_t {
+        try appResolver.resolve(query).processIdentifier
     }
 
     /// Where a rung's events go. The pixel rung addresses the target process directly; the
@@ -835,10 +898,11 @@ public final class AXPrimitiveActionExecutor {
         candidate: DeliveryCandidate,
         point: CGPoint,
         element: AXUIElement?,
-        process: pid_t?,
+        targeting foreground: ForegroundTarget,
         sourceWindowFrame: AXFrame? = nil,
         details: [String: JSONValue]
     ) -> PrimitiveActionResult {
+        let process = foreground.process
         var evidence = details
         if let element {
             evidence.merge(targetWindowEvidence(for: element, point: point)) { _, new in new }
@@ -876,7 +940,7 @@ public final class AXPrimitiveActionExecutor {
             }
         }
         return inForeground(
-            action: action, target: target, policy: policy, process: process,
+            action: action, target: target, policy: policy, targeting: foreground,
             restoresPointer: true, details: evidence
         ) {
             if let failure = validationFailure(settling: true) {
@@ -898,9 +962,10 @@ public final class AXPrimitiveActionExecutor {
         candidate: DeliveryCandidate,
         element: AXUIElement,
         point: CGPoint,
-        process: pid_t?,
+        targeting foreground: ForegroundTarget,
         value: String
     ) -> PrimitiveActionResult {
+        let process = foreground.process
         var evidence = targetWindowEvidence(for: element, point: point)
         evidence["semanticFallback"] = .string("AXValue did not take; the field was refilled by pointer and keystroke")
         let message = "Keyboard events were dispatched, but the field value could not be verified"
@@ -935,7 +1000,7 @@ public final class AXPrimitiveActionExecutor {
             )
         } else {
             base = inForeground(
-                action: "type", target: target, policy: policy, process: process,
+                action: "type", target: target, policy: policy, targeting: foreground,
                 restoresPointer: true, details: evidence
             ) {
                 if let failure = validationFailure(settling: true) {
@@ -967,10 +1032,11 @@ public final class AXPrimitiveActionExecutor {
         target: String,
         policy: DeliveryPolicy,
         candidate: DeliveryCandidate,
-        process: pid_t?,
+        targeting foreground: ForegroundTarget,
         intent: KeyboardIntent,
         details: [String: JSONValue]
     ) -> PrimitiveActionResult {
+        let process = foreground.process
         let message = "Keyboard events were dispatched, but semantic outcome is unverified without a postcondition"
         let post: ((CGEvent) -> Void) -> Bool = { sink in
             switch intent {
@@ -991,7 +1057,7 @@ public final class AXPrimitiveActionExecutor {
             )
         }
         return inForeground(
-            action: "keyboard", target: target, policy: policy, process: process,
+            action: "keyboard", target: target, policy: policy, targeting: foreground,
             restoresPointer: false, details: details
         ) {
             let dispatched = post(self.postEvent)
@@ -1008,12 +1074,13 @@ public final class AXPrimitiveActionExecutor {
         target: String,
         policy: DeliveryPolicy,
         candidate: DeliveryCandidate,
-        process: pid_t?,
+        targeting foreground: ForegroundTarget,
         start: ResolvedPointerTarget,
         end: ResolvedPointerTarget,
         durationMs: Int?,
         details: [String: JSONValue]
     ) -> PrimitiveActionResult {
+        let process = foreground.process
         var dispatch: DragDispatch?
         let post: ((CGEvent) -> Void) -> Bool = { sink in
             let outcome = self.postMouseDrag(from: start, to: end, durationMs: durationMs, sink: sink)
@@ -1029,7 +1096,7 @@ public final class AXPrimitiveActionExecutor {
             )
         } else {
             base = inForeground(
-                action: "drag", target: target, policy: policy, process: process,
+                action: "drag", target: target, policy: policy, targeting: foreground,
                 restoresPointer: true, details: details
             ) {
                 let dispatched = post(self.postEvent)
@@ -1122,31 +1189,55 @@ public final class AXPrimitiveActionExecutor {
     ///
     /// Activation is proved before anything is posted, and restoration runs on every exit including
     /// a thrown error, so an escalation cannot leave the user's foreground where Axon put it.
+    ///
+    /// Every claim the result makes about the foreground comes from this one transaction: the
+    /// single `prior` reading taken here, compared against a target that is either a resolved
+    /// process or honestly none. A missing target used to satisfy the comparison by default, which
+    /// reported the target as already frontmost, skipped activation, and posted global input into
+    /// the foreign session the same envelope had just named.
     private func inForeground(
         action: String,
         target: String,
         policy: DeliveryPolicy,
-        process: pid_t?,
+        targeting foreground: ForegroundTarget,
         restoresPointer: Bool,
         details: [String: JSONValue],
         _ body: () -> PrimitiveActionResult
     ) -> PrimitiveActionResult {
         let prior = frontmostApp()
-        let alreadyFrontmost = process == nil || prior?.processIdentifier == process
-        // Nil, not true, when there is no process: an action that names no application activates
-        // nothing, so there is no activation to have proved.
-        var activationProved: Bool? = process == nil ? nil : alreadyFrontmost
-        if !alreadyFrontmost, let process {
-            _ = activateProcess(process)
-            activationProved = settle { self.frontmostApp()?.processIdentifier == process }
+        let alreadyFrontmost: Bool?
+        switch foreground {
+        case let .process(process):
+            // Measured, and only measured. An unreadable foreground is not evidence that the target
+            // is standing in it.
+            alreadyFrontmost = prior?.processIdentifier == process
+        case .currentForeground:
+            alreadyFrontmost = true
+        case .unattributed:
+            alreadyFrontmost = nil
+        }
+        // Whether *this* transaction raised something, which is the question restoration asks.
+        // `alreadyFrontmost` answers a different one and cannot stand in for it.
+        var activated = false
+        // Nil, not true, when nothing was raised: an action that activates nothing has no
+        // activation to have proved.
+        var activationProved: Bool?
+        if case let .process(process) = foreground {
+            if alreadyFrontmost == true {
+                activationProved = true
+            } else {
+                _ = activateProcess(process)
+                activated = true
+                activationProved = settle { self.frontmostApp()?.processIdentifier == process }
+            }
         }
         guard activationProved != false else {
             let cleanup = ForegroundCleanup(
                 priorApp: prior?.identity,
                 priorAppProcessIdentifier: prior.map { Int($0.processIdentifier) },
-                alreadyFrontmost: false,
+                alreadyFrontmost: alreadyFrontmost,
                 activationProved: false,
-                restored: restoreForeground(prior: prior, alreadyFrontmost: false),
+                restored: restoreForeground(prior: prior, activated: activated),
                 pointerRestored: nil,
                 message: "No events were posted"
             )
@@ -1167,7 +1258,7 @@ public final class AXPrimitiveActionExecutor {
         let pointerBefore = restoresPointer ? pointerLocation() : nil
         func handBack() -> ForegroundCleanup {
             let pointerRestored = restorePointer(to: pointerBefore)
-            let restored = restoreForeground(prior: prior, alreadyFrontmost: alreadyFrontmost)
+            let restored = restoreForeground(prior: prior, activated: activated)
             return ForegroundCleanup(
                 priorApp: prior?.identity,
                 priorAppProcessIdentifier: prior.map { Int($0.processIdentifier) },
@@ -1191,8 +1282,11 @@ public final class AXPrimitiveActionExecutor {
         )
     }
 
-    private func restoreForeground(prior: ForegroundApp?, alreadyFrontmost: Bool) -> Bool {
-        guard !alreadyFrontmost, let prior else {
+    /// Puts the prior application back, but only when this transaction is what moved it. A dispatch
+    /// that raised nothing has nothing to hand back, and saying so is not the same as claiming the
+    /// target was already there.
+    private func restoreForeground(prior: ForegroundApp?, activated: Bool) -> Bool {
+        guard activated, let prior else {
             return true
         }
         if frontmostApp()?.processIdentifier == prior.processIdentifier {
@@ -1310,8 +1404,12 @@ public final class AXPrimitiveActionExecutor {
     /// against, but it does know the window frame its coordinates were computed from, and that is
     /// enough to catch the geometry having moved underneath it — which is the difference between
     /// clicking the intended text and clicking a screen coordinate that has come to mean somewhere
-    /// else entirely. A point that carries neither element nor provenance is a bare caller-supplied
-    /// coordinate, and there is nothing to compare it against.
+    /// else entirely.
+    ///
+    /// A caller-supplied coordinate that names an application has no frame to be measured against,
+    /// but once that application has been raised there is still one thing worth knowing before a
+    /// global click: whether the pixels under the point now belong to it. A point that names
+    /// nothing at all has neither question available, and gets no check.
     private func pointerValidationCheck(
         point: CGPoint,
         element: AXUIElement?,
@@ -1322,8 +1420,11 @@ public final class AXPrimitiveActionExecutor {
         if let element {
             return { self.pointerValidationFailure(element: element, point: point) }
         }
-        guard let process, let sourceWindowFrame else {
+        guard let process else {
             return nil
+        }
+        guard let sourceWindowFrame else {
+            return { self.pointOwnershipFailure(point: point, process: process) }
         }
         // The same question at both rungs, because it is the same coordinate that has to still mean
         // what it meant. Only *where* it is asked differs: the pixel rung asks once, immediately
@@ -1335,6 +1436,31 @@ public final class AXPrimitiveActionExecutor {
         // reached for such a point after this check has already refused it, so asking would be
         // answering something the ladder never gets to.
         return { self.sourceWindowFailure(point: point, process: process, sourceWindowFrame: sourceWindowFrame) }
+    }
+
+    /// Whether the pixels under a caller-supplied coordinate belong to the application it named.
+    ///
+    /// This is what an activation actually buys, checked rather than assumed. An application is
+    /// reported frontmost before the window server has finished raising its window, so a click
+    /// posted the instant activation is proved can still land in the window that was on top a
+    /// moment ago — the click goes to the app the escalation was meant to move aside. Asked inside
+    /// the settle budget, this waits for the raise to actually happen; asked of a point that is over
+    /// another application's window for good, it refuses rather than clicking that application.
+    ///
+    /// An unanswered hit test or an element that will not name its process is not evidence that the
+    /// point is wrong, and must not ground a click that would otherwise work.
+    private func pointOwnershipFailure(point: CGPoint, process: pid_t) -> String? {
+        guard let hit = hitTest(point), let owner = processProvider(hit) else {
+            return nil
+        }
+        guard owner != process else {
+            return nil
+        }
+        return """
+            Pointer target validation failed: the point is covered by a window of process \(owner), \
+            not the target process \(process). \
+            Resolved point {x:\(Double(point.x).compactDescription),y:\(Double(point.y).compactDescription)}
+            """
     }
 
     /// Whether the window these coordinates were computed against is still where it was, with the

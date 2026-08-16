@@ -183,18 +183,24 @@ public struct DeliveryRefusal: Codable, Equatable, Sendable {
 public struct ForegroundCleanup: Codable, Equatable, Sendable {
     public let priorApp: String?
     public let priorAppProcessIdentifier: Int?
-    /// True when no activation was performed: either the target already held the foreground, or the
-    /// action named no application and so had nothing to raise.
-    public let alreadyFrontmost: Bool
-    /// True when the target was observed frontmost before anything was posted, and nil when the
-    /// action named no application, so there was no target to observe and nothing was proved.
+    /// True when the target was measured holding the foreground already, so no activation was
+    /// performed. Nil when the dispatch had no application to compare against — a bare screen
+    /// coordinate, a wheel burst that routes by location — because there is no target of which
+    /// "already frontmost" could be true or false.
+    ///
+    /// Nil, never `true`, for that case: reporting `true` beside a `priorApp` naming some other
+    /// application is an envelope contradicting itself, and it read as evidence that the dispatch
+    /// had reached the intended app when it had gone to whatever owned those pixels.
+    public let alreadyFrontmost: Bool?
+    /// True when the target was observed frontmost before anything was posted, and nil when nothing
+    /// was raised, so there was no activation to prove.
     ///
     /// The nil case is the honest answer to a question that does not apply. Reporting `true` there
     /// read as evidence that an activation had succeeded, which sent a field investigation after the
     /// wrong mechanism entirely.
     public let activationProved: Bool?
     /// True when the prior application was observed frontmost again afterwards. Also true when
-    /// nothing needed restoring because the target already held the foreground.
+    /// nothing needed restoring because this dispatch raised nothing.
     public let restored: Bool
     /// Nil when the dispatch never moved the pointer, so there was nothing to put back.
     public let pointerRestored: Bool?
@@ -203,7 +209,7 @@ public struct ForegroundCleanup: Codable, Equatable, Sendable {
     public init(
         priorApp: String?,
         priorAppProcessIdentifier: Int?,
-        alreadyFrontmost: Bool,
+        alreadyFrontmost: Bool?,
         activationProved: Bool?,
         restored: Bool,
         pointerRestored: Bool? = nil,
@@ -222,7 +228,7 @@ public struct ForegroundCleanup: Codable, Equatable, Sendable {
         .object([
             "priorApp": priorApp.map(JSONValue.string) ?? .null,
             "priorAppProcessIdentifier": priorAppProcessIdentifier.map(JSONValue.int) ?? .null,
-            "alreadyFrontmost": .bool(alreadyFrontmost),
+            "alreadyFrontmost": alreadyFrontmost.map(JSONValue.bool) ?? .null,
             "activationProved": activationProved.map(JSONValue.bool) ?? .null,
             "restored": .bool(restored),
             "pointerRestored": pointerRestored.map(JSONValue.bool) ?? .null,
