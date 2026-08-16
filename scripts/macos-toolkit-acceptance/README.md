@@ -164,6 +164,80 @@ A clean Core Graphics post is only `dispatchAccepted`. It is never `accepted`. M
 absent software are `blocked` and `unavailable`; neither is ever recorded as a refusal, because
 neither is the target's answer.
 
+## What was measured, and what it decided
+
+Measured 2026-08-16 on macOS 26.4 (build 25E246), arm64, on an interactive session with
+Accessibility permission granted, against Safari 26.4, Google Chrome 151.0.7922.138, a pinned
+Electron 43.4.0 runtime, an AppKit fixture, and a WKWebView embedded in a fixture of its own. Ten
+rows, every one of them with both controls acting and every invariant held. See
+[`RESULTS.md`](RESULTS.md).
+
+**Every click is refused. Every keystroke is accepted.** Not one target acted on a PID-targeted
+click, and every target acted on PID-targeted keystrokes — across three unrelated engines and a
+native AppKit control, with the decoy frontmost and the real pointer provably unmoved throughout.
+
+### One mechanism explains all ten rows
+
+The AppKit fixture reports every event `NSApplication` is handed, which makes the cause visible
+rather than inferred:
+
+| posted with `CGEventPostToPid` | arrives as | acted on |
+| --- | --- | --- |
+| `leftMouseDown` / `leftMouseUp` | window number **0**, location in screen coordinates | no |
+| `keyDown` / `keyUp` | the target's real window number | yes |
+
+Posting to a process bypasses the window server's hit testing, so a mouse event delivered this way
+carries no window association at all. AppKit routes mouse events by window number, and window zero
+is no window: there is no view under the coordinate because there is no coordinate space. Nothing
+rejects the click. Nothing ever receives it.
+
+Keyboard is different in kind, not in degree. Key events are routed by the application to its own
+key window, which the application resolves for itself without the window server's help, so a
+pid-targeted keystroke reaches the focused control exactly as an ordinary one would.
+
+That single fact predicts the whole table, and the table confirms it. WebKit, Chromium and AppKit
+draw their content inside one window and hit-test within it, so none of them can act on an event
+that names no window — which is why there is no Chromium-versus-WebKit difference here of the kind
+Linux found, and why the embedded WKWebView behaves identically to Safari. **The macOS refusal is a
+property of the delivery mechanism, not of any toolkit.**
+
+### Safari reproduces the field measurement
+
+`safari-click-2026-08-16` is the axn/195 field row, reproduced against a local deterministic
+navigation endpoint: the post completes, the page does not navigate, and the URL does not change,
+with the decoy frontmost and the pointer unmoved. What the field measurement recorded as
+`dispatchSuccess: true, success: false` is recorded here as `dispatchAccepted` with verdict
+`refused`, which is the same observation with the ambiguity removed.
+
+### There is no generic signature to key an entry on
+
+A backend holding a process identifier can read a bundle identifier and `CFBundleShortVersionString`
+through `NSRunningApplication`, and that is all. Two things it cannot read:
+
+- **The engine.** Chrome's Info.plist names Chrome, not Chromium. The bare Electron runtime reports
+  `com.github.Electron`, and a *packaged* Electron application reports its own identifier with
+  nothing marking it as Electron at all — the Electron framework's own version was not readable from
+  the bundle in this campaign either. There is no macOS equivalent of the AT-SPI toolkit name that
+  Linux keys its entries on.
+- **What the window contains.** A native window and an embedded web view are the same window to the
+  window server.
+
+So rows stay application-specific, and an unknown bundle identifier fails closed. This costs nothing
+here, because no target was measured to accept a click and there is therefore no click entry to
+widen or narrow.
+
+### The keyboard result is not a pixel rung, and is not this issue's to spend
+
+Every target acted on background keystrokes with the foreground and the pointer unchanged, which is
+a real and useful finding: it says an application-scoped background keyboard delivery is available on
+macOS today. It is deliberately *not* offered as a pixel rung. `docs/platform-spec.md` requires the
+pixel rung to be bound to a verified target window with coordinates derived from resolved geometry,
+and a pid-targeted keystroke is bound to an application and carries no coordinate at all. It is a
+different mechanism that happens to satisfy the same two invariants.
+
+The rows are committed so that whoever takes that question up has the measurement. Nothing in this
+issue authorizes it.
+
 ## Rerun policy
 
 Application and macOS releases invalidate these rows. Commits to this repository do not. Each row
@@ -193,6 +267,15 @@ row identifiers from `scripts/macos-toolkit-acceptance/results.json` in its `evi
 measurement behind a permission is one hop from the permission. A target with no matching entry
 refuses `backgroundPixelUnsupported`, and so does a target whose entry says refused; the difference
 is that a refused entry can say *why*, and an absent one can only say that nobody measured it.
+
+**What the measurement currently supports.** No target accepts a PID-targeted click, so the table
+AXN-125 writes has no accepting click entry to hold. That is a simpler outcome than Linux's, and it
+should be written as what it is: a refusal that names the mechanism rather than the application,
+citing the five refused rows and the `windowNumber 0` observation behind them. The refusal detail
+should say that macOS delivers no window-bound mouse event to a process, because a caller told
+"Safari declined this" would reasonably try a different application, and every application refuses
+for the same reason. Should a future macOS deliver pid-targeted mouse events with a window
+association, this campaign is the thing that would detect it.
 
 **The key is what a backend can read at dispatch time.** Holding a process identifier, `axon-mac`
 can read a bundle identifier and the bundle's own version through `NSRunningApplication`. That is
