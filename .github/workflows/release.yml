@@ -119,6 +119,11 @@ jobs:
           codesign --verify --deep --strict "dist/Axon.app"
           spctl -a -vvv -t install "dist/Axon.app"
           xcrun stapler validate "dist/Axon.app"
+          # Read back from the stapled bundle, which is what ships: notarization and stapling run
+          # after signing, so this is the last look at the exact bytes users install. Without the
+          # Automation entitlement the hardened runtime refuses Apple events silently, and every
+          # check above still passes.
+          ./scripts/check-app-entitlements "dist/Axon.app"
 
       - name: Verify the packaged CLI and nested editor report the release version
         env:
