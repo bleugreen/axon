@@ -34,23 +34,32 @@ public enum BrowserAutomationAuthorizationLeg: String, Equatable, Sendable {
 /// This tracks answers from *either* leg, not prompt attempts. The confounded trial never prompted
 /// at all: it was the silent leg's answer that got reused, so a prompt-only flag would have stayed
 /// false through the one sequence it exists to catch.
+///
+/// It keeps the answer itself, not merely that one arrived, because a surface that must not prompt
+/// still has to know the grant: the menu decides whether its consent item has anything left to offer
+/// from what this process already holds, rather than putting the question to macOS again.
 final class AppleEventAnswerLedger: @unchecked Sendable {
     static let shared = AppleEventAnswerLedger()
 
     private let lock = NSLock()
-    private var answered: Set<String> = []
+    private var answers: [String: OSStatus] = [:]
 
     /// Whether macOS has already answered this process for `bundleIdentifier`.
     func hasAnswer(for bundleIdentifier: String) -> Bool {
-        lock.lock()
-        defer { lock.unlock() }
-        return answered.contains(bundleIdentifier)
+        answer(for: bundleIdentifier) != nil
     }
 
-    func recordAnswer(for bundleIdentifier: String) {
+    /// The most recent answer this process holds for `bundleIdentifier`, if any.
+    func answer(for bundleIdentifier: String) -> OSStatus? {
         lock.lock()
         defer { lock.unlock() }
-        answered.insert(bundleIdentifier)
+        return answers[bundleIdentifier]
+    }
+
+    func recordAnswer(_ status: OSStatus, for bundleIdentifier: String) {
+        lock.lock()
+        defer { lock.unlock() }
+        answers[bundleIdentifier] = status
     }
 }
 
@@ -136,7 +145,7 @@ struct AppleEventAuthorizationService {
         // An unexpected status means the call failed, not that macOS answered the authorization, so
         // it must not make the next denial claim this process is holding a stale answer.
         if [noErr, OSStatus(errAEEventNotPermitted), OSStatus(errAEEventWouldRequireUserConsent)].contains(status) {
-            ledger.recordAnswer(for: bundleIdentifier)
+            ledger.recordAnswer(status, for: bundleIdentifier)
         }
         log("automation authorization target=\(bundleIdentifier) leg=\(leg.rawValue) status=\(status) answeredEarlierInThisProcess=\(holdsEarlierAnswer)")
         return Decision(status: status, leg: leg, answeredEarlierInThisProcess: holdsEarlierAnswer)
@@ -157,6 +166,24 @@ struct AppleEventAuthorizationService {
         default:
             throw BrowserAutomationError.authorizationFailed(app: appName, status: decision.status)
         }
+    }
+
+    /// The authorization this process already holds for `bundleIdentifier`, or one silent
+    /// determination when it holds none.
+    ///
+    /// Never prompts, and never re-asks macOS about a target it has already been answered for. Both
+    /// halves matter to the caller this exists for — the menu, which is rebuilt whenever it is shown
+    /// and must not cost a TCC round trip each time, and must not make this process start holding an
+    /// answer any earlier than the person's own use of Axon already would.
+    func settledStatus(bundleIdentifier: String) -> OSStatus {
+        if let held = ledger.answer(for: bundleIdentifier) {
+            return held
+        }
+        return determine(
+            bundleIdentifier: bundleIdentifier,
+            askUserIfNeeded: false,
+            answeredEarlierInThisProcess: false
+        ).status
     }
 
     private func denial(
