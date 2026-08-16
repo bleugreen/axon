@@ -24,6 +24,14 @@ cd "$target"
 version="${1:-latest}"
 npm install --no-audit --no-fund "electron@$version"
 
+# The electron package is a downloader: the runtime itself arrives from a
+# postinstall script, which an npm configured to ignore scripts will skip
+# without saying so. Running it directly when the runtime is absent is what
+# makes this script's success mean the runtime is actually here.
+if [[ ! -d "$target/node_modules/electron/dist/Electron.app" ]]; then
+  node "$target/node_modules/electron/install.js"
+fi
+
 if [[ ! -d "$target/node_modules/electron/dist/Electron.app" ]]; then
   echo "electron did not land in $target/node_modules; refusing to report success" >&2
   exit 1
