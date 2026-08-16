@@ -209,16 +209,9 @@ DAEMON_SIGN_ARGS=("${SIGN_ARGS[@]}" --entitlements "$DAEMON_ENTITLEMENTS")
 /usr/bin/codesign "${DAEMON_SIGN_ARGS[@]}" "$DAEMON_APP_DIR/Contents/MacOS/Axon"
 /usr/bin/codesign "${DAEMON_SIGN_ARGS[@]}" "$DAEMON_APP_DIR"
 
-# A signature that silently lost the entitlement is exactly the failure this packaging step exists
-# to prevent, and it is invisible in every other check: the bundle verifies, notarizes, staples,
-# launches, and only the Automation surface is dead. Assert it here so no consumer of this script
-# can ship without it.
-if ! /usr/bin/codesign -d --entitlements - --xml "$DAEMON_APP_DIR" 2>/dev/null \
-  | /usr/bin/plutil -extract com.apple.security.automation.apple-events raw -o - - \
-  | grep -qx 'true'; then
-  printf 'signed app is missing com.apple.security.automation.apple-events\n' >&2
-  exit 1
-fi
+# Asserted at the point of signing so that no caller of this script can ship a bundle whose
+# Automation surface is dead.
+"$ROOT/scripts/check-app-entitlements" "$DAEMON_APP_DIR"
 
 # Named with the version and the target, matching the Rust archives, so a consumer pinning a
 # release can name every artifact it needs without guessing. The archive root is the app itself:

@@ -1,0 +1,28 @@
+#!/usr/bin/env bash
+# Asserts that a packaged Axon.app carries exactly the entitlements it is meant to.
+#
+# Under the hardened runtime a process without com.apple.security.automation.apple-events may not
+# send Apple events, and macOS refuses silently: no consent dialog, no TCC row, and no entry in
+# System Settings > Privacy & Security > Automation. A build that lost the entitlement still
+# verifies, notarizes, staples, and launches, so every other release check passes while browser
+# navigate, windows, and tabs are dead. That is why this is asserted rather than assumed.
+#
+# The whole set is compared, not just the presence of the one key: an entitlement nothing needs
+# reopens a hole the hardened runtime otherwise closes, and adding one silently is as much a
+# regression as dropping one.
+set -euo pipefail
+
+APP="${1:-dist/Axon.app}"
+EXPECTED='{"com.apple.security.automation.apple-events":true}'
+
+# An unsigned or entitlement-free bundle prints nothing here, which compares unequal and reports as
+# `<none>` rather than passing on an empty match.
+ACTUAL="$(/usr/bin/codesign -d --entitlements - --xml "$APP" 2>/dev/null \
+  | /usr/bin/plutil -convert json -o - - 2>/dev/null || true)"
+
+if [[ "$ACTUAL" != "$EXPECTED" ]]; then
+  printf '%s: entitlements are %s, expected %s\n' "$APP" "${ACTUAL:-<none>}" "$EXPECTED" >&2
+  exit 1
+fi
+
+printf '%s: entitlements %s\n' "$APP" "$ACTUAL"
