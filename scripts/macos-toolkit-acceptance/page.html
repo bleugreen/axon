@@ -46,18 +46,34 @@
           keepalive: true,
         }).catch(() => {});
 
-      // Screen coordinates, because that is the space CGEventPostToPid takes and
-      // the space CGWindowListCopyWindowInfo reports window bounds in. screenX
-      // and screenY are the viewport's own offset from the top left of the
-      // display, so the page never has to be told where its window is.
-      const screenRect = (element) => {
+      // Two coordinate spaces are reported for every element, because neither
+      // alone is trustworthy.
+      //
+      // `client` is the element's position inside the viewport, which is a fact
+      // the page knows exactly. The campaign converts it to the screen using the
+      // window rectangle it reads from CGWindowListCopyWindowInfo, which is
+      // authoritative and the same space it posts events in.
+      //
+      // `screen` is what the browser itself says, through screenX and screenY,
+      // and it is reported as a cross-check rather than used. Engines disagree
+      // about what those mean: Safari answers with the window's own top, while
+      // Chromium answers with the viewport's, so a coordinate derived from them
+      // lands in Safari's toolbar and nowhere near the target.
+      const rects = (element) => {
         const box = element.getBoundingClientRect();
-        const x = window.screenX + box.left;
-        const y = window.screenY + box.top;
-        return {
-          x, y, width: box.width, height: box.height,
-          center: { x: x + box.width / 2, y: y + box.height / 2 },
+        const client = {
+          x: box.left, y: box.top, width: box.width, height: box.height,
+          center: { x: box.left + box.width / 2, y: box.top + box.height / 2 },
         };
+        const screen = {
+          x: window.screenX + box.left, y: window.screenY + box.top,
+          width: box.width, height: box.height,
+          center: {
+            x: window.screenX + box.left + box.width / 2,
+            y: window.screenY + box.top + box.height / 2,
+          },
+        };
+        return { client, screen };
       };
 
       let clicks = 0;
@@ -85,7 +101,15 @@
           kind: "geometry",
           href: location.href,
           devicePixelRatio: window.devicePixelRatio,
-          widgets: { link: screenRect(link), entry: screenRect(entry) },
+          viewport: {
+            innerWidth: window.innerWidth,
+            innerHeight: window.innerHeight,
+            outerWidth: window.outerWidth,
+            outerHeight: window.outerHeight,
+            screenX: window.screenX,
+            screenY: window.screenY,
+          },
+          widgets: { link: rects(link), entry: rects(entry) },
         });
       };
       window.addEventListener("load", report);
