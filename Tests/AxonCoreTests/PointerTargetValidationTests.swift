@@ -213,17 +213,19 @@ private func pointerExecutor(
     #expect(posted == [.leftMouseDown, .leftMouseUp])
 }
 
-@Test func anAppScopedPointTakesTheTargetedRungAndProvesNothingAboutTheForeground() throws {
-    // `CGEventToPid` is a separate mechanism from foreground activation and answers a different
-    // question. A point that names an application is delivered to that process directly: nothing is
-    // raised, nothing reaches the shared devices, and the result carries no foreground evidence at
-    // all — so a working targeted click is never evidence that the transaction above it behaves.
+@Test func anApplicationNameIsNotGeometryAndDoesNotEarnTheTargetedRung() throws {
+    // `CGEventToPid` is a separate mechanism from foreground activation, and naming an application
+    // is not what qualifies a coordinate for it. Nothing here has established that this point lies
+    // in that application's window — an app name is an owner, not geometry — so the targeted rung is
+    // declined and the click goes where its coordinates mean what the caller measured, at proved
+    // activation. Not one event reaches the process behind its back.
     var global: [CGEventType] = []
     var targeted: [pid_t] = []
     var activations: [pid_t] = []
     // Resolvable by pid, so the point carries a genuine application identity without depending on
     // any particular application being installed.
     let target = try #require(NSWorkspace.shared.frontmostApplication?.processIdentifier)
+    var frontmost: pid_t = 7
     let executor = AXPrimitiveActionExecutor(
         elementStore: AXElementStore(),
         overlay: nil,
@@ -233,8 +235,10 @@ private func pointerExecutor(
         frameProvider: { _ in pointerFrame },
         parentProvider: { _ in nil },
         processProvider: { _ in nil },
-        frontmostApp: { ForegroundApp(processIdentifier: 7, name: "Prior", bundleIdentifier: "com.example.prior") },
-        activateProcess: { activations.append($0); return true },
+        frontmostApp: {
+            ForegroundApp(processIdentifier: frontmost, name: "p\(frontmost)", bundleIdentifier: "com.example.p\(frontmost)")
+        },
+        activateProcess: { activations.append($0); frontmost = $0; return true },
         pointerLocation: { .zero }
     )
 
@@ -243,12 +247,13 @@ private func pointerExecutor(
         policy: .foregroundPermitted
     )
 
-    #expect(result.delivery == .pixel)
-    #expect(result.strategy == "CGEventToPid")
-    #expect(targeted == [target, target])
-    #expect(global.isEmpty)
-    #expect(activations.isEmpty)
-    #expect(result.details["foreground"] == nil)
+    #expect(result.delivery == .foreground)
+    #expect(result.strategy == "CGEvent")
+    #expect(targeted.isEmpty)
+    #expect(global == [.leftMouseDown, .leftMouseUp])
+    #expect(activations.first == target)
+    #expect(result.details["foreground"]?["alreadyFrontmost"] == .bool(false))
+    #expect(result.details["foreground"]?["activationProved"] == .bool(true))
 }
 
 @Test func typeFallbackRejectsMismatchedHitBeforeMouseOrKeyboardEvents() throws {

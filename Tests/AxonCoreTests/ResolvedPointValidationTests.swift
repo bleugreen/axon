@@ -231,15 +231,23 @@ private func resolvedPoint(at point: CGPoint, app: pid_t, provenance: AXFrame? =
 
 @Test func aPointWithoutProvenanceIsDispatchedWithoutGeometricValidation() throws {
     // A coordinate the caller supplied has nothing to be measured against, so there is nothing to
-    // check and the guard must not invent a claim about it.
+    // check and the guard must not invent a claim about it — note the stray point and the mismatched
+    // hit owner here, neither of which may produce a geometric refusal.
+    //
+    // What such a point cannot do is travel in the background: naming an owner is not geometry, and
+    // nothing has established that the coordinate belongs to that application. So it is dispatched
+    // at the rung where its coordinates mean what the caller measured, and the absence of
+    // provenance costs it that rung rather than earning it a fabricated refusal.
     let process = try resolvableProcess()
     let desktop = FakeDesktop(windows: [resolutionWindow], hitOwners: [4_242])
 
     let result = try desktop.executor().click(
         point: resolvedPoint(at: strayPoint, app: process, provenance: nil),
-        policy: .backgroundOnly
+        policy: .foregroundPermitted
     )
 
     #expect(result.dispatchSuccess)
+    #expect(result.delivery == .foreground)
+    #expect(result.message?.contains("Pointer target validation failed") != true)
     #expect(desktop.posted == [.leftMouseDown, .leftMouseUp])
 }
