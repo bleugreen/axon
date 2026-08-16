@@ -1404,8 +1404,12 @@ public final class AXPrimitiveActionExecutor {
     /// against, but it does know the window frame its coordinates were computed from, and that is
     /// enough to catch the geometry having moved underneath it — which is the difference between
     /// clicking the intended text and clicking a screen coordinate that has come to mean somewhere
-    /// else entirely. A point that carries neither element nor provenance is a bare caller-supplied
-    /// coordinate, and there is nothing to compare it against.
+    /// else entirely.
+    ///
+    /// A caller-supplied coordinate that names an application has no frame to be measured against,
+    /// but once that application has been raised there is still one thing worth knowing before a
+    /// global click: whether the pixels under the point now belong to it. A point that names
+    /// nothing at all has neither question available, and gets no check.
     private func pointerValidationCheck(
         point: CGPoint,
         element: AXUIElement?,
@@ -1416,8 +1420,11 @@ public final class AXPrimitiveActionExecutor {
         if let element {
             return { self.pointerValidationFailure(element: element, point: point) }
         }
-        guard let process, let sourceWindowFrame else {
+        guard let process else {
             return nil
+        }
+        guard let sourceWindowFrame else {
+            return { self.pointOwnershipFailure(point: point, process: process) }
         }
         // The same question at both rungs, because it is the same coordinate that has to still mean
         // what it meant. Only *where* it is asked differs: the pixel rung asks once, immediately
@@ -1429,6 +1436,31 @@ public final class AXPrimitiveActionExecutor {
         // reached for such a point after this check has already refused it, so asking would be
         // answering something the ladder never gets to.
         return { self.sourceWindowFailure(point: point, process: process, sourceWindowFrame: sourceWindowFrame) }
+    }
+
+    /// Whether the pixels under a caller-supplied coordinate belong to the application it named.
+    ///
+    /// This is what an activation actually buys, checked rather than assumed. An application is
+    /// reported frontmost before the window server has finished raising its window, so a click
+    /// posted the instant activation is proved can still land in the window that was on top a
+    /// moment ago — the click goes to the app the escalation was meant to move aside. Asked inside
+    /// the settle budget, this waits for the raise to actually happen; asked of a point that is over
+    /// another application's window for good, it refuses rather than clicking that application.
+    ///
+    /// An unanswered hit test or an element that will not name its process is not evidence that the
+    /// point is wrong, and must not ground a click that would otherwise work.
+    private func pointOwnershipFailure(point: CGPoint, process: pid_t) -> String? {
+        guard let hit = hitTest(point), let owner = processProvider(hit) else {
+            return nil
+        }
+        guard owner != process else {
+            return nil
+        }
+        return """
+            Pointer target validation failed: the point is covered by a window of process \(owner), \
+            not the target process \(process). \
+            Resolved point {x:\(Double(point.x).compactDescription),y:\(Double(point.y).compactDescription)}
+            """
     }
 
     /// Whether the window these coordinates were computed against is still where it was, with the
