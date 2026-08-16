@@ -3,6 +3,7 @@
 .superpowers/
 dist/
 rust/target/
+scripts/macos-toolkit-acceptance/probe/target/
 site/dist/
 site/node_modules/
 

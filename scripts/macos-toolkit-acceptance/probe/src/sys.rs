@@ -285,7 +285,6 @@ msg!(send_ret_point, () -> CGPoint);
 msg!(send_rect_arg, (a: CGRect) -> Id);
 msg!(send_ret_rect_with_rect, (a: CGRect) -> CGRect);
 msg!(send_ret_rect_with_rect_view, (a: CGRect, b: Id) -> CGRect);
-msg!(send_point_arg, (a: CGPoint) -> Id);
 msg!(send_sel_arg, (a: Sel) -> bool);
 msg!(send_i64_arg, (a: i64) -> Id);
 msg!(send_i32_arg, (a: i32) -> Id);
