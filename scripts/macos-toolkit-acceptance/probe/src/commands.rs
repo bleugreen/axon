@@ -7,7 +7,6 @@
 //! so the coordinator derives a verdict from evidence it did not have to ask
 //! for separately.
 
-use std::ffi::c_void;
 use std::thread::sleep;
 use std::time::Duration;
 
