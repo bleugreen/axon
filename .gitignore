@@ -4,6 +4,10 @@
 dist/
 rust/target/
 scripts/macos-toolkit-acceptance/probe/target/
+# The campaign's unnormalized record: hundreds of kilobytes of window stacks and
+# per-phase readings, kept on the bench that produced it for diagnosis. The
+# normalized fixtures are what the repository carries.
+scripts/macos-toolkit-acceptance/raw/
 __pycache__/
 site/dist/
 site/node_modules/

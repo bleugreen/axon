@@ -478,9 +478,8 @@ def owning_process(probe: Probe, point: dict, expected_bundle_id: str | None) ->
                 f"the window at the page's coordinate belongs to "
                 f"{reported.get('bundleId')!r}, not to {expected_bundle_id!r}"
             ),
-            "stack": stack,
         }
-    return {"pid": pid, "window": ordinary[0], "application": reported, "stack": stack}
+    return {"pid": pid, "window": ordinary[0], "application": reported}
 
 
 def window_bounds(probe: Probe, pid: int, window_id: int | None) -> dict | None:
