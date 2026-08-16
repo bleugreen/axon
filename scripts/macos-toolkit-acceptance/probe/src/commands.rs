@@ -483,11 +483,9 @@ fn foreground_key(args: &Args) -> Result<J, String> {
     release_source(source);
     sleep(SETTLE);
     let observed = state();
-    if args.flag("restore") {
-        if let Some(prior) = prior_frontmost {
-            activate(prior);
-            sleep(Duration::from_millis(400));
-        }
+    if let Some(prior) = prior_frontmost.filter(|_| args.flag("restore")) {
+        activate(prior);
+        sleep(Duration::from_millis(400));
     }
     Ok(J::obj(vec![
         ("mechanism", J::str("CGEventPost(kCGHIDEventTap)")),
@@ -542,12 +540,10 @@ fn raise_command(args: &Args) -> Result<J, String> {
             // An application that is not frontmost may report no focused
             // window; its first window is the one a click would land in.
             let (windows, _) = copy_attribute(application, "AXWindows");
-            if !windows.is_null() {
-                if CFArrayGetCount(windows) > 0 {
-                    let first = CFArrayGetValueAtIndex(windows, 0);
-                    if !first.is_null() {
-                        window = first;
-                    }
+            if !windows.is_null() && CFArrayGetCount(windows) > 0 {
+                let first = CFArrayGetValueAtIndex(windows, 0);
+                if !first.is_null() {
+                    window = first;
                 }
             }
         }
@@ -652,6 +648,6 @@ fn source_of(args: &Args) -> Result<Source, String> {
 
 fn release_source(source: CGEventSourceRef) {
     if !source.is_null() {
-        unsafe { CFRelease(source as *const c_void) };
+        unsafe { CFRelease(source) };
     }
 }

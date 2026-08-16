@@ -4,6 +4,7 @@
 dist/
 rust/target/
 scripts/macos-toolkit-acceptance/probe/target/
+__pycache__/
 site/dist/
 site/node_modules/
 

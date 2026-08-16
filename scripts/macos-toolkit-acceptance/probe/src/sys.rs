@@ -147,7 +147,9 @@ pub struct ObjcSuper {
 // Objective-C runtime finds `NSApplication` and friends only if the framework
 // is in the image.
 #[link(name = "AppKit", kind = "framework")]
+unsafe extern "C" {}
 #[link(name = "Foundation", kind = "framework")]
+unsafe extern "C" {}
 #[link(name = "WebKit", kind = "framework")]
 unsafe extern "C" {}
 
@@ -287,7 +289,6 @@ msg!(send, () -> Id);
 msg!(send_id, (a: Id) -> Id);
 msg!(send_bool_arg, (a: bool) -> Id);
 msg!(send_u64_arg, (a: u64) -> Id);
-msg!(send_f64_arg, (a: f64) -> Id);
 msg!(send_ret_i64, () -> i64);
 msg!(send_ret_u64, () -> u64);
 msg!(send_ret_f64, () -> f64);
@@ -302,7 +303,6 @@ msg!(send_sel_arg, (a: Sel) -> bool);
 msg!(send_i64_arg, (a: i64) -> Id);
 msg!(send_i32_arg, (a: i32) -> Id);
 msg!(send_rect_mask_backing_defer, (a: CGRect, b: u64, c: u64, d: bool) -> Id);
-msg!(send_next_event, (a: u64, b: Id, c: Id, d: bool) -> Id);
 msg!(send_timer, (a: f64, b: Id, c: Sel, d: Id, e: bool) -> Id);
 msg!(send_rect_id, (a: CGRect, b: Id) -> Id);
 
