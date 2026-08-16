@@ -1,7 +1,7 @@
 {
   "campaign": {
     "id": "bbl-2026-08-16",
-    "measuredAt": "2026-08-16T19:04:06-04:00",
+    "measuredAt": "2026-08-16T19:14:56-04:00",
     "machine": "arm64 macOS bench",
     "operatingSystem": "Version 26.4 (Build 25E246)",
     "session": "interactive desktop session with a logged-in user",
@@ -22,7 +22,7 @@
       "width": 2560,
       "height": 1440
     },
-    "probePid": 51837
+    "probePid": 34398
   },
   "trials": [
     {
@@ -32,7 +32,7 @@
       "phases": [
         {
           "phase": "identity",
-          "at": 1786921250.5469792,
+          "at": 1786922064.513441,
           "data": {
             "pid": 94963,
             "identity": {
@@ -45,7 +45,7 @@
               "source": "NSRunningApplication(processIdentifier:) then the bundle's Info.plist",
               "processStartTime": "Sun Aug 16 15:18:08 2026"
             },
-            "nonce": "e8e8f15eddd6",
+            "nonce": "bcfb3a0ca350",
             "point": {
               "x": 1093.2578125,
               "y": 208.5
@@ -55,11 +55,11 @@
             },
             "detail": {
               "geometry": {
-                "nonce": "e8e8f15eddd6",
+                "nonce": "bcfb3a0ca350",
                 "marker": "page",
                 "role": "page",
                 "kind": "geometry",
-                "href": "http://127.0.0.1:52393/page?nonce=e8e8f15eddd6",
+                "href": "http://127.0.0.1:54477/page?nonce=bcfb3a0ca350",
                 "devicePixelRatio": 2,
                 "widgets": {
                   "link": {
@@ -83,14 +83,14 @@
                     }
                   }
                 },
-                "receivedAt": 1786921249.358788
+                "receivedAt": 1786922063.274722
               }
             }
           }
         },
         {
           "phase": "controlBefore",
-          "at": 1786921254.829917,
+          "at": 1786922068.8497212,
           "data": {
             "ran": true,
             "acted": false,
@@ -106,7 +106,7 @@
               "restored": false,
               "before": {
                 "frontmost": {
-                  "pid": 51895,
+                  "pid": 34762,
                   "bundleId": "com.apple.Safari",
                   "name": "Safari",
                   "bundlePath": "/System/Volumes/Preboot/Cryptexes/App/System/Applications/Safari.app",
@@ -114,13 +114,13 @@
                   "terminated": false
                 },
                 "pointer": {
-                  "x": 948.9140625,
-                  "y": 915.68359375
+                  "x": 1244.1875,
+                  "y": 1242.8515625
                 }
               },
               "after": {
                 "frontmost": {
-                  "pid": 51895,
+                  "pid": 34762,
                   "bundleId": "com.apple.Safari",
                   "name": "Safari",
                   "bundlePath": "/System/Volumes/Preboot/Cryptexes/App/System/Applications/Safari.app",
@@ -134,7 +134,7 @@
               },
               "final": {
                 "frontmost": {
-                  "pid": 51895,
+                  "pid": 34762,
                   "bundleId": "com.apple.Safari",
                   "name": "Safari",
                   "bundlePath": "/System/Volumes/Preboot/Cryptexes/App/System/Applications/Safari.app",
@@ -151,10 +151,31 @@
         },
         {
           "phase": "background",
-          "at": 1786921255.6388962,
+          "at": 1786922070.566081,
           "data": {
+            "raised": {
+              "pid": 94963,
+              "raised": true,
+              "status": 0,
+              "before": {
+                "pid": 34762,
+                "bundleId": "com.apple.Safari",
+                "name": "Safari",
+                "bundlePath": "/System/Volumes/Preboot/Cryptexes/App/System/Applications/Safari.app",
+                "active": true,
+                "terminated": false
+              },
+              "after": {
+                "pid": 34762,
+                "bundleId": "com.apple.Safari",
+                "name": "Safari",
+                "bundlePath": "/System/Volumes/Preboot/Cryptexes/App/System/Applications/Safari.app",
+                "active": true,
+                "terminated": false
+              }
+            },
             "decoy": {
-              "pid": 51864,
+              "pid": 34401,
               "bundleId": "dev.axon.acceptance.decoy",
               "name": "AxonAcceptanceDecoy",
               "bundlePath": "/Users/mitch/.cairn/build-slots/axn/.authority/slot-121/scratch/axon-acceptance-bundles/AxonAcceptanceDecoy.app",
@@ -162,7 +183,7 @@
               "terminated": false
             },
             "frontmost": {
-              "pid": 51864,
+              "pid": 34401,
               "bundleId": "dev.axon.acceptance.decoy",
               "name": "AxonAcceptanceDecoy",
               "bundlePath": "/Users/mitch/.cairn/build-slots/axn/.authority/slot-121/scratch/axon-acceptance-bundles/AxonAcceptanceDecoy.app",
@@ -183,9 +204,13 @@
         },
         {
           "phase": "ownership",
-          "at": 1786921255.70142,
+          "at": 1786922070.628426,
           "data": {
             "proved": false,
+            "point": {
+              "x": 1093.2578125,
+              "y": 208.5
+            },
             "observed": {
               "point": {
                 "x": 1093.2578125,
@@ -205,6 +230,36 @@
                     "y": 0,
                     "width": 2560,
                     "height": 1440
+                  }
+                },
+                {
+                  "windowId": 2806,
+                  "ownerPid": 34762,
+                  "ownerName": "Safari",
+                  "name": "Axon macOS acceptance",
+                  "layer": 0,
+                  "onScreen": true,
+                  "alpha": 1,
+                  "bounds": {
+                    "x": 981,
+                    "y": 30,
+                    "width": 640,
+                    "height": 1328
+                  }
+                },
+                {
+                  "windowId": 348,
+                  "ownerPid": 94963,
+                  "ownerName": "Safari",
+                  "name": "Head of Design Engineering \u2014 Careers at Tasklet",
+                  "layer": 0,
+                  "onScreen": true,
+                  "alpha": 1,
+                  "bounds": {
+                    "x": 785,
+                    "y": 159,
+                    "width": 989,
+                    "height": 1012
                   }
                 },
                 {
@@ -223,557 +278,48 @@
                   }
                 },
                 {
-                  "windowId": 177,
-                  "ownerPid": 98108,
-                  "ownerName": "Firefox",
-                  "name": "Stop the executor's own supervision from consuming the machine, and m\u2026 \u00b7 bleugreen/cairn@60368a3 \u2014 Original profile",
+                  "windowId": 2702,
+                  "ownerPid": 61675,
+                  "ownerName": "Google Chrome",
+                  "name": "Axon macOS acceptance",
                   "layer": 0,
                   "onScreen": true,
                   "alpha": 1,
                   "bounds": {
-                    "x": 853,
-                    "y": 30,
-                    "width": 853,
-                    "height": 1328
+                    "x": 62,
+                    "y": 133,
+                    "width": 1200,
+                    "height": 854
                   }
                 },
                 {
-                  "windowId": 1725,
-                  "ownerPid": 91101,
-                  "ownerName": "Mail",
-                  "name": "Re: [20000135922934] Apple Developer Support - Membership and Account",
+                  "windowId": 2696,
+                  "ownerPid": 61675,
+                  "ownerName": "Google Chrome",
+                  "name": "Restore pages?",
                   "layer": 0,
                   "onScreen": true,
                   "alpha": 1,
                   "bounds": {
-                    "x": 446,
-                    "y": 164,
-                    "width": 1668,
-                    "height": 1002
+                    "x": 914,
+                    "y": 191,
+                    "width": 320,
+                    "height": 238
                   }
                 },
                 {
-                  "windowId": 1719,
-                  "ownerPid": 91101,
-                  "ownerName": "Mail",
-                  "name": "Searching",
+                  "windowId": 2687,
+                  "ownerPid": 61675,
+                  "ownerName": "Google Chrome",
+                  "name": "Axon macOS acceptance",
                   "layer": 0,
                   "onScreen": true,
                   "alpha": 1,
                   "bounds": {
-                    "x": 750,
-                    "y": 163,
-                    "width": 1059,
-                    "height": 1003
-                  }
-                },
-                {
-                  "windowId": 1648,
-                  "ownerPid": 59769,
-                  "ownerName": "Cursor",
-                  "name": "AGENTS.md",
-                  "layer": 0,
-                  "onScreen": true,
-                  "alpha": 1,
-                  "bounds": {
-                    "x": 416,
-                    "y": 163,
-                    "width": 1728,
-                    "height": 1003
-                  }
-                },
-                {
-                  "windowId": 1490,
-                  "ownerPid": 81765,
-                  "ownerName": "Terminal",
-                  "name": "cairn \u2014 ~/p/cairn \u2014 -fish \u2014 69\u00d784",
-                  "layer": 0,
-                  "onScreen": true,
-                  "alpha": 1,
-                  "bounds": {
-                    "x": 1028,
-                    "y": 52,
-                    "width": 503,
-                    "height": 1225
-                  }
-                }
-              ]
-            }
-          }
-        },
-        {
-          "phase": "dispatch",
-          "at": 1786921256.1648462,
-          "data": {
-            "mechanism": "CGEventPostToPid",
-            "variant": "leftMouseDown+leftMouseUp/source=null/gapMs=0",
-            "targetPid": 94963,
-            "point": {
-              "x": 1093.2578125,
-              "y": 208.5
-            },
-            "eventsCreated": true,
-            "accessibilityTrusted": true,
-            "before": {
-              "frontmost": {
-                "pid": 51864,
-                "bundleId": "dev.axon.acceptance.decoy",
-                "name": "AxonAcceptanceDecoy",
-                "bundlePath": "/Users/mitch/.cairn/build-slots/axn/.authority/slot-121/scratch/axon-acceptance-bundles/AxonAcceptanceDecoy.app",
-                "active": true,
-                "terminated": false
-              },
-              "pointer": {
-                "x": 2554,
-                "y": 1434
-              }
-            },
-            "after": {
-              "frontmost": {
-                "pid": 51864,
-                "bundleId": "dev.axon.acceptance.decoy",
-                "name": "AxonAcceptanceDecoy",
-                "bundlePath": "/Users/mitch/.cairn/build-slots/axn/.authority/slot-121/scratch/axon-acceptance-bundles/AxonAcceptanceDecoy.app",
-                "active": true,
-                "terminated": false
-              },
-              "pointer": {
-                "x": 2554,
-                "y": 1434
-              }
-            }
-          }
-        },
-        {
-          "phase": "observe",
-          "at": 1786921259.267924,
-          "data": {
-            "before": {
-              "clicks": 0,
-              "text": "",
-              "navigations": 0
-            },
-            "after": {
-              "clicks": 0,
-              "text": "",
-              "navigations": 0
-            },
-            "mutated": false,
-            "mutationEvidence": "the page neither navigated nor reported a click",
-            "eventReachedTarget": false,
-            "arrivalDetail": "the page's event listeners recorded nothing",
-            "decoyReceived": [],
-            "accessibility": {
-              "pid": 94963,
-              "accessibilityTrusted": true,
-              "focusedWindowError": -25212,
-              "document": null,
-              "title": null
-            }
-          }
-        },
-        {
-          "phase": "controlAfter",
-          "at": 1786921263.558971,
-          "data": {
-            "ran": true,
-            "acted": false,
-            "mechanism": "CGEventPost(kCGHIDEventTap) with the real pointer over the coordinate",
-            "detail": "the page neither navigated nor reported a click",
-            "observed": {
-              "mechanism": "CGEventPost(kCGHIDEventTap)",
-              "point": {
-                "x": 1093.2578125,
-                "y": 208.5
-              },
-              "activated": true,
-              "restored": false,
-              "before": {
-                "frontmost": {
-                  "pid": 51864,
-                  "bundleId": "dev.axon.acceptance.decoy",
-                  "name": "AxonAcceptanceDecoy",
-                  "bundlePath": "/Users/mitch/.cairn/build-slots/axn/.authority/slot-121/scratch/axon-acceptance-bundles/AxonAcceptanceDecoy.app",
-                  "active": true,
-                  "terminated": false
-                },
-                "pointer": {
-                  "x": 2554,
-                  "y": 1434
-                }
-              },
-              "after": {
-                "frontmost": {
-                  "pid": 51864,
-                  "bundleId": "dev.axon.acceptance.decoy",
-                  "name": "AxonAcceptanceDecoy",
-                  "bundlePath": "/Users/mitch/.cairn/build-slots/axn/.authority/slot-121/scratch/axon-acceptance-bundles/AxonAcceptanceDecoy.app",
-                  "active": true,
-                  "terminated": false
-                },
-                "pointer": {
-                  "x": 1093.2578125,
-                  "y": 208.5
-                }
-              },
-              "final": {
-                "frontmost": {
-                  "pid": 51864,
-                  "bundleId": "dev.axon.acceptance.decoy",
-                  "name": "AxonAcceptanceDecoy",
-                  "bundlePath": "/Users/mitch/.cairn/build-slots/axn/.authority/slot-121/scratch/axon-acceptance-bundles/AxonAcceptanceDecoy.app",
-                  "active": true,
-                  "terminated": false
-                },
-                "pointer": {
-                  "x": 1093.2578125,
-                  "y": 208.5
-                }
-              }
-            }
-          }
-        },
-        {
-          "phase": "restore",
-          "at": 1786921264.353353,
-          "data": {
-            "frontmost": {
-              "pid": 51864,
-              "bundleId": "dev.axon.acceptance.decoy",
-              "name": "AxonAcceptanceDecoy",
-              "bundlePath": "/Users/mitch/.cairn/build-slots/axn/.authority/slot-121/scratch/axon-acceptance-bundles/AxonAcceptanceDecoy.app",
-              "active": true,
-              "terminated": false
-            },
-            "pointer": {
-              "x": 759.52734375,
-              "y": 939.890625
-            }
-          }
-        }
-      ],
-      "observations": {
-        "dispatchAccepted": true,
-        "variant": "leftMouseDown+leftMouseUp/source=null/gapMs=0",
-        "targetMutated": false,
-        "mutationEvidence": "the page neither navigated nor reported a click",
-        "eventReachedTarget": false,
-        "arrivalDetail": "the page's event listeners recorded nothing",
-        "frontmostUnchanged": true,
-        "decoyFrontmost": true,
-        "pointerUnchanged": true,
-        "ownershipProved": false,
-        "pointerBefore": {
-          "x": 2554,
-          "y": 1434
-        },
-        "pointerAfter": {
-          "x": 2554,
-          "y": 1434
-        },
-        "frontmostBefore": "dev.axon.acceptance.decoy",
-        "frontmostAfter": "dev.axon.acceptance.decoy",
-        "targetPid": 94963,
-        "windowId": null,
-        "point": {
-          "x": 1093.2578125,
-          "y": 208.5
-        },
-        "nonce": "e8e8f15eddd6"
-      },
-      "identity": {
-        "bundleId": "com.apple.Safari",
-        "bundleShortVersion": "26.4",
-        "bundleVersion": "21624.1.16.11.4",
-        "versionSeries": "26.4",
-        "runtimeSignature": null,
-        "readableAtDispatch": true,
-        "source": "NSRunningApplication(processIdentifier:) then the bundle's Info.plist",
-        "processStartTime": "Sun Aug 16 15:18:08 2026"
-      },
-      "controls": {
-        "before": {
-          "ran": true,
-          "acted": false,
-          "mechanism": "CGEventPost(kCGHIDEventTap) with the real pointer over the coordinate",
-          "detail": "the page neither navigated nor reported a click",
-          "observed": {
-            "mechanism": "CGEventPost(kCGHIDEventTap)",
-            "point": {
-              "x": 1093.2578125,
-              "y": 208.5
-            },
-            "activated": true,
-            "restored": false,
-            "before": {
-              "frontmost": {
-                "pid": 51895,
-                "bundleId": "com.apple.Safari",
-                "name": "Safari",
-                "bundlePath": "/System/Volumes/Preboot/Cryptexes/App/System/Applications/Safari.app",
-                "active": true,
-                "terminated": false
-              },
-              "pointer": {
-                "x": 948.9140625,
-                "y": 915.68359375
-              }
-            },
-            "after": {
-              "frontmost": {
-                "pid": 51895,
-                "bundleId": "com.apple.Safari",
-                "name": "Safari",
-                "bundlePath": "/System/Volumes/Preboot/Cryptexes/App/System/Applications/Safari.app",
-                "active": true,
-                "terminated": false
-              },
-              "pointer": {
-                "x": 1093.2578125,
-                "y": 208.5
-              }
-            },
-            "final": {
-              "frontmost": {
-                "pid": 51895,
-                "bundleId": "com.apple.Safari",
-                "name": "Safari",
-                "bundlePath": "/System/Volumes/Preboot/Cryptexes/App/System/Applications/Safari.app",
-                "active": true,
-                "terminated": false
-              },
-              "pointer": {
-                "x": 1093.2578125,
-                "y": 208.5
-              }
-            }
-          }
-        },
-        "after": {
-          "ran": true,
-          "acted": false,
-          "mechanism": "CGEventPost(kCGHIDEventTap) with the real pointer over the coordinate",
-          "detail": "the page neither navigated nor reported a click",
-          "observed": {
-            "mechanism": "CGEventPost(kCGHIDEventTap)",
-            "point": {
-              "x": 1093.2578125,
-              "y": 208.5
-            },
-            "activated": true,
-            "restored": false,
-            "before": {
-              "frontmost": {
-                "pid": 51864,
-                "bundleId": "dev.axon.acceptance.decoy",
-                "name": "AxonAcceptanceDecoy",
-                "bundlePath": "/Users/mitch/.cairn/build-slots/axn/.authority/slot-121/scratch/axon-acceptance-bundles/AxonAcceptanceDecoy.app",
-                "active": true,
-                "terminated": false
-              },
-              "pointer": {
-                "x": 2554,
-                "y": 1434
-              }
-            },
-            "after": {
-              "frontmost": {
-                "pid": 51864,
-                "bundleId": "dev.axon.acceptance.decoy",
-                "name": "AxonAcceptanceDecoy",
-                "bundlePath": "/Users/mitch/.cairn/build-slots/axn/.authority/slot-121/scratch/axon-acceptance-bundles/AxonAcceptanceDecoy.app",
-                "active": true,
-                "terminated": false
-              },
-              "pointer": {
-                "x": 1093.2578125,
-                "y": 208.5
-              }
-            },
-            "final": {
-              "frontmost": {
-                "pid": 51864,
-                "bundleId": "dev.axon.acceptance.decoy",
-                "name": "AxonAcceptanceDecoy",
-                "bundlePath": "/Users/mitch/.cairn/build-slots/axn/.authority/slot-121/scratch/axon-acceptance-bundles/AxonAcceptanceDecoy.app",
-                "active": true,
-                "terminated": false
-              },
-              "pointer": {
-                "x": 1093.2578125,
-                "y": 208.5
-              }
-            }
-          }
-        }
-      },
-      "verdict": [
-        "blocked",
-        "the foreground control before the dispatch did not act, so this trial is measuring the campaign rather than the target"
-      ]
-    },
-    {
-      "target": "safari",
-      "action": "keyboard",
-      "campaign": "bbl-2026-08-16",
-      "phases": [
-        {
-          "phase": "identity",
-          "at": 1786921266.744565,
-          "data": {
-            "pid": 94963,
-            "identity": {
-              "bundleId": "com.apple.Safari",
-              "bundleShortVersion": "26.4",
-              "bundleVersion": "21624.1.16.11.4",
-              "versionSeries": "26.4",
-              "runtimeSignature": null,
-              "readableAtDispatch": true,
-              "source": "NSRunningApplication(processIdentifier:) then the bundle's Info.plist",
-              "processStartTime": "Sun Aug 16 15:18:08 2026"
-            },
-            "nonce": "c9ccdb2e22d1",
-            "point": {
-              "x": 1093.2578125,
-              "y": 208.5
-            },
-            "windows": {
-              "windows": []
-            },
-            "detail": {
-              "geometry": {
-                "nonce": "c9ccdb2e22d1",
-                "marker": "page",
-                "role": "page",
-                "kind": "geometry",
-                "href": "http://127.0.0.1:52393/page?nonce=c9ccdb2e22d1",
-                "devicePixelRatio": 2,
-                "widgets": {
-                  "link": {
-                    "x": 1021,
-                    "y": 180,
-                    "width": 144.515625,
-                    "height": 57,
-                    "center": {
-                      "x": 1093.2578125,
-                      "y": 208.5
-                    }
-                  },
-                  "entry": {
-                    "x": 1021,
-                    "y": 90,
-                    "width": 340,
-                    "height": 44,
-                    "center": {
-                      "x": 1191,
-                      "y": 112
-                    }
-                  }
-                },
-                "receivedAt": 1786921265.600992
-              }
-            }
-          }
-        },
-        {
-          "phase": "controlBefore",
-          "at": 1786921270.920876,
-          "data": {
-            "ran": true,
-            "acted": false,
-            "mechanism": "CGEventPost(kCGHIDEventTap) with the target activated",
-            "detail": "the page's input read '' before and '' after",
-            "observed": {
-              "mechanism": "CGEventPost(kCGHIDEventTap)",
-              "text": "axon",
-              "activated": true,
-              "before": {
-                "frontmost": {
-                  "pid": 57852,
-                  "bundleId": "com.apple.Safari",
-                  "name": "Safari",
-                  "bundlePath": "/System/Volumes/Preboot/Cryptexes/App/System/Applications/Safari.app",
-                  "active": true,
-                  "terminated": false
-                },
-                "pointer": {
-                  "x": 759,
-                  "y": 939
-                }
-              },
-              "after": {
-                "frontmost": {
-                  "pid": 57852,
-                  "bundleId": "com.apple.Safari",
-                  "name": "Safari",
-                  "bundlePath": "/System/Volumes/Preboot/Cryptexes/App/System/Applications/Safari.app",
-                  "active": true,
-                  "terminated": false
-                },
-                "pointer": {
-                  "x": 759,
-                  "y": 939
-                }
-              }
-            }
-          }
-        },
-        {
-          "phase": "background",
-          "at": 1786921271.725429,
-          "data": {
-            "decoy": {
-              "pid": 51864,
-              "bundleId": "dev.axon.acceptance.decoy",
-              "name": "AxonAcceptanceDecoy",
-              "bundlePath": "/Users/mitch/.cairn/build-slots/axn/.authority/slot-121/scratch/axon-acceptance-bundles/AxonAcceptanceDecoy.app",
-              "active": true,
-              "terminated": false
-            },
-            "frontmost": {
-              "pid": 51864,
-              "bundleId": "dev.axon.acceptance.decoy",
-              "name": "AxonAcceptanceDecoy",
-              "bundlePath": "/Users/mitch/.cairn/build-slots/axn/.authority/slot-121/scratch/axon-acceptance-bundles/AxonAcceptanceDecoy.app",
-              "active": true,
-              "terminated": false
-            },
-            "parked": {
-              "requested": {
-                "x": 2554,
-                "y": 1434
-              },
-              "pointer": {
-                "x": 2554,
-                "y": 1434
-              }
-            }
-          }
-        },
-        {
-          "phase": "ownership",
-          "at": 1786921271.785644,
-          "data": {
-            "proved": false,
-            "observed": {
-              "point": {
-                "x": 1093.2578125,
-                "y": 208.5
-              },
-              "stack": [
-                {
-                  "windowId": 8,
-                  "ownerPid": 699,
-                  "ownerName": "Dock",
-                  "name": "Dock",
-                  "layer": 20,
-                  "onScreen": true,
-                  "alpha": 1,
-                  "bounds": {
-                    "x": 0,
-                    "y": 0,
-                    "width": 2560,
-                    "height": 1440
+                    "x": 40,
+                    "y": 111,
+                    "width": 1200,
+                    "height": 854
                   }
                 },
                 {
@@ -792,21 +338,6 @@
                   }
                 },
                 {
-                  "windowId": 1753,
-                  "ownerPid": 24842,
-                  "ownerName": "cairn",
-                  "name": "cairn",
-                  "layer": 0,
-                  "onScreen": true,
-                  "alpha": 1,
-                  "bounds": {
-                    "x": 0,
-                    "y": 30,
-                    "width": 2560,
-                    "height": 1329
-                  }
-                },
-                {
                   "windowId": 177,
                   "ownerPid": 98108,
                   "ownerName": "Firefox",
@@ -887,17 +418,20 @@
         },
         {
           "phase": "dispatch",
-          "at": 1786921272.360118,
+          "at": 1786922071.119036,
           "data": {
             "mechanism": "CGEventPostToPid",
-            "variant": "keyDown+keyUp/source=null",
+            "variant": "leftMouseDown+leftMouseUp/source=null/gapMs=0",
             "targetPid": 94963,
-            "text": "axon",
+            "point": {
+              "x": 1093.2578125,
+              "y": 208.5
+            },
             "eventsCreated": true,
             "accessibilityTrusted": true,
             "before": {
               "frontmost": {
-                "pid": 51864,
+                "pid": 34401,
                 "bundleId": "dev.axon.acceptance.decoy",
                 "name": "AxonAcceptanceDecoy",
                 "bundlePath": "/Users/mitch/.cairn/build-slots/axn/.authority/slot-121/scratch/axon-acceptance-bundles/AxonAcceptanceDecoy.app",
@@ -911,7 +445,7 @@
             },
             "after": {
               "frontmost": {
-                "pid": 51864,
+                "pid": 34401,
                 "bundleId": "dev.axon.acceptance.decoy",
                 "name": "AxonAcceptanceDecoy",
                 "bundlePath": "/Users/mitch/.cairn/build-slots/axn/.authority/slot-121/scratch/axon-acceptance-bundles/AxonAcceptanceDecoy.app",
@@ -927,7 +461,7 @@
         },
         {
           "phase": "observe",
-          "at": 1786921275.445977,
+          "at": 1786922074.197907,
           "data": {
             "before": {
               "clicks": 0,
@@ -940,34 +474,38 @@
               "navigations": 0
             },
             "mutated": false,
-            "mutationEvidence": "the page's input read '' before and '' after",
+            "mutationEvidence": "the page neither navigated nor reported a click",
             "eventReachedTarget": false,
             "arrivalDetail": "the page's event listeners recorded nothing",
             "decoyReceived": [],
             "accessibility": {
               "pid": 94963,
               "accessibilityTrusted": true,
-              "focusedWindowError": -25212,
+              "focusedWindowError": 0,
               "document": null,
-              "title": null
+              "title": "Head of Design Engineering \u2014 Careers at Tasklet"
             }
           }
         },
         {
           "phase": "controlAfter",
-          "at": 1786921279.618112,
+          "at": 1786922078.544128,
           "data": {
             "ran": true,
             "acted": false,
-            "mechanism": "CGEventPost(kCGHIDEventTap) with the target activated",
-            "detail": "the page's input read '' before and '' after",
+            "mechanism": "CGEventPost(kCGHIDEventTap) with the real pointer over the coordinate",
+            "detail": "the page neither navigated nor reported a click",
             "observed": {
               "mechanism": "CGEventPost(kCGHIDEventTap)",
-              "text": "axon",
+              "point": {
+                "x": 1093.2578125,
+                "y": 208.5
+              },
               "activated": true,
+              "restored": false,
               "before": {
                 "frontmost": {
-                  "pid": 51864,
+                  "pid": 34401,
                   "bundleId": "dev.axon.acceptance.decoy",
                   "name": "AxonAcceptanceDecoy",
                   "bundlePath": "/Users/mitch/.cairn/build-slots/axn/.authority/slot-121/scratch/axon-acceptance-bundles/AxonAcceptanceDecoy.app",
@@ -981,7 +519,7 @@
               },
               "after": {
                 "frontmost": {
-                  "pid": 51864,
+                  "pid": 34401,
                   "bundleId": "dev.axon.acceptance.decoy",
                   "name": "AxonAcceptanceDecoy",
                   "bundlePath": "/Users/mitch/.cairn/build-slots/axn/.authority/slot-121/scratch/axon-acceptance-bundles/AxonAcceptanceDecoy.app",
@@ -989,8 +527,22 @@
                   "terminated": false
                 },
                 "pointer": {
-                  "x": 2554,
-                  "y": 1434
+                  "x": 1093.2578125,
+                  "y": 208.5
+                }
+              },
+              "final": {
+                "frontmost": {
+                  "pid": 34401,
+                  "bundleId": "dev.axon.acceptance.decoy",
+                  "name": "AxonAcceptanceDecoy",
+                  "bundlePath": "/Users/mitch/.cairn/build-slots/axn/.authority/slot-121/scratch/axon-acceptance-bundles/AxonAcceptanceDecoy.app",
+                  "active": true,
+                  "terminated": false
+                },
+                "pointer": {
+                  "x": 1093.2578125,
+                  "y": 208.5
                 }
               }
             }
@@ -998,10 +550,10 @@
         },
         {
           "phase": "restore",
-          "at": 1786921280.4078898,
+          "at": 1786922079.405122,
           "data": {
             "frontmost": {
-              "pid": 51864,
+              "pid": 34401,
               "bundleId": "dev.axon.acceptance.decoy",
               "name": "AxonAcceptanceDecoy",
               "bundlePath": "/Users/mitch/.cairn/build-slots/axn/.authority/slot-121/scratch/axon-acceptance-bundles/AxonAcceptanceDecoy.app",
@@ -1009,17 +561,17 @@
               "terminated": false
             },
             "pointer": {
-              "x": 759,
-              "y": 939
+              "x": 1244.1875,
+              "y": 1242.8515625
             }
           }
         }
       ],
       "observations": {
         "dispatchAccepted": true,
-        "variant": "keyDown+keyUp/source=null",
+        "variant": "leftMouseDown+leftMouseUp/source=null/gapMs=0",
         "targetMutated": false,
-        "mutationEvidence": "the page's input read '' before and '' after",
+        "mutationEvidence": "the page neither navigated nor reported a click",
         "eventReachedTarget": false,
         "arrivalDetail": "the page's event listeners recorded nothing",
         "frontmostUnchanged": true,
@@ -1042,7 +594,496 @@
           "x": 1093.2578125,
           "y": 208.5
         },
-        "nonce": "c9ccdb2e22d1"
+        "nonce": "bcfb3a0ca350"
+      },
+      "identity": {
+        "bundleId": "com.apple.Safari",
+        "bundleShortVersion": "26.4",
+        "bundleVersion": "21624.1.16.11.4",
+        "versionSeries": "26.4",
+        "runtimeSignature": null,
+        "readableAtDispatch": true,
+        "source": "NSRunningApplication(processIdentifier:) then the bundle's Info.plist",
+        "processStartTime": "Sun Aug 16 15:18:08 2026"
+      },
+      "controls": {
+        "before": {
+          "ran": true,
+          "acted": false,
+          "mechanism": "CGEventPost(kCGHIDEventTap) with the real pointer over the coordinate",
+          "detail": "the page neither navigated nor reported a click",
+          "observed": {
+            "mechanism": "CGEventPost(kCGHIDEventTap)",
+            "point": {
+              "x": 1093.2578125,
+              "y": 208.5
+            },
+            "activated": true,
+            "restored": false,
+            "before": {
+              "frontmost": {
+                "pid": 34762,
+                "bundleId": "com.apple.Safari",
+                "name": "Safari",
+                "bundlePath": "/System/Volumes/Preboot/Cryptexes/App/System/Applications/Safari.app",
+                "active": true,
+                "terminated": false
+              },
+              "pointer": {
+                "x": 1244.1875,
+                "y": 1242.8515625
+              }
+            },
+            "after": {
+              "frontmost": {
+                "pid": 34762,
+                "bundleId": "com.apple.Safari",
+                "name": "Safari",
+                "bundlePath": "/System/Volumes/Preboot/Cryptexes/App/System/Applications/Safari.app",
+                "active": true,
+                "terminated": false
+              },
+              "pointer": {
+                "x": 1093.2578125,
+                "y": 208.5
+              }
+            },
+            "final": {
+              "frontmost": {
+                "pid": 34762,
+                "bundleId": "com.apple.Safari",
+                "name": "Safari",
+                "bundlePath": "/System/Volumes/Preboot/Cryptexes/App/System/Applications/Safari.app",
+                "active": true,
+                "terminated": false
+              },
+              "pointer": {
+                "x": 1093.2578125,
+                "y": 208.5
+              }
+            }
+          }
+        },
+        "after": {
+          "ran": true,
+          "acted": false,
+          "mechanism": "CGEventPost(kCGHIDEventTap) with the real pointer over the coordinate",
+          "detail": "the page neither navigated nor reported a click",
+          "observed": {
+            "mechanism": "CGEventPost(kCGHIDEventTap)",
+            "point": {
+              "x": 1093.2578125,
+              "y": 208.5
+            },
+            "activated": true,
+            "restored": false,
+            "before": {
+              "frontmost": {
+                "pid": 34401,
+                "bundleId": "dev.axon.acceptance.decoy",
+                "name": "AxonAcceptanceDecoy",
+                "bundlePath": "/Users/mitch/.cairn/build-slots/axn/.authority/slot-121/scratch/axon-acceptance-bundles/AxonAcceptanceDecoy.app",
+                "active": true,
+                "terminated": false
+              },
+              "pointer": {
+                "x": 2554,
+                "y": 1434
+              }
+            },
+            "after": {
+              "frontmost": {
+                "pid": 34401,
+                "bundleId": "dev.axon.acceptance.decoy",
+                "name": "AxonAcceptanceDecoy",
+                "bundlePath": "/Users/mitch/.cairn/build-slots/axn/.authority/slot-121/scratch/axon-acceptance-bundles/AxonAcceptanceDecoy.app",
+                "active": true,
+                "terminated": false
+              },
+              "pointer": {
+                "x": 1093.2578125,
+                "y": 208.5
+              }
+            },
+            "final": {
+              "frontmost": {
+                "pid": 34401,
+                "bundleId": "dev.axon.acceptance.decoy",
+                "name": "AxonAcceptanceDecoy",
+                "bundlePath": "/Users/mitch/.cairn/build-slots/axn/.authority/slot-121/scratch/axon-acceptance-bundles/AxonAcceptanceDecoy.app",
+                "active": true,
+                "terminated": false
+              },
+              "pointer": {
+                "x": 1093.2578125,
+                "y": 208.5
+              }
+            }
+          }
+        }
+      },
+      "verdict": [
+        "blocked",
+        "the foreground control before the dispatch did not act, so this trial is measuring the campaign rather than the target"
+      ]
+    },
+    {
+      "target": "safari",
+      "action": "keyboard",
+      "campaign": "bbl-2026-08-16",
+      "phases": [
+        {
+          "phase": "identity",
+          "at": 1786922082.345665,
+          "data": {
+            "pid": 94963,
+            "identity": {
+              "bundleId": "com.apple.Safari",
+              "bundleShortVersion": "26.4",
+              "bundleVersion": "21624.1.16.11.4",
+              "versionSeries": "26.4",
+              "runtimeSignature": null,
+              "readableAtDispatch": true,
+              "source": "NSRunningApplication(processIdentifier:) then the bundle's Info.plist",
+              "processStartTime": "Sun Aug 16 15:18:08 2026"
+            },
+            "nonce": "aa5d997ccd1b",
+            "point": {
+              "x": 1093.2578125,
+              "y": 208.5
+            },
+            "windows": {
+              "windows": [
+                {
+                  "windowId": 348,
+                  "ownerPid": 94963,
+                  "ownerName": "Safari",
+                  "name": "Head of Design Engineering \u2014 Careers at Tasklet",
+                  "layer": 0,
+                  "onScreen": true,
+                  "alpha": 1,
+                  "bounds": {
+                    "x": 785,
+                    "y": 159,
+                    "width": 989,
+                    "height": 1012
+                  }
+                }
+              ]
+            },
+            "detail": {
+              "geometry": {
+                "nonce": "aa5d997ccd1b",
+                "marker": "page",
+                "role": "page",
+                "kind": "geometry",
+                "href": "http://127.0.0.1:54477/page?nonce=aa5d997ccd1b",
+                "devicePixelRatio": 2,
+                "widgets": {
+                  "link": {
+                    "x": 1021,
+                    "y": 180,
+                    "width": 144.515625,
+                    "height": 57,
+                    "center": {
+                      "x": 1093.2578125,
+                      "y": 208.5
+                    }
+                  },
+                  "entry": {
+                    "x": 1021,
+                    "y": 90,
+                    "width": 340,
+                    "height": 44,
+                    "center": {
+                      "x": 1191,
+                      "y": 112
+                    }
+                  }
+                },
+                "receivedAt": 1786922081.160564
+              }
+            }
+          }
+        },
+        {
+          "phase": "controlBefore",
+          "at": 1786922086.5240471,
+          "data": {
+            "ran": true,
+            "acted": false,
+            "mechanism": "CGEventPost(kCGHIDEventTap) with the target activated",
+            "detail": "the page's input read '' before and '' after",
+            "observed": {
+              "mechanism": "CGEventPost(kCGHIDEventTap)",
+              "text": "axon",
+              "activated": true,
+              "before": {
+                "frontmost": {
+                  "pid": 36513,
+                  "bundleId": "com.apple.Safari",
+                  "name": "Safari",
+                  "bundlePath": "/System/Volumes/Preboot/Cryptexes/App/System/Applications/Safari.app",
+                  "active": true,
+                  "terminated": false
+                },
+                "pointer": {
+                  "x": 1244,
+                  "y": 1242
+                }
+              },
+              "after": {
+                "frontmost": {
+                  "pid": 36513,
+                  "bundleId": "com.apple.Safari",
+                  "name": "Safari",
+                  "bundlePath": "/System/Volumes/Preboot/Cryptexes/App/System/Applications/Safari.app",
+                  "active": true,
+                  "terminated": false
+                },
+                "pointer": {
+                  "x": 1244,
+                  "y": 1242
+                }
+              }
+            }
+          }
+        },
+        {
+          "phase": "background",
+          "at": 1786922087.7147388,
+          "data": {
+            "raised": {
+              "pid": 94963,
+              "raised": true,
+              "status": 0,
+              "before": {
+                "pid": 94963,
+                "bundleId": "com.apple.Safari",
+                "name": "Safari",
+                "bundlePath": "/System/Volumes/Preboot/Cryptexes/App/System/Applications/Safari.app",
+                "active": true,
+                "terminated": false
+              },
+              "after": {
+                "pid": 94963,
+                "bundleId": "com.apple.Safari",
+                "name": "Safari",
+                "bundlePath": "/System/Volumes/Preboot/Cryptexes/App/System/Applications/Safari.app",
+                "active": true,
+                "terminated": false
+              }
+            },
+            "decoy": {
+              "pid": 34401,
+              "bundleId": "dev.axon.acceptance.decoy",
+              "name": "AxonAcceptanceDecoy",
+              "bundlePath": "/Users/mitch/.cairn/build-slots/axn/.authority/slot-121/scratch/axon-acceptance-bundles/AxonAcceptanceDecoy.app",
+              "active": true,
+              "terminated": false
+            },
+            "frontmost": {
+              "pid": 34401,
+              "bundleId": "dev.axon.acceptance.decoy",
+              "name": "AxonAcceptanceDecoy",
+              "bundlePath": "/Users/mitch/.cairn/build-slots/axn/.authority/slot-121/scratch/axon-acceptance-bundles/AxonAcceptanceDecoy.app",
+              "active": true,
+              "terminated": false
+            },
+            "parked": {
+              "requested": {
+                "x": 2554,
+                "y": 1434
+              },
+              "pointer": {
+                "x": 2554,
+                "y": 1434
+              }
+            }
+          }
+        },
+        {
+          "phase": "ownership",
+          "at": 1786922087.7798998,
+          "data": {
+            "proved": true,
+            "point": null,
+            "observed": {
+              "windows": [
+                {
+                  "windowId": 348,
+                  "ownerPid": 94963,
+                  "ownerName": "Safari",
+                  "name": "Head of Design Engineering \u2014 Careers at Tasklet",
+                  "layer": 0,
+                  "onScreen": true,
+                  "alpha": 1,
+                  "bounds": {
+                    "x": 785,
+                    "y": 159,
+                    "width": 989,
+                    "height": 1012
+                  }
+                }
+              ]
+            }
+          }
+        },
+        {
+          "phase": "dispatch",
+          "at": 1786922088.3759308,
+          "data": {
+            "mechanism": "CGEventPostToPid",
+            "variant": "keyDown+keyUp/source=null",
+            "targetPid": 94963,
+            "text": "axon",
+            "eventsCreated": true,
+            "accessibilityTrusted": true,
+            "before": {
+              "frontmost": {
+                "pid": 34401,
+                "bundleId": "dev.axon.acceptance.decoy",
+                "name": "AxonAcceptanceDecoy",
+                "bundlePath": "/Users/mitch/.cairn/build-slots/axn/.authority/slot-121/scratch/axon-acceptance-bundles/AxonAcceptanceDecoy.app",
+                "active": true,
+                "terminated": false
+              },
+              "pointer": {
+                "x": 2554,
+                "y": 1434
+              }
+            },
+            "after": {
+              "frontmost": {
+                "pid": 34401,
+                "bundleId": "dev.axon.acceptance.decoy",
+                "name": "AxonAcceptanceDecoy",
+                "bundlePath": "/Users/mitch/.cairn/build-slots/axn/.authority/slot-121/scratch/axon-acceptance-bundles/AxonAcceptanceDecoy.app",
+                "active": true,
+                "terminated": false
+              },
+              "pointer": {
+                "x": 2554,
+                "y": 1434
+              }
+            }
+          }
+        },
+        {
+          "phase": "observe",
+          "at": 1786922091.440118,
+          "data": {
+            "before": {
+              "clicks": 0,
+              "text": "",
+              "navigations": 0
+            },
+            "after": {
+              "clicks": 0,
+              "text": "",
+              "navigations": 0
+            },
+            "mutated": false,
+            "mutationEvidence": "the page's input read '' before and '' after",
+            "eventReachedTarget": false,
+            "arrivalDetail": "the page's event listeners recorded nothing",
+            "decoyReceived": [],
+            "accessibility": {
+              "pid": 94963,
+              "accessibilityTrusted": true,
+              "focusedWindowError": 0,
+              "document": null,
+              "title": "Head of Design Engineering \u2014 Careers at Tasklet"
+            }
+          }
+        },
+        {
+          "phase": "controlAfter",
+          "at": 1786922095.6215942,
+          "data": {
+            "ran": true,
+            "acted": false,
+            "mechanism": "CGEventPost(kCGHIDEventTap) with the target activated",
+            "detail": "the page's input read '' before and '' after",
+            "observed": {
+              "mechanism": "CGEventPost(kCGHIDEventTap)",
+              "text": "axon",
+              "activated": true,
+              "before": {
+                "frontmost": {
+                  "pid": 34401,
+                  "bundleId": "dev.axon.acceptance.decoy",
+                  "name": "AxonAcceptanceDecoy",
+                  "bundlePath": "/Users/mitch/.cairn/build-slots/axn/.authority/slot-121/scratch/axon-acceptance-bundles/AxonAcceptanceDecoy.app",
+                  "active": true,
+                  "terminated": false
+                },
+                "pointer": {
+                  "x": 2554,
+                  "y": 1434
+                }
+              },
+              "after": {
+                "frontmost": {
+                  "pid": 34401,
+                  "bundleId": "dev.axon.acceptance.decoy",
+                  "name": "AxonAcceptanceDecoy",
+                  "bundlePath": "/Users/mitch/.cairn/build-slots/axn/.authority/slot-121/scratch/axon-acceptance-bundles/AxonAcceptanceDecoy.app",
+                  "active": true,
+                  "terminated": false
+                },
+                "pointer": {
+                  "x": 2554,
+                  "y": 1434
+                }
+              }
+            }
+          }
+        },
+        {
+          "phase": "restore",
+          "at": 1786922096.4030468,
+          "data": {
+            "frontmost": {
+              "pid": 34401,
+              "bundleId": "dev.axon.acceptance.decoy",
+              "name": "AxonAcceptanceDecoy",
+              "bundlePath": "/Users/mitch/.cairn/build-slots/axn/.authority/slot-121/scratch/axon-acceptance-bundles/AxonAcceptanceDecoy.app",
+              "active": true,
+              "terminated": false
+            },
+            "pointer": {
+              "x": 1244,
+              "y": 1242
+            }
+          }
+        }
+      ],
+      "observations": {
+        "dispatchAccepted": true,
+        "variant": "keyDown+keyUp/source=null",
+        "targetMutated": false,
+        "mutationEvidence": "the page's input read '' before and '' after",
+        "eventReachedTarget": false,
+        "arrivalDetail": "the page's event listeners recorded nothing",
+        "frontmostUnchanged": true,
+        "decoyFrontmost": true,
+        "pointerUnchanged": true,
+        "ownershipProved": true,
+        "pointerBefore": {
+          "x": 2554,
+          "y": 1434
+        },
+        "pointerAfter": {
+          "x": 2554,
+          "y": 1434
+        },
+        "frontmostBefore": "dev.axon.acceptance.decoy",
+        "frontmostAfter": "dev.axon.acceptance.decoy",
+        "targetPid": 94963,
+        "windowId": null,
+        "point": null,
+        "nonce": "aa5d997ccd1b"
       },
       "identity": {
         "bundleId": "com.apple.Safari",
@@ -1066,7 +1107,7 @@
             "activated": true,
             "before": {
               "frontmost": {
-                "pid": 57852,
+                "pid": 36513,
                 "bundleId": "com.apple.Safari",
                 "name": "Safari",
                 "bundlePath": "/System/Volumes/Preboot/Cryptexes/App/System/Applications/Safari.app",
@@ -1074,13 +1115,13 @@
                 "terminated": false
               },
               "pointer": {
-                "x": 759,
-                "y": 939
+                "x": 1244,
+                "y": 1242
               }
             },
             "after": {
               "frontmost": {
-                "pid": 57852,
+                "pid": 36513,
                 "bundleId": "com.apple.Safari",
                 "name": "Safari",
                 "bundlePath": "/System/Volumes/Preboot/Cryptexes/App/System/Applications/Safari.app",
@@ -1088,8 +1129,8 @@
                 "terminated": false
               },
               "pointer": {
-                "x": 759,
-                "y": 939
+                "x": 1244,
+                "y": 1242
               }
             }
           }
@@ -1105,7 +1146,7 @@
             "activated": true,
             "before": {
               "frontmost": {
-                "pid": 51864,
+                "pid": 34401,
                 "bundleId": "dev.axon.acceptance.decoy",
                 "name": "AxonAcceptanceDecoy",
                 "bundlePath": "/Users/mitch/.cairn/build-slots/axn/.authority/slot-121/scratch/axon-acceptance-bundles/AxonAcceptanceDecoy.app",
@@ -1119,3729 +1160,7 @@
             },
             "after": {
               "frontmost": {
-                "pid": 51864,
-                "bundleId": "dev.axon.acceptance.decoy",
-                "name": "AxonAcceptanceDecoy",
-                "bundlePath": "/Users/mitch/.cairn/build-slots/axn/.authority/slot-121/scratch/axon-acceptance-bundles/AxonAcceptanceDecoy.app",
-                "active": true,
-                "terminated": false
-              },
-              "pointer": {
-                "x": 2554,
-                "y": 1434
-              }
-            }
-          }
-        }
-      },
-      "verdict": [
-        "blocked",
-        "the foreground control before the dispatch did not act, so this trial is measuring the campaign rather than the target"
-      ]
-    },
-    {
-      "target": "chrome",
-      "action": "click",
-      "campaign": "bbl-2026-08-16",
-      "phases": [
-        {
-          "phase": "identity",
-          "at": 1786921286.461783,
-          "data": {
-            "pid": 61675,
-            "identity": {
-              "bundleId": "com.google.Chrome",
-              "bundleShortVersion": "150.0.7871.186",
-              "bundleVersion": "7871.186",
-              "versionSeries": "150.0",
-              "runtimeSignature": null,
-              "readableAtDispatch": true,
-              "source": "NSRunningApplication(processIdentifier:) then the bundle's Info.plist",
-              "processStartTime": "Sun Aug 16 19:01:20 2026"
-            },
-            "nonce": "bb55f841c69f",
-            "point": {
-              "x": 152.02734375,
-              "y": 289.25
-            },
-            "windows": {
-              "windows": [
-                {
-                  "windowId": 2696,
-                  "ownerPid": 61675,
-                  "ownerName": "Google Chrome",
-                  "name": "Restore pages?",
-                  "layer": 0,
-                  "onScreen": true,
-                  "alpha": 1,
-                  "bounds": {
-                    "x": 914,
-                    "y": 191,
-                    "width": 320,
-                    "height": 238
-                  }
-                },
-                {
-                  "windowId": 2687,
-                  "ownerPid": 61675,
-                  "ownerName": "Google Chrome",
-                  "name": "Axon macOS acceptance",
-                  "layer": 0,
-                  "onScreen": true,
-                  "alpha": 1,
-                  "bounds": {
-                    "x": 40,
-                    "y": 111,
-                    "width": 1200,
-                    "height": 854
-                  }
-                }
-              ]
-            },
-            "detail": {
-              "geometry": {
-                "nonce": "bb55f841c69f",
-                "marker": "page",
-                "role": "page",
-                "kind": "geometry",
-                "href": "http://127.0.0.1:52393/page?nonce=bb55f841c69f",
-                "devicePixelRatio": 2,
-                "widgets": {
-                  "link": {
-                    "x": 80,
-                    "y": 261,
-                    "width": 144.0546875,
-                    "height": 56.5,
-                    "center": {
-                      "x": 152.02734375,
-                      "y": 289.25
-                    }
-                  },
-                  "entry": {
-                    "x": 80,
-                    "y": 171,
-                    "width": 328,
-                    "height": 38,
-                    "center": {
-                      "x": 244,
-                      "y": 190
-                    }
-                  }
-                },
-                "receivedAt": 1786921285.290883
-              }
-            }
-          }
-        },
-        {
-          "phase": "controlBefore",
-          "at": 1786921290.7590652,
-          "data": {
-            "ran": true,
-            "acted": false,
-            "mechanism": "CGEventPost(kCGHIDEventTap) with the real pointer over the coordinate",
-            "detail": "the page neither navigated nor reported a click",
-            "observed": {
-              "mechanism": "CGEventPost(kCGHIDEventTap)",
-              "point": {
-                "x": 152.02734375,
-                "y": 289.25
-              },
-              "activated": true,
-              "restored": false,
-              "before": {
-                "frontmost": {
-                  "pid": 61675,
-                  "bundleId": "com.google.Chrome",
-                  "name": "Google Chrome",
-                  "bundlePath": "/Applications/Google Chrome.app",
-                  "active": true,
-                  "terminated": false
-                },
-                "pointer": {
-                  "x": 759,
-                  "y": 939
-                }
-              },
-              "after": {
-                "frontmost": {
-                  "pid": 61675,
-                  "bundleId": "com.google.Chrome",
-                  "name": "Google Chrome",
-                  "bundlePath": "/Applications/Google Chrome.app",
-                  "active": true,
-                  "terminated": false
-                },
-                "pointer": {
-                  "x": 152.02734375,
-                  "y": 289.25
-                }
-              },
-              "final": {
-                "frontmost": {
-                  "pid": 61675,
-                  "bundleId": "com.google.Chrome",
-                  "name": "Google Chrome",
-                  "bundlePath": "/Applications/Google Chrome.app",
-                  "active": true,
-                  "terminated": false
-                },
-                "pointer": {
-                  "x": 152.02734375,
-                  "y": 289.25
-                }
-              }
-            }
-          }
-        },
-        {
-          "phase": "background",
-          "at": 1786921291.5792892,
-          "data": {
-            "decoy": {
-              "pid": 51864,
-              "bundleId": "dev.axon.acceptance.decoy",
-              "name": "AxonAcceptanceDecoy",
-              "bundlePath": "/Users/mitch/.cairn/build-slots/axn/.authority/slot-121/scratch/axon-acceptance-bundles/AxonAcceptanceDecoy.app",
-              "active": true,
-              "terminated": false
-            },
-            "frontmost": {
-              "pid": 51864,
-              "bundleId": "dev.axon.acceptance.decoy",
-              "name": "AxonAcceptanceDecoy",
-              "bundlePath": "/Users/mitch/.cairn/build-slots/axn/.authority/slot-121/scratch/axon-acceptance-bundles/AxonAcceptanceDecoy.app",
-              "active": true,
-              "terminated": false
-            },
-            "parked": {
-              "requested": {
-                "x": 2554,
-                "y": 1434
-              },
-              "pointer": {
-                "x": 2554,
-                "y": 1434
-              }
-            }
-          }
-        },
-        {
-          "phase": "ownership",
-          "at": 1786921291.644846,
-          "data": {
-            "proved": true,
-            "observed": {
-              "point": {
-                "x": 152.02734375,
-                "y": 289.25
-              },
-              "stack": [
-                {
-                  "windowId": 8,
-                  "ownerPid": 699,
-                  "ownerName": "Dock",
-                  "name": "Dock",
-                  "layer": 20,
-                  "onScreen": true,
-                  "alpha": 1,
-                  "bounds": {
-                    "x": 0,
-                    "y": 0,
-                    "width": 2560,
-                    "height": 1440
-                  }
-                },
-                {
-                  "windowId": 2687,
-                  "ownerPid": 61675,
-                  "ownerName": "Google Chrome",
-                  "name": "Axon macOS acceptance",
-                  "layer": 0,
-                  "onScreen": true,
-                  "alpha": 1,
-                  "bounds": {
-                    "x": 40,
-                    "y": 111,
-                    "width": 1200,
-                    "height": 854
-                  }
-                },
-                {
-                  "windowId": 1753,
-                  "ownerPid": 24842,
-                  "ownerName": "cairn",
-                  "name": "cairn",
-                  "layer": 0,
-                  "onScreen": true,
-                  "alpha": 1,
-                  "bounds": {
-                    "x": 0,
-                    "y": 30,
-                    "width": 2560,
-                    "height": 1329
-                  }
-                }
-              ]
-            }
-          }
-        },
-        {
-          "phase": "dispatch",
-          "at": 1786921292.133067,
-          "data": {
-            "mechanism": "CGEventPostToPid",
-            "variant": "leftMouseDown+leftMouseUp/source=null/gapMs=0",
-            "targetPid": 61675,
-            "point": {
-              "x": 152.02734375,
-              "y": 289.25
-            },
-            "eventsCreated": true,
-            "accessibilityTrusted": true,
-            "before": {
-              "frontmost": {
-                "pid": 51864,
-                "bundleId": "dev.axon.acceptance.decoy",
-                "name": "AxonAcceptanceDecoy",
-                "bundlePath": "/Users/mitch/.cairn/build-slots/axn/.authority/slot-121/scratch/axon-acceptance-bundles/AxonAcceptanceDecoy.app",
-                "active": true,
-                "terminated": false
-              },
-              "pointer": {
-                "x": 2554,
-                "y": 1434
-              }
-            },
-            "after": {
-              "frontmost": {
-                "pid": 51864,
-                "bundleId": "dev.axon.acceptance.decoy",
-                "name": "AxonAcceptanceDecoy",
-                "bundlePath": "/Users/mitch/.cairn/build-slots/axn/.authority/slot-121/scratch/axon-acceptance-bundles/AxonAcceptanceDecoy.app",
-                "active": true,
-                "terminated": false
-              },
-              "pointer": {
-                "x": 2554,
-                "y": 1434
-              }
-            }
-          }
-        },
-        {
-          "phase": "observe",
-          "at": 1786921295.199998,
-          "data": {
-            "before": {
-              "clicks": 0,
-              "text": "",
-              "navigations": 0
-            },
-            "after": {
-              "clicks": 0,
-              "text": "",
-              "navigations": 0
-            },
-            "mutated": false,
-            "mutationEvidence": "the page neither navigated nor reported a click",
-            "eventReachedTarget": false,
-            "arrivalDetail": "the page's event listeners recorded nothing",
-            "decoyReceived": [],
-            "accessibility": {
-              "pid": 61675,
-              "accessibilityTrusted": true,
-              "focusedWindowError": 0,
-              "document": "http://127.0.0.1:52393/page?nonce=bb55f841c69f",
-              "title": "Axon macOS acceptance - Google Chrome"
-            }
-          }
-        },
-        {
-          "phase": "controlAfter",
-          "at": 1786921299.487592,
-          "data": {
-            "ran": true,
-            "acted": false,
-            "mechanism": "CGEventPost(kCGHIDEventTap) with the real pointer over the coordinate",
-            "detail": "the page neither navigated nor reported a click",
-            "observed": {
-              "mechanism": "CGEventPost(kCGHIDEventTap)",
-              "point": {
-                "x": 152.02734375,
-                "y": 289.25
-              },
-              "activated": true,
-              "restored": false,
-              "before": {
-                "frontmost": {
-                  "pid": 51864,
-                  "bundleId": "dev.axon.acceptance.decoy",
-                  "name": "AxonAcceptanceDecoy",
-                  "bundlePath": "/Users/mitch/.cairn/build-slots/axn/.authority/slot-121/scratch/axon-acceptance-bundles/AxonAcceptanceDecoy.app",
-                  "active": true,
-                  "terminated": false
-                },
-                "pointer": {
-                  "x": 2554,
-                  "y": 1434
-                }
-              },
-              "after": {
-                "frontmost": {
-                  "pid": 51864,
-                  "bundleId": "dev.axon.acceptance.decoy",
-                  "name": "AxonAcceptanceDecoy",
-                  "bundlePath": "/Users/mitch/.cairn/build-slots/axn/.authority/slot-121/scratch/axon-acceptance-bundles/AxonAcceptanceDecoy.app",
-                  "active": true,
-                  "terminated": false
-                },
-                "pointer": {
-                  "x": 152.02734375,
-                  "y": 289.25
-                }
-              },
-              "final": {
-                "frontmost": {
-                  "pid": 51864,
-                  "bundleId": "dev.axon.acceptance.decoy",
-                  "name": "AxonAcceptanceDecoy",
-                  "bundlePath": "/Users/mitch/.cairn/build-slots/axn/.authority/slot-121/scratch/axon-acceptance-bundles/AxonAcceptanceDecoy.app",
-                  "active": true,
-                  "terminated": false
-                },
-                "pointer": {
-                  "x": 152.02734375,
-                  "y": 289.25
-                }
-              }
-            }
-          }
-        },
-        {
-          "phase": "restore",
-          "at": 1786921300.26745,
-          "data": {
-            "frontmost": {
-              "pid": 51864,
-              "bundleId": "dev.axon.acceptance.decoy",
-              "name": "AxonAcceptanceDecoy",
-              "bundlePath": "/Users/mitch/.cairn/build-slots/axn/.authority/slot-121/scratch/axon-acceptance-bundles/AxonAcceptanceDecoy.app",
-              "active": true,
-              "terminated": false
-            },
-            "pointer": {
-              "x": 759,
-              "y": 939
-            }
-          }
-        }
-      ],
-      "observations": {
-        "dispatchAccepted": true,
-        "variant": "leftMouseDown+leftMouseUp/source=null/gapMs=0",
-        "targetMutated": false,
-        "mutationEvidence": "the page neither navigated nor reported a click",
-        "eventReachedTarget": false,
-        "arrivalDetail": "the page's event listeners recorded nothing",
-        "frontmostUnchanged": true,
-        "decoyFrontmost": true,
-        "pointerUnchanged": true,
-        "ownershipProved": true,
-        "pointerBefore": {
-          "x": 2554,
-          "y": 1434
-        },
-        "pointerAfter": {
-          "x": 2554,
-          "y": 1434
-        },
-        "frontmostBefore": "dev.axon.acceptance.decoy",
-        "frontmostAfter": "dev.axon.acceptance.decoy",
-        "targetPid": 61675,
-        "windowId": null,
-        "point": {
-          "x": 152.02734375,
-          "y": 289.25
-        },
-        "nonce": "bb55f841c69f"
-      },
-      "identity": {
-        "bundleId": "com.google.Chrome",
-        "bundleShortVersion": "150.0.7871.186",
-        "bundleVersion": "7871.186",
-        "versionSeries": "150.0",
-        "runtimeSignature": null,
-        "readableAtDispatch": true,
-        "source": "NSRunningApplication(processIdentifier:) then the bundle's Info.plist",
-        "processStartTime": "Sun Aug 16 19:01:20 2026"
-      },
-      "controls": {
-        "before": {
-          "ran": true,
-          "acted": false,
-          "mechanism": "CGEventPost(kCGHIDEventTap) with the real pointer over the coordinate",
-          "detail": "the page neither navigated nor reported a click",
-          "observed": {
-            "mechanism": "CGEventPost(kCGHIDEventTap)",
-            "point": {
-              "x": 152.02734375,
-              "y": 289.25
-            },
-            "activated": true,
-            "restored": false,
-            "before": {
-              "frontmost": {
-                "pid": 61675,
-                "bundleId": "com.google.Chrome",
-                "name": "Google Chrome",
-                "bundlePath": "/Applications/Google Chrome.app",
-                "active": true,
-                "terminated": false
-              },
-              "pointer": {
-                "x": 759,
-                "y": 939
-              }
-            },
-            "after": {
-              "frontmost": {
-                "pid": 61675,
-                "bundleId": "com.google.Chrome",
-                "name": "Google Chrome",
-                "bundlePath": "/Applications/Google Chrome.app",
-                "active": true,
-                "terminated": false
-              },
-              "pointer": {
-                "x": 152.02734375,
-                "y": 289.25
-              }
-            },
-            "final": {
-              "frontmost": {
-                "pid": 61675,
-                "bundleId": "com.google.Chrome",
-                "name": "Google Chrome",
-                "bundlePath": "/Applications/Google Chrome.app",
-                "active": true,
-                "terminated": false
-              },
-              "pointer": {
-                "x": 152.02734375,
-                "y": 289.25
-              }
-            }
-          }
-        },
-        "after": {
-          "ran": true,
-          "acted": false,
-          "mechanism": "CGEventPost(kCGHIDEventTap) with the real pointer over the coordinate",
-          "detail": "the page neither navigated nor reported a click",
-          "observed": {
-            "mechanism": "CGEventPost(kCGHIDEventTap)",
-            "point": {
-              "x": 152.02734375,
-              "y": 289.25
-            },
-            "activated": true,
-            "restored": false,
-            "before": {
-              "frontmost": {
-                "pid": 51864,
-                "bundleId": "dev.axon.acceptance.decoy",
-                "name": "AxonAcceptanceDecoy",
-                "bundlePath": "/Users/mitch/.cairn/build-slots/axn/.authority/slot-121/scratch/axon-acceptance-bundles/AxonAcceptanceDecoy.app",
-                "active": true,
-                "terminated": false
-              },
-              "pointer": {
-                "x": 2554,
-                "y": 1434
-              }
-            },
-            "after": {
-              "frontmost": {
-                "pid": 51864,
-                "bundleId": "dev.axon.acceptance.decoy",
-                "name": "AxonAcceptanceDecoy",
-                "bundlePath": "/Users/mitch/.cairn/build-slots/axn/.authority/slot-121/scratch/axon-acceptance-bundles/AxonAcceptanceDecoy.app",
-                "active": true,
-                "terminated": false
-              },
-              "pointer": {
-                "x": 152.02734375,
-                "y": 289.25
-              }
-            },
-            "final": {
-              "frontmost": {
-                "pid": 51864,
-                "bundleId": "dev.axon.acceptance.decoy",
-                "name": "AxonAcceptanceDecoy",
-                "bundlePath": "/Users/mitch/.cairn/build-slots/axn/.authority/slot-121/scratch/axon-acceptance-bundles/AxonAcceptanceDecoy.app",
-                "active": true,
-                "terminated": false
-              },
-              "pointer": {
-                "x": 152.02734375,
-                "y": 289.25
-              }
-            }
-          }
-        }
-      },
-      "verdict": [
-        "blocked",
-        "the foreground control before the dispatch did not act, so this trial is measuring the campaign rather than the target"
-      ]
-    },
-    {
-      "target": "chrome",
-      "action": "keyboard",
-      "campaign": "bbl-2026-08-16",
-      "phases": [
-        {
-          "phase": "identity",
-          "at": 1786921301.740986,
-          "data": {
-            "pid": 61675,
-            "identity": {
-              "bundleId": "com.google.Chrome",
-              "bundleShortVersion": "150.0.7871.186",
-              "bundleVersion": "7871.186",
-              "versionSeries": "150.0",
-              "runtimeSignature": null,
-              "readableAtDispatch": true,
-              "source": "NSRunningApplication(processIdentifier:) then the bundle's Info.plist",
-              "processStartTime": "Sun Aug 16 19:01:20 2026"
-            },
-            "nonce": "39e394087328",
-            "point": {
-              "x": 174.02734375,
-              "y": 311.25
-            },
-            "windows": {
-              "windows": [
-                {
-                  "windowId": 2708,
-                  "ownerPid": 61675,
-                  "ownerName": "Google Chrome",
-                  "name": "Restore pages?",
-                  "layer": 0,
-                  "onScreen": true,
-                  "alpha": 1,
-                  "bounds": {
-                    "x": 936,
-                    "y": 213,
-                    "width": 320,
-                    "height": 238
-                  }
-                },
-                {
-                  "windowId": 2702,
-                  "ownerPid": 61675,
-                  "ownerName": "Google Chrome",
-                  "name": "Axon macOS acceptance",
-                  "layer": 0,
-                  "onScreen": true,
-                  "alpha": 1,
-                  "bounds": {
-                    "x": 62,
-                    "y": 133,
-                    "width": 1200,
-                    "height": 854
-                  }
-                },
-                {
-                  "windowId": 2696,
-                  "ownerPid": 61675,
-                  "ownerName": "Google Chrome",
-                  "name": "Restore pages?",
-                  "layer": 0,
-                  "onScreen": true,
-                  "alpha": 1,
-                  "bounds": {
-                    "x": 914,
-                    "y": 191,
-                    "width": 320,
-                    "height": 238
-                  }
-                },
-                {
-                  "windowId": 2687,
-                  "ownerPid": 61675,
-                  "ownerName": "Google Chrome",
-                  "name": "Axon macOS acceptance",
-                  "layer": 0,
-                  "onScreen": true,
-                  "alpha": 1,
-                  "bounds": {
-                    "x": 40,
-                    "y": 111,
-                    "width": 1200,
-                    "height": 854
-                  }
-                }
-              ]
-            },
-            "detail": {
-              "geometry": {
-                "nonce": "39e394087328",
-                "marker": "page",
-                "role": "page",
-                "kind": "geometry",
-                "href": "http://127.0.0.1:52393/page?nonce=39e394087328",
-                "devicePixelRatio": 2,
-                "widgets": {
-                  "link": {
-                    "x": 102,
-                    "y": 283,
-                    "width": 144.0546875,
-                    "height": 56.5,
-                    "center": {
-                      "x": 174.02734375,
-                      "y": 311.25
-                    }
-                  },
-                  "entry": {
-                    "x": 102,
-                    "y": 193,
-                    "width": 328,
-                    "height": 38,
-                    "center": {
-                      "x": 266,
-                      "y": 212
-                    }
-                  }
-                },
-                "receivedAt": 1786921300.601347
-              }
-            }
-          }
-        },
-        {
-          "phase": "controlBefore",
-          "at": 1786921305.904052,
-          "data": {
-            "ran": true,
-            "acted": false,
-            "mechanism": "CGEventPost(kCGHIDEventTap) with the target activated",
-            "detail": "the page's input read '' before and '' after",
-            "observed": {
-              "mechanism": "CGEventPost(kCGHIDEventTap)",
-              "text": "axon",
-              "activated": true,
-              "before": {
-                "frontmost": {
-                  "pid": 61675,
-                  "bundleId": "com.google.Chrome",
-                  "name": "Google Chrome",
-                  "bundlePath": "/Applications/Google Chrome.app",
-                  "active": true,
-                  "terminated": false
-                },
-                "pointer": {
-                  "x": 759,
-                  "y": 939
-                }
-              },
-              "after": {
-                "frontmost": {
-                  "pid": 61675,
-                  "bundleId": "com.google.Chrome",
-                  "name": "Google Chrome",
-                  "bundlePath": "/Applications/Google Chrome.app",
-                  "active": true,
-                  "terminated": false
-                },
-                "pointer": {
-                  "x": 759,
-                  "y": 939
-                }
-              }
-            }
-          }
-        },
-        {
-          "phase": "background",
-          "at": 1786921306.709146,
-          "data": {
-            "decoy": {
-              "pid": 51864,
-              "bundleId": "dev.axon.acceptance.decoy",
-              "name": "AxonAcceptanceDecoy",
-              "bundlePath": "/Users/mitch/.cairn/build-slots/axn/.authority/slot-121/scratch/axon-acceptance-bundles/AxonAcceptanceDecoy.app",
-              "active": true,
-              "terminated": false
-            },
-            "frontmost": {
-              "pid": 51864,
-              "bundleId": "dev.axon.acceptance.decoy",
-              "name": "AxonAcceptanceDecoy",
-              "bundlePath": "/Users/mitch/.cairn/build-slots/axn/.authority/slot-121/scratch/axon-acceptance-bundles/AxonAcceptanceDecoy.app",
-              "active": true,
-              "terminated": false
-            },
-            "parked": {
-              "requested": {
-                "x": 2554,
-                "y": 1434
-              },
-              "pointer": {
-                "x": 2554,
-                "y": 1434
-              }
-            }
-          }
-        },
-        {
-          "phase": "ownership",
-          "at": 1786921306.770813,
-          "data": {
-            "proved": true,
-            "observed": {
-              "point": {
-                "x": 174.02734375,
-                "y": 311.25
-              },
-              "stack": [
-                {
-                  "windowId": 8,
-                  "ownerPid": 699,
-                  "ownerName": "Dock",
-                  "name": "Dock",
-                  "layer": 20,
-                  "onScreen": true,
-                  "alpha": 1,
-                  "bounds": {
-                    "x": 0,
-                    "y": 0,
-                    "width": 2560,
-                    "height": 1440
-                  }
-                },
-                {
-                  "windowId": 2702,
-                  "ownerPid": 61675,
-                  "ownerName": "Google Chrome",
-                  "name": "Axon macOS acceptance",
-                  "layer": 0,
-                  "onScreen": true,
-                  "alpha": 1,
-                  "bounds": {
-                    "x": 62,
-                    "y": 133,
-                    "width": 1200,
-                    "height": 854
-                  }
-                },
-                {
-                  "windowId": 2687,
-                  "ownerPid": 61675,
-                  "ownerName": "Google Chrome",
-                  "name": "Axon macOS acceptance",
-                  "layer": 0,
-                  "onScreen": true,
-                  "alpha": 1,
-                  "bounds": {
-                    "x": 40,
-                    "y": 111,
-                    "width": 1200,
-                    "height": 854
-                  }
-                },
-                {
-                  "windowId": 1753,
-                  "ownerPid": 24842,
-                  "ownerName": "cairn",
-                  "name": "cairn",
-                  "layer": 0,
-                  "onScreen": true,
-                  "alpha": 1,
-                  "bounds": {
-                    "x": 0,
-                    "y": 30,
-                    "width": 2560,
-                    "height": 1329
-                  }
-                }
-              ]
-            }
-          }
-        },
-        {
-          "phase": "dispatch",
-          "at": 1786921307.3433821,
-          "data": {
-            "mechanism": "CGEventPostToPid",
-            "variant": "keyDown+keyUp/source=null",
-            "targetPid": 61675,
-            "text": "axon",
-            "eventsCreated": true,
-            "accessibilityTrusted": true,
-            "before": {
-              "frontmost": {
-                "pid": 51864,
-                "bundleId": "dev.axon.acceptance.decoy",
-                "name": "AxonAcceptanceDecoy",
-                "bundlePath": "/Users/mitch/.cairn/build-slots/axn/.authority/slot-121/scratch/axon-acceptance-bundles/AxonAcceptanceDecoy.app",
-                "active": true,
-                "terminated": false
-              },
-              "pointer": {
-                "x": 2554,
-                "y": 1434
-              }
-            },
-            "after": {
-              "frontmost": {
-                "pid": 51864,
-                "bundleId": "dev.axon.acceptance.decoy",
-                "name": "AxonAcceptanceDecoy",
-                "bundlePath": "/Users/mitch/.cairn/build-slots/axn/.authority/slot-121/scratch/axon-acceptance-bundles/AxonAcceptanceDecoy.app",
-                "active": true,
-                "terminated": false
-              },
-              "pointer": {
-                "x": 2554,
-                "y": 1434
-              }
-            }
-          }
-        },
-        {
-          "phase": "observe",
-          "at": 1786921310.404403,
-          "data": {
-            "before": {
-              "clicks": 0,
-              "text": "",
-              "navigations": 0
-            },
-            "after": {
-              "clicks": 0,
-              "text": "",
-              "navigations": 0
-            },
-            "mutated": false,
-            "mutationEvidence": "the page's input read '' before and '' after",
-            "eventReachedTarget": false,
-            "arrivalDetail": "the page's event listeners recorded nothing",
-            "decoyReceived": [],
-            "accessibility": {
-              "pid": 61675,
-              "accessibilityTrusted": true,
-              "focusedWindowError": 0,
-              "document": "",
-              "title": "Restore pages?"
-            }
-          }
-        },
-        {
-          "phase": "controlAfter",
-          "at": 1786921314.590394,
-          "data": {
-            "ran": true,
-            "acted": false,
-            "mechanism": "CGEventPost(kCGHIDEventTap) with the target activated",
-            "detail": "the page's input read '' before and '' after",
-            "observed": {
-              "mechanism": "CGEventPost(kCGHIDEventTap)",
-              "text": "axon",
-              "activated": true,
-              "before": {
-                "frontmost": {
-                  "pid": 51864,
-                  "bundleId": "dev.axon.acceptance.decoy",
-                  "name": "AxonAcceptanceDecoy",
-                  "bundlePath": "/Users/mitch/.cairn/build-slots/axn/.authority/slot-121/scratch/axon-acceptance-bundles/AxonAcceptanceDecoy.app",
-                  "active": true,
-                  "terminated": false
-                },
-                "pointer": {
-                  "x": 2554,
-                  "y": 1434
-                }
-              },
-              "after": {
-                "frontmost": {
-                  "pid": 51864,
-                  "bundleId": "dev.axon.acceptance.decoy",
-                  "name": "AxonAcceptanceDecoy",
-                  "bundlePath": "/Users/mitch/.cairn/build-slots/axn/.authority/slot-121/scratch/axon-acceptance-bundles/AxonAcceptanceDecoy.app",
-                  "active": true,
-                  "terminated": false
-                },
-                "pointer": {
-                  "x": 2554,
-                  "y": 1434
-                }
-              }
-            }
-          }
-        },
-        {
-          "phase": "restore",
-          "at": 1786921315.388126,
-          "data": {
-            "frontmost": {
-              "pid": 51864,
-              "bundleId": "dev.axon.acceptance.decoy",
-              "name": "AxonAcceptanceDecoy",
-              "bundlePath": "/Users/mitch/.cairn/build-slots/axn/.authority/slot-121/scratch/axon-acceptance-bundles/AxonAcceptanceDecoy.app",
-              "active": true,
-              "terminated": false
-            },
-            "pointer": {
-              "x": 759,
-              "y": 939
-            }
-          }
-        }
-      ],
-      "observations": {
-        "dispatchAccepted": true,
-        "variant": "keyDown+keyUp/source=null",
-        "targetMutated": false,
-        "mutationEvidence": "the page's input read '' before and '' after",
-        "eventReachedTarget": false,
-        "arrivalDetail": "the page's event listeners recorded nothing",
-        "frontmostUnchanged": true,
-        "decoyFrontmost": true,
-        "pointerUnchanged": true,
-        "ownershipProved": true,
-        "pointerBefore": {
-          "x": 2554,
-          "y": 1434
-        },
-        "pointerAfter": {
-          "x": 2554,
-          "y": 1434
-        },
-        "frontmostBefore": "dev.axon.acceptance.decoy",
-        "frontmostAfter": "dev.axon.acceptance.decoy",
-        "targetPid": 61675,
-        "windowId": null,
-        "point": {
-          "x": 174.02734375,
-          "y": 311.25
-        },
-        "nonce": "39e394087328"
-      },
-      "identity": {
-        "bundleId": "com.google.Chrome",
-        "bundleShortVersion": "150.0.7871.186",
-        "bundleVersion": "7871.186",
-        "versionSeries": "150.0",
-        "runtimeSignature": null,
-        "readableAtDispatch": true,
-        "source": "NSRunningApplication(processIdentifier:) then the bundle's Info.plist",
-        "processStartTime": "Sun Aug 16 19:01:20 2026"
-      },
-      "controls": {
-        "before": {
-          "ran": true,
-          "acted": false,
-          "mechanism": "CGEventPost(kCGHIDEventTap) with the target activated",
-          "detail": "the page's input read '' before and '' after",
-          "observed": {
-            "mechanism": "CGEventPost(kCGHIDEventTap)",
-            "text": "axon",
-            "activated": true,
-            "before": {
-              "frontmost": {
-                "pid": 61675,
-                "bundleId": "com.google.Chrome",
-                "name": "Google Chrome",
-                "bundlePath": "/Applications/Google Chrome.app",
-                "active": true,
-                "terminated": false
-              },
-              "pointer": {
-                "x": 759,
-                "y": 939
-              }
-            },
-            "after": {
-              "frontmost": {
-                "pid": 61675,
-                "bundleId": "com.google.Chrome",
-                "name": "Google Chrome",
-                "bundlePath": "/Applications/Google Chrome.app",
-                "active": true,
-                "terminated": false
-              },
-              "pointer": {
-                "x": 759,
-                "y": 939
-              }
-            }
-          }
-        },
-        "after": {
-          "ran": true,
-          "acted": false,
-          "mechanism": "CGEventPost(kCGHIDEventTap) with the target activated",
-          "detail": "the page's input read '' before and '' after",
-          "observed": {
-            "mechanism": "CGEventPost(kCGHIDEventTap)",
-            "text": "axon",
-            "activated": true,
-            "before": {
-              "frontmost": {
-                "pid": 51864,
-                "bundleId": "dev.axon.acceptance.decoy",
-                "name": "AxonAcceptanceDecoy",
-                "bundlePath": "/Users/mitch/.cairn/build-slots/axn/.authority/slot-121/scratch/axon-acceptance-bundles/AxonAcceptanceDecoy.app",
-                "active": true,
-                "terminated": false
-              },
-              "pointer": {
-                "x": 2554,
-                "y": 1434
-              }
-            },
-            "after": {
-              "frontmost": {
-                "pid": 51864,
-                "bundleId": "dev.axon.acceptance.decoy",
-                "name": "AxonAcceptanceDecoy",
-                "bundlePath": "/Users/mitch/.cairn/build-slots/axn/.authority/slot-121/scratch/axon-acceptance-bundles/AxonAcceptanceDecoy.app",
-                "active": true,
-                "terminated": false
-              },
-              "pointer": {
-                "x": 2554,
-                "y": 1434
-              }
-            }
-          }
-        }
-      },
-      "verdict": [
-        "blocked",
-        "the foreground control before the dispatch did not act, so this trial is measuring the campaign rather than the target"
-      ]
-    },
-    {
-      "target": "electron",
-      "action": "click",
-      "campaign": "bbl-2026-08-16",
-      "phases": [
-        {
-          "phase": "identity",
-          "at": 1786921318.4794612,
-          "data": {
-            "pid": 69361,
-            "identity": {
-              "bundleId": "com.github.Electron",
-              "bundleShortVersion": "43.4.0",
-              "bundleVersion": "43.4.0",
-              "versionSeries": "43.4",
-              "runtimeSignature": {
-                "kind": "electron-framework",
-                "version": null
-              },
-              "readableAtDispatch": true,
-              "source": "NSRunningApplication(processIdentifier:) then the bundle's Info.plist",
-              "processStartTime": "Sun Aug 16 19:01:55 2026"
-            },
-            "nonce": "e30876a8c497",
-            "point": {
-              "x": 232.02734375,
-              "y": 298.25
-            },
-            "windows": {
-              "windows": [
-                {
-                  "windowId": 2711,
-                  "ownerPid": 69361,
-                  "ownerName": "Electron",
-                  "name": "Axon macOS acceptance",
-                  "layer": 0,
-                  "onScreen": true,
-                  "alpha": 1,
-                  "bounds": {
-                    "x": 120,
-                    "y": 120,
-                    "width": 640,
-                    "height": 480
-                  }
-                }
-              ]
-            },
-            "detail": {
-              "geometry": {
-                "nonce": "e30876a8c497",
-                "marker": "page",
-                "role": "page",
-                "kind": "geometry",
-                "href": "http://127.0.0.1:52393/page?nonce=e30876a8c497",
-                "devicePixelRatio": 2,
-                "widgets": {
-                  "link": {
-                    "x": 160,
-                    "y": 270,
-                    "width": 144.0546875,
-                    "height": 56.5,
-                    "center": {
-                      "x": 232.02734375,
-                      "y": 298.25
-                    }
-                  },
-                  "entry": {
-                    "x": 160,
-                    "y": 180,
-                    "width": 328,
-                    "height": 38,
-                    "center": {
-                      "x": 324,
-                      "y": 199
-                    }
-                  }
-                },
-                "receivedAt": 1786921317.3711638
-              }
-            }
-          }
-        },
-        {
-          "phase": "controlBefore",
-          "at": 1786921322.778708,
-          "data": {
-            "ran": true,
-            "acted": false,
-            "mechanism": "CGEventPost(kCGHIDEventTap) with the real pointer over the coordinate",
-            "detail": "the page neither navigated nor reported a click",
-            "observed": {
-              "mechanism": "CGEventPost(kCGHIDEventTap)",
-              "point": {
-                "x": 232.02734375,
-                "y": 298.25
-              },
-              "activated": true,
-              "restored": false,
-              "before": {
-                "frontmost": {
-                  "pid": 69361,
-                  "bundleId": "com.github.Electron",
-                  "name": "Electron",
-                  "bundlePath": "/Users/mitch/.cairn/build-slots/axn/slot-121/scripts/macos-toolkit-acceptance/targets/electron/node_modules/electron/dist/Electron.app",
-                  "active": true,
-                  "terminated": false
-                },
-                "pointer": {
-                  "x": 759,
-                  "y": 939
-                }
-              },
-              "after": {
-                "frontmost": {
-                  "pid": 69361,
-                  "bundleId": "com.github.Electron",
-                  "name": "Electron",
-                  "bundlePath": "/Users/mitch/.cairn/build-slots/axn/slot-121/scripts/macos-toolkit-acceptance/targets/electron/node_modules/electron/dist/Electron.app",
-                  "active": true,
-                  "terminated": false
-                },
-                "pointer": {
-                  "x": 232.02734375,
-                  "y": 298.25
-                }
-              },
-              "final": {
-                "frontmost": {
-                  "pid": 69361,
-                  "bundleId": "com.github.Electron",
-                  "name": "Electron",
-                  "bundlePath": "/Users/mitch/.cairn/build-slots/axn/slot-121/scripts/macos-toolkit-acceptance/targets/electron/node_modules/electron/dist/Electron.app",
-                  "active": true,
-                  "terminated": false
-                },
-                "pointer": {
-                  "x": 232.02734375,
-                  "y": 298.25
-                }
-              }
-            }
-          }
-        },
-        {
-          "phase": "background",
-          "at": 1786921323.705733,
-          "data": {
-            "decoy": {
-              "pid": 51864,
-              "bundleId": "dev.axon.acceptance.decoy",
-              "name": "AxonAcceptanceDecoy",
-              "bundlePath": "/Users/mitch/.cairn/build-slots/axn/.authority/slot-121/scratch/axon-acceptance-bundles/AxonAcceptanceDecoy.app",
-              "active": true,
-              "terminated": false
-            },
-            "frontmost": {
-              "pid": 51864,
-              "bundleId": "dev.axon.acceptance.decoy",
-              "name": "AxonAcceptanceDecoy",
-              "bundlePath": "/Users/mitch/.cairn/build-slots/axn/.authority/slot-121/scratch/axon-acceptance-bundles/AxonAcceptanceDecoy.app",
-              "active": true,
-              "terminated": false
-            },
-            "parked": {
-              "requested": {
-                "x": 2554,
-                "y": 1434
-              },
-              "pointer": {
-                "x": 2554,
-                "y": 1434
-              }
-            }
-          }
-        },
-        {
-          "phase": "ownership",
-          "at": 1786921323.779039,
-          "data": {
-            "proved": true,
-            "observed": {
-              "point": {
-                "x": 232.02734375,
-                "y": 298.25
-              },
-              "stack": [
-                {
-                  "windowId": 8,
-                  "ownerPid": 699,
-                  "ownerName": "Dock",
-                  "name": "Dock",
-                  "layer": 20,
-                  "onScreen": true,
-                  "alpha": 1,
-                  "bounds": {
-                    "x": 0,
-                    "y": 0,
-                    "width": 2560,
-                    "height": 1440
-                  }
-                },
-                {
-                  "windowId": 2711,
-                  "ownerPid": 69361,
-                  "ownerName": "Electron",
-                  "name": "Axon macOS acceptance",
-                  "layer": 0,
-                  "onScreen": true,
-                  "alpha": 1,
-                  "bounds": {
-                    "x": 120,
-                    "y": 120,
-                    "width": 640,
-                    "height": 480
-                  }
-                },
-                {
-                  "windowId": 2702,
-                  "ownerPid": 61675,
-                  "ownerName": "Google Chrome",
-                  "name": "Axon macOS acceptance",
-                  "layer": 0,
-                  "onScreen": true,
-                  "alpha": 1,
-                  "bounds": {
-                    "x": 62,
-                    "y": 133,
-                    "width": 1200,
-                    "height": 854
-                  }
-                },
-                {
-                  "windowId": 2687,
-                  "ownerPid": 61675,
-                  "ownerName": "Google Chrome",
-                  "name": "Axon macOS acceptance",
-                  "layer": 0,
-                  "onScreen": true,
-                  "alpha": 1,
-                  "bounds": {
-                    "x": 40,
-                    "y": 111,
-                    "width": 1200,
-                    "height": 854
-                  }
-                },
-                {
-                  "windowId": 1753,
-                  "ownerPid": 24842,
-                  "ownerName": "cairn",
-                  "name": "cairn",
-                  "layer": 0,
-                  "onScreen": true,
-                  "alpha": 1,
-                  "bounds": {
-                    "x": 0,
-                    "y": 30,
-                    "width": 2560,
-                    "height": 1329
-                  }
-                }
-              ]
-            }
-          }
-        },
-        {
-          "phase": "dispatch",
-          "at": 1786921324.264395,
-          "data": {
-            "mechanism": "CGEventPostToPid",
-            "variant": "leftMouseDown+leftMouseUp/source=null/gapMs=0",
-            "targetPid": 69361,
-            "point": {
-              "x": 232.02734375,
-              "y": 298.25
-            },
-            "eventsCreated": true,
-            "accessibilityTrusted": true,
-            "before": {
-              "frontmost": {
-                "pid": 51864,
-                "bundleId": "dev.axon.acceptance.decoy",
-                "name": "AxonAcceptanceDecoy",
-                "bundlePath": "/Users/mitch/.cairn/build-slots/axn/.authority/slot-121/scratch/axon-acceptance-bundles/AxonAcceptanceDecoy.app",
-                "active": true,
-                "terminated": false
-              },
-              "pointer": {
-                "x": 2554,
-                "y": 1434
-              }
-            },
-            "after": {
-              "frontmost": {
-                "pid": 51864,
-                "bundleId": "dev.axon.acceptance.decoy",
-                "name": "AxonAcceptanceDecoy",
-                "bundlePath": "/Users/mitch/.cairn/build-slots/axn/.authority/slot-121/scratch/axon-acceptance-bundles/AxonAcceptanceDecoy.app",
-                "active": true,
-                "terminated": false
-              },
-              "pointer": {
-                "x": 2554,
-                "y": 1434
-              }
-            }
-          }
-        },
-        {
-          "phase": "observe",
-          "at": 1786921327.335995,
-          "data": {
-            "before": {
-              "clicks": 0,
-              "text": "",
-              "navigations": 0
-            },
-            "after": {
-              "clicks": 0,
-              "text": "",
-              "navigations": 0
-            },
-            "mutated": false,
-            "mutationEvidence": "the page neither navigated nor reported a click",
-            "eventReachedTarget": false,
-            "arrivalDetail": "the page's event listeners recorded nothing",
-            "decoyReceived": [],
-            "accessibility": {
-              "pid": 69361,
-              "accessibilityTrusted": true,
-              "focusedWindowError": 0,
-              "document": "",
-              "title": "Axon macOS acceptance"
-            }
-          }
-        },
-        {
-          "phase": "controlAfter",
-          "at": 1786921331.639334,
-          "data": {
-            "ran": true,
-            "acted": false,
-            "mechanism": "CGEventPost(kCGHIDEventTap) with the real pointer over the coordinate",
-            "detail": "the page neither navigated nor reported a click",
-            "observed": {
-              "mechanism": "CGEventPost(kCGHIDEventTap)",
-              "point": {
-                "x": 232.02734375,
-                "y": 298.25
-              },
-              "activated": true,
-              "restored": false,
-              "before": {
-                "frontmost": {
-                  "pid": 51864,
-                  "bundleId": "dev.axon.acceptance.decoy",
-                  "name": "AxonAcceptanceDecoy",
-                  "bundlePath": "/Users/mitch/.cairn/build-slots/axn/.authority/slot-121/scratch/axon-acceptance-bundles/AxonAcceptanceDecoy.app",
-                  "active": true,
-                  "terminated": false
-                },
-                "pointer": {
-                  "x": 2554,
-                  "y": 1434
-                }
-              },
-              "after": {
-                "frontmost": {
-                  "pid": 51864,
-                  "bundleId": "dev.axon.acceptance.decoy",
-                  "name": "AxonAcceptanceDecoy",
-                  "bundlePath": "/Users/mitch/.cairn/build-slots/axn/.authority/slot-121/scratch/axon-acceptance-bundles/AxonAcceptanceDecoy.app",
-                  "active": true,
-                  "terminated": false
-                },
-                "pointer": {
-                  "x": 232.02734375,
-                  "y": 298.25
-                }
-              },
-              "final": {
-                "frontmost": {
-                  "pid": 51864,
-                  "bundleId": "dev.axon.acceptance.decoy",
-                  "name": "AxonAcceptanceDecoy",
-                  "bundlePath": "/Users/mitch/.cairn/build-slots/axn/.authority/slot-121/scratch/axon-acceptance-bundles/AxonAcceptanceDecoy.app",
-                  "active": true,
-                  "terminated": false
-                },
-                "pointer": {
-                  "x": 232.02734375,
-                  "y": 298.25
-                }
-              }
-            }
-          }
-        },
-        {
-          "phase": "restore",
-          "at": 1786921332.45943,
-          "data": {
-            "frontmost": {
-              "pid": 51864,
-              "bundleId": "dev.axon.acceptance.decoy",
-              "name": "AxonAcceptanceDecoy",
-              "bundlePath": "/Users/mitch/.cairn/build-slots/axn/.authority/slot-121/scratch/axon-acceptance-bundles/AxonAcceptanceDecoy.app",
-              "active": true,
-              "terminated": false
-            },
-            "pointer": {
-              "x": 759,
-              "y": 939
-            }
-          }
-        }
-      ],
-      "observations": {
-        "dispatchAccepted": true,
-        "variant": "leftMouseDown+leftMouseUp/source=null/gapMs=0",
-        "targetMutated": false,
-        "mutationEvidence": "the page neither navigated nor reported a click",
-        "eventReachedTarget": false,
-        "arrivalDetail": "the page's event listeners recorded nothing",
-        "frontmostUnchanged": true,
-        "decoyFrontmost": true,
-        "pointerUnchanged": true,
-        "ownershipProved": true,
-        "pointerBefore": {
-          "x": 2554,
-          "y": 1434
-        },
-        "pointerAfter": {
-          "x": 2554,
-          "y": 1434
-        },
-        "frontmostBefore": "dev.axon.acceptance.decoy",
-        "frontmostAfter": "dev.axon.acceptance.decoy",
-        "targetPid": 69361,
-        "windowId": null,
-        "point": {
-          "x": 232.02734375,
-          "y": 298.25
-        },
-        "nonce": "e30876a8c497"
-      },
-      "identity": {
-        "bundleId": "com.github.Electron",
-        "bundleShortVersion": "43.4.0",
-        "bundleVersion": "43.4.0",
-        "versionSeries": "43.4",
-        "runtimeSignature": {
-          "kind": "electron-framework",
-          "version": null
-        },
-        "readableAtDispatch": true,
-        "source": "NSRunningApplication(processIdentifier:) then the bundle's Info.plist",
-        "processStartTime": "Sun Aug 16 19:01:55 2026"
-      },
-      "controls": {
-        "before": {
-          "ran": true,
-          "acted": false,
-          "mechanism": "CGEventPost(kCGHIDEventTap) with the real pointer over the coordinate",
-          "detail": "the page neither navigated nor reported a click",
-          "observed": {
-            "mechanism": "CGEventPost(kCGHIDEventTap)",
-            "point": {
-              "x": 232.02734375,
-              "y": 298.25
-            },
-            "activated": true,
-            "restored": false,
-            "before": {
-              "frontmost": {
-                "pid": 69361,
-                "bundleId": "com.github.Electron",
-                "name": "Electron",
-                "bundlePath": "/Users/mitch/.cairn/build-slots/axn/slot-121/scripts/macos-toolkit-acceptance/targets/electron/node_modules/electron/dist/Electron.app",
-                "active": true,
-                "terminated": false
-              },
-              "pointer": {
-                "x": 759,
-                "y": 939
-              }
-            },
-            "after": {
-              "frontmost": {
-                "pid": 69361,
-                "bundleId": "com.github.Electron",
-                "name": "Electron",
-                "bundlePath": "/Users/mitch/.cairn/build-slots/axn/slot-121/scripts/macos-toolkit-acceptance/targets/electron/node_modules/electron/dist/Electron.app",
-                "active": true,
-                "terminated": false
-              },
-              "pointer": {
-                "x": 232.02734375,
-                "y": 298.25
-              }
-            },
-            "final": {
-              "frontmost": {
-                "pid": 69361,
-                "bundleId": "com.github.Electron",
-                "name": "Electron",
-                "bundlePath": "/Users/mitch/.cairn/build-slots/axn/slot-121/scripts/macos-toolkit-acceptance/targets/electron/node_modules/electron/dist/Electron.app",
-                "active": true,
-                "terminated": false
-              },
-              "pointer": {
-                "x": 232.02734375,
-                "y": 298.25
-              }
-            }
-          }
-        },
-        "after": {
-          "ran": true,
-          "acted": false,
-          "mechanism": "CGEventPost(kCGHIDEventTap) with the real pointer over the coordinate",
-          "detail": "the page neither navigated nor reported a click",
-          "observed": {
-            "mechanism": "CGEventPost(kCGHIDEventTap)",
-            "point": {
-              "x": 232.02734375,
-              "y": 298.25
-            },
-            "activated": true,
-            "restored": false,
-            "before": {
-              "frontmost": {
-                "pid": 51864,
-                "bundleId": "dev.axon.acceptance.decoy",
-                "name": "AxonAcceptanceDecoy",
-                "bundlePath": "/Users/mitch/.cairn/build-slots/axn/.authority/slot-121/scratch/axon-acceptance-bundles/AxonAcceptanceDecoy.app",
-                "active": true,
-                "terminated": false
-              },
-              "pointer": {
-                "x": 2554,
-                "y": 1434
-              }
-            },
-            "after": {
-              "frontmost": {
-                "pid": 51864,
-                "bundleId": "dev.axon.acceptance.decoy",
-                "name": "AxonAcceptanceDecoy",
-                "bundlePath": "/Users/mitch/.cairn/build-slots/axn/.authority/slot-121/scratch/axon-acceptance-bundles/AxonAcceptanceDecoy.app",
-                "active": true,
-                "terminated": false
-              },
-              "pointer": {
-                "x": 232.02734375,
-                "y": 298.25
-              }
-            },
-            "final": {
-              "frontmost": {
-                "pid": 51864,
-                "bundleId": "dev.axon.acceptance.decoy",
-                "name": "AxonAcceptanceDecoy",
-                "bundlePath": "/Users/mitch/.cairn/build-slots/axn/.authority/slot-121/scratch/axon-acceptance-bundles/AxonAcceptanceDecoy.app",
-                "active": true,
-                "terminated": false
-              },
-              "pointer": {
-                "x": 232.02734375,
-                "y": 298.25
-              }
-            }
-          }
-        }
-      },
-      "verdict": [
-        "blocked",
-        "the foreground control before the dispatch did not act, so this trial is measuring the campaign rather than the target"
-      ]
-    },
-    {
-      "target": "electron",
-      "action": "keyboard",
-      "campaign": "bbl-2026-08-16",
-      "phases": [
-        {
-          "phase": "identity",
-          "at": 1786921333.9384801,
-          "data": {
-            "pid": 71222,
-            "identity": {
-              "bundleId": "com.github.Electron",
-              "bundleShortVersion": "43.4.0",
-              "bundleVersion": "43.4.0",
-              "versionSeries": "43.4",
-              "runtimeSignature": {
-                "kind": "electron-framework",
-                "version": null
-              },
-              "readableAtDispatch": true,
-              "source": "NSRunningApplication(processIdentifier:) then the bundle's Info.plist",
-              "processStartTime": "Sun Aug 16 19:02:12 2026"
-            },
-            "nonce": "16c5a8aaebc4",
-            "point": {
-              "x": 232.02734375,
-              "y": 298.25
-            },
-            "windows": {
-              "windows": [
-                {
-                  "windowId": 2721,
-                  "ownerPid": 71222,
-                  "ownerName": "Electron",
-                  "name": "Axon macOS acceptance",
-                  "layer": 0,
-                  "onScreen": true,
-                  "alpha": 1,
-                  "bounds": {
-                    "x": 120,
-                    "y": 120,
-                    "width": 640,
-                    "height": 480
-                  }
-                }
-              ]
-            },
-            "detail": {
-              "geometry": {
-                "nonce": "16c5a8aaebc4",
-                "marker": "page",
-                "role": "page",
-                "kind": "geometry",
-                "href": "http://127.0.0.1:52393/page?nonce=16c5a8aaebc4",
-                "devicePixelRatio": 2,
-                "widgets": {
-                  "link": {
-                    "x": 160,
-                    "y": 270,
-                    "width": 144.0546875,
-                    "height": 56.5,
-                    "center": {
-                      "x": 232.02734375,
-                      "y": 298.25
-                    }
-                  },
-                  "entry": {
-                    "x": 160,
-                    "y": 180,
-                    "width": 328,
-                    "height": 38,
-                    "center": {
-                      "x": 324,
-                      "y": 199
-                    }
-                  }
-                },
-                "receivedAt": 1786921332.8590431
-              }
-            }
-          }
-        },
-        {
-          "phase": "controlBefore",
-          "at": 1786921338.1295638,
-          "data": {
-            "ran": true,
-            "acted": true,
-            "mechanism": "CGEventPost(kCGHIDEventTap) with the target activated",
-            "detail": "the page's input read '' before and 'axon' after",
-            "observed": {
-              "mechanism": "CGEventPost(kCGHIDEventTap)",
-              "text": "axon",
-              "activated": true,
-              "before": {
-                "frontmost": {
-                  "pid": 71222,
-                  "bundleId": "com.github.Electron",
-                  "name": "Electron",
-                  "bundlePath": "/Users/mitch/.cairn/build-slots/axn/slot-121/scripts/macos-toolkit-acceptance/targets/electron/node_modules/electron/dist/Electron.app",
-                  "active": true,
-                  "terminated": false
-                },
-                "pointer": {
-                  "x": 759,
-                  "y": 939
-                }
-              },
-              "after": {
-                "frontmost": {
-                  "pid": 71222,
-                  "bundleId": "com.github.Electron",
-                  "name": "Electron",
-                  "bundlePath": "/Users/mitch/.cairn/build-slots/axn/slot-121/scripts/macos-toolkit-acceptance/targets/electron/node_modules/electron/dist/Electron.app",
-                  "active": true,
-                  "terminated": false
-                },
-                "pointer": {
-                  "x": 759,
-                  "y": 939
-                }
-              }
-            }
-          }
-        },
-        {
-          "phase": "background",
-          "at": 1786921338.922395,
-          "data": {
-            "decoy": {
-              "pid": 51864,
-              "bundleId": "dev.axon.acceptance.decoy",
-              "name": "AxonAcceptanceDecoy",
-              "bundlePath": "/Users/mitch/.cairn/build-slots/axn/.authority/slot-121/scratch/axon-acceptance-bundles/AxonAcceptanceDecoy.app",
-              "active": true,
-              "terminated": false
-            },
-            "frontmost": {
-              "pid": 51864,
-              "bundleId": "dev.axon.acceptance.decoy",
-              "name": "AxonAcceptanceDecoy",
-              "bundlePath": "/Users/mitch/.cairn/build-slots/axn/.authority/slot-121/scratch/axon-acceptance-bundles/AxonAcceptanceDecoy.app",
-              "active": true,
-              "terminated": false
-            },
-            "parked": {
-              "requested": {
-                "x": 2554,
-                "y": 1434
-              },
-              "pointer": {
-                "x": 2554,
-                "y": 1434
-              }
-            }
-          }
-        },
-        {
-          "phase": "ownership",
-          "at": 1786921338.979794,
-          "data": {
-            "proved": true,
-            "observed": {
-              "point": {
-                "x": 232.02734375,
-                "y": 298.25
-              },
-              "stack": [
-                {
-                  "windowId": 8,
-                  "ownerPid": 699,
-                  "ownerName": "Dock",
-                  "name": "Dock",
-                  "layer": 20,
-                  "onScreen": true,
-                  "alpha": 1,
-                  "bounds": {
-                    "x": 0,
-                    "y": 0,
-                    "width": 2560,
-                    "height": 1440
-                  }
-                },
-                {
-                  "windowId": 2721,
-                  "ownerPid": 71222,
-                  "ownerName": "Electron",
-                  "name": "Axon macOS acceptance",
-                  "layer": 0,
-                  "onScreen": true,
-                  "alpha": 1,
-                  "bounds": {
-                    "x": 120,
-                    "y": 120,
-                    "width": 640,
-                    "height": 480
-                  }
-                },
-                {
-                  "windowId": 2702,
-                  "ownerPid": 61675,
-                  "ownerName": "Google Chrome",
-                  "name": "Axon macOS acceptance",
-                  "layer": 0,
-                  "onScreen": true,
-                  "alpha": 1,
-                  "bounds": {
-                    "x": 62,
-                    "y": 133,
-                    "width": 1200,
-                    "height": 854
-                  }
-                },
-                {
-                  "windowId": 2687,
-                  "ownerPid": 61675,
-                  "ownerName": "Google Chrome",
-                  "name": "Axon macOS acceptance",
-                  "layer": 0,
-                  "onScreen": true,
-                  "alpha": 1,
-                  "bounds": {
-                    "x": 40,
-                    "y": 111,
-                    "width": 1200,
-                    "height": 854
-                  }
-                },
-                {
-                  "windowId": 1753,
-                  "ownerPid": 24842,
-                  "ownerName": "cairn",
-                  "name": "cairn",
-                  "layer": 0,
-                  "onScreen": true,
-                  "alpha": 1,
-                  "bounds": {
-                    "x": 0,
-                    "y": 30,
-                    "width": 2560,
-                    "height": 1329
-                  }
-                }
-              ]
-            }
-          }
-        },
-        {
-          "phase": "dispatch",
-          "at": 1786921339.558223,
-          "data": {
-            "mechanism": "CGEventPostToPid",
-            "variant": "keyDown+keyUp/source=null",
-            "targetPid": 71222,
-            "text": "axon",
-            "eventsCreated": true,
-            "accessibilityTrusted": true,
-            "before": {
-              "frontmost": {
-                "pid": 51864,
-                "bundleId": "dev.axon.acceptance.decoy",
-                "name": "AxonAcceptanceDecoy",
-                "bundlePath": "/Users/mitch/.cairn/build-slots/axn/.authority/slot-121/scratch/axon-acceptance-bundles/AxonAcceptanceDecoy.app",
-                "active": true,
-                "terminated": false
-              },
-              "pointer": {
-                "x": 2554,
-                "y": 1434
-              }
-            },
-            "after": {
-              "frontmost": {
-                "pid": 51864,
-                "bundleId": "dev.axon.acceptance.decoy",
-                "name": "AxonAcceptanceDecoy",
-                "bundlePath": "/Users/mitch/.cairn/build-slots/axn/.authority/slot-121/scratch/axon-acceptance-bundles/AxonAcceptanceDecoy.app",
-                "active": true,
-                "terminated": false
-              },
-              "pointer": {
-                "x": 2554,
-                "y": 1434
-              }
-            }
-          }
-        },
-        {
-          "phase": "observe",
-          "at": 1786921342.610378,
-          "data": {
-            "before": {
-              "clicks": 0,
-              "text": "axon",
-              "navigations": 0
-            },
-            "after": {
-              "clicks": 0,
-              "text": "axonaxon",
-              "navigations": 0
-            },
-            "mutated": true,
-            "mutationEvidence": "the page's input read 'axon' before and 'axonaxon' after",
-            "eventReachedTarget": true,
-            "arrivalDetail": "the page observed keydown isTrusted=True, keyup isTrusted=True, keydown isTrusted=True, keyup isTrusted=True, keydown isTrusted=True, keyup isTrusted=True, keydown isTrusted=True, keyup isTrusted=True",
-            "decoyReceived": [],
-            "accessibility": {
-              "pid": 71222,
-              "accessibilityTrusted": true,
-              "focusedWindowError": 0,
-              "document": "",
-              "title": "Axon macOS acceptance"
-            }
-          }
-        },
-        {
-          "phase": "controlAfter",
-          "at": 1786921346.7858508,
-          "data": {
-            "ran": true,
-            "acted": true,
-            "mechanism": "CGEventPost(kCGHIDEventTap) with the target activated",
-            "detail": "the page's input read 'axonaxon' before and 'axonaxonaxon' after",
-            "observed": {
-              "mechanism": "CGEventPost(kCGHIDEventTap)",
-              "text": "axon",
-              "activated": true,
-              "before": {
-                "frontmost": {
-                  "pid": 51864,
-                  "bundleId": "dev.axon.acceptance.decoy",
-                  "name": "AxonAcceptanceDecoy",
-                  "bundlePath": "/Users/mitch/.cairn/build-slots/axn/.authority/slot-121/scratch/axon-acceptance-bundles/AxonAcceptanceDecoy.app",
-                  "active": true,
-                  "terminated": false
-                },
-                "pointer": {
-                  "x": 2554,
-                  "y": 1434
-                }
-              },
-              "after": {
-                "frontmost": {
-                  "pid": 51864,
-                  "bundleId": "dev.axon.acceptance.decoy",
-                  "name": "AxonAcceptanceDecoy",
-                  "bundlePath": "/Users/mitch/.cairn/build-slots/axn/.authority/slot-121/scratch/axon-acceptance-bundles/AxonAcceptanceDecoy.app",
-                  "active": true,
-                  "terminated": false
-                },
-                "pointer": {
-                  "x": 2554,
-                  "y": 1434
-                }
-              }
-            }
-          }
-        },
-        {
-          "phase": "restore",
-          "at": 1786921347.5735629,
-          "data": {
-            "frontmost": {
-              "pid": 51864,
-              "bundleId": "dev.axon.acceptance.decoy",
-              "name": "AxonAcceptanceDecoy",
-              "bundlePath": "/Users/mitch/.cairn/build-slots/axn/.authority/slot-121/scratch/axon-acceptance-bundles/AxonAcceptanceDecoy.app",
-              "active": true,
-              "terminated": false
-            },
-            "pointer": {
-              "x": 759,
-              "y": 939
-            }
-          }
-        }
-      ],
-      "observations": {
-        "dispatchAccepted": true,
-        "variant": "keyDown+keyUp/source=null",
-        "targetMutated": true,
-        "mutationEvidence": "the page's input read 'axon' before and 'axonaxon' after",
-        "eventReachedTarget": true,
-        "arrivalDetail": "the page observed keydown isTrusted=True, keyup isTrusted=True, keydown isTrusted=True, keyup isTrusted=True, keydown isTrusted=True, keyup isTrusted=True, keydown isTrusted=True, keyup isTrusted=True",
-        "frontmostUnchanged": true,
-        "decoyFrontmost": true,
-        "pointerUnchanged": true,
-        "ownershipProved": true,
-        "pointerBefore": {
-          "x": 2554,
-          "y": 1434
-        },
-        "pointerAfter": {
-          "x": 2554,
-          "y": 1434
-        },
-        "frontmostBefore": "dev.axon.acceptance.decoy",
-        "frontmostAfter": "dev.axon.acceptance.decoy",
-        "targetPid": 71222,
-        "windowId": null,
-        "point": {
-          "x": 232.02734375,
-          "y": 298.25
-        },
-        "nonce": "16c5a8aaebc4"
-      },
-      "identity": {
-        "bundleId": "com.github.Electron",
-        "bundleShortVersion": "43.4.0",
-        "bundleVersion": "43.4.0",
-        "versionSeries": "43.4",
-        "runtimeSignature": {
-          "kind": "electron-framework",
-          "version": null
-        },
-        "readableAtDispatch": true,
-        "source": "NSRunningApplication(processIdentifier:) then the bundle's Info.plist",
-        "processStartTime": "Sun Aug 16 19:02:12 2026"
-      },
-      "controls": {
-        "before": {
-          "ran": true,
-          "acted": true,
-          "mechanism": "CGEventPost(kCGHIDEventTap) with the target activated",
-          "detail": "the page's input read '' before and 'axon' after",
-          "observed": {
-            "mechanism": "CGEventPost(kCGHIDEventTap)",
-            "text": "axon",
-            "activated": true,
-            "before": {
-              "frontmost": {
-                "pid": 71222,
-                "bundleId": "com.github.Electron",
-                "name": "Electron",
-                "bundlePath": "/Users/mitch/.cairn/build-slots/axn/slot-121/scripts/macos-toolkit-acceptance/targets/electron/node_modules/electron/dist/Electron.app",
-                "active": true,
-                "terminated": false
-              },
-              "pointer": {
-                "x": 759,
-                "y": 939
-              }
-            },
-            "after": {
-              "frontmost": {
-                "pid": 71222,
-                "bundleId": "com.github.Electron",
-                "name": "Electron",
-                "bundlePath": "/Users/mitch/.cairn/build-slots/axn/slot-121/scripts/macos-toolkit-acceptance/targets/electron/node_modules/electron/dist/Electron.app",
-                "active": true,
-                "terminated": false
-              },
-              "pointer": {
-                "x": 759,
-                "y": 939
-              }
-            }
-          }
-        },
-        "after": {
-          "ran": true,
-          "acted": true,
-          "mechanism": "CGEventPost(kCGHIDEventTap) with the target activated",
-          "detail": "the page's input read 'axonaxon' before and 'axonaxonaxon' after",
-          "observed": {
-            "mechanism": "CGEventPost(kCGHIDEventTap)",
-            "text": "axon",
-            "activated": true,
-            "before": {
-              "frontmost": {
-                "pid": 51864,
-                "bundleId": "dev.axon.acceptance.decoy",
-                "name": "AxonAcceptanceDecoy",
-                "bundlePath": "/Users/mitch/.cairn/build-slots/axn/.authority/slot-121/scratch/axon-acceptance-bundles/AxonAcceptanceDecoy.app",
-                "active": true,
-                "terminated": false
-              },
-              "pointer": {
-                "x": 2554,
-                "y": 1434
-              }
-            },
-            "after": {
-              "frontmost": {
-                "pid": 51864,
-                "bundleId": "dev.axon.acceptance.decoy",
-                "name": "AxonAcceptanceDecoy",
-                "bundlePath": "/Users/mitch/.cairn/build-slots/axn/.authority/slot-121/scratch/axon-acceptance-bundles/AxonAcceptanceDecoy.app",
-                "active": true,
-                "terminated": false
-              },
-              "pointer": {
-                "x": 2554,
-                "y": 1434
-              }
-            }
-          }
-        }
-      },
-      "verdict": [
-        "accepted",
-        "the target acted on input posted to its process while a decoy held the foreground and the real pointer did not move"
-      ]
-    },
-    {
-      "target": "AxonAcceptanceTarget",
-      "action": "click",
-      "campaign": "bbl-2026-08-16",
-      "phases": [
-        {
-          "phase": "identity",
-          "at": 1786921348.9052238,
-          "data": {
-            "pid": 76561,
-            "identity": {
-              "bundleId": "dev.axon.acceptance.target",
-              "bundleShortVersion": "1.0.0",
-              "bundleVersion": "1",
-              "versionSeries": "1.0",
-              "runtimeSignature": null,
-              "readableAtDispatch": true,
-              "source": "NSRunningApplication(processIdentifier:) then the bundle's Info.plist",
-              "processStartTime": "Sun Aug 16 19:02:27 2026"
-            },
-            "nonce": "8fed31316cd9",
-            "point": {
-              "x": 210.5,
-              "y": 940
-            },
-            "windows": {
-              "windows": [
-                {
-                  "windowId": 2732,
-                  "ownerPid": 76561,
-                  "ownerName": "AxonAcceptanceTarget",
-                  "name": "axon-acceptance-target",
-                  "layer": 0,
-                  "onScreen": true,
-                  "alpha": 1,
-                  "bounds": {
-                    "x": 120,
-                    "y": 648,
-                    "width": 520,
-                    "height": 332
-                  }
-                }
-              ]
-            },
-            "detail": {
-              "ready": {
-                "kind": "ready",
-                "role": "target",
-                "nonce": "8fed31316cd9",
-                "pid": 76561,
-                "windowNumber": 2732,
-                "title": "axon-acceptance-target",
-                "window": {
-                  "x": 120,
-                  "y": 680,
-                  "width": 520,
-                  "height": 300,
-                  "center": {
-                    "x": 380,
-                    "y": 830
-                  }
-                },
-                "checkbox": {
-                  "x": 144,
-                  "y": 932,
-                  "width": 133,
-                  "height": 16,
-                  "center": {
-                    "x": 210.5,
-                    "y": 940
-                  }
-                },
-                "textField": {
-                  "x": 144,
-                  "y": 856,
-                  "width": 472,
-                  "height": 28,
-                  "center": {
-                    "x": 380,
-                    "y": 870
-                  }
-                }
-              }
-            }
-          }
-        },
-        {
-          "phase": "controlBefore",
-          "at": 1786921353.1870131,
-          "data": {
-            "ran": true,
-            "acted": true,
-            "mechanism": "CGEventPost(kCGHIDEventTap) with the real pointer over the coordinate",
-            "detail": "the fixture's checkbox read 0 before and 1 after",
-            "observed": {
-              "mechanism": "CGEventPost(kCGHIDEventTap)",
-              "point": {
-                "x": 210.5,
-                "y": 940
-              },
-              "activated": true,
-              "restored": false,
-              "before": {
-                "frontmost": {
-                  "pid": 76561,
-                  "bundleId": "dev.axon.acceptance.target",
-                  "name": "AxonAcceptanceTarget",
-                  "bundlePath": "/Users/mitch/.cairn/build-slots/axn/.authority/slot-121/scratch/axon-acceptance-bundles/AxonAcceptanceTarget.app",
-                  "active": true,
-                  "terminated": false
-                },
-                "pointer": {
-                  "x": 759,
-                  "y": 939
-                }
-              },
-              "after": {
-                "frontmost": {
-                  "pid": 76561,
-                  "bundleId": "dev.axon.acceptance.target",
-                  "name": "AxonAcceptanceTarget",
-                  "bundlePath": "/Users/mitch/.cairn/build-slots/axn/.authority/slot-121/scratch/axon-acceptance-bundles/AxonAcceptanceTarget.app",
-                  "active": true,
-                  "terminated": false
-                },
-                "pointer": {
-                  "x": 210.5,
-                  "y": 940
-                }
-              },
-              "final": {
-                "frontmost": {
-                  "pid": 76561,
-                  "bundleId": "dev.axon.acceptance.target",
-                  "name": "AxonAcceptanceTarget",
-                  "bundlePath": "/Users/mitch/.cairn/build-slots/axn/.authority/slot-121/scratch/axon-acceptance-bundles/AxonAcceptanceTarget.app",
-                  "active": true,
-                  "terminated": false
-                },
-                "pointer": {
-                  "x": 210.5,
-                  "y": 940
-                }
-              }
-            }
-          }
-        },
-        {
-          "phase": "background",
-          "at": 1786921354.283575,
-          "data": {
-            "decoy": {
-              "pid": 51864,
-              "bundleId": "dev.axon.acceptance.decoy",
-              "name": "AxonAcceptanceDecoy",
-              "bundlePath": "/Users/mitch/.cairn/build-slots/axn/.authority/slot-121/scratch/axon-acceptance-bundles/AxonAcceptanceDecoy.app",
-              "active": true,
-              "terminated": false
-            },
-            "frontmost": {
-              "pid": 51864,
-              "bundleId": "dev.axon.acceptance.decoy",
-              "name": "AxonAcceptanceDecoy",
-              "bundlePath": "/Users/mitch/.cairn/build-slots/axn/.authority/slot-121/scratch/axon-acceptance-bundles/AxonAcceptanceDecoy.app",
-              "active": true,
-              "terminated": false
-            },
-            "parked": {
-              "requested": {
-                "x": 2554,
-                "y": 1434
-              },
-              "pointer": {
-                "x": 2554,
-                "y": 1434
-              }
-            }
-          }
-        },
-        {
-          "phase": "ownership",
-          "at": 1786921354.348429,
-          "data": {
-            "proved": true,
-            "observed": {
-              "point": {
-                "x": 210.5,
-                "y": 940
-              },
-              "stack": [
-                {
-                  "windowId": 8,
-                  "ownerPid": 699,
-                  "ownerName": "Dock",
-                  "name": "Dock",
-                  "layer": 20,
-                  "onScreen": true,
-                  "alpha": 1,
-                  "bounds": {
-                    "x": 0,
-                    "y": 0,
-                    "width": 2560,
-                    "height": 1440
-                  }
-                },
-                {
-                  "windowId": 2732,
-                  "ownerPid": 76561,
-                  "ownerName": "AxonAcceptanceTarget",
-                  "name": "axon-acceptance-target",
-                  "layer": 0,
-                  "onScreen": true,
-                  "alpha": 1,
-                  "bounds": {
-                    "x": 120,
-                    "y": 648,
-                    "width": 520,
-                    "height": 332
-                  }
-                },
-                {
-                  "windowId": 2702,
-                  "ownerPid": 61675,
-                  "ownerName": "Google Chrome",
-                  "name": "Axon macOS acceptance",
-                  "layer": 0,
-                  "onScreen": true,
-                  "alpha": 1,
-                  "bounds": {
-                    "x": 62,
-                    "y": 133,
-                    "width": 1200,
-                    "height": 854
-                  }
-                },
-                {
-                  "windowId": 2687,
-                  "ownerPid": 61675,
-                  "ownerName": "Google Chrome",
-                  "name": "Axon macOS acceptance",
-                  "layer": 0,
-                  "onScreen": true,
-                  "alpha": 1,
-                  "bounds": {
-                    "x": 40,
-                    "y": 111,
-                    "width": 1200,
-                    "height": 854
-                  }
-                },
-                {
-                  "windowId": 1753,
-                  "ownerPid": 24842,
-                  "ownerName": "cairn",
-                  "name": "cairn",
-                  "layer": 0,
-                  "onScreen": true,
-                  "alpha": 1,
-                  "bounds": {
-                    "x": 0,
-                    "y": 30,
-                    "width": 2560,
-                    "height": 1329
-                  }
-                }
-              ]
-            }
-          }
-        },
-        {
-          "phase": "dispatch",
-          "at": 1786921354.952717,
-          "data": {
-            "mechanism": "CGEventPostToPid",
-            "variant": "leftMouseDown+leftMouseUp/source=null/gapMs=0",
-            "targetPid": 76561,
-            "point": {
-              "x": 210.5,
-              "y": 940
-            },
-            "eventsCreated": true,
-            "accessibilityTrusted": true,
-            "before": {
-              "frontmost": {
-                "pid": 51864,
-                "bundleId": "dev.axon.acceptance.decoy",
-                "name": "AxonAcceptanceDecoy",
-                "bundlePath": "/Users/mitch/.cairn/build-slots/axn/.authority/slot-121/scratch/axon-acceptance-bundles/AxonAcceptanceDecoy.app",
-                "active": true,
-                "terminated": false
-              },
-              "pointer": {
-                "x": 2554,
-                "y": 1434
-              }
-            },
-            "after": {
-              "frontmost": {
-                "pid": 51864,
-                "bundleId": "dev.axon.acceptance.decoy",
-                "name": "AxonAcceptanceDecoy",
-                "bundlePath": "/Users/mitch/.cairn/build-slots/axn/.authority/slot-121/scratch/axon-acceptance-bundles/AxonAcceptanceDecoy.app",
-                "active": true,
-                "terminated": false
-              },
-              "pointer": {
-                "x": 2554,
-                "y": 1434
-              }
-            }
-          }
-        },
-        {
-          "phase": "observe",
-          "at": 1786921358.0135171,
-          "data": {
-            "before": {
-              "checkbox": 1,
-              "text": ""
-            },
-            "after": {
-              "checkbox": 1,
-              "text": ""
-            },
-            "mutated": false,
-            "mutationEvidence": "the fixture's checkbox read 1 before and 1 after",
-            "eventReachedTarget": true,
-            "arrivalDetail": "the application dequeued leftMouseDown on window 0, leftMouseUp on window 0",
-            "decoyReceived": [],
-            "accessibility": {
-              "pid": 76561,
-              "accessibilityTrusted": true,
-              "focusedWindowError": 0,
-              "document": null,
-              "title": "axon-acceptance-target"
-            }
-          }
-        },
-        {
-          "phase": "controlAfter",
-          "at": 1786921362.300995,
-          "data": {
-            "ran": true,
-            "acted": true,
-            "mechanism": "CGEventPost(kCGHIDEventTap) with the real pointer over the coordinate",
-            "detail": "the fixture's checkbox read 1 before and 0 after",
-            "observed": {
-              "mechanism": "CGEventPost(kCGHIDEventTap)",
-              "point": {
-                "x": 210.5,
-                "y": 940
-              },
-              "activated": true,
-              "restored": false,
-              "before": {
-                "frontmost": {
-                  "pid": 51864,
-                  "bundleId": "dev.axon.acceptance.decoy",
-                  "name": "AxonAcceptanceDecoy",
-                  "bundlePath": "/Users/mitch/.cairn/build-slots/axn/.authority/slot-121/scratch/axon-acceptance-bundles/AxonAcceptanceDecoy.app",
-                  "active": true,
-                  "terminated": false
-                },
-                "pointer": {
-                  "x": 2554,
-                  "y": 1434
-                }
-              },
-              "after": {
-                "frontmost": {
-                  "pid": 51864,
-                  "bundleId": "dev.axon.acceptance.decoy",
-                  "name": "AxonAcceptanceDecoy",
-                  "bundlePath": "/Users/mitch/.cairn/build-slots/axn/.authority/slot-121/scratch/axon-acceptance-bundles/AxonAcceptanceDecoy.app",
-                  "active": true,
-                  "terminated": false
-                },
-                "pointer": {
-                  "x": 210.5,
-                  "y": 940
-                }
-              },
-              "final": {
-                "frontmost": {
-                  "pid": 51864,
-                  "bundleId": "dev.axon.acceptance.decoy",
-                  "name": "AxonAcceptanceDecoy",
-                  "bundlePath": "/Users/mitch/.cairn/build-slots/axn/.authority/slot-121/scratch/axon-acceptance-bundles/AxonAcceptanceDecoy.app",
-                  "active": true,
-                  "terminated": false
-                },
-                "pointer": {
-                  "x": 210.5,
-                  "y": 940
-                }
-              }
-            }
-          }
-        },
-        {
-          "phase": "restore",
-          "at": 1786921363.120526,
-          "data": {
-            "frontmost": {
-              "pid": 51864,
-              "bundleId": "dev.axon.acceptance.decoy",
-              "name": "AxonAcceptanceDecoy",
-              "bundlePath": "/Users/mitch/.cairn/build-slots/axn/.authority/slot-121/scratch/axon-acceptance-bundles/AxonAcceptanceDecoy.app",
-              "active": true,
-              "terminated": false
-            },
-            "pointer": {
-              "x": 759,
-              "y": 939
-            }
-          }
-        }
-      ],
-      "observations": {
-        "dispatchAccepted": true,
-        "variant": "leftMouseDown+leftMouseUp/source=null/gapMs=0",
-        "targetMutated": false,
-        "mutationEvidence": "the fixture's checkbox read 1 before and 1 after",
-        "eventReachedTarget": true,
-        "arrivalDetail": "the application dequeued leftMouseDown on window 0, leftMouseUp on window 0",
-        "frontmostUnchanged": true,
-        "decoyFrontmost": true,
-        "pointerUnchanged": true,
-        "ownershipProved": true,
-        "pointerBefore": {
-          "x": 2554,
-          "y": 1434
-        },
-        "pointerAfter": {
-          "x": 2554,
-          "y": 1434
-        },
-        "frontmostBefore": "dev.axon.acceptance.decoy",
-        "frontmostAfter": "dev.axon.acceptance.decoy",
-        "targetPid": 76561,
-        "windowId": null,
-        "point": {
-          "x": 210.5,
-          "y": 940
-        },
-        "nonce": "8fed31316cd9"
-      },
-      "identity": {
-        "bundleId": "dev.axon.acceptance.target",
-        "bundleShortVersion": "1.0.0",
-        "bundleVersion": "1",
-        "versionSeries": "1.0",
-        "runtimeSignature": null,
-        "readableAtDispatch": true,
-        "source": "NSRunningApplication(processIdentifier:) then the bundle's Info.plist",
-        "processStartTime": "Sun Aug 16 19:02:27 2026"
-      },
-      "controls": {
-        "before": {
-          "ran": true,
-          "acted": true,
-          "mechanism": "CGEventPost(kCGHIDEventTap) with the real pointer over the coordinate",
-          "detail": "the fixture's checkbox read 0 before and 1 after",
-          "observed": {
-            "mechanism": "CGEventPost(kCGHIDEventTap)",
-            "point": {
-              "x": 210.5,
-              "y": 940
-            },
-            "activated": true,
-            "restored": false,
-            "before": {
-              "frontmost": {
-                "pid": 76561,
-                "bundleId": "dev.axon.acceptance.target",
-                "name": "AxonAcceptanceTarget",
-                "bundlePath": "/Users/mitch/.cairn/build-slots/axn/.authority/slot-121/scratch/axon-acceptance-bundles/AxonAcceptanceTarget.app",
-                "active": true,
-                "terminated": false
-              },
-              "pointer": {
-                "x": 759,
-                "y": 939
-              }
-            },
-            "after": {
-              "frontmost": {
-                "pid": 76561,
-                "bundleId": "dev.axon.acceptance.target",
-                "name": "AxonAcceptanceTarget",
-                "bundlePath": "/Users/mitch/.cairn/build-slots/axn/.authority/slot-121/scratch/axon-acceptance-bundles/AxonAcceptanceTarget.app",
-                "active": true,
-                "terminated": false
-              },
-              "pointer": {
-                "x": 210.5,
-                "y": 940
-              }
-            },
-            "final": {
-              "frontmost": {
-                "pid": 76561,
-                "bundleId": "dev.axon.acceptance.target",
-                "name": "AxonAcceptanceTarget",
-                "bundlePath": "/Users/mitch/.cairn/build-slots/axn/.authority/slot-121/scratch/axon-acceptance-bundles/AxonAcceptanceTarget.app",
-                "active": true,
-                "terminated": false
-              },
-              "pointer": {
-                "x": 210.5,
-                "y": 940
-              }
-            }
-          }
-        },
-        "after": {
-          "ran": true,
-          "acted": true,
-          "mechanism": "CGEventPost(kCGHIDEventTap) with the real pointer over the coordinate",
-          "detail": "the fixture's checkbox read 1 before and 0 after",
-          "observed": {
-            "mechanism": "CGEventPost(kCGHIDEventTap)",
-            "point": {
-              "x": 210.5,
-              "y": 940
-            },
-            "activated": true,
-            "restored": false,
-            "before": {
-              "frontmost": {
-                "pid": 51864,
-                "bundleId": "dev.axon.acceptance.decoy",
-                "name": "AxonAcceptanceDecoy",
-                "bundlePath": "/Users/mitch/.cairn/build-slots/axn/.authority/slot-121/scratch/axon-acceptance-bundles/AxonAcceptanceDecoy.app",
-                "active": true,
-                "terminated": false
-              },
-              "pointer": {
-                "x": 2554,
-                "y": 1434
-              }
-            },
-            "after": {
-              "frontmost": {
-                "pid": 51864,
-                "bundleId": "dev.axon.acceptance.decoy",
-                "name": "AxonAcceptanceDecoy",
-                "bundlePath": "/Users/mitch/.cairn/build-slots/axn/.authority/slot-121/scratch/axon-acceptance-bundles/AxonAcceptanceDecoy.app",
-                "active": true,
-                "terminated": false
-              },
-              "pointer": {
-                "x": 210.5,
-                "y": 940
-              }
-            },
-            "final": {
-              "frontmost": {
-                "pid": 51864,
-                "bundleId": "dev.axon.acceptance.decoy",
-                "name": "AxonAcceptanceDecoy",
-                "bundlePath": "/Users/mitch/.cairn/build-slots/axn/.authority/slot-121/scratch/axon-acceptance-bundles/AxonAcceptanceDecoy.app",
-                "active": true,
-                "terminated": false
-              },
-              "pointer": {
-                "x": 210.5,
-                "y": 940
-              }
-            }
-          }
-        }
-      },
-      "verdict": [
-        "refused",
-        "the Core Graphics post completed and the target did nothing: dispatch was accepted by macOS and the action was not delivered"
-      ]
-    },
-    {
-      "target": "AxonAcceptanceTarget",
-      "action": "keyboard",
-      "campaign": "bbl-2026-08-16",
-      "phases": [
-        {
-          "phase": "identity",
-          "at": 1786921364.877578,
-          "data": {
-            "pid": 81625,
-            "identity": {
-              "bundleId": "dev.axon.acceptance.target",
-              "bundleShortVersion": "1.0.0",
-              "bundleVersion": "1",
-              "versionSeries": "1.0",
-              "runtimeSignature": null,
-              "readableAtDispatch": true,
-              "source": "NSRunningApplication(processIdentifier:) then the bundle's Info.plist",
-              "processStartTime": "Sun Aug 16 19:02:43 2026"
-            },
-            "nonce": "2273b67b2827",
-            "point": null,
-            "windows": {
-              "windows": [
-                {
-                  "windowId": 2744,
-                  "ownerPid": 81625,
-                  "ownerName": "AxonAcceptanceTarget",
-                  "name": "axon-acceptance-target",
-                  "layer": 0,
-                  "onScreen": true,
-                  "alpha": 1,
-                  "bounds": {
-                    "x": 120,
-                    "y": 648,
-                    "width": 520,
-                    "height": 332
-                  }
-                }
-              ]
-            },
-            "detail": {
-              "ready": {
-                "kind": "ready",
-                "role": "target",
-                "nonce": "2273b67b2827",
-                "pid": 81625,
-                "windowNumber": 2744,
-                "title": "axon-acceptance-target",
-                "window": {
-                  "x": 120,
-                  "y": 680,
-                  "width": 520,
-                  "height": 300,
-                  "center": {
-                    "x": 380,
-                    "y": 830
-                  }
-                },
-                "checkbox": {
-                  "x": 144,
-                  "y": 932,
-                  "width": 133,
-                  "height": 16,
-                  "center": {
-                    "x": 210.5,
-                    "y": 940
-                  }
-                },
-                "textField": {
-                  "x": 144,
-                  "y": 856,
-                  "width": 472,
-                  "height": 28,
-                  "center": {
-                    "x": 380,
-                    "y": 870
-                  }
-                }
-              }
-            }
-          }
-        },
-        {
-          "phase": "controlBefore",
-          "at": 1786921369.06779,
-          "data": {
-            "ran": true,
-            "acted": true,
-            "mechanism": "CGEventPost(kCGHIDEventTap) with the target activated",
-            "detail": "the fixture's text field read '' before and 'axon' after",
-            "observed": {
-              "mechanism": "CGEventPost(kCGHIDEventTap)",
-              "text": "axon",
-              "activated": true,
-              "before": {
-                "frontmost": {
-                  "pid": 81625,
-                  "bundleId": "dev.axon.acceptance.target",
-                  "name": "AxonAcceptanceTarget",
-                  "bundlePath": "/Users/mitch/.cairn/build-slots/axn/.authority/slot-121/scratch/axon-acceptance-bundles/AxonAcceptanceTarget.app",
-                  "active": true,
-                  "terminated": false
-                },
-                "pointer": {
-                  "x": 759,
-                  "y": 939
-                }
-              },
-              "after": {
-                "frontmost": {
-                  "pid": 81625,
-                  "bundleId": "dev.axon.acceptance.target",
-                  "name": "AxonAcceptanceTarget",
-                  "bundlePath": "/Users/mitch/.cairn/build-slots/axn/.authority/slot-121/scratch/axon-acceptance-bundles/AxonAcceptanceTarget.app",
-                  "active": true,
-                  "terminated": false
-                },
-                "pointer": {
-                  "x": 759,
-                  "y": 939
-                }
-              }
-            }
-          }
-        },
-        {
-          "phase": "background",
-          "at": 1786921369.892996,
-          "data": {
-            "decoy": {
-              "pid": 51864,
-              "bundleId": "dev.axon.acceptance.decoy",
-              "name": "AxonAcceptanceDecoy",
-              "bundlePath": "/Users/mitch/.cairn/build-slots/axn/.authority/slot-121/scratch/axon-acceptance-bundles/AxonAcceptanceDecoy.app",
-              "active": true,
-              "terminated": false
-            },
-            "frontmost": {
-              "pid": 51864,
-              "bundleId": "dev.axon.acceptance.decoy",
-              "name": "AxonAcceptanceDecoy",
-              "bundlePath": "/Users/mitch/.cairn/build-slots/axn/.authority/slot-121/scratch/axon-acceptance-bundles/AxonAcceptanceDecoy.app",
-              "active": true,
-              "terminated": false
-            },
-            "parked": {
-              "requested": {
-                "x": 2554,
-                "y": 1434
-              },
-              "pointer": {
-                "x": 2554,
-                "y": 1434
-              }
-            }
-          }
-        },
-        {
-          "phase": "ownership",
-          "at": 1786921369.964961,
-          "data": {
-            "proved": true,
-            "observed": {
-              "windows": [
-                {
-                  "windowId": 2744,
-                  "ownerPid": 81625,
-                  "ownerName": "AxonAcceptanceTarget",
-                  "name": "axon-acceptance-target",
-                  "layer": 0,
-                  "onScreen": true,
-                  "alpha": 1,
-                  "bounds": {
-                    "x": 120,
-                    "y": 648,
-                    "width": 520,
-                    "height": 332
-                  }
-                }
-              ]
-            }
-          }
-        },
-        {
-          "phase": "dispatch",
-          "at": 1786921370.556606,
-          "data": {
-            "mechanism": "CGEventPostToPid",
-            "variant": "keyDown+keyUp/source=null",
-            "targetPid": 81625,
-            "text": "axon",
-            "eventsCreated": true,
-            "accessibilityTrusted": true,
-            "before": {
-              "frontmost": {
-                "pid": 51864,
-                "bundleId": "dev.axon.acceptance.decoy",
-                "name": "AxonAcceptanceDecoy",
-                "bundlePath": "/Users/mitch/.cairn/build-slots/axn/.authority/slot-121/scratch/axon-acceptance-bundles/AxonAcceptanceDecoy.app",
-                "active": true,
-                "terminated": false
-              },
-              "pointer": {
-                "x": 2554,
-                "y": 1434
-              }
-            },
-            "after": {
-              "frontmost": {
-                "pid": 51864,
-                "bundleId": "dev.axon.acceptance.decoy",
-                "name": "AxonAcceptanceDecoy",
-                "bundlePath": "/Users/mitch/.cairn/build-slots/axn/.authority/slot-121/scratch/axon-acceptance-bundles/AxonAcceptanceDecoy.app",
-                "active": true,
-                "terminated": false
-              },
-              "pointer": {
-                "x": 2554,
-                "y": 1434
-              }
-            }
-          }
-        },
-        {
-          "phase": "observe",
-          "at": 1786921373.609107,
-          "data": {
-            "before": {
-              "checkbox": 0,
-              "text": "axon"
-            },
-            "after": {
-              "checkbox": 0,
-              "text": "axonaxon"
-            },
-            "mutated": true,
-            "mutationEvidence": "the fixture's text field read 'axon' before and 'axonaxon' after",
-            "eventReachedTarget": true,
-            "arrivalDetail": "the application dequeued keyDown on window 2744, keyUp on window 2744, keyDown on window 2744, keyUp on window 2744, keyDown on window 2744, keyUp on window 2744, keyDown on window 2744, keyUp on window 2744",
-            "decoyReceived": [],
-            "accessibility": {
-              "pid": 81625,
-              "accessibilityTrusted": true,
-              "focusedWindowError": 0,
-              "document": null,
-              "title": "axon-acceptance-target"
-            }
-          }
-        },
-        {
-          "phase": "controlAfter",
-          "at": 1786921377.786908,
-          "data": {
-            "ran": true,
-            "acted": true,
-            "mechanism": "CGEventPost(kCGHIDEventTap) with the target activated",
-            "detail": "the fixture's text field read 'axonaxon' before and 'axonaxonaxon' after",
-            "observed": {
-              "mechanism": "CGEventPost(kCGHIDEventTap)",
-              "text": "axon",
-              "activated": true,
-              "before": {
-                "frontmost": {
-                  "pid": 51864,
-                  "bundleId": "dev.axon.acceptance.decoy",
-                  "name": "AxonAcceptanceDecoy",
-                  "bundlePath": "/Users/mitch/.cairn/build-slots/axn/.authority/slot-121/scratch/axon-acceptance-bundles/AxonAcceptanceDecoy.app",
-                  "active": true,
-                  "terminated": false
-                },
-                "pointer": {
-                  "x": 2554,
-                  "y": 1434
-                }
-              },
-              "after": {
-                "frontmost": {
-                  "pid": 51864,
-                  "bundleId": "dev.axon.acceptance.decoy",
-                  "name": "AxonAcceptanceDecoy",
-                  "bundlePath": "/Users/mitch/.cairn/build-slots/axn/.authority/slot-121/scratch/axon-acceptance-bundles/AxonAcceptanceDecoy.app",
-                  "active": true,
-                  "terminated": false
-                },
-                "pointer": {
-                  "x": 2554,
-                  "y": 1434
-                }
-              }
-            }
-          }
-        },
-        {
-          "phase": "restore",
-          "at": 1786921378.605369,
-          "data": {
-            "frontmost": {
-              "pid": 51864,
-              "bundleId": "dev.axon.acceptance.decoy",
-              "name": "AxonAcceptanceDecoy",
-              "bundlePath": "/Users/mitch/.cairn/build-slots/axn/.authority/slot-121/scratch/axon-acceptance-bundles/AxonAcceptanceDecoy.app",
-              "active": true,
-              "terminated": false
-            },
-            "pointer": {
-              "x": 759,
-              "y": 939
-            }
-          }
-        }
-      ],
-      "observations": {
-        "dispatchAccepted": true,
-        "variant": "keyDown+keyUp/source=null",
-        "targetMutated": true,
-        "mutationEvidence": "the fixture's text field read 'axon' before and 'axonaxon' after",
-        "eventReachedTarget": true,
-        "arrivalDetail": "the application dequeued keyDown on window 2744, keyUp on window 2744, keyDown on window 2744, keyUp on window 2744, keyDown on window 2744, keyUp on window 2744, keyDown on window 2744, keyUp on window 2744",
-        "frontmostUnchanged": true,
-        "decoyFrontmost": true,
-        "pointerUnchanged": true,
-        "ownershipProved": true,
-        "pointerBefore": {
-          "x": 2554,
-          "y": 1434
-        },
-        "pointerAfter": {
-          "x": 2554,
-          "y": 1434
-        },
-        "frontmostBefore": "dev.axon.acceptance.decoy",
-        "frontmostAfter": "dev.axon.acceptance.decoy",
-        "targetPid": 81625,
-        "windowId": null,
-        "point": null,
-        "nonce": "2273b67b2827"
-      },
-      "identity": {
-        "bundleId": "dev.axon.acceptance.target",
-        "bundleShortVersion": "1.0.0",
-        "bundleVersion": "1",
-        "versionSeries": "1.0",
-        "runtimeSignature": null,
-        "readableAtDispatch": true,
-        "source": "NSRunningApplication(processIdentifier:) then the bundle's Info.plist",
-        "processStartTime": "Sun Aug 16 19:02:43 2026"
-      },
-      "controls": {
-        "before": {
-          "ran": true,
-          "acted": true,
-          "mechanism": "CGEventPost(kCGHIDEventTap) with the target activated",
-          "detail": "the fixture's text field read '' before and 'axon' after",
-          "observed": {
-            "mechanism": "CGEventPost(kCGHIDEventTap)",
-            "text": "axon",
-            "activated": true,
-            "before": {
-              "frontmost": {
-                "pid": 81625,
-                "bundleId": "dev.axon.acceptance.target",
-                "name": "AxonAcceptanceTarget",
-                "bundlePath": "/Users/mitch/.cairn/build-slots/axn/.authority/slot-121/scratch/axon-acceptance-bundles/AxonAcceptanceTarget.app",
-                "active": true,
-                "terminated": false
-              },
-              "pointer": {
-                "x": 759,
-                "y": 939
-              }
-            },
-            "after": {
-              "frontmost": {
-                "pid": 81625,
-                "bundleId": "dev.axon.acceptance.target",
-                "name": "AxonAcceptanceTarget",
-                "bundlePath": "/Users/mitch/.cairn/build-slots/axn/.authority/slot-121/scratch/axon-acceptance-bundles/AxonAcceptanceTarget.app",
-                "active": true,
-                "terminated": false
-              },
-              "pointer": {
-                "x": 759,
-                "y": 939
-              }
-            }
-          }
-        },
-        "after": {
-          "ran": true,
-          "acted": true,
-          "mechanism": "CGEventPost(kCGHIDEventTap) with the target activated",
-          "detail": "the fixture's text field read 'axonaxon' before and 'axonaxonaxon' after",
-          "observed": {
-            "mechanism": "CGEventPost(kCGHIDEventTap)",
-            "text": "axon",
-            "activated": true,
-            "before": {
-              "frontmost": {
-                "pid": 51864,
-                "bundleId": "dev.axon.acceptance.decoy",
-                "name": "AxonAcceptanceDecoy",
-                "bundlePath": "/Users/mitch/.cairn/build-slots/axn/.authority/slot-121/scratch/axon-acceptance-bundles/AxonAcceptanceDecoy.app",
-                "active": true,
-                "terminated": false
-              },
-              "pointer": {
-                "x": 2554,
-                "y": 1434
-              }
-            },
-            "after": {
-              "frontmost": {
-                "pid": 51864,
-                "bundleId": "dev.axon.acceptance.decoy",
-                "name": "AxonAcceptanceDecoy",
-                "bundlePath": "/Users/mitch/.cairn/build-slots/axn/.authority/slot-121/scratch/axon-acceptance-bundles/AxonAcceptanceDecoy.app",
-                "active": true,
-                "terminated": false
-              },
-              "pointer": {
-                "x": 2554,
-                "y": 1434
-              }
-            }
-          }
-        }
-      },
-      "verdict": [
-        "accepted",
-        "the target acted on input posted to its process while a decoy held the foreground and the real pointer did not move"
-      ]
-    },
-    {
-      "target": "AxonAcceptanceWebView",
-      "action": "click",
-      "campaign": "bbl-2026-08-16",
-      "phases": [
-        {
-          "phase": "identity",
-          "at": 1786921405.269155,
-          "data": {
-            "pid": 84802,
-            "identity": {
-              "bundleId": "dev.axon.acceptance.webview",
-              "bundleShortVersion": "1.0.0",
-              "bundleVersion": "1",
-              "versionSeries": "1.0",
-              "runtimeSignature": null,
-              "readableAtDispatch": true,
-              "source": "NSRunningApplication(processIdentifier:) then the bundle's Info.plist",
-              "processStartTime": "Sun Aug 16 19:02:58 2026"
-            },
-            "nonce": "5f33893ba2a7",
-            "point": null,
-            "windows": {
-              "windows": [
-                {
-                  "windowId": 2757,
-                  "ownerPid": 84802,
-                  "ownerName": "AxonAcceptanceWebView",
-                  "name": "axon-acceptance-target",
-                  "layer": 0,
-                  "onScreen": true,
-                  "alpha": 1,
-                  "bounds": {
-                    "x": 120,
-                    "y": 648,
-                    "width": 520,
-                    "height": 332
-                  }
-                }
-              ]
-            },
-            "detail": {
-              "ready": {
-                "kind": "ready",
-                "role": "target",
-                "nonce": "5f33893ba2a7",
-                "pid": 84802,
-                "windowNumber": 2757,
-                "title": "axon-acceptance-target",
-                "window": {
-                  "x": 120,
-                  "y": 680,
-                  "width": 520,
-                  "height": 300,
-                  "center": {
-                    "x": 380,
-                    "y": 830
-                  }
-                },
-                "checkbox": {
-                  "x": 144,
-                  "y": 932,
-                  "width": 133,
-                  "height": 16,
-                  "center": {
-                    "x": 210.5,
-                    "y": 940
-                  }
-                },
-                "textField": {
-                  "x": 144,
-                  "y": 856,
-                  "width": 472,
-                  "height": 28,
-                  "center": {
-                    "x": 380,
-                    "y": 870
-                  }
-                }
-              }
-            }
-          }
-        },
-        {
-          "phase": "restore",
-          "at": 1786921406.095169,
-          "data": {
-            "frontmost": {
-              "pid": 51864,
-              "bundleId": "dev.axon.acceptance.decoy",
-              "name": "AxonAcceptanceDecoy",
-              "bundlePath": "/Users/mitch/.cairn/build-slots/axn/.authority/slot-121/scratch/axon-acceptance-bundles/AxonAcceptanceDecoy.app",
-              "active": true,
-              "terminated": false
-            },
-            "pointer": {
-              "x": 759,
-              "y": 939
-            }
-          }
-        }
-      ],
-      "verdict": [
-        "blocked",
-        "the trial could not be established: 'NoneType' object is not subscriptable"
-      ]
-    },
-    {
-      "target": "AxonAcceptanceWebView",
-      "action": "keyboard",
-      "campaign": "bbl-2026-08-16",
-      "phases": [
-        {
-          "phase": "identity",
-          "at": 1786921432.460813,
-          "data": {
-            "pid": 87019,
-            "identity": {
-              "bundleId": "dev.axon.acceptance.webview",
-              "bundleShortVersion": "1.0.0",
-              "bundleVersion": "1",
-              "versionSeries": "1.0",
-              "runtimeSignature": null,
-              "readableAtDispatch": true,
-              "source": "NSRunningApplication(processIdentifier:) then the bundle's Info.plist",
-              "processStartTime": "Sun Aug 16 19:03:26 2026"
-            },
-            "nonce": "e0b1fd2c0c7b",
-            "point": null,
-            "windows": {
-              "windows": [
-                {
-                  "windowId": 2767,
-                  "ownerPid": 87019,
-                  "ownerName": "AxonAcceptanceWebView",
-                  "name": "axon-acceptance-target",
-                  "layer": 0,
-                  "onScreen": true,
-                  "alpha": 1,
-                  "bounds": {
-                    "x": 120,
-                    "y": 648,
-                    "width": 520,
-                    "height": 332
-                  }
-                }
-              ]
-            },
-            "detail": {
-              "ready": {
-                "kind": "ready",
-                "role": "target",
-                "nonce": "e0b1fd2c0c7b",
-                "pid": 87019,
-                "windowNumber": 2767,
-                "title": "axon-acceptance-target",
-                "window": {
-                  "x": 120,
-                  "y": 680,
-                  "width": 520,
-                  "height": 300,
-                  "center": {
-                    "x": 380,
-                    "y": 830
-                  }
-                },
-                "checkbox": {
-                  "x": 144,
-                  "y": 932,
-                  "width": 133,
-                  "height": 16,
-                  "center": {
-                    "x": 210.5,
-                    "y": 940
-                  }
-                },
-                "textField": {
-                  "x": 144,
-                  "y": 856,
-                  "width": 472,
-                  "height": 28,
-                  "center": {
-                    "x": 380,
-                    "y": 870
-                  }
-                }
-              }
-            }
-          }
-        },
-        {
-          "phase": "controlBefore",
-          "at": 1786921436.650541,
-          "data": {
-            "ran": true,
-            "acted": false,
-            "mechanism": "CGEventPost(kCGHIDEventTap) with the target activated",
-            "detail": "the page's input read '' before and '' after",
-            "observed": {
-              "mechanism": "CGEventPost(kCGHIDEventTap)",
-              "text": "axon",
-              "activated": true,
-              "before": {
-                "frontmost": {
-                  "pid": 87019,
-                  "bundleId": "dev.axon.acceptance.webview",
-                  "name": "AxonAcceptanceWebView",
-                  "bundlePath": "/Users/mitch/.cairn/build-slots/axn/.authority/slot-121/scratch/axon-acceptance-bundles/AxonAcceptanceWebView.app",
-                  "active": true,
-                  "terminated": false
-                },
-                "pointer": {
-                  "x": 758.69140625,
-                  "y": 939.3046875
-                }
-              },
-              "after": {
-                "frontmost": {
-                  "pid": 87019,
-                  "bundleId": "dev.axon.acceptance.webview",
-                  "name": "AxonAcceptanceWebView",
-                  "bundlePath": "/Users/mitch/.cairn/build-slots/axn/.authority/slot-121/scratch/axon-acceptance-bundles/AxonAcceptanceWebView.app",
-                  "active": true,
-                  "terminated": false
-                },
-                "pointer": {
-                  "x": 758.69140625,
-                  "y": 939.609375
-                }
-              }
-            }
-          }
-        },
-        {
-          "phase": "background",
-          "at": 1786921437.4521012,
-          "data": {
-            "decoy": {
-              "pid": 51864,
-              "bundleId": "dev.axon.acceptance.decoy",
-              "name": "AxonAcceptanceDecoy",
-              "bundlePath": "/Users/mitch/.cairn/build-slots/axn/.authority/slot-121/scratch/axon-acceptance-bundles/AxonAcceptanceDecoy.app",
-              "active": true,
-              "terminated": false
-            },
-            "frontmost": {
-              "pid": 51864,
-              "bundleId": "dev.axon.acceptance.decoy",
-              "name": "AxonAcceptanceDecoy",
-              "bundlePath": "/Users/mitch/.cairn/build-slots/axn/.authority/slot-121/scratch/axon-acceptance-bundles/AxonAcceptanceDecoy.app",
-              "active": true,
-              "terminated": false
-            },
-            "parked": {
-              "requested": {
-                "x": 2554,
-                "y": 1434
-              },
-              "pointer": {
-                "x": 2554,
-                "y": 1434
-              }
-            }
-          }
-        },
-        {
-          "phase": "ownership",
-          "at": 1786921437.503127,
-          "data": {
-            "proved": true,
-            "observed": {
-              "windows": [
-                {
-                  "windowId": 2767,
-                  "ownerPid": 87019,
-                  "ownerName": "AxonAcceptanceWebView",
-                  "name": "axon-acceptance-target",
-                  "layer": 0,
-                  "onScreen": true,
-                  "alpha": 1,
-                  "bounds": {
-                    "x": 120,
-                    "y": 648,
-                    "width": 520,
-                    "height": 332
-                  }
-                }
-              ]
-            }
-          }
-        },
-        {
-          "phase": "dispatch",
-          "at": 1786921438.0693681,
-          "data": {
-            "mechanism": "CGEventPostToPid",
-            "variant": "keyDown+keyUp/source=null",
-            "targetPid": 87019,
-            "text": "axon",
-            "eventsCreated": true,
-            "accessibilityTrusted": true,
-            "before": {
-              "frontmost": {
-                "pid": 51864,
-                "bundleId": "dev.axon.acceptance.decoy",
-                "name": "AxonAcceptanceDecoy",
-                "bundlePath": "/Users/mitch/.cairn/build-slots/axn/.authority/slot-121/scratch/axon-acceptance-bundles/AxonAcceptanceDecoy.app",
-                "active": true,
-                "terminated": false
-              },
-              "pointer": {
-                "x": 2554,
-                "y": 1434
-              }
-            },
-            "after": {
-              "frontmost": {
-                "pid": 51864,
-                "bundleId": "dev.axon.acceptance.decoy",
-                "name": "AxonAcceptanceDecoy",
-                "bundlePath": "/Users/mitch/.cairn/build-slots/axn/.authority/slot-121/scratch/axon-acceptance-bundles/AxonAcceptanceDecoy.app",
-                "active": true,
-                "terminated": false
-              },
-              "pointer": {
-                "x": 2554,
-                "y": 1434
-              }
-            }
-          }
-        },
-        {
-          "phase": "observe",
-          "at": 1786921441.143098,
-          "data": {
-            "before": {
-              "clicks": 0,
-              "text": "",
-              "navigations": 0
-            },
-            "after": {
-              "clicks": 0,
-              "text": "",
-              "navigations": 0
-            },
-            "mutated": false,
-            "mutationEvidence": "the page's input read '' before and '' after",
-            "eventReachedTarget": false,
-            "arrivalDetail": "the page's event listeners recorded nothing",
-            "decoyReceived": [],
-            "accessibility": {
-              "pid": 87019,
-              "accessibilityTrusted": true,
-              "focusedWindowError": 0,
-              "document": null,
-              "title": "axon-acceptance-target"
-            }
-          }
-        },
-        {
-          "phase": "controlAfter",
-          "at": 1786921445.335776,
-          "data": {
-            "ran": true,
-            "acted": false,
-            "mechanism": "CGEventPost(kCGHIDEventTap) with the target activated",
-            "detail": "the page's input read '' before and '' after",
-            "observed": {
-              "mechanism": "CGEventPost(kCGHIDEventTap)",
-              "text": "axon",
-              "activated": true,
-              "before": {
-                "frontmost": {
-                  "pid": 51864,
-                  "bundleId": "dev.axon.acceptance.decoy",
-                  "name": "AxonAcceptanceDecoy",
-                  "bundlePath": "/Users/mitch/.cairn/build-slots/axn/.authority/slot-121/scratch/axon-acceptance-bundles/AxonAcceptanceDecoy.app",
-                  "active": true,
-                  "terminated": false
-                },
-                "pointer": {
-                  "x": 2554,
-                  "y": 1434
-                }
-              },
-              "after": {
-                "frontmost": {
-                  "pid": 51864,
-                  "bundleId": "dev.axon.acceptance.decoy",
-                  "name": "AxonAcceptanceDecoy",
-                  "bundlePath": "/Users/mitch/.cairn/build-slots/axn/.authority/slot-121/scratch/axon-acceptance-bundles/AxonAcceptanceDecoy.app",
-                  "active": true,
-                  "terminated": false
-                },
-                "pointer": {
-                  "x": 2554,
-                  "y": 1434
-                }
-              }
-            }
-          }
-        },
-        {
-          "phase": "restore",
-          "at": 1786921446.117818,
-          "data": {
-            "frontmost": {
-              "pid": 51864,
-              "bundleId": "dev.axon.acceptance.decoy",
-              "name": "AxonAcceptanceDecoy",
-              "bundlePath": "/Users/mitch/.cairn/build-slots/axn/.authority/slot-121/scratch/axon-acceptance-bundles/AxonAcceptanceDecoy.app",
-              "active": true,
-              "terminated": false
-            },
-            "pointer": {
-              "x": 759,
-              "y": 939
-            }
-          }
-        }
-      ],
-      "observations": {
-        "dispatchAccepted": true,
-        "variant": "keyDown+keyUp/source=null",
-        "targetMutated": false,
-        "mutationEvidence": "the page's input read '' before and '' after",
-        "eventReachedTarget": false,
-        "arrivalDetail": "the page's event listeners recorded nothing",
-        "frontmostUnchanged": true,
-        "decoyFrontmost": true,
-        "pointerUnchanged": true,
-        "ownershipProved": true,
-        "pointerBefore": {
-          "x": 2554,
-          "y": 1434
-        },
-        "pointerAfter": {
-          "x": 2554,
-          "y": 1434
-        },
-        "frontmostBefore": "dev.axon.acceptance.decoy",
-        "frontmostAfter": "dev.axon.acceptance.decoy",
-        "targetPid": 87019,
-        "windowId": null,
-        "point": null,
-        "nonce": "e0b1fd2c0c7b"
-      },
-      "identity": {
-        "bundleId": "dev.axon.acceptance.webview",
-        "bundleShortVersion": "1.0.0",
-        "bundleVersion": "1",
-        "versionSeries": "1.0",
-        "runtimeSignature": null,
-        "readableAtDispatch": true,
-        "source": "NSRunningApplication(processIdentifier:) then the bundle's Info.plist",
-        "processStartTime": "Sun Aug 16 19:03:26 2026"
-      },
-      "controls": {
-        "before": {
-          "ran": true,
-          "acted": false,
-          "mechanism": "CGEventPost(kCGHIDEventTap) with the target activated",
-          "detail": "the page's input read '' before and '' after",
-          "observed": {
-            "mechanism": "CGEventPost(kCGHIDEventTap)",
-            "text": "axon",
-            "activated": true,
-            "before": {
-              "frontmost": {
-                "pid": 87019,
-                "bundleId": "dev.axon.acceptance.webview",
-                "name": "AxonAcceptanceWebView",
-                "bundlePath": "/Users/mitch/.cairn/build-slots/axn/.authority/slot-121/scratch/axon-acceptance-bundles/AxonAcceptanceWebView.app",
-                "active": true,
-                "terminated": false
-              },
-              "pointer": {
-                "x": 758.69140625,
-                "y": 939.3046875
-              }
-            },
-            "after": {
-              "frontmost": {
-                "pid": 87019,
-                "bundleId": "dev.axon.acceptance.webview",
-                "name": "AxonAcceptanceWebView",
-                "bundlePath": "/Users/mitch/.cairn/build-slots/axn/.authority/slot-121/scratch/axon-acceptance-bundles/AxonAcceptanceWebView.app",
-                "active": true,
-                "terminated": false
-              },
-              "pointer": {
-                "x": 758.69140625,
-                "y": 939.609375
-              }
-            }
-          }
-        },
-        "after": {
-          "ran": true,
-          "acted": false,
-          "mechanism": "CGEventPost(kCGHIDEventTap) with the target activated",
-          "detail": "the page's input read '' before and '' after",
-          "observed": {
-            "mechanism": "CGEventPost(kCGHIDEventTap)",
-            "text": "axon",
-            "activated": true,
-            "before": {
-              "frontmost": {
-                "pid": 51864,
-                "bundleId": "dev.axon.acceptance.decoy",
-                "name": "AxonAcceptanceDecoy",
-                "bundlePath": "/Users/mitch/.cairn/build-slots/axn/.authority/slot-121/scratch/axon-acceptance-bundles/AxonAcceptanceDecoy.app",
-                "active": true,
-                "terminated": false
-              },
-              "pointer": {
-                "x": 2554,
-                "y": 1434
-              }
-            },
-            "after": {
-              "frontmost": {
-                "pid": 51864,
+                "pid": 34401,
                 "bundleId": "dev.axon.acceptance.decoy",
                 "name": "AxonAcceptanceDecoy",
                 "bundlePath": "/Users/mitch/.cairn/build-slots/axn/.authority/slot-121/scratch/axon-acceptance-bundles/AxonAcceptanceDecoy.app",
