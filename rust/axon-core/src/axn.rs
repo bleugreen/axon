@@ -391,13 +391,15 @@ pub enum ArgumentType {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct AxnAction {
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub id: Option<String>,
     #[serde(default)]
     pub tool: String,
-    #[serde(default)]
+    // An action that requires nothing and expects nothing says so by omission. Serializing the
+    // empty collections instead would put scaffolding into every authored and healed document.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub requires: Vec<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub expects: Vec<ExpectedFact>,
     #[serde(flatten)]
     pub params: Map<String, Value>,
