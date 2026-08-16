@@ -1175,31 +1175,55 @@ public final class AXPrimitiveActionExecutor {
     ///
     /// Activation is proved before anything is posted, and restoration runs on every exit including
     /// a thrown error, so an escalation cannot leave the user's foreground where Axon put it.
+    ///
+    /// Every claim the result makes about the foreground comes from this one transaction: the
+    /// single `prior` reading taken here, compared against a target that is either a resolved
+    /// process or honestly none. A missing target used to satisfy the comparison by default, which
+    /// reported the target as already frontmost, skipped activation, and posted global input into
+    /// the foreign session the same envelope had just named.
     private func inForeground(
         action: String,
         target: String,
         policy: DeliveryPolicy,
-        process: pid_t?,
+        targeting foreground: ForegroundTarget,
         restoresPointer: Bool,
         details: [String: JSONValue],
         _ body: () -> PrimitiveActionResult
     ) -> PrimitiveActionResult {
         let prior = frontmostApp()
-        let alreadyFrontmost = process == nil || prior?.processIdentifier == process
-        // Nil, not true, when there is no process: an action that names no application activates
-        // nothing, so there is no activation to have proved.
-        var activationProved: Bool? = process == nil ? nil : alreadyFrontmost
-        if !alreadyFrontmost, let process {
-            _ = activateProcess(process)
-            activationProved = settle { self.frontmostApp()?.processIdentifier == process }
+        let alreadyFrontmost: Bool?
+        switch foreground {
+        case let .process(process):
+            // Measured, and only measured. An unreadable foreground is not evidence that the target
+            // is standing in it.
+            alreadyFrontmost = prior?.processIdentifier == process
+        case .currentForeground:
+            alreadyFrontmost = true
+        case .unattributed:
+            alreadyFrontmost = nil
+        }
+        // Whether *this* transaction raised something, which is the question restoration asks.
+        // `alreadyFrontmost` answers a different one and cannot stand in for it.
+        var activated = false
+        // Nil, not true, when nothing was raised: an action that activates nothing has no
+        // activation to have proved.
+        var activationProved: Bool?
+        if case let .process(process) = foreground {
+            if alreadyFrontmost == true {
+                activationProved = true
+            } else {
+                _ = activateProcess(process)
+                activated = true
+                activationProved = settle { self.frontmostApp()?.processIdentifier == process }
+            }
         }
         guard activationProved != false else {
             let cleanup = ForegroundCleanup(
                 priorApp: prior?.identity,
                 priorAppProcessIdentifier: prior.map { Int($0.processIdentifier) },
-                alreadyFrontmost: false,
+                alreadyFrontmost: alreadyFrontmost,
                 activationProved: false,
-                restored: restoreForeground(prior: prior, alreadyFrontmost: false),
+                restored: restoreForeground(prior: prior, activated: activated),
                 pointerRestored: nil,
                 message: "No events were posted"
             )
@@ -1220,7 +1244,7 @@ public final class AXPrimitiveActionExecutor {
         let pointerBefore = restoresPointer ? pointerLocation() : nil
         func handBack() -> ForegroundCleanup {
             let pointerRestored = restorePointer(to: pointerBefore)
-            let restored = restoreForeground(prior: prior, alreadyFrontmost: alreadyFrontmost)
+            let restored = restoreForeground(prior: prior, activated: activated)
             return ForegroundCleanup(
                 priorApp: prior?.identity,
                 priorAppProcessIdentifier: prior.map { Int($0.processIdentifier) },
@@ -1244,8 +1268,11 @@ public final class AXPrimitiveActionExecutor {
         )
     }
 
-    private func restoreForeground(prior: ForegroundApp?, alreadyFrontmost: Bool) -> Bool {
-        guard !alreadyFrontmost, let prior else {
+    /// Puts the prior application back, but only when this transaction is what moved it. A dispatch
+    /// that raised nothing has nothing to hand back, and saying so is not the same as claiming the
+    /// target was already there.
+    private func restoreForeground(prior: ForegroundApp?, activated: Bool) -> Bool {
+        guard activated, let prior else {
             return true
         }
         if frontmostApp()?.processIdentifier == prior.processIdentifier {
