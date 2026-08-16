@@ -2,5 +2,8 @@
   "name": "axon-acceptance-electron-target",
   "private": true,
   "version": "0.0.0",
-  "main": "main.js"
+  "main": "main.js",
+  "dependencies": {
+    "electron": "^43.4.0"
+  }
 }
