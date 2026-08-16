@@ -117,7 +117,7 @@ public enum ToolTarget: Equatable, Sendable {
         in object: [String: JSONValue],
         fieldName: String
     ) throws -> ActionPointCoordinateSpace? {
-        let rawValue: String?
+        let rawValue: String
         if case let .string(value)? = object["coordinateSpace"] {
             rawValue = value
         } else if case let .string(value)? = object["space"] {
@@ -136,7 +136,6 @@ public enum ToolTarget: Equatable, Sendable {
             throw JSONRPCError.invalidParams("\(fieldName) point coordinateSpace must be screen, window, or screenshot")
         }
     }
-
 
     private static func numericValue(_ key: String, in params: [String: JSONValue]) -> Double? {
         switch params[key] {

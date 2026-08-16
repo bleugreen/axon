@@ -1050,7 +1050,20 @@ private struct PrimitiveActionCommandHandler {
     private func screenPoint(for point: ActionPoint, defaultApp: String?, fieldName: String) throws -> ActionPoint {
         switch point.coordinateSpace {
         case .screen, .legacyScreen:
-            return point
+            // A screen coordinate needs no conversion, but it still has an owner when the caller
+            // named one. Returning it untouched dropped the command-level app, and delivery reads a
+            // point with no app as a deliberately anonymous coordinate: nothing to bind to, nothing
+            // to raise, so the input goes to whichever application already holds the foreground.
+            guard point.app == nil, let defaultApp, !defaultApp.isEmpty else {
+                return point
+            }
+            return ActionPoint(
+                x: point.x,
+                y: point.y,
+                coordinateSpace: point.coordinateSpace,
+                app: defaultApp,
+                sourceWindowFrame: point.sourceWindowFrame
+            )
         case .window, .screenshot:
             let app = point.app ?? defaultApp
             guard let app, !app.isEmpty else {
