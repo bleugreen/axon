@@ -217,8 +217,14 @@ fn a_recorded_flow_round_trips_through_the_shared_v2_codec() {
     assert_eq!(reparsed, document);
     // An action that requires nothing and expects nothing says so by omission, so a recorded file
     // stays readable by the person who has to edit it.
-    assert!(!yaml.contains("requires"), "unexpected scaffolding in {yaml}");
-    assert!(!yaml.contains("expects"), "unexpected scaffolding in {yaml}");
+    assert!(
+        !yaml.contains("requires"),
+        "unexpected scaffolding in {yaml}"
+    );
+    assert!(
+        !yaml.contains("expects"),
+        "unexpected scaffolding in {yaml}"
+    );
     assert!(!yaml.contains("null"), "unexpected scaffolding in {yaml}");
 }
 
