@@ -410,7 +410,7 @@ public final class AXPrimitiveActionExecutor {
             return scrollWheelResult(
                 target: description,
                 at: CGPoint(x: point.x, y: point.y),
-                process: point.app.flatMap { processIdentifier(forApp: $0) },
+                process: try point.app.map(processIdentifier(forApp:)),
                 policy: policy,
                 identityMessage: "A raw screen point carries no application identity, so a wheel burst cannot be bound to a process",
                 deltaX: deltaX,
@@ -537,12 +537,13 @@ public final class AXPrimitiveActionExecutor {
                     post: post
                 )
             } else {
-                // Deliberately no process to activate: a wheel routes by the event's location, so
-                // raising the app would cost the user their focus and buy the scroll nothing. A
-                // wheel carries no cursor position either, which is why neither rung has a pointer
-                // to restore or to be held to.
+                // Unattributed even when the process is known: a wheel routes by the event's
+                // location, so raising the app would cost the user their focus and buy the scroll
+                // nothing, and a transaction that will not raise anything has no business claiming
+                // the target was already forward. A wheel carries no cursor position either, which
+                // is why neither rung has a pointer to restore or to be held to.
                 base = self.inForeground(
-                    action: "scroll", target: target, policy: policy, process: nil,
+                    action: "scroll", target: target, policy: policy, targeting: .unattributed,
                     restoresPointer: false, details: wheelDetails
                 ) {
                     let dispatched = post(self.postEvent)
@@ -612,7 +613,7 @@ public final class AXPrimitiveActionExecutor {
         case let .handle(handle):
             return processProvider(try elementStore.element(for: handle))
         case let .point(point):
-            return point.app.flatMap { processIdentifier(forApp: $0) }
+            return try point.app.map(processIdentifier(forApp:))
         case nil:
             return app?.processIdentifier
         }
@@ -630,7 +631,9 @@ public final class AXPrimitiveActionExecutor {
         let target = "\(from.targetDescription)->\(to.targetDescription)"
         // A drag has to stay inside one application for its whole path, so the identity that binds
         // background delivery is the app the caller named, or the process owning the start element.
-        let process = app.flatMap { processIdentifier(forApp: $0) }
+        // An app that was named and did not resolve throws: falling back to an endpoint's process
+        // would silently drag inside an application the caller never asked for.
+        let process = try app.map(processIdentifier(forApp:))
             ?? start.element.flatMap(processProvider)
             ?? end.element.flatMap(processProvider)
         let details: [String: JSONValue] = [
@@ -657,7 +660,7 @@ public final class AXPrimitiveActionExecutor {
                 target: target,
                 policy: policy,
                 candidate: candidate,
-                process: process,
+                targeting: ForegroundTarget(resolved: process),
                 start: start,
                 end: end,
                 durationMs: durationMs,
