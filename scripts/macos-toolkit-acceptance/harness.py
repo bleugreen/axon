@@ -791,6 +791,7 @@ class Trial:
         decoy: Decoy,
         campaign: str,
         park_at: tuple[float, float],
+        settle=time.sleep,
     ) -> None:
         self.probe = probe
         self.reports = reports
@@ -799,6 +800,9 @@ class Trial:
         self.decoy = decoy
         self.campaign = campaign
         self.park_at = park_at
+        # Seamed so the ordering and the cleanup can be exercised without a
+        # desktop and without waiting out every reaction window.
+        self.settle = settle
         self.phases: list[dict] = []
 
     def _phase(self, name: str, data: object) -> None:
@@ -883,7 +887,7 @@ class Trial:
                 dispatch = self.probe("post-key", pid=launched.pid, text=TYPED_TEXT)
             self._phase("dispatch", dispatch)
 
-            time.sleep(REACTION_TIMEOUT)
+            self.settle(REACTION_TIMEOUT)
             after = self.target.snapshot()
             mutated, mutation_detail = self.target.mutation(self.action, before, after)
             reached, arrival_detail = self.target.arrival(mark)
@@ -964,7 +968,7 @@ class Trial:
         else:
             observed = self.probe("foreground-key", pid=launched.pid, text=TYPED_TEXT)
             mechanism = "CGEventPost(kCGHIDEventTap) with the target activated"
-        time.sleep(REACTION_TIMEOUT)
+        self.settle(REACTION_TIMEOUT)
         after = self.target.snapshot()
         acted, detail = self.target.mutation(self.action, before, after)
         return {"ran": True, "acted": acted, "mechanism": mechanism, "detail": detail, "observed": observed}
