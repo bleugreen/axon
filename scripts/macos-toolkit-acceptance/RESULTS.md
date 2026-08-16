@@ -11,13 +11,13 @@ decides what to authorize; a target absent from the table authorizes nothing.
 
 | campaign | measured | machine | macOS | Accessibility | raw evidence |
 | --- | --- | --- | --- | --- | --- |
-| `bbl-2026-08-16` | 2026-08-16T19:18:54-04:00 | arm64 macOS bench | Version 26.4 (Build 25E246) | granted | [`raw/bbl-2026-08-16.json`](raw/bbl-2026-08-16.json) |
+| `bbl-2026-08-16` | 2026-08-16T19:20:11-04:00 | arm64 macOS bench | Version 26.4 (Build 25E246) | granted | [`raw/bbl-2026-08-16.json`](raw/bbl-2026-08-16.json) |
 
 ## Rows
 
 | row | target | identity | action | verdict | dispatch | target acted | arrival | invariants | controls |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| `safari-click-2026-08-16` | safari (webkit-browser) | `com.apple.Safari` 26.4 | `click` | **blocked** | accepted | no | never arrived | all held | before: acted; after: silent |
+| `safari-click-2026-08-16` | safari (webkit-browser) | `com.apple.Safari` 26.4 | `click` | **refused** | accepted | no | never arrived | all held | before: acted; after: acted |
 | `safari-keyboard-2026-08-16` | safari (webkit-browser) | `com.apple.Safari` 26.4 | `keyboard` | **accepted** | accepted | yes | reached | all held | before: acted; after: acted |
 
 ## Reading this table
@@ -48,15 +48,15 @@ claims exactly as much as that key can carry and no more.
 
 ### `safari-click-2026-08-16`
 
-the foreground control after the dispatch did not act, so the target cannot be shown to have been live and aimed at throughout
+the Core Graphics post completed and the target did nothing: dispatch was accepted by macOS and the action was not delivered
 
 - Variant: `leftMouseDown+leftMouseUp/source=null/gapMs=0` through `CGEventPostToPid`
 - Campaign: `bbl-2026-08-16`
 - Fresh state: not fresh — a foreground control click preceded the measured dispatch, which is what licenses the click trial; a keyboard verdict is never taken from a trial shaped this way
 - Target-side observation: the page neither navigated nor reported a click
 - Arrival: the page's event listeners recorded nothing
-- Control before: acted via `CGEventPost(kCGHIDEventTap) with the real pointer over the coordinate` — the page navigated to the local endpoint
-- Control after: stayed silent via `CGEventPost(kCGHIDEventTap) with the real pointer over the coordinate` — the page neither navigated nor reported a click
+- Control before: acted via `CGEventPost(kCGHIDEventTap) with the real pointer over the coordinate` — the page followed its link and the server served the next document
+- Control after: acted via `CGEventPost(kCGHIDEventTap) with the real pointer over the coordinate` — the page followed its link and the server served the next document
 - Raw evidence: [`raw/bbl-2026-08-16.json#safari-click`](raw/bbl-2026-08-16.json)
 - Re-measure when: a Safari or macOS major release
 
