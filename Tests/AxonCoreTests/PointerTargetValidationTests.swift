@@ -1,3 +1,4 @@
+import AppKit
 import ApplicationServices
 import CoreGraphics
 import Testing
@@ -210,6 +211,44 @@ private func pointerExecutor(
     #expect(result.dispatchSuccess)
     #expect(result.strategy == "CGEvent")
     #expect(posted == [.leftMouseDown, .leftMouseUp])
+}
+
+@Test func anAppScopedPointTakesTheTargetedRungAndProvesNothingAboutTheForeground() throws {
+    // `CGEventToPid` is a separate mechanism from foreground activation and answers a different
+    // question. A point that names an application is delivered to that process directly: nothing is
+    // raised, nothing reaches the shared devices, and the result carries no foreground evidence at
+    // all — so a working targeted click is never evidence that the transaction above it behaves.
+    var global: [CGEventType] = []
+    var targeted: [pid_t] = []
+    var activations: [pid_t] = []
+    // Resolvable by pid, so the point carries a genuine application identity without depending on
+    // any particular application being installed.
+    let target = try #require(NSWorkspace.shared.frontmostApplication?.processIdentifier)
+    let executor = AXPrimitiveActionExecutor(
+        elementStore: AXElementStore(),
+        overlay: nil,
+        postEvent: { global.append($0.type) },
+        postEventToProcess: { _, pid in targeted.append(pid) },
+        sleepMilliseconds: { _ in },
+        frameProvider: { _ in pointerFrame },
+        parentProvider: { _ in nil },
+        processProvider: { _ in nil },
+        frontmostApp: { ForegroundApp(processIdentifier: 7, name: "Prior", bundleIdentifier: "com.example.prior") },
+        activateProcess: { activations.append($0); return true },
+        pointerLocation: { .zero }
+    )
+
+    let result = try executor.click(
+        point: ActionPoint(x: 30, y: 40, coordinateSpace: .screen, app: String(target)),
+        policy: .foregroundPermitted
+    )
+
+    #expect(result.delivery == .pixel)
+    #expect(result.strategy == "CGEventToPid")
+    #expect(targeted == [target, target])
+    #expect(global.isEmpty)
+    #expect(activations.isEmpty)
+    #expect(result.details["foreground"] == nil)
 }
 
 @Test func typeFallbackRejectsMismatchedHitBeforeMouseOrKeyboardEvents() throws {
