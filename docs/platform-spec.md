@@ -269,6 +269,18 @@ captured and restored around it. If restoration fails after dispatch, the result
 keeps its `delivery`, `dispatchSuccess`, and verification evidence and reports
 the failed hand-back separately.
 
+A coordinate reaches the pixel rung on verified geometry, not on being told who
+owns it. An element hit-tests; a point derived from a capture carries the window
+frame it was measured against and is checked against it. A bare screen coordinate
+with an application name attached has neither: the name is an owner, and nothing
+has established that the coordinate lies in that application's window. Such a
+point takes the foreground rung, where its coordinates mean what the caller
+measured, and refuses under `backgroundOnly`. This is fail-closed for a reason a
+click makes sharp: a targeted post is accepted by the window server whether or
+not the application acts on it, and a click has no postcondition to notice the
+difference with, so a rung that cannot establish its aim would report delivery
+for an event that did nothing.
+
 Whether the target already holds the foreground is a measurement, never a
 default: the resolved target process compared against the one prior-foreground
 reading the transaction captured. A dispatch with no application to compare
