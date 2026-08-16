@@ -48,6 +48,10 @@ struct Context {
     last_text: String,
     counts: Vec<(u64, i64)>,
     deadline: Instant,
+    /// Whether the opening reading has been published. The campaign compares
+    /// control state before and after a dispatch, so the baseline has to be
+    /// reported even though nothing has changed yet.
+    reported_baseline: bool,
 }
 
 thread_local! {
@@ -172,6 +176,7 @@ pub fn run(args: &Args) -> Result<(), String> {
             last_text: nsstring_to_string(send(field, "stringValue")).unwrap_or_default(),
             counts: Vec::new(),
             deadline: Instant::now() + Duration::from_secs_f64(seconds),
+            reported_baseline: false,
         });
     });
 
@@ -235,7 +240,9 @@ extern "C" fn tick(_this: Id, _command: Sel, _timer: Id) {
         };
         let checkbox = send_ret_i64(context.checkbox, "state");
         let text = nsstring_to_string(send(context.field, "stringValue")).unwrap_or_default();
-        if checkbox != context.last_checkbox || text != context.last_text {
+        let changed = checkbox != context.last_checkbox || text != context.last_text;
+        if changed || !context.reported_baseline {
+            context.reported_baseline = true;
             context.last_checkbox = checkbox;
             context.last_text = text.clone();
             let record = J::obj(vec![
