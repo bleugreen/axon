@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+# Electron is not on a Mac by default, and it is what stands in for a packaged
+# Chromium application rather than a browser. A version is pinned rather than
+# floating, because a row speaks for the runtime it was measured against.
+#
+#   install-electron            # the current release
+#   install-electron 32         # a specific major
+#
+# The runtime is gitignored: the measurement is committed, the download is not.
+set -euo pipefail
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+mkdir -p "$here/targets/electron"
+cd "$here/targets/electron"
+
+version="${1:-latest}"
+npm install --no-audit --no-fund "electron@$version"
+node -e "console.log('installed electron', require('electron/package.json').version)"

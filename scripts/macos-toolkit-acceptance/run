@@ -1,0 +1,42 @@
+#!/usr/bin/env bash
+# Entry point for the macOS PID-targeted input acceptance campaign.
+#
+# This is not hermetic and cannot be. There is no macOS equivalent of the Linux
+# harness's Xvfb lane: PID-targeted input delivery is a property of a real
+# window server with a logged-in user in front of it, and the permission that
+# gates it is granted to a process by a person. So this runs on an interactive
+# bench, serialized, and it takes over the pointer and the foreground while it
+# runs.
+#
+#   scripts/macos-toolkit-acceptance/run                 # the whole matrix
+#   scripts/macos-toolkit-acceptance/run --only safari
+#   scripts/macos-toolkit-acceptance/run --skip-build    # reuse the built probe
+#
+# The measurement is written to results.json, rendered into RESULTS.md, and kept
+# unnormalized under raw/. All three are committed: the point of the campaign is
+# that the table is reviewable and re-runnable rather than folklore.
+set -euo pipefail
+
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+if [[ "$(uname -s)" != "Darwin" ]]; then
+  echo "this campaign measures macOS and runs on macOS only" >&2
+  exit 64
+fi
+
+command -v cargo >/dev/null || { echo "cargo is required to build the probe" >&2; exit 1; }
+
+# Accessibility permission is what makes a posted event reach anything at all.
+# Without it macOS drops every post in silence, which from the sending side is
+# indistinguishable from a target that declined — so the campaign records every
+# trial as blocked rather than producing a table of refusals it did not earn.
+# The harness reads the permission itself and says so in every row; this warning
+# is here so the operator finds out before waiting out a full matrix.
+if ! "$here/probe/target/release/acceptance-probe" env 2>/dev/null | grep -q '"accessibilityTrusted":true'; then
+  echo "warning: the probe does not yet hold Accessibility permission." >&2
+  echo "         Grant it to the terminal running this campaign in" >&2
+  echo "         System Settings > Privacy & Security > Accessibility," >&2
+  echo "         or every row will be recorded as blocked." >&2
+fi
+
+exec python3 "$here/harness.py" "$@"
