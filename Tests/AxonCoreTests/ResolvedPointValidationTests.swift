@@ -239,7 +239,10 @@ private func resolvedPoint(at point: CGPoint, app: pid_t, provenance: AXFrame? =
     // at the rung where its coordinates mean what the caller measured, and the absence of
     // provenance costs it that rung rather than earning it a fabricated refusal.
     let process = try resolvableProcess()
-    let desktop = FakeDesktop(windows: [resolutionWindow], hitOwners: [4_242])
+    // The point is well outside `resolutionWindow`, and the window list answers — so a guard that
+    // measured this coordinate against a frame would refuse it. It has no frame to be measured
+    // against, so it is not measured.
+    let desktop = FakeDesktop(windows: [resolutionWindow], hitOwners: [process])
 
     let result = try desktop.executor().click(
         point: resolvedPoint(at: strayPoint, app: process, provenance: nil),
@@ -249,5 +252,43 @@ private func resolvedPoint(at point: CGPoint, app: pid_t, provenance: AXFrame? =
     #expect(result.dispatchSuccess)
     #expect(result.delivery == .foreground)
     #expect(result.message?.contains("Pointer target validation failed") != true)
+    #expect(desktop.posted == [.leftMouseDown, .leftMouseUp])
+}
+
+@Test func aPointWithoutProvenanceIsRefusedWhenAnotherApplicationCoversIt() throws {
+    // What such a point *can* be asked, once its application has been raised, is whether the pixels
+    // under it belong to that application. Here they belong to somebody else, so the escalation has
+    // not put the target under the coordinate and a global click would land in the window the
+    // activation was meant to move aside — the misattribution this guard exists to prevent.
+    let process = try resolvableProcess()
+    let desktop = FakeDesktop(windows: [resolutionWindow], hitOwners: [4_242])
+
+    let result = try desktop.executor().click(
+        point: resolvedPoint(at: insidePoint, app: process, provenance: nil),
+        policy: .foregroundPermitted
+    )
+
+    #expect(result.dispatchSuccess == false)
+    #expect(result.message?.contains("covered by a window of process 4242") == true)
+    #expect(desktop.posted.isEmpty)
+    // The activation still happened and is still reported honestly; what it did not do is justify
+    // a click it could not aim.
+    #expect(result.details["foreground"]?["activationProved"] == .bool(true))
+}
+
+@Test func aPointWithoutProvenanceWaitsForTheRaisedWindowToReachTheTop() throws {
+    // An application is reported frontmost before the window server has finished raising it, so the
+    // first look still sees the window that was on top. Clicking there would deliver the escalation
+    // to the wrong application; the check sits inside the settle budget so the raise can complete.
+    let process = try resolvableProcess()
+    let desktop = FakeDesktop(windows: [resolutionWindow], hitOwners: [4_242, 4_242, process])
+
+    let result = try desktop.executor().click(
+        point: resolvedPoint(at: insidePoint, app: process, provenance: nil),
+        policy: .foregroundPermitted
+    )
+
+    #expect(result.dispatchSuccess)
+    #expect(result.delivery == .foreground)
     #expect(desktop.posted == [.leftMouseDown, .leftMouseUp])
 }
