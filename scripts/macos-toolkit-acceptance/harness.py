@@ -368,8 +368,11 @@ class FixtureTarget(Target):
         point = None
         if self.webview_url:
             geometry = self.reports.wait_for(READY_TIMEOUT, kind="geometry", nonce=self.nonce)
-            if geometry:
-                point = geometry["widgets"]["link"]["center"]
+            if geometry is None:
+                raise RuntimeError(
+                    "the embedded WKWebView never loaded the measurement page"
+                )
+            point = geometry["widgets"]["link"]["center"]
         elif action == "click":
             point = self.ready["checkbox"]["center"]
         return Launched(
@@ -435,6 +438,36 @@ class FixtureTarget(Target):
             except subprocess.TimeoutExpired:
                 self.process.kill()
         self.process = None
+
+
+def owning_process(probe: Probe, point: dict, expected_bundle_id: str | None) -> dict:
+    """Which process owns the window showing the measurement page.
+
+    Resolved from the window at the page's own coordinate rather than from the
+    list of processes with a matching bundle identifier, because a browser is
+    not one process. Safari runs one process per window family and `open`
+    readily starts a second instance beside one that was already there: asking
+    for "the Safari" gets an arbitrary member of a set, and a trial that posts
+    at one window's coordinate while naming another window's process measures
+    nothing. The window is the thing the page is in, so the window is what the
+    process identity is taken from.
+    """
+    stack = probe("owner-at", x=point["x"], y=point["y"])
+    ordinary = [window for window in stack.get("stack", []) if window.get("layer") == 0]
+    if not ordinary:
+        return {"pid": None, "reason": "no ordinary window covers the page's own coordinate"}
+    pid = ordinary[0]["ownerPid"]
+    reported = probe("app", pid=pid)
+    if expected_bundle_id and reported.get("bundleId") != expected_bundle_id:
+        return {
+            "pid": None,
+            "reason": (
+                f"the window at the page's coordinate belongs to "
+                f"{reported.get('bundleId')!r}, not to {expected_bundle_id!r}"
+            ),
+            "stack": stack,
+        }
+    return {"pid": pid, "window": ordinary[0], "application": reported, "stack": stack}
 
 
 def web_point(reports: Reports, nonce: str) -> dict | None:
@@ -529,17 +562,19 @@ class BrowserTarget(Target):
         geometry = self.reports.wait_for(READY_TIMEOUT, kind="geometry", nonce=self.nonce)
         if geometry is None:
             raise RuntimeError(f"{self.label} never loaded the measurement page")
-        found = self.probe("find-app", bundle_id=self.bundle_id)
-        applications = found.get("applications") or []
-        if not applications:
-            raise RuntimeError(f"{self.label} is not running after being opened")
-        pid = applications[0]["pid"]
-        time.sleep(1.0)
+        time.sleep(1.5)
+        point = web_point(self.reports, self.nonce) or geometry["widgets"]["link"]["center"]
+        owner = owning_process(self.probe, point, self.bundle_id)
+        if owner["pid"] is None:
+            raise RuntimeError(
+                f"{self.label}: could not bind the page to a process — {owner['reason']}"
+            )
         return Launched(
-            pid=pid,
+            pid=owner["pid"],
             nonce=self.nonce,
-            point=geometry["widgets"]["link"]["center"],
-            detail={"geometry": geometry},
+            point=point,
+            window=owner.get("window"),
+            detail={"geometry": geometry, "owner": owner},
         )
 
     def point(self, action: str, launched: Launched) -> dict | None:
@@ -603,12 +638,17 @@ class ElectronTarget(Target):
         geometry = self.reports.wait_for(READY_TIMEOUT, kind="geometry", nonce=self.nonce)
         if geometry is None:
             raise RuntimeError("the Electron runtime never loaded the measurement page")
-        time.sleep(1.0)
+        time.sleep(1.5)
+        point = web_point(self.reports, self.nonce) or geometry["widgets"]["link"]["center"]
+        # Electron is several processes too, and the one that owns the window is
+        # not necessarily the one this launched.
+        owner = owning_process(self.probe, point, None)
         return Launched(
-            pid=self.process.pid,
+            pid=owner["pid"] or self.process.pid,
             nonce=self.nonce,
-            point=geometry["widgets"]["link"]["center"],
-            detail={"geometry": geometry},
+            point=point,
+            window=owner.get("window"),
+            detail={"geometry": geometry, "owner": owner, "spawnedPid": self.process.pid},
         )
 
     def point(self, action: str, launched: Launched) -> dict | None:
