@@ -129,6 +129,17 @@ unsafe extern "C" {
     pub fn objc_getClass(name: *const c_char) -> Id;
     pub fn sel_registerName(name: *const c_char) -> Sel;
     pub fn objc_msgSend();
+    pub fn objc_msgSendSuper();
+    pub fn objc_allocateClassPair(superclass: Id, name: *const c_char, extra: usize) -> Id;
+    pub fn objc_registerClassPair(class: Id);
+    pub fn class_addMethod(class: Id, name: Sel, imp: *const c_void, types: *const c_char)
+    -> bool;
+}
+
+#[repr(C)]
+pub struct ObjcSuper {
+    pub receiver: Id,
+    pub superclass: Id,
 }
 
 // AppKit is linked for its classes rather than for any symbol named here: the
@@ -290,6 +301,44 @@ msg!(send_i64_arg, (a: i64) -> Id);
 msg!(send_i32_arg, (a: i32) -> Id);
 msg!(send_rect_mask_backing_defer, (a: CGRect, b: u64, c: u64, d: bool) -> Id);
 msg!(send_next_event, (a: u64, b: Id, c: Id, d: bool) -> Id);
+msg!(send_timer, (a: f64, b: Id, c: Sel, d: Id, e: bool) -> Id);
+
+/// Registers a subclass with the methods it needs, or returns the existing one.
+///
+/// The fixture needs exactly two behaviours AppKit has no C entry point for:
+/// seeing every event `NSApplication` is handed, and being called back on a
+/// timer. Both are methods, so both need a class to live on.
+pub fn define_class(name: &str, superclass: &str, methods: &[(&str, *const c_void, &str)]) -> Id {
+    let owned = CString::new(name).unwrap_or_default();
+    let existing = unsafe { objc_getClass(owned.as_ptr()) };
+    if !existing.is_null() {
+        return existing;
+    }
+    let created = unsafe { objc_allocateClassPair(class(superclass), owned.as_ptr(), 0) };
+    if created.is_null() {
+        return std::ptr::null_mut();
+    }
+    for (selector, implementation, types) in methods {
+        let encoding = CString::new(*types).unwrap_or_default();
+        unsafe {
+            class_addMethod(created, sel(selector), *implementation, encoding.as_ptr());
+        }
+    }
+    unsafe { objc_registerClassPair(created) };
+    created
+}
+
+/// Calls one method on the superclass implementation, which is how an override
+/// observes without replacing.
+pub fn send_super_id(receiver: Id, superclass: &str, selector: &str, argument: Id) {
+    let mut parent = ObjcSuper {
+        receiver,
+        superclass: class(superclass),
+    };
+    let target: extern "C" fn(*mut ObjcSuper, Sel, Id) =
+        unsafe { std::mem::transmute(objc_msgSendSuper as *const c_void) };
+    target(&mut parent, sel(selector), argument);
+}
 
 pub fn nsstring(value: &str) -> Id {
     let owned = CString::new(value).unwrap_or_default();
