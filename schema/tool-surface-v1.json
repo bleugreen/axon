@@ -139,7 +139,7 @@
         "swift" : true,
         "windows" : false
       },
-      "description" : "Navigate the active tab of a supported browser through its application scripting dictionary and verify the URL by read-back.",
+      "description" : "Navigate the active tab of a supported browser through its application scripting dictionary and verify the URL by read-back once the tab settles.",
       "inputSchema" : {
         "additionalProperties" : false,
         "properties" : {

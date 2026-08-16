@@ -460,8 +460,9 @@ private struct PerceptionCommandHandler {
             case "navigate":
                 let result = try services.browserAutomation.navigate(app: app, url: try decoder.requiredString("url"))
                 return JSONRPCResponse(id: request.id, result: ["navigation": .object([
-                    "app": .string(result.app), "requestedURL": .string(result.requestedURL), "url": .string(result.url), "title": .string(result.title), "success": .bool(result.url == result.requestedURL),
-                    "verification": .string(result.url == result.requestedURL ? "dictionary_readback" : "dictionary_mismatch")
+                    "app": .string(result.app), "requestedURL": .string(result.requestedURL), "url": .string(result.url), "title": .string(result.title), "success": .bool(result.success),
+                    "verification": .string(result.verification.rawValue),
+                    "settled": .bool(result.settled), "settleEvidence": .string(result.settleEvidence.rawValue), "elapsedMs": .int(result.elapsedMs)
                 ])])
             case "windows":
                 let windows = try services.browserAutomation.windows(app: app)

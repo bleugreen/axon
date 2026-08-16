@@ -480,11 +480,122 @@ public enum BrowserAutomationError: Error, Equatable, CustomStringConvertible {
     }
 }
 
+/// Browser URL equality as an address bar means it.
+///
+/// A browser rewrites the URL it is handed into its own canonical spelling before reading it back:
+/// ask for `https://news.ycombinator.com` and the tab reports `https://news.ycombinator.com/`.
+/// Comparing those as strings calls a navigation that plainly succeeded a mismatch, so every
+/// navigation verdict compares through here. Only spellings of the same address are folded together
+/// — a different host, path, or query is a different page and stays one.
+public enum BrowserURL {
+    public static func equivalent(_ lhs: String, _ rhs: String) -> Bool {
+        normalized(lhs) == normalized(rhs)
+    }
+
+    /// The canonical spelling of `raw`, or `raw` unchanged when it does not parse as a URL.
+    public static func normalized(_ raw: String) -> String {
+        guard var components = URLComponents(string: raw) else { return raw }
+        components.scheme = components.scheme?.lowercased()
+        components.host = components.host?.lowercased()
+        if let port = components.port, port == defaultPort(for: components.scheme) { components.port = nil }
+        // An empty path is the root path, which a browser spells with the slash.
+        if components.path.isEmpty { components.path = "/" }
+        // A bare trailing `?` or `#` carries nothing a browser distinguishes from its absence.
+        if components.query?.isEmpty == true { components.query = nil }
+        if components.fragment?.isEmpty == true { components.fragment = nil }
+        return components.string ?? raw
+    }
+
+    private static func defaultPort(for scheme: String?) -> Int? {
+        switch scheme {
+        case "http": return 80
+        case "https": return 443
+        default: return nil
+        }
+    }
+}
+
+/// How a navigation verdict was reached.
+public enum BrowserNavigationVerification: String, Equatable, Sendable {
+    /// The browser's dictionary read the requested address back from the tab.
+    case dictionaryReadback = "dictionary_readback"
+    /// The dictionary read a different address back: the tab is not showing what was requested.
+    case dictionaryMismatch = "dictionary_mismatch"
+}
+
+/// One reading of a browser tab's dictionary state.
+public struct BrowserTabReading: Equatable, Sendable {
+    public let url: String
+    public let title: String
+    /// The browser's own answer to whether the tab is still loading, or nil when its dictionary
+    /// does not expose one. Chrome publishes `loading`; Safari's tab has no equivalent, and asking
+    /// its page through injected JavaScript is a capability Axon does not take.
+    public let loading: Bool?
+
+    public init(url: String, title: String, loading: Bool? = nil) {
+        self.url = url
+        self.title = title
+        self.loading = loading
+    }
+}
+
+/// What backs the claim that a navigated tab had come to rest.
+///
+/// The two kinds of evidence are not equally strong, and collapsing them into a bare boolean would
+/// hide which one a caller got.
+public enum BrowserNavigationSettleEvidence: String, Equatable, Sendable {
+    /// The browser reported the tab finished loading. Proof, not inference.
+    case loadingFlag = "loading_flag"
+    /// The read-back held still for the whole stability window. This is inference, used for browsers
+    /// whose dictionary exposes no loading state: a page that publishes nothing new for that long is
+    /// treated as loaded, and a placeholder that outlasts the window would be believed.
+    case stableReadback = "stable_readback"
+    /// The bound expired first, so this reading is an intermediate state and not an outcome.
+    case bound
+}
+
 public struct BrowserNavigationResult: Equatable, Sendable {
     public let app: String
     public let requestedURL: String
     public let url: String
     public let title: String
+    /// What backs — or withholds — the claim that the tab had come to rest when this reading was
+    /// taken.
+    public let settleEvidence: BrowserNavigationSettleEvidence
+    /// How long the settle poll ran before this reading was taken, in milliseconds.
+    public let elapsedMs: Int
+
+    public init(
+        app: String,
+        requestedURL: String,
+        url: String,
+        title: String,
+        settleEvidence: BrowserNavigationSettleEvidence,
+        elapsedMs: Int
+    ) {
+        self.app = app
+        self.requestedURL = requestedURL
+        self.url = url
+        self.title = title
+        self.settleEvidence = settleEvidence
+        self.elapsedMs = elapsedMs
+    }
+
+    /// False means the reading is the honest intermediate state at the settle bound, not a finished
+    /// page load.
+    public var settled: Bool { settleEvidence != .bound }
+
+    /// Whether the tab is showing the page that was requested.
+    ///
+    /// The verdict is a URL judgment and only a URL judgment. A title belongs to a page load that
+    /// may still be in flight, while the URL is the browser's own answer to what it was asked to
+    /// show; `settled` says whether the title alongside it can be trusted yet. A redirect lands
+    /// somewhere the caller did not name, so it reads false with `url` naming where the tab is.
+    public var success: Bool { BrowserURL.equivalent(url, requestedURL) }
+
+    public var verification: BrowserNavigationVerification {
+        success ? .dictionaryReadback : .dictionaryMismatch
+    }
 }
 
 public struct BrowserWindow: Equatable, Sendable {
@@ -504,6 +615,134 @@ public struct BrowserTab: Equatable, Sendable {
     public let active: Bool
 }
 
+/// Waits, boundedly, for a navigated tab to come to rest before its state is read as a verdict.
+///
+/// Setting a tab's URL returns as soon as the browser accepts the Apple event, so the very next
+/// dictionary read can still describe the page being navigated away from — that is how a navigation
+/// that plainly worked reported the previous page's title. The tab is polled until the reading is
+/// backed by evidence of a finished load, and the bound is deliberately small: a page still loading
+/// when it expires is reported as the intermediate state it is, never waited on indefinitely.
+///
+/// The evidence a browser can offer differs, so the settler takes the strongest it is given.
+/// Chrome publishes `loading` on a tab, which ends the wait the moment it goes false. Safari
+/// publishes nothing equivalent, so the only available evidence is that the read-back stopped
+/// changing — and a single repeat is worth nothing, because a browser holds a placeholder title
+/// (often the address itself) and an intermediate redirect hop still for many poll intervals. The
+/// read-back must therefore hold still for a continuous window before it is believed, which is the
+/// same bar `wait_for_stability` sets with `stableMs`. A placeholder that outlasts the window is
+/// the honest limit of inference without a loading signal, and `settleEvidence` says which kind of
+/// evidence a caller got.
+struct BrowserNavigationSettler: Sendable {
+    /// Long enough for a page to publish its own title over a normal connection and for the
+    /// stability window to close inside it, short enough that an agent's synchronous call is never
+    /// held hostage to a slow site.
+    static let defaultTimeoutMs = 4_000
+    static let defaultIntervalMs = 60
+    /// How long an unchanging read-back must hold to stand in for a loading signal. Longer than the
+    /// placeholder titles and redirect hops that a browser publishes on the way to a page, and long
+    /// enough that several polls must agree rather than two adjacent ones.
+    static let defaultStableMs = 480
+
+    struct Outcome: Equatable {
+        let reading: BrowserTabReading
+        let evidence: BrowserNavigationSettleEvidence
+        let elapsedMs: Int
+
+        var settled: Bool { evidence != .bound }
+    }
+
+    let timeoutMs: Int
+    let intervalMs: Int
+    let stableMs: Int
+    let now: @Sendable () -> Date
+    let sleepMilliseconds: @Sendable (Int) -> Void
+
+    static let live = BrowserNavigationSettler(
+        timeoutMs: defaultTimeoutMs,
+        intervalMs: defaultIntervalMs,
+        stableMs: defaultStableMs,
+        now: Date.init,
+        sleepMilliseconds: { Thread.sleep(forTimeInterval: Double($0) / 1_000) }
+    )
+
+    /// Polls `read` until the tab settles or the bound expires, reporting whichever came first.
+    func settle(
+        requestedURL: String,
+        before: BrowserTabReading,
+        read: () throws -> BrowserTabReading
+    ) rethrows -> Outcome {
+        let startedAt = now()
+        let deadline = startedAt.addingTimeInterval(Double(timeoutMs) / 1_000)
+        var previous: BrowserTabReading?
+        var unchangedSince = startedAt
+
+        while true {
+            let reading = try read()
+            let observedAt = now()
+            if reading != previous {
+                previous = reading
+                unchangedSince = observedAt
+            }
+            let elapsedMs = Self.milliseconds(from: startedAt, to: observedAt)
+            if let evidence = evidence(
+                requestedURL: requestedURL,
+                before: before,
+                reading: reading,
+                unchangedForMs: Self.milliseconds(from: unchangedSince, to: observedAt)
+            ) {
+                return Outcome(reading: reading, evidence: evidence, elapsedMs: elapsedMs)
+            }
+            guard observedAt < deadline else {
+                return Outcome(reading: reading, evidence: .bound, elapsedMs: elapsedMs)
+            }
+            let remainingMs = max(0, Int((deadline.timeIntervalSince(observedAt) * 1_000).rounded(.up)))
+            sleepMilliseconds(min(intervalMs, remainingMs))
+        }
+    }
+
+    /// What, if anything, proves `reading` is the finished navigation rather than a page in flight.
+    private func evidence(
+        requestedURL: String,
+        before: BrowserTabReading,
+        reading: BrowserTabReading,
+        unchangedForMs: Int
+    ) -> BrowserNavigationSettleEvidence? {
+        guard describesTheNewPage(requestedURL: requestedURL, before: before, reading: reading) else { return nil }
+        switch reading.loading {
+        case false: return .loadingFlag
+        // The browser says the load is still running, and no amount of a frozen read-back overrides
+        // it: a page whose title has not changed yet reads exactly like one that never will.
+        case true: return nil
+        case nil: return unchangedForMs >= stableMs ? .stableReadback : nil
+        }
+    }
+
+    /// Whether the tab has left the page it was navigated away from for the one that was asked for.
+    ///
+    /// This is a necessary condition, never a sufficient one: it says the reading is no longer the
+    /// old page, while the evidence above says the new one has finished arriving.
+    private func describesTheNewPage(
+        requestedURL: String,
+        before: BrowserTabReading,
+        reading: BrowserTabReading
+    ) -> Bool {
+        guard BrowserURL.equivalent(reading.url, requestedURL) else {
+            // Not the requested address. Only a page that actually replaced the one being navigated
+            // away from — a redirect that has come to rest — is an outcome worth reporting;
+            // anything else is still the pre-navigation state and the bound should keep waiting.
+            return !BrowserURL.equivalent(reading.url, before.url) && reading.title != before.title
+        }
+        // The requested address is showing. Its title is trustworthy unless it is still the title of
+        // the page being left, which is exactly the stale read this bound exists to outlast.
+        // Re-navigating to the address already open has no title change to wait for.
+        return reading.title != before.title || BrowserURL.equivalent(before.url, requestedURL)
+    }
+
+    private static func milliseconds(from start: Date, to end: Date) -> Int {
+        max(0, Int((end.timeIntervalSince(start) * 1_000).rounded()))
+    }
+}
+
 public protocol BrowserAutomationServing {
     func navigate(app: String, url: String) throws -> BrowserNavigationResult
     func windows(app: String) throws -> [BrowserWindow]
@@ -515,6 +754,10 @@ public final class AppleScriptBrowserAutomation: BrowserAutomationServing {
     private let isRunning: (String) -> Bool
     private let ledger: AppleEventAnswerLedger
     private let log: (String) -> Void
+    private let settler: BrowserNavigationSettler
+    /// Runs one navigation script and returns its list result. Injected so the dispatch-then-settle
+    /// sequence can be exercised without a live browser; nil runs it as a real Apple event.
+    private let runNavigationScript: ((String, String) throws -> [String])?
 
     public convenience init() {
         self.init(authorizer: SystemAppleEventAuthorizer(), isRunning: { bundleIdentifier in
@@ -526,29 +769,104 @@ public final class AppleScriptBrowserAutomation: BrowserAutomationServing {
         authorizer: any AppleEventAuthorizing,
         isRunning: @escaping (String) -> Bool,
         ledger: AppleEventAnswerLedger = .shared,
-        log: @escaping (String) -> Void = AppleEventAuthorizationService.logToStandardError
+        log: @escaping (String) -> Void = AppleEventAuthorizationService.logToStandardError,
+        settler: BrowserNavigationSettler = .live,
+        runNavigationScript: ((String, String) throws -> [String])? = nil
     ) {
         self.authorizer = authorizer
         self.isRunning = isRunning
         self.ledger = ledger
         self.log = log
+        self.settler = settler
+        self.runNavigationScript = runNavigationScript
     }
 
     public func navigate(app: String, url: String) throws -> BrowserNavigationResult {
         let validatedURL = try Self.validatedURL(url)
         let browser = try resolve(app)
-        let tabExpression = browser == .safari ? "current tab of front window" : "active tab of front window"
+        let before = try dispatchNavigation(to: validatedURL, in: browser)
+        let outcome = try settler.settle(requestedURL: validatedURL, before: before) {
+            try readActiveTab(browser)
+        }
+        return BrowserNavigationResult(
+            app: browser.rawValue,
+            requestedURL: validatedURL,
+            url: outcome.reading.url,
+            title: outcome.reading.title,
+            settleEvidence: outcome.evidence,
+            elapsedMs: outcome.elapsedMs
+        )
+    }
+
+    /// Sends the navigation and returns what the tab held at the moment it was sent.
+    ///
+    /// Capturing the outgoing page in the same Apple event that starts the navigation is what makes
+    /// the baseline trustworthy: read it separately and the tab could already have moved, leaving
+    /// nothing to tell a stale readback from a fresh one.
+    private func dispatchNavigation(to url: String, in browser: SupportedBrowser) throws -> BrowserTabReading {
         let source = """
         tell application id "\(browser.rawValue)"
             if (count of windows) is 0 then error "browser has no windows" number 1728
-            set targetTab to \(tabExpression)
-            set URL of targetTab to "\(Self.appleScriptLiteral(validatedURL))"
-            return {URL of targetTab, name of targetTab}
+            set targetTab to \(Self.activeTabExpression(browser))
+            set previousURL to URL of targetTab
+            set previousName to name of targetTab
+            \(Self.loadingProbe(browser))
+            set URL of targetTab to "\(Self.appleScriptLiteral(url))"
+            return {previousURL, previousName, loadingState}
         end tell
         """
-        let values = try executeList(source, browser: browser)
-        guard values.count == 2 else { throw BrowserAutomationError.executionFailed("unexpected navigation response") }
-        return BrowserNavigationResult(app: browser.rawValue, requestedURL: validatedURL, url: values[0], title: values[1])
+        return try readTabReading(source, browser: browser)
+    }
+
+    private func readActiveTab(_ browser: SupportedBrowser) throws -> BrowserTabReading {
+        let source = """
+        tell application id "\(browser.rawValue)"
+            if (count of windows) is 0 then error "browser has no windows" number 1728
+            set targetTab to \(Self.activeTabExpression(browser))
+            \(Self.loadingProbe(browser))
+            return {URL of targetTab, name of targetTab, loadingState}
+        end tell
+        """
+        return try readTabReading(source, browser: browser)
+    }
+
+    private func readTabReading(_ source: String, browser: SupportedBrowser) throws -> BrowserTabReading {
+        let values = try runNavigationScript.map { try $0(source, browser.name) }
+            ?? executeList(source, browser: browser)
+        guard values.count == 3 else { throw BrowserAutomationError.executionFailed("unexpected navigation response") }
+        return BrowserTabReading(url: values[0], title: values[1], loading: Self.loadingState(values[2]))
+    }
+
+    private static func activeTabExpression(_ browser: SupportedBrowser) -> String {
+        browser == .safari ? "current tab of front window" : "active tab of front window"
+    }
+
+    /// Statements that leave `loadingState` holding `"true"`, `"false"`, or `"unknown"`.
+    ///
+    /// Safari's tab has no loading property, so asking would only raise an error to swallow and the
+    /// settler falls back to its stability window. Chrome's `loading` is read inside a `try` so that
+    /// a build whose dictionary lacks it degrades to that same fallback rather than failing the
+    /// navigation outright.
+    private static func loadingProbe(_ browser: SupportedBrowser) -> String {
+        guard browser != .safari else { return "set loadingState to \"unknown\"" }
+        return """
+        set loadingState to "unknown"
+            try
+                if loading of targetTab then
+                    set loadingState to "true"
+                else
+                    set loadingState to "false"
+                end if
+            end try
+        """
+    }
+
+    private static func loadingState(_ value: String) -> Bool? {
+        switch value {
+        case "true": return true
+        case "false": return false
+        default: return nil
+        }
     }
 
     public func windows(app: String) throws -> [BrowserWindow] {

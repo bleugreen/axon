@@ -183,7 +183,7 @@ public enum ToolSurfaceSpec {
             ],
             cliUsage: "axon look [app | target-json] [--since snapshot-id] [--no-screenshot] [--screen-text] [--frames] [--json] [--details] [--debug] [--no-tree] [--offset n] [--limit n] [--depth n]"
         , availability: .all),
-        ToolSpec(name: "navigate", description: "Navigate the active tab of a supported browser through its application scripting dictionary and verify the URL by read-back.", params: [
+        ToolSpec(name: "navigate", description: "Navigate the active tab of a supported browser through its application scripting dictionary and verify the URL by read-back once the tab settles.", params: [
             ToolParameterSpec("app", .string, required: true, description: "Safari or Google Chrome, by name or exact bundle identifier."),
             ToolParameterSpec("url", .string, required: true, description: "Absolute http or https URL, limited to 8192 bytes.")
         ], availability: .swiftOnly),
