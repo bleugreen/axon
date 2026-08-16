@@ -42,6 +42,8 @@ struct Context {
     report: Option<String>,
     role: String,
     nonce: String,
+    /// Null in the embedded-web-view role, where the page reports its own
+    /// state over the same channel and there are no native controls to poll.
     checkbox: Id,
     field: Id,
     last_checkbox: i64,
@@ -110,6 +112,72 @@ pub fn run(args: &Args) -> Result<(), String> {
     }
     send_id(window, "setTitle:", nsstring(&title));
     let view = send(window, "contentView");
+
+    // The embedded-web-view role. Safari answers what Safari does; this answers
+    // whether the answer belongs to WebKit or to Safari, which is a different
+    // question and the one a future acceptance key would have to be able to
+    // tell apart — an entry keyed on `com.apple.Safari` says nothing about an
+    // application that embeds the same engine.
+    if let Some(address) = args.optional_string("webview") {
+        let bounds = send_ret_rect(view, "bounds");
+        let configuration = send(send(class("WKWebViewConfiguration"), "alloc"), "init");
+        let webview = send_rect_id(
+            send(class("WKWebView"), "alloc"),
+            "initWithFrame:configuration:",
+            bounds,
+            configuration,
+        );
+        if webview.is_null() {
+            return Err("WKWebView could not be created".into());
+        }
+        let url = send_id(class("NSURL"), "URLWithString:", nsstring(&address));
+        let request = send_id(class("NSURLRequest"), "requestWithURL:", url);
+        send_id(webview, "loadRequest:", request);
+        send_id(view, "addSubview:", webview);
+        send_id(window, "makeKeyAndOrderFront:", null_mut());
+        send_bool_arg(application, "activateIgnoringOtherApps:", true);
+        send(application, "finishLaunching");
+        let ready = J::obj(vec![
+            ("kind", J::str("ready")),
+            ("role", J::str(role.clone())),
+            ("nonce", J::str(nonce.clone())),
+            ("pid", J::Int(std::process::id() as i64)),
+            ("windowNumber", J::Int(send_ret_i64(window, "windowNumber"))),
+            ("title", J::str(title)),
+            ("webview", J::str(address)),
+            ("window", rect_json(screen_rect(window, view, view))),
+        ]);
+        println!("{}", ready.render());
+        let _ = std::io::stdout().flush();
+        if let Some(url) = &report {
+            post(url, &ready.render());
+        }
+        CONTEXT.with(|context| {
+            *context.borrow_mut() = Some(Context {
+                report,
+                role,
+                nonce,
+                checkbox: null_mut(),
+                field: null_mut(),
+                last_checkbox: 0,
+                last_text: String::new(),
+                counts: Vec::new(),
+                deadline: Instant::now() + Duration::from_secs_f64(seconds),
+                reported_baseline: true,
+            });
+        });
+        send_timer(
+            class("NSTimer"),
+            "scheduledTimerWithTimeInterval:target:selector:userInfo:repeats:",
+            0.05,
+            application,
+            sel("axonTick:"),
+            null_mut(),
+            true,
+        );
+        send(application, "run");
+        return Ok(());
+    }
 
     // A checkbox rather than a push button, because a checkbox records that it
     // was clicked in its own state: no action target is needed for the click to
@@ -245,6 +313,9 @@ extern "C" fn tick(_this: Id, _command: Sel, _timer: Id) {
         let Some(context) = borrowed.as_mut() else {
             return false;
         };
+        if context.checkbox.is_null() {
+            return Instant::now() >= context.deadline;
+        }
         let checkbox = send_ret_i64(context.checkbox, "state");
         let text = nsstring_to_string(send(context.field, "stringValue")).unwrap_or_default();
         let changed = checkbox != context.last_checkbox || text != context.last_text;

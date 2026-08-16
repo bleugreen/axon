@@ -147,6 +147,7 @@ pub struct ObjcSuper {
 // is in the image.
 #[link(name = "AppKit", kind = "framework")]
 #[link(name = "Foundation", kind = "framework")]
+#[link(name = "WebKit", kind = "framework")]
 unsafe extern "C" {}
 
 // -- Core Foundation helpers ---------------------------------------------------------------
@@ -302,6 +303,7 @@ msg!(send_i32_arg, (a: i32) -> Id);
 msg!(send_rect_mask_backing_defer, (a: CGRect, b: u64, c: u64, d: bool) -> Id);
 msg!(send_next_event, (a: u64, b: Id, c: Id, d: bool) -> Id);
 msg!(send_timer, (a: f64, b: Id, c: Sel, d: Id, e: bool) -> Id);
+msg!(send_rect_id, (a: CGRect, b: Id) -> Id);
 
 /// Registers a subclass with the methods it needs, or returns the existing one.
 ///
