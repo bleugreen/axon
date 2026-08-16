@@ -365,7 +365,14 @@ def _identity_cell(identity: dict) -> str:
     if version:
         parts.append(version)
     if runtime:
-        parts.append("{kind} {version}".format(**runtime))
+        version = runtime.get("version")
+        # An unreadable engine version is a finding rather than a gap: it is why
+        # a row keyed on a runtime family cannot be written.
+        parts.append(
+            f"{runtime['kind']} {version}"
+            if version
+            else f"{runtime['kind']} (version not readable)"
+        )
     if identity.get("readableAtDispatch") is not True:
         parts.append("(not readable at dispatch)")
     return " ".join(parts)
