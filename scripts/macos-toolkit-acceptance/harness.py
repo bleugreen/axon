@@ -1258,6 +1258,59 @@ def normalize(raw: dict, target: Target, campaign_id: str, raw_path: str, date: 
     }
 
 
+def merge_document(previous: dict, campaign: dict, rows: list[dict], generated_at: str) -> dict:
+    """Folds one run's rows into whatever was already committed.
+
+    Rows are replaced by identity and campaigns are never rewritten. That is the
+    whole of the rule, and it exists because `--only` is a supported way to run
+    this: a partial run that replaced the campaign record would leave the rows
+    it did not measure citing a campaign whose timestamp, machine facts and raw
+    record now describe a different run. A row's provenance has to survive a
+    rerun that did not touch it, so each run gets its own campaign identity and
+    the campaigns of untouched rows stay exactly where they were.
+
+    Campaigns that no row cites any more are dropped, so the file does not
+    accumulate the history of every partial run that has since been superseded.
+    """
+    measured = {row["id"]: row for row in rows}
+    merged: list[dict] = []
+    for existing in previous.get("rows", []):
+        # Replaced in place rather than appended, so a partial rerun does not
+        # reshuffle the rendered table.
+        merged.append(measured.pop(existing["id"], existing))
+    merged.extend(row for row in rows if row["id"] in measured)
+
+    campaigns = [
+        item for item in previous.get("campaigns", []) if item["id"] != campaign["id"]
+    ]
+    campaigns.append(campaign)
+    cited = {row["campaign"] for row in merged}
+    return {
+        "schemaVersion": "macos-acceptance-v1",
+        "generatedAt": generated_at,
+        "campaigns": [item for item in campaigns if item["id"] in cited],
+        "rows": merged,
+    }
+
+
+def write_raw(path: Path, campaign: dict, machine_facts: dict, trials: list[dict]) -> None:
+    """The unnormalized record, one JSON object per line.
+
+    Line-delimited rather than one indented document because it is a machine
+    record read by loading it, not by reading it: indented it runs to thousands
+    of lines of window stacks. It is not committed — it stays on the bench that
+    produced it, and the normalized rows carry everything a consumer needs.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w") as handle:
+        handle.write(json.dumps({"kind": "campaign", "campaign": campaign, "machine": machine_facts}) + "\n")
+        for trial in trials:
+            record = dict(trial)
+            record["kind"] = "trial"
+            record["id"] = f"{trial['target']}-{trial['action']}"
+            handle.write(json.dumps(record) + "\n")
+
+
 # -- the campaign ------------------------------------------------------------------------------
 
 
@@ -1338,10 +1391,13 @@ def main(argv: list[str] | None = None) -> int:
     ]
     wanted = set(arguments.only.split(",")) if arguments.only else None
 
-    date = datetime.now().strftime("%Y-%m-%d")
-    campaign_id = f"{platform.node().split('.')[0]}-{date}"
-    RAW_DIR.mkdir(parents=True, exist_ok=True)
-    raw_path = f"raw/{campaign_id}.json"
+    started = datetime.now()
+    date = started.strftime("%Y-%m-%d")
+    # One identity per invocation, down to the second. A campaign identified only
+    # by host and date would be shared by every run of a day, and a partial rerun
+    # would then rewrite the provenance of rows it never measured.
+    campaign_id = f"{platform.node().split('.')[0]}-{started.strftime('%Y-%m-%dT%H%M%S')}"
+    raw_path = f"raw/{campaign_id}.jsonl"
 
     trials: list[dict] = []
     rows: list[dict] = []
@@ -1386,33 +1442,16 @@ def main(argv: list[str] | None = None) -> int:
         "rawEvidence": raw_path,
         "notes": None,
     }
-    (HERE / raw_path).write_text(
-        json.dumps({"campaign": campaign, "machineFacts": machine_facts, "trials": trials}, indent=2)
-        + "\n"
-    )
+    write_raw(HERE / raw_path, campaign, machine_facts, trials)
 
-    document = {
-        "schemaVersion": "macos-acceptance-v1",
-        "generatedAt": datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds"),
-        "campaigns": [],
-        "rows": [],
-    }
     existing = Path(arguments.merge)
-    if existing.exists():
-        previous = json.loads(existing.read_text())
-        # Replaced row by row rather than campaign by campaign. Dropping every
-        # row of a campaign would make `--only` destroy the rows it did not
-        # re-measure, which is how a partial run quietly turns a full matrix
-        # into a two-row file.
-        measured = {row["id"] for row in rows}
-        document["campaigns"] = [
-            item for item in previous.get("campaigns", []) if item["id"] != campaign_id
-        ]
-        document["rows"] = [
-            item for item in previous.get("rows", []) if item["id"] not in measured
-        ]
-    document["campaigns"].append(campaign)
-    document["rows"].extend(rows)
+    previous = json.loads(existing.read_text()) if existing.exists() else {}
+    document = merge_document(
+        previous,
+        campaign,
+        rows,
+        datetime.now(timezone.utc).astimezone().isoformat(timespec="seconds"),
+    )
 
     (HERE / "results.json").write_text(json.dumps(document, indent=2) + "\n")
     evidence.RENDERED_PATH.write_text(evidence.render(document))
