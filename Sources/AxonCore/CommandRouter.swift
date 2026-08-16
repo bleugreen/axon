@@ -1300,6 +1300,10 @@ private struct PrimitiveActionCommandHandler {
             return JSONRPCResponse(id: id, error: error)
         } catch let error as AXElementStoreError {
             return JSONRPCResponse(id: id, error: .invalidParams(error.description))
+        } catch let error as AppResolverError {
+            // An application the caller named and that is not running is a target-resolution
+            // failure, which the contract reports as a bad request rather than as an internal fault.
+            return JSONRPCResponse(id: id, error: .invalidParams(error.description))
         } catch {
             return JSONRPCResponse(id: id, error: .internalError(String(describing: error)))
         }
