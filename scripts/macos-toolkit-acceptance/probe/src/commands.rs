@@ -35,6 +35,7 @@ pub fn run(command: &str, args: &Args) -> Result<J, String> {
         "foreground-click" => foreground_click(args),
         "foreground-key" => foreground_key(args),
         "activate" => activate_command(args),
+        "raise" => raise_command(args),
         "ax-read" => ax_read(args),
         other => Err(format!("unknown command: {other}")),
     }
@@ -509,6 +510,69 @@ fn activate_command(args: &Args) -> Result<J, String> {
         ("activated", J::Bool(activated)),
         ("frontmost", frontmost()),
     ]))
+}
+
+/// Raises the target's window without asking for the application to be
+/// activated.
+///
+/// A background measurement still needs the target to be the window at the
+/// coordinate. Launching one puts it on top, but the decoy is activated after
+/// it, and on a real desktop that re-ordering can leave an unrelated window —
+/// whatever the user had open — sitting above the target. Then the trial would
+/// be aimed at someone else's window, which is a blocked trial rather than a
+/// measurement.
+///
+/// `AXRaise` is the only way to reorder another application's window, and
+/// whether it also activates that application is not documented to be either
+/// way. So the frontmost application is recorded either side of it, and the
+/// campaign re-establishes the decoy afterwards rather than assuming.
+fn raise_command(args: &Args) -> Result<J, String> {
+    let pid = args.i32("pid")?;
+    if unsafe { AXIsProcessTrusted() } == 0 {
+        return Err("the probe does not hold Accessibility permission".into());
+    }
+    let before = frontmost();
+    unsafe {
+        let application = AXUIElementCreateApplication(pid);
+        if application.is_null() {
+            return Err(format!("no accessibility element for pid {pid}"));
+        }
+        let (mut window, _) = copy_attribute(application, "AXFocusedWindow");
+        if window.is_null() {
+            // An application that is not frontmost may report no focused
+            // window; its first window is the one a click would land in.
+            let (windows, _) = copy_attribute(application, "AXWindows");
+            if !windows.is_null() {
+                if CFArrayGetCount(windows) > 0 {
+                    let first = CFArrayGetValueAtIndex(windows, 0);
+                    if !first.is_null() {
+                        window = first;
+                    }
+                }
+            }
+        }
+        if window.is_null() {
+            CFRelease(application);
+            return Ok(J::obj(vec![
+                ("pid", J::Int(pid as i64)),
+                ("raised", J::Bool(false)),
+                ("reason", J::str("the application published no window to raise")),
+                ("before", before),
+                ("after", frontmost()),
+            ]));
+        }
+        let action = CFString::new("AXRaise");
+        let status = AXUIElementPerformAction(window, action.0);
+        CFRelease(application);
+        sleep(Duration::from_millis(300));
+        Ok(J::obj(vec![
+            ("pid", J::Int(pid as i64)),
+            ("raised", J::Bool(status == 0)),
+            ("status", J::Int(status as i64)),
+            ("before", before),
+            ("after", frontmost()),
+        ]))
+    }
 }
 
 /// Accessibility readback of the target's focused window.

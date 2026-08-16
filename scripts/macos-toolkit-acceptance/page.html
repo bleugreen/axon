@@ -89,9 +89,13 @@
         });
       };
       window.addEventListener("load", report);
-      // A window that is moved or resized between the geometry report and the
-      // dispatch would be aimed at where it used to be.
       window.addEventListener("resize", report);
+      // Repeated rather than reported once, because a browser window that is
+      // moved has no DOM event to report it: `open` hands a window back before
+      // the browser has finished restoring its saved position, and a coordinate
+      // read at load time can name where the window used to be. The campaign
+      // takes the most recent report immediately before it aims at anything.
+      setInterval(report, 400);
     </script>
   </body>
 </html>

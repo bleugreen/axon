@@ -122,6 +122,7 @@ unsafe extern "C" {
         attribute: CFStringRef,
         value: *mut CFTypeRef,
     ) -> i32;
+    pub fn AXUIElementPerformAction(element: CFTypeRef, action: CFStringRef) -> i32;
 }
 
 #[link(name = "objc")]
