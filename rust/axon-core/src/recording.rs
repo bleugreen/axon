@@ -301,21 +301,15 @@ impl UserRecordingTranslator {
             // A scroll that only exists to bring the next step's target into view becomes that
             // step's `resolve` hint rather than a step of its own.
             if let Some(scroll) = scroll_components(group.action())
-                && index + 1 < semantic_groups.len()
+                && let Some(next) = semantic_groups.get(index + 1)
+                && target_bearing_action_target(next.action())
+                    .is_some_and(|target| target.get("locator").is_some())
             {
-                {
-                    let next = &semantic_groups[index + 1];
-                    if target_bearing_action_target(next.action())
-                        .is_some_and(|target| target.get("locator").is_some())
-                    {
-                        emitted = next;
-                        observed = uniqued_values(&[group.observed.clone(), next.observed.clone()]);
-                        warnings =
-                            uniqued_strings(&[group.warnings.clone(), next.warnings.clone()]);
-                        resolve = reveal_resolution(&scroll);
-                        index += 1;
-                    }
-                }
+                emitted = next;
+                observed = uniqued_values(&[group.observed.clone(), next.observed.clone()]);
+                warnings = uniqued_strings(&[group.warnings.clone(), next.warnings.clone()]);
+                resolve = reveal_resolution(&scroll);
+                index += 1;
             }
 
             let action_id = format!("a{action_number:03}");
