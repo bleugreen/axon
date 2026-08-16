@@ -152,6 +152,11 @@ jobs:
           }
           assert_daemon_plist "dist/Axon.app/Contents/Info.plist"
           assert_editor_plist "dist/Axon.app/$NESTED_EDITOR/Contents/Info.plist"
+          # The other half of Apple Events consent, asserted beside the usage description it pairs
+          # with: the string above supplies the dialog's wording, and the entitlement is what lets
+          # the hardened runtime present a dialog at all. A build missing it passes every other
+          # check here and ships a dead browser automation surface.
+          ./scripts/check-app-entitlements "dist/Axon.app"
           archive_dir="$(mktemp -d)"
           trap 'rm -rf "$archive_dir"' EXIT
           ditto -x -k "$ZIP" "$archive_dir"

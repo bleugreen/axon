@@ -97,9 +97,43 @@ private func authorizationService(
 
     #expect(denial.authorization == .denied)
     #expect(denial.leg == .checked)
+    #expect(denial.origin == .browserVerb)
     #expect(denial.answeredEarlierInThisProcess == false)
     #expect(denial.message.contains("System Settings > Privacy & Security > Automation"))
+    // A verb's refusal is the one surface for which the menu gesture is a step the user has not
+    // taken yet, so it is the one surface that keeps naming it.
+    #expect(denial.message.contains("choose Browser Automation..."))
     #expect(authorizer.requests == [false])
+}
+
+/// The loop a user walked on a build whose signature carried no Apple Events entitlement: the menu
+/// gesture was refused without a prompt, and the refusal told them to use the menu gesture. Whatever
+/// the gesture reports, the remediation can never be the gesture itself.
+@Test func theConsentGestureNeverPrescribesTheConsentGesture() throws {
+    // A denial already recorded in TCC: macOS answers at the silent leg and does not re-prompt.
+    let recordedDenial = AppleEventAuthorizerStub(results: [OSStatus(errAEEventNotPermitted)])
+    let denied = try automationDenial {
+        try authorizationService(recordedDenial).requestConsent(bundleIdentifier: "com.apple.Safari", appName: "Safari")
+    }
+    // A prompt that never appeared and recorded nothing, leaving the grant exactly as undetermined
+    // as it was before the user asked.
+    let suppressedPrompt = AppleEventAuthorizerStub(results: [
+        OSStatus(errAEEventWouldRequireUserConsent),
+        OSStatus(errAEEventWouldRequireUserConsent)
+    ])
+    let unresolved = try automationDenial {
+        try authorizationService(suppressedPrompt).requestConsent(bundleIdentifier: "com.apple.Safari", appName: "Safari")
+    }
+
+    for denial in [denied, unresolved] {
+        #expect(denial.origin == .consentGesture)
+        #expect(denial.message.contains("Browser Automation...") == false)
+    }
+    #expect(denied.authorization == .denied)
+    #expect(denied.message.contains("If Axon is not listed there at all"))
+    #expect(unresolved.authorization == .notDetermined)
+    #expect(unresolved.leg == .prompted)
+    #expect(unresolved.message.contains("Quit Axon and open it again"))
 }
 
 /// The confounded 2026-08-14 trial, reproduced: two denials for the same target in one process with
@@ -325,7 +359,7 @@ private func authorizationService(
     ))
     #expect(invalid.error?.code == -32602)
 
-    browser.error = .automationNotGranted(BrowserAutomationDenial(app: "Safari", authorization: .denied, leg: .checked, status: -1743))
+    browser.error = .automationNotGranted(BrowserAutomationDenial(app: "Safari", authorization: .denied, leg: .checked, status: -1743, origin: .browserVerb))
     let denied = CommandRouter(browserAutomation: browser).handle(JSONRPCRequest(
         id: .int(2), method: "windows", params: .object(["app": .string("Safari")])
     ))
@@ -341,7 +375,7 @@ private func authorizationService(
 
 @Test func automationDenialContractIsSharedByEveryBrowserVerbAndRoundTrips() throws {
     let browser = BrowserAutomationStub()
-    browser.error = .automationNotGranted(BrowserAutomationDenial(app: "Google Chrome", authorization: .notDetermined, leg: .checked, status: -1744))
+    browser.error = .automationNotGranted(BrowserAutomationDenial(app: "Google Chrome", authorization: .notDetermined, leg: .checked, status: -1744, origin: .browserVerb))
     let router = CommandRouter(browserAutomation: browser)
     let requests = [
         JSONRPCRequest(id: .int(1), method: "navigate", params: .object(["app": .string("Chrome"), "url": .string("https://example.com")])),

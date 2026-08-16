@@ -89,7 +89,7 @@ struct AppleEventAuthorizationService {
             askUserIfNeeded: false,
             answeredEarlierInThisProcess: answeredEarlier
         )
-        try resolve(decision, appName: appName)
+        try resolve(decision, appName: appName, origin: .browserVerb)
     }
 
     /// Resolves the authorization, presenting macOS's consent dialog when the grant is undetermined.
@@ -108,7 +108,7 @@ struct AppleEventAuthorizationService {
         // A recorded denial is final until the user changes it in System Settings; macOS will not
         // present a dialog for it, so prompting would only repeat the same answer.
         guard initial.status == OSStatus(errAEEventWouldRequireUserConsent) else {
-            return try resolve(initial, appName: appName)
+            return try resolve(initial, appName: appName, origin: .consentGesture)
         }
         try resolve(
             determine(
@@ -116,7 +116,8 @@ struct AppleEventAuthorizationService {
                 askUserIfNeeded: true,
                 answeredEarlierInThisProcess: answeredEarlier
             ),
-            appName: appName
+            appName: appName,
+            origin: .consentGesture
         )
     }
 
@@ -141,14 +142,18 @@ struct AppleEventAuthorizationService {
         return Decision(status: status, leg: leg, answeredEarlierInThisProcess: holdsEarlierAnswer)
     }
 
-    private func resolve(_ decision: Decision, appName: String) throws {
+    private func resolve(
+        _ decision: Decision,
+        appName: String,
+        origin: BrowserAutomationDenialOrigin
+    ) throws {
         switch decision.status {
         case noErr:
             return
         case OSStatus(errAEEventNotPermitted):
-            throw denial(.denied, decision, appName: appName)
+            throw denial(.denied, decision, appName: appName, origin: origin)
         case OSStatus(errAEEventWouldRequireUserConsent):
-            throw denial(.notDetermined, decision, appName: appName)
+            throw denial(.notDetermined, decision, appName: appName, origin: origin)
         default:
             throw BrowserAutomationError.authorizationFailed(app: appName, status: decision.status)
         }
@@ -157,13 +162,15 @@ struct AppleEventAuthorizationService {
     private func denial(
         _ authorization: BrowserAutomationAuthorization,
         _ decision: Decision,
-        appName: String
+        appName: String,
+        origin: BrowserAutomationDenialOrigin
     ) -> BrowserAutomationError {
         .automationNotGranted(BrowserAutomationDenial(
             app: appName,
             authorization: authorization,
             leg: decision.leg,
             status: decision.status,
+            origin: origin,
             answeredEarlierInThisProcess: decision.answeredEarlierInThisProcess
         ))
     }
@@ -263,12 +270,25 @@ struct SystemAppleEventAuthorizer: AppleEventAuthorizing {
     }
 }
 
+/// Which surface asked for the authorization that was refused.
+///
+/// Remediation depends on it. A browser verb's refusal can send the user to the menu bar's consent
+/// gesture, because that gesture is a step they have not taken yet. The gesture's own refusal
+/// cannot: sending it back to itself describes an action the user just performed.
+public enum BrowserAutomationDenialOrigin: String, Equatable, Sendable {
+    /// An agent-facing browser verb — navigate, windows, or tabs.
+    case browserVerb
+    /// The daemon menu's Browser Automation... item, the one surface that asks macOS to prompt.
+    case consentGesture
+}
+
 /// One refused Apple Events authorization, described well enough to act on.
 public struct BrowserAutomationDenial: Equatable, Sendable {
     public let app: String
     public let authorization: BrowserAutomationAuthorization
     public let leg: BrowserAutomationAuthorizationLeg
     public let status: Int32?
+    public let origin: BrowserAutomationDenialOrigin
     /// True when this process had already resolved an authorization for the same target before this
     /// request. macOS may answer from what the process holds, so such a denial does not necessarily
     /// describe the current TCC database.
@@ -279,29 +299,49 @@ public struct BrowserAutomationDenial: Equatable, Sendable {
         authorization: BrowserAutomationAuthorization,
         leg: BrowserAutomationAuthorizationLeg,
         status: Int32?,
+        origin: BrowserAutomationDenialOrigin,
         answeredEarlierInThisProcess: Bool = false
     ) {
         self.app = app
         self.authorization = authorization
         self.leg = leg
         self.status = status
+        self.origin = origin
         self.answeredEarlierInThisProcess = answeredEarlierInThisProcess
     }
 
-    /// Remediation the user can actually perform from the state they are actually in. Until consent
-    /// has been requested once there is no Axon row in System Settings and no way to add one, so
-    /// pointing an undetermined grant at that pane describes an impossible action.
     var message: String {
         var sentences = ["Automation permission for \(app) \(authorization == .denied ? "is denied" : "has not been granted")."]
-        if authorization == .notDetermined {
-            sentences.append("Open the Axon menu bar item and choose Browser Automation... to grant it. Axon does not appear in System Settings > Privacy & Security > Automation until consent has been requested once.")
-        } else {
-            sentences.append("If Axon is listed in System Settings > Privacy & Security > Automation, enable \(app) beneath it. If it is not listed, open the Axon menu bar item and choose Browser Automation... to request consent.")
-        }
+        sentences.append(remediation)
         if answeredEarlierInThisProcess {
             sentences.append("The Axon daemon already resolved Automation for \(app) earlier in this session and macOS can answer from what the process holds, so this may not reflect current settings. Restart the daemon with `launchctl kickstart -k gui/$(id -u)/dev.axon.daemon` to re-check.")
         }
         return sentences.joined(separator: " ")
+    }
+
+    /// Remediation the user can actually perform from the state they are actually in, which is a
+    /// different sentence for each surface.
+    ///
+    /// Until consent has been requested once there is no Axon row in System Settings and no way to
+    /// add one, so pointing an undetermined grant at that pane describes an impossible action. And
+    /// the consent gesture is the end of the road: whatever it reports, the answer cannot be to go
+    /// perform the consent gesture.
+    private var remediation: String {
+        switch (origin, authorization) {
+        case (.browserVerb, .notDetermined):
+            return "Open the Axon menu bar item and choose Browser Automation... to grant it. Axon does not appear in System Settings > Privacy & Security > Automation until consent has been requested once."
+        case (.browserVerb, .denied):
+            return "If Axon is listed in System Settings > Privacy & Security > Automation, enable \(app) beneath it. If it is not listed, open the Axon menu bar item and choose Browser Automation... to request consent."
+        case (.consentGesture, .denied):
+            // macOS refuses a recorded denial without re-prompting, and refuses identically when it
+            // will not let this build ask at all — the state that shipped through 0.3.6, where the
+            // signature lacked the Apple Events entitlement. Whether an Axon row exists in the
+            // Automation pane is what separates them, and it is the one thing the user can see and
+            // Axon cannot, so the sentence hands them that test instead of guessing.
+            return "macOS will not present the consent dialog again while a denial is recorded, so enable \(app) beneath Axon in System Settings > Privacy & Security > Automation. If Axon is not listed there at all, macOS refused without recording anything, which no setting on this Mac can change: install the latest Axon and try again."
+        case (.consentGesture, .notDetermined):
+            return "macOS neither presented the consent dialog nor recorded an answer, so there is nothing to enable in System Settings > Privacy & Security > Automation yet. Quit Axon and open it again to retry from a fresh process; if the dialog still does not appear, install the latest Axon."
+        }
     }
 }
 
@@ -490,8 +530,11 @@ public final class AppleScriptBrowserAutomation: BrowserAutomationServing {
         guard let script = NSAppleScript(source: boundedSource), let result = script.executeAndReturnError(&error) as NSAppleEventDescriptor? else {
             let number = error?[NSAppleScript.errorNumber] as? Int
             if let number, number == Int(errAEEventNotPermitted) {
+                // Only a browser verb sends Apple events; the consent gesture stops at the
+                // authorization.
                 throw BrowserAutomationError.automationNotGranted(BrowserAutomationDenial(
-                    app: appName, authorization: .denied, leg: .executed, status: Int32(number)
+                    app: appName, authorization: .denied, leg: .executed, status: Int32(number),
+                    origin: .browserVerb
                 ))
             }
             if number == -1712 { throw BrowserAutomationError.timeout(appName) }
