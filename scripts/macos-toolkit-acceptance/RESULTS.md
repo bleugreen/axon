@@ -21,8 +21,8 @@ decides what to authorize; a target absent from the table authorizes nothing.
 | `safari-keyboard-2026-08-16` | safari (webkit-browser) | `com.apple.Safari` 26.4 | `keyboard` | **accepted** | accepted | yes | reached | all held | before: acted; after: acted |
 | `chrome-click-2026-08-16` | chrome (chromium-browser) | `com.google.Chrome` 151.0.7922.138 | `click` | **refused** | accepted | no | never arrived | all held | before: acted; after: acted |
 | `chrome-keyboard-2026-08-16` | chrome (chromium-browser) | `com.google.Chrome` 151.0.7922.138 | `keyboard` | **accepted** | accepted | yes | reached | all held | before: acted; after: acted |
-| `electron-click-2026-08-16` | electron (electron) | `com.github.Electron` 43.4.0 electron-framework None | `click` | **refused** | accepted | no | never arrived | all held | before: acted; after: acted |
-| `electron-keyboard-2026-08-16` | electron (electron) | `com.github.Electron` 43.4.0 electron-framework None | `keyboard` | **accepted** | accepted | yes | reached | all held | before: acted; after: acted |
+| `electron-click-2026-08-16` | electron (electron) | `com.github.Electron` 43.4.0 electron-framework (version not readable) | `click` | **refused** | accepted | no | never arrived | all held | before: acted; after: acted |
+| `electron-keyboard-2026-08-16` | electron (electron) | `com.github.Electron` 43.4.0 electron-framework (version not readable) | `keyboard` | **accepted** | accepted | yes | reached | all held | before: acted; after: acted |
 | `AxonAcceptanceTarget-click-2026-08-16` | AxonAcceptanceTarget (appkit-native) | `dev.axon.acceptance.target` 1.0.0 | `click` | **refused** | accepted | no | reached | all held | before: acted; after: acted |
 | `AxonAcceptanceTarget-keyboard-2026-08-16` | AxonAcceptanceTarget (appkit-native) | `dev.axon.acceptance.target` 1.0.0 | `keyboard` | **accepted** | accepted | yes | reached | all held | before: acted; after: acted |
 | `AxonAcceptanceWebView-click-2026-08-16` | AxonAcceptanceWebView (wkwebview) | `dev.axon.acceptance.webview` 1.0.0 | `click` | **refused** | accepted | no | never arrived | all held | before: acted; after: acted |
