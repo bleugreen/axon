@@ -209,6 +209,12 @@ class IntegrityTests(unittest.TestCase):
     def test_a_dangling_campaign_reference_is_rejected(self) -> None:
         self.assert_rejects(accepted_row(campaign="nowhere"), "not declared")
 
+    def test_a_row_pointing_at_another_runs_raw_record_is_rejected(self) -> None:
+        self.assert_rejects(
+            accepted_row(rawEvidence="raw/some-other-run.jsonl#example-click"),
+            "is not the raw record of campaign",
+        )
+
     def test_duplicate_row_ids_are_rejected(self) -> None:
         problems = evidence.integrity(document(accepted_row(), accepted_row()))
         self.assertTrue(any("duplicate row id" in problem for problem in problems), problems)
@@ -272,10 +278,20 @@ class CommittedFixtureTests(unittest.TestCase):
             "RESULTS.md is not what results.json renders to; run check --write",
         )
 
-    def test_every_row_points_at_raw_evidence_that_exists(self) -> None:
+    def test_every_row_names_the_trial_in_its_campaign_record(self) -> None:
+        # The raw record itself is not committed — it stays on the bench that
+        # produced it — so what is checked here is that the reference is
+        # well formed and points into the record of the campaign that measured
+        # the row, which is the part that can silently go wrong.
+        campaigns = {item["id"]: item for item in self.document["campaigns"]}
         for row in self.document["rows"]:
-            path = evidence.HERE / row["rawEvidence"].split("#")[0]
-            self.assertTrue(path.exists(), f"{row['id']} cites missing {path}")
+            path, _, fragment = row["rawEvidence"].partition("#")
+            self.assertEqual(path, campaigns[row["campaign"]]["rawEvidence"])
+            self.assertEqual(
+                fragment,
+                f"{row['target']['label']}-{row['action']}",
+                f"{row['id']} names a trial its own target and action do not",
+            )
 
 
 if __name__ == "__main__":

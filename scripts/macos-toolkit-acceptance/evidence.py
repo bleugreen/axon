@@ -173,6 +173,14 @@ def integrity(document: dict) -> list[str]:
         campaign = campaigns.get(row.get("campaign", ""))
         if campaign is None:
             problems.append(f"{where}: cites campaign {row.get('campaign')!r}, which is not declared")
+        elif row.get("rawEvidence", "").split("#")[0] != campaign.get("rawEvidence"):
+            # A row whose raw reference names a different run's record has had
+            # its provenance rewritten under it, which is what a partial rerun
+            # does if campaigns are not given their own identity.
+            problems.append(
+                f"{where}: points at {row.get('rawEvidence', '')!r}, which is not the raw "
+                f"record of campaign {campaign['id']!r} that measured it"
+            )
 
         verdict = row.get("verdict")
         observations = row.get("observations", {})
