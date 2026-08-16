@@ -24,6 +24,7 @@ DAEMON_APP_DIR="$DIST_DIR/$DAEMON_APP_NAME.app"
 EDITOR_APP_DIR="$DAEMON_APP_DIR/Contents/Library/Applications/$EDITOR_APP_NAME.app"
 ICON_SOURCE="$ROOT/Assets/Axon.icns"
 MENU_BAR_ICON_SOURCE="$ROOT/Assets/AxonMenuBarTemplate.png"
+DAEMON_ENTITLEMENTS="$ROOT/Assets/Axon.entitlements"
 
 cd "$ROOT"
 
@@ -192,14 +193,32 @@ if [[ "$SIGN_IDENTITY" != "-" ]]; then
   SIGN_ARGS+=(--timestamp)
 fi
 
+# The hardened runtime forbids sending Apple events unless the signature carries the Automation
+# entitlement, and forbids it silently: no consent dialog, no TCC row, no Automation pane entry.
+# Only the daemon app sends them, so only its signature gets the entitlement — the CLI and the
+# editor stay at the empty entitlement set the runtime gives them by default.
+DAEMON_SIGN_ARGS=("${SIGN_ARGS[@]}" --entitlements "$DAEMON_ENTITLEMENTS")
+
 # Signed inside-out: every nested piece is sealed before the code that contains it, so the outer
 # signature covers final bytes. Signing the outer bundle before the nested editor would invalidate
-# it the moment the editor was signed.
+# it the moment the editor was signed. The outer bundle's own signature is the one macOS reads the
+# entitlement from, because signing a bundle re-signs its main executable in place.
 /usr/bin/codesign "${SIGN_ARGS[@]}" "$DAEMON_APP_DIR/Contents/Resources/bin/axon"
 /usr/bin/codesign "${SIGN_ARGS[@]}" "$EDITOR_APP_DIR/Contents/MacOS/AxonEditor"
 /usr/bin/codesign "${SIGN_ARGS[@]}" "$EDITOR_APP_DIR"
-/usr/bin/codesign "${SIGN_ARGS[@]}" "$DAEMON_APP_DIR/Contents/MacOS/Axon"
-/usr/bin/codesign "${SIGN_ARGS[@]}" "$DAEMON_APP_DIR"
+/usr/bin/codesign "${DAEMON_SIGN_ARGS[@]}" "$DAEMON_APP_DIR/Contents/MacOS/Axon"
+/usr/bin/codesign "${DAEMON_SIGN_ARGS[@]}" "$DAEMON_APP_DIR"
+
+# A signature that silently lost the entitlement is exactly the failure this packaging step exists
+# to prevent, and it is invisible in every other check: the bundle verifies, notarizes, staples,
+# launches, and only the Automation surface is dead. Assert it here so no consumer of this script
+# can ship without it.
+if ! /usr/bin/codesign -d --entitlements - --xml "$DAEMON_APP_DIR" 2>/dev/null \
+  | /usr/bin/plutil -extract com.apple.security.automation.apple-events raw -o - - \
+  | grep -qx 'true'; then
+  printf 'signed app is missing com.apple.security.automation.apple-events\n' >&2
+  exit 1
+fi
 
 # Named with the version and the target, matching the Rust archives, so a consumer pinning a
 # release can name every artifact it needs without guessing. The archive root is the app itself:
