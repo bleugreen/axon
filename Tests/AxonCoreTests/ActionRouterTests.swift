@@ -1031,7 +1031,9 @@ private func stabilitySnapshot(id: String, title: String) -> AppSnapshot {
     let router = CommandRouter(
         actions: PrimitiveActionHandlers(
             scroll: { target, app, deltaX, deltaY, _ in
-                #expect(target == .point(ActionPoint(x: 10, y: 20)))
+                // The command-level app owns a point that does not name one, so the wheel burst
+                // reaches delivery with a process to bind to rather than as a bare coordinate.
+                #expect(target == .point(ActionPoint(x: 10, y: 20, app: "com.example.App")))
                 #expect(app == "com.example.App")
                 #expect(deltaX == 0)
                 #expect(deltaY == -480)
@@ -1137,8 +1139,10 @@ private func stabilitySnapshot(id: String, title: String) -> AppSnapshot {
     let router = CommandRouter(
         actions: PrimitiveActionHandlers(
             drag: { from, to, app, durationMs, _ in
-                #expect(from == .point(ActionPoint(x: 10, y: 20)))
-                #expect(to == .point(ActionPoint(x: 90, y: 120)))
+                // Both endpoints inherit the app the drag named: a path has to stay inside one
+                // application, and neither end of it is an anonymous coordinate.
+                #expect(from == .point(ActionPoint(x: 10, y: 20, app: "com.example.App")))
+                #expect(to == .point(ActionPoint(x: 90, y: 120, app: "com.example.App")))
                 #expect(app == "com.example.App")
                 #expect(durationMs == 250)
                 return PrimitiveActionResult(action: "drag", target: "point:10,20->point:90,120", strategy: "CGEventDrag", success: true)
