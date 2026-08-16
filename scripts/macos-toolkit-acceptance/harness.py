@@ -133,6 +133,16 @@ class _Handler(BaseHTTPRequestHandler):
             # available, because this server sees it directly rather than being
             # told about it by a page whose script an engine may have throttled.
             marker = "navigated" if parsed.path == "/navigated" else "page"
+            # Every serve is recorded, not only the ones to the navigation
+            # endpoint. A click on the link navigates between two pages that
+            # differ only in which way the link points, so counting arrivals at
+            # one of them would see the first click and miss the one that came
+            # back. The server sees both, which is the point of observing
+            # navigation here rather than in the page: it does not depend on an
+            # engine choosing to run script in a window that is not frontmost.
+            type(self).reports.add(
+                {"kind": "served", "nonce": nonce, "marker": marker, "role": "server"}
+            )
             if marker == "navigated":
                 type(self).reports.add({"kind": "navigated", "nonce": nonce, "role": "server"})
             other = "/page" if marker == "navigated" else "/navigated"
@@ -517,23 +527,21 @@ def web_point(
 
 def web_snapshot(reports: Reports, nonce: str) -> dict:
     items = [item for item in reports.snapshot() if item.get("nonce") == nonce]
-    clicks = [item for item in items if item.get("kind") == "click"]
     texts = [item for item in items if item.get("kind") == "text"]
-    navigations = [item for item in items if item.get("kind") == "navigated"]
     return {
-        "clicks": clicks[-1]["count"] if clicks else 0,
+        "clicks": len([item for item in items if item.get("kind") == "click"]),
         "text": texts[-1]["value"] if texts else "",
-        "navigations": len(navigations),
+        "loads": len([item for item in items if item.get("kind") == "served"]),
     }
 
 
 def web_mutation(action: str, before: dict, after: dict) -> tuple[bool, str]:
     if action == "click":
-        navigated = after.get("navigations", 0) > before.get("navigations", 0)
+        navigated = after.get("loads", 0) > before.get("loads", 0)
         clicked = after.get("clicks", 0) > before.get("clicks", 0)
         return (
             navigated or clicked,
-            "the page navigated to the local endpoint"
+            "the page followed its link and the server served the next document"
             if navigated
             else (
                 "the page reported a click without navigating"
