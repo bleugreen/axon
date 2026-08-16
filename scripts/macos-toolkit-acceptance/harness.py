@@ -591,10 +591,18 @@ class BrowserTarget(Target):
         self.remeasure_when = remeasure_when
         self.extra_args = extra_args or []
         self.nonce = ""
+        self.started_pid: int | None = None
         self.unavailable = None if Path(application).exists() else f"{application} is not installed"
+
+    def _running_pids(self) -> set[int]:
+        found = self.probe("find-app", bundle_id=self.bundle_id)
+        return {item["pid"] for item in found.get("applications") or []}
 
     def launch(self, action: str) -> Launched:
         self.nonce = uuid.uuid4().hex[:12]
+        # Recorded so `close` can tell an instance this campaign started from one
+        # the operator already had open, and never terminate the latter.
+        before_pids = self._running_pids()
         url = f"{self.page_url}?nonce={self.nonce}"
         argv = ["open", "-n", "-a", self.application]
         if self.extra_args:
@@ -619,6 +627,7 @@ class BrowserTarget(Target):
             )
         self.pid = owner["pid"]
         self.window_id = owner["window"]["windowId"]
+        self.started_pid = owner["pid"] if owner["pid"] not in before_pids else None
         return Launched(
             pid=owner["pid"],
             nonce=self.nonce,
@@ -644,6 +653,25 @@ class BrowserTarget(Target):
 
     def arrival(self, mark: float) -> tuple[bool | None, str | None]:
         return web_arrival(self.reports, self.nonce, mark)
+
+    def close(self) -> None:
+        """Ends the browser instance this campaign started, and only that one.
+
+        A window left open outlives its trial. The next trial activates the same
+        application and macOS makes its most recently used window key, which may
+        be the previous trial's — so a keyboard control types into a window
+        nobody is measuring and reports a silence that belongs to the campaign.
+        An instance that was already running when the trial began is left
+        untouched: it is the operator's, not the campaign's.
+        """
+        if self.started_pid is None:
+            return
+        try:
+            os.kill(self.started_pid, 15)
+        except (ProcessLookupError, PermissionError):
+            pass
+        self.started_pid = None
+        time.sleep(1.5)
 
 
 class ElectronTarget(Target):
