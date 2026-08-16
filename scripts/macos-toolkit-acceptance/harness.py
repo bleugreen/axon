@@ -1373,11 +1373,16 @@ def main(argv: list[str] | None = None) -> int:
     existing = Path(arguments.merge)
     if existing.exists():
         previous = json.loads(existing.read_text())
+        # Replaced row by row rather than campaign by campaign. Dropping every
+        # row of a campaign would make `--only` destroy the rows it did not
+        # re-measure, which is how a partial run quietly turns a full matrix
+        # into a two-row file.
+        measured = {row["id"] for row in rows}
         document["campaigns"] = [
             item for item in previous.get("campaigns", []) if item["id"] != campaign_id
         ]
         document["rows"] = [
-            item for item in previous.get("rows", []) if item["campaign"] != campaign_id
+            item for item in previous.get("rows", []) if item["id"] not in measured
         ]
     document["campaigns"].append(campaign)
     document["rows"].extend(rows)
