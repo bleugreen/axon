@@ -744,6 +744,11 @@ def make_bundle(root: Path, name: str, bundle_id: str, binary: Path) -> Path:
                 "CFBundleShortVersionString": "1.0.0",
                 "CFBundleVersion": "1",
                 "NSHighResolutionCapable": True,
+                # The embedded web view loads the campaign's own page over plain
+                # HTTP on the loopback interface. App Transport Security blocks
+                # that by default, and blocks it silently: the view stays blank
+                # and the only symptom is a page that never reports.
+                "NSAppTransportSecurity": {"NSAllowsLocalNetworking": True},
             }
         )
     )
