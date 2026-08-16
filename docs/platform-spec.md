@@ -269,6 +269,22 @@ captured and restored around it. If restoration fails after dispatch, the result
 keeps its `delivery`, `dispatchSuccess`, and verification evidence and reports
 the failed hand-back separately.
 
+Whether the target already holds the foreground is a measurement, never a
+default: the resolved target process compared against the one prior-foreground
+reading the transaction captured. A dispatch with no application to compare
+against — a bare screen coordinate, a wheel burst that routes by the event's
+location rather than by application — reports `alreadyFrontmost: null` and
+`activationProved: null`, because there is no target of which either could be
+true. An action aimed at the foreground itself, such as an unaimed keystroke, is
+the one case that reports `alreadyFrontmost: true` without a resolved process:
+the foreground is its target by definition. `alreadyFrontmost: true` beside a
+`priorApp` naming some other application is a contradiction no backend may
+report. An application a caller named and that does not resolve to a process is a
+target-resolution failure, not a dispatch with no target: collapsing the two lets
+a click aimed at one application become global input aimed at nobody.
+Restoration follows from whether this transaction raised anything, which is a
+different question from whether the target was already there.
+
 Restoration is reported evidence, not a condition on the action's `success`.
 The foreground rung promises proved activation and exactly one dispatch; action
 verification still decides goal success. A session handed back immaculately says
