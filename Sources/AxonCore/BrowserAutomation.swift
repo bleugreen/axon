@@ -512,7 +512,7 @@ public final class AppleScriptBrowserAutomation: BrowserAutomationServing {
             return {URL of targetTab, name of targetTab}
         end tell
         """
-        let values = try executeList(source, appName: browser.name)
+        let values = try executeList(source, browser: browser)
         guard values.count == 2 else { throw BrowserAutomationError.executionFailed("unexpected navigation response") }
         return BrowserNavigationResult(app: browser.rawValue, requestedURL: validatedURL, url: values[0], title: values[1])
     }
@@ -529,7 +529,7 @@ public final class AppleScriptBrowserAutomation: BrowserAutomationServing {
             return output
         end tell
         """
-        return try executeRecords(source, appName: browser.name).map { record in
+        return try executeRecords(source, browser: browser).map { record in
             guard record.count == 3, let index = Int(record[0]) else { throw BrowserAutomationError.executionFailed("unexpected window response") }
             return BrowserWindow(id: "window:\(index)", index: index, title: record[1], active: record[2] == "true")
         }
@@ -558,7 +558,7 @@ public final class AppleScriptBrowserAutomation: BrowserAutomationServing {
             return output
         end tell
         """
-        return try executeRecords(source, appName: browser.name).map { record in
+        return try executeRecords(source, browser: browser).map { record in
             guard record.count == 5, let wi = Int(record[0]), let ti = Int(record[1]) else { throw BrowserAutomationError.executionFailed("unexpected tab response") }
             return BrowserTab(id: "window:\(wi):tab:\(ti)", windowID: "window:\(wi)", windowIndex: wi, index: ti, title: record[2], url: record[3], active: record[4] == "true")
         }
@@ -590,18 +590,32 @@ public final class AppleScriptBrowserAutomation: BrowserAutomationServing {
         value.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"")
     }
 
-    private func executeList(_ source: String, appName: String) throws -> [String] {
-        let descriptor = try execute(source, appName: appName)
+    private func executeList(_ source: String, browser: SupportedBrowser) throws -> [String] {
+        let descriptor = try execute(source, browser: browser)
         return descriptorStrings(descriptor)
     }
 
-    private func executeRecords(_ source: String, appName: String) throws -> [[String]] {
-        let descriptor = try execute(source, appName: appName)
+    private func executeRecords(_ source: String, browser: SupportedBrowser) throws -> [[String]] {
+        let descriptor = try execute(source, browser: browser)
         guard descriptor.numberOfItems > 0 else { return [] }
         return (1...descriptor.numberOfItems).map { descriptorStrings(descriptor.atIndex($0)) }
     }
 
-    private func execute(_ source: String, appName: String) throws -> NSAppleEventDescriptor {
+    /// The Apple event itself was refused, after the preflight determination had passed.
+    ///
+    /// That is macOS answering this process, so the ledger takes it like any other answer. Otherwise
+    /// the allowed preflight would be the last word: the menu would go on treating the grant as
+    /// settled and retire its consent item, leaving this refusal — which names that item — pointing
+    /// at a surface that is no longer there.
+    func executedRefusal(browser: SupportedBrowser, status: Int32) -> BrowserAutomationError {
+        ledger.recordAnswer(OSStatus(errAEEventNotPermitted), for: browser.rawValue)
+        return .automationNotGranted(BrowserAutomationDenial(
+            app: browser.name, authorization: .denied, leg: .executed, status: status,
+            origin: .browserVerb
+        ))
+    }
+
+    private func execute(_ source: String, browser: SupportedBrowser) throws -> NSAppleEventDescriptor {
         var error: NSDictionary?
         let boundedSource = "with timeout of 15 seconds\n\(source)\nend timeout"
         guard let script = NSAppleScript(source: boundedSource), let result = script.executeAndReturnError(&error) as NSAppleEventDescriptor? else {
@@ -609,12 +623,9 @@ public final class AppleScriptBrowserAutomation: BrowserAutomationServing {
             if let number, number == Int(errAEEventNotPermitted) {
                 // Only a browser verb sends Apple events; the consent gesture stops at the
                 // authorization.
-                throw BrowserAutomationError.automationNotGranted(BrowserAutomationDenial(
-                    app: appName, authorization: .denied, leg: .executed, status: Int32(number),
-                    origin: .browserVerb
-                ))
+                throw executedRefusal(browser: browser, status: Int32(number))
             }
-            if number == -1712 { throw BrowserAutomationError.timeout(appName) }
+            if number == -1712 { throw BrowserAutomationError.timeout(browser.name) }
             throw BrowserAutomationError.executionFailed((error?[NSAppleScript.errorMessage] as? String) ?? "unknown Apple event error")
         }
         return result

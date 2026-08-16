@@ -322,6 +322,24 @@ private func consentRequester(
     #expect(authorizer.bundleIdentifiers == ["com.apple.Safari"])
 }
 
+/// An Apple event refused after the preflight passed is still macOS answering this process, so the
+/// ledger takes that answer over the preflight's. Otherwise the refusal would name a menu item the
+/// allowed preflight had already retired.
+@Test func anEventRefusedAfterAPassingPreflightRestoresTheConsentMenuItem() {
+    let ledger = AppleEventAnswerLedger()
+    let settled = AppleEventAuthorizerStub(results: [noErr, noErr])
+    #expect(consentRequester(settled, ledger: ledger).outstandingConsent() == .none)
+
+    let refusal = browserAutomation(authorizer: AppleEventAuthorizerStub(results: []), ledger: ledger)
+        .executedRefusal(browser: .safari, status: Int32(errAEEventNotPermitted))
+
+    #expect(refusal.description.contains("choose Browser Automation..."))
+    // Read back from the ledger alone: the stub holds no results and would trap on a fresh ask.
+    let afterRefusal = AppleEventAuthorizerStub(results: [])
+    #expect(consentRequester(afterRefusal, ledger: ledger).outstandingConsent() == .explain)
+    #expect(afterRefusal.requests.isEmpty)
+}
+
 /// A grant minted at the dialog retires the item on the spot: the prompted leg's answer is what the
 /// ledger now holds, so the next menu build finds nothing left to consent to.
 @Test func grantingConsentAtTheDialogRetiresTheMenuItem() throws {
