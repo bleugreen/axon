@@ -224,6 +224,15 @@ class Target:
     def launch(self, action: str) -> Launched:
         raise NotImplementedError
 
+    def point(self, action: str, launched: Launched) -> dict | None:
+        """The coordinate to aim at, read again rather than remembered.
+
+        A browser window that is moved after it opens has no event to announce
+        it, so a coordinate read once at load time can name where the window
+        used to be. Targets that can re-report override this.
+        """
+        return launched.point
+
     def identity(self, pid: int) -> dict:
         raise NotImplementedError
 
@@ -371,6 +380,11 @@ class FixtureTarget(Target):
             detail={"ready": self.ready},
         )
 
+    def point(self, action: str, launched: Launched) -> dict | None:
+        if self.webview_url and action == "click":
+            return web_point(self.reports, self.nonce) or launched.point
+        return launched.point
+
     def identity(self, pid: int) -> dict:
         return bundle_identity(self.probe, pid)
 
@@ -421,6 +435,18 @@ class FixtureTarget(Target):
             except subprocess.TimeoutExpired:
                 self.process.kill()
         self.process = None
+
+
+def web_point(reports: Reports, nonce: str) -> dict | None:
+    """The most recent screen rectangle the page reported for its link."""
+    geometries = [
+        item
+        for item in reports.snapshot()
+        if item.get("kind") == "geometry" and item.get("nonce") == nonce
+    ]
+    if not geometries:
+        return None
+    return geometries[-1]["widgets"]["link"]["center"]
 
 
 def web_snapshot(reports: Reports, nonce: str) -> dict:
@@ -516,6 +542,11 @@ class BrowserTarget(Target):
             detail={"geometry": geometry},
         )
 
+    def point(self, action: str, launched: Launched) -> dict | None:
+        if action != "click":
+            return None
+        return web_point(self.reports, self.nonce) or launched.point
+
     def identity(self, pid: int) -> dict:
         return bundle_identity(self.probe, pid)
 
@@ -579,6 +610,11 @@ class ElectronTarget(Target):
             point=geometry["widgets"]["link"]["center"],
             detail={"geometry": geometry},
         )
+
+    def point(self, action: str, launched: Launched) -> dict | None:
+        if action != "click":
+            return None
+        return web_point(self.reports, self.nonce) or launched.point
 
     def identity(self, pid: int) -> dict:
         return bundle_identity(self.probe, pid)
