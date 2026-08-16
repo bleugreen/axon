@@ -278,11 +278,12 @@ class CommittedFixtureTests(unittest.TestCase):
             "RESULTS.md is not what results.json renders to; run check --write",
         )
 
-    def test_every_row_names_the_trial_in_its_campaign_record(self) -> None:
-        # The raw record itself is not committed — it stays on the bench that
-        # produced it — so what is checked here is that the reference is
-        # well formed and points into the record of the campaign that measured
-        # the row, which is the part that can silently go wrong.
+    def test_every_rows_bench_reference_is_well_formed_and_names_its_own_campaign(self) -> None:
+        # The record itself is not committed — it stays on the bench that
+        # produced it — so this cannot and does not resolve the reference. What
+        # it checks is that the reference is well formed and names the record of
+        # the campaign that measured this row, which is the part that goes wrong
+        # silently when a rerun rewrites provenance.
         campaigns = {item["id"]: item for item in self.document["campaigns"]}
         for row in self.document["rows"]:
             path, _, fragment = row["rawEvidence"].partition("#")

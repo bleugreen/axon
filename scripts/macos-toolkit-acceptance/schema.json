@@ -39,7 +39,7 @@
         "session": { "description": "What kind of session this was: an interactive desktop with a logged-in user, or something else. PID-targeted input cannot be measured without one.", "type": "string" },
         "harness": { "description": "The commit or description of the harness that produced this campaign.", "type": ["string", "null"] },
         "permissions": { "$ref": "#/$defs/permissions" },
-        "rawEvidence": { "description": "Path to the machine and date stamped raw record kept for diagnosis, relative to this directory.", "type": "string", "minLength": 1 },
+        "rawEvidence": { "description": "Path, relative to this directory, of the unnormalized record this run wrote for diagnosis. Not committed: it is bench-local and each run writes its own.", "type": "string", "minLength": 1 },
         "notes": { "type": ["string", "null"] }
       }
     },
@@ -95,7 +95,7 @@
         "controls": { "$ref": "#/$defs/controls" },
         "freshState": { "$ref": "#/$defs/freshState" },
         "rawEvidence": {
-          "description": "Where the unnormalized record of this row lives, as a path and a pointer into it.",
+          "description": "Names the trial in the unnormalized record its run wrote, as a path and a fragment. That record is written on the bench that ran the campaign and is not committed; this is a pointer for whoever still has that machine, and not a link. Everything a verdict rests on is carried by the row itself.",
           "type": "string",
           "minLength": 1
         },

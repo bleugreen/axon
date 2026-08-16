@@ -291,6 +291,13 @@ A trial whose control did not act is measuring the campaign rather than the targ
 **identity** is what a backend can read about the target at dispatch time, holding only a process
 identifier. It is the key any future acceptance entry would have to be written against, and a row
 claims exactly as much as that key can carry and no more.
+
+Every observation a verdict rests on is in this document and in `results.json`: the dispatch outcome,
+the target-side mutation and how it was observed, whether the event reached the application, all four
+invariants, and what each control did. The `bench record` a row names is the unnormalized per-phase
+reading the run wrote on the machine that produced it — window stacks, every report each target sent,
+the full readings either side of each phase. It is not committed and its name is a pointer for
+whoever still has that machine, not a link.
 """
 
 
@@ -298,11 +305,14 @@ def render(document: dict) -> str:
     lines: list[str] = [_PREAMBLE]
 
     lines.append("## Campaigns\n")
-    lines.append("| campaign | measured | machine | macOS | Accessibility | raw evidence |")
+    lines.append("| campaign | measured | machine | macOS | Accessibility | bench record |")
     lines.append("| --- | --- | --- | --- | --- | --- |")
     for campaign in document.get("campaigns", []):
+        # Named, never linked. The unnormalized record is written on the bench
+        # that runs the campaign and is not part of the repository, so rendering
+        # it as a link would publish a citation that resolves to nothing.
         lines.append(
-            "| `{id}` | {measuredAt} | {machine} | {operatingSystem} | {access} | [`{raw}`]({raw}) |".format(
+            "| `{id}` | {measuredAt} | {machine} | {operatingSystem} | {access} | `{raw}` |".format(
                 id=campaign["id"],
                 measuredAt=campaign["measuredAt"],
                 machine=campaign["machine"],
@@ -358,7 +368,7 @@ def render(document: dict) -> str:
         for phase in ("before", "after"):
             control = row["controls"][phase]
             lines.append(f"- Control {phase}: {_control(control)}")
-        lines.append(f"- Raw evidence: [`{row['rawEvidence']}`]({row['rawEvidence'].split('#')[0]})")
+        lines.append(f"- Bench record: `{row['rawEvidence']}` (written by the run, not committed)")
         lines.append(f"- Re-measure when: {row['remeasureWhen']}")
         lines.append("")
 
