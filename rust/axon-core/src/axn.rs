@@ -167,7 +167,11 @@ fn deserialize_version<'de, D: serde::Deserializer<'de>>(d: D) -> Result<u32, D:
     }
 }
 
-fn validate_replay_contract(doc: &AxnDocument) -> Result<(), AxnError> {
+/// The single statement of what makes a v2 document replayable.
+///
+/// Public so that authoring can hold itself to the same rule replay enforces, rather than a second
+/// validator that can drift stricter or looser than the one that actually gates dispatch.
+pub fn validate_replay_contract(doc: &AxnDocument) -> Result<(), AxnError> {
     if doc.version != 2 {
         let obsolete = doc.actions.iter().enumerate().find_map(|(i, a)| {
             ["target", "from", "to"]

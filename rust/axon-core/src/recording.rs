@@ -25,13 +25,17 @@ pub struct RecordedPoint {
 ///
 /// The name and bundle identifier are what a serialized artifact keeps, because they survive the
 /// session; the process id is runtime-only scoping for the semantic-name registry.
+///
+/// That split is enforced by the model rather than asserted by this comment: `process_id` is
+/// skipped by serde in both directions, so a pid cannot ride into an artifact, a history record,
+/// or a diagnostic dump and later be mistaken for durable identity by a different session.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RecordedAppIdentity {
     pub name: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bundle_identifier: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[serde(skip)]
     pub process_id: Option<u32>,
 }
 
@@ -269,12 +273,26 @@ impl UserRecordingTranslator {
         Self
     }
 
+    /// Authors the recorded groups as a v2 document, or refuses.
+    ///
+    /// The result is checked against the same replay contract `run` enforces, so authoring cannot
+    /// hand back a file that its own replay would reject: a provider that emits a target without
+    /// durable identity, or a malformed point fallback, fails here rather than at the moment
+    /// someone tries to use the recording.
+    ///
+    /// `assertion_taint` decides which observed values are safe to *assert*, and nothing more.
+    /// Redacting durable values is an upstream boundary: evidence is redacted before it enters a
+    /// recorder buffer or a history record, so a credential has already become a
+    /// `<redacted: …>` marker by the time it arrives here. Those markers are carried through on
+    /// purpose — they are what keeps a recording of a password field readable and
+    /// parameterizable — which is exactly why they must never be asserted back.
     pub fn axn_document(
         &self,
         groups: &[RecordedUserEventGroup],
         arguments: Vec<AxnArgument>,
-        taint: &dyn crate::SecretTaint,
-    ) -> AxnDocument {
+        assertion_taint: &dyn crate::SecretTaint,
+    ) -> Result<AxnDocument, crate::AxnError> {
+        let taint = assertion_taint;
         // Gathered across the whole recording before any step is compiled: an echo of typed text
         // can surface a step or two later, and every one of these strings is a parameterization
         // candidate no step may assert.
@@ -389,7 +407,7 @@ impl UserRecordingTranslator {
             action_number += 1;
         }
 
-        AxnDocument {
+        let document = AxnDocument {
             version: 2,
             arguments,
             actions: prune_unrequired_guard_facts(actions, &guard_fact_ids)
@@ -397,16 +415,18 @@ impl UserRecordingTranslator {
                 .map(into_axn_action)
                 .collect(),
             flags: Map::new(),
-        }
+        };
+        crate::validate_replay_contract(&document)?;
+        Ok(document)
     }
 
     pub fn yaml(
         &self,
         groups: &[RecordedUserEventGroup],
         arguments: Vec<AxnArgument>,
-        taint: &dyn crate::SecretTaint,
+        assertion_taint: &dyn crate::SecretTaint,
     ) -> Result<String, crate::AxnError> {
-        crate::AxnCodec::to_yaml(&self.axn_document(groups, arguments, taint))
+        crate::AxnCodec::to_yaml(&self.axn_document(groups, arguments, assertion_taint)?)
     }
 }
 
