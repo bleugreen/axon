@@ -626,9 +626,9 @@ impl PlatformBackend for LinuxBackend {
                 )
             })?;
         match &self.screenshot {
-            ScreenshotProvider::X11(session) => {
-                session.screenshot_for_pid(process_id).map(|(image, _)| image)
-            }
+            ScreenshotProvider::X11(session) => session
+                .screenshot_for_pid(process_id)
+                .map(|(image, _)| image),
             ScreenshotProvider::Unavailable(_) => unreachable!(),
         }
     }

@@ -674,11 +674,7 @@ impl<B: PointerTargetVerifier + BackgroundPixelInput> Router<B> {
                 describe_point(point)
             )));
         };
-        let Some(live) = self
-            .backend
-            .window_rect(source.id)
-            .map_err(backend_error)?
-        else {
+        let Some(live) = self.backend.window_rect(source.id).map_err(backend_error)? else {
             // The window server did not answer. That is not evidence the point is wrong, and
             // refusing on it would ground a working click on a transient fault.
             return Ok(None);
@@ -2497,11 +2493,24 @@ mod tests {
     /// centre, {x:1575,y:410}.
     const PHOTOGRAPHED: u32 = 7;
     const OTHER_WINDOW: u32 = 8;
-    const OCR_WINDOW: Rect = Rect { x: 1400.0, y: 100.0, width: 500.0, height: 900.0 };
-    const OCR_TEXT: Rect = Rect { x: 1500.0, y: 400.0, width: 150.0, height: 20.0 };
+    const OCR_WINDOW: Rect = Rect {
+        x: 1400.0,
+        y: 100.0,
+        width: 500.0,
+        height: 900.0,
+    };
+    const OCR_TEXT: Rect = Rect {
+        x: 1500.0,
+        y: 400.0,
+        width: 150.0,
+        height: 20.0,
+    };
 
     fn photographed() -> Option<SourceWindow> {
-        Some(SourceWindow { id: PHOTOGRAPHED, frame: OCR_WINDOW })
+        Some(SourceWindow {
+            id: PHOTOGRAPHED,
+            frame: OCR_WINDOW,
+        })
     }
 
     #[test]
@@ -2522,7 +2531,12 @@ mod tests {
     fn ocr_click_refuses_with_the_measured_discrepancy_when_the_window_moved() {
         // The coordinates were computed from a capture; by dispatch time the window has moved and
         // the same numbers name somewhere else. Nothing may be posted at them.
-        let moved = Rect { x: 100.0, y: 80.0, width: 500.0, height: 900.0 };
+        let moved = Rect {
+            x: 100.0,
+            y: 80.0,
+            width: 500.0,
+            height: 900.0,
+        };
         let mut router = ocr_router(OCR_TEXT, photographed(), vec![(PHOTOGRAPHED, moved)]);
         let clicks = router.backend.clicks.clone();
 
@@ -2533,11 +2547,30 @@ mod tests {
         };
         assert_eq!(failure.error.code, -32003);
         // The measurements that make the next occurrence diagnosable from the refusal alone.
-        assert!(failure.error.message.contains("{x:1500,y:400,width:150,height:20}"));
+        assert!(
+            failure
+                .error
+                .message
+                .contains("{x:1500,y:400,width:150,height:20}")
+        );
         assert!(failure.error.message.contains("{x:1575,y:410}"));
-        assert!(failure.error.message.contains("{x:1400,y:100,width:500,height:900}"));
-        assert!(failure.error.message.contains("{x:100,y:80,width:500,height:900}"));
-        assert_eq!(*clicks.borrow(), 0, "nothing may be posted at a stale point");
+        assert!(
+            failure
+                .error
+                .message
+                .contains("{x:1400,y:100,width:500,height:900}")
+        );
+        assert!(
+            failure
+                .error
+                .message
+                .contains("{x:100,y:80,width:500,height:900}")
+        );
+        assert_eq!(
+            *clicks.borrow(),
+            0,
+            "nothing may be posted at a stale point"
+        );
     }
 
     #[test]
@@ -2546,8 +2579,18 @@ mod tests {
         // of one application overlap at the recognized text. The photographed one has moved away,
         // and the other still covers the stale coordinates — so a guard that asks about the point
         // rather than about the window finds a perfectly stable window and dispatches into it.
-        let moved = Rect { x: 0.0, y: 0.0, width: 500.0, height: 900.0 };
-        let overlapping = Rect { x: 1450.0, y: 380.0, width: 400.0, height: 300.0 };
+        let moved = Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 500.0,
+            height: 900.0,
+        };
+        let overlapping = Rect {
+            x: 1450.0,
+            y: 380.0,
+            width: 400.0,
+            height: 300.0,
+        };
         let mut router = ocr_router(
             OCR_TEXT,
             photographed(),
@@ -2562,8 +2605,18 @@ mod tests {
         };
         assert_eq!(failure.error.code, -32003);
         // The refusal is about the photographed window, not about the one that happens to cover it.
-        assert!(failure.error.message.contains("{x:1400,y:100,width:500,height:900}"));
-        assert!(failure.error.message.contains("{x:0,y:0,width:500,height:900}"));
+        assert!(
+            failure
+                .error
+                .message
+                .contains("{x:1400,y:100,width:500,height:900}")
+        );
+        assert!(
+            failure
+                .error
+                .message
+                .contains("{x:0,y:0,width:500,height:900}")
+        );
         assert_eq!(
             *clicks.borrow(),
             0,
@@ -2597,7 +2650,12 @@ mod tests {
             panic!("an OCR click with no source window must refuse")
         };
         assert_eq!(failure.error.code, -32003);
-        assert!(failure.error.message.contains("did not report which window"));
+        assert!(
+            failure
+                .error
+                .message
+                .contains("did not report which window")
+        );
         assert_eq!(*clicks.borrow(), 0);
     }
 
