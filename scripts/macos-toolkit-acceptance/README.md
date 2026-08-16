@@ -84,7 +84,22 @@ campaign that ran without it.
 | `tests/` | hermetic tests: phase order, verdicts, integrity, rendering |
 | `results.json` | the normalized fixtures, consumed by the future Rust table |
 | `RESULTS.md` | generated from `results.json`; never edited by hand |
-| `raw/` | machine and date stamped raw records, kept for diagnosis |
+| `raw/` | the unnormalized record each run writes, **not committed** (see below) |
+
+### The raw record stays on the bench
+
+Every run writes `raw/<campaign>.jsonl`: one line per trial, holding each phase's full readings —
+window stacks, per-phase frontmost and pointer readings, every report each target sent. It runs to
+hundreds of kilobytes per campaign, it is read by loading it rather than by reading it, and it is
+gitignored. What the repository carries is the normalized rows, which hold every observation a
+consumer or a reviewer needs; the raw record exists for diagnosing a run while you still have the
+machine that produced it.
+
+Each row names its trial in that record (`raw/<campaign>.jsonl#<target>-<action>`), and each run gets
+its own campaign identity down to the second. That is what makes `--only` safe: a partial rerun
+adds a new campaign and replaces only the rows it measured, so rows it did not touch keep pointing
+at the run that actually measured them. `check` rejects a row whose raw reference names a campaign
+other than the one that measured it.
 
 ### The probe is standalone on purpose
 
