@@ -254,6 +254,56 @@ public struct BrowserAutomationConsentRequester {
             }
         }
     }
+
+    /// What this gesture still has to offer, resolved without ever prompting.
+    ///
+    /// The menu asks this while it is being built, so the item tracks a permission macOS can change
+    /// under a running daemon: a browser installed or a grant reset flips its answer back to
+    /// undetermined and the item returns. Browsers that are not running are left out for the same
+    /// reason the request skips them — macOS resolves a grant only for a running target — so a
+    /// machine with no browser open has nothing to consent to either.
+    public func outstandingConsent() -> BrowserAutomationConsentNeed {
+        let service = AppleEventAuthorizationService(authorizer: authorizer, ledger: ledger, log: log)
+        return SupportedBrowser.allCases
+            .filter { isRunning($0.rawValue) }
+            .map { BrowserAutomationConsentNeed(status: service.settledStatus(bundleIdentifier: $0.rawValue)) }
+            .max { $0.precedence < $1.precedence } ?? .none
+    }
+}
+
+/// What the menu bar's Browser Automation item still has to offer, and therefore whether it exists.
+///
+/// A consent gesture with nothing left to consent to is an invitation to a dead end, so the item is
+/// built from this rather than shown unconditionally.
+public enum BrowserAutomationConsentNeed: String, Equatable, Sendable {
+    /// Every browser macOS can answer for is allowed. Nothing to request, so no menu item.
+    case none
+    /// At least one grant is undetermined and the gesture can still mint it.
+    case request
+    /// At least one grant stands denied — recorded in TCC, or refused without a row at all. macOS
+    /// will not re-prompt over that, so the gesture explains instead of asking; the item stays,
+    /// because hiding it would leave the refusal that sent the user here with nowhere to lead.
+    case explain
+
+    init(status: OSStatus) {
+        switch status {
+        case noErr: self = .none
+        case OSStatus(errAEEventWouldRequireUserConsent): self = .request
+        // A denial, and equally a determination that failed outright: neither is a grant, and both
+        // are states the gesture can only describe.
+        default: self = .explain
+        }
+    }
+
+    /// Which browser's state decides the menu when they disagree. A standing denial outranks an
+    /// undetermined grant because it is the state whose remediation lives nowhere else.
+    var precedence: Int {
+        switch self {
+        case .none: return 0
+        case .request: return 1
+        case .explain: return 2
+        }
+    }
 }
 
 /// The result of a deliberate consent request for one browser.
