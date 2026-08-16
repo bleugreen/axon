@@ -488,6 +488,29 @@ mod production {
         raw: spa::param::video::VideoInfoRaw,
     }
 
+    /// How long the portal gets for the calls no human is part of.
+    ///
+    /// Reaching the portal, asking what it can capture, and creating a session are machine-speed
+    /// operations. Giving them the interactive budget makes a portal that is simply not there look
+    /// like a user who has not answered yet, and delays the refusal by the whole of that budget.
+    ///
+    /// Not as short as those calls are on a portal that is already running, where they return
+    /// immediately: the first one may have to start the service through D-Bus activation, and
+    /// reporting a portal unavailable while it is still starting would be a worse error than
+    /// waiting for it.
+    const PORTAL_TIMEOUT: Duration = Duration::from_secs(10);
+
+    /// How long a session is given to close before the driver stops waiting for it.
+    const CLOSE_TIMEOUT: Duration = Duration::from_secs(1);
+
+    /// What a completed negotiation hands to PipeWire.
+    struct Negotiated {
+        fd: OwnedFd,
+        node: u32,
+        restore_token: Option<String>,
+        source_id: Option<String>,
+    }
+
     pub fn run(
         token: Option<RestoreToken>,
         started: Arc<dyn Fn(StartedSession) + Send + Sync>,
@@ -499,86 +522,142 @@ mod production {
             .enable_time()
             .build()
             .map_err(|e| DriverError::Failed(e.to_string()))?;
-        let setup_result = runtime.block_on(async {
-            let setup = setup(token.as_ref());
-            tokio::pin!(setup);
-            let deadline = tokio::time::sleep(INTERACTIVE_TIMEOUT);
-            tokio::pin!(deadline);
-            loop {
-                tokio::select! {
-                    result = &mut setup => break Ok(result),
-                    _ = &mut deadline => break Err(DriverError::TimedOut),
-                    _ = tokio::time::sleep(Duration::from_millis(25)) => {
-                        if stopped.take() {
-                            break Err(DriverError::Cancelled);
-                        }
-                    }
-                }
+
+        // The session leaves the negotiation through an out-parameter rather than a return value,
+        // which is what makes the close below reachable from every terminating path. Everything
+        // that can end an authorization early -- the deadline, a stop request, a refusal -- drops
+        // the future that owns the session, and `ashpd::desktop::Session` cannot close itself on
+        // Drop, because closing is an async D-Bus call. An abandoned session is not merely untidy:
+        // a client that leaves one open stops being shown a chooser for its later requests, so a
+        // daemon that times out once can never ask for consent again.
+        let mut session = None;
+        let negotiated = runtime.block_on(negotiate(token.as_ref(), &mut session, &stopped));
+        stopped.install_wake(None);
+
+        let result = match negotiated {
+            Err(error) => Err(error),
+            Ok(stream) => {
+                started(StartedSession {
+                    restore_token: stream.restore_token.map(RestoreToken::new),
+                    source_id: stream.source_id,
+                });
+                // Runs before the close deliberately: closing the session tears the stream down,
+                // so the session has to outlive the capture as well as every failure.
+                run_pipewire(stream.fd, stream.node, publish, stopped)
             }
-        });
-        let (session, fd, node, next_token, source_id) = match setup_result {
-            Err(error) => return Err(error),
-            Ok(Err(error)) => return Err(classify(error, token.is_some())),
-            Ok(Ok(value)) => value,
         };
-        started(StartedSession {
-            restore_token: next_token.map(RestoreToken::new),
-            source_id,
-        });
-        let result = run_pipewire(fd, node, publish, stopped);
-        let _ = runtime.block_on(async {
-            tokio::time::timeout(Duration::from_secs(1), session.close()).await
-        });
+
+        if let Some(session) = session {
+            let _ = runtime
+                .block_on(async { tokio::time::timeout(CLOSE_TIMEOUT, session.close()).await });
+        }
         result
     }
 
-    async fn setup(
+    /// Runs the portal handshake, publishing the session into `session` the moment it exists.
+    ///
+    /// Split by who is being waited on. Everything up to and including `create_session` is
+    /// machine-speed and gets [`PORTAL_TIMEOUT`]; only the source chooser waits on a person, so
+    /// only it spends the interactive budget and races the stop signal.
+    async fn negotiate(
         token: Option<&RestoreToken>,
-    ) -> ashpd::Result<(
-        ashpd::desktop::Session<Screencast>,
-        OwnedFd,
-        u32,
-        Option<String>,
-        Option<String>,
-    )> {
-        let portal = Screencast::new().await?;
-        if !portal
-            .available_source_types()
-            .await?
-            .contains(SourceType::Window)
+        session: &mut Option<ashpd::desktop::Session<Screencast>>,
+        stopped: &StopSignal,
+    ) -> Result<Negotiated, DriverError> {
+        let restoring = token.is_some();
+        let portal = bounded("reach the ScreenCast portal", Screencast::new(), restoring).await?;
+        if !bounded(
+            "list the portal's source types",
+            portal.available_source_types(),
+            restoring,
+        )
+        .await?
+        .contains(SourceType::Window)
         {
-            return Err(ashpd::Error::Portal(ashpd::PortalError::NotFound(
-                "WINDOW source unavailable".into(),
-            )));
+            return Err(DriverError::Unavailable("WINDOW source unavailable".into()));
         }
-        let session = portal.create_session(Default::default()).await?;
-        portal
-            .select_sources(
-                &session,
-                SelectSourcesOptions::default()
-                    .set_sources(BitFlags::from_flag(SourceType::Window))
-                    .set_multiple(false)
-                    .set_persist_mode(PersistMode::ExplicitlyRevoked)
-                    .set_restore_token(token.map(RestoreToken::expose)),
+        *session = Some(
+            bounded(
+                "create a ScreenCast session",
+                portal.create_session(Default::default()),
+                restoring,
             )
-            .await?
-            .response()?;
-        let streams = portal
-            .start(&session, None, StartCastOptions::default())
-            .await?
-            .response()?;
-        let stream = streams.streams().first().ok_or_else(|| {
-            ashpd::Error::Portal(ashpd::PortalError::NotFound(
-                "portal returned no stream".into(),
-            ))
-        })?;
-        let node = stream.pipe_wire_node_id();
-        let source_id = stream.id().map(str::to_owned);
-        let next_token = streams.restore_token().map(str::to_owned);
-        let fd = portal
-            .open_pipe_wire_remote(&session, OpenPipeWireRemoteOptions::default())
-            .await?;
-        Ok((session, fd, node, next_token, source_id))
+            .await?,
+        );
+        let live = session.as_ref().expect("the session was just created");
+
+        let authorize = async {
+            portal
+                .select_sources(
+                    live,
+                    SelectSourcesOptions::default()
+                        .set_sources(BitFlags::from_flag(SourceType::Window))
+                        .set_multiple(false)
+                        .set_persist_mode(PersistMode::ExplicitlyRevoked)
+                        .set_restore_token(token.map(RestoreToken::expose)),
+                )
+                .await?
+                .response()?;
+            let streams = portal
+                .start(live, None, StartCastOptions::default())
+                .await?
+                .response()?;
+            let stream = streams.streams().first().ok_or_else(|| {
+                ashpd::Error::Portal(ashpd::PortalError::NotFound(
+                    "portal returned no stream".into(),
+                ))
+            })?;
+            let node = stream.pipe_wire_node_id();
+            let source_id = stream.id().map(str::to_owned);
+            let restore_token = streams.restore_token().map(str::to_owned);
+            let fd = portal
+                .open_pipe_wire_remote(live, OpenPipeWireRemoteOptions::default())
+                .await?;
+            Ok::<_, ashpd::Error>(Negotiated {
+                fd,
+                node,
+                restore_token,
+                source_id,
+            })
+        };
+
+        tokio::select! {
+            result = authorize => result.map_err(|error| classify(error, restoring)),
+            _ = tokio::time::sleep(INTERACTIVE_TIMEOUT) => Err(DriverError::TimedOut),
+            _ = stop_requested(stopped) => Err(DriverError::Cancelled),
+        }
+    }
+
+    /// Bounds one portal call that nobody is being asked to answer.
+    async fn bounded<T>(
+        what: &str,
+        call: impl std::future::Future<Output = ashpd::Result<T>>,
+        restoring: bool,
+    ) -> Result<T, DriverError> {
+        match tokio::time::timeout(PORTAL_TIMEOUT, call).await {
+            Err(_) => Err(DriverError::Unavailable(format!(
+                "the desktop portal did not answer within {}s when asked to {what}",
+                PORTAL_TIMEOUT.as_secs()
+            ))),
+            Ok(Err(error)) => Err(classify(error, restoring)),
+            Ok(Ok(value)) => Ok(value),
+        }
+    }
+
+    /// Resolves when a stop is requested.
+    ///
+    /// The controller wakes this directly. What it replaces was a 25 ms timer asking six hundred
+    /// times across a full interactive wait whether anything had happened, allocating a fresh
+    /// timer each time round.
+    async fn stop_requested(stopped: &StopSignal) {
+        let notify = Arc::new(tokio::sync::Notify::new());
+        let wake = notify.clone();
+        // Installing a wake fires it immediately when a stop is already pending, so a stop that
+        // arrived before this future existed is observed rather than waited through.
+        stopped.install_wake(Some(Arc::new(move || wake.notify_one())));
+        while !stopped.take() {
+            notify.notified().await;
+        }
     }
 
     fn run_pipewire(

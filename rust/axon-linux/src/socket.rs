@@ -384,6 +384,13 @@ fn merge_screenshot_capability(
 /// Routes one request, answering `health` and `shutdown` here and everything else through the
 /// backend router.
 ///
+/// Deliberately does not know how to serve `capture_screen`. This runs with `&mut Router` in
+/// hand, so serving an interactive capture here would hold the router lock for the whole of it
+/// and starve every other tool call behind a request that waits on a person. `dispatch_shared`
+/// clones the capture provider out and releases the lock before capturing, which is the contract;
+/// a second implementation that quietly broke it, reachable the moment routing changed, is worse
+/// than no second implementation at all.
+///
 /// `shutdown` is an ordinary JSON-RPC method with an id and a reply, not a magic frame: a
 /// lifecycle command learns which process it stopped from that reply, and cannot otherwise
 /// tell a clean stop from a daemon that crashed while being asked.
@@ -403,9 +410,6 @@ fn dispatch(
     };
     let method = request.method.clone();
     match method.as_str() {
-        "capture_screen" => dispatch_capture_with(request, |reauthorize| {
-            router.backend().capture_screen(reauthorize)
-        }),
         "health" => {
             let capabilities =
                 merge_screenshot_capability(reported, router.backend().screenshot_capability());

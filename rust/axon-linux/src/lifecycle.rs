@@ -348,6 +348,17 @@ mod tests {
     }
 
     #[test]
+    fn the_unit_bounds_the_memory_a_misbehaving_daemon_can_take() {
+        // A daemon that grows without bound must die alone. This machine class hosts CI runners
+        // beside the desktop, and an unbounded Axon has taken one down twice; the bound plus the
+        // restart above turns that into a blip.
+        let unit = unit_file("/opt/axon/0.1.7/axon-linux");
+
+        assert!(unit.contains("MemoryHigh=512M"));
+        assert!(unit.contains("MemoryMax=1G"));
+    }
+
+    #[test]
     fn a_permanent_path_with_spaces_stays_one_argument() {
         // systemd splits ExecStart on whitespace, so an unquoted path here would register a unit
         // that executes /opt/Axon. `daemon install` registers whatever path the caller invoked,

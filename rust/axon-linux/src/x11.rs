@@ -785,6 +785,17 @@ impl X11Session {
             .copied())
     }
 
+    /// The ceiling on one property read, in four-byte words.
+    ///
+    /// `get_property`'s length is a request for the server to answer, and this process allocates
+    /// whatever the reply announces. Asking for `u32::MAX` words is asking for up to 16 GiB on the
+    /// word of another process. A well-behaved server returns only the property's real length, so
+    /// the ceiling never binds in practice -- the properties read here are `_NET_SUPPORTED`,
+    /// `_NET_CLIENT_LIST`, and `_NET_WM_PID`, which run to a few hundred words on a busy desktop.
+    /// It is here because a size decided outside this process is exactly the kind of thing that
+    /// should be bounded at the crossing rather than trusted.
+    const MAX_PROPERTY_WORDS: u32 = 16 * 1024;
+
     fn property(
         &self,
         window: Window,
@@ -793,7 +804,7 @@ impl X11Session {
     ) -> Result<Vec<u32>, BackendError> {
         let reply = self
             .connection
-            .get_property(false, window, property, kind, 0, u32::MAX)
+            .get_property(false, window, property, kind, 0, Self::MAX_PROPERTY_WORDS)
             .map_err(|error| operation("read an X11 property", error))?
             .reply()
             .map_err(|error| operation("read an X11 property", error))?;
