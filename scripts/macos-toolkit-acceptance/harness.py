@@ -888,19 +888,26 @@ class Trial:
             control_before = self._control(launched)
             self._phase("controlBefore", control_before)
 
+            # The target is raised before the decoy takes the foreground, so it
+            # sits directly beneath the decoy rather than beneath whatever the
+            # operator happened to have open. Without this the trial is aimed at
+            # someone else's window on any desktop that is not empty.
+            raised = self.probe("raise", pid=launched.pid)
             self.decoy.raise_to_front()
             parked = self.probe("park", x=self.park_at[0], y=self.park_at[1])
             background = {
+                "raised": raised,
                 "decoy": self.probe("app", pid=self.decoy.pid),
                 "frontmost": self.probe("frontmost"),
                 "parked": parked,
             }
             self._phase("background", background)
 
+            point = self.target.point(self.action, launched)
             ownership = None
             ownership_proved = None
-            if launched.point:
-                ownership = self.probe("owner-at", x=launched.point["x"], y=launched.point["y"])
+            if point:
+                ownership = self.probe("owner-at", x=point["x"], y=point["y"])
                 ordinary = [
                     window for window in ownership.get("stack", []) if window.get("layer") == 0
                 ]
@@ -911,14 +918,14 @@ class Trial:
                 windows = self.probe("windows", pid=launched.pid).get("windows", [])
                 ownership = {"windows": windows}
                 ownership_proved = any(window.get("onScreen") for window in windows)
-            self._phase("ownership", {"proved": ownership_proved, "observed": ownership})
+            self._phase(
+                "ownership", {"proved": ownership_proved, "point": point, "observed": ownership}
+            )
 
             before = self.target.snapshot()
             mark = self.reports.mark()
             if self.action == "click":
-                dispatch = self.probe(
-                    "post-click", pid=launched.pid, x=launched.point["x"], y=launched.point["y"]
-                )
+                dispatch = self.probe("post-click", pid=launched.pid, x=point["x"], y=point["y"])
             else:
                 dispatch = self.probe("post-key", pid=launched.pid, text=TYPED_TEXT)
             self._phase("dispatch", dispatch)
@@ -964,7 +971,7 @@ class Trial:
                 "frontmostAfter": describe_app(dispatch.get("after", {}).get("frontmost")),
                 "targetPid": launched.pid,
                 "windowId": (launched.window or {}).get("windowId"),
-                "point": launched.point,
+                "point": point,
                 "nonce": launched.nonce,
             }
             raw["identity"] = identity
@@ -994,11 +1001,16 @@ class Trial:
         """A foreground control at the same target: real pointer, or real keys."""
         before = self.target.snapshot()
         if self.action == "click":
+            point = self.target.point(self.action, launched)
+            if point is None:
+                return {
+                    "ran": False,
+                    "acted": None,
+                    "mechanism": None,
+                    "detail": "the target never reported a coordinate to aim at",
+                }
             observed = self.probe(
-                "foreground-click",
-                pid=launched.pid,
-                x=launched.point["x"],
-                y=launched.point["y"],
+                "foreground-click", pid=launched.pid, x=point["x"], y=point["y"]
             )
             mechanism = "CGEventPost(kCGHIDEventTap) with the real pointer over the coordinate"
         else:
