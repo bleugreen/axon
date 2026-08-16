@@ -349,14 +349,16 @@ impl UserRecordingTranslator {
 
             let mut expected_facts: Vec<Value> = Vec::new();
             if let Some(observation) = emitted.observation.as_ref() {
-                expected_facts.extend(crate::DerivedPostconditionCompiler::new(assertion_taint).facts(
-                    &crate::PostconditionInput {
-                        action_id: &action_id,
-                        tool: tool_name(emitted.action()),
-                        observation,
-                        workflow_inputs: &workflow_inputs,
-                    },
-                ));
+                expected_facts.extend(
+                    crate::DerivedPostconditionCompiler::new(assertion_taint).facts(
+                        &crate::PostconditionInput {
+                            action_id: &action_id,
+                            tool: tool_name(emitted.action()),
+                            observation,
+                            workflow_inputs: &workflow_inputs,
+                        },
+                    ),
+                );
             }
 
             // A redacted value is carried as the step's value but never becomes a guard. The field
