@@ -211,6 +211,117 @@ private func stabilitySnapshot(id: String, title: String) -> AppSnapshot {
     #expect(response.result?["action"]?["point"]?["x"] == .double(25))
 }
 
+@Test func clickRequestKeepsTheApplicationNamedBesideAWrappedPoint() {
+    // The exact shape from the field report: the application sits on the wrapper and the
+    // coordinates in the nested point. Reading only the nested object dropped "Safari", and a
+    // screen point with no application is delivered as global input at whatever owns those pixels.
+    var dispatched: ActionPoint?
+    let router = CommandRouter(actions: PrimitiveActionHandlers(clickPoint: { point, _ in
+        dispatched = point
+        return PrimitiveActionResult(action: "click", target: "point:1898,112", strategy: "CGEventToPid", success: false)
+    }))
+
+    let response = router.handle(JSONRPCRequest(id: .string("click-wrapped-app-point"), method: "click", params: .object([
+        "target": .object([
+            "app": .string("Safari"),
+            "coordinateSpace": .string("screen"),
+            "point": .object(["x": .int(1_898), "y": .int(112)])
+        ]),
+        "deliveryPolicy": .string("foregroundPermitted")
+    ])))
+
+    #expect(response.error == nil)
+    #expect(dispatched == ActionPoint(x: 1_898, y: 112, coordinateSpace: .screen, app: "Safari"))
+}
+
+@Test func clickRequestGivesAScreenPointTheCommandLevelApplication() {
+    // A screen coordinate needs no conversion, which is why it used to be returned untouched — and
+    // with it went the only identity the click had.
+    var dispatched: ActionPoint?
+    let router = CommandRouter(actions: PrimitiveActionHandlers(clickPoint: { point, _ in
+        dispatched = point
+        return PrimitiveActionResult(action: "click", target: "point:25,40", strategy: "CGEventToPid", success: false)
+    }))
+
+    let response = router.handle(JSONRPCRequest(id: .string("click-command-app-point"), method: "click", params: .object([
+        "app": .string("com.example.App"),
+        "target": .object(["point": .object(["x": .int(25), "y": .int(40), "coordinateSpace": .string("screen")])])
+    ])))
+
+    #expect(response.error == nil)
+    #expect(dispatched == ActionPoint(x: 25, y: 40, coordinateSpace: .screen, app: "com.example.App"))
+
+    // A legacy point that states no coordinate space at all is the same coordinate and gets the
+    // same owner.
+    let legacy = router.handle(JSONRPCRequest(id: .string("click-command-app-legacy-point"), method: "click", params: .object([
+        "app": .string("com.example.App"),
+        "target": .object(["point": .object(["x": .int(25), "y": .int(40)])])
+    ])))
+
+    #expect(legacy.error == nil)
+    #expect(dispatched == ActionPoint(x: 25, y: 40, coordinateSpace: .legacyScreen, app: "com.example.App"))
+}
+
+@Test func clickRequestPrefersThePointsOwnApplicationOverEveryFallback() {
+    // One precedence rule everywhere: the point, then the wrapper it arrived in, then the command.
+    // The most specific identity is never overwritten by a broader one.
+    var dispatched: ActionPoint?
+    let router = CommandRouter(actions: PrimitiveActionHandlers(clickPoint: { point, _ in
+        dispatched = point
+        return PrimitiveActionResult(action: "click", target: "point:25,40", strategy: "CGEventToPid", success: false)
+    }))
+
+    _ = router.handle(JSONRPCRequest(id: .string("click-point-app-wins"), method: "click", params: .object([
+        "app": .string("com.example.CommandApp"),
+        "target": .object([
+            "app": .string("com.example.WrapperApp"),
+            "point": .object(["app": .string("com.example.PointApp"), "x": .int(25), "y": .int(40)])
+        ])
+    ])))
+    #expect(dispatched?.app == "com.example.PointApp")
+
+    _ = router.handle(JSONRPCRequest(id: .string("click-wrapper-app-wins"), method: "click", params: .object([
+        "app": .string("com.example.CommandApp"),
+        "target": .object([
+            "app": .string("com.example.WrapperApp"),
+            "point": .object(["x": .int(25), "y": .int(40)])
+        ])
+    ])))
+    #expect(dispatched?.app == "com.example.WrapperApp")
+}
+
+@Test func clickRequestConvertsAWrappedPointThroughTheWrappersCoordinateSpace() {
+    // A coordinate space stated on the wrapper used to be dropped with the rest of it, which turned
+    // window coordinates into screen coordinates and clicked somewhere else entirely.
+    let router = CommandRouter(
+        captureSnapshot: { app, screenshot in
+            #expect(app == "com.example.App")
+            #expect(screenshot == false)
+            return actionTextLocationFixtureSnapshot(labels: [])
+        },
+        actions: PrimitiveActionHandlers(clickPoint: { point, _ in
+            #expect(point == ActionPoint(
+                x: 60,
+                y: 80,
+                coordinateSpace: .screen,
+                app: "com.example.App",
+                sourceWindowFrame: actionFixtureWindowFrame
+            ))
+            return PrimitiveActionResult(action: "click", target: "converted", strategy: "CGEvent", success: true)
+        })
+    )
+
+    let response = router.handle(JSONRPCRequest(id: .string("click-wrapped-window-point"), method: "click", params: .object([
+        "target": .object([
+            "app": .string("com.example.App"),
+            "coordinateSpace": .string("window"),
+            "point": .object(["x": .int(10), "y": .int(20)])
+        ])
+    ])))
+
+    #expect(response.error == nil)
+}
+
 @Test func clickRequestConvertsWindowPointToLogicalScreenPoints() {
     let router = CommandRouter(
         captureSnapshot: { app, screenshot in
