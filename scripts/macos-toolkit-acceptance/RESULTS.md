@@ -11,14 +11,14 @@ decides what to authorize; a target absent from the table authorizes nothing.
 
 | campaign | measured | machine | macOS | Accessibility | raw evidence |
 | --- | --- | --- | --- | --- | --- |
-| `bbl-2026-08-16` | 2026-08-16T19:14:56-04:00 | arm64 macOS bench | Version 26.4 (Build 25E246) | granted | [`raw/bbl-2026-08-16.json`](raw/bbl-2026-08-16.json) |
+| `bbl-2026-08-16` | 2026-08-16T19:16:39-04:00 | arm64 macOS bench | Version 26.4 (Build 25E246) | granted | [`raw/bbl-2026-08-16.json`](raw/bbl-2026-08-16.json) |
 
 ## Rows
 
 | row | target | identity | action | verdict | dispatch | target acted | arrival | invariants | controls |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| `safari-click-2026-08-16` | safari (webkit-browser) | `com.apple.Safari` 26.4 | `click` | **blocked** | accepted | no | never arrived | broke ownershipProved | before: silent; after: silent |
-| `safari-keyboard-2026-08-16` | safari (webkit-browser) | `com.apple.Safari` 26.4 | `keyboard` | **blocked** | accepted | no | never arrived | all held | before: silent; after: silent |
+| `safari-click-2026-08-16` | safari (webkit-browser) | `com.apple.Safari` 26.4 | `click` | **blocked** | accepted | no | never arrived | all held | before: silent; after: silent |
+| `safari-keyboard-2026-08-16` | safari (webkit-browser) | `com.apple.Safari` 26.4 | `keyboard` | **accepted** | accepted | yes | reached | all held | before: acted; after: acted |
 
 ## Reading this table
 
@@ -62,14 +62,14 @@ the foreground control before the dispatch did not act, so this trial is measuri
 
 ### `safari-keyboard-2026-08-16`
 
-the foreground control before the dispatch did not act, so this trial is measuring the campaign rather than the target
+the target acted on input posted to its process while a decoy held the foreground and the real pointer did not move
 
 - Variant: `keyDown+keyUp/source=null` through `CGEventPostToPid`
 - Campaign: `bbl-2026-08-16`
 - Fresh state: fresh — the measured keystrokes were the first synthetic input this target received: its foreground control was a keystroke, not a click
-- Target-side observation: the page's input read '' before and '' after
-- Arrival: the page's event listeners recorded nothing
-- Control before: stayed silent via `CGEventPost(kCGHIDEventTap) with the target activated` — the page's input read '' before and '' after
-- Control after: stayed silent via `CGEventPost(kCGHIDEventTap) with the target activated` — the page's input read '' before and '' after
+- Target-side observation: the page's input read 'axon' before and 'axonaxon' after
+- Arrival: the page observed keydown isTrusted=True, keyup isTrusted=True, keydown isTrusted=True, keyup isTrusted=True, keydown isTrusted=True, keyup isTrusted=True, keydown isTrusted=True, keyup isTrusted=True
+- Control before: acted via `CGEventPost(kCGHIDEventTap) with the target activated` — the page's input read '' before and 'axon' after
+- Control after: acted via `CGEventPost(kCGHIDEventTap) with the target activated` — the page's input read 'axonaxon' before and 'axon axonaxon' after
 - Raw evidence: [`raw/bbl-2026-08-16.json#safari-keyboard`](raw/bbl-2026-08-16.json)
 - Re-measure when: a Safari or macOS major release

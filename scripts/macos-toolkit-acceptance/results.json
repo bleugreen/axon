@@ -1,10 +1,10 @@
 {
   "schemaVersion": "macos-acceptance-v1",
-  "generatedAt": "2026-08-16T19:14:56-04:00",
+  "generatedAt": "2026-08-16T19:16:39-04:00",
   "campaigns": [
     {
       "id": "bbl-2026-08-16",
-      "measuredAt": "2026-08-16T19:14:56-04:00",
+      "measuredAt": "2026-08-16T19:16:39-04:00",
       "machine": "arm64 macOS bench",
       "operatingSystem": "Version 26.4 (Build 25E246)",
       "session": "interactive desktop session with a logged-in user",
@@ -33,7 +33,7 @@
           "runtimeSignature": null,
           "readableAtDispatch": true,
           "source": "NSRunningApplication(processIdentifier:) then the bundle's Info.plist",
-          "processStartTime": "Sun Aug 16 15:18:08 2026"
+          "processStartTime": "Sun Aug 16 19:16:05 2026"
         }
       },
       "action": "click",
@@ -50,7 +50,7 @@
         "frontmostUnchanged": true,
         "decoyFrontmost": true,
         "pointerUnchanged": true,
-        "ownershipProved": false,
+        "ownershipProved": true,
         "pointerBefore": {
           "x": 2554,
           "y": 1434
@@ -61,13 +61,13 @@
         },
         "frontmostBefore": "dev.axon.acceptance.decoy",
         "frontmostAfter": "dev.axon.acceptance.decoy",
-        "targetPid": 94963,
-        "windowId": null,
+        "targetPid": 53388,
+        "windowId": 2843,
         "point": {
           "x": 1093.2578125,
           "y": 208.5
         },
-        "nonce": "bcfb3a0ca350"
+        "nonce": "ecfa0d39c662"
       },
       "controls": {
         "before": {
@@ -104,20 +104,20 @@
           "runtimeSignature": null,
           "readableAtDispatch": true,
           "source": "NSRunningApplication(processIdentifier:) then the bundle's Info.plist",
-          "processStartTime": "Sun Aug 16 15:18:08 2026"
+          "processStartTime": "Sun Aug 16 19:16:22 2026"
         }
       },
       "action": "keyboard",
       "mechanism": "CGEventPostToPid",
       "variant": "keyDown+keyUp/source=null",
-      "verdict": "blocked",
-      "reason": "the foreground control before the dispatch did not act, so this trial is measuring the campaign rather than the target",
+      "verdict": "accepted",
+      "reason": "the target acted on input posted to its process while a decoy held the foreground and the real pointer did not move",
       "observations": {
         "dispatchAccepted": true,
-        "targetMutated": false,
-        "mutationEvidence": "the page's input read '' before and '' after",
-        "eventReachedTarget": false,
-        "arrivalDetail": "the page's event listeners recorded nothing",
+        "targetMutated": true,
+        "mutationEvidence": "the page's input read 'axon' before and 'axonaxon' after",
+        "eventReachedTarget": true,
+        "arrivalDetail": "the page observed keydown isTrusted=True, keyup isTrusted=True, keydown isTrusted=True, keyup isTrusted=True, keydown isTrusted=True, keyup isTrusted=True, keydown isTrusted=True, keyup isTrusted=True",
         "frontmostUnchanged": true,
         "decoyFrontmost": true,
         "pointerUnchanged": true,
@@ -132,23 +132,23 @@
         },
         "frontmostBefore": "dev.axon.acceptance.decoy",
         "frontmostAfter": "dev.axon.acceptance.decoy",
-        "targetPid": 94963,
-        "windowId": null,
+        "targetPid": 54759,
+        "windowId": 2858,
         "point": null,
-        "nonce": "aa5d997ccd1b"
+        "nonce": "baf86047030d"
       },
       "controls": {
         "before": {
           "ran": true,
-          "acted": false,
+          "acted": true,
           "mechanism": "CGEventPost(kCGHIDEventTap) with the target activated",
-          "detail": "the page's input read '' before and '' after"
+          "detail": "the page's input read '' before and 'axon' after"
         },
         "after": {
           "ran": true,
-          "acted": false,
+          "acted": true,
           "mechanism": "CGEventPost(kCGHIDEventTap) with the target activated",
-          "detail": "the page's input read '' before and '' after"
+          "detail": "the page's input read 'axonaxon' before and 'axon axonaxon' after"
         }
       },
       "freshState": {

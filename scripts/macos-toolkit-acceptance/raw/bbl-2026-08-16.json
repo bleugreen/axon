@@ -1,7 +1,7 @@
 {
   "campaign": {
     "id": "bbl-2026-08-16",
-    "measuredAt": "2026-08-16T19:14:56-04:00",
+    "measuredAt": "2026-08-16T19:16:39-04:00",
     "machine": "arm64 macOS bench",
     "operatingSystem": "Version 26.4 (Build 25E246)",
     "session": "interactive desktop session with a logged-in user",
@@ -22,7 +22,7 @@
       "width": 2560,
       "height": 1440
     },
-    "probePid": 34398
+    "probePid": 53374
   },
   "trials": [
     {
@@ -32,9 +32,9 @@
       "phases": [
         {
           "phase": "identity",
-          "at": 1786922064.513441,
+          "at": 1786922168.363708,
           "data": {
-            "pid": 94963,
+            "pid": 53388,
             "identity": {
               "bundleId": "com.apple.Safari",
               "bundleShortVersion": "26.4",
@@ -43,23 +43,39 @@
               "runtimeSignature": null,
               "readableAtDispatch": true,
               "source": "NSRunningApplication(processIdentifier:) then the bundle's Info.plist",
-              "processStartTime": "Sun Aug 16 15:18:08 2026"
+              "processStartTime": "Sun Aug 16 19:16:05 2026"
             },
-            "nonce": "bcfb3a0ca350",
+            "nonce": "ecfa0d39c662",
             "point": {
               "x": 1093.2578125,
               "y": 208.5
             },
             "windows": {
-              "windows": []
+              "windows": [
+                {
+                  "windowId": 2843,
+                  "ownerPid": 53388,
+                  "ownerName": "Safari",
+                  "name": "Axon macOS acceptance",
+                  "layer": 0,
+                  "onScreen": true,
+                  "alpha": 1,
+                  "bounds": {
+                    "x": 981,
+                    "y": 30,
+                    "width": 640,
+                    "height": 1328
+                  }
+                }
+              ]
             },
             "detail": {
               "geometry": {
-                "nonce": "bcfb3a0ca350",
+                "nonce": "ecfa0d39c662",
                 "marker": "page",
                 "role": "page",
                 "kind": "geometry",
-                "href": "http://127.0.0.1:54477/page?nonce=bcfb3a0ca350",
+                "href": "http://127.0.0.1:55075/page?nonce=ecfa0d39c662",
                 "devicePixelRatio": 2,
                 "widgets": {
                   "link": {
@@ -83,14 +99,273 @@
                     }
                   }
                 },
-                "receivedAt": 1786922063.274722
+                "receivedAt": 1786922166.7052329
+              },
+              "owner": {
+                "pid": 53388,
+                "window": {
+                  "windowId": 2843,
+                  "ownerPid": 53388,
+                  "ownerName": "Safari",
+                  "name": "Axon macOS acceptance",
+                  "layer": 0,
+                  "onScreen": true,
+                  "alpha": 1,
+                  "bounds": {
+                    "x": 981,
+                    "y": 30,
+                    "width": 640,
+                    "height": 1328
+                  }
+                },
+                "application": {
+                  "pid": 53388,
+                  "bundleId": "com.apple.Safari",
+                  "name": "Safari",
+                  "bundlePath": "/System/Volumes/Preboot/Cryptexes/App/System/Applications/Safari.app",
+                  "active": true,
+                  "terminated": false
+                },
+                "stack": {
+                  "point": {
+                    "x": 1093.2578125,
+                    "y": 208.5
+                  },
+                  "stack": [
+                    {
+                      "windowId": 8,
+                      "ownerPid": 699,
+                      "ownerName": "Dock",
+                      "name": "Dock",
+                      "layer": 20,
+                      "onScreen": true,
+                      "alpha": 1,
+                      "bounds": {
+                        "x": 0,
+                        "y": 0,
+                        "width": 2560,
+                        "height": 1440
+                      }
+                    },
+                    {
+                      "windowId": 2843,
+                      "ownerPid": 53388,
+                      "ownerName": "Safari",
+                      "name": "Axon macOS acceptance",
+                      "layer": 0,
+                      "onScreen": true,
+                      "alpha": 1,
+                      "bounds": {
+                        "x": 981,
+                        "y": 30,
+                        "width": 640,
+                        "height": 1328
+                      }
+                    },
+                    {
+                      "windowId": 348,
+                      "ownerPid": 94963,
+                      "ownerName": "Safari",
+                      "name": "Head of Design Engineering \u2014 Careers at Tasklet",
+                      "layer": 0,
+                      "onScreen": true,
+                      "alpha": 1,
+                      "bounds": {
+                        "x": 785,
+                        "y": 159,
+                        "width": 989,
+                        "height": 1012
+                      }
+                    },
+                    {
+                      "windowId": 2820,
+                      "ownerPid": 36513,
+                      "ownerName": "Safari",
+                      "name": "Axon macOS acceptance",
+                      "layer": 0,
+                      "onScreen": true,
+                      "alpha": 1,
+                      "bounds": {
+                        "x": 981,
+                        "y": 30,
+                        "width": 640,
+                        "height": 1328
+                      }
+                    },
+                    {
+                      "windowId": 2806,
+                      "ownerPid": 34762,
+                      "ownerName": "Safari",
+                      "name": "Axon macOS acceptance",
+                      "layer": 0,
+                      "onScreen": true,
+                      "alpha": 1,
+                      "bounds": {
+                        "x": 981,
+                        "y": 30,
+                        "width": 640,
+                        "height": 1328
+                      }
+                    },
+                    {
+                      "windowId": 1753,
+                      "ownerPid": 24842,
+                      "ownerName": "cairn",
+                      "name": "cairn",
+                      "layer": 0,
+                      "onScreen": true,
+                      "alpha": 1,
+                      "bounds": {
+                        "x": 0,
+                        "y": 30,
+                        "width": 2560,
+                        "height": 1329
+                      }
+                    },
+                    {
+                      "windowId": 2702,
+                      "ownerPid": 61675,
+                      "ownerName": "Google Chrome",
+                      "name": "Axon macOS acceptance",
+                      "layer": 0,
+                      "onScreen": true,
+                      "alpha": 1,
+                      "bounds": {
+                        "x": 62,
+                        "y": 133,
+                        "width": 1200,
+                        "height": 854
+                      }
+                    },
+                    {
+                      "windowId": 2696,
+                      "ownerPid": 61675,
+                      "ownerName": "Google Chrome",
+                      "name": "Restore pages?",
+                      "layer": 0,
+                      "onScreen": true,
+                      "alpha": 1,
+                      "bounds": {
+                        "x": 914,
+                        "y": 191,
+                        "width": 320,
+                        "height": 238
+                      }
+                    },
+                    {
+                      "windowId": 2687,
+                      "ownerPid": 61675,
+                      "ownerName": "Google Chrome",
+                      "name": "Axon macOS acceptance",
+                      "layer": 0,
+                      "onScreen": true,
+                      "alpha": 1,
+                      "bounds": {
+                        "x": 40,
+                        "y": 111,
+                        "width": 1200,
+                        "height": 854
+                      }
+                    },
+                    {
+                      "windowId": 2679,
+                      "ownerPid": 57852,
+                      "ownerName": "Safari",
+                      "name": "Axon macOS acceptance",
+                      "layer": 0,
+                      "onScreen": true,
+                      "alpha": 1,
+                      "bounds": {
+                        "x": 981,
+                        "y": 30,
+                        "width": 640,
+                        "height": 1328
+                      }
+                    },
+                    {
+                      "windowId": 177,
+                      "ownerPid": 98108,
+                      "ownerName": "Firefox",
+                      "name": "Stop the executor's own supervision from consuming the machine, and m\u2026 \u00b7 bleugreen/cairn@60368a3 \u2014 Original profile",
+                      "layer": 0,
+                      "onScreen": true,
+                      "alpha": 1,
+                      "bounds": {
+                        "x": 853,
+                        "y": 30,
+                        "width": 853,
+                        "height": 1328
+                      }
+                    },
+                    {
+                      "windowId": 1725,
+                      "ownerPid": 91101,
+                      "ownerName": "Mail",
+                      "name": "Re: [20000135922934] Apple Developer Support - Membership and Account",
+                      "layer": 0,
+                      "onScreen": true,
+                      "alpha": 1,
+                      "bounds": {
+                        "x": 446,
+                        "y": 164,
+                        "width": 1668,
+                        "height": 1002
+                      }
+                    },
+                    {
+                      "windowId": 1719,
+                      "ownerPid": 91101,
+                      "ownerName": "Mail",
+                      "name": "Searching",
+                      "layer": 0,
+                      "onScreen": true,
+                      "alpha": 1,
+                      "bounds": {
+                        "x": 750,
+                        "y": 163,
+                        "width": 1059,
+                        "height": 1003
+                      }
+                    },
+                    {
+                      "windowId": 1648,
+                      "ownerPid": 59769,
+                      "ownerName": "Cursor",
+                      "name": "AGENTS.md",
+                      "layer": 0,
+                      "onScreen": true,
+                      "alpha": 1,
+                      "bounds": {
+                        "x": 416,
+                        "y": 163,
+                        "width": 1728,
+                        "height": 1003
+                      }
+                    },
+                    {
+                      "windowId": 1490,
+                      "ownerPid": 81765,
+                      "ownerName": "Terminal",
+                      "name": "cairn \u2014 ~/p/cairn \u2014 -fish \u2014 69\u00d784",
+                      "layer": 0,
+                      "onScreen": true,
+                      "alpha": 1,
+                      "bounds": {
+                        "x": 1028,
+                        "y": 52,
+                        "width": 503,
+                        "height": 1225
+                      }
+                    }
+                  ]
+                }
               }
             }
           }
         },
         {
           "phase": "controlBefore",
-          "at": 1786922068.8497212,
+          "at": 1786922172.6496809,
           "data": {
             "ran": true,
             "acted": false,
@@ -106,7 +381,7 @@
               "restored": false,
               "before": {
                 "frontmost": {
-                  "pid": 34762,
+                  "pid": 53388,
                   "bundleId": "com.apple.Safari",
                   "name": "Safari",
                   "bundlePath": "/System/Volumes/Preboot/Cryptexes/App/System/Applications/Safari.app",
@@ -114,13 +389,13 @@
                   "terminated": false
                 },
                 "pointer": {
-                  "x": 1244.1875,
-                  "y": 1242.8515625
+                  "x": 1244,
+                  "y": 1242
                 }
               },
               "after": {
                 "frontmost": {
-                  "pid": 34762,
+                  "pid": 53388,
                   "bundleId": "com.apple.Safari",
                   "name": "Safari",
                   "bundlePath": "/System/Volumes/Preboot/Cryptexes/App/System/Applications/Safari.app",
@@ -134,7 +409,7 @@
               },
               "final": {
                 "frontmost": {
-                  "pid": 34762,
+                  "pid": 53388,
                   "bundleId": "com.apple.Safari",
                   "name": "Safari",
                   "bundlePath": "/System/Volumes/Preboot/Cryptexes/App/System/Applications/Safari.app",
@@ -151,14 +426,14 @@
         },
         {
           "phase": "background",
-          "at": 1786922070.566081,
+          "at": 1786922173.818112,
           "data": {
             "raised": {
-              "pid": 94963,
+              "pid": 53388,
               "raised": true,
               "status": 0,
               "before": {
-                "pid": 34762,
+                "pid": 53388,
                 "bundleId": "com.apple.Safari",
                 "name": "Safari",
                 "bundlePath": "/System/Volumes/Preboot/Cryptexes/App/System/Applications/Safari.app",
@@ -166,7 +441,7 @@
                 "terminated": false
               },
               "after": {
-                "pid": 34762,
+                "pid": 53388,
                 "bundleId": "com.apple.Safari",
                 "name": "Safari",
                 "bundlePath": "/System/Volumes/Preboot/Cryptexes/App/System/Applications/Safari.app",
@@ -175,7 +450,7 @@
               }
             },
             "decoy": {
-              "pid": 34401,
+              "pid": 53376,
               "bundleId": "dev.axon.acceptance.decoy",
               "name": "AxonAcceptanceDecoy",
               "bundlePath": "/Users/mitch/.cairn/build-slots/axn/.authority/slot-121/scratch/axon-acceptance-bundles/AxonAcceptanceDecoy.app",
@@ -183,7 +458,7 @@
               "terminated": false
             },
             "frontmost": {
-              "pid": 34401,
+              "pid": 53376,
               "bundleId": "dev.axon.acceptance.decoy",
               "name": "AxonAcceptanceDecoy",
               "bundlePath": "/Users/mitch/.cairn/build-slots/axn/.authority/slot-121/scratch/axon-acceptance-bundles/AxonAcceptanceDecoy.app",
@@ -204,9 +479,9 @@
         },
         {
           "phase": "ownership",
-          "at": 1786922070.628426,
+          "at": 1786922173.88094,
           "data": {
-            "proved": false,
+            "proved": true,
             "point": {
               "x": 1093.2578125,
               "y": 208.5
@@ -233,8 +508,8 @@
                   }
                 },
                 {
-                  "windowId": 2806,
-                  "ownerPid": 34762,
+                  "windowId": 2843,
+                  "ownerPid": 53388,
                   "ownerName": "Safari",
                   "name": "Axon macOS acceptance",
                   "layer": 0,
@@ -260,6 +535,36 @@
                     "y": 159,
                     "width": 989,
                     "height": 1012
+                  }
+                },
+                {
+                  "windowId": 2820,
+                  "ownerPid": 36513,
+                  "ownerName": "Safari",
+                  "name": "Axon macOS acceptance",
+                  "layer": 0,
+                  "onScreen": true,
+                  "alpha": 1,
+                  "bounds": {
+                    "x": 981,
+                    "y": 30,
+                    "width": 640,
+                    "height": 1328
+                  }
+                },
+                {
+                  "windowId": 2806,
+                  "ownerPid": 34762,
+                  "ownerName": "Safari",
+                  "name": "Axon macOS acceptance",
+                  "layer": 0,
+                  "onScreen": true,
+                  "alpha": 1,
+                  "bounds": {
+                    "x": 981,
+                    "y": 30,
+                    "width": 640,
+                    "height": 1328
                   }
                 },
                 {
@@ -418,11 +723,11 @@
         },
         {
           "phase": "dispatch",
-          "at": 1786922071.119036,
+          "at": 1786922174.353211,
           "data": {
             "mechanism": "CGEventPostToPid",
             "variant": "leftMouseDown+leftMouseUp/source=null/gapMs=0",
-            "targetPid": 94963,
+            "targetPid": 53388,
             "point": {
               "x": 1093.2578125,
               "y": 208.5
@@ -431,7 +736,7 @@
             "accessibilityTrusted": true,
             "before": {
               "frontmost": {
-                "pid": 34401,
+                "pid": 53376,
                 "bundleId": "dev.axon.acceptance.decoy",
                 "name": "AxonAcceptanceDecoy",
                 "bundlePath": "/Users/mitch/.cairn/build-slots/axn/.authority/slot-121/scratch/axon-acceptance-bundles/AxonAcceptanceDecoy.app",
@@ -445,7 +750,7 @@
             },
             "after": {
               "frontmost": {
-                "pid": 34401,
+                "pid": 53376,
                 "bundleId": "dev.axon.acceptance.decoy",
                 "name": "AxonAcceptanceDecoy",
                 "bundlePath": "/Users/mitch/.cairn/build-slots/axn/.authority/slot-121/scratch/axon-acceptance-bundles/AxonAcceptanceDecoy.app",
@@ -461,7 +766,7 @@
         },
         {
           "phase": "observe",
-          "at": 1786922074.197907,
+          "at": 1786922177.413475,
           "data": {
             "before": {
               "clicks": 0,
@@ -479,17 +784,17 @@
             "arrivalDetail": "the page's event listeners recorded nothing",
             "decoyReceived": [],
             "accessibility": {
-              "pid": 94963,
+              "pid": 53388,
               "accessibilityTrusted": true,
               "focusedWindowError": 0,
               "document": null,
-              "title": "Head of Design Engineering \u2014 Careers at Tasklet"
+              "title": "Axon macOS acceptance"
             }
           }
         },
         {
           "phase": "controlAfter",
-          "at": 1786922078.544128,
+          "at": 1786922181.692089,
           "data": {
             "ran": true,
             "acted": false,
@@ -505,7 +810,7 @@
               "restored": false,
               "before": {
                 "frontmost": {
-                  "pid": 34401,
+                  "pid": 53376,
                   "bundleId": "dev.axon.acceptance.decoy",
                   "name": "AxonAcceptanceDecoy",
                   "bundlePath": "/Users/mitch/.cairn/build-slots/axn/.authority/slot-121/scratch/axon-acceptance-bundles/AxonAcceptanceDecoy.app",
@@ -519,7 +824,7 @@
               },
               "after": {
                 "frontmost": {
-                  "pid": 34401,
+                  "pid": 53376,
                   "bundleId": "dev.axon.acceptance.decoy",
                   "name": "AxonAcceptanceDecoy",
                   "bundlePath": "/Users/mitch/.cairn/build-slots/axn/.authority/slot-121/scratch/axon-acceptance-bundles/AxonAcceptanceDecoy.app",
@@ -533,7 +838,7 @@
               },
               "final": {
                 "frontmost": {
-                  "pid": 34401,
+                  "pid": 53376,
                   "bundleId": "dev.axon.acceptance.decoy",
                   "name": "AxonAcceptanceDecoy",
                   "bundlePath": "/Users/mitch/.cairn/build-slots/axn/.authority/slot-121/scratch/axon-acceptance-bundles/AxonAcceptanceDecoy.app",
@@ -550,10 +855,10 @@
         },
         {
           "phase": "restore",
-          "at": 1786922079.405122,
+          "at": 1786922182.4821062,
           "data": {
             "frontmost": {
-              "pid": 34401,
+              "pid": 53376,
               "bundleId": "dev.axon.acceptance.decoy",
               "name": "AxonAcceptanceDecoy",
               "bundlePath": "/Users/mitch/.cairn/build-slots/axn/.authority/slot-121/scratch/axon-acceptance-bundles/AxonAcceptanceDecoy.app",
@@ -561,8 +866,8 @@
               "terminated": false
             },
             "pointer": {
-              "x": 1244.1875,
-              "y": 1242.8515625
+              "x": 1244,
+              "y": 1242
             }
           }
         }
@@ -577,7 +882,7 @@
         "frontmostUnchanged": true,
         "decoyFrontmost": true,
         "pointerUnchanged": true,
-        "ownershipProved": false,
+        "ownershipProved": true,
         "pointerBefore": {
           "x": 2554,
           "y": 1434
@@ -588,13 +893,13 @@
         },
         "frontmostBefore": "dev.axon.acceptance.decoy",
         "frontmostAfter": "dev.axon.acceptance.decoy",
-        "targetPid": 94963,
-        "windowId": null,
+        "targetPid": 53388,
+        "windowId": 2843,
         "point": {
           "x": 1093.2578125,
           "y": 208.5
         },
-        "nonce": "bcfb3a0ca350"
+        "nonce": "ecfa0d39c662"
       },
       "identity": {
         "bundleId": "com.apple.Safari",
@@ -604,7 +909,7 @@
         "runtimeSignature": null,
         "readableAtDispatch": true,
         "source": "NSRunningApplication(processIdentifier:) then the bundle's Info.plist",
-        "processStartTime": "Sun Aug 16 15:18:08 2026"
+        "processStartTime": "Sun Aug 16 19:16:05 2026"
       },
       "controls": {
         "before": {
@@ -622,7 +927,7 @@
             "restored": false,
             "before": {
               "frontmost": {
-                "pid": 34762,
+                "pid": 53388,
                 "bundleId": "com.apple.Safari",
                 "name": "Safari",
                 "bundlePath": "/System/Volumes/Preboot/Cryptexes/App/System/Applications/Safari.app",
@@ -630,13 +935,13 @@
                 "terminated": false
               },
               "pointer": {
-                "x": 1244.1875,
-                "y": 1242.8515625
+                "x": 1244,
+                "y": 1242
               }
             },
             "after": {
               "frontmost": {
-                "pid": 34762,
+                "pid": 53388,
                 "bundleId": "com.apple.Safari",
                 "name": "Safari",
                 "bundlePath": "/System/Volumes/Preboot/Cryptexes/App/System/Applications/Safari.app",
@@ -650,7 +955,7 @@
             },
             "final": {
               "frontmost": {
-                "pid": 34762,
+                "pid": 53388,
                 "bundleId": "com.apple.Safari",
                 "name": "Safari",
                 "bundlePath": "/System/Volumes/Preboot/Cryptexes/App/System/Applications/Safari.app",
@@ -679,7 +984,7 @@
             "restored": false,
             "before": {
               "frontmost": {
-                "pid": 34401,
+                "pid": 53376,
                 "bundleId": "dev.axon.acceptance.decoy",
                 "name": "AxonAcceptanceDecoy",
                 "bundlePath": "/Users/mitch/.cairn/build-slots/axn/.authority/slot-121/scratch/axon-acceptance-bundles/AxonAcceptanceDecoy.app",
@@ -693,7 +998,7 @@
             },
             "after": {
               "frontmost": {
-                "pid": 34401,
+                "pid": 53376,
                 "bundleId": "dev.axon.acceptance.decoy",
                 "name": "AxonAcceptanceDecoy",
                 "bundlePath": "/Users/mitch/.cairn/build-slots/axn/.authority/slot-121/scratch/axon-acceptance-bundles/AxonAcceptanceDecoy.app",
@@ -707,7 +1012,7 @@
             },
             "final": {
               "frontmost": {
-                "pid": 34401,
+                "pid": 53376,
                 "bundleId": "dev.axon.acceptance.decoy",
                 "name": "AxonAcceptanceDecoy",
                 "bundlePath": "/Users/mitch/.cairn/build-slots/axn/.authority/slot-121/scratch/axon-acceptance-bundles/AxonAcceptanceDecoy.app",
@@ -734,9 +1039,9 @@
       "phases": [
         {
           "phase": "identity",
-          "at": 1786922082.345665,
+          "at": 1786922185.211508,
           "data": {
-            "pid": 94963,
+            "pid": 54759,
             "identity": {
               "bundleId": "com.apple.Safari",
               "bundleShortVersion": "26.4",
@@ -745,9 +1050,9 @@
               "runtimeSignature": null,
               "readableAtDispatch": true,
               "source": "NSRunningApplication(processIdentifier:) then the bundle's Info.plist",
-              "processStartTime": "Sun Aug 16 15:18:08 2026"
+              "processStartTime": "Sun Aug 16 19:16:22 2026"
             },
-            "nonce": "aa5d997ccd1b",
+            "nonce": "baf86047030d",
             "point": {
               "x": 1093.2578125,
               "y": 208.5
@@ -755,29 +1060,29 @@
             "windows": {
               "windows": [
                 {
-                  "windowId": 348,
-                  "ownerPid": 94963,
+                  "windowId": 2858,
+                  "ownerPid": 54759,
                   "ownerName": "Safari",
-                  "name": "Head of Design Engineering \u2014 Careers at Tasklet",
+                  "name": "Axon macOS acceptance",
                   "layer": 0,
                   "onScreen": true,
                   "alpha": 1,
                   "bounds": {
-                    "x": 785,
-                    "y": 159,
-                    "width": 989,
-                    "height": 1012
+                    "x": 981,
+                    "y": 30,
+                    "width": 640,
+                    "height": 1328
                   }
                 }
               ]
             },
             "detail": {
               "geometry": {
-                "nonce": "aa5d997ccd1b",
+                "nonce": "baf86047030d",
                 "marker": "page",
                 "role": "page",
                 "kind": "geometry",
-                "href": "http://127.0.0.1:54477/page?nonce=aa5d997ccd1b",
+                "href": "http://127.0.0.1:55075/page?nonce=baf86047030d",
                 "devicePixelRatio": 2,
                 "widgets": {
                   "link": {
@@ -801,26 +1106,300 @@
                     }
                   }
                 },
-                "receivedAt": 1786922081.160564
+                "receivedAt": 1786922183.540875
+              },
+              "owner": {
+                "pid": 54759,
+                "window": {
+                  "windowId": 2858,
+                  "ownerPid": 54759,
+                  "ownerName": "Safari",
+                  "name": "Axon macOS acceptance",
+                  "layer": 0,
+                  "onScreen": true,
+                  "alpha": 1,
+                  "bounds": {
+                    "x": 981,
+                    "y": 30,
+                    "width": 640,
+                    "height": 1328
+                  }
+                },
+                "application": {
+                  "pid": 54759,
+                  "bundleId": "com.apple.Safari",
+                  "name": "Safari",
+                  "bundlePath": "/System/Volumes/Preboot/Cryptexes/App/System/Applications/Safari.app",
+                  "active": true,
+                  "terminated": false
+                },
+                "stack": {
+                  "point": {
+                    "x": 1093.2578125,
+                    "y": 208.5
+                  },
+                  "stack": [
+                    {
+                      "windowId": 8,
+                      "ownerPid": 699,
+                      "ownerName": "Dock",
+                      "name": "Dock",
+                      "layer": 20,
+                      "onScreen": true,
+                      "alpha": 1,
+                      "bounds": {
+                        "x": 0,
+                        "y": 0,
+                        "width": 2560,
+                        "height": 1440
+                      }
+                    },
+                    {
+                      "windowId": 2858,
+                      "ownerPid": 54759,
+                      "ownerName": "Safari",
+                      "name": "Axon macOS acceptance",
+                      "layer": 0,
+                      "onScreen": true,
+                      "alpha": 1,
+                      "bounds": {
+                        "x": 981,
+                        "y": 30,
+                        "width": 640,
+                        "height": 1328
+                      }
+                    },
+                    {
+                      "windowId": 2843,
+                      "ownerPid": 53388,
+                      "ownerName": "Safari",
+                      "name": "Axon macOS acceptance",
+                      "layer": 0,
+                      "onScreen": true,
+                      "alpha": 1,
+                      "bounds": {
+                        "x": 981,
+                        "y": 30,
+                        "width": 640,
+                        "height": 1328
+                      }
+                    },
+                    {
+                      "windowId": 348,
+                      "ownerPid": 94963,
+                      "ownerName": "Safari",
+                      "name": "Head of Design Engineering \u2014 Careers at Tasklet",
+                      "layer": 0,
+                      "onScreen": true,
+                      "alpha": 1,
+                      "bounds": {
+                        "x": 785,
+                        "y": 159,
+                        "width": 989,
+                        "height": 1012
+                      }
+                    },
+                    {
+                      "windowId": 2820,
+                      "ownerPid": 36513,
+                      "ownerName": "Safari",
+                      "name": "Axon macOS acceptance",
+                      "layer": 0,
+                      "onScreen": true,
+                      "alpha": 1,
+                      "bounds": {
+                        "x": 981,
+                        "y": 30,
+                        "width": 640,
+                        "height": 1328
+                      }
+                    },
+                    {
+                      "windowId": 2806,
+                      "ownerPid": 34762,
+                      "ownerName": "Safari",
+                      "name": "Axon macOS acceptance",
+                      "layer": 0,
+                      "onScreen": true,
+                      "alpha": 1,
+                      "bounds": {
+                        "x": 981,
+                        "y": 30,
+                        "width": 640,
+                        "height": 1328
+                      }
+                    },
+                    {
+                      "windowId": 1753,
+                      "ownerPid": 24842,
+                      "ownerName": "cairn",
+                      "name": "cairn",
+                      "layer": 0,
+                      "onScreen": true,
+                      "alpha": 1,
+                      "bounds": {
+                        "x": 0,
+                        "y": 30,
+                        "width": 2560,
+                        "height": 1329
+                      }
+                    },
+                    {
+                      "windowId": 2702,
+                      "ownerPid": 61675,
+                      "ownerName": "Google Chrome",
+                      "name": "Axon macOS acceptance",
+                      "layer": 0,
+                      "onScreen": true,
+                      "alpha": 1,
+                      "bounds": {
+                        "x": 62,
+                        "y": 133,
+                        "width": 1200,
+                        "height": 854
+                      }
+                    },
+                    {
+                      "windowId": 2696,
+                      "ownerPid": 61675,
+                      "ownerName": "Google Chrome",
+                      "name": "Restore pages?",
+                      "layer": 0,
+                      "onScreen": true,
+                      "alpha": 1,
+                      "bounds": {
+                        "x": 914,
+                        "y": 191,
+                        "width": 320,
+                        "height": 238
+                      }
+                    },
+                    {
+                      "windowId": 2687,
+                      "ownerPid": 61675,
+                      "ownerName": "Google Chrome",
+                      "name": "Axon macOS acceptance",
+                      "layer": 0,
+                      "onScreen": true,
+                      "alpha": 1,
+                      "bounds": {
+                        "x": 40,
+                        "y": 111,
+                        "width": 1200,
+                        "height": 854
+                      }
+                    },
+                    {
+                      "windowId": 2679,
+                      "ownerPid": 57852,
+                      "ownerName": "Safari",
+                      "name": "Axon macOS acceptance",
+                      "layer": 0,
+                      "onScreen": true,
+                      "alpha": 1,
+                      "bounds": {
+                        "x": 981,
+                        "y": 30,
+                        "width": 640,
+                        "height": 1328
+                      }
+                    },
+                    {
+                      "windowId": 177,
+                      "ownerPid": 98108,
+                      "ownerName": "Firefox",
+                      "name": "Stop the executor's own supervision from consuming the machine, and m\u2026 \u00b7 bleugreen/cairn@60368a3 \u2014 Original profile",
+                      "layer": 0,
+                      "onScreen": true,
+                      "alpha": 1,
+                      "bounds": {
+                        "x": 853,
+                        "y": 30,
+                        "width": 853,
+                        "height": 1328
+                      }
+                    },
+                    {
+                      "windowId": 1725,
+                      "ownerPid": 91101,
+                      "ownerName": "Mail",
+                      "name": "Re: [20000135922934] Apple Developer Support - Membership and Account",
+                      "layer": 0,
+                      "onScreen": true,
+                      "alpha": 1,
+                      "bounds": {
+                        "x": 446,
+                        "y": 164,
+                        "width": 1668,
+                        "height": 1002
+                      }
+                    },
+                    {
+                      "windowId": 1719,
+                      "ownerPid": 91101,
+                      "ownerName": "Mail",
+                      "name": "Searching",
+                      "layer": 0,
+                      "onScreen": true,
+                      "alpha": 1,
+                      "bounds": {
+                        "x": 750,
+                        "y": 163,
+                        "width": 1059,
+                        "height": 1003
+                      }
+                    },
+                    {
+                      "windowId": 1648,
+                      "ownerPid": 59769,
+                      "ownerName": "Cursor",
+                      "name": "AGENTS.md",
+                      "layer": 0,
+                      "onScreen": true,
+                      "alpha": 1,
+                      "bounds": {
+                        "x": 416,
+                        "y": 163,
+                        "width": 1728,
+                        "height": 1003
+                      }
+                    },
+                    {
+                      "windowId": 1490,
+                      "ownerPid": 81765,
+                      "ownerName": "Terminal",
+                      "name": "cairn \u2014 ~/p/cairn \u2014 -fish \u2014 69\u00d784",
+                      "layer": 0,
+                      "onScreen": true,
+                      "alpha": 1,
+                      "bounds": {
+                        "x": 1028,
+                        "y": 52,
+                        "width": 503,
+                        "height": 1225
+                      }
+                    }
+                  ]
+                }
               }
             }
           }
         },
         {
           "phase": "controlBefore",
-          "at": 1786922086.5240471,
+          "at": 1786922189.395413,
           "data": {
             "ran": true,
-            "acted": false,
+            "acted": true,
             "mechanism": "CGEventPost(kCGHIDEventTap) with the target activated",
-            "detail": "the page's input read '' before and '' after",
+            "detail": "the page's input read '' before and 'axon' after",
             "observed": {
               "mechanism": "CGEventPost(kCGHIDEventTap)",
               "text": "axon",
               "activated": true,
               "before": {
                 "frontmost": {
-                  "pid": 36513,
+                  "pid": 54759,
                   "bundleId": "com.apple.Safari",
                   "name": "Safari",
                   "bundlePath": "/System/Volumes/Preboot/Cryptexes/App/System/Applications/Safari.app",
@@ -834,7 +1413,7 @@
               },
               "after": {
                 "frontmost": {
-                  "pid": 36513,
+                  "pid": 54759,
                   "bundleId": "com.apple.Safari",
                   "name": "Safari",
                   "bundlePath": "/System/Volumes/Preboot/Cryptexes/App/System/Applications/Safari.app",
@@ -851,14 +1430,14 @@
         },
         {
           "phase": "background",
-          "at": 1786922087.7147388,
+          "at": 1786922190.5634828,
           "data": {
             "raised": {
-              "pid": 94963,
+              "pid": 54759,
               "raised": true,
               "status": 0,
               "before": {
-                "pid": 94963,
+                "pid": 54759,
                 "bundleId": "com.apple.Safari",
                 "name": "Safari",
                 "bundlePath": "/System/Volumes/Preboot/Cryptexes/App/System/Applications/Safari.app",
@@ -866,7 +1445,7 @@
                 "terminated": false
               },
               "after": {
-                "pid": 94963,
+                "pid": 54759,
                 "bundleId": "com.apple.Safari",
                 "name": "Safari",
                 "bundlePath": "/System/Volumes/Preboot/Cryptexes/App/System/Applications/Safari.app",
@@ -875,7 +1454,7 @@
               }
             },
             "decoy": {
-              "pid": 34401,
+              "pid": 53376,
               "bundleId": "dev.axon.acceptance.decoy",
               "name": "AxonAcceptanceDecoy",
               "bundlePath": "/Users/mitch/.cairn/build-slots/axn/.authority/slot-121/scratch/axon-acceptance-bundles/AxonAcceptanceDecoy.app",
@@ -883,7 +1462,7 @@
               "terminated": false
             },
             "frontmost": {
-              "pid": 34401,
+              "pid": 53376,
               "bundleId": "dev.axon.acceptance.decoy",
               "name": "AxonAcceptanceDecoy",
               "bundlePath": "/Users/mitch/.cairn/build-slots/axn/.authority/slot-121/scratch/axon-acceptance-bundles/AxonAcceptanceDecoy.app",
@@ -904,25 +1483,25 @@
         },
         {
           "phase": "ownership",
-          "at": 1786922087.7798998,
+          "at": 1786922190.621727,
           "data": {
             "proved": true,
             "point": null,
             "observed": {
               "windows": [
                 {
-                  "windowId": 348,
-                  "ownerPid": 94963,
+                  "windowId": 2858,
+                  "ownerPid": 54759,
                   "ownerName": "Safari",
-                  "name": "Head of Design Engineering \u2014 Careers at Tasklet",
+                  "name": "Axon macOS acceptance",
                   "layer": 0,
                   "onScreen": true,
                   "alpha": 1,
                   "bounds": {
-                    "x": 785,
-                    "y": 159,
-                    "width": 989,
-                    "height": 1012
+                    "x": 981,
+                    "y": 30,
+                    "width": 640,
+                    "height": 1328
                   }
                 }
               ]
@@ -931,17 +1510,17 @@
         },
         {
           "phase": "dispatch",
-          "at": 1786922088.3759308,
+          "at": 1786922191.206223,
           "data": {
             "mechanism": "CGEventPostToPid",
             "variant": "keyDown+keyUp/source=null",
-            "targetPid": 94963,
+            "targetPid": 54759,
             "text": "axon",
             "eventsCreated": true,
             "accessibilityTrusted": true,
             "before": {
               "frontmost": {
-                "pid": 34401,
+                "pid": 53376,
                 "bundleId": "dev.axon.acceptance.decoy",
                 "name": "AxonAcceptanceDecoy",
                 "bundlePath": "/Users/mitch/.cairn/build-slots/axn/.authority/slot-121/scratch/axon-acceptance-bundles/AxonAcceptanceDecoy.app",
@@ -955,7 +1534,7 @@
             },
             "after": {
               "frontmost": {
-                "pid": 34401,
+                "pid": 53376,
                 "bundleId": "dev.axon.acceptance.decoy",
                 "name": "AxonAcceptanceDecoy",
                 "bundlePath": "/Users/mitch/.cairn/build-slots/axn/.authority/slot-121/scratch/axon-acceptance-bundles/AxonAcceptanceDecoy.app",
@@ -971,47 +1550,47 @@
         },
         {
           "phase": "observe",
-          "at": 1786922091.440118,
+          "at": 1786922194.272089,
           "data": {
             "before": {
               "clicks": 0,
-              "text": "",
+              "text": "axon",
               "navigations": 0
             },
             "after": {
               "clicks": 0,
-              "text": "",
+              "text": "axonaxon",
               "navigations": 0
             },
-            "mutated": false,
-            "mutationEvidence": "the page's input read '' before and '' after",
-            "eventReachedTarget": false,
-            "arrivalDetail": "the page's event listeners recorded nothing",
+            "mutated": true,
+            "mutationEvidence": "the page's input read 'axon' before and 'axonaxon' after",
+            "eventReachedTarget": true,
+            "arrivalDetail": "the page observed keydown isTrusted=True, keyup isTrusted=True, keydown isTrusted=True, keyup isTrusted=True, keydown isTrusted=True, keyup isTrusted=True, keydown isTrusted=True, keyup isTrusted=True",
             "decoyReceived": [],
             "accessibility": {
-              "pid": 94963,
+              "pid": 54759,
               "accessibilityTrusted": true,
               "focusedWindowError": 0,
               "document": null,
-              "title": "Head of Design Engineering \u2014 Careers at Tasklet"
+              "title": "Axon macOS acceptance"
             }
           }
         },
         {
           "phase": "controlAfter",
-          "at": 1786922095.6215942,
+          "at": 1786922198.4434528,
           "data": {
             "ran": true,
-            "acted": false,
+            "acted": true,
             "mechanism": "CGEventPost(kCGHIDEventTap) with the target activated",
-            "detail": "the page's input read '' before and '' after",
+            "detail": "the page's input read 'axonaxon' before and 'axon axonaxon' after",
             "observed": {
               "mechanism": "CGEventPost(kCGHIDEventTap)",
               "text": "axon",
               "activated": true,
               "before": {
                 "frontmost": {
-                  "pid": 34401,
+                  "pid": 53376,
                   "bundleId": "dev.axon.acceptance.decoy",
                   "name": "AxonAcceptanceDecoy",
                   "bundlePath": "/Users/mitch/.cairn/build-slots/axn/.authority/slot-121/scratch/axon-acceptance-bundles/AxonAcceptanceDecoy.app",
@@ -1025,7 +1604,7 @@
               },
               "after": {
                 "frontmost": {
-                  "pid": 34401,
+                  "pid": 53376,
                   "bundleId": "dev.axon.acceptance.decoy",
                   "name": "AxonAcceptanceDecoy",
                   "bundlePath": "/Users/mitch/.cairn/build-slots/axn/.authority/slot-121/scratch/axon-acceptance-bundles/AxonAcceptanceDecoy.app",
@@ -1042,10 +1621,10 @@
         },
         {
           "phase": "restore",
-          "at": 1786922096.4030468,
+          "at": 1786922199.223742,
           "data": {
             "frontmost": {
-              "pid": 34401,
+              "pid": 53376,
               "bundleId": "dev.axon.acceptance.decoy",
               "name": "AxonAcceptanceDecoy",
               "bundlePath": "/Users/mitch/.cairn/build-slots/axn/.authority/slot-121/scratch/axon-acceptance-bundles/AxonAcceptanceDecoy.app",
@@ -1062,10 +1641,10 @@
       "observations": {
         "dispatchAccepted": true,
         "variant": "keyDown+keyUp/source=null",
-        "targetMutated": false,
-        "mutationEvidence": "the page's input read '' before and '' after",
-        "eventReachedTarget": false,
-        "arrivalDetail": "the page's event listeners recorded nothing",
+        "targetMutated": true,
+        "mutationEvidence": "the page's input read 'axon' before and 'axonaxon' after",
+        "eventReachedTarget": true,
+        "arrivalDetail": "the page observed keydown isTrusted=True, keyup isTrusted=True, keydown isTrusted=True, keyup isTrusted=True, keydown isTrusted=True, keyup isTrusted=True, keydown isTrusted=True, keyup isTrusted=True",
         "frontmostUnchanged": true,
         "decoyFrontmost": true,
         "pointerUnchanged": true,
@@ -1080,10 +1659,10 @@
         },
         "frontmostBefore": "dev.axon.acceptance.decoy",
         "frontmostAfter": "dev.axon.acceptance.decoy",
-        "targetPid": 94963,
-        "windowId": null,
+        "targetPid": 54759,
+        "windowId": 2858,
         "point": null,
-        "nonce": "aa5d997ccd1b"
+        "nonce": "baf86047030d"
       },
       "identity": {
         "bundleId": "com.apple.Safari",
@@ -1093,21 +1672,21 @@
         "runtimeSignature": null,
         "readableAtDispatch": true,
         "source": "NSRunningApplication(processIdentifier:) then the bundle's Info.plist",
-        "processStartTime": "Sun Aug 16 15:18:08 2026"
+        "processStartTime": "Sun Aug 16 19:16:22 2026"
       },
       "controls": {
         "before": {
           "ran": true,
-          "acted": false,
+          "acted": true,
           "mechanism": "CGEventPost(kCGHIDEventTap) with the target activated",
-          "detail": "the page's input read '' before and '' after",
+          "detail": "the page's input read '' before and 'axon' after",
           "observed": {
             "mechanism": "CGEventPost(kCGHIDEventTap)",
             "text": "axon",
             "activated": true,
             "before": {
               "frontmost": {
-                "pid": 36513,
+                "pid": 54759,
                 "bundleId": "com.apple.Safari",
                 "name": "Safari",
                 "bundlePath": "/System/Volumes/Preboot/Cryptexes/App/System/Applications/Safari.app",
@@ -1121,7 +1700,7 @@
             },
             "after": {
               "frontmost": {
-                "pid": 36513,
+                "pid": 54759,
                 "bundleId": "com.apple.Safari",
                 "name": "Safari",
                 "bundlePath": "/System/Volumes/Preboot/Cryptexes/App/System/Applications/Safari.app",
@@ -1137,16 +1716,16 @@
         },
         "after": {
           "ran": true,
-          "acted": false,
+          "acted": true,
           "mechanism": "CGEventPost(kCGHIDEventTap) with the target activated",
-          "detail": "the page's input read '' before and '' after",
+          "detail": "the page's input read 'axonaxon' before and 'axon axonaxon' after",
           "observed": {
             "mechanism": "CGEventPost(kCGHIDEventTap)",
             "text": "axon",
             "activated": true,
             "before": {
               "frontmost": {
-                "pid": 34401,
+                "pid": 53376,
                 "bundleId": "dev.axon.acceptance.decoy",
                 "name": "AxonAcceptanceDecoy",
                 "bundlePath": "/Users/mitch/.cairn/build-slots/axn/.authority/slot-121/scratch/axon-acceptance-bundles/AxonAcceptanceDecoy.app",
@@ -1160,7 +1739,7 @@
             },
             "after": {
               "frontmost": {
-                "pid": 34401,
+                "pid": 53376,
                 "bundleId": "dev.axon.acceptance.decoy",
                 "name": "AxonAcceptanceDecoy",
                 "bundlePath": "/Users/mitch/.cairn/build-slots/axn/.authority/slot-121/scratch/axon-acceptance-bundles/AxonAcceptanceDecoy.app",
@@ -1176,8 +1755,8 @@
         }
       },
       "verdict": [
-        "blocked",
-        "the foreground control before the dispatch did not act, so this trial is measuring the campaign rather than the target"
+        "accepted",
+        "the target acted on input posted to its process while a decoy held the foreground and the real pointer did not move"
       ]
     }
   ]
