@@ -297,6 +297,11 @@ fn post_click(args: &Args) -> Result<J, String> {
         y: args.f64("y")?,
     };
     let source_kind = source_of(args)?;
+    // How long the button is held. The product posts down and up back to back,
+    // so zero is the variant a row must be measured with; a non-zero gap is
+    // measured alongside it so a silent target cannot be explained away as an
+    // application that wanted a slower click.
+    let gap = args.optional_f64("gap-ms").unwrap_or(0.0);
     let before = state();
     let source = source_kind.create();
     let mut created = true;
@@ -311,6 +316,9 @@ fn post_click(args: &Args) -> Result<J, String> {
             CGEventPostToPid(pid, event);
             CFRelease(event);
         }
+        if kind == kCGEventLeftMouseDown && gap > 0.0 {
+            sleep(Duration::from_secs_f64(gap / 1000.0));
+        }
     }
     release_source(source);
     sleep(SETTLE);
@@ -319,7 +327,7 @@ fn post_click(args: &Args) -> Result<J, String> {
         (
             "variant",
             J::str(format!(
-                "leftMouseDown+leftMouseUp/source={}",
+                "leftMouseDown+leftMouseUp/source={}/gapMs={gap}",
                 source_kind.key()
             )),
         ),
@@ -401,6 +409,11 @@ fn foreground_click(args: &Args) -> Result<J, String> {
     }
     warp_pointer(point);
     sleep(Duration::from_millis(120));
+    // The control is meant to look like a person clicking, so the button is
+    // held for a human interval by default. A control that failed because it
+    // clicked faster than any hand could would invalidate every trial it was
+    // supposed to be proving.
+    let gap = args.optional_f64("gap-ms").unwrap_or(80.0);
     let source = Source::Null.create();
     for kind in [kCGEventLeftMouseDown, kCGEventLeftMouseUp] {
         unsafe {
@@ -411,6 +424,9 @@ fn foreground_click(args: &Args) -> Result<J, String> {
             CGEventSetIntegerValueField(event, kCGMouseEventClickState, 1);
             CGEventPost(kCGHIDEventTap, event);
             CFRelease(event);
+        }
+        if kind == kCGEventLeftMouseDown && gap > 0.0 {
+            sleep(Duration::from_secs_f64(gap / 1000.0));
         }
     }
     release_source(source);
