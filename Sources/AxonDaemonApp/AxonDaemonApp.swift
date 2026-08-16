@@ -49,7 +49,7 @@ struct IncumbentCopy: Sendable {
 }
 
 @MainActor
-final class AxonDaemonAppDelegate: NSObject, NSApplicationDelegate, @unchecked Sendable {
+final class AxonDaemonAppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate, @unchecked Sendable {
     private enum UpdateMenuState {
         case idle
         case checking
@@ -85,6 +85,10 @@ final class AxonDaemonAppDelegate: NSObject, NSApplicationDelegate, @unchecked S
     private let appRecency = RecordingAppRecencyStore()
     private var incumbent: IncumbentCopy?
     private var strayEditorNotice: String?
+    /// Resolved as the menu opens, never cached from launch. Presence is the conservative default:
+    /// an item that turns out to have nothing to offer is a smaller failure than a grant with no
+    /// way to mint it.
+    private var browserConsentNeed: BrowserAutomationConsentNeed = .request
 
     func applicationWillFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
@@ -185,6 +189,33 @@ final class AxonDaemonAppDelegate: NSObject, NSApplicationDelegate, @unchecked S
 
     private func installMenu() {
         let menu = NSMenu()
+        menu.delegate = self
+        populate(menu)
+        statusItem.menu = menu
+        updateStatusItemAppearance()
+    }
+
+    /// Rebuilds the menu that is about to be displayed, refreshing the state only an open menu can
+    /// act on.
+    ///
+    /// Whether the Browser Automation item exists depends on a grant macOS can change under a
+    /// running daemon, and resolving one costs a TCC round trip that also makes this process start
+    /// holding macOS's answer for the rest of its life. Deciding here binds both to a menu someone
+    /// opened, rather than to the two-second refresh timer rebuilding a menu nobody is looking at.
+    func menuNeedsUpdate(_ menu: NSMenu) {
+        refreshBrowserConsentNeed()
+        menu.removeAllItems()
+        populate(menu)
+    }
+
+    /// A copy that lost the socket race serves no browser verbs, so it has no reason to ask macOS
+    /// about grants for them.
+    private func refreshBrowserConsentNeed() {
+        guard incumbent == nil else { return }
+        browserConsentNeed = BrowserAutomationConsentRequester().outstandingConsent()
+    }
+
+    private func populate(_ menu: NSMenu) {
         menu.addItem(disabledItem("Axon"))
 
         // A copy that lost the socket race serves nothing, so offering it recording and updates
@@ -195,8 +226,6 @@ final class AxonDaemonAppDelegate: NSObject, NSApplicationDelegate, @unchecked S
             menu.addItem(.separator())
             menu.addItem(menuItem(title: "Use This Copy", action: #selector(useThisCopy)))
             menu.addItem(menuItem(title: "Quit", action: #selector(quit), keyEquivalent: "q"))
-            statusItem.menu = menu
-            updateStatusItemAppearance()
             return
         }
 
@@ -213,7 +242,11 @@ final class AxonDaemonAppDelegate: NSObject, NSApplicationDelegate, @unchecked S
         if !AccessibilityPermission.isTrusted() {
             menu.addItem(menuItem(title: "Request Accessibility", action: #selector(requestAccessibility)))
         }
-        menu.addItem(menuItem(title: "Browser Automation...", action: #selector(requestBrowserAutomationConsent)))
+        // Present only while there is something to consent to: a grant still to mint, or a standing
+        // denial that macOS will not re-prompt over and this gesture is the only place to explain.
+        if browserConsentNeed != .none {
+            menu.addItem(menuItem(title: "Browser Automation...", action: #selector(requestBrowserAutomationConsent)))
+        }
         menu.addItem(menuItem(title: "Open .axn File...", action: #selector(openAxnFromMenu)))
         if let recordingScope {
             menu.addItem(disabledItem("Recording \(recordingScope.displayName)"))
@@ -224,8 +257,6 @@ final class AxonDaemonAppDelegate: NSObject, NSApplicationDelegate, @unchecked S
         addUpdateItem(to: menu)
         menu.addItem(.separator())
         menu.addItem(menuItem(title: "Quit", action: #selector(quit), keyEquivalent: "q"))
-        statusItem.menu = menu
-        updateStatusItemAppearance()
     }
 
     private func addUpdateItem(to menu: NSMenu) {
@@ -319,6 +350,9 @@ final class AxonDaemonAppDelegate: NSObject, NSApplicationDelegate, @unchecked S
     }
 
     private func presentBrowserAutomationConsent(_ outcomes: [BrowserAutomationConsentOutcome]) {
+        // The request just wrote its answers to the ledger, so a grant minted here retires the item
+        // without asking macOS again.
+        refreshBrowserConsentNeed()
         installMenu()
         guard !outcomes.isEmpty else {
             showAlert(

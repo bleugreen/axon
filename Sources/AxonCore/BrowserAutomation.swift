@@ -34,23 +34,50 @@ public enum BrowserAutomationAuthorizationLeg: String, Equatable, Sendable {
 /// This tracks answers from *either* leg, not prompt attempts. The confounded trial never prompted
 /// at all: it was the silent leg's answer that got reused, so a prompt-only flag would have stayed
 /// false through the one sequence it exists to catch.
+///
+/// It keeps the answer itself, not merely that one arrived, because a surface that must not prompt
+/// still has to know the grant: the menu decides whether its consent item has anything left to offer
+/// from what this process already holds, rather than putting the question to macOS again.
 final class AppleEventAnswerLedger: @unchecked Sendable {
     static let shared = AppleEventAnswerLedger()
 
+    /// One answer macOS gave this process, and the leg that produced it.
+    struct Answer: Equatable {
+        let status: OSStatus
+        let leg: BrowserAutomationAuthorizationLeg
+    }
+
     private let lock = NSLock()
-    private var answered: Set<String> = []
+    private var answers: [String: Answer] = [:]
 
     /// Whether macOS has already answered this process for `bundleIdentifier`.
     func hasAnswer(for bundleIdentifier: String) -> Bool {
-        lock.lock()
-        defer { lock.unlock() }
-        return answered.contains(bundleIdentifier)
+        answer(for: bundleIdentifier) != nil
     }
 
-    func recordAnswer(for bundleIdentifier: String) {
+    /// The most recent answer this process holds for `bundleIdentifier`, if any.
+    func answer(for bundleIdentifier: String) -> Answer? {
         lock.lock()
         defer { lock.unlock() }
-        answered.insert(bundleIdentifier)
+        return answers[bundleIdentifier]
+    }
+
+    /// Records an answer, except where that would let a preflight overwrite an event macOS actually
+    /// refused.
+    ///
+    /// An executed-leg denial is the one answer that contradicts a passing preflight for the same
+    /// target: the determination said yes and then the event itself was refused. For the rest of
+    /// this process's life the preflight is known to be answering wrongly there, so its `noErr` must
+    /// not retire the denial — and with it the menu item carrying the only remediation the user has.
+    /// Only the dialog replaces it, because that answer is a person deciding in this moment;
+    /// otherwise the daemon restarts and the ledger starts empty.
+    func recordAnswer(_ status: OSStatus, leg: BrowserAutomationAuthorizationLeg, for bundleIdentifier: String) {
+        lock.lock()
+        defer { lock.unlock() }
+        if answers[bundleIdentifier]?.leg == .executed, leg != .prompted {
+            return
+        }
+        answers[bundleIdentifier] = Answer(status: status, leg: leg)
     }
 }
 
@@ -100,6 +127,20 @@ struct AppleEventAuthorizationService {
         // Read once, before the first leg, so the silent leg of this very request does not read back
         // as an earlier answer.
         let answeredEarlier = ledger.hasAnswer(for: bundleIdentifier)
+        // An event macOS refused after the preflight passed is a denial the preflight will not
+        // reproduce: asking it again returns the same `noErr` it already answered wrongly with. The
+        // gesture would then report the browser as granted and retire its own menu item, leaving the
+        // refusal the user came here from with nowhere to lead.
+        if let held = ledger.answer(for: bundleIdentifier),
+           held.leg == .executed, held.status == OSStatus(errAEEventNotPermitted) {
+            log("automation authorization target=\(bundleIdentifier) leg=\(held.leg.rawValue) status=\(held.status) answeredEarlierInThisProcess=true source=ledger")
+            throw denial(
+                .denied,
+                Decision(status: held.status, leg: .executed, answeredEarlierInThisProcess: answeredEarlier),
+                appName: appName,
+                origin: .consentGesture
+            )
+        }
         let initial = determine(
             bundleIdentifier: bundleIdentifier,
             askUserIfNeeded: false,
@@ -136,7 +177,7 @@ struct AppleEventAuthorizationService {
         // An unexpected status means the call failed, not that macOS answered the authorization, so
         // it must not make the next denial claim this process is holding a stale answer.
         if [noErr, OSStatus(errAEEventNotPermitted), OSStatus(errAEEventWouldRequireUserConsent)].contains(status) {
-            ledger.recordAnswer(for: bundleIdentifier)
+            ledger.recordAnswer(status, leg: leg, for: bundleIdentifier)
         }
         log("automation authorization target=\(bundleIdentifier) leg=\(leg.rawValue) status=\(status) answeredEarlierInThisProcess=\(holdsEarlierAnswer)")
         return Decision(status: status, leg: leg, answeredEarlierInThisProcess: holdsEarlierAnswer)
@@ -157,6 +198,24 @@ struct AppleEventAuthorizationService {
         default:
             throw BrowserAutomationError.authorizationFailed(app: appName, status: decision.status)
         }
+    }
+
+    /// The authorization this process already holds for `bundleIdentifier`, or one silent
+    /// determination when it holds none.
+    ///
+    /// Never prompts, and never re-asks macOS about a target it has already been answered for. Both
+    /// halves matter to the caller this exists for — the menu, which is rebuilt whenever it is shown
+    /// and must not cost a TCC round trip each time, and must not make this process start holding an
+    /// answer any earlier than the person's own use of Axon already would.
+    func settledStatus(bundleIdentifier: String) -> OSStatus {
+        if let held = ledger.answer(for: bundleIdentifier) {
+            return held.status
+        }
+        return determine(
+            bundleIdentifier: bundleIdentifier,
+            askUserIfNeeded: false,
+            answeredEarlierInThisProcess: false
+        ).status
     }
 
     private func denial(
@@ -225,6 +284,58 @@ public struct BrowserAutomationConsentRequester {
             } catch {
                 return BrowserAutomationConsentOutcome(app: browser.name, bundleIdentifier: browser.rawValue, granted: false, detail: String(describing: error))
             }
+        }
+    }
+
+    /// What this gesture still has to offer, resolved without ever prompting.
+    ///
+    /// The menu asks this while it is being built, so a browser this process has never been answered
+    /// for — launched or installed since the daemon started — brings the item back. A grant changed
+    /// after an answer is held, including by `tccutil reset`, does not: macOS resolves the
+    /// authorization inside this process and answers from what it holds, so no reading here can
+    /// observe that change and only a daemon restart clears it. Browsers that are not running are
+    /// left out for the same reason the request skips them — macOS resolves a grant only for a
+    /// running target — so a machine with no browser open has nothing to consent to either.
+    public func outstandingConsent() -> BrowserAutomationConsentNeed {
+        let service = AppleEventAuthorizationService(authorizer: authorizer, ledger: ledger, log: log)
+        return SupportedBrowser.allCases
+            .filter { isRunning($0.rawValue) }
+            .map { BrowserAutomationConsentNeed(status: service.settledStatus(bundleIdentifier: $0.rawValue)) }
+            .max { $0.precedence < $1.precedence } ?? .none
+    }
+}
+
+/// What the menu bar's Browser Automation item still has to offer, and therefore whether it exists.
+///
+/// A consent gesture with nothing left to consent to is an invitation to a dead end, so the item is
+/// built from this rather than shown unconditionally.
+public enum BrowserAutomationConsentNeed: String, Equatable, Sendable {
+    /// Every browser macOS can answer for is allowed. Nothing to request, so no menu item.
+    case none
+    /// At least one grant is undetermined and the gesture can still mint it.
+    case request
+    /// At least one grant stands denied — recorded in TCC, or refused without a row at all. macOS
+    /// will not re-prompt over that, so the gesture explains instead of asking; the item stays,
+    /// because hiding it would leave the refusal that sent the user here with nowhere to lead.
+    case explain
+
+    init(status: OSStatus) {
+        switch status {
+        case noErr: self = .none
+        case OSStatus(errAEEventWouldRequireUserConsent): self = .request
+        // A denial, and equally a determination that failed outright: neither is a grant, and both
+        // are states the gesture can only describe.
+        default: self = .explain
+        }
+    }
+
+    /// Which browser's state decides the menu when they disagree. A standing denial outranks an
+    /// undetermined grant because it is the state whose remediation lives nowhere else.
+    var precedence: Int {
+        switch self {
+        case .none: return 0
+        case .request: return 1
+        case .explain: return 2
         }
     }
 }
@@ -435,7 +546,7 @@ public final class AppleScriptBrowserAutomation: BrowserAutomationServing {
             return {URL of targetTab, name of targetTab}
         end tell
         """
-        let values = try executeList(source, appName: browser.name)
+        let values = try executeList(source, browser: browser)
         guard values.count == 2 else { throw BrowserAutomationError.executionFailed("unexpected navigation response") }
         return BrowserNavigationResult(app: browser.rawValue, requestedURL: validatedURL, url: values[0], title: values[1])
     }
@@ -452,7 +563,7 @@ public final class AppleScriptBrowserAutomation: BrowserAutomationServing {
             return output
         end tell
         """
-        return try executeRecords(source, appName: browser.name).map { record in
+        return try executeRecords(source, browser: browser).map { record in
             guard record.count == 3, let index = Int(record[0]) else { throw BrowserAutomationError.executionFailed("unexpected window response") }
             return BrowserWindow(id: "window:\(index)", index: index, title: record[1], active: record[2] == "true")
         }
@@ -481,7 +592,7 @@ public final class AppleScriptBrowserAutomation: BrowserAutomationServing {
             return output
         end tell
         """
-        return try executeRecords(source, appName: browser.name).map { record in
+        return try executeRecords(source, browser: browser).map { record in
             guard record.count == 5, let wi = Int(record[0]), let ti = Int(record[1]) else { throw BrowserAutomationError.executionFailed("unexpected tab response") }
             return BrowserTab(id: "window:\(wi):tab:\(ti)", windowID: "window:\(wi)", windowIndex: wi, index: ti, title: record[2], url: record[3], active: record[4] == "true")
         }
@@ -513,18 +624,32 @@ public final class AppleScriptBrowserAutomation: BrowserAutomationServing {
         value.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "\"", with: "\\\"")
     }
 
-    private func executeList(_ source: String, appName: String) throws -> [String] {
-        let descriptor = try execute(source, appName: appName)
+    private func executeList(_ source: String, browser: SupportedBrowser) throws -> [String] {
+        let descriptor = try execute(source, browser: browser)
         return descriptorStrings(descriptor)
     }
 
-    private func executeRecords(_ source: String, appName: String) throws -> [[String]] {
-        let descriptor = try execute(source, appName: appName)
+    private func executeRecords(_ source: String, browser: SupportedBrowser) throws -> [[String]] {
+        let descriptor = try execute(source, browser: browser)
         guard descriptor.numberOfItems > 0 else { return [] }
         return (1...descriptor.numberOfItems).map { descriptorStrings(descriptor.atIndex($0)) }
     }
 
-    private func execute(_ source: String, appName: String) throws -> NSAppleEventDescriptor {
+    /// The Apple event itself was refused, after the preflight determination had passed.
+    ///
+    /// That is macOS answering this process, so the ledger takes it like any other answer. Otherwise
+    /// the allowed preflight would be the last word: the menu would go on treating the grant as
+    /// settled and retire its consent item, leaving this refusal — which names that item — pointing
+    /// at a surface that is no longer there.
+    func executedRefusal(browser: SupportedBrowser, status: Int32) -> BrowserAutomationError {
+        ledger.recordAnswer(OSStatus(errAEEventNotPermitted), leg: .executed, for: browser.rawValue)
+        return .automationNotGranted(BrowserAutomationDenial(
+            app: browser.name, authorization: .denied, leg: .executed, status: status,
+            origin: .browserVerb
+        ))
+    }
+
+    private func execute(_ source: String, browser: SupportedBrowser) throws -> NSAppleEventDescriptor {
         var error: NSDictionary?
         let boundedSource = "with timeout of 15 seconds\n\(source)\nend timeout"
         guard let script = NSAppleScript(source: boundedSource), let result = script.executeAndReturnError(&error) as NSAppleEventDescriptor? else {
@@ -532,12 +657,9 @@ public final class AppleScriptBrowserAutomation: BrowserAutomationServing {
             if let number, number == Int(errAEEventNotPermitted) {
                 // Only a browser verb sends Apple events; the consent gesture stops at the
                 // authorization.
-                throw BrowserAutomationError.automationNotGranted(BrowserAutomationDenial(
-                    app: appName, authorization: .denied, leg: .executed, status: Int32(number),
-                    origin: .browserVerb
-                ))
+                throw executedRefusal(browser: browser, status: Int32(number))
             }
-            if number == -1712 { throw BrowserAutomationError.timeout(appName) }
+            if number == -1712 { throw BrowserAutomationError.timeout(browser.name) }
             throw BrowserAutomationError.executionFailed((error?[NSAppleScript.errorMessage] as? String) ?? "unknown Apple event error")
         }
         return result

@@ -251,6 +251,150 @@ private func authorizationService(
     #expect(outcomes[1].detail?.contains("Google Chrome") == true)
 }
 
+private func consentRequester(
+    _ authorizer: AppleEventAuthorizerStub,
+    ledger: AppleEventAnswerLedger = AppleEventAnswerLedger(),
+    isRunning: @escaping (String) -> Bool = { _ in true }
+) -> BrowserAutomationConsentRequester {
+    BrowserAutomationConsentRequester(authorizer: authorizer, isRunning: isRunning, ledger: ledger, log: { _ in })
+}
+
+/// The ruling behind the item's presence: a consent gesture with nothing left to consent to is an
+/// invitation to a dead end. Every state below is read without ever reaching the prompting leg,
+/// because building a menu must not put a privacy dialog on someone's screen.
+@Test func theConsentMenuItemDisappearsOnceEveryRunningBrowserIsAllowed() {
+    let authorizer = AppleEventAuthorizerStub(results: [noErr, noErr])
+
+    #expect(consentRequester(authorizer).outstandingConsent() == .none)
+    #expect(authorizer.bundleIdentifiers == ["com.apple.Safari", "com.google.Chrome"])
+    #expect(authorizer.requests == [false, false])
+}
+
+@Test func anUndeterminedGrantKeepsTheConsentMenuItemSoTheGrantCanStillBeMinted() {
+    let authorizer = AppleEventAuthorizerStub(results: [noErr, OSStatus(errAEEventWouldRequireUserConsent)])
+
+    #expect(consentRequester(authorizer).outstandingConsent() == .request)
+    #expect(authorizer.requests == [false, false])
+}
+
+/// macOS will not present the dialog again over a standing denial, so this item exists to explain
+/// rather than to ask. Hiding it would strand the user with a refusal that names System Settings and
+/// no surface that says so.
+@Test func aStandingDenialKeepsTheConsentMenuItemForTheExplanationItCarries() throws {
+    let ledger = AppleEventAnswerLedger()
+    let checked = AppleEventAuthorizerStub(results: [OSStatus(errAEEventNotPermitted), OSStatus(errAEEventWouldRequireUserConsent)])
+
+    #expect(consentRequester(checked, ledger: ledger).outstandingConsent() == .explain)
+    #expect(checked.requests == [false, false])
+
+    // Choosing the item that stayed: the gesture explains the denial without prescribing itself.
+    let outcomes = consentRequester(
+        AppleEventAuthorizerStub(results: [OSStatus(errAEEventNotPermitted), noErr]),
+        ledger: ledger
+    ).requestForRunningBrowsers()
+
+    let refused = try #require(outcomes.first { !$0.granted })
+    let detail = try #require(refused.detail)
+    #expect(detail.contains("System Settings > Privacy & Security > Automation"))
+    #expect(detail.contains("Browser Automation...") == false)
+}
+
+/// A determination is not free: it costs a TCC round trip, and it makes this process hold macOS's
+/// answer for the rest of its life. The menu is rebuilt every time it opens, so presence is read
+/// from the ledger once an answer is in it — the stub is out of results and would trap on a
+/// redundant ask.
+@Test func menuPresenceReadsTheLedgerRatherThanAskingMacOSAgain() {
+    let ledger = AppleEventAnswerLedger()
+    let authorizer = AppleEventAuthorizerStub(results: [noErr, OSStatus(errAEEventNotPermitted)])
+    let requester = consentRequester(authorizer, ledger: ledger)
+
+    #expect(requester.outstandingConsent() == .explain)
+    #expect(requester.outstandingConsent() == .explain)
+    #expect(authorizer.requests == [false, false])
+}
+
+/// macOS resolves a grant only for a running target, so a browser that is not running is not a
+/// grant this gesture could mint — the same rule the request itself follows.
+@Test func aBrowserThatIsNotRunningIsNotConsentTheMenuCanOffer() {
+    let authorizer = AppleEventAuthorizerStub(results: [noErr])
+
+    #expect(consentRequester(authorizer, isRunning: { $0 == "com.apple.Safari" }).outstandingConsent() == .none)
+    #expect(authorizer.bundleIdentifiers == ["com.apple.Safari"])
+}
+
+/// An Apple event refused after the preflight passed is still macOS answering this process, so the
+/// ledger takes that answer over the preflight's. Otherwise the refusal would name a menu item the
+/// allowed preflight had already retired.
+@Test func anEventRefusedAfterAPassingPreflightRestoresTheConsentMenuItem() {
+    let ledger = AppleEventAnswerLedger()
+    let settled = AppleEventAuthorizerStub(results: [noErr, noErr])
+    #expect(consentRequester(settled, ledger: ledger).outstandingConsent() == .none)
+
+    let refusal = browserAutomation(authorizer: AppleEventAuthorizerStub(results: []), ledger: ledger)
+        .executedRefusal(browser: .safari, status: Int32(errAEEventNotPermitted))
+
+    #expect(refusal.description.contains("choose Browser Automation..."))
+    // Read back from the ledger alone: the stub holds no results and would trap on a fresh ask.
+    let afterRefusal = AppleEventAuthorizerStub(results: [])
+    #expect(consentRequester(afterRefusal, ledger: ledger).outstandingConsent() == .explain)
+    #expect(afterRefusal.requests.isEmpty)
+}
+
+/// Following the restored item through to the click. The preflight that already answered wrongly
+/// once will answer `noErr` again, so a gesture that simply re-determined would report the browser
+/// as granted and retire the one surface carrying the remediation.
+@Test func theGestureHonorsAnExecutedDenialThatAPassingPreflightWouldErase() throws {
+    let ledger = AppleEventAnswerLedger()
+    _ = browserAutomation(authorizer: AppleEventAuthorizerStub(results: []), ledger: ledger)
+        .executedRefusal(browser: .safari, status: Int32(errAEEventNotPermitted))
+
+    // Only Chrome reaches the authorizer: Safari is answered from the executed denial.
+    let authorizer = AppleEventAuthorizerStub(results: [noErr])
+    let outcomes = consentRequester(authorizer, ledger: ledger).requestForRunningBrowsers()
+
+    let safari = try #require(outcomes.first { $0.app == "Safari" })
+    let detail = try #require(safari.detail)
+    #expect(safari.granted == false)
+    #expect(detail.contains("System Settings > Privacy & Security > Automation"))
+    #expect(detail.contains("Browser Automation...") == false)
+    #expect(authorizer.bundleIdentifiers == ["com.google.Chrome"])
+    // And the item the refusal points at survives the gesture.
+    #expect(consentRequester(AppleEventAuthorizerStub(results: []), ledger: ledger).outstandingConsent() == .explain)
+}
+
+/// The same erasure by the other route: a browser verb's preflight, which passes for exactly the
+/// same reason the event was refused anyway.
+@Test func aPassingPreflightDoesNotRetireAnExecutedDenial() throws {
+    let ledger = AppleEventAnswerLedger()
+    _ = browserAutomation(authorizer: AppleEventAuthorizerStub(results: []), ledger: ledger)
+        .executedRefusal(browser: .safari, status: Int32(errAEEventNotPermitted))
+
+    try authorizationService(AppleEventAuthorizerStub(results: [noErr]), ledger: ledger)
+        .check(bundleIdentifier: "com.apple.Safari", appName: "Safari")
+
+    #expect(consentRequester(
+        AppleEventAuthorizerStub(results: []),
+        ledger: ledger,
+        isRunning: { $0 == "com.apple.Safari" }
+    ).outstandingConsent() == .explain)
+}
+
+/// A grant minted at the dialog retires the item on the spot: the prompted leg's answer is what the
+/// ledger now holds, so the next menu build finds nothing left to consent to.
+@Test func grantingConsentAtTheDialogRetiresTheMenuItem() throws {
+    let ledger = AppleEventAnswerLedger()
+    let authorizer = AppleEventAuthorizerStub(results: [
+        OSStatus(errAEEventWouldRequireUserConsent), noErr,
+        OSStatus(errAEEventWouldRequireUserConsent), noErr
+    ])
+
+    let outcomes = consentRequester(authorizer, ledger: ledger).requestForRunningBrowsers()
+
+    #expect(outcomes.map(\.granted) == [true, true])
+    #expect(consentRequester(authorizer, ledger: ledger).outstandingConsent() == .none)
+    #expect(authorizer.requests == [false, true, false, true])
+}
+
 @Test func consentSkipsBrowsersThatAreNotRunning() {
     let authorizer = AppleEventAuthorizerStub(results: [noErr])
     let outcomes = BrowserAutomationConsentRequester(
