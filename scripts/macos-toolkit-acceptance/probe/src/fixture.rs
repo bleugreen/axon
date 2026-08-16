@@ -127,6 +127,13 @@ pub fn run(args: &Args) -> Result<(), String> {
     );
     send_u64_arg(checkbox, "setButtonType:", NS_BUTTON_TYPE_SWITCH);
     send_id(checkbox, "setTitle:", nsstring("acceptance target"));
+    // A switch button hit-tests what it draws — the box and its title — and not
+    // the rest of its frame. Sizing it to fit makes the rectangle this fixture
+    // publishes the rectangle a click can actually land in, so the centre of
+    // the reported rectangle is a real target rather than empty space beside
+    // the label. Without this, a control click misses and every verdict the
+    // control was meant to license is a statement about the fixture.
+    send(checkbox, "sizeToFit");
     send_id(view, "addSubview:", checkbox);
 
     let field = send_rect_arg(
