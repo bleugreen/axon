@@ -884,10 +884,11 @@ public final class AXPrimitiveActionExecutor {
         candidate: DeliveryCandidate,
         point: CGPoint,
         element: AXUIElement?,
-        process: pid_t?,
+        targeting foreground: ForegroundTarget,
         sourceWindowFrame: AXFrame? = nil,
         details: [String: JSONValue]
     ) -> PrimitiveActionResult {
+        let process = foreground.process
         var evidence = details
         if let element {
             evidence.merge(targetWindowEvidence(for: element, point: point)) { _, new in new }
@@ -925,7 +926,7 @@ public final class AXPrimitiveActionExecutor {
             }
         }
         return inForeground(
-            action: action, target: target, policy: policy, process: process,
+            action: action, target: target, policy: policy, targeting: foreground,
             restoresPointer: true, details: evidence
         ) {
             if let failure = validationFailure(settling: true) {
@@ -947,9 +948,10 @@ public final class AXPrimitiveActionExecutor {
         candidate: DeliveryCandidate,
         element: AXUIElement,
         point: CGPoint,
-        process: pid_t?,
+        targeting foreground: ForegroundTarget,
         value: String
     ) -> PrimitiveActionResult {
+        let process = foreground.process
         var evidence = targetWindowEvidence(for: element, point: point)
         evidence["semanticFallback"] = .string("AXValue did not take; the field was refilled by pointer and keystroke")
         let message = "Keyboard events were dispatched, but the field value could not be verified"
@@ -984,7 +986,7 @@ public final class AXPrimitiveActionExecutor {
             )
         } else {
             base = inForeground(
-                action: "type", target: target, policy: policy, process: process,
+                action: "type", target: target, policy: policy, targeting: foreground,
                 restoresPointer: true, details: evidence
             ) {
                 if let failure = validationFailure(settling: true) {
@@ -1016,10 +1018,11 @@ public final class AXPrimitiveActionExecutor {
         target: String,
         policy: DeliveryPolicy,
         candidate: DeliveryCandidate,
-        process: pid_t?,
+        targeting foreground: ForegroundTarget,
         intent: KeyboardIntent,
         details: [String: JSONValue]
     ) -> PrimitiveActionResult {
+        let process = foreground.process
         let message = "Keyboard events were dispatched, but semantic outcome is unverified without a postcondition"
         let post: ((CGEvent) -> Void) -> Bool = { sink in
             switch intent {
@@ -1040,7 +1043,7 @@ public final class AXPrimitiveActionExecutor {
             )
         }
         return inForeground(
-            action: "keyboard", target: target, policy: policy, process: process,
+            action: "keyboard", target: target, policy: policy, targeting: foreground,
             restoresPointer: false, details: details
         ) {
             let dispatched = post(self.postEvent)
@@ -1057,12 +1060,13 @@ public final class AXPrimitiveActionExecutor {
         target: String,
         policy: DeliveryPolicy,
         candidate: DeliveryCandidate,
-        process: pid_t?,
+        targeting foreground: ForegroundTarget,
         start: ResolvedPointerTarget,
         end: ResolvedPointerTarget,
         durationMs: Int?,
         details: [String: JSONValue]
     ) -> PrimitiveActionResult {
+        let process = foreground.process
         var dispatch: DragDispatch?
         let post: ((CGEvent) -> Void) -> Bool = { sink in
             let outcome = self.postMouseDrag(from: start, to: end, durationMs: durationMs, sink: sink)
@@ -1078,7 +1082,7 @@ public final class AXPrimitiveActionExecutor {
             )
         } else {
             base = inForeground(
-                action: "drag", target: target, policy: policy, process: process,
+                action: "drag", target: target, policy: policy, targeting: foreground,
                 restoresPointer: true, details: details
             ) {
                 let dispatched = post(self.postEvent)
