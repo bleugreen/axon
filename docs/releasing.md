@@ -80,6 +80,32 @@ For release signing, provide a Developer ID identity:
 AXON_CODESIGN_IDENTITY="Developer ID Application: Example, Inc. (TEAMID)" make package-app
 ```
 
+### Signing and entitlements
+
+Everything is signed with the hardened runtime, inside out, so the outer bundle's signature seals
+final bytes. `Axon.app` is signed with the entitlements in `Assets/Axon.entitlements`, which holds
+exactly one:
+
+```text
+com.apple.security.automation.apple-events
+```
+
+The daemon app sends Apple events to Safari and Google Chrome for `navigate`, `windows`, and `tabs`.
+Under the hardened runtime a process without that entitlement may not even ask: macOS refuses
+instantly, presents no consent dialog, records no TCC row, and the app never appears in System
+Settings > Privacy & Security > Automation. Such a build verifies, notarizes, staples, launches, and
+passes every other release check while its browser automation surface is dead — which is how it
+shipped through 0.3.6.
+
+`scripts/check-app-entitlements` therefore asserts the packaged bundle's entitlements as a whole set,
+and refuses an extra one as firmly as a missing one, since every entitlement reopens a hole the
+hardened runtime otherwise closes. `scripts/package-app` runs it immediately after signing, the test
+workflow's package smoke step runs it beside the `Info.plist` assertions, and the release job runs it
+again on the stapled bundle, which is the last look at the bytes users install.
+
+Only the daemon app carries the entitlement. The nested CLI and the editor send no Apple events, so
+they keep the empty entitlement set the hardened runtime gives them by default.
+
 For notarization, configure a notarytool keychain profile and pass it during packaging:
 
 ```sh

@@ -33,10 +33,25 @@ with structured reason `automation-not-granted`, the target app, an authorizatio
 or `notDetermined`, and the `leg` that produced the decision. Axon does not collapse these
 independent target grants into the global health document.
 
+Being allowed to *ask* is itself a signing property. The daemon app runs under the hardened runtime,
+which forbids Apple events outright unless the signature carries
+`com.apple.security.automation.apple-events`, and forbids them silently: TCC refuses instantly,
+presents no dialog, records no row, and Axon never appears in System Settings > Privacy & Security >
+Automation. `NSAppleEventsUsageDescription` in the bundle's `Info.plist` supplies the dialog's
+wording and the entitlement permits the dialog to exist; both halves are required, and packaging
+asserts the entitlement rather than assuming it. See [Releasing Axon](releasing.md#signing-and-entitlements).
+
 macOS resolves an Apple Events authorization inside the daemon process once that process holds an
 answer for a browser, so a grant changed after the daemon started — including by `tccutil reset` — is
 not visible until the daemon restarts. When Axon has already answered for that browser in the current
 session it says so, and names the restart as the remediation.
+
+Remediation is written for the surface that was refused. A browser verb's refusal can send the user
+to the menu bar's consent gesture, because that is a step they have not taken. The gesture's own
+refusal cannot: it distinguishes a denial already recorded in TCC, which is fixed by enabling the
+browser beneath Axon in the Automation pane, from a request macOS refused without recording anything,
+which no setting on the machine can change. Guidance that pointed the gesture back at the gesture was
+the defect that made a mis-signed build unreportable.
 
 ### Windows
 
