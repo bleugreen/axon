@@ -293,5 +293,102 @@ class NormalizationTests(unittest.TestCase):
         self.assertEqual(evidence.integrity(whole), [])
 
 
+class MergeTests(unittest.TestCase):
+    """What a partial rerun is allowed to do to rows it did not measure.
+
+    `--only` is a documented way to run this campaign, so a rerun that touched
+    one target has to leave every other row's provenance exactly as it found it.
+    """
+
+    def campaign(self, identifier: str, when: str) -> dict:
+        return {
+            "id": identifier,
+            "measuredAt": when,
+            "machine": "bench",
+            "operatingSystem": "macOS",
+            "session": "interactive",
+            "harness": None,
+            "permissions": {
+                "accessibility": "granted",
+                "automation": None,
+                "screenRecording": "notNeeded",
+            },
+            "rawEvidence": f"raw/{identifier}.jsonl",
+            "notes": None,
+        }
+
+    def row(self, label: str, campaign: str) -> dict:
+        return {
+            "id": f"{label}-click-2026-08-16",
+            "campaign": campaign,
+            "target": {"label": label, "kind": "appkit-native", "identity": {}},
+            "action": "click",
+            "rawEvidence": f"raw/{campaign}.jsonl#{label}-click",
+        }
+
+    def test_a_partial_rerun_leaves_untouched_rows_on_their_own_campaign(self) -> None:
+        first = self.campaign("bench-2026-08-16T100000", "2026-08-16T10:00:00-04:00")
+        previous = {
+            "campaigns": [first],
+            "rows": [self.row("safari", first["id"]), self.row("chrome", first["id"])],
+        }
+        second = self.campaign("bench-2026-08-16T180000", "2026-08-16T18:00:00-04:00")
+        merged = harness.merge_document(
+            previous, second, [self.row("safari", second["id"])], "2026-08-16T18:00:05-04:00"
+        )
+
+        rows = {row["id"]: row for row in merged["rows"]}
+        self.assertEqual(len(merged["rows"]), 2, "a partial rerun must not drop rows")
+        self.assertEqual(rows["chrome-click-2026-08-16"]["campaign"], first["id"])
+        self.assertEqual(rows["safari-click-2026-08-16"]["campaign"], second["id"])
+        # Both campaigns survive, because both are still cited.
+        self.assertEqual({item["id"] for item in merged["campaigns"]}, {first["id"], second["id"]})
+
+    def test_every_row_still_points_into_the_campaign_that_measured_it(self) -> None:
+        first = self.campaign("bench-2026-08-16T100000", "2026-08-16T10:00:00-04:00")
+        previous = {
+            "campaigns": [first],
+            "rows": [self.row("safari", first["id"]), self.row("chrome", first["id"])],
+        }
+        second = self.campaign("bench-2026-08-16T180000", "2026-08-16T18:00:00-04:00")
+        merged = harness.merge_document(
+            previous, second, [self.row("safari", second["id"])], "2026-08-16T18:00:05-04:00"
+        )
+        campaigns = {item["id"]: item for item in merged["campaigns"]}
+        for row in merged["rows"]:
+            self.assertEqual(
+                row["rawEvidence"].split("#")[0],
+                campaigns[row["campaign"]]["rawEvidence"],
+            )
+
+    def test_a_superseded_campaign_is_dropped(self) -> None:
+        first = self.campaign("bench-2026-08-16T100000", "2026-08-16T10:00:00-04:00")
+        previous = {"campaigns": [first], "rows": [self.row("safari", first["id"])]}
+        second = self.campaign("bench-2026-08-16T180000", "2026-08-16T18:00:00-04:00")
+        merged = harness.merge_document(
+            previous, second, [self.row("safari", second["id"])], "2026-08-16T18:00:05-04:00"
+        )
+        self.assertEqual([item["id"] for item in merged["campaigns"]], [second["id"]])
+
+    def test_a_rerun_does_not_reorder_the_table(self) -> None:
+        first = self.campaign("bench-2026-08-16T100000", "2026-08-16T10:00:00-04:00")
+        previous = {
+            "campaigns": [first],
+            "rows": [
+                self.row("safari", first["id"]),
+                self.row("chrome", first["id"]),
+                self.row("electron", first["id"]),
+            ],
+        }
+        second = self.campaign("bench-2026-08-16T180000", "2026-08-16T18:00:00-04:00")
+        merged = harness.merge_document(
+            previous, second, [self.row("chrome", second["id"])], "2026-08-16T18:00:05-04:00"
+        )
+        self.assertEqual(
+            [row["target"]["label"] for row in merged["rows"]],
+            ["safari", "chrome", "electron"],
+        )
+
+
 if __name__ == "__main__":
     unittest.main()
