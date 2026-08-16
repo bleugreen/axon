@@ -385,7 +385,8 @@ class FixtureTarget(Target):
 
     def point(self, action: str, launched: Launched) -> dict | None:
         if self.webview_url and action == "click":
-            return web_point(self.reports, self.nonce) or launched.point
+            bounds = (self.ready or {}).get("window")
+            return web_point(self.reports, self.nonce, bounds) or launched.point
         return launched.point
 
     def identity(self, pid: int) -> dict:
@@ -470,8 +471,31 @@ def owning_process(probe: Probe, point: dict, expected_bundle_id: str | None) ->
     return {"pid": pid, "window": ordinary[0], "application": reported, "stack": stack}
 
 
-def web_point(reports: Reports, nonce: str) -> dict | None:
-    """The most recent screen rectangle the page reported for its link."""
+def window_bounds(probe: Probe, pid: int, window_id: int | None) -> dict | None:
+    """Where the target's window is right now, from the window server."""
+    windows = probe("windows", pid=pid).get("windows", [])
+    if window_id is not None:
+        for window in windows:
+            if window.get("windowId") == window_id:
+                return window.get("bounds")
+    ordinary = [window for window in windows if window.get("layer") == 0]
+    return ordinary[0].get("bounds") if ordinary else None
+
+
+def web_point(
+    reports: Reports, nonce: str, bounds: dict | None = None
+) -> dict | None:
+    """Where on the screen the page's link is, right now.
+
+    Derived from the window rectangle the window server reports and the
+    element's position inside the viewport, rather than from the browser's own
+    `screenX`/`screenY`. Engines disagree about what those mean — Safari answers
+    with the window's top and Chromium with the viewport's — and a campaign that
+    trusted them would aim at Safari's toolbar and record a refusal that was
+    really a miss. The chrome above the viewport is measured as the difference
+    between the window's height and the page's own `innerHeight`, which needs no
+    assumption about any particular browser's furniture.
+    """
     geometries = [
         item
         for item in reports.snapshot()
@@ -479,7 +503,16 @@ def web_point(reports: Reports, nonce: str) -> dict | None:
     ]
     if not geometries:
         return None
-    return geometries[-1]["widgets"]["link"]["center"]
+    latest = geometries[-1]
+    link = latest["widgets"]["link"]
+    viewport = latest.get("viewport") or {}
+    if bounds and viewport.get("innerHeight"):
+        chrome = bounds["height"] - viewport["innerHeight"]
+        return {
+            "x": bounds["x"] + link["client"]["center"]["x"],
+            "y": bounds["y"] + chrome + link["client"]["center"]["y"],
+        }
+    return link["screen"]["center"]
 
 
 def web_snapshot(reports: Reports, nonce: str) -> dict:
@@ -563,24 +596,32 @@ class BrowserTarget(Target):
         if geometry is None:
             raise RuntimeError(f"{self.label} never loaded the measurement page")
         time.sleep(1.5)
-        point = web_point(self.reports, self.nonce) or geometry["widgets"]["link"]["center"]
-        owner = owning_process(self.probe, point, self.bundle_id)
+        # Bound in two steps: the browser's own screen coordinate is good enough
+        # to say which window the page is in, and the window then gives the
+        # authoritative rectangle every later coordinate is derived from.
+        rough = web_point(self.reports, self.nonce)
+        if rough is None:
+            raise RuntimeError(f"{self.label} never reported where its page is")
+        owner = owning_process(self.probe, rough, self.bundle_id)
         if owner["pid"] is None:
             raise RuntimeError(
                 f"{self.label}: could not bind the page to a process — {owner['reason']}"
             )
+        self.pid = owner["pid"]
+        self.window_id = owner["window"]["windowId"]
         return Launched(
             pid=owner["pid"],
             nonce=self.nonce,
-            point=point,
+            point=self.point(action, Launched(owner["pid"], self.nonce, rough)),
             window=owner.get("window"),
-            detail={"geometry": geometry, "owner": owner},
+            detail={"geometry": geometry, "owner": owner, "roughPoint": rough},
         )
 
     def point(self, action: str, launched: Launched) -> dict | None:
         if action != "click":
             return None
-        return web_point(self.reports, self.nonce) or launched.point
+        bounds = window_bounds(self.probe, launched.pid, getattr(self, "window_id", None))
+        return web_point(self.reports, self.nonce, bounds) or launched.point
 
     def identity(self, pid: int) -> dict:
         return bundle_identity(self.probe, pid)
@@ -639,14 +680,18 @@ class ElectronTarget(Target):
         if geometry is None:
             raise RuntimeError("the Electron runtime never loaded the measurement page")
         time.sleep(1.5)
-        point = web_point(self.reports, self.nonce) or geometry["widgets"]["link"]["center"]
+        rough = web_point(self.reports, self.nonce)
+        if rough is None:
+            raise RuntimeError("the Electron runtime never reported where its page is")
         # Electron is several processes too, and the one that owns the window is
         # not necessarily the one this launched.
-        owner = owning_process(self.probe, point, None)
+        owner = owning_process(self.probe, rough, None)
+        pid = owner["pid"] or self.process.pid
+        self.window_id = (owner.get("window") or {}).get("windowId")
         return Launched(
-            pid=owner["pid"] or self.process.pid,
+            pid=pid,
             nonce=self.nonce,
-            point=point,
+            point=self.point(action, Launched(pid, self.nonce, rough)),
             window=owner.get("window"),
             detail={"geometry": geometry, "owner": owner, "spawnedPid": self.process.pid},
         )
@@ -654,7 +699,8 @@ class ElectronTarget(Target):
     def point(self, action: str, launched: Launched) -> dict | None:
         if action != "click":
             return None
-        return web_point(self.reports, self.nonce) or launched.point
+        bounds = window_bounds(self.probe, launched.pid, getattr(self, "window_id", None))
+        return web_point(self.reports, self.nonce, bounds) or launched.point
 
     def identity(self, pid: int) -> dict:
         return bundle_identity(self.probe, pid)
