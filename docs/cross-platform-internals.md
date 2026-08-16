@@ -107,9 +107,18 @@ should be discoverable here first.
   macOS only. AT-SPI event observation is not wired into the Linux backend;
   UIA event delivery is probe-verified on Windows but excluded from the v1
   surface.
-- Recording (`save` from live history, global user-input observation): macOS
-  only. `serializeHistory` and `observeGlobalInput` are unimplemented on both
-  Rust backends.
+- Recording (`save` from live history, global user-input observation): the
+  shipping implementation is macOS-only and lives in the Swift daemon. The
+  shared half of the port now lives in `axon-core` — `recording.rs` carries the
+  provider-neutral event vocabulary, the `GlobalInputObserver` seam, and v2
+  authoring; `postconditions.rs` carries the observed-state model and the rules
+  that decide which transitions may be asserted. A platform supplies only the
+  evidence it alone can gather, and native handles never cross that boundary, so
+  what a recording says about an interface is decided in one place rather than
+  per platform. No Rust backend implements the observer hook yet, which is why
+  `observeGlobalInput` stays unusable on all three and refuses with a stable
+  reason rather than a bare error. `serializeHistory` likewise waits on the
+  shared history store.
 - WebKitGTK renderer accessibility on Linux: the same-bus peer traversal is
   proven only in `axon-spike-linux` and is not in the shipping Linux backend,
   so WebKitGTK page content is still out of reach. Chromium-family activation
