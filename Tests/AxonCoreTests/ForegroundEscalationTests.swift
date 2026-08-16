@@ -482,6 +482,100 @@ private func escalationStore() -> (AXElementStore, AXUIElement) {
     #expect(!session.log.contains { $0.hasPrefix("activate") })
 }
 
+@Test func theFieldClickRaisesSafariAndPostsGloballyRatherThanSettlingOnABackgroundPost() throws {
+    // The reported request exactly: another application holds the foreground, and the caller clicks
+    // a screen coordinate it measured inside the one it names. Nothing about that coordinate has
+    // been checked against the named application's geometry, so the targeted rung must not take it
+    // — posting it into the process is accepted and can do nothing, and a click has no
+    // postcondition to notice with. What must happen instead is the transaction this issue is
+    // about: raise the target, prove it, then post where the caller measured.
+    let session = FakeSession()
+    let target = try resolvableProcess()
+    let executor = session.pointExecutor(targetProcess: target)
+
+    let result = try executor.click(
+        point: ActionPoint(
+            x: escalationPoint.x,
+            y: escalationPoint.y,
+            coordinateSpace: .screen,
+            app: String(target)
+        ),
+        policy: .foregroundPermitted
+    )
+
+    #expect(result.delivery == .foreground)
+    #expect(result.strategy == "CGEvent")
+    #expect(result.dispatchSuccess)
+    // Not one event went to the process behind its own back.
+    #expect(session.targetedPosts.isEmpty)
+    #expect(session.globalPosts > 0)
+    #expect(session.log.first == "activate:\(target)")
+    #expect(session.frontmostDuringDispatch.allSatisfy { $0 == target })
+
+    let cleanup = result.details["foreground"]
+    #expect(cleanup?["priorApp"] == .string("com.example.p\(priorProcess)"))
+    #expect(cleanup?["alreadyFrontmost"] == .bool(false))
+    #expect(cleanup?["activationProved"] == .bool(true))
+    #expect(cleanup?["restored"] == .bool(true))
+    #expect(session.frontmost == priorProcess)
+}
+
+@Test func theFieldClickUnderBackgroundOnlyRefusesInsteadOfPostingIntoTheProcess() throws {
+    // The same coordinate with the foreground withheld has no mechanism left, and says so. An
+    // accepted post into the process would be the silent no-op this whole issue came from, dressed
+    // as a delivery.
+    let session = FakeSession()
+    let target = try resolvableProcess()
+    let executor = session.pointExecutor(targetProcess: target)
+
+    let result = try executor.click(
+        point: ActionPoint(
+            x: escalationPoint.x,
+            y: escalationPoint.y,
+            coordinateSpace: .screen,
+            app: String(target)
+        ),
+        policy: .backgroundOnly
+    )
+
+    #expect(result.dispatchSuccess == false)
+    #expect(result.delivery == nil)
+    #expect(result.refusal?.reason == .foregroundNotPermitted)
+    #expect(result.refusal?.alsoRefused.contains { $0.message.contains("no window provenance") } == true)
+    #expect(session.targetedPosts.isEmpty)
+    #expect(session.globalPosts == 0)
+    #expect(!session.log.contains { $0.hasPrefix("activate") })
+}
+
+@Test func aPointDerivedFromACaptureKeepsTheTargetedRungItsProvenanceEarns() throws {
+    // The other half of the rule, so the fix above is a distinction and not a blanket ban: a point
+    // that carries the window frame it was measured against can be checked against that frame, and
+    // that check is what makes a targeted post honest. Such a point still delivers in the
+    // background, activating nothing.
+    let session = FakeSession()
+    let target = try resolvableProcess()
+    let executor = session.pointExecutor(targetProcess: target)
+
+    let result = try executor.click(
+        point: ActionPoint(
+            x: escalationPoint.x,
+            y: escalationPoint.y,
+            coordinateSpace: .screen,
+            app: String(target),
+            sourceWindowFrame: escalationFrame
+        ),
+        policy: .backgroundOnly
+    )
+
+    #expect(result.delivery == .pixel)
+    #expect(result.strategy == "CGEventToPid")
+    #expect(result.dispatchSuccess)
+    #expect(session.targetedPosts.allSatisfy { $0 == target })
+    #expect(session.globalPosts == 0)
+    #expect(!session.log.contains { $0.hasPrefix("activate") })
+    #expect(result.details["foreground"] == nil)
+}
+
 @Test func anAppScopedPointRaisesItsOwnApplicationBeforePostingGlobalInput() throws {
     // The field case, at the rung it actually reaches: another application holds the foreground,
     // the caller clicks a point measured inside its own, and the targeted rung refuses because the
