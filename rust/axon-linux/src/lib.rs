@@ -1748,8 +1748,7 @@ pub fn parse_request(line: &str) -> Result<JsonRpcRequest, JsonRpcResponse> {
 mod tests {
     use super::*;
     use axon_core::{
-        Application, BackendError, CapabilityInfo, Node, Observation, Rect,
-        Screenshot, Window,
+        Application, BackendError, CapabilityInfo, Node, Observation, Rect, Screenshot, Window,
     };
     use std::{cell::RefCell, rc::Rc, time::Duration};
 

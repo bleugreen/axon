@@ -8,8 +8,8 @@ use serde_json::{Map, Value};
 mod window_capture;
 use axon_core::{
     AppQuery, Application, BackendError, Capability, CapabilityInfo, CaptureBounds,
-    ChildPageCapture, ChildPageRequest, KeyboardIntent, Node, Observation, PlatformBackend,
-    Rect, Screenshot, Snapshot, SnapshotHandle, Window,
+    ChildPageCapture, ChildPageRequest, KeyboardIntent, Node, Observation, PlatformBackend, Rect,
+    Screenshot, Snapshot, SnapshotHandle, Window,
 };
 use std::{
     collections::HashMap,

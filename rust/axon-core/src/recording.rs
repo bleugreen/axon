@@ -336,16 +336,14 @@ impl UserRecordingTranslator {
 
             let mut expected_facts: Vec<Value> = Vec::new();
             if let Some(observation) = emitted.observation.as_ref() {
-                expected_facts.extend(
-                    crate::DerivedPostconditionCompiler::new(taint).facts(
-                        &crate::PostconditionInput {
-                            action_id: &action_id,
-                            tool: tool_name(emitted.action()),
-                            observation,
-                            workflow_inputs: &workflow_inputs,
-                        },
-                    ),
-                );
+                expected_facts.extend(crate::DerivedPostconditionCompiler::new(taint).facts(
+                    &crate::PostconditionInput {
+                        action_id: &action_id,
+                        tool: tool_name(emitted.action()),
+                        observation,
+                        workflow_inputs: &workflow_inputs,
+                    },
+                ));
             }
 
             if let RecordedUserAction::SetValue {
@@ -586,7 +584,11 @@ fn coalesced_scroll_bursts(groups: &[RecordedUserEventGroup]) -> Vec<RecordedUse
         let mut next_index = index + 1;
 
         while next_index < groups.len() {
-            let Some(next) = groups[next_index].action.as_ref().and_then(scroll_components) else {
+            let Some(next) = groups[next_index]
+                .action
+                .as_ref()
+                .and_then(scroll_components)
+            else {
                 break;
             };
             if scroll.app != next.app {
@@ -637,11 +639,7 @@ fn scroll_signature(delta_x: f64, delta_y: f64) -> Option<ScrollSignature> {
     })
 }
 
-fn aggregate_scroll_delta(
-    total_x: f64,
-    total_y: f64,
-    fallback: ScrollSignature,
-) -> (f64, f64) {
+fn aggregate_scroll_delta(total_x: f64, total_y: f64, fallback: ScrollSignature) -> (f64, f64) {
     let signature = scroll_signature(total_x, total_y).unwrap_or(fallback);
     match signature.axis {
         ScrollAxis::Horizontal => (signed_magnitude(total_x, signature.sign), 0.0),
@@ -830,10 +828,9 @@ fn expects_app_change(group: &RecordedUserEventGroup) -> bool {
         return true;
     }
     match group.action() {
-        RecordedUserAction::Click { .. } | RecordedUserAction::PerformAction { .. } => group
-            .observed
-            .iter()
-            .any(observed_navigation_evidence),
+        RecordedUserAction::Click { .. } | RecordedUserAction::PerformAction { .. } => {
+            group.observed.iter().any(observed_navigation_evidence)
+        }
         _ => false,
     }
 }
@@ -866,7 +863,9 @@ fn app_name(action: &RecordedUserAction) -> Option<String> {
         RecordedUserAction::TypeText { app, .. } | RecordedUserAction::PressKey { app, .. } => {
             Some(app.clone())
         }
-        RecordedUserAction::Scroll { app, .. } | RecordedUserAction::Drag { app, .. } => app.clone(),
+        RecordedUserAction::Scroll { app, .. } | RecordedUserAction::Drag { app, .. } => {
+            app.clone()
+        }
     }
 }
 
