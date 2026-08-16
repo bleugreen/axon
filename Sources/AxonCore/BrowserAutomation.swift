@@ -289,11 +289,13 @@ public struct BrowserAutomationConsentRequester {
 
     /// What this gesture still has to offer, resolved without ever prompting.
     ///
-    /// The menu asks this while it is being built, so the item tracks a permission macOS can change
-    /// under a running daemon: a browser installed or a grant reset flips its answer back to
-    /// undetermined and the item returns. Browsers that are not running are left out for the same
-    /// reason the request skips them — macOS resolves a grant only for a running target — so a
-    /// machine with no browser open has nothing to consent to either.
+    /// The menu asks this while it is being built, so a browser this process has never been answered
+    /// for — launched or installed since the daemon started — brings the item back. A grant changed
+    /// after an answer is held, including by `tccutil reset`, does not: macOS resolves the
+    /// authorization inside this process and answers from what it holds, so no reading here can
+    /// observe that change and only a daemon restart clears it. Browsers that are not running are
+    /// left out for the same reason the request skips them — macOS resolves a grant only for a
+    /// running target — so a machine with no browser open has nothing to consent to either.
     public func outstandingConsent() -> BrowserAutomationConsentNeed {
         let service = AppleEventAuthorizationService(authorizer: authorizer, ledger: ledger, log: log)
         return SupportedBrowser.allCases

@@ -32,7 +32,9 @@ control Safari does not allow it to control Google Chrome. The item is present o
 somewhere to go — a grant still to mint, or a standing denial macOS will not re-prompt over, which
 this gesture is the only place to explain. Once every running browser is allowed the item is gone,
 since a gesture with nothing to consent to leads nowhere. Presence is resolved as the menu opens, so
-a browser launched or a grant reset while the daemon runs brings it back. A missing grant returns JSON-RPC `-32603`
+a browser the daemon has not been answered for yet — one launched or installed since it started —
+brings the item back. A grant reset after the daemon holds an answer does not, for the same reason
+the refusals below name a daemon restart. A missing grant returns JSON-RPC `-32603`
 with structured reason `automation-not-granted`, the target app, an authorization state of `denied`
 or `notDetermined`, and the `leg` that produced the decision. Axon does not collapse these
 independent target grants into the global health document.

@@ -1177,7 +1177,12 @@ same per-process answer ledger, and a denial keeps it (the gesture is then the o
 the remediation) while an all-allowed reading retires it. The reading happens as the menu opens
 rather than on the menu's two-second refresh, because a determination is not free — it costs a TCC
 round trip, and it is what makes the process start holding macOS's answer, which must not happen
-earlier than a person's own use of Axon would cause it. The intended
+earlier than a person's own use of Axon would cause it. The item therefore returns for a browser this
+process has no answer for, and not for a grant reset behind an answer it already holds: the ledger
+has the same lifetime as the process-held answer it mirrors, and a reset is visible only after a
+restart. An executed-leg denial is the one answer a later preflight cannot overwrite — it is the
+answer that proved the preflight wrong for that target — so neither a browser verb nor the consent
+gesture can retire the item on the strength of a `noErr` that contradicts a refused event. The intended
 sender is `Axon.app/Contents/MacOS/Axon`, registered in launchd's `gui/<uid>` domain with
 `LimitLoadToSessionType=Aqua`; the daemon bundle also carries `NSAppleEventsUsageDescription`.
 
