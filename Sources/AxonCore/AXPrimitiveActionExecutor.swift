@@ -676,6 +676,41 @@ public final class AXPrimitiveActionExecutor {
         case advance(PrimitiveActionResult)
     }
 
+    /// Whose foreground one dispatch is accountable for.
+    ///
+    /// These three are not interchangeable, and collapsing them into "a process or nothing" is what
+    /// let a click report `alreadyFrontmost: true` in the same envelope that named a foreign
+    /// application as the prior one — and then skip the activation that reading implied had already
+    /// happened.
+    private enum ForegroundTarget {
+        /// A resolved process. Whether it holds the foreground is a comparison this dispatch can
+        /// make, and raising it is a claim it must prove before anything is posted.
+        case process(pid_t)
+        /// The action addresses whoever holds the foreground rather than a named application, as an
+        /// unaimed keystroke does. The foreground is the target by definition, so there is nothing
+        /// to raise and nothing to prove.
+        case currentForeground
+        /// No application-level claim is available: either nothing named an application, or the
+        /// mechanism routes by the event's location rather than by application, as a wheel burst
+        /// does. Answering `alreadyFrontmost` here would answer a question nobody asked.
+        case unattributed
+
+        /// A target identified by a process when one was resolved, and explicitly unattributed when
+        /// it was not. Never the current foreground by default: that is a claim only an action
+        /// aimed at the foreground itself gets to make.
+        init(resolved process: pid_t?) {
+            self = process.map(ForegroundTarget.process) ?? .unattributed
+        }
+
+        /// The process background delivery binds to, which exists only for a resolved target.
+        var process: pid_t? {
+            guard case let .process(process) = self else {
+                return nil
+            }
+            return process
+        }
+    }
+
     /// Walks an action's ladder, dispatching at the first rung the policy and runtime allow.
     ///
     /// The selection always happens before `attempt` runs, so a policy or capability denial returns
@@ -749,8 +784,15 @@ public final class AXPrimitiveActionExecutor {
         ]
     }
 
-    private func processIdentifier(forApp query: String) -> pid_t? {
-        (try? appResolver.resolve(query))?.processIdentifier
+    /// The process behind an application a caller named.
+    ///
+    /// Throwing is the point. Swallowing the resolver's failure returned `nil`, which is the same
+    /// answer a deliberately anonymous coordinate gives, so a target the caller *did* name became a
+    /// target with no identity — and delivery reads that as licence to post global input at
+    /// whatever holds the foreground. A named application that cannot be found is a resolution
+    /// failure, reported before any event is created.
+    private func processIdentifier(forApp query: String) throws -> pid_t {
+        try appResolver.resolve(query).processIdentifier
     }
 
     /// Where a rung's events go. The pixel rung addresses the target process directly; the
