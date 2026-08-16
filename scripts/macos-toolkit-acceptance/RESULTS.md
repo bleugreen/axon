@@ -9,9 +9,9 @@ decides what to authorize; a target absent from the table authorizes nothing.
 
 ## Campaigns
 
-| campaign | measured | machine | macOS | Accessibility | raw evidence |
+| campaign | measured | machine | macOS | Accessibility | bench record |
 | --- | --- | --- | --- | --- | --- |
-| `bbl-2026-08-16` | 2026-08-16T19:44:22-04:00 | arm64 macOS bench | Version 26.4 (Build 25E246) | granted | [`raw/bbl-2026-08-16.json`](raw/bbl-2026-08-16.json) |
+| `bbl-2026-08-16` | 2026-08-16T19:44:22-04:00 | arm64 macOS bench | Version 26.4 (Build 25E246) | granted | `raw/bbl-2026-08-16.json` |
 
 ## Rows
 
@@ -52,6 +52,13 @@ A trial whose control did not act is measuring the campaign rather than the targ
 identifier. It is the key any future acceptance entry would have to be written against, and a row
 claims exactly as much as that key can carry and no more.
 
+Every observation a verdict rests on is in this document and in `results.json`: the dispatch outcome,
+the target-side mutation and how it was observed, whether the event reached the application, all four
+invariants, and what each control did. The `bench record` a row names is the unnormalized per-phase
+reading the run wrote on the machine that produced it — window stacks, every report each target sent,
+the full readings either side of each phase. It is not committed and its name is a pointer for
+whoever still has that machine, not a link.
+
 ## Row detail
 
 ### `safari-click-2026-08-16`
@@ -65,7 +72,7 @@ the Core Graphics post completed and the target did nothing: dispatch was accept
 - Arrival: the page's event listeners recorded nothing
 - Control before: acted via `CGEventPost(kCGHIDEventTap) with the real pointer over the coordinate` — the page followed its link and the server served the next document
 - Control after: acted via `CGEventPost(kCGHIDEventTap) with the real pointer over the coordinate` — the page followed its link and the server served the next document
-- Raw evidence: [`raw/bbl-2026-08-16.json#safari-click`](raw/bbl-2026-08-16.json)
+- Bench record: `raw/bbl-2026-08-16.json#safari-click` (written by the run, not committed)
 - Re-measure when: a Safari or macOS major release
 
 ### `safari-keyboard-2026-08-16`
@@ -79,7 +86,7 @@ the target acted on input posted to its process while a decoy held the foregroun
 - Arrival: the page observed keydown isTrusted=True, keyup isTrusted=True, keydown isTrusted=True, keyup isTrusted=True, keydown isTrusted=True, keyup isTrusted=True, keydown isTrusted=True, keyup isTrusted=True
 - Control before: acted via `CGEventPost(kCGHIDEventTap) with the target activated` — the page's input read '' before and 'axon' after
 - Control after: acted via `CGEventPost(kCGHIDEventTap) with the target activated` — the page's input read 'axonaxon' before and 'axonaxonaxon' after
-- Raw evidence: [`raw/bbl-2026-08-16.json#safari-keyboard`](raw/bbl-2026-08-16.json)
+- Bench record: `raw/bbl-2026-08-16.json#safari-keyboard` (written by the run, not committed)
 - Re-measure when: a Safari or macOS major release
 
 ### `chrome-click-2026-08-16`
@@ -93,7 +100,7 @@ the Core Graphics post completed and the target did nothing: dispatch was accept
 - Arrival: the page's event listeners recorded nothing
 - Control before: acted via `CGEventPost(kCGHIDEventTap) with the real pointer over the coordinate` — the page followed its link and the server served the next document
 - Control after: acted via `CGEventPost(kCGHIDEventTap) with the real pointer over the coordinate` — the page followed its link and the server served the next document
-- Raw evidence: [`raw/bbl-2026-08-16.json#chrome-click`](raw/bbl-2026-08-16.json)
+- Bench record: `raw/bbl-2026-08-16.json#chrome-click` (written by the run, not committed)
 - Re-measure when: a Chrome major release
 
 ### `chrome-keyboard-2026-08-16`
@@ -107,7 +114,7 @@ the target acted on input posted to its process while a decoy held the foregroun
 - Arrival: the page observed keydown isTrusted=True, keyup isTrusted=True, keydown isTrusted=True, keyup isTrusted=True, keydown isTrusted=True, keyup isTrusted=True, keydown isTrusted=True, keyup isTrusted=True
 - Control before: acted via `CGEventPost(kCGHIDEventTap) with the target activated` — the page's input read '' before and 'axon' after
 - Control after: acted via `CGEventPost(kCGHIDEventTap) with the target activated` — the page's input read 'axonaxon' before and 'axonaxonaxon' after
-- Raw evidence: [`raw/bbl-2026-08-16.json#chrome-keyboard`](raw/bbl-2026-08-16.json)
+- Bench record: `raw/bbl-2026-08-16.json#chrome-keyboard` (written by the run, not committed)
 - Re-measure when: a Chrome major release
 
 ### `electron-click-2026-08-16`
@@ -121,7 +128,7 @@ the Core Graphics post completed and the target did nothing: dispatch was accept
 - Arrival: the page's event listeners recorded nothing
 - Control before: acted via `CGEventPost(kCGHIDEventTap) with the real pointer over the coordinate` — the page followed its link and the server served the next document
 - Control after: acted via `CGEventPost(kCGHIDEventTap) with the real pointer over the coordinate` — the page followed its link and the server served the next document
-- Raw evidence: [`raw/bbl-2026-08-16.json#electron-click`](raw/bbl-2026-08-16.json)
+- Bench record: `raw/bbl-2026-08-16.json#electron-click` (written by the run, not committed)
 - Re-measure when: an Electron or Chromium major release
 
 ### `electron-keyboard-2026-08-16`
@@ -135,7 +142,7 @@ the target acted on input posted to its process while a decoy held the foregroun
 - Arrival: the page observed keydown isTrusted=True, keyup isTrusted=True, keydown isTrusted=True, keyup isTrusted=True, keydown isTrusted=True, keyup isTrusted=True, keydown isTrusted=True, keyup isTrusted=True
 - Control before: acted via `CGEventPost(kCGHIDEventTap) with the target activated` — the page's input read '' before and 'axon' after
 - Control after: acted via `CGEventPost(kCGHIDEventTap) with the target activated` — the page's input read 'axonaxon' before and 'axonaxonaxon' after
-- Raw evidence: [`raw/bbl-2026-08-16.json#electron-keyboard`](raw/bbl-2026-08-16.json)
+- Bench record: `raw/bbl-2026-08-16.json#electron-keyboard` (written by the run, not committed)
 - Re-measure when: an Electron or Chromium major release
 
 ### `AxonAcceptanceTarget-click-2026-08-16`
@@ -149,7 +156,7 @@ the Core Graphics post completed and the target did nothing: dispatch was accept
 - Arrival: the application dequeued leftMouseDown on window 0, leftMouseUp on window 0
 - Control before: acted via `CGEventPost(kCGHIDEventTap) with the real pointer over the coordinate` — the fixture's checkbox read 0 before and 1 after
 - Control after: acted via `CGEventPost(kCGHIDEventTap) with the real pointer over the coordinate` — the fixture's checkbox read 1 before and 0 after
-- Raw evidence: [`raw/bbl-2026-08-16.json#AxonAcceptanceTarget-click`](raw/bbl-2026-08-16.json)
+- Bench record: `raw/bbl-2026-08-16.json#AxonAcceptanceTarget-click` (written by the run, not committed)
 - Re-measure when: a macOS major release, which is what changes how AppKit routes a posted event
 
 ### `AxonAcceptanceTarget-keyboard-2026-08-16`
@@ -163,7 +170,7 @@ the target acted on input posted to its process while a decoy held the foregroun
 - Arrival: the application dequeued keyDown on window 3441, keyUp on window 3441, keyDown on window 3441, keyUp on window 3441, keyDown on window 3441, keyUp on window 3441, keyDown on window 3441, keyUp on window 3441
 - Control before: acted via `CGEventPost(kCGHIDEventTap) with the target activated` — the fixture's text field read '' before and 'axon' after
 - Control after: acted via `CGEventPost(kCGHIDEventTap) with the target activated` — the fixture's text field read 'axonaxon' before and 'axonaxonaxon' after
-- Raw evidence: [`raw/bbl-2026-08-16.json#AxonAcceptanceTarget-keyboard`](raw/bbl-2026-08-16.json)
+- Bench record: `raw/bbl-2026-08-16.json#AxonAcceptanceTarget-keyboard` (written by the run, not committed)
 - Re-measure when: a macOS major release, which is what changes how AppKit routes a posted event
 
 ### `AxonAcceptanceWebView-click-2026-08-16`
@@ -177,7 +184,7 @@ the Core Graphics post completed and the target did nothing: dispatch was accept
 - Arrival: the page's event listeners recorded nothing
 - Control before: acted via `CGEventPost(kCGHIDEventTap) with the real pointer over the coordinate` — the page followed its link and the server served the next document
 - Control after: acted via `CGEventPost(kCGHIDEventTap) with the real pointer over the coordinate` — the page followed its link and the server served the next document
-- Raw evidence: [`raw/bbl-2026-08-16.json#AxonAcceptanceWebView-click`](raw/bbl-2026-08-16.json)
+- Bench record: `raw/bbl-2026-08-16.json#AxonAcceptanceWebView-click` (written by the run, not committed)
 - Re-measure when: a macOS major release, which is what changes how AppKit routes a posted event
 
 ### `AxonAcceptanceWebView-keyboard-2026-08-16`
@@ -191,5 +198,5 @@ the target acted on input posted to its process while a decoy held the foregroun
 - Arrival: the page observed keydown isTrusted=True, keyup isTrusted=True, keydown isTrusted=True, keyup isTrusted=True, keydown isTrusted=True, keyup isTrusted=True, keydown isTrusted=True, keyup isTrusted=True
 - Control before: acted via `CGEventPost(kCGHIDEventTap) with the target activated` — the page's input read '' before and 'axon' after
 - Control after: acted via `CGEventPost(kCGHIDEventTap) with the target activated` — the page's input read 'Axonaxon' before and 'Axonaxonaxon' after
-- Raw evidence: [`raw/bbl-2026-08-16.json#AxonAcceptanceWebView-keyboard`](raw/bbl-2026-08-16.json)
+- Bench record: `raw/bbl-2026-08-16.json#AxonAcceptanceWebView-keyboard` (written by the run, not committed)
 - Re-measure when: a macOS major release, which is what changes how AppKit routes a posted event
