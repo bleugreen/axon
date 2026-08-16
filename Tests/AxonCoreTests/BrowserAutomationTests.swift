@@ -452,13 +452,299 @@ private func consentRequester(
     #expect(response.result?["crossCheck"]?["matchingTitles"] == .int(1))
 }
 
+/// A browser answers with its own spelling of the address it was handed, so the verdict has to
+/// compare addresses rather than strings. Everything below the fold is a different page, and stays
+/// one.
+@Test func navigationURLComparisonFoldsSpellingsOfTheSameAddress() {
+    #expect(BrowserURL.equivalent("https://news.ycombinator.com", "https://news.ycombinator.com/"))
+    #expect(BrowserURL.equivalent("HTTPS://News.YCombinator.com/", "https://news.ycombinator.com/"))
+    #expect(BrowserURL.equivalent("https://example.com:443/docs", "https://example.com/docs"))
+    #expect(BrowserURL.equivalent("http://example.com:80/", "http://example.com/"))
+    #expect(BrowserURL.equivalent("https://example.com/?", "https://example.com/"))
+    #expect(BrowserURL.equivalent("https://example.com/#", "https://example.com/"))
+
+    #expect(BrowserURL.equivalent("https://example.com/docs", "https://example.com/docs/") == false)
+    #expect(BrowserURL.equivalent("https://example.com", "https://www.example.com") == false)
+    #expect(BrowserURL.equivalent("https://example.com", "http://example.com") == false)
+    #expect(BrowserURL.equivalent("https://example.com/a?q=1", "https://example.com/a?q=2") == false)
+    #expect(BrowserURL.equivalent("https://example.com/a#top", "https://example.com/a") == false)
+}
+
+/// The 2026-08-16 field report, with the intermediate states repeating the way real ones do: the
+/// tab's URL updates the instant the browser accepts the event while the title still belongs to the
+/// page being left, and the browser then publishes the address itself as a placeholder for several
+/// polls before the real title arrives. Neither intermediate state may be mistaken for the outcome,
+/// so a Safari-shaped reading (no loading flag) has to hold still for the whole stability window.
+@Test func settlingOutlastsBothTheStaleTitleAndThePlaceholderThatFollowsIt() {
+    let clock = SettleClock()
+    let staleTitle = BrowserTabReading(url: "https://news.ycombinator.com/", title: "Why does Opus 5 feel worse to work with?")
+    let placeholder = BrowserTabReading(url: "https://news.ycombinator.com/", title: "news.ycombinator.com")
+    let loaded = BrowserTabReading(url: "https://news.ycombinator.com/", title: "Hacker News")
+    // Five polls each at 60ms: 300ms apiece, well past two adjacent samples and still short of the
+    // 480ms window, which is the whole point of measuring the window in time rather than in reads.
+    let tab = ScriptedTab(readings: Array(repeating: staleTitle, count: 5)
+        + Array(repeating: placeholder, count: 5)
+        + [loaded])
+
+    let outcome = settler(clock: clock).settle(
+        requestedURL: "https://news.ycombinator.com",
+        before: BrowserTabReading(url: "https://news.ycombinator.com/item?id=1", title: "Why does Opus 5 feel worse to work with?"),
+        read: tab.read
+    )
+
+    #expect(outcome.reading == loaded)
+    #expect(outcome.evidence == .stableReadback)
+    #expect(outcome.elapsedMs >= BrowserNavigationSettler.defaultStableMs)
+    #expect(navigationResult(requestedURL: "https://news.ycombinator.com", outcome).success)
+}
+
+/// The honest limit of inference, stated as a test rather than left to be discovered: with no
+/// loading signal, a placeholder that outlasts the stability window is indistinguishable from a page
+/// that has finished loading, and is believed. `settleEvidence` is what tells a caller which kind of
+/// evidence they are holding — `stable_readback` is "nothing changed for long enough", not proof.
+@Test func aPlaceholderThatOutlastsTheWindowIsBelievedAndSaysWhyItWasBelieved() {
+    let clock = SettleClock()
+    let placeholder = BrowserTabReading(url: "https://example.com/", title: "example.com")
+    let tab = ScriptedTab(readings: [placeholder])
+
+    let outcome = settler(clock: clock).settle(
+        requestedURL: "https://example.com",
+        before: BrowserTabReading(url: "https://start.example/", title: "Start"),
+        read: tab.read
+    )
+
+    #expect(outcome.reading == placeholder)
+    #expect(outcome.evidence == .stableReadback)
+}
+
+/// A redirect chain passes through addresses that are not the destination. A hop that holds for a
+/// few polls must not be reported as where the navigation ended, or the caller learns about a URL
+/// the tab has already left.
+@Test func anIntermediateRedirectHopIsNotReportedAsTheDestination() {
+    let clock = SettleClock()
+    let hop = BrowserTabReading(url: "https://hop.example/redirect", title: "Redirecting")
+    let destination = BrowserTabReading(url: "https://www.example.net/", title: "Elsewhere")
+    let tab = ScriptedTab(readings: Array(repeating: hop, count: 6) + [destination])
+
+    let outcome = settler(clock: clock).settle(
+        requestedURL: "https://example.com",
+        before: BrowserTabReading(url: "https://start.example/", title: "Start"),
+        read: tab.read
+    )
+    let result = navigationResult(requestedURL: "https://example.com", outcome)
+
+    #expect(outcome.reading == destination)
+    #expect(result.url == "https://www.example.net/")
+    // A settled address that is not the one requested is still a mismatch, reported with where the
+    // tab actually landed.
+    #expect(result.success == false)
+    #expect(result.verification == .dictionaryMismatch)
+    #expect(result.settled)
+}
+
+/// Chrome publishes `loading` on a tab, which is evidence rather than inference: the wait ends when
+/// the browser says the load ended, without spending the stability window that exists only for
+/// browsers offering nothing better.
+@Test func aBrowsersOwnLoadingFlagEndsTheWaitWithoutTheStabilityWindow() {
+    let clock = SettleClock()
+    let loaded = BrowserTabReading(url: "https://example.com/", title: "Example", loading: false)
+    let tab = ScriptedTab(readings: [
+        BrowserTabReading(url: "https://example.com/", title: "example.com", loading: true),
+        BrowserTabReading(url: "https://example.com/", title: "Example", loading: true),
+        loaded
+    ])
+
+    let outcome = settler(clock: clock).settle(
+        requestedURL: "https://example.com",
+        before: BrowserTabReading(url: "https://start.example/", title: "Start", loading: false),
+        read: tab.read
+    )
+
+    #expect(outcome.reading == loaded)
+    #expect(outcome.evidence == .loadingFlag)
+    #expect(outcome.elapsedMs < BrowserNavigationSettler.defaultStableMs)
+}
+
+/// A frozen read-back does not override the browser saying the load is still running: a title that
+/// has not changed yet reads exactly like one that never will.
+@Test func aTabThatKeepsSayingItIsLoadingIsNeverCalledSettled() {
+    let clock = SettleClock()
+    let tab = ScriptedTab(readings: [BrowserTabReading(url: "https://example.com/", title: "Example", loading: true)])
+
+    let outcome = settler(clock: clock, timeoutMs: 1_000).settle(
+        requestedURL: "https://example.com",
+        before: BrowserTabReading(url: "https://start.example/", title: "Start", loading: false),
+        read: tab.read
+    )
+
+    #expect(outcome.evidence == .bound)
+    #expect(outcome.settled == false)
+    #expect(navigationResult(requestedURL: "https://example.com", outcome).success)
+}
+
+/// Navigating to the address already open has no title change to wait for, so requiring one would
+/// spend the whole bound on a navigation that was finished before it started.
+@Test func settlingDoesNotWaitForATitleChangeThatCannotCome() {
+    let clock = SettleClock()
+    let reading = BrowserTabReading(url: "https://example.com/", title: "Example")
+    let tab = ScriptedTab(readings: [reading])
+
+    let outcome = settler(clock: clock).settle(requestedURL: "https://example.com", before: reading, read: tab.read)
+
+    #expect(outcome.evidence == .stableReadback)
+    #expect(outcome.elapsedMs < BrowserNavigationSettler.defaultStableMs * 2)
+}
+
+/// A page that never finishes loading must not spin the daemon: the bound expires, the last reading
+/// is reported as the intermediate state it is, and the evidence says the bound is why.
+@Test func aPageThatNeverSettlesIsReportedHonestlyAtTheBound() {
+    let clock = SettleClock()
+    let stale = BrowserTabReading(url: "https://start.example/", title: "Start")
+    let tab = ScriptedTab(readings: [stale])
+
+    let outcome = settler(clock: clock, timeoutMs: 1_000, intervalMs: 50).settle(
+        requestedURL: "https://example.com",
+        before: stale,
+        read: tab.read
+    )
+
+    #expect(outcome.settled == false)
+    #expect(outcome.evidence == .bound)
+    #expect(outcome.reading == stale)
+    #expect(outcome.elapsedMs >= 1_000)
+    // Bounded, not unbounded: one read per interval and no more.
+    #expect(tab.reads <= 22)
+}
+
+/// The whole sequence, without a browser: the outgoing page is captured by the same script that
+/// starts the navigation, and every script after it only reads. A verdict taken from the dispatch
+/// script's own reply is the race this exists to prevent, so the reply is a baseline and never an
+/// answer.
+@Test func navigateCapturesTheOutgoingPageInTheDispatchAndThenPollsForTheNewOne() throws {
+    let clock = SettleClock()
+    let outgoing = ["https://news.ycombinator.com/item?id=1", "Why does Opus 5 feel worse to work with?", "unknown"]
+    let stale = ["https://news.ycombinator.com/", "Why does Opus 5 feel worse to work with?", "unknown"]
+    let loaded = ["https://news.ycombinator.com/", "Hacker News", "unknown"]
+    let scripts = ScriptedBrowser(replies: [outgoing] + Array(repeating: stale, count: 3) + [loaded])
+    let browser = AppleScriptBrowserAutomation(
+        authorizer: AppleEventAuthorizerStub(results: [noErr]),
+        isRunning: { _ in true },
+        ledger: AppleEventAnswerLedger(),
+        log: { _ in },
+        settler: settler(clock: clock),
+        runNavigationScript: scripts.run
+    )
+
+    let result = try browser.navigate(app: "Safari", url: "https://news.ycombinator.com")
+
+    #expect(result.success)
+    #expect(result.verification == .dictionaryReadback)
+    #expect(result.settled)
+    #expect(result.settleEvidence == .stableReadback)
+    #expect(result.title == "Hacker News")
+    #expect(result.url == "https://news.ycombinator.com/")
+    // Exactly one script navigates, and it is the first one.
+    #expect(scripts.sources.filter { $0.contains("set URL of targetTab") } == [scripts.sources[0]])
+    #expect(scripts.sources[0].contains("set previousName to name of targetTab"))
+    #expect(scripts.sources.allSatisfy { $0.contains("current tab of front window") })
+    // Safari's tab has no loading property, so its scripts must not ask for one.
+    #expect(scripts.sources.allSatisfy { $0.contains("loading of targetTab") == false })
+    #expect(scripts.sources.allSatisfy { $0.contains("set loadingState to \"unknown\"") })
+}
+
+/// Chrome does expose the flag, and it is read defensively: a build whose dictionary lacks it must
+/// degrade to the stability window rather than fail the navigation.
+@Test func chromeNavigationAsksTheTabWhetherItIsStillLoading() throws {
+    let scripts = ScriptedBrowser(replies: [["https://start.example/", "Start", "false"], ["https://example.com/", "Example", "false"]])
+    let browser = AppleScriptBrowserAutomation(
+        authorizer: AppleEventAuthorizerStub(results: [noErr]),
+        isRunning: { _ in true },
+        ledger: AppleEventAnswerLedger(),
+        log: { _ in },
+        settler: settler(clock: SettleClock()),
+        runNavigationScript: scripts.run
+    )
+
+    let result = try browser.navigate(app: "Chrome", url: "https://example.com")
+
+    #expect(result.settleEvidence == .loadingFlag)
+    #expect(result.title == "Example")
+    #expect(scripts.sources.allSatisfy { $0.contains("active tab of front window") })
+    #expect(scripts.sources.allSatisfy { $0.contains("if loading of targetTab then") })
+    #expect(scripts.sources.allSatisfy { $0.contains("try") })
+}
+
+/// Replays scripted AppleScript replies and records the sources it was asked to run.
+private final class ScriptedBrowser {
+    private let replies: [[String]]
+    private(set) var sources: [String] = []
+
+    init(replies: [[String]]) { self.replies = replies }
+
+    func run(_ source: String, _ appName: String) -> [String] {
+        defer { sources.append(source) }
+        return replies[min(sources.count, replies.count - 1)]
+    }
+}
+
+/// The settler polls on the one thread that is serving the request, so this test clock is only ever
+/// touched from there.
+private final class SettleClock: @unchecked Sendable {
+    private var current = Date(timeIntervalSince1970: 1_000)
+    func now() -> Date { current }
+    func sleep(_ milliseconds: Int) { current = current.addingTimeInterval(Double(milliseconds) / 1_000) }
+}
+
+/// Replays scripted dictionary readings, holding on the last one the way a loaded page does.
+private final class ScriptedTab {
+    private let readings: [BrowserTabReading]
+    private(set) var reads = 0
+
+    init(readings: [BrowserTabReading]) { self.readings = readings }
+
+    func read() -> BrowserTabReading {
+        defer { reads += 1 }
+        return readings[min(reads, readings.count - 1)]
+    }
+}
+
+private func settler(
+    clock: SettleClock,
+    timeoutMs: Int = BrowserNavigationSettler.defaultTimeoutMs,
+    intervalMs: Int = BrowserNavigationSettler.defaultIntervalMs,
+    stableMs: Int = BrowserNavigationSettler.defaultStableMs
+) -> BrowserNavigationSettler {
+    BrowserNavigationSettler(
+        timeoutMs: timeoutMs,
+        intervalMs: intervalMs,
+        stableMs: stableMs,
+        now: clock.now,
+        sleepMilliseconds: clock.sleep
+    )
+}
+
+private func navigationResult(requestedURL: String, _ outcome: BrowserNavigationSettler.Outcome) -> BrowserNavigationResult {
+    BrowserNavigationResult(
+        app: "com.apple.Safari",
+        requestedURL: requestedURL,
+        url: outcome.reading.url,
+        title: outcome.reading.title,
+        settleEvidence: outcome.evidence,
+        elapsedMs: outcome.elapsedMs
+    )
+}
+
+/// The envelope reports the browser's own spelling of the address as the success it is, and carries
+/// how the reading was obtained so a caller can tell a loaded page from one caught mid-load.
 @Test func navigateReturnsVerifiedDictionaryReadback() {
     let browser = BrowserAutomationStub()
     browser.navigation = BrowserNavigationResult(
         app: "com.apple.Safari",
         requestedURL: "https://example.com",
-        url: "https://example.com",
-        title: "Example"
+        url: "https://example.com/",
+        title: "Example",
+        settleEvidence: .loadingFlag,
+        elapsedMs: 120
     )
     let router = CommandRouter(browserAutomation: browser)
 
@@ -469,9 +755,37 @@ private func consentRequester(
     #expect(response.error == nil)
     #expect(response.result?["navigation"]?["success"] == .bool(true))
     #expect(response.result?["navigation"]?["verification"] == .string("dictionary_readback"))
+    #expect(response.result?["navigation"]?["url"] == .string("https://example.com/"))
+    #expect(response.result?["navigation"]?["settled"] == .bool(true))
+    #expect(response.result?["navigation"]?["settleEvidence"] == .string("loading_flag"))
+    #expect(response.result?["navigation"]?["elapsedMs"] == .int(120))
     #expect(browser.navigationRequests.count == 1)
     #expect(browser.navigationRequests.first?.0 == "Safari")
     #expect(browser.navigationRequests.first?.1 == "https://example.com")
+}
+
+/// A tab still mid-load at the bound is reported as reached-but-unsettled rather than as a failure:
+/// the address is the browser's answer to what it was asked to show, and the title is the part that
+/// may still be catching up.
+@Test func navigateReportsAnUnsettledPageWithoutCallingItAFailure() {
+    let browser = BrowserAutomationStub()
+    browser.navigation = BrowserNavigationResult(
+        app: "com.apple.Safari",
+        requestedURL: "https://news.ycombinator.com",
+        url: "https://news.ycombinator.com/",
+        title: "Why does Opus 5 feel worse to work with?",
+        settleEvidence: .bound,
+        elapsedMs: 4_000
+    )
+
+    let response = CommandRouter(browserAutomation: browser).handle(JSONRPCRequest(
+        id: .string("navigate"), method: "navigate",
+        params: .object(["app": .string("Safari"), "url": .string("https://news.ycombinator.com")])
+    ))
+
+    #expect(response.result?["navigation"]?["success"] == .bool(true))
+    #expect(response.result?["navigation"]?["settled"] == .bool(false))
+    #expect(response.result?["navigation"]?["settleEvidence"] == .string("bound"))
 }
 
 @Test func windowsUsesScriptingAuthorityAndCrossChecksAX() {

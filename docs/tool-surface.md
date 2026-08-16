@@ -161,7 +161,39 @@ confidence.
 Safari and Google Chrome. They use each application's scripting dictionary when
 AX does not model navigation or tabs. Navigation accepts only absolute `http`
 and `https` URLs and succeeds only when the browser dictionary reads the
-requested URL back from the active tab. Window and tab IDs are one-call,
+requested URL back from the active tab.
+
+That read-back is taken after the tab settles, not the instant the browser
+accepts the event. Setting a tab's URL returns immediately, so an immediate read
+still describes the page being navigated away from: the URL has already moved
+while the title has not. Axon polls the tab until the reading is backed by
+evidence of a finished load, bounded to four seconds, and reports both `settled`
+and the `settleEvidence` that backs it. A page still loading when the bound
+expires is reported as the intermediate state it is rather than waited on
+indefinitely, with evidence `bound`, and `elapsedMs` says how long the settle
+took.
+
+The two kinds of evidence are not equally strong, which is why the envelope names
+which one a caller got. Chrome publishes `loading` on a tab, so evidence
+`loading_flag` is the browser stating the load ended. Safari's tab exposes no
+equivalent, and Axon does not inject JavaScript into a page to ask, so the only
+available evidence is that the read-back stopped changing: evidence
+`stable_readback` means the URL and title held still for a continuous stability
+window, the same bar `wait_for_stability` sets with `stableMs`. A single repeat
+would prove nothing, because a browser holds a placeholder title (often the
+address itself) and an intermediate redirect hop still for many poll intervals.
+A placeholder that outlasts the whole window is the honest limit of inference
+without a loading signal, and `stable_readback` is the field that says so.
+
+The verdict itself is a URL judgment: a title belongs to a load that may still be
+in flight, while the URL is the browser's own answer to what it was asked to
+show. Requested and final URLs are compared as addresses rather than as strings,
+so the browser's own spelling — a root path written `/`, a lowercased host, an
+explicit default port, a bare trailing `?` or `#` — is the success it is. A
+different host, path, query, or fragment is a different page, so a redirect reads
+as `dictionary_mismatch` with `url` naming where the tab actually landed.
+
+Window and tab IDs are one-call,
 index-based references and must be refreshed by enumerating again. Browser
 enumeration is authoritative from application scripting; `windows` also reports
 an AX title/count cross-check when Accessibility access is available, while
