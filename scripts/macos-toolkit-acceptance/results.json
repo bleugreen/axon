@@ -1,10 +1,10 @@
 {
   "schemaVersion": "macos-acceptance-v1",
-  "generatedAt": "2026-08-16T19:16:39-04:00",
+  "generatedAt": "2026-08-16T19:18:54-04:00",
   "campaigns": [
     {
       "id": "bbl-2026-08-16",
-      "measuredAt": "2026-08-16T19:16:39-04:00",
+      "measuredAt": "2026-08-16T19:18:54-04:00",
       "machine": "arm64 macOS bench",
       "operatingSystem": "Version 26.4 (Build 25E246)",
       "session": "interactive desktop session with a logged-in user",
@@ -33,14 +33,14 @@
           "runtimeSignature": null,
           "readableAtDispatch": true,
           "source": "NSRunningApplication(processIdentifier:) then the bundle's Info.plist",
-          "processStartTime": "Sun Aug 16 19:16:05 2026"
+          "processStartTime": "Sun Aug 16 19:18:20 2026"
         }
       },
       "action": "click",
       "mechanism": "CGEventPostToPid",
       "variant": "leftMouseDown+leftMouseUp/source=null/gapMs=0",
       "verdict": "blocked",
-      "reason": "the foreground control before the dispatch did not act, so this trial is measuring the campaign rather than the target",
+      "reason": "the foreground control after the dispatch did not act, so the target cannot be shown to have been live and aimed at throughout",
       "observations": {
         "dispatchAccepted": true,
         "targetMutated": false,
@@ -61,20 +61,20 @@
         },
         "frontmostBefore": "dev.axon.acceptance.decoy",
         "frontmostAfter": "dev.axon.acceptance.decoy",
-        "targetPid": 53388,
-        "windowId": 2843,
+        "targetPid": 70721,
+        "windowId": 2887,
         "point": {
           "x": 1093.2578125,
-          "y": 208.5
+          "y": 298.5
         },
-        "nonce": "ecfa0d39c662"
+        "nonce": "e3e95ebb3880"
       },
       "controls": {
         "before": {
           "ran": true,
-          "acted": false,
+          "acted": true,
           "mechanism": "CGEventPost(kCGHIDEventTap) with the real pointer over the coordinate",
-          "detail": "the page neither navigated nor reported a click"
+          "detail": "the page navigated to the local endpoint"
         },
         "after": {
           "ran": true,
@@ -104,7 +104,7 @@
           "runtimeSignature": null,
           "readableAtDispatch": true,
           "source": "NSRunningApplication(processIdentifier:) then the bundle's Info.plist",
-          "processStartTime": "Sun Aug 16 19:16:22 2026"
+          "processStartTime": "Sun Aug 16 19:18:37 2026"
         }
       },
       "action": "keyboard",
@@ -132,10 +132,10 @@
         },
         "frontmostBefore": "dev.axon.acceptance.decoy",
         "frontmostAfter": "dev.axon.acceptance.decoy",
-        "targetPid": 54759,
-        "windowId": 2858,
+        "targetPid": 71382,
+        "windowId": 2903,
         "point": null,
-        "nonce": "baf86047030d"
+        "nonce": "f0d537c07864"
       },
       "controls": {
         "before": {
@@ -148,7 +148,7 @@
           "ran": true,
           "acted": true,
           "mechanism": "CGEventPost(kCGHIDEventTap) with the target activated",
-          "detail": "the page's input read 'axonaxon' before and 'axon axonaxon' after"
+          "detail": "the page's input read 'axonaxon' before and 'axonaxonaxon' after"
         }
       },
       "freshState": {
