@@ -6,7 +6,7 @@
 
 use axon_core::{
     AppQuery, Application, BackendError, CapabilityInfo, DeliveryRefusalReason, ForegroundTarget,
-    KeyboardIntent, Node, Observation, PlatformBackend, RecordedCall, Screenshot, Snapshot,
+    KeyboardIntent, Node, Observation, PlatformBackend, Screenshot, Snapshot,
     SnapshotHandle, dispatch_in_foreground,
 };
 use serde_json::Value;
@@ -166,15 +166,6 @@ impl PlatformBackend for FakeSession {
         unreachable!()
     }
     fn hit_test(&mut self, _: (f64, f64)) -> Result<Option<Node>, BackendError> {
-        unreachable!()
-    }
-    fn recorded_calls(&self) -> Result<Vec<RecordedCall>, BackendError> {
-        unreachable!()
-    }
-    fn set_recording(&mut self, _: bool) -> Result<(), BackendError> {
-        unreachable!()
-    }
-    fn observe_global_input(&mut self, _: Duration) -> Result<Vec<RecordedCall>, BackendError> {
         unreachable!()
     }
 }

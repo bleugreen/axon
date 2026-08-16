@@ -1778,18 +1778,6 @@ mod tests {
         ) -> Result<Option<axon_core::Node>, axon_core::BackendError> {
             unreachable!()
         }
-        fn recorded_calls(&self) -> Result<Vec<axon_core::RecordedCall>, axon_core::BackendError> {
-            unreachable!()
-        }
-        fn set_recording(&mut self, _: bool) -> Result<(), axon_core::BackendError> {
-            unreachable!()
-        }
-        fn observe_global_input(
-            &mut self,
-            _: Duration,
-        ) -> Result<Vec<axon_core::RecordedCall>, axon_core::BackendError> {
-            unreachable!()
-        }
     }
 
     impl PointerTargetVerifier for EnumerationBackend {

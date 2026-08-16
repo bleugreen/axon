@@ -9,7 +9,7 @@ mod window_capture;
 use axon_core::{
     AppQuery, Application, BackendError, Capability, CapabilityInfo, CaptureBounds,
     ChildPageCapture, ChildPageRequest, KeyboardIntent, Node, Observation, PlatformBackend,
-    RecordedCall, Rect, Screenshot, Snapshot, SnapshotHandle, Window,
+    Rect, Screenshot, Snapshot, SnapshotHandle, Window,
 };
 use std::{
     collections::HashMap,
@@ -653,15 +653,6 @@ impl PlatformBackend for MacBackend {
     }
     fn hit_test(&mut self, _: (f64, f64)) -> Result<Option<Node>, BackendError> {
         Err(cap(Capability::HitTest, "excluded from v1"))
-    }
-    fn recorded_calls(&self) -> Result<Vec<RecordedCall>, BackendError> {
-        Err(cap(Capability::SerializeHistory, "excluded from v1"))
-    }
-    fn set_recording(&mut self, _: bool) -> Result<(), BackendError> {
-        Err(cap(Capability::SerializeHistory, "excluded from v1"))
-    }
-    fn observe_global_input(&mut self, _: Duration) -> Result<Vec<RecordedCall>, BackendError> {
-        Err(cap(Capability::ObserveGlobalInput, "excluded from v1"))
     }
 }
 impl VisualObservationProvider for MacBackend {

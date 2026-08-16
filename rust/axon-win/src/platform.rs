@@ -7,7 +7,7 @@ use crate::{
 use axon_core::{
     AppQuery, Application, BackendError, Capability, CapabilityInfo, CaptureBounds,
     ChildPageCapture, ChildPageRequest, Key, KeyboardIntent, Modifier, Node, Observation,
-    PlatformBackend, RecognizedText, RecordedCall, Rect, Screenshot, Snapshot, SnapshotHandle,
+    PlatformBackend, RecognizedText, Rect, Screenshot, Snapshot, SnapshotHandle,
     TextRecognitionProvider, Window,
 };
 use serde::Serialize;
@@ -1668,15 +1668,6 @@ impl PlatformBackend for WindowsBackend {
     }
     fn hit_test(&mut self, point: (f64, f64)) -> Result<Option<Node>, BackendError> {
         self.call(|tx| Command::Hit(point, tx))
-    }
-    fn recorded_calls(&self) -> Result<Vec<RecordedCall>, BackendError> {
-        Err(cap(Capability::SerializeHistory, "excluded from v1"))
-    }
-    fn set_recording(&mut self, _: bool) -> Result<(), BackendError> {
-        Err(cap(Capability::SerializeHistory, "excluded from v1"))
-    }
-    fn observe_global_input(&mut self, _: Duration) -> Result<Vec<RecordedCall>, BackendError> {
-        Err(cap(Capability::ObserveGlobalInput, "excluded from v1"))
     }
 
     /// Activation and readback are proved before dispatch.

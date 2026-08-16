@@ -135,13 +135,6 @@ pub struct Screenshot {
     pub height: u32,
     pub frame: Rect,
 }
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct RecordedCall {
-    pub tool: String,
-    pub params: Value,
-    pub result: Value,
-}
-
 /// What a keyboard action was asked to deliver.
 ///
 /// Two intents rather than one string, because no backend can tell them apart after the fact:
@@ -240,12 +233,24 @@ pub trait PlatformBackend {
     fn keyboard(&mut self, app: &AppQuery, intent: KeyboardIntent<'_>) -> Result<(), BackendError>;
     fn screenshot(&mut self, app: &AppQuery) -> Result<Screenshot, BackendError>;
     fn hit_test(&mut self, point: (f64, f64)) -> Result<Option<Node>, BackendError>;
-    fn recorded_calls(&self) -> Result<Vec<RecordedCall>, BackendError>;
-    fn set_recording(&mut self, enabled: bool) -> Result<(), BackendError>;
-    fn observe_global_input(
+
+    /// The native global-input observer this backend provides.
+    ///
+    /// This is the whole recording seam. A platform supplies only the evidence it alone can gather
+    /// — what the pointer hit, what holds focus, which application is frontmost — and shared core
+    /// owns ordering, grouping, semantic target construction, history, redaction, and v2 authoring.
+    /// A backend without a hook refuses here with a stable reason, which is the same state its
+    /// `observeGlobalInput` capability reports, so a claim and a dispatch can never disagree.
+    fn global_input_observer(
         &mut self,
-        timeout: Duration,
-    ) -> Result<Vec<RecordedCall>, BackendError>;
+    ) -> Result<&mut dyn crate::GlobalInputObserver, BackendError> {
+        Err(BackendError::CapabilityReason {
+            capability: Capability::ObserveGlobalInput,
+            code: "observer-unavailable",
+            reason: "this backend has no global input observer".into(),
+            diagnostic: None,
+        })
+    }
 
     /// Whether this backend can capture the foreground, activate a target, and prove it came forward
     /// before dispatch. Cleanup still attempts and reports the hand-back on every exit path.
