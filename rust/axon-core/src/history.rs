@@ -267,3 +267,105 @@ fn atomic_write(path: &Path, contents: &[u8]) -> Result<(), ActionHistoryError> 
         source,
     })
 }
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{JsonRpcId, JsonRpcSuccess, JsonRpcVersion};
+    use serde_json::json;
+
+    fn request(method: &str, params: Value) -> JsonRpcRequest {
+        JsonRpcRequest::new(Some(JsonRpcId::Integer(1)), method, Some(params))
+    }
+
+    fn success() -> JsonRpcResponse {
+        JsonRpcResponse::Success(JsonRpcSuccess {
+            jsonrpc: JsonRpcVersion,
+            id: JsonRpcId::Integer(1),
+            result: json!({"ok": true}),
+        })
+    }
+
+    #[test]
+    fn context_extracts_session_without_persisting_it() {
+        let store = ActionHistoryStore::default();
+        let context = store.context(&request("click", json!({"_session": "editor", "target": "button"})));
+        assert_eq!(context.session_id, "editor");
+        assert_eq!(context.request.params, Some(json!({"target": "button"})));
+
+        let fallback = store.context(&request("click", json!({"_session": ""})));
+        assert_eq!(fallback.session_id, DEFAULT_HISTORY_SESSION);
+    }
+
+    #[test]
+    fn records_are_monotonic_parent_linked_session_scoped_and_bounded() {
+        let store = ActionHistoryStore::new(2);
+        let first = store.record(&request("click", json!({})), &success(), "a", None).unwrap();
+        let other = store.record(&request("click", json!({})), &success(), "b", None).unwrap();
+        let second = store.record(&request("type", json!({"text": "hi"})), &success(), "a", None).unwrap();
+        let third = store.record(&request("keyboard", json!({"key": "enter"})), &success(), "a", None).unwrap();
+
+        assert_eq!((first.id.as_str(), other.id.as_str(), second.id.as_str(), third.id.as_str()), ("c1", "c2", "c3", "c4"));
+        assert_eq!(second.parent_id.as_deref(), Some("c1"));
+        assert_eq!(third.parent_id.as_deref(), Some("c3"));
+        assert_eq!(store.records("a").iter().map(|r| r.id.as_str()).collect::<Vec<_>>(), vec!["c3", "c4"]);
+        assert_eq!(store.records("b").len(), 1);
+    }
+
+    #[test]
+    fn excludes_control_methods_and_strips_run_payloads() {
+        let store = ActionHistoryStore::default();
+        assert!(store.record(&request("health", json!({})), &success(), "s", None).is_none());
+        assert!(store.record(&request("save", json!({})), &success(), "s", None).is_none());
+        let record = store.record(
+            &request("run", json!({"actions": [1], "args": [2], "argValues": {"x": 3}, "dryRun": true})),
+            &success(),
+            "s",
+            None,
+        ).unwrap();
+        assert_eq!(record.params, json!({"dryRun": true}).as_object().unwrap().clone());
+    }
+
+    #[test]
+    fn export_filters_reads_counts_the_inclusive_range_and_round_trips() {
+        let store = ActionHistoryStore::default();
+        let look = store.record(&request("look", json!({"app": "Notes"})), &success(), "s", None).unwrap();
+        let click = store.record(&request("click", json!({"target": {"app": "Notes", "name": "New"}})), &success(), "s", None).unwrap();
+        let find = store.record(&request("find", json!({"query": "Done"})), &success(), "s", None).unwrap();
+
+        let actions_only = store.export_script("s", false, Some(&look.id), Some(&find.id), None).unwrap();
+        assert_eq!((actions_only.action_count, actions_only.record_count), (1, 3));
+        let document = AxnCodec::parse(&actions_only.script).unwrap();
+        assert_eq!(document.actions[0].id.as_deref(), Some("a001"));
+        assert_eq!(document.actions[0].tool, "click");
+
+        let including_reads = store.export_script("s", true, Some(&look.id), Some(&click.id), None).unwrap();
+        assert_eq!((including_reads.action_count, including_reads.record_count), (2, 2));
+        assert_eq!(AxnCodec::parse(&including_reads.script).unwrap().version, 2);
+    }
+
+    #[test]
+    fn range_errors_are_typed() {
+        let store = ActionHistoryStore::default();
+        let first = store.record(&request("click", json!({})), &success(), "s", None).unwrap();
+        let second = store.record(&request("type", json!({})), &success(), "s", None).unwrap();
+        assert!(matches!(
+            store.export_script("s", false, Some("missing"), None, None),
+            Err(ActionHistoryError::UnknownRangeBoundary { label: "from", .. })
+        ));
+        assert!(matches!(
+            store.export_script("s", false, Some(&second.id), Some(&first.id), None),
+            Err(ActionHistoryError::ReversedRange { .. })
+        ));
+    }
+
+    #[test]
+    fn optional_path_receives_the_same_valid_script() {
+        let store = ActionHistoryStore::default();
+        store.record(&request("click", json!({})), &success(), "s", None);
+        let path = std::env::temp_dir().join(format!("axon-history-{}-{}.axn", std::process::id(), std::thread::current().name().unwrap_or("test")));
+        let export = store.export_script("s", false, None, None, Some(&path)).unwrap();
+        assert_eq!(fs::read_to_string(&path).unwrap(), export.script);
+        assert_eq!(AxnCodec::parse(&export.script).unwrap().actions.len(), 1);
+        fs::remove_file(path).unwrap();
+    }
+}
