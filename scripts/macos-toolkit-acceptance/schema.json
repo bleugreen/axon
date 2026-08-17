@@ -1,0 +1,219 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/bleugreen/axon/scripts/macos-toolkit-acceptance/schema.json",
+  "title": "Axon macos-acceptance-v1",
+  "description": "Measured acceptance of macOS PID-targeted synthetic input, one row per target and action. Rows are implementation-neutral: they record what macOS did, keyed on identity facts a backend can read at dispatch time, so a delivery implementation in any language can consume them without inheriting the campaign's own assumptions. A row is evidence, not a permission: the consumer decides what to authorize, and an absent row authorizes nothing.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schemaVersion", "generatedAt", "campaigns", "rows"],
+  "properties": {
+    "schemaVersion": {
+      "description": "This contract's identity. Within macos-acceptance-v1 producers may add rows and campaigns; removing a required field or changing what a verdict means requires a new major.",
+      "const": "macos-acceptance-v1"
+    },
+    "generatedAt": {
+      "description": "When this document was last written. Distinct from a campaign's measuredAt: regenerating the file does not re-measure anything.",
+      "type": "string"
+    },
+    "campaigns": {
+      "description": "The measurement sessions the rows were earned in. A row cites one by id rather than repeating its machine and permission facts, so two rows measured together cannot disagree about the bench they ran on.",
+      "type": "array",
+      "items": { "$ref": "#/$defs/campaign" }
+    },
+    "rows": {
+      "description": "One row per target and action. Rows are app-specific unless macOS offers a stable generic signature, because a family-wide entry claims more than any single application can prove.",
+      "type": "array",
+      "items": { "$ref": "#/$defs/row" }
+    }
+  },
+  "$defs": {
+    "campaign": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "measuredAt", "machine", "operatingSystem", "session", "permissions", "rawEvidence"],
+      "properties": {
+        "id": { "description": "Stable identifier a row cites.", "type": "string", "minLength": 1 },
+        "measuredAt": { "description": "When the measurements were taken, not when the file was written.", "type": "string", "minLength": 1 },
+        "machine": { "description": "Hardware model and architecture of the bench.", "type": "string" },
+        "operatingSystem": { "description": "macOS version and build.", "type": "string" },
+        "session": { "description": "What kind of session this was: an interactive desktop with a logged-in user, or something else. PID-targeted input cannot be measured without one.", "type": "string" },
+        "harness": { "description": "The commit or description of the harness that produced this campaign.", "type": ["string", "null"] },
+        "permissions": { "$ref": "#/$defs/permissions" },
+        "rawEvidence": { "description": "Path, relative to this directory, of the unnormalized record this run wrote for diagnosis. Not committed: it is bench-local and each run writes its own.", "type": "string", "minLength": 1 },
+        "notes": { "type": ["string", "null"] }
+      }
+    },
+    "permissions": {
+      "description": "The permission state of the posting process. Missing permission makes every trial blocked rather than refused: macOS drops posted events from an untrusted process silently, which from the sending side is indistinguishable from a target declining them.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["accessibility"],
+      "properties": {
+        "accessibility": { "enum": ["granted", "denied", "unknown"] },
+        "automation": {
+          "description": "Per-target Automation (Apple Events) state, where it was needed. Recorded per bundle identifier because macOS grants it that way.",
+          "type": ["object", "null"]
+        },
+        "screenRecording": { "enum": ["granted", "denied", "unknown", "notNeeded"] }
+      }
+    },
+    "row": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id", "campaign", "target", "action", "mechanism", "variant",
+        "verdict", "reason", "observations", "controls", "freshState",
+        "rawEvidence", "remeasureWhen"
+      ],
+      "properties": {
+        "id": {
+          "description": "The stable identifier a Rust source comment or a refusal detail cites. It names the target, the action and the campaign date so a citation stays legible without the file open beside it.",
+          "type": "string",
+          "minLength": 1
+        },
+        "campaign": { "description": "Which campaign measured this row.", "type": "string", "minLength": 1 },
+        "target": { "$ref": "#/$defs/target" },
+        "action": {
+          "description": "Click evidence never authorizes keyboard, drag or scroll: each action is measured and recorded on its own.",
+          "enum": ["click", "keyboard"]
+        },
+        "mechanism": {
+          "description": "The delivery mechanism measured. Only PID-targeted Core Graphics posting is in scope here.",
+          "const": "CGEventPostToPid"
+        },
+        "variant": {
+          "description": "The exact construction posted, including the event source and the down/up hold. A row speaks only for the variant it names, because an application that ignores one construction may act on another.",
+          "type": "string",
+          "minLength": 1
+        },
+        "verdict": {
+          "description": "accepted: the target acted while the decoy held the foreground and the real pointer did not move. refused: the post was accepted by macOS and the target did nothing. blocked: the trial could not establish its own preconditions, so it says nothing about the target. unavailable: the target software was not present.",
+          "enum": ["accepted", "refused", "blocked", "unavailable"]
+        },
+        "reason": { "description": "Why this verdict, in a sentence a refusal detail can carry.", "type": "string", "minLength": 1 },
+        "observations": { "$ref": "#/$defs/observations" },
+        "controls": { "$ref": "#/$defs/controls" },
+        "freshState": { "$ref": "#/$defs/freshState" },
+        "rawEvidence": {
+          "description": "Names the trial in the unnormalized record its run wrote, as a path and a fragment. That record is written on the bench that ran the campaign and is not committed; this is a pointer for whoever still has that machine, and not a link. Everything a verdict rests on is carried by the row itself.",
+          "type": "string",
+          "minLength": 1
+        },
+        "remeasureWhen": {
+          "description": "What invalidates this row. Application and OS releases invalidate it; commits to this repository do not.",
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    },
+    "target": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["label", "kind", "identity"],
+      "properties": {
+        "label": { "type": "string", "minLength": 1 },
+        "kind": {
+          "description": "What the target is built on, as a description rather than as a key. A consumer keys on identity, never on this.",
+          "enum": ["webkit-browser", "chromium-browser", "electron", "appkit-native", "wkwebview", "gecko-browser"]
+        },
+        "identity": { "$ref": "#/$defs/identity" }
+      }
+    },
+    "identity": {
+      "description": "The dispatch-time identity candidates: what a backend holding only a process identifier can actually read about the target before it posts anything.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["bundleId", "readableAtDispatch", "source"],
+      "properties": {
+        "bundleId": { "type": ["string", "null"] },
+        "bundleShortVersion": { "type": ["string", "null"] },
+        "bundleVersion": { "type": ["string", "null"] },
+        "versionSeries": {
+          "description": "The major.minor prefix an entry would key on, because that is the granularity an application's own version string supports.",
+          "type": ["string", "null"]
+        },
+        "runtimeSignature": {
+          "description": "An engine or runtime version, only when it is genuinely readable from the target's own bundle at dispatch time. Null where macOS publishes nothing, which is itself the finding that keeps a row app-specific.",
+          "type": ["object", "null"]
+        },
+        "readableAtDispatch": {
+          "description": "Whether every identity fact above was read from the running process rather than from the campaign's own knowledge of what it launched.",
+          "type": "boolean"
+        },
+        "source": { "description": "The API path the identity was read through.", "type": "string", "minLength": 1 },
+        "processStartTime": { "type": ["string", "null"] }
+      }
+    },
+    "observations": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["dispatchAccepted", "targetMutated"],
+      "properties": {
+        "dispatchAccepted": {
+          "description": "Whether the Core Graphics post completed. This is dispatch evidence and nothing more: CGEventPostToPid returns no status, so a completed post never proves the target received or acted on anything.",
+          "type": ["boolean", "null"]
+        },
+        "targetMutated": {
+          "description": "Whether the target itself changed: a control moved, a page navigated, a field echoed. This is the only evidence that can license an accepted verdict.",
+          "type": ["boolean", "null"]
+        },
+        "mutationEvidence": { "type": ["string", "null"] },
+        "eventReachedTarget": {
+          "description": "Whether the target's process observed the event arriving, where the target can report that. It separates 'never delivered' from 'delivered and declined', which the sending side cannot tell apart.",
+          "type": ["boolean", "null"]
+        },
+        "arrivalDetail": { "type": ["string", "null"] },
+        "frontmostUnchanged": { "type": ["boolean", "null"] },
+        "decoyFrontmost": {
+          "description": "Whether a decoy application held the foreground across the dispatch. Without this the target may simply have been receiving ordinary input.",
+          "type": ["boolean", "null"]
+        },
+        "pointerUnchanged": { "type": ["boolean", "null"] },
+        "ownershipProved": {
+          "description": "Whether the target owned the topmost ordinary window at the dispatch coordinate, checked immediately before posting.",
+          "type": ["boolean", "null"]
+        },
+        "pointerBefore": { "type": ["object", "null"] },
+        "pointerAfter": { "type": ["object", "null"] },
+        "frontmostBefore": { "type": ["string", "null"] },
+        "frontmostAfter": { "type": ["string", "null"] },
+        "targetPid": { "type": ["integer", "null"] },
+        "windowId": { "type": ["integer", "null"] },
+        "windowBounds": { "type": ["object", "null"] },
+        "point": { "type": ["object", "null"] },
+        "nonce": { "type": ["string", "null"] }
+      }
+    },
+    "controls": {
+      "description": "The two foreground controls that bracket a dispatch. A trial whose control did not act is measuring the campaign rather than the target, and is blocked rather than refused.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["before", "after"],
+      "properties": {
+        "before": { "$ref": "#/$defs/control" },
+        "after": { "$ref": "#/$defs/control" }
+      }
+    },
+    "control": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ran", "acted"],
+      "properties": {
+        "ran": { "type": "boolean" },
+        "acted": { "type": ["boolean", "null"] },
+        "mechanism": { "type": ["string", "null"] },
+        "detail": { "type": ["string", "null"] }
+      }
+    },
+    "freshState": {
+      "description": "Whether this trial ran against a target that had received no prior synthetic input. A keyboard verdict may only be earned on a fresh target: a window that was just clicked can route keys it would otherwise drop.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["fresh", "detail"],
+      "properties": {
+        "fresh": { "type": "boolean" },
+        "detail": { "type": "string", "minLength": 1 }
+      }
+    }
+  }
+}

@@ -1,0 +1,64 @@
+#!/usr/bin/env python3
+"""Validate the committed fixtures and regenerate the rendered table.
+
+Run with no arguments it checks: `results.json` matches `schema.json`, every row
+obeys the integrity rules, and `RESULTS.md` is exactly what the current
+`results.json` renders to. Run with `--write` it regenerates `RESULTS.md`.
+
+The rendered file is generated rather than written so that the prose a reviewer
+reads and the evidence a backend consumes cannot drift apart. A dirty diff here
+is a real failure: it means the two are already saying different things.
+"""
+
+from __future__ import annotations
+
+import json
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+
+import evidence  # noqa: E402 - the path has to be set before this import
+
+
+def main(argv: list[str]) -> int:
+    write = "--write" in argv
+    unknown = [argument for argument in argv if argument != "--write"]
+    if unknown:
+        print(f"unknown argument: {unknown[0]}", file=sys.stderr)
+        return 2
+
+    if not evidence.RESULTS_PATH.exists():
+        print(f"{evidence.RESULTS_PATH} does not exist", file=sys.stderr)
+        return 1
+    document = json.loads(evidence.RESULTS_PATH.read_text())
+
+    problems = evidence.validate(document, evidence.load_schema())
+    problems += evidence.integrity(document)
+
+    rendered = evidence.render(document)
+    if write:
+        evidence.RENDERED_PATH.write_text(rendered)
+    elif not evidence.RENDERED_PATH.exists():
+        problems.append(f"{evidence.RENDERED_PATH.name} has not been generated")
+    elif evidence.RENDERED_PATH.read_text() != rendered:
+        problems.append(
+            f"{evidence.RENDERED_PATH.name} is not what results.json renders to; "
+            "regenerate it with scripts/macos-toolkit-acceptance/check --write"
+        )
+
+    for problem in problems:
+        print(problem, file=sys.stderr)
+    if problems:
+        return 1
+
+    counts: dict[str, int] = {}
+    for row in document["rows"]:
+        counts[row["verdict"]] = counts.get(row["verdict"], 0) + 1
+    summary = ", ".join(f"{count} {verdict}" for verdict, count in sorted(counts.items()))
+    print(f"{len(document['rows'])} rows: {summary}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv[1:]))

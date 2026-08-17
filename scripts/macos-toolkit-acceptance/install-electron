@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+# Electron is not on a Mac by default, and it is what stands in for a packaged
+# Chromium application rather than a browser. A version is pinned rather than
+# floating, because a row speaks for the runtime it was measured against.
+#
+#   install-electron            # the current release
+#   install-electron 32         # a specific major
+#
+# The runtime is gitignored: the measurement is committed, the download is not.
+#
+# `targets/electron/package.json` is committed and must stay committed. Without
+# a package.json in this directory npm walks up the filesystem looking for one
+# and installs into whatever it finds first, which is somewhere outside this
+# repository entirely. The check after the install is there because that failure
+# is silent: npm reports success while having modified a directory nobody asked
+# it to touch.
+set -euo pipefail
+here="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+target="$here/targets/electron"
+cd "$target"
+
+[[ -f package.json ]] || { echo "targets/electron/package.json is missing; npm would install outside this repository" >&2; exit 1; }
+
+version="${1:-latest}"
+npm install --no-audit --no-fund "electron@$version"
+
+# The electron package is a downloader: the runtime itself arrives from a
+# postinstall script, which an npm configured to ignore scripts will skip
+# without saying so. Running it directly when the runtime is absent is what
+# makes this script's success mean the runtime is actually here.
+if [[ ! -d "$target/node_modules/electron/dist/Electron.app" ]]; then
+  node "$target/node_modules/electron/install.js"
+fi
+
+if [[ ! -d "$target/node_modules/electron/dist/Electron.app" ]]; then
+  echo "electron did not land in $target/node_modules; refusing to report success" >&2
+  exit 1
+fi
+node -e "console.log('installed electron', require('$target/node_modules/electron/package.json').version)"

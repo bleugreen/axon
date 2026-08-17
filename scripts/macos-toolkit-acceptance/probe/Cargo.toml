@@ -1,0 +1,26 @@
+[package]
+name = "axon-macos-acceptance-probe"
+version = "0.1.0"
+edition = "2024"
+publish = false
+description = "Native macOS probe for the PID-targeted input acceptance campaign."
+
+# Deliberately its own workspace root, and not a member of rust/Cargo.toml.
+#
+# This crate binds Core Graphics, the Objective-C runtime, and AppKit. None of
+# that is product code, and none of it may enter the product workspace's
+# dependency graph or its lockfile: the Linux and Windows lanes resolve that
+# lockfile with `--locked`, and a macOS-only crate landing in it would make
+# those lanes carry a resolution they can never build. An empty `[workspace]`
+# table is what tells cargo to stop walking up and treat this directory as its
+# own root.
+[workspace]
+
+[dependencies]
+# None, on purpose. Every API used here is a system framework reached through
+# raw FFI, so re-running the campaign on a fresh bench needs no registry access
+# and the committed lockfile has nothing in it to drift.
+
+[[bin]]
+name = "acceptance-probe"
+path = "src/main.rs"

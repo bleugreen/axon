@@ -1,0 +1,125 @@
+<!doctype html>
+<!--
+  The page every web-engine target loads: Safari, an installed Chromium browser,
+  a pinned Electron runtime, and the embedded WKWebView fixture.
+
+  It reports three things the outside cannot see. Its own element rectangles in
+  screen coordinates, because only the page knows where the engine laid them out
+  and only screen coordinates can be posted at. Every event it receives with
+  `isTrusted`, which is how an engine says it saw a synthetic event and decided
+  what to do with it. And a nonce on every report, so a stale window from an
+  earlier trial cannot be mistaken for this one.
+
+  The click target is a link to a deterministic local endpoint. Navigation is the
+  strongest target-side evidence available: it is observed by the coordinator's
+  own HTTP server rather than by the page, so it survives an engine that throttles
+  a background window's script. The page it lands on is this same document with
+  the link pointing back, so the layout is identical and a control click after the
+  measurement lands in the same place.
+-->
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Axon macOS acceptance</title>
+    <style>
+      body { margin: 0; font: 16px -apple-system, sans-serif; background: #fff; color: #111; }
+      #link { position: absolute; left: 40px; top: 150px; display: inline-block;
+              padding: 18px 28px; background: #1d6fd0; color: #fff; font-size: 18px;
+              text-decoration: none; border-radius: 6px; }
+      #entry { position: absolute; left: 40px; top: 60px; width: 320px; height: 32px; font-size: 16px; }
+      #marker { position: absolute; left: 40px; top: 20px; font-size: 13px; color: #555; }
+    </style>
+  </head>
+  <body>
+    <div id="marker">page __MARKER__ / nonce __NONCE__</div>
+    <input id="entry" autofocus />
+    <a id="link" href="__HREF__">Target Link</a>
+    <script>
+      const nonce = "__NONCE__";
+      const marker = "__MARKER__";
+      const endpoint = new URL("/report", location.origin);
+      const send = (payload) =>
+        fetch(endpoint, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(Object.assign({ nonce, marker, role: "page" }, payload)),
+          keepalive: true,
+        }).catch(() => {});
+
+      // Two coordinate spaces are reported for every element, because neither
+      // alone is trustworthy.
+      //
+      // `client` is the element's position inside the viewport, which is a fact
+      // the page knows exactly. The campaign converts it to the screen using the
+      // window rectangle it reads from CGWindowListCopyWindowInfo, which is
+      // authoritative and the same space it posts events in.
+      //
+      // `screen` is what the browser itself says, through screenX and screenY,
+      // and it is reported as a cross-check rather than used. Engines disagree
+      // about what those mean: Safari answers with the window's own top, while
+      // Chromium answers with the viewport's, so a coordinate derived from them
+      // lands in Safari's toolbar and nowhere near the target.
+      const rects = (element) => {
+        const box = element.getBoundingClientRect();
+        const client = {
+          x: box.left, y: box.top, width: box.width, height: box.height,
+          center: { x: box.left + box.width / 2, y: box.top + box.height / 2 },
+        };
+        const screen = {
+          x: window.screenX + box.left, y: window.screenY + box.top,
+          width: box.width, height: box.height,
+          center: {
+            x: window.screenX + box.left + box.width / 2,
+            y: window.screenY + box.top + box.height / 2,
+          },
+        };
+        return { client, screen };
+      };
+
+      let clicks = 0;
+      const link = document.getElementById("link");
+      const entry = document.getElementById("entry");
+
+      link.addEventListener("click", (event) => {
+        clicks += 1;
+        send({ kind: "click", widget: "link", count: clicks, isTrusted: event.isTrusted });
+      });
+      entry.addEventListener("input", (event) => {
+        send({ kind: "text", widget: "entry", value: event.target.value });
+      });
+      for (const type of ["mousedown", "mouseup", "keydown", "keyup"]) {
+        window.addEventListener(
+          type,
+          (event) => send({ kind: "raw", event: type, isTrusted: event.isTrusted }),
+          true,
+        );
+      }
+
+      const report = () => {
+        entry.focus();
+        send({
+          kind: "geometry",
+          href: location.href,
+          devicePixelRatio: window.devicePixelRatio,
+          viewport: {
+            innerWidth: window.innerWidth,
+            innerHeight: window.innerHeight,
+            outerWidth: window.outerWidth,
+            outerHeight: window.outerHeight,
+            screenX: window.screenX,
+            screenY: window.screenY,
+          },
+          widgets: { link: rects(link), entry: rects(entry) },
+        });
+      };
+      window.addEventListener("load", report);
+      window.addEventListener("resize", report);
+      // Repeated rather than reported once, because a browser window that is
+      // moved has no DOM event to report it: `open` hands a window back before
+      // the browser has finished restoring its saved position, and a coordinate
+      // read at load time can name where the window used to be. The campaign
+      // takes the most recent report immediately before it aims at anything.
+      setInterval(report, 400);
+    </script>
+  </body>
+</html>
