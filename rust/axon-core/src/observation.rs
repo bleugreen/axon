@@ -283,6 +283,14 @@ pub enum LookObservationKind {
 }
 
 pub fn format_snapshot(snapshot: &Snapshot, options: &LookDisplayOptions) -> Value {
+    format_snapshot_with_redaction(snapshot, options, &ObservationRedactionContext::default())
+}
+
+pub fn format_snapshot_with_redaction(
+    snapshot: &Snapshot,
+    options: &LookDisplayOptions,
+    redaction: &ObservationRedactionContext,
+) -> Value {
     let mut value = serde_json::to_value(snapshot).expect("snapshot serialization cannot fail");
     fn format_node(node: &mut Map<String, Value>, depth: usize, options: &LookDisplayOptions) {
         if !options.frames {
@@ -319,6 +327,7 @@ pub fn format_snapshot(snapshot: &Snapshot, options: &LookDisplayOptions) -> Val
             Value::String(OBSERVATION_NOTE_NO_WINDOWS.into()),
         );
     }
+    redaction.redact_value(&mut value);
     if options.format == LookFormat::Debug {
         let mut envelope = Map::new();
         envelope.insert("format".into(), Value::String("debug".into()));
@@ -335,7 +344,23 @@ pub fn format_child_page(
     rendered: &Snapshot,
     options: &LookDisplayOptions,
 ) -> Value {
-    let mut tree = format_snapshot(rendered, options);
+    format_child_page_with_redaction(
+        capture,
+        parent,
+        rendered,
+        options,
+        &ObservationRedactionContext::default(),
+    )
+}
+
+pub fn format_child_page_with_redaction(
+    capture: &crate::ChildPageCapture,
+    parent: &WireElementTarget,
+    rendered: &Snapshot,
+    options: &LookDisplayOptions,
+    redaction: &ObservationRedactionContext,
+) -> Value {
+    let mut tree = format_snapshot_with_redaction(rendered, options, redaction);
     if options.format == LookFormat::Debug {
         tree = tree.get("observation").cloned().unwrap_or(Value::Null);
     }
