@@ -4,6 +4,7 @@ use crate::{
 };
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{Map, Value};
+use regex::Regex;
 
 /// The canonical image budget for every public `look` surface.
 pub const OBSERVATION_SCREENSHOT_MAX_DIMENSION: u32 = 1280;
@@ -39,9 +40,189 @@ impl ObservationRedactionContext {
         }
     }
 
-    fn redacts(&self, value: &str) -> bool {
-        !value.is_empty() && self.active_secrets.iter().any(|secret| secret == value)
+    pub fn redact_value(&self, value: &mut Value) {
+        self.redact_recursive(value, None, &DeterministicRedactionContext::default());
     }
+
+    fn redact_recursive(
+        &self,
+        value: &mut Value,
+        field: Option<&str>,
+        inherited: &DeterministicRedactionContext,
+    ) {
+        match value {
+            Value::String(text) => {
+                if let Some(marker) = self.redaction_marker(field.unwrap_or_default(), text, inherited) {
+                    *text = marker;
+                }
+            }
+            Value::Array(values) => {
+                for value in values {
+                    self.redact_recursive(value, field, inherited);
+                }
+            }
+            Value::Object(object) => {
+                let context = DeterministicRedactionContext::from_object(object, inherited);
+                for (key, value) in object {
+                    self.redact_recursive(value, Some(key), &context);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn redaction_marker(
+        &self,
+        field: &str,
+        value: &str,
+        context: &DeterministicRedactionContext,
+    ) -> Option<String> {
+        if value.is_empty() {
+            return None;
+        }
+        if self.active_secrets.iter().any(|secret| secret == value) {
+            return Some("<redacted: active-credential>".into());
+        }
+        deterministic_tag(field, value, context).map(|tag| format!("<redacted: {tag}>") )
+    }
+}
+
+#[derive(Clone, Debug, Default)]
+struct DeterministicRedactionContext {
+    role: Option<String>,
+    title: Option<String>,
+    label: Option<String>,
+    description: Option<String>,
+    help: Option<String>,
+    identifier: Option<String>,
+}
+
+impl DeterministicRedactionContext {
+    fn from_object(object: &Map<String, Value>, inherited: &Self) -> Self {
+        fn string(object: &Map<String, Value>, key: &str) -> Option<String> {
+            object.get(key).and_then(Value::as_str).map(str::to_owned)
+        }
+        Self {
+            role: string(object, "role").or_else(|| inherited.role.clone()),
+            title: string(object, "title").or_else(|| inherited.title.clone()),
+            label: string(object, "label").or_else(|| inherited.label.clone()),
+            description: string(object, "description").or_else(|| inherited.description.clone()),
+            help: string(object, "help").or_else(|| inherited.help.clone()),
+            identifier: string(object, "identifier").or_else(|| inherited.identifier.clone()),
+        }
+    }
+}
+
+fn deterministic_tag(
+    field: &str,
+    value: &str,
+    context: &DeterministicRedactionContext,
+) -> Option<&'static str> {
+    let secret_role = field == "value"
+        && context.role.as_deref().is_some_and(|role| {
+            role == "AXSecureTextField" || role.to_ascii_lowercase().contains("secure")
+        });
+    let secret_label = field == "value"
+        && [
+            context.title.as_deref(),
+            context.label.as_deref(),
+            context.description.as_deref(),
+            context.help.as_deref(),
+            context.identifier.as_deref(),
+        ]
+        .into_iter()
+        .flatten()
+        .map(normalized_label)
+        .any(|label| SECRET_LABELS.iter().any(|needle| label.contains(needle)));
+    if secret_role || secret_label || credential_pattern_matches(value) {
+        return Some("auth-credential");
+    }
+    if pii_pattern_matches(value) {
+        return Some("pii-identifier");
+    }
+    if !is_numeric_control_value(field, value, context) && contains_luhn_card(value) {
+        return Some("financial-data");
+    }
+    None
+}
+
+const SECRET_LABELS: &[&str] = &[
+    "password", "passcode", "secret", "token", "private key", "recovery code",
+    "recovery key", "api key", "seed phrase", "credential", "access key", "auth key",
+];
+
+fn normalized_label(value: &str) -> String {
+    value.to_ascii_lowercase().replace(['_', '-', '.'], " ")
+}
+
+fn regex_matches(pattern: &str, value: &str) -> bool {
+    Regex::new(pattern).expect("redaction regex is valid").is_match(value)
+}
+
+fn credential_pattern_matches(value: &str) -> bool {
+    [
+        r"\b(?:github_pat_[A-Za-z0-9_]{20,}|gh[pousr]_[A-Za-z0-9_]{20,})\b",
+        r"\bsk-(?:proj-)?[A-Za-z0-9_-]{16,}\b",
+        r"\bxox[baprs]-[A-Za-z0-9-]{20,}\b",
+        r"\bAKIA[0-9A-Z]{16}\b",
+        r"\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\b",
+        r"-----BEGIN [A-Z ]*PRIVATE KEY-----",
+    ]
+    .into_iter()
+    .any(|pattern| regex_matches(pattern, value))
+}
+
+fn pii_pattern_matches(value: &str) -> bool {
+    [
+        r"\b\d{3}-\d{2}-\d{4}\b",
+        r"(?i)\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b",
+        r"(?:^|[^0-9])(?:\+1[ .-]?)?(?:\([2-9][0-9]{2}\)|[2-9][0-9]{2})[ .-]?[2-9][0-9]{2}[ .-]?[0-9]{4}(?:$|[^0-9])",
+    ]
+    .into_iter()
+    .any(|pattern| regex_matches(pattern, value))
+}
+
+fn is_numeric_control_value(
+    field: &str,
+    value: &str,
+    context: &DeterministicRedactionContext,
+) -> bool {
+    field == "value"
+        && matches!(
+            context.role.as_deref(),
+            Some("AXScrollBar" | "AXSlider" | "AXValueIndicator")
+        )
+        && value.trim().parse::<f64>().is_ok()
+}
+
+fn contains_luhn_card(value: &str) -> bool {
+    Regex::new(r"(?:^|[^0-9])((?:[0-9][ -]?){13,19})(?:$|[^0-9])")
+        .expect("card regex is valid")
+        .captures_iter(value)
+        .filter_map(|capture| capture.get(1).map(|matched| matched.as_str()))
+        .any(|candidate| {
+            if candidate.contains(['*', '•']) || candidate.to_ascii_lowercase().contains('x') {
+                return false;
+            }
+            let digits: Vec<u32> = candidate.chars().filter_map(|char| char.to_digit(10)).collect();
+            if !(13..=19).contains(&digits.len()) {
+                return false;
+            }
+            let sum: u32 = digits
+                .iter()
+                .rev()
+                .enumerate()
+                .map(|(index, digit)| {
+                    if index % 2 == 1 {
+                        let doubled = digit * 2;
+                        if doubled > 9 { doubled - 9 } else { doubled }
+                    } else {
+                        *digit
+                    }
+                })
+                .sum();
+            sum > 0 && sum.is_multiple_of(10)
+        })
 }
 
 pub fn format_screen_text(
@@ -74,14 +255,7 @@ pub fn format_screen_text(
             .take(OBSERVATION_SCREEN_TEXT_MAX_ITEMS)
             .map(|item| {
                 let mut object = Map::new();
-                if redaction.redacts(&item.text) {
-                    object.insert(
-                        "text".into(),
-                        Value::String("<redacted: active-credential>".into()),
-                    );
-                } else {
-                    object.insert("text".into(), Value::String(item.text.clone()));
-                }
+                object.insert("text".into(), Value::String(item.text.clone()));
                 if let Some(confidence) = item.confidence.filter(|value| value.is_finite()) {
                     object.insert("confidence".into(), Value::from(confidence));
                 }
@@ -92,7 +266,9 @@ pub fn format_screen_text(
                             .expect("recognized text frame serialization cannot fail"),
                     );
                 }
-                Value::Object(object)
+                let mut value = Value::Object(object);
+                redaction.redact_value(&mut value);
+                value
             })
             .collect(),
     )
