@@ -1568,8 +1568,7 @@ pub fn parse_request(line: &str) -> Result<JsonRpcRequest, JsonRpcResponse> {
 mod tests {
     use super::*;
     use axon_core::{
-        Application, BackendError, CapabilityInfo, Node, Observation, RecordedCall, Rect,
-        Screenshot, Window,
+        Application, BackendError, CapabilityInfo, Node, Observation, Rect, Screenshot, Window,
     };
     use std::{cell::RefCell, rc::Rc, time::Duration};
 
@@ -1891,15 +1890,6 @@ mod tests {
         }
         fn hit_test(&mut self, _: (f64, f64)) -> Result<Option<Node>, BackendError> {
             Ok(self.ocr_hit_target.clone())
-        }
-        fn recorded_calls(&self) -> Result<Vec<RecordedCall>, BackendError> {
-            unreachable!()
-        }
-        fn set_recording(&mut self, _: bool) -> Result<(), BackendError> {
-            unreachable!()
-        }
-        fn observe_global_input(&mut self, _: Duration) -> Result<Vec<RecordedCall>, BackendError> {
-            unreachable!()
         }
         fn supports_foreground_transaction(&self) -> bool {
             self.foreground_transaction

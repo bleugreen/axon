@@ -23,8 +23,8 @@ use atspi::{
 };
 use axon_core::{
     AppQuery, Application, BackendError, Capability, CapabilityInfo, CaptureBounds,
-    ChildPageCapture, ChildPageRequest, KeyboardIntent, Node, Observation, PlatformBackend,
-    RecordedCall, Rect, Screenshot, Snapshot, SnapshotHandle, Window,
+    ChildPageCapture, ChildPageRequest, KeyboardIntent, Node, Observation, PlatformBackend, Rect,
+    Screenshot, Snapshot, SnapshotHandle, Window,
 };
 use std::{
     collections::{HashMap, HashSet},
@@ -635,19 +635,6 @@ impl PlatformBackend for LinuxBackend {
     fn hit_test(&mut self, _: (f64, f64)) -> Result<Option<Node>, BackendError> {
         Err(capability(Capability::HitTest, "not implemented"))
     }
-    fn recorded_calls(&self) -> Result<Vec<RecordedCall>, BackendError> {
-        Err(capability(Capability::SerializeHistory, "not implemented"))
-    }
-    fn set_recording(&mut self, _: bool) -> Result<(), BackendError> {
-        Err(capability(Capability::SerializeHistory, "not implemented"))
-    }
-    fn observe_global_input(&mut self, _: Duration) -> Result<Vec<RecordedCall>, BackendError> {
-        Err(capability(
-            Capability::ObserveGlobalInput,
-            "global input observation is not implemented",
-        ))
-    }
-
     fn supports_foreground_transaction(&self) -> bool {
         matches!(self.input, InputSession::Available(_))
     }
