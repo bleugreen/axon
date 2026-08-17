@@ -2,9 +2,9 @@ use crate::{
     AppQuery, BackendError, DiffClassification, RecognizedText, SemanticDiff, Snapshot, SnapshotId,
     WireElementTarget,
 };
+use regex::Regex;
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{Map, Value};
-use regex::Regex;
 
 /// The canonical image budget for every public `look` surface.
 pub const OBSERVATION_SCREENSHOT_MAX_DIMENSION: u32 = 1280;
@@ -85,7 +85,7 @@ impl ObservationRedactionContext {
         if self.active_secrets.iter().any(|secret| secret == value) {
             return Some("<redacted: active-credential>".into());
         }
-        deterministic_tag(field, value, context).map(|tag| format!("<redacted: {tag}>") )
+        deterministic_tag(field, value, context).map(|tag| format!("<redacted: {tag}>"))
     }
 }
 
