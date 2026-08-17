@@ -105,9 +105,9 @@ impl DaemonRecordingOwner {
         if let RecordingScope::Application { app } = &scope
             && app.name.trim().is_empty()
             && app
-+                .bundle_identifier
-+                .as_deref()
-+                .is_none_or(|value| value.trim().is_empty())
+                .bundle_identifier
+                .as_deref()
+                .is_none_or(|value| value.trim().is_empty())
         {
             return Err(invalid(
                 "params.scope.app",
