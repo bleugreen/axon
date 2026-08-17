@@ -165,6 +165,44 @@ pub trait GlobalInputObserver {
     fn is_recording(&self) -> bool;
 }
 
+/// Bounded reads requested by shared core at semantic event boundaries.
+///
+/// This is deliberately separate from [`GlobalInputObserver`]: passive event collection has a
+/// different lifetime and failure mode from Accessibility/UIA/AT-SPI reads, and providers that only
+/// implement observation keep compiling while recording-capable providers opt into this contract.
+pub trait RecordingEvidenceProvider: GlobalInputObserver {
+    /// Captures the currently focused actionable element. Called at the beginning and end of a text
+    /// burst; the latter read supplies the complete field value used by `setValue`.
+    fn read_focused(&mut self) -> Result<Option<RecordedFocusedEvidence>, crate::BackendError>;
+
+    /// Takes a fresh full-tree snapshot for semantic resolution. Native objects do not cross this
+    /// boundary, and the snapshot must belong to the supplied stable application identity.
+    fn capture_snapshot(
+        &mut self,
+        app: &RecordedAppIdentity,
+    ) -> Result<Option<Snapshot>, crate::BackendError>;
+
+    /// Waits for the action at `group_index` to settle and returns its post-delivery evidence.
+    /// Core always appends the group before making this call.
+    fn settle(
+        &mut self,
+        group_index: usize,
+        tool: &str,
+    ) -> Result<RecordedSettleEvidence, crate::BackendError>;
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct RecordedFocusedEvidence {
+    pub target: RecordedTargetEvidence,
+    pub value: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct RecordedSettleEvidence {
+    pub observed: Vec<Value>,
+    pub observation: Option<crate::ActionObservation>,
+}
+
 /// A semantic action the recorder decided one or more native events amount to.
 #[derive(Clone, Debug, PartialEq)]
 pub enum RecordedUserAction {
