@@ -263,6 +263,7 @@ version = "0.3.6"
 dependencies = [
  "chrono",
  "pretty_assertions",
+ "regex",
  "serde",
  "serde_json",
  "serde_yaml",

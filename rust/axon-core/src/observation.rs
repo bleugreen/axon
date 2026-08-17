@@ -52,7 +52,9 @@ impl ObservationRedactionContext {
     ) {
         match value {
             Value::String(text) => {
-                if let Some(marker) = self.redaction_marker(field.unwrap_or_default(), text, inherited) {
+                if let Some(marker) =
+                    self.redaction_marker(field.unwrap_or_default(), text, inherited)
+                {
                     *text = marker;
                 }
             }
@@ -201,7 +203,10 @@ fn contains_luhn_card(value: &str) -> bool {
         .captures_iter(value)
         .filter_map(|capture| capture.get(1).map(|matched| matched.as_str()))
         .any(|candidate| {
-            if candidate.contains(['*', '•']) || candidate.to_ascii_lowercase().contains('x') {
+            if candidate.contains('*')
+                || candidate.contains('•')
+                || candidate.to_ascii_lowercase().contains('x')
+            {
                 return false;
             }
             let digits: Vec<u32> = candidate.chars().filter_map(|char| char.to_digit(10)).collect();
