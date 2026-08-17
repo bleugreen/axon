@@ -24,6 +24,8 @@ pub mod socket;
 #[cfg(target_os = "macos")]
 mod platform;
 #[cfg(target_os = "macos")]
+mod global_input;
+#[cfg(target_os = "macos")]
 pub use platform::MacBackend;
 
 /// Tools this backend does not implement at all. These are not delivery decisions: the request

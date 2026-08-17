@@ -2,6 +2,7 @@ use crate::{
     BackgroundPixelPointer, PixelDispatch, PixelDispatchError, PixelPlan, PixelTarget,
     PointerTargetVerifier, ReadableStateProvider, VisualObservation, VisualObservationProvider,
 };
+use crate::global_input::MacGlobalInputObserver;
 use serde_json::{Map, Value};
 
 #[path = "capture.rs"]
@@ -47,6 +48,19 @@ fn child_count(element: AXUIElementRef) -> Option<usize> {
 fn child_range(element: AXUIElementRef, offset: usize, limit: usize) -> Option<Owned> {
     if limit == 0 {
         return None;
+    }
+    fn global_input_observer(
+        &mut self,
+    ) -> Result<&mut dyn axon_core::GlobalInputObserver, BackendError> {
+        if !self.global_input.available() {
+            return Err(BackendError::CapabilityReason {
+                capability: Capability::ObserveGlobalInput,
+                code: "accessibility-denied",
+                reason: "Accessibility permission is not granted".into(),
+                diagnostic: None,
+            });
+        }
+        Ok(&mut self.global_input)
     }
     let children = cfstr("AXChildren").ok()?;
     let mut values = null();
@@ -334,11 +348,13 @@ fn capture_node(element: Owned, depth: usize, max_depth: usize, count: &mut usiz
 
 pub struct MacBackend {
     handles: HashMap<SnapshotHandle, Owned>,
+    global_input: MacGlobalInputObserver,
 }
 impl MacBackend {
     pub fn new() -> Result<Self, BackendError> {
         Ok(Self {
             handles: HashMap::new(),
+            global_input: MacGlobalInputObserver::default(),
         })
     }
     pub fn accessibility_enabled(&self) -> bool {
@@ -437,6 +453,7 @@ impl PlatformBackend for MacBackend {
             Capability::Focus,
             Capability::Scroll,
             Capability::Screenshot,
+            Capability::ObserveGlobalInput,
         ];
         Ok(Capability::ALL
             .into_iter()
