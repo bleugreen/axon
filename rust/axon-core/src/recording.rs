@@ -9,7 +9,10 @@
 //! Native handles never cross this boundary. Every element is described in portable terms so a
 //! recording is a statement about the interface rather than about one process's pointers.
 
-use crate::{AxnAction, AxnArgument, AxnDocument, ExpectedFact};
+use crate::{
+    AxnAction, AxnArgument, AxnDocument, ExpectedFact, Locator, LocatorResolver,
+    ResolutionStatus, SemanticNameRegistry, Snapshot, TextMatcher, WireElementTarget,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use std::time::Duration;
