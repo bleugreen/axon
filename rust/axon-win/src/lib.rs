@@ -1603,6 +1603,35 @@ mod tests {
     use std::{cell::RefCell, rc::Rc, time::Duration};
 
     #[test]
+    fn recording_start_refuses_when_native_observer_is_unavailable() {
+        let mut router = Router::new(backend(vec![node("Save")], None));
+        let response = router
+            .request(JsonRpcRequest::new(
+                Some(JsonRpcId::Integer(1)),
+                "recording.start",
+                Some(json!({"scope":{"scope":"allApplications"}})),
+            ))
+            .unwrap();
+        let JsonRpcResponse::Failure(failure) = response else {
+            panic!("windows recording.start must not return empty success")
+        };
+        assert_eq!(failure.error.code, -32004);
+        assert_eq!(
+            failure.error.data.unwrap()["reason"],
+            "observer-unavailable"
+        );
+
+        let save = router
+            .request(JsonRpcRequest::new(
+                Some(JsonRpcId::Integer(2)),
+                "save",
+                Some(json!({})),
+            ))
+            .unwrap();
+        assert!(!matches!(save, JsonRpcResponse::Failure(ref failure) if failure.error.data.as_ref().is_some_and(|data| data["reason"] == "observer-unavailable")));
+    }
+
+    #[test]
     fn semantic_resolution_captures_selected_pid_on_first_try() {
         let mut backend = backend(vec![node("Save")], None);
         backend.snapshot.app.process_id = Some(4101);
