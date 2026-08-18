@@ -479,6 +479,7 @@ impl PlatformBackend for LinuxBackend {
             Capability::ReadValue,
             Capability::SetValue,
             Capability::Focus,
+            Capability::SerializeHistory,
         ];
         let unavailable = [
             (
@@ -492,10 +493,6 @@ impl PlatformBackend for LinuxBackend {
             (
                 Capability::HitTest,
                 "AT-SPI point lookup is not implemented",
-            ),
-            (
-                Capability::SerializeHistory,
-                "live history serialization is not implemented",
             ),
             (
                 Capability::ObserveGlobalInput,

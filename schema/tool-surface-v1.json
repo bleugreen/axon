@@ -7,7 +7,7 @@
         "linux" : true,
         "mac" : false,
         "swift" : false,
-        "windows" : false
+        "windows" : true
       },
       "description" : "Capture the user-authorized desktop ScreenCast source. The selected source is not associated with any application.",
       "inputSchema" : {
@@ -134,8 +134,8 @@
     },
     {
       "availability" : {
-        "linux" : false,
-        "mac" : false,
+        "linux" : true,
+        "mac" : true,
         "swift" : true,
         "windows" : false
       },
