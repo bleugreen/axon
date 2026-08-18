@@ -1,4 +1,8 @@
-use crate::{ActionObservation, AxnAction, AxnCodec, AxnDocument, AxnError, JsonRpcRequest, JsonRpcResponse};
+use crate::{
+    ActionObservation, AxnAction, AxnCodec, AxnDocument, AxnError,
+    DerivedPostconditionCompiler, ExpectedFact, JsonRpcRequest, JsonRpcResponse,
+    PostconditionInput, RedactionMarkerTaint,
+};
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
 use std::collections::HashMap;
@@ -244,15 +248,18 @@ impl ActionHistoryStore {
         path: Option<&Path>,
     ) -> Result<ActionHistoryExport, ActionHistoryError> {
         let records = self.sliced_records(session_id, from, to)?;
-        let actions = records
+        let workflow_inputs = records
             .iter()
-            .filter_map(|record| history_action(record, include_reads))
-            .enumerate()
-            .map(|(index, mut action)| {
-                action.id = Some(format!("a{:03}", index + 1));
-                action
-            })
+            .filter_map(|record| record.observation.as_ref())
+            .flat_map(|observation| observation.inputs.iter().cloned())
             .collect::<Vec<_>>();
+        let mut actions = Vec::new();
+        for record in &records {
+            let action_id = format!("a{:03}", actions.len() + 1);
+            if let Some(action) = history_action(record, include_reads, &action_id, &workflow_inputs) {
+                actions.push(action);
+            }
+        }
         let document = AxnDocument {
             version: 2,
             arguments: Vec::new(),
@@ -307,7 +314,12 @@ fn should_record(method: &str) -> bool {
     matches!(method, "look" | "find" | "click" | "scroll" | "drag" | "invoke" | "type" | "keyboard" | "run")
 }
 
-fn history_action(record: &ActionHistoryRecord, include_reads: bool) -> Option<AxnAction> {
+fn history_action(
+    record: &ActionHistoryRecord,
+    include_reads: bool,
+    action_id: &str,
+    workflow_inputs: &[String],
+) -> Option<AxnAction> {
     let tool = match record.method.as_str() {
         "look" | "find" if include_reads => record.method.clone(),
         "click" | "scroll" | "drag" | "invoke" | "type" | "keyboard" => record.method.clone(),
@@ -315,13 +327,54 @@ fn history_action(record: &ActionHistoryRecord, include_reads: bool) -> Option<A
     };
     let mut params = record.params.clone();
     params.remove("tool");
+    if let Some(observation) = record.observation.as_ref() {
+        attach_replay_evidence(&mut params, "target", observation.target_before.as_ref());
+        attach_replay_evidence(&mut params, "from", observation.from_before.as_ref());
+        attach_replay_evidence(&mut params, "to", observation.to_before.as_ref());
+    }
+    let expects = record
+        .observation
+        .as_ref()
+        .map(|observation| {
+            DerivedPostconditionCompiler::new(&RedactionMarkerTaint)
+                .facts(&PostconditionInput {
+                    action_id,
+                    tool: &tool,
+                    observation,
+                    workflow_inputs,
+                })
+                .into_iter()
+                .filter_map(|fact| serde_json::from_value::<ExpectedFact>(fact).ok())
+                .collect()
+        })
+        .unwrap_or_default();
     Some(AxnAction {
-        id: None,
+        id: Some(action_id.to_owned()),
         tool,
         requires: Vec::new(),
-        expects: Vec::new(),
+        expects,
         params,
     })
+}
+
+fn attach_replay_evidence(
+    params: &mut Map<String, Value>,
+    key: &str,
+    state: Option<&crate::ObservedElementState>,
+) {
+    let Some(target) = params.get_mut(key).and_then(Value::as_object_mut) else {
+        return;
+    };
+    if !target.get("app").is_some_and(Value::is_string)
+        || !target.get("name").is_some_and(Value::is_string)
+        || target.contains_key("locator")
+    {
+        return;
+    }
+    let Some(locator) = state.and_then(|state| state.locator.clone()) else {
+        return;
+    };
+    target.insert("locator".into(), Value::Object(locator));
 }
 
 fn atomic_write(path: &Path, contents: &[u8]) -> Result<(), ActionHistoryError> {
