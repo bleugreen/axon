@@ -24,6 +24,19 @@ pub struct RecordedPoint {
     pub y: f64,
 }
 
+fn point_fallback_warning(target: &Value) -> Option<String> {
+    target.get("point").map(|_| "could not derive a canonical semantic target; recorded point fallback".into())
+}
+
+fn point_fallback_warnings(action: &RecordedUserAction) -> Vec<String> {
+    match action {
+        RecordedUserAction::Click { target } => point_fallback_warning(target).into_iter().collect(),
+        RecordedUserAction::Drag { from, to, .. } => [from, to].into_iter().filter_map(point_fallback_warning).collect(),
+        RecordedUserAction::Scroll { target: Some(target), .. } => point_fallback_warning(target).into_iter().collect(),
+        _ => Vec::new(),
+    }
+}
+
 /// Provider-neutral recorder state machine. Native backends only collect events and evidence;
 /// ordering, grouping, target selection, and the append-before-settle invariant live here.
 pub struct UserActionRecorder<P: RecordingEvidenceProvider> {
@@ -103,11 +116,12 @@ impl<P: RecordingEvidenceProvider> UserActionRecorder<P> {
                     let action = if let Some(at) = drag_end {
                         RecordedUserAction::Drag { from, to: point_target(&evidence.app, at), app: Some(evidence.app.name), duration_ms: Some(timestamp_ms.saturating_sub(started) as i64) }
                     } else { RecordedUserAction::Click { target: from } };
-                    self.append_and_settle(action, tool)?;
+                    let warnings = point_fallback_warnings(&action);
+                    self.append_and_settle_with_warnings(action, tool, warnings)?;
                 }
             }
             RecordedInputEvent::Scroll { evidence, delta_x, delta_y, .. } => {
-                if self.in_scope(&evidence.app) { self.flush_text()?; let target = Some(self.target(&evidence)?); self.append_and_settle(RecordedUserAction::Scroll { target, app: Some(evidence.app.name), delta_x, delta_y }, "scroll")?; }
+                if self.in_scope(&evidence.app) { self.flush_text()?; let target = Some(self.target(&evidence)?); let action = RecordedUserAction::Scroll { target, app: Some(evidence.app.name), delta_x, delta_y }; let warnings = point_fallback_warnings(&action); self.append_and_settle_with_warnings(action, "scroll", warnings)?; }
             }
             RecordedInputEvent::Notification { app, notification, role, .. } => {
                 if self.in_scope(&app) { if let Some(last) = self.groups.last_mut() { last.observed.push(serde_json::json!({"notification": notification, "role": role})); } }
@@ -121,22 +135,26 @@ impl<P: RecordingEvidenceProvider> UserActionRecorder<P> {
         let Some((app, text)) = self.pending_text.take() else { return Ok(()); };
         // Clear pending state before the provider read: Accessibility callbacks may re-enter.
         let focused = self.provider.read_focused()?;
-        let action = match focused {
+        let (action, warnings) = match focused {
             Some(focused) if !focused.target.candidates.iter().any(|candidate| candidate.sensitive) => {
                 let target = self.target(&focused.target)?;
                 match focused.value {
-                    Some(value) => RecordedUserAction::SetValue { target: target.clone(), value, fact_target: Some(target) },
-                    None => RecordedUserAction::TypeText { app: app.name, text },
+                    Some(value) => (RecordedUserAction::SetValue { target: target.clone(), value, fact_target: Some(target) }, point_fallback_warning(&target).into_iter().collect()),
+                    None => (RecordedUserAction::TypeText { app: app.name, text }, vec!["focused element did not expose a value; recorded keyboard fallback".into()]),
                 }
             }
-            _ => RecordedUserAction::TypeText { app: app.name, text },
+            _ => (RecordedUserAction::TypeText { app: app.name, text }, vec!["focused element unavailable or sensitive; recorded keyboard fallback".into()]),
         };
-        self.append_and_settle(action, "type")
+        self.append_and_settle_with_warnings(action, "type", warnings)
     }
 
     fn append_and_settle(&mut self, action: RecordedUserAction, tool: &str) -> Result<(), crate::BackendError> {
+        self.append_and_settle_with_warnings(action, tool, Vec::new())
+    }
+
+    fn append_and_settle_with_warnings(&mut self, action: RecordedUserAction, tool: &str, warnings: Vec<String>) -> Result<(), crate::BackendError> {
         let index = self.groups.len();
-        self.groups.push(RecordedUserEventGroup::new(action));
+        self.groups.push(RecordedUserEventGroup::new(action).with_warnings(warnings));
         let settled = self.provider.settle(index, tool)?;
         self.groups[index].observed.extend(settled.observed);
         self.groups[index].observation = settled.observation;
