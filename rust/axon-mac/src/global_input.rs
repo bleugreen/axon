@@ -69,6 +69,14 @@ unsafe extern "C" {
 }
 #[link(name = "Carbon", kind = "framework")]
 unsafe extern "C" { fn IsSecureEventInputEnabled() -> bool; }
+#[link(name = "ApplicationKit", kind = "framework")]
+unsafe extern "C" {}
+#[link(name = "objc")]
+unsafe extern "C" {
+    fn objc_getClass(name: *const c_char) -> *mut c_void;
+    fn sel_registerName(name: *const c_char) -> *mut c_void;
+    fn objc_msgSend();
+}
 
 fn operation(message: impl Into<String>) -> BackendError {
     BackendError::Operation { operation: "observeGlobalInput".into(), message: message.into(), diagnostic: None }
@@ -98,11 +106,25 @@ impl Drop for RunningTap { fn drop(&mut self) { self.stop(); } }
 
 #[derive(Default)]
 struct NativeRuntime;
+
+enum StartupState { Initializing, Running(usize), Cancelled }
+
+fn cancel_startup(state: &Arc<Mutex<StartupState>>, thread: JoinHandle<()>) {
+    let run_loop = {
+        let mut state = state.lock().unwrap();
+        let run_loop = match *state { StartupState::Running(value) => Some(value), _ => None };
+        *state = StartupState::Cancelled;
+        run_loop
+    };
+    if let Some(value) = run_loop { unsafe { CFRunLoopStop(value as CFRunLoopRef); } }
+    let _ = thread.join();
+}
+
 impl TapRuntime for NativeRuntime {
     fn trusted(&self) -> bool { unsafe { AXIsProcessTrusted() } }
     fn spawn(&self, scope: RecordingScope, queue: Arc<Queue>) -> Result<RunningTap, BackendError> {
-        let run_loop = Arc::new(Mutex::new(0usize));
-        let run_loop_for_thread = Arc::clone(&run_loop);
+        let startup = Arc::new(Mutex::new(StartupState::Initializing));
+        let startup_for_thread = Arc::clone(&startup);
         let (started_tx, started_rx) = mpsc::sync_channel(1);
         let thread = thread::Builder::new().name("axon-global-input".into()).spawn(move || {
             let state = Box::new(CallbackState { scope, queue, secure: Mutex::new(false) });
@@ -114,15 +136,22 @@ impl TapRuntime for NativeRuntime {
             let source = unsafe { CFMachPortCreateRunLoopSource(null(), tap, 0) };
             if source.is_null() { unsafe { CFRelease(tap.cast()); drop(Box::from_raw(state_ptr)); } let _ = started_tx.send(Err("could not create event-tap run-loop source")); return; }
             let current = unsafe { CFRunLoopGetCurrent() };
-            *run_loop_for_thread.lock().unwrap() = current as usize;
             unsafe { CFRunLoopAddSource(current, source, kCFRunLoopCommonModes); CGEventTapEnable(tap, true); }
+            let cancelled = {
+                let mut startup = startup_for_thread.lock().unwrap();
+                if matches!(*startup, StartupState::Cancelled) { true } else { *startup = StartupState::Running(current as usize); false }
+            };
+            if cancelled {
+                unsafe { CGEventTapEnable(tap, false); CFRelease(source.cast()); CFRelease(tap.cast()); drop(Box::from_raw(state_ptr)); }
+                return;
+            }
             let _ = started_tx.send(Ok(()));
             unsafe { CFRunLoopRun(); CGEventTapEnable(tap, false); CFRelease(source.cast()); CFRelease(tap.cast()); drop(Box::from_raw(state_ptr)); }
         }).map_err(|error| operation(format!("could not create observer thread: {error}")))?;
         match started_rx.recv_timeout(Duration::from_secs(2)) {
-            Ok(Ok(())) => Ok(RunningTap { stop: Some(Box::new(move || { let value = *run_loop.lock().unwrap(); if value != 0 { unsafe { CFRunLoopStop(value as CFRunLoopRef); } } })), thread: Some(thread) }),
+            Ok(Ok(())) => Ok(RunningTap { stop: Some(Box::new(move || { let value = match *startup.lock().unwrap() { StartupState::Running(value) => value, _ => 0 }; if value != 0 { unsafe { CFRunLoopStop(value as CFRunLoopRef); } } })), thread: Some(thread) }),
             Ok(Err(reason)) => { let _ = thread.join(); Err(operation(reason)) }
-            Err(_) => Err(operation("event-tap initialization timed out")),
+            Err(_) => { cancel_startup(&startup, thread); Err(operation("event-tap initialization timed out")) }
         }
     }
 }
@@ -165,7 +194,7 @@ fn capture_event(state: &CallbackState, ty: u32, event: CGEventRef) -> Option<Re
 }
 
 fn scope_accepts(scope: &RecordingScope, app: &RecordedAppIdentity) -> bool {
-    match scope { RecordingScope::AllApplications => true, RecordingScope::Application { app: wanted } => wanted.process_id.zip(app.process_id).is_some_and(|(a,b)| a == b) || (!wanted.name.is_empty() && wanted.name.eq_ignore_ascii_case(&app.name)) }
+    match scope { RecordingScope::AllApplications => true, RecordingScope::Application { app: wanted } => wanted.matches_runtime(app) }
 }
 
 fn classify_key(event: CGEventRef) -> RecordedKeystroke {
@@ -207,7 +236,28 @@ fn app_identity(element: AXUIElementRef) -> Option<RecordedAppIdentity> {
     let mut pid = 0; if unsafe { AXUIElementGetPid(element, &mut pid) } != 0 { return None; }
     let app = unsafe { AXUIElementCreateApplication(pid) }; if app.is_null() { return None; }
     let name = text_attribute(app, "AXTitle").unwrap_or_default(); unsafe { CFRelease(app); }
-    Some(RecordedAppIdentity { name, bundle_identifier: None, process_id: Some(pid as u32) })
+    let (native_name, bundle_identifier) = running_application_identity(pid);
+    Some(RecordedAppIdentity { name: native_name.filter(|value| !value.is_empty()).unwrap_or(name), bundle_identifier, process_id: Some(pid as u32) })
+}
+
+fn running_application_identity(pid: i32) -> (Option<String>, Option<String>) {
+    unsafe {
+        let class = objc_getClass(c"NSRunningApplication".as_ptr());
+        if class.is_null() { return (None, None); }
+        let application: unsafe extern "C" fn(*mut c_void, *mut c_void, i32) -> *mut c_void = std::mem::transmute(objc_msgSend as *const ());
+        let app = application(class, sel_registerName(c"runningApplicationWithProcessIdentifier:".as_ptr()), pid);
+        if app.is_null() { return (None, None); }
+        (objc_string_property(app, c"localizedName"), objc_string_property(app, c"bundleIdentifier"))
+    }
+}
+
+unsafe fn objc_string_property(object: *mut c_void, selector: &std::ffi::CStr) -> Option<String> {
+    let property: unsafe extern "C" fn(*mut c_void, *mut c_void) -> *mut c_void = unsafe { std::mem::transmute(objc_msgSend as *const ()) };
+    let value = unsafe { property(object, sel_registerName(selector.as_ptr())) };
+    if value.is_null() { return None; }
+    let utf8: unsafe extern "C" fn(*mut c_void, *mut c_void) -> *const c_char = unsafe { std::mem::transmute(objc_msgSend as *const ()) };
+    let bytes = unsafe { utf8(value, sel_registerName(c"UTF8String".as_ptr())) };
+    (!bytes.is_null()).then(|| unsafe { std::ffi::CStr::from_ptr(bytes) }.to_string_lossy().into_owned())
 }
 
 fn element_evidence(element: AXUIElementRef) -> Option<RecordedElementEvidence> {
@@ -244,4 +294,24 @@ mod tests {
     #[test] fn refuses_without_accessibility_permission() { let mut value = observer(false, Arc::default()); let error = value.start(&RecordingScope::AllApplications).unwrap_err(); assert!(error.to_string().contains("Accessibility permission")); assert!(!value.is_recording()); }
     #[test] fn refuses_duplicate_start_and_stop_is_idempotent() { let stops = Arc::new(Mutex::new(0)); let mut value = observer(true, Arc::clone(&stops)); value.start(&RecordingScope::AllApplications).unwrap(); assert!(value.start(&RecordingScope::AllApplications).unwrap_err().to_string().contains("already active")); value.stop().unwrap(); value.stop().unwrap(); assert_eq!(*stops.lock().unwrap(), 1); }
     #[test] fn drop_releases_active_provider() { let stops = Arc::new(Mutex::new(0)); { let mut value = observer(true, Arc::clone(&stops)); value.start(&RecordingScope::AllApplications).unwrap(); } assert_eq!(*stops.lock().unwrap(), 1); }
+    #[test] fn delayed_startup_is_cancelled_and_joined() {
+        let startup = Arc::new(Mutex::new(StartupState::Initializing));
+        let for_thread = Arc::clone(&startup);
+        let exited = Arc::new(Mutex::new(false));
+        let exited_on_thread = Arc::clone(&exited);
+        let thread = thread::spawn(move || {
+            thread::sleep(Duration::from_millis(20));
+            assert!(matches!(*for_thread.lock().unwrap(), StartupState::Cancelled));
+            *exited_on_thread.lock().unwrap() = true;
+        });
+        cancel_startup(&startup, thread);
+        assert!(*exited.lock().unwrap());
+    }
+    #[test] fn application_scope_uses_pid_then_bundle_then_name() {
+        let identity = |name: &str, bundle: Option<&str>, pid| RecordedAppIdentity { name: name.into(), bundle_identifier: bundle.map(str::to_owned), process_id: pid };
+        let wanted = RecordingScope::Application { app: identity("Notes", Some("com.apple.Notes"), Some(10)) };
+        assert!(!scope_accepts(&wanted, &identity("Notes", Some("com.apple.Notes"), Some(11))));
+        assert!(scope_accepts(&wanted, &identity("Renamed", Some("com.apple.Notes"), None)));
+        assert!(scope_accepts(&RecordingScope::Application { app: identity("Notes", None, None) }, &identity("notes", None, None)));
+    }
 }

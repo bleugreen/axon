@@ -25,6 +25,19 @@ pub struct RecordedPoint {
     pub y: f64,
 }
 
+impl RecordedAppIdentity {
+    /// Match two identities using the strongest runtime identity both sides carry.
+    pub fn matches_runtime(&self, other: &Self) -> bool {
+        if let (Some(left), Some(right)) = (self.process_id, other.process_id) {
+            return left == right;
+        }
+        if let (Some(left), Some(right)) = (&self.bundle_identifier, &other.bundle_identifier) {
+            return left == right;
+        }
+        !self.name.is_empty() && self.name.eq_ignore_ascii_case(&other.name)
+    }
+}
+
 fn redact_serializable<T: Serialize + DeserializeOwned>(value: T, context: &crate::ObservationRedactionContext) -> T {
     let mut value = serde_json::to_value(value).expect("recorder evidence serializes");
     context.redact_value(&mut value);
@@ -204,7 +217,7 @@ impl UserActionRecorder {
     }
 
     fn in_scope(&self, app: &RecordedAppIdentity) -> bool {
-        match &self.scope { RecordingScope::AllApplications => true, RecordingScope::Application { app: wanted } => same_app(wanted, app) }
+        match &self.scope { RecordingScope::AllApplications => true, RecordingScope::Application { app: wanted } => wanted.matches_runtime(app) }
     }
 }
 
@@ -233,9 +246,7 @@ impl<P: RecordingEvidenceProvider> OwnedUserActionRecorder<P> {
     }
 }
 
-fn same_app(a: &RecordedAppIdentity, b: &RecordedAppIdentity) -> bool {
-    match (&a.bundle_identifier, &b.bundle_identifier) { (Some(a), Some(b)) => a == b, _ => a.name == b.name }
-}
+fn same_app(a: &RecordedAppIdentity, b: &RecordedAppIdentity) -> bool { a.matches_runtime(b) }
 
 fn node_matches(node: &crate::Node, candidate: &RecordedElementEvidence) -> bool {
     node.role == candidate.role

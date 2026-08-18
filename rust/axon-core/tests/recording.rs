@@ -25,6 +25,23 @@ struct FakeRecorderState {
     fail_stop: bool,
 }
 
+#[test]
+fn application_scope_prefers_runtime_pid_over_bundle_and_name() {
+    let mut wanted = app("Notes", "com.example.notes");
+    wanted.process_id = Some(41);
+    let mut wrong_process = wanted.clone();
+    wrong_process.process_id = Some(42);
+    let state = Rc::new(RefCell::new(FakeRecorderState {
+        polls: VecDeque::from([vec![text(wrong_process, "outside"), text(wanted.clone(), "inside")]]),
+        ..Default::default()
+    }));
+    let mut recorder = OwnedUserActionRecorder::start(FakeRecordingProvider(state), RecordingScope::Application { app: wanted }).unwrap();
+    recorder.poll(Duration::ZERO).unwrap();
+    let groups = recorder.finish().unwrap();
+    assert_eq!(groups.len(), 1);
+    assert!(matches!(&groups[0].action, Some(RecordedUserAction::TypeText { text, .. }) if text == "inside"));
+}
+
 #[derive(Clone)]
 struct FakeRecordingProvider(Rc<RefCell<FakeRecorderState>>);
 
