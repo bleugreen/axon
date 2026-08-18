@@ -427,6 +427,24 @@ impl MacBackend {
     }
 }
 
+impl axon_core::GlobalInputObserver for MacBackend {
+    fn start(&mut self, scope: &axon_core::RecordingScope) -> Result<(), BackendError> {
+        axon_core::GlobalInputObserver::start(&mut self.global_input, scope)
+    }
+
+    fn poll(&mut self, timeout: Duration) -> Result<Vec<axon_core::RecordedInputEvent>, BackendError> {
+        axon_core::GlobalInputObserver::poll(&mut self.global_input, timeout)
+    }
+
+    fn stop(&mut self) -> Result<(), BackendError> {
+        axon_core::GlobalInputObserver::stop(&mut self.global_input)
+    }
+
+    fn is_recording(&self) -> bool {
+        axon_core::GlobalInputObserver::is_recording(&self.global_input)
+    }
+}
+
 impl RecordingEvidenceProvider for MacBackend {
     fn read_focused(&mut self) -> Result<Option<RecordedFocusedEvidence>, BackendError> {
         Ok(crate::global_input::focused_evidence().map(|(app, element)| {

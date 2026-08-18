@@ -78,6 +78,7 @@ pub struct Router<B> {
     observation_sequence: u64,
     observation_redaction: axon_core::ObservationRedactionContext,
     daemon: axon_core::NativeDaemonState,
+    recorder: Option<axon_core::UserActionRecorder>,
 }
 
 fn visual_observation_result(
@@ -362,6 +363,7 @@ impl<
             observation_sequence: 0,
             observation_redaction: Default::default(),
             daemon: Default::default(),
+            recorder: None,
         }
     }
     fn register_snapshot(&mut self, snapshot: &Snapshot) -> Vec<axon_core::SemanticElementName> {
