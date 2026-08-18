@@ -1924,6 +1924,88 @@ mod tests {
         }
     }
 
+    impl axon_core::GlobalInputObserver for EnumerationBackend {
+        fn start(&mut self, _: &axon_core::RecordingScope) -> Result<(), axon_core::BackendError> {
+            Ok(())
+        }
+        fn poll(
+            &mut self,
+            _: Duration,
+        ) -> Result<Vec<axon_core::RecordedInputEvent>, axon_core::BackendError> {
+            Ok(vec![axon_core::RecordedInputEvent::KeyDown {
+                app: axon_core::RecordedAppIdentity {
+                    name: "Notes".into(),
+                    bundle_identifier: Some("com.example.Notes".into()),
+                    process_id: None,
+                },
+                keystroke: axon_core::RecordedKeystroke::Key { key: "Return".into() },
+                timestamp_ms: 1,
+            }])
+        }
+        fn stop(&mut self) -> Result<(), axon_core::BackendError> {
+            Ok(())
+        }
+        fn is_recording(&self) -> bool {
+            true
+        }
+    }
+
+    impl axon_core::RecordingEvidenceProvider for EnumerationBackend {
+        fn read_focused(
+            &mut self,
+        ) -> Result<Option<axon_core::RecordedFocusedEvidence>, axon_core::BackendError> {
+            Ok(None)
+        }
+        fn capture_snapshot(
+            &mut self,
+            _: &axon_core::RecordedAppIdentity,
+        ) -> Result<Option<Snapshot>, axon_core::BackendError> {
+            Ok(None)
+        }
+        fn settle(
+            &mut self,
+            _: usize,
+            _: &str,
+        ) -> Result<axon_core::RecordedSettleEvidence, axon_core::BackendError> {
+            Ok(Default::default())
+        }
+    }
+
+    #[test]
+    fn recording_routes_ingest_native_events_before_stop() {
+        let mut router = Router::new(EnumerationBackend);
+        let start = router
+            .request(JsonRpcRequest::new(
+                Some(JsonRpcId::Integer(1)),
+                "recording.start",
+                Some(json!({"scope":{"scope":"allApplications"}})),
+            ))
+            .unwrap();
+        assert!(matches!(start, JsonRpcResponse::Success(_)));
+
+        let status = router
+            .request(JsonRpcRequest::new(
+                Some(JsonRpcId::Integer(2)),
+                "recording.status",
+                Some(json!({})),
+            ))
+            .unwrap();
+        assert!(matches!(status, JsonRpcResponse::Success(_)));
+
+        let stop = router
+            .request(JsonRpcRequest::new(
+                Some(JsonRpcId::Integer(3)),
+                "recording.stop",
+                Some(json!({})),
+            ))
+            .unwrap();
+        let JsonRpcResponse::Success(stop) = stop else {
+            panic!("recording.stop must author the drained native events")
+        };
+        assert!(stop.result["actionCount"].as_u64().unwrap() > 0);
+        assert!(stop.result["script"].as_str().unwrap().contains("pressKey"));
+    }
+
     #[test]
     fn look_application_enumeration_matches_shared_envelope() {
         let mut router = Router::new(EnumerationBackend);
