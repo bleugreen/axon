@@ -148,7 +148,32 @@ impl ActionHistoryStore {
         ActionHistoryContext { session_id, request }
     }
 
-    /// Persists a request after the caller's shared observation boundary has sanitized it.
+    /// Redacts every durable field before inserting a history record.
+    pub fn record_redacted(
+        &self,
+        request: &JsonRpcRequest,
+        response: &JsonRpcResponse,
+        session_id: &str,
+        observation: Option<ActionObservation>,
+        redaction: &crate::ObservationRedactionContext,
+    ) -> Option<ActionHistoryRecord> {
+        let mut request_value = serde_json::to_value(request).expect("JSON-RPC request serializes");
+        redaction.redact_value(&mut request_value);
+        let request = serde_json::from_value(request_value).expect("redacted request remains valid");
+
+        let mut response_value = serde_json::to_value(response).expect("JSON-RPC response serializes");
+        redaction.redact_value(&mut response_value);
+        let response = serde_json::from_value(response_value).expect("redacted response remains valid");
+
+        let observation = observation.map(|observation| {
+            let mut value = serde_json::to_value(observation).expect("action observation serializes");
+            redaction.redact_value(&mut value);
+            serde_json::from_value(value).expect("redacted action observation remains valid")
+        });
+        self.record(&request, &response, session_id, observation)
+    }
+
+    /// Persists a request that has already crossed the shared redaction boundary.
     pub fn record(
         &self,
         request: &JsonRpcRequest,

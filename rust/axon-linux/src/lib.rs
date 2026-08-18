@@ -400,7 +400,13 @@ impl<B: PointerTargetVerifier + BackgroundPixelInput> Router<B> {
             Ok(result) => JsonRpcResponse::success(id, result),
             Err(error) => JsonRpcResponse::failure(id, error),
         };
-        self.daemon.history.record(&context.request, &response, &context.session_id, None);
+        self.daemon.history.record_redacted(
+            &context.request,
+            &response,
+            &context.session_id,
+            None,
+            &self.observation_redaction,
+        );
         Some(response)
     }
 
