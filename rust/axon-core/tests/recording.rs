@@ -9,7 +9,7 @@ use axon_core::{
     ActionObservation, AxnAction, BackendError, DerivedPostconditionCompiler, GlobalInputObserver,
     ObservedElementState, PostconditionInput, RecordedAppIdentity, RecordedFocusedEvidence, RecordedInputEvent, RecordedKeystroke, RecordedPoint,
     RecordedSettleEvidence, RecordedTargetEvidence, RecordedUserAction, RecordedUserEventGroup,
-    RecordingEvidenceProvider, RecordingScope, RedactionMarkerTaint, Snapshot, UserActionRecorder,
+    RecordingEvidenceProvider, RecordingScope, RedactionMarkerTaint, Snapshot, OwnedUserActionRecorder,
     UserRecordingTranslator,
 };
 use serde_json::{Value, json};
@@ -69,9 +69,9 @@ fn text(app: RecordedAppIdentity, value: &str) -> RecordedInputEvent {
     RecordedInputEvent::KeyDown { app, keystroke: RecordedKeystroke::Text { text: value.into() }, timestamp_ms: 0 }
 }
 
-fn recorder_with(events: Vec<RecordedInputEvent>) -> (UserActionRecorder<FakeRecordingProvider>, Rc<RefCell<FakeRecorderState>>) {
+fn recorder_with(events: Vec<RecordedInputEvent>) -> (OwnedUserActionRecorder<FakeRecordingProvider>, Rc<RefCell<FakeRecorderState>>) {
     let state = Rc::new(RefCell::new(FakeRecorderState { polls: VecDeque::from([events]), ..Default::default() }));
-    let recorder = UserActionRecorder::start(FakeRecordingProvider(state.clone()), RecordingScope::AllApplications).unwrap();
+    let recorder = OwnedUserActionRecorder::start(FakeRecordingProvider(state.clone()), RecordingScope::AllApplications).unwrap();
     (recorder, state)
 }
 
@@ -727,7 +727,7 @@ fn application_scope_filters_by_stable_bundle_identity() {
         polls: VecDeque::from([vec![text(other, "outside"), text(wanted.clone(), "inside")]]),
         ..Default::default()
     }));
-    let mut recorder = UserActionRecorder::start(
+    let mut recorder = OwnedUserActionRecorder::start(
         FakeRecordingProvider(state), RecordingScope::Application { app: app("Notes", "com.example.notes") },
     ).unwrap();
 

@@ -189,6 +189,31 @@ impl UserActionRecorder {
     }
 }
 
+/// Compatibility wrapper for callers that prefer the provider and recorder to share ownership.
+pub struct OwnedUserActionRecorder<P: RecordingEvidenceProvider> {
+    provider: P,
+    recorder: UserActionRecorder,
+}
+
+impl<P: RecordingEvidenceProvider> OwnedUserActionRecorder<P> {
+    pub fn start(mut provider: P, scope: RecordingScope) -> Result<Self, crate::BackendError> {
+        let recorder = UserActionRecorder::start(&mut provider, scope)?;
+        Ok(Self { provider, recorder })
+    }
+
+    pub fn poll(&mut self, timeout: Duration) -> Result<usize, crate::BackendError> {
+        self.recorder.poll(&mut self.provider, timeout)
+    }
+
+    pub fn finish(mut self) -> Result<Vec<RecordedUserEventGroup>, crate::BackendError> {
+        self.recorder.finish(&mut self.provider)
+    }
+
+    pub fn groups(&self) -> &[RecordedUserEventGroup] {
+        self.recorder.groups()
+    }
+}
+
 fn same_app(a: &RecordedAppIdentity, b: &RecordedAppIdentity) -> bool {
     match (&a.bundle_identifier, &b.bundle_identifier) { (Some(a), Some(b)) => a == b, _ => a.name == b.name }
 }
