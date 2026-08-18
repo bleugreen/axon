@@ -24,6 +24,169 @@ pub struct RecordedPoint {
     pub y: f64,
 }
 
+/// Provider-neutral recorder state machine. Native backends only collect events and evidence;
+/// ordering, grouping, target selection, and the append-before-settle invariant live here.
+pub struct UserActionRecorder<P: RecordingEvidenceProvider> {
+    provider: P,
+    registry: SemanticNameRegistry,
+    scope: RecordingScope,
+    groups: Vec<RecordedUserEventGroup>,
+    pending_text: Option<(RecordedAppIdentity, String)>,
+    mouse_down: Option<(RecordedTargetEvidence, u64)>,
+    drag_end: Option<RecordedPoint>,
+    secure_input: bool,
+}
+
+impl<P: RecordingEvidenceProvider> UserActionRecorder<P> {
+    pub fn start(mut provider: P, scope: RecordingScope) -> Result<Self, crate::BackendError> {
+        provider.start(&scope)?;
+        Ok(Self {
+            provider,
+            registry: SemanticNameRegistry::default(),
+            scope,
+            groups: Vec::new(),
+            pending_text: None,
+            mouse_down: None,
+            drag_end: None,
+            secure_input: false,
+        })
+    }
+
+    pub fn poll(&mut self, timeout: Duration) -> Result<usize, crate::BackendError> {
+        let events = self.provider.poll(timeout)?;
+        let count = events.len();
+        for event in events { self.consume(event)?; }
+        Ok(count)
+    }
+
+    pub fn finish(mut self) -> Result<Vec<RecordedUserEventGroup>, crate::BackendError> {
+        let flush = self.flush_text();
+        let stop = self.provider.stop();
+        flush?;
+        stop?;
+        Ok(self.groups)
+    }
+
+    pub fn groups(&self) -> &[RecordedUserEventGroup] { &self.groups }
+
+    fn consume(&mut self, event: RecordedInputEvent) -> Result<(), crate::BackendError> {
+        if let RecordedInputEvent::SecureInputChanged { active, .. } = event {
+            self.secure_input = active;
+            self.pending_text = None;
+            self.mouse_down = None;
+            self.drag_end = None;
+            return Ok(());
+        }
+        if self.secure_input { return Ok(()); }
+        match event {
+            RecordedInputEvent::KeyDown { app, keystroke: RecordedKeystroke::Text { text }, .. } => {
+                if !self.in_scope(&app) { return Ok(()); }
+                match &mut self.pending_text {
+                    Some((pending_app, pending)) if same_app(pending_app, &app) => pending.push_str(&text),
+                    Some(_) => { self.flush_text()?; self.pending_text = Some((app, text)); }
+                    None => self.pending_text = Some((app, text)),
+                }
+            }
+            RecordedInputEvent::KeyDown { app, keystroke: RecordedKeystroke::Key { key }, .. } => {
+                if self.in_scope(&app) { self.flush_text()?; self.append_and_settle(RecordedUserAction::PressKey { app: app.name, key }, "press")?; }
+            }
+            RecordedInputEvent::MouseDown { evidence, timestamp_ms } => {
+                if self.in_scope(&evidence.app) { self.flush_text()?; self.mouse_down = Some((evidence, timestamp_ms)); self.drag_end = None; }
+            }
+            RecordedInputEvent::MouseDragged { at, .. } => self.drag_end = Some(at),
+            RecordedInputEvent::MouseUp { evidence, timestamp_ms } => {
+                if !self.in_scope(&evidence.app) { return Ok(()); }
+                if let Some((down, started)) = self.mouse_down.take() {
+                    let from = self.target(&down)?;
+                    let drag_end = self.drag_end.take();
+                    let tool = if drag_end.is_some() { "drag" } else { "click" };
+                    let action = if let Some(at) = drag_end {
+                        RecordedUserAction::Drag { from, to: point_target(&evidence.app, at), app: Some(evidence.app.name), duration_ms: Some(timestamp_ms.saturating_sub(started) as i64) }
+                    } else { RecordedUserAction::Click { target: from } };
+                    self.append_and_settle(action, tool)?;
+                }
+            }
+            RecordedInputEvent::Scroll { evidence, delta_x, delta_y, .. } => {
+                if self.in_scope(&evidence.app) { self.flush_text()?; let target = Some(self.target(&evidence)?); self.append_and_settle(RecordedUserAction::Scroll { target, app: Some(evidence.app.name), delta_x, delta_y }, "scroll")?; }
+            }
+            RecordedInputEvent::Notification { app, notification, role, .. } => {
+                if self.in_scope(&app) { if let Some(last) = self.groups.last_mut() { last.observed.push(serde_json::json!({"notification": notification, "role": role})); } }
+            }
+            RecordedInputEvent::SecureInputChanged { .. } => unreachable!(),
+        }
+        Ok(())
+    }
+
+    fn flush_text(&mut self) -> Result<(), crate::BackendError> {
+        let Some((app, text)) = self.pending_text.take() else { return Ok(()); };
+        // Clear pending state before the provider read: Accessibility callbacks may re-enter.
+        let focused = self.provider.read_focused()?;
+        let action = match focused {
+            Some(focused) if !focused.target.candidates.iter().any(|candidate| candidate.sensitive) => {
+                let target = self.target(&focused.target)?;
+                match focused.value {
+                    Some(value) => RecordedUserAction::SetValue { target: target.clone(), value, fact_target: Some(target) },
+                    None => RecordedUserAction::TypeText { app: app.name, text },
+                }
+            }
+            _ => RecordedUserAction::TypeText { app: app.name, text },
+        };
+        self.append_and_settle(action, "type")
+    }
+
+    fn append_and_settle(&mut self, action: RecordedUserAction, tool: &str) -> Result<(), crate::BackendError> {
+        let index = self.groups.len();
+        self.groups.push(RecordedUserEventGroup::new(action));
+        let settled = self.provider.settle(index, tool)?;
+        self.groups[index].observed.extend(settled.observed);
+        self.groups[index].observation = settled.observation;
+        Ok(())
+    }
+
+    fn target(&mut self, evidence: &RecordedTargetEvidence) -> Result<Value, crate::BackendError> {
+        if evidence.candidates.iter().any(|candidate| candidate.sensitive) {
+            return Ok(point_target(&evidence.app, evidence.point));
+        }
+        let Some(snapshot) = self.provider.capture_snapshot(&evidence.app)? else { return Ok(point_target(&evidence.app, evidence.point)); };
+        let names = self.registry.register(&snapshot);
+        for candidate in &evidence.candidates {
+            for name in &names {
+                let Some(node) = snapshot.node(name.source_index) else { continue; };
+                if node_matches(node, candidate) && name.collision_free {
+                    let wire = WireElementTarget { app: evidence.app.bundle_identifier.clone().unwrap_or_else(|| evidence.app.name.clone()), name: name.name.clone() };
+                    if let crate::SemanticSelection::Selected(context) = self.registry.select(&wire) {
+                        if LocatorResolver::resolve(context.locator(), &snapshot).status == ResolutionStatus::Unique {
+                            return Ok(serde_json::to_value(wire).expect("wire target serializes"));
+                        }
+                    }
+                }
+            }
+        }
+        Ok(point_target(&evidence.app, evidence.point))
+    }
+
+    fn in_scope(&self, app: &RecordedAppIdentity) -> bool {
+        match &self.scope { RecordingScope::AllApplications => true, RecordingScope::Application { app: wanted } => same_app(wanted, app) }
+    }
+}
+
+fn same_app(a: &RecordedAppIdentity, b: &RecordedAppIdentity) -> bool {
+    match (&a.bundle_identifier, &b.bundle_identifier) { (Some(a), Some(b)) => a == b, _ => a.name == b.name }
+}
+
+fn node_matches(node: &crate::Node, candidate: &RecordedElementEvidence) -> bool {
+    node.role == candidate.role
+        && candidate.subrole.as_ref().is_none_or(|v| node.subrole.as_ref() == Some(v))
+        && candidate.identifier.as_ref().is_none_or(|v| node.identifier.as_ref() == Some(v))
+        && candidate.title.as_ref().is_none_or(|v| node.title.as_ref() == Some(v))
+        && candidate.value.as_ref().is_none_or(|v| node.value.as_ref() == Some(v))
+        && candidate.description.as_ref().is_none_or(|v| node.description.as_ref() == Some(v))
+}
+
+fn point_target(app: &RecordedAppIdentity, point: RecordedPoint) -> Value {
+    serde_json::json!({"app": app.bundle_identifier.as_deref().unwrap_or(&app.name), "point": {"x": point.x, "y": point.y}})
+}
+
 /// Which application an event belongs to.
 ///
 /// The name and bundle identifier are what a serialized artifact keeps, because they survive the
