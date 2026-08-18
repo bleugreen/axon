@@ -343,7 +343,8 @@ impl<
         + TextRecognitionProvider
         + VisualObservationProvider
         + ReadableStateProvider
-        + BackgroundPixelPointer,
+        + BackgroundPixelPointer
+        + axon_core::RecordingEvidenceProvider,
 > Router<B>
 {
     /// What the backend can do, for health documents.
@@ -595,6 +596,74 @@ impl<
             .map(str::to_owned)
     }
 
+    fn pump_recording(&mut self) -> Result<(), JsonRpcError> {
+        let Some(recorder) = self.recorder.as_mut() else {
+            return Ok(());
+        };
+        recorder
+            .poll(&mut self.backend, Duration::ZERO)
+            .map_err(backend_error)?;
+        for group in recorder.take_groups() {
+            self.daemon.recording.push_group(group)?;
+        }
+        Ok(())
+    }
+
+    fn dispatch_recording(
+        &mut self,
+        method: &str,
+        params: &Map<String, Value>,
+    ) -> Option<Result<Value, JsonRpcError>> {
+        Some(match method {
+            "recording.start" | "editor.recordFromHere" => {
+                let started = self.daemon.dispatch(method, params)?;
+                match started {
+                    Ok(value) => {
+                        let scope = self.daemon.recording.status().scope.expect("active recording has scope");
+                        match axon_core::UserActionRecorder::start(&mut self.backend, scope) {
+                            Ok(recorder) => {
+                                self.recorder = Some(recorder);
+                                Ok(value)
+                            }
+                            Err(error) => {
+                                self.daemon.recording.abandon();
+                                Err(backend_error(error))
+                            }
+                        }
+                    }
+                    Err(error) => Err(error),
+                }
+            }
+            "recording.status" => self.pump_recording().and_then(|_| {
+                self.daemon.dispatch(method, params).expect("recording route")
+            }),
+            "recording.stop" => {
+                if let Err(error) = self.pump_recording() {
+                    let _ = axon_core::GlobalInputObserver::stop(&mut self.backend);
+                    self.recorder = None;
+                    self.daemon.recording.abandon();
+                    Err(error)
+                } else if let Some(recorder) = self.recorder.take() {
+                    match recorder.finish(&mut self.backend) {
+                        Ok(groups) => {
+                            for group in groups {
+                                self.daemon.recording.push_group(group)?;
+                            }
+                            self.daemon.dispatch(method, params).expect("recording route")
+                        }
+                        Err(error) => {
+                            self.daemon.recording.abandon();
+                            Err(backend_error(error))
+                        }
+                    }
+                } else {
+                    self.daemon.dispatch(method, params).expect("recording route")
+                }
+            }
+            _ => return None,
+        })
+    }
+
     pub fn request(&mut self, request: JsonRpcRequest) -> Option<JsonRpcResponse> {
         let id = request.id.clone()?;
         let context = self.daemon.history.context(&request);
@@ -608,7 +677,8 @@ impl<
             .as_ref()
             .and_then(|v| v.as_object().cloned())
             .unwrap_or_default();
-        let outcome = self.daemon.dispatch(&context.request.method, &params)
+        let outcome = self.dispatch_recording(&context.request.method, &params)
+            .or_else(|| self.daemon.dispatch(&context.request.method, &params))
             .unwrap_or_else(|| self.dispatch_tool(&context.request.method, &params));
         let response = match outcome {
             Ok(result) => JsonRpcResponse::success(id, result),
@@ -1416,7 +1486,8 @@ impl<
         + TextRecognitionProvider
         + VisualObservationProvider
         + ReadableStateProvider
-        + BackgroundPixelPointer,
+        + BackgroundPixelPointer
+        + axon_core::RecordingEvidenceProvider,
 > ToolDispatcher for Router<B>
 {
     fn set_observation_redaction_context(
