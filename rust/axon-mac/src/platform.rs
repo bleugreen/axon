@@ -10,7 +10,8 @@ mod window_capture;
 use axon_core::{
     AppQuery, Application, BackendError, Capability, CapabilityInfo, CaptureBounds,
     ChildPageCapture, ChildPageRequest, KeyboardIntent, Node, Observation, PlatformBackend, Rect,
-    Screenshot, Snapshot, SnapshotHandle, Window,
+    RecordingEvidenceProvider, RecordedFocusedEvidence, RecordedPoint, RecordedSettleEvidence,
+    RecordedTargetEvidence, Screenshot, Snapshot, SnapshotHandle, Window,
 };
 use std::{
     collections::HashMap,
@@ -48,19 +49,6 @@ fn child_count(element: AXUIElementRef) -> Option<usize> {
 fn child_range(element: AXUIElementRef, offset: usize, limit: usize) -> Option<Owned> {
     if limit == 0 {
         return None;
-    }
-    fn global_input_observer(
-        &mut self,
-    ) -> Result<&mut dyn axon_core::GlobalInputObserver, BackendError> {
-        if !self.global_input.available() {
-            return Err(BackendError::CapabilityReason {
-                capability: Capability::ObserveGlobalInput,
-                code: "accessibility-denied",
-                reason: "Accessibility permission is not granted".into(),
-                diagnostic: None,
-            });
-        }
-        Ok(&mut self.global_input)
     }
     let children = cfstr("AXChildren").ok()?;
     let mut values = null();
@@ -439,7 +427,57 @@ impl MacBackend {
     }
 }
 
+impl RecordingEvidenceProvider for MacBackend {
+    fn read_focused(&mut self) -> Result<Option<RecordedFocusedEvidence>, BackendError> {
+        Ok(crate::global_input::focused_evidence().map(|(app, element)| {
+            let value = element.value.clone();
+            RecordedFocusedEvidence {
+                target: RecordedTargetEvidence {
+                    app,
+                    point: RecordedPoint::default(),
+                    candidates: vec![element],
+                },
+                value,
+            }
+        }))
+    }
+
+    fn capture_snapshot(
+        &mut self,
+        app: &axon_core::RecordedAppIdentity,
+    ) -> Result<Option<Snapshot>, BackendError> {
+        let query = AppQuery {
+            process_id: app.process_id,
+            name: Some(app.name.clone()),
+            identifier: app.bundle_identifier.clone(),
+        };
+        PlatformBackend::capture(self, &query).map(Some)
+    }
+
+    fn settle(
+        &mut self,
+        _group_index: usize,
+        _tool: &str,
+    ) -> Result<RecordedSettleEvidence, BackendError> {
+        Ok(RecordedSettleEvidence::default())
+    }
+}
+
 impl PlatformBackend for MacBackend {
+    fn global_input_observer(
+        &mut self,
+    ) -> Result<&mut dyn axon_core::GlobalInputObserver, BackendError> {
+        if !self.global_input.available() {
+            return Err(BackendError::CapabilityReason {
+                capability: Capability::ObserveGlobalInput,
+                code: "accessibility-denied",
+                reason: "Accessibility permission is not granted".into(),
+                diagnostic: None,
+            });
+        }
+        Ok(&mut self.global_input)
+    }
+
     fn capabilities(&self) -> Result<Vec<CapabilityInfo>, BackendError> {
         let accessibility_enabled = self.accessibility_enabled();
         let screen_recording_enabled = window_capture::screen_capture_enabled();
