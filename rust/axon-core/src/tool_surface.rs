@@ -617,6 +617,7 @@ mod tests {
                 "wait_for_value",
                 "wait_for_stability",
                 "run",
+                "save",
                 "click",
                 "type",
                 "keyboard",
@@ -632,6 +633,7 @@ mod tests {
                 "wait_for_value",
                 "wait_for_stability",
                 "run",
+                "save",
                 "click",
                 "type",
                 "keyboard",
@@ -648,12 +650,32 @@ mod tests {
                 "wait_for_value",
                 "wait_for_stability",
                 "run",
+                "save",
                 "click",
                 "type",
                 "keyboard",
                 "invoke",
             ]
         );
+        for backend in [
+            ToolBackend::Swift,
+            ToolBackend::Mac,
+            ToolBackend::Windows,
+            ToolBackend::Linux,
+        ] {
+            let names = names(backend);
+            assert!(names.contains(&"save".to_string()));
+            for socket_rpc in [
+                "health",
+                "shutdown",
+                "recording.start",
+                "recording.status",
+                "recording.stop",
+                "editor.recordFromHere",
+            ] {
+                assert!(!names.contains(&socket_rpc.to_string()), "{socket_rpc}");
+            }
+        }
     }
 
     #[test]
