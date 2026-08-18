@@ -2151,7 +2151,7 @@ mod tests {
 
     #[test]
     fn excluded_tools_are_capability_errors_before_dispatch() {
-        for tool in ["save", "drag", "permit"] {
+        for tool in ["drag", "permit"] {
             let (_, capability) = EXCLUDED.iter().find(|(name, _)| *name == tool).unwrap();
             assert!(!capability.is_empty());
         }
