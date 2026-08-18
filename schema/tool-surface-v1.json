@@ -428,10 +428,10 @@
     },
     {
       "availability" : {
-        "linux" : false,
-        "mac" : false,
+        "linux" : true,
+        "mac" : true,
         "swift" : true,
-        "windows" : false
+        "windows" : true
       },
       "description" : "Save recent recorded Axon calls as an editable .axn action file. Read calls are omitted unless includeReads is true.",
       "inputSchema" : {
