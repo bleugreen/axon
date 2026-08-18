@@ -6,11 +6,75 @@
 //! without Accessibility, a pointer, or a clock.
 
 use axon_core::{
-    ActionObservation, AxnAction, DerivedPostconditionCompiler, ObservedElementState,
-    PostconditionInput, RecordedAppIdentity, RecordedUserAction, RecordedUserEventGroup,
-    RedactionMarkerTaint, UserRecordingTranslator,
+    ActionObservation, AxnAction, BackendError, DerivedPostconditionCompiler, GlobalInputObserver,
+    ObservedElementState, PostconditionInput, RecordedAppIdentity, RecordedElementEvidence,
+    RecordedFocusedEvidence, RecordedInputEvent, RecordedKeystroke, RecordedPoint,
+    RecordedSettleEvidence, RecordedTargetEvidence, RecordedUserAction, RecordedUserEventGroup,
+    RecordingEvidenceProvider, RecordingScope, RedactionMarkerTaint, Snapshot, UserActionRecorder,
+    UserRecordingTranslator,
 };
 use serde_json::{Value, json};
+use std::{cell::RefCell, collections::VecDeque, rc::Rc, time::Duration};
+
+#[derive(Default)]
+struct FakeRecorderState {
+    polls: VecDeque<Vec<RecordedInputEvent>>,
+    focused: VecDeque<Option<RecordedFocusedEvidence>>,
+    settle_calls: Vec<(usize, String)>,
+    stop_calls: usize,
+    fail_settle: bool,
+    fail_stop: bool,
+}
+
+#[derive(Clone)]
+struct FakeRecordingProvider(Rc<RefCell<FakeRecorderState>>);
+
+fn backend_error(operation: &str) -> BackendError {
+    BackendError::Operation { operation: operation.into(), message: "fake failure".into(), diagnostic: None }
+}
+
+impl GlobalInputObserver for FakeRecordingProvider {
+    fn start(&mut self, _: &RecordingScope) -> Result<(), BackendError> { Ok(()) }
+    fn poll(&mut self, _: Duration) -> Result<Vec<RecordedInputEvent>, BackendError> {
+        Ok(self.0.borrow_mut().polls.pop_front().unwrap_or_default())
+    }
+    fn stop(&mut self) -> Result<(), BackendError> {
+        let mut state = self.0.borrow_mut();
+        state.stop_calls += 1;
+        if state.fail_stop { Err(backend_error("stop")) } else { Ok(()) }
+    }
+    fn is_recording(&self) -> bool { true }
+}
+
+impl RecordingEvidenceProvider for FakeRecordingProvider {
+    fn read_focused(&mut self) -> Result<Option<RecordedFocusedEvidence>, BackendError> {
+        Ok(self.0.borrow_mut().focused.pop_front().unwrap_or(None))
+    }
+    fn capture_snapshot(&mut self, _: &RecordedAppIdentity) -> Result<Option<Snapshot>, BackendError> { Ok(None) }
+    fn settle(&mut self, index: usize, tool: &str) -> Result<RecordedSettleEvidence, BackendError> {
+        let mut state = self.0.borrow_mut();
+        state.settle_calls.push((index, tool.into()));
+        if state.fail_settle { Err(backend_error("settle")) } else { Ok(RecordedSettleEvidence::default()) }
+    }
+}
+
+fn app(name: &str, bundle: &str) -> RecordedAppIdentity {
+    RecordedAppIdentity { name: name.into(), bundle_identifier: Some(bundle.into()), process_id: Some(42) }
+}
+
+fn point_evidence(app: RecordedAppIdentity, x: f64, y: f64) -> RecordedTargetEvidence {
+    RecordedTargetEvidence { app, point: RecordedPoint { x, y }, candidates: Vec::new() }
+}
+
+fn text(app: RecordedAppIdentity, value: &str) -> RecordedInputEvent {
+    RecordedInputEvent::KeyDown { app, keystroke: RecordedKeystroke::Text { text: value.into() }, timestamp_ms: 0 }
+}
+
+fn recorder_with(events: Vec<RecordedInputEvent>) -> (UserActionRecorder<FakeRecordingProvider>, Rc<RefCell<FakeRecorderState>>) {
+    let state = Rc::new(RefCell::new(FakeRecorderState { polls: VecDeque::from([events]), ..Default::default() }));
+    let recorder = UserActionRecorder::start(FakeRecordingProvider(state.clone()), RecordingScope::AllApplications).unwrap();
+    (recorder, state)
+}
 
 fn translate(groups: &[RecordedUserEventGroup]) -> Vec<AxnAction> {
     UserRecordingTranslator::new()
@@ -587,4 +651,122 @@ fn focus_that_never_moved_is_no_transition_at_all() {
     };
 
     assert!(facts(&observation, &[]).is_empty());
+}
+
+
+#[test]
+fn recorder_groups_text_and_reads_the_complete_value_only_when_flushed() {
+    let notes = app("Notes", "com.example.notes");
+    let (mut recorder, state) = recorder_with(vec![text(notes.clone(), "hel"), text(notes.clone(), "lo")]);
+    state.borrow_mut().focused.push_back(Some(RecordedFocusedEvidence {
+        target: point_evidence(notes, 8.0, 9.0),
+        value: Some("hello from field".into()),
+    }));
+
+    assert_eq!(recorder.poll(Duration::ZERO).unwrap(), 2);
+    assert!(recorder.groups().is_empty(), "the burst must remain pending until a boundary");
+    let groups = recorder.finish().unwrap();
+
+    assert_eq!(groups.len(), 1);
+    assert!(matches!(&groups[0].action, Some(RecordedUserAction::SetValue { value, .. }) if value == "hello from field"));
+    assert_eq!(state.borrow().settle_calls, vec![(0, "type".into())]);
+}
+
+#[test]
+fn recorder_warns_when_a_text_burst_falls_back_to_keyboard_input() {
+    let notes = app("Notes", "com.example.notes");
+    let (mut recorder, state) = recorder_with(vec![text(notes.clone(), "hello")]);
+    state.borrow_mut().focused.push_back(Some(RecordedFocusedEvidence {
+        target: point_evidence(notes, 1.0, 2.0), value: None,
+    }));
+
+    recorder.poll(Duration::ZERO).unwrap();
+    let groups = recorder.finish().unwrap();
+
+    assert!(matches!(&groups[0].action, Some(RecordedUserAction::TypeText { text, .. }) if text == "hello"));
+    assert!(groups[0].warnings.iter().any(|warning| warning.contains("keyboard fallback")));
+}
+
+#[test]
+fn recorder_appends_a_group_before_settle_can_fail() {
+    let notes = app("Notes", "com.example.notes");
+    let event = RecordedInputEvent::KeyDown {
+        app: notes, keystroke: RecordedKeystroke::Key { key: "Return".into() }, timestamp_ms: 0,
+    };
+    let (mut recorder, state) = recorder_with(vec![event]);
+    state.borrow_mut().fail_settle = true;
+
+    assert!(recorder.poll(Duration::ZERO).is_err());
+    assert_eq!(recorder.groups().len(), 1, "the attempted action must remain inspectable after settle failure");
+    assert_eq!(state.borrow().settle_calls, vec![(0, "press".into())]);
+}
+
+#[test]
+fn secure_input_clears_pending_text_and_drops_events_until_disabled() {
+    let notes = app("Notes", "com.example.notes");
+    let events = vec![
+        text(notes.clone(), "secret-before-toggle"),
+        RecordedInputEvent::SecureInputChanged { active: true, timestamp_ms: 1 },
+        text(notes.clone(), "secret-during-toggle"),
+        RecordedInputEvent::SecureInputChanged { active: false, timestamp_ms: 2 },
+        text(notes, "safe"),
+    ];
+    let (mut recorder, _) = recorder_with(events);
+
+    recorder.poll(Duration::ZERO).unwrap();
+    let groups = recorder.finish().unwrap();
+
+    assert_eq!(groups.len(), 1);
+    assert!(matches!(&groups[0].action, Some(RecordedUserAction::TypeText { text, .. }) if text == "safe"));
+}
+
+#[test]
+fn application_scope_filters_by_stable_bundle_identity() {
+    let wanted = app("Renamed Notes", "com.example.notes");
+    let other = app("Notes", "com.example.other");
+    let state = Rc::new(RefCell::new(FakeRecorderState {
+        polls: VecDeque::from([vec![text(other, "outside"), text(wanted.clone(), "inside")]]),
+        ..Default::default()
+    }));
+    let mut recorder = UserActionRecorder::start(
+        FakeRecordingProvider(state), RecordingScope::Application { app: app("Notes", "com.example.notes") },
+    ).unwrap();
+
+    recorder.poll(Duration::ZERO).unwrap();
+    let groups = recorder.finish().unwrap();
+
+    assert_eq!(groups.len(), 1);
+    assert!(matches!(&groups[0].action, Some(RecordedUserAction::TypeText { text, .. }) if text == "inside"));
+}
+
+#[test]
+fn click_and_drag_preserve_pre_delivery_origin_and_point_fallbacks() {
+    let notes = app("Notes", "com.example.notes");
+    let events = vec![
+        RecordedInputEvent::MouseDown { evidence: point_evidence(notes.clone(), 10.0, 20.0), timestamp_ms: 100 },
+        RecordedInputEvent::MouseUp { evidence: point_evidence(notes.clone(), 11.0, 21.0), timestamp_ms: 120 },
+        RecordedInputEvent::MouseDown { evidence: point_evidence(notes.clone(), 30.0, 40.0), timestamp_ms: 200 },
+        RecordedInputEvent::MouseDragged { at: RecordedPoint { x: 50.0, y: 60.0 }, timestamp_ms: 230 },
+        RecordedInputEvent::MouseUp { evidence: point_evidence(notes, 51.0, 61.0), timestamp_ms: 260 },
+    ];
+    let (mut recorder, _) = recorder_with(events);
+
+    recorder.poll(Duration::ZERO).unwrap();
+    let groups = recorder.finish().unwrap();
+
+    assert_eq!(groups.len(), 2);
+    assert!(matches!(&groups[0].action, Some(RecordedUserAction::Click { target }) if target["point"] == json!({"x": 10.0, "y": 20.0})));
+    assert!(matches!(&groups[1].action, Some(RecordedUserAction::Drag { from, to, duration_ms: Some(60), .. }) if from["point"] == json!({"x": 30.0, "y": 40.0}) && to["point"] == json!({"x": 50.0, "y": 60.0})));
+    assert!(groups.iter().all(|group| group.warnings.iter().any(|warning| warning.contains("point fallback"))));
+}
+
+#[test]
+fn finish_stops_exactly_once_and_propagates_stop_failure() {
+    let (recorder, state) = recorder_with(Vec::new());
+    state.borrow_mut().fail_stop = true;
+
+    let error = recorder.finish().unwrap_err();
+
+    assert!(error.to_string().contains("stop"));
+    assert_eq!(state.borrow().stop_calls, 1);
 }
