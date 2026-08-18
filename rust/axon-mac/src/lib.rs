@@ -645,12 +645,12 @@ impl<
                     Err(error)
                 } else if let Some(recorder) = self.recorder.take() {
                     match recorder.finish(&mut self.backend) {
-                        Ok(groups) => {
-                            for group in groups {
-                                self.daemon.recording.push_group(group)?;
-                            }
-                            self.daemon.dispatch(method, params).expect("recording route")
-                        }
+                        Ok(groups) => groups
+                            .into_iter()
+                            .try_for_each(|group| self.daemon.recording.push_group(group))
+                            .and_then(|_| {
+                                self.daemon.dispatch(method, params).expect("recording route")
+                            }),
                         Err(error) => {
                             self.daemon.recording.abandon();
                             Err(backend_error(error))
