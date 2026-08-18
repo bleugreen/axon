@@ -54,6 +54,44 @@ import Testing
     #expect(json == expectedJSON)
 }
 
+@Test func swiftParsesAndReplaysRustProducerV2Fixtures() throws {
+    for name in [
+        "rust-user-recording-v2.yaml",
+        "rust-user-recording-v2.json",
+        "rust-action-history-v2.yaml"
+    ] {
+        let document = try Axn(source: String(decoding: fixtureData(name), as: UTF8.self))
+        let runner = AxnRunner { request in
+            JSONRPCResponse(id: request.id, result: ["action": .object(["success": .bool(true)])])
+        }
+        let result = try runner.run(params: [
+            "version": .int(document.version),
+            "actions": document.jsonValue["actions"] ?? .array([]),
+            "dryRun": .bool(true),
+            "continueOnError": .bool(true)
+        ])
+        if case let .array(trace)? = result["trace"] {
+            #expect(trace.count == document.blocks.count)
+        } else {
+            Issue.record("Rust fixture replay did not return a trace")
+        }
+        if name.hasPrefix("rust-user-recording") {
+            #expect(document.blocks.count == 5)
+            let pointX = document.blocks[2].jsonValue["target"]?["point"]?["x"]
+            let scrollY = document.blocks[4].jsonValue["deltaY"]
+            #expect(pointX == .double(42) || pointX == .int(42))
+            #expect(scrollY == .double(-120) || scrollY == .int(-120))
+            #expect(document.blocks[3].jsonValue["value"] == .string("<redacted: active-credential>"))
+            #expect(
+                document.blocks[0].jsonValue["target"]?["locator"]?["identifier"]
+                    == .string("query")
+            )
+        } else {
+            #expect(document.blocks.count == 2)
+        }
+    }
+}
+
 @Test func actionHistoryExportMatchesPinnedSwiftV2Fixture() throws {
     let history = ActionHistoryStore()
     let request = JSONRPCRequest(
