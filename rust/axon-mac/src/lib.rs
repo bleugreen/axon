@@ -2003,7 +2003,7 @@ mod tests {
             panic!("recording.stop must author the drained native events")
         };
         assert!(stop.result["actionCount"].as_u64().unwrap() > 0);
-        assert!(stop.result["script"].as_str().unwrap().contains("pressKey"));
+        assert!(stop.result["script"].as_str().unwrap().contains("Return"));
     }
 
     #[test]
