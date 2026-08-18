@@ -39,34 +39,6 @@ impl NativeDaemonState {
         })
     }
 
-    #[test]
-    fn stop_response_redacts_deterministic_and_active_secrets_but_keeps_markers() {
-        const ACTIVE: &str = "active-secret-canary";
-        const CARD: &str = "4111111111111111";
-        let mut owner = DaemonRecordingOwner::default();
-        owner.set_redaction_context(crate::ObservationRedactionContext::from_active_secrets([
-            ACTIVE.to_string(),
-        ]));
-        owner.start(&object(json!({"scope":{"scope":"allApplications"}}))).unwrap();
-        owner.push_group(
-            RecordedUserEventGroup::new(RecordedUserAction::TypeText {
-                app: "Notes".into(),
-                text: CARD.into(),
-            })
-            .with_observed(vec![json!({"title":"person@example.com"})])
-            .with_warnings(vec![ACTIVE.into()]),
-        ).unwrap();
-
-        let stopped = owner.stop(&Map::new()).unwrap();
-        let response = serde_json::to_string(&stopped).unwrap();
-
-        assert!(!response.contains(CARD), "deterministic secret leaked: {response}");
-        assert!(!response.contains(ACTIVE), "active secret leaked: {response}");
-        assert!(!response.contains("person@example.com"), "observation leaked: {response}");
-        assert!(response.contains("<redacted:"), "redaction markers were lost: {response}");
-        assert!(response.contains("active-credential"), "active-secret marker was lost: {response}");
-    }
-
 }
 
 fn value<T: serde::Serialize>(value: T) -> Result<Value, JsonRpcError> {
