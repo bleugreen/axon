@@ -398,7 +398,10 @@ fn atomic_write(path: &Path, contents: &[u8]) -> Result<(), ActionHistoryError> 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{JsonRpcId, JsonRpcSuccess, JsonRpcVersion};
+    use crate::{
+        AxnRunner, DispatchOutcome, JsonRpcId, JsonRpcSuccess, JsonRpcVersion, Locator,
+        ObservedElementState, ObservationRedactionContext, RunOptions, ToolDispatcher,
+    };
     use serde_json::json;
 
     fn request(method: &str, params: Value) -> JsonRpcRequest {
@@ -495,5 +498,103 @@ mod tests {
         assert_eq!(fs::read_to_string(&path).unwrap(), export.script);
         assert_eq!(AxnCodec::parse(&export.script).unwrap().actions.len(), 1);
         fs::remove_file(path).unwrap();
+    }
+
+    #[derive(Default)]
+    struct FreshDaemon {
+        registered: Vec<(String, String)>,
+        dispatched: Vec<String>,
+    }
+
+    impl ToolDispatcher for FreshDaemon {
+        fn register_replay_target(
+            &mut self,
+            app: &str,
+            name: &str,
+            _locator: &Locator,
+        ) -> Result<(), String> {
+            self.registered.push((app.to_owned(), name.to_owned()));
+            Ok(())
+        }
+
+        fn dispatch(&mut self, tool: &str, _params: &Map<String, Value>) -> DispatchOutcome {
+            self.dispatched.push(tool.to_owned());
+            DispatchOutcome {
+                success: true,
+                dispatched_without_semantic_verification: false,
+                result: json!({"success": true}),
+                error: None,
+                resolution: None,
+            }
+        }
+
+        fn verify(&mut self, _fact: &ExpectedFact) -> Result<(), String> {
+            Ok(())
+        }
+    }
+
+    fn observed(app: &str, value: Option<&str>, enabled: Option<bool>) -> ObservedElementState {
+        ObservedElementState {
+            app: app.into(),
+            role: "AXButton".into(),
+            locator: Some(json!({"role":"AXButton","title":"Submit"}).as_object().unwrap().clone()),
+            value: value.map(str::to_owned),
+            focused: Some(false),
+            enabled,
+            value_derived_from_input: false,
+        }
+    }
+
+    #[test]
+    fn exported_click_and_type_replay_in_fresh_daemon_with_sanitized_durable_evidence() {
+        let store = ActionHistoryStore::default();
+        let redaction = ObservationRedactionContext::default();
+        let click_observation = ActionObservation {
+            tool: "click".into(),
+            app: Some("Notes".into()),
+            target_before: Some(observed("Notes", None, Some(true))),
+            target_after: Some(observed("Notes", None, Some(false))),
+            settled: true,
+            warnings: vec!["user@example.com".into()],
+            ..Default::default()
+        };
+        store.record_redacted(
+            &request("click", json!({"target":{"app":"Notes","name":"Submit"}})),
+            &success(),
+            "s",
+            Some(click_observation),
+            &redaction,
+        );
+        let type_observation = ActionObservation {
+            tool: "type".into(),
+            app: Some("Notes".into()),
+            inputs: vec!["4111 1111 1111 1111".into()],
+            target_before: Some(observed("Notes", Some(""), Some(true))),
+            target_after: Some(observed("Notes", Some("4111 1111 1111 1111"), Some(true)).resolving(&["4111 1111 1111 1111".into()])),
+            settled: true,
+            ..Default::default()
+        };
+        store.record_redacted(
+            &request("type", json!({"target":{"app":"Notes","name":"Submit"},"value":"4111 1111 1111 1111"})),
+            &success(),
+            "s",
+            Some(type_observation),
+            &redaction,
+        );
+
+        let export = store.export_script("s", false, None, None, None).unwrap();
+        assert!(!export.script.contains("user@example.com"));
+        assert!(!export.script.contains("4111 1111 1111 1111"));
+        assert_eq!(export.script.matches("locator:").count(), 2);
+        let document = AxnCodec::parse(&export.script).unwrap();
+        assert!(!document.actions[0].expects.is_empty());
+
+        let mut daemon = FreshDaemon::default();
+        let replay = AxnRunner::new(&mut daemon)
+            .run(&document, &Map::new(), RunOptions { dry_run: Some(false), continue_on_error: Some(false) })
+            .unwrap();
+        assert!(replay.success);
+        assert_eq!(daemon.registered.len(), 2);
+        assert_eq!(daemon.dispatched, ["click", "type"]);
     }
 }
