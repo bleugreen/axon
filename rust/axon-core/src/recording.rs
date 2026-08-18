@@ -38,7 +38,7 @@ impl RecordedAppIdentity {
     }
 }
 
-fn redact_serializable<T: Serialize + DeserializeOwned>(value: T, context: &crate::ObservationRedactionContext) -> T {
+pub(crate) fn redact_serializable<T: Serialize + DeserializeOwned>(value: T, context: &crate::ObservationRedactionContext) -> T {
     let mut value = serde_json::to_value(value).expect("recorder evidence serializes");
     context.redact_value(&mut value);
     serde_json::from_value(value).expect("redacted recorder evidence preserves its shape")

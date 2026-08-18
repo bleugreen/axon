@@ -232,7 +232,7 @@ public enum ToolSurfaceSpec {
             name: "permit",
             description: "Ask macOS to show the Accessibility permission prompt for the running Axon daemon identity.",
             cliUsage: "axon permit"
-        , availability: .all),
+        , availability: .swiftOnly),
         ToolSpec(
             name: "run",
             description: "Run a sequence of Axon actions from inline actions, a .axn path, or a path loaded first with inline actions appended.",
@@ -257,7 +257,7 @@ public enum ToolSurfaceSpec {
                 ToolParameterSpec("includeReads", .boolean, default: .bool(false), description: "Include read/context tools such as look and find. Defaults to false.")
             ],
             cliUsage: "axon save [--session id] [--from call] [--to call] [--path file.axn] [--include-reads]"
-        , availability: .swiftOnly),
+        , availability: .all),
         ToolSpec(
             name: "click",
             description: "Click an app-scoped semantic element name, explicit point, or text location.",

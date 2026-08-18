@@ -1498,6 +1498,7 @@ impl<
         &mut self,
         context: axon_core::ObservationRedactionContext,
     ) {
+        self.daemon.recording.set_redaction_context(context.clone());
         self.observation_redaction = context;
     }
 

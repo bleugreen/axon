@@ -39,6 +39,34 @@ impl NativeDaemonState {
         })
     }
 
+    #[test]
+    fn stop_response_redacts_deterministic_and_active_secrets_but_keeps_markers() {
+        const ACTIVE: &str = "active-secret-canary";
+        const CARD: &str = "4111111111111111";
+        let mut owner = DaemonRecordingOwner::default();
+        owner.set_redaction_context(crate::ObservationRedactionContext::from_active_secrets([
+            ACTIVE.to_string(),
+        ]));
+        owner.start(&object(json!({"scope":{"scope":"allApplications"}}))).unwrap();
+        owner.push_group(
+            RecordedUserEventGroup::new(RecordedUserAction::TypeText {
+                app: "Notes".into(),
+                text: CARD.into(),
+            })
+            .with_observed(vec![json!({"title":"person@example.com"})])
+            .with_warnings(vec![ACTIVE.into()]),
+        ).unwrap();
+
+        let stopped = owner.stop(&Map::new()).unwrap();
+        let response = serde_json::to_string(&stopped).unwrap();
+
+        assert!(!response.contains(CARD), "deterministic secret leaked: {response}");
+        assert!(!response.contains(ACTIVE), "active secret leaked: {response}");
+        assert!(!response.contains("person@example.com"), "observation leaked: {response}");
+        assert!(response.contains("<redacted:"), "redaction markers were lost: {response}");
+        assert!(response.contains("active-credential"), "active-secret marker was lost: {response}");
+    }
+
 }
 
 fn value<T: serde::Serialize>(value: T) -> Result<Value, JsonRpcError> {
@@ -108,9 +136,14 @@ struct ActiveRecording {
 pub struct DaemonRecordingOwner {
     next_session: u64,
     active: Option<ActiveRecording>,
+    redaction: crate::ObservationRedactionContext,
 }
 
 impl DaemonRecordingOwner {
+    pub fn set_redaction_context(&mut self, context: crate::ObservationRedactionContext) {
+        self.redaction = context;
+    }
+
     pub fn start(&mut self, params: &Map<String, Value>) -> Result<RecordingStatus, JsonRpcError> {
         let params: RecordingStartParams = strict_params(params)?;
         self.start_validated(params.scope, params.destination)
@@ -191,6 +224,7 @@ impl DaemonRecordingOwner {
     }
 
     pub fn push_group(&mut self, group: RecordedUserEventGroup) -> Result<(), JsonRpcError> {
+        let group = crate::recording::redact_serializable(group, &self.redaction);
         self.active
             .as_mut()
             .ok_or_else(recording_inactive)?
@@ -203,7 +237,11 @@ impl DaemonRecordingOwner {
         if !params.is_empty() {
             return Err(invalid("params", "recording.stop accepts no fields"));
         }
-        let active = self.active.take().ok_or_else(recording_inactive)?;
+        let mut active = self.active.take().ok_or_else(recording_inactive)?;
+        for group in &mut active.groups {
+            let durable = std::mem::take(group);
+            *group = crate::recording::redact_serializable(durable, &self.redaction);
+        }
         let document = UserRecordingTranslator::new()
             .axn_document(&active.groups, active.arguments, &RedactionMarkerTaint)
             .map_err(|error| JsonRpcError {
