@@ -80,6 +80,10 @@ impl UserActionRecorder {
 
     pub fn groups(&self) -> &[RecordedUserEventGroup] { &self.groups }
 
+    pub fn take_groups(&mut self) -> Vec<RecordedUserEventGroup> {
+        std::mem::take(&mut self.groups)
+    }
+
     fn consume(&mut self, provider: &mut dyn RecordingEvidenceProvider, event: RecordedInputEvent) -> Result<(), crate::BackendError> {
         if let RecordedInputEvent::SecureInputChanged { active, .. } = event {
             self.secure_input = active;
