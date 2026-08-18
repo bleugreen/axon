@@ -2742,7 +2742,7 @@ mod tests {
         assert_eq!(
             EXCLUDED.iter().map(|entry| entry.0).collect::<Vec<_>>(),
             [
-                "navigate", "windows", "tabs", "save", "drag", "scroll", "permit"
+                "navigate", "windows", "tabs", "drag", "scroll", "permit"
             ]
         );
         for tool in ["click", "keyboard", "type", "invoke"] {

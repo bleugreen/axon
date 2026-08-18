@@ -71,7 +71,7 @@ import Testing
         ("wait_for_stability", "wait_for_stability", [.swift, .mac, .windows, .linux]),
         ("permit", "permit", [.swift]),
         ("run", "run", [.swift, .mac, .windows, .linux]),
-        ("save", "save", [.swift]),
+        ("save", "save", [.swift, .mac, .windows, .linux]),
         ("click", "click", [.swift, .mac, .windows, .linux]),
         ("type", "type", [.swift, .mac, .windows, .linux]),
         ("keyboard", "keyboard", [.swift, .mac, .windows, .linux]),
