@@ -620,7 +620,11 @@ impl<
                 match started {
                     Ok(value) => {
                         let scope = self.daemon.recording.status().scope.expect("active recording has scope");
-                        match axon_core::UserActionRecorder::start(&mut self.backend, scope) {
+                        match axon_core::UserActionRecorder::start_with_redaction(
+                            &mut self.backend,
+                            scope,
+                            self.observation_redaction.clone(),
+                        ) {
                             Ok(recorder) => {
                                 self.recorder = Some(recorder);
                                 Ok(value)

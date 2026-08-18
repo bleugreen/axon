@@ -15,6 +15,7 @@ use crate::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
+use serde::de::DeserializeOwned;
 use std::time::Duration;
 
 /// A physical point in the same screen coordinates a dispatch is aimed with.
@@ -22,6 +23,12 @@ use std::time::Duration;
 pub struct RecordedPoint {
     pub x: f64,
     pub y: f64,
+}
+
+fn redact_serializable<T: Serialize + DeserializeOwned>(value: T, context: &crate::ObservationRedactionContext) -> T {
+    let mut value = serde_json::to_value(value).expect("recorder evidence serializes");
+    context.redact_value(&mut value);
+    serde_json::from_value(value).expect("redacted recorder evidence preserves its shape")
 }
 
 fn point_fallback_warning(target: &Value) -> Option<String> {
@@ -47,10 +54,15 @@ pub struct UserActionRecorder {
     mouse_down: Option<(RecordedTargetEvidence, u64)>,
     drag_end: Option<RecordedPoint>,
     secure_input: bool,
+    redaction: crate::ObservationRedactionContext,
 }
 
 impl UserActionRecorder {
     pub fn start(provider: &mut dyn RecordingEvidenceProvider, scope: RecordingScope) -> Result<Self, crate::BackendError> {
+        Self::start_with_redaction(provider, scope, Default::default())
+    }
+
+    pub fn start_with_redaction(provider: &mut dyn RecordingEvidenceProvider, scope: RecordingScope, redaction: crate::ObservationRedactionContext) -> Result<Self, crate::BackendError> {
         provider.start(&scope)?;
         Ok(Self {
             registry: SemanticNameRegistry::default(),
@@ -60,13 +72,14 @@ impl UserActionRecorder {
             mouse_down: None,
             drag_end: None,
             secure_input: false,
+            redaction,
         })
     }
 
     pub fn poll(&mut self, provider: &mut dyn RecordingEvidenceProvider, timeout: Duration) -> Result<usize, crate::BackendError> {
         let events = provider.poll(timeout)?;
         let count = events.len();
-        for event in events { self.consume(provider, event)?; }
+        for event in events { self.consume(provider, redact_serializable(event, &self.redaction))?; }
         Ok(count)
     }
 
@@ -163,6 +176,8 @@ impl UserActionRecorder {
         let settled = provider.settle(index, tool)?;
         self.groups[index].observed.extend(settled.observed);
         self.groups[index].observation = settled.observation;
+        let group = std::mem::take(&mut self.groups[index]);
+        self.groups[index] = redact_serializable(group, &self.redaction);
         Ok(())
     }
 
@@ -415,7 +430,7 @@ pub struct RecordedSettleEvidence {
 }
 
 /// A semantic action the recorder decided one or more native events amount to.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum RecordedUserAction {
     Click {
         target: Value,
@@ -452,7 +467,7 @@ pub enum RecordedUserAction {
 }
 
 /// One recorded action together with the evidence gathered around it.
-#[derive(Clone, Debug, PartialEq, Default)]
+#[derive(Clone, Debug, PartialEq, Default, Serialize, Deserialize)]
 pub struct RecordedUserEventGroup {
     pub action: Option<RecordedUserAction>,
     pub observed: Vec<Value>,
