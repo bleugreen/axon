@@ -1,12 +1,150 @@
 use axon_core::*;
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
+use std::fs;
+use std::path::PathBuf;
+
+fn rust_fixture_path(name: &str) -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("fixtures")
+        .join(name)
+}
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct LookRequestControlsFixture {
     format: LookFormatControls,
     nonnegative: Vec<String>,
+}
+
+fn rust_recording_fixture() -> AxnDocument {
+    let semantic = json!({
+        "app": "com.example.Parity",
+        "name": "query-field",
+        "locator": {"role": "AXTextField", "identifier": "query", "title": "Query"}
+    });
+    let submit = json!({
+        "app": "com.example.Parity",
+        "name": "submit-button",
+        "locator": {"role": "AXButton", "identifier": "submit", "title": "Submit"}
+    });
+    let groups = vec![
+        RecordedUserEventGroup::new(RecordedUserAction::SetValue {
+            target: semantic.clone(),
+            value: "grouped text".into(),
+            fact_target: Some(semantic),
+        }),
+        RecordedUserEventGroup::new(RecordedUserAction::Click { target: submit })
+            .with_observed(vec![json!({"notification": "AXWindowCreated"})]),
+        RecordedUserEventGroup::new(RecordedUserAction::Click {
+            target: json!({"app": "com.example.Parity", "point": {"x": 42.0, "y": 84.0}}),
+        })
+        .with_warnings(vec![
+            "could not derive a canonical semantic target; recorded point fallback".into(),
+        ]),
+        RecordedUserEventGroup::new(RecordedUserAction::SetValue {
+            target: json!({
+                "app": "com.example.Parity",
+                "name": "secret-field",
+                "locator": {"role": "AXSecureTextField", "identifier": "secret"}
+            }),
+            value: "<redacted: active-credential>".into(),
+            fact_target: None,
+        })
+        .with_warnings(vec!["credential value was redacted before recording".into()]),
+        RecordedUserEventGroup::new(RecordedUserAction::Scroll {
+            target: None,
+            app: Some("com.example.Parity".into()),
+            delta_x: 0.0,
+            delta_y: -30.0,
+        }),
+        RecordedUserEventGroup::new(RecordedUserAction::Scroll {
+            target: None,
+            app: Some("com.example.Parity".into()),
+            delta_x: 0.0,
+            delta_y: 20.0,
+        }),
+    ];
+    UserRecordingTranslator::new()
+        .axn_document(&groups, Vec::new(), &RedactionMarkerTaint)
+        .unwrap()
+}
+
+#[test]
+fn rust_recording_v2_output_matches_producer_owned_fixtures() {
+    let document = rust_recording_fixture();
+    let yaml = AxnCodec::to_yaml(&document).unwrap();
+    let json = format!("{}\n", AxnCodec::to_json(&document).unwrap());
+    if std::env::var_os("UPDATE_RUST_EXPORT_FIXTURES").is_some() {
+        fs::write(rust_fixture_path("rust-user-recording-v2.yaml"), &yaml).unwrap();
+        fs::write(rust_fixture_path("rust-user-recording-v2.json"), &json).unwrap();
+    }
+    assert_eq!(yaml, include_str!("../fixtures/rust-user-recording-v2.yaml"));
+    assert_eq!(json, include_str!("../fixtures/rust-user-recording-v2.json"));
+
+    assert_eq!(document.actions.len(), 5);
+    assert_eq!(document.actions[0].expects[0].id, "a001.value.0");
+    assert_eq!(document.actions[1].requires, ["a001.value.0"]);
+    assert_eq!(document.actions[1].expects[0].id, "a002.changed.0");
+    assert_eq!(document.actions[2].params["target"]["point"], json!({"x":42.0,"y":84.0}));
+    assert_eq!(document.actions[3].params["value"], "<redacted: active-credential>");
+    assert_eq!(document.actions[4].params["deltaY"], -120.0);
+}
+
+#[test]
+fn rust_history_v2_output_matches_producer_owned_fixture_and_range_counts() {
+    let store = ActionHistoryStore::default();
+    let redaction = ObservationRedactionContext::from_active_secrets(["fixture-history-secret".into()]);
+    for (id, method, params) in [
+        (1, "look", json!({"app":"Parity"})),
+        (2, "click", json!({"target":{"app":"Parity","point":{"x":10,"y":20}},"note":"fixture-history-secret"})),
+        (3, "keyboard", json!({"app":"Parity","text":"done"})),
+    ] {
+        store.record_redacted(
+            &JsonRpcRequest::new(Some(JsonRpcId::Integer(id)), method, Some(params)),
+            &JsonRpcResponse::success(JsonRpcId::Integer(id), json!({"action":{"success":true}})),
+            "rust-fixture",
+            None,
+            &redaction,
+        );
+    }
+    let export = store
+        .export_script("rust-fixture", true, Some("c1"), Some("c2"), None)
+        .unwrap();
+    if std::env::var_os("UPDATE_RUST_EXPORT_FIXTURES").is_some() {
+        fs::write(rust_fixture_path("rust-action-history-v2.yaml"), &export.script).unwrap();
+    }
+    assert_eq!(
+        export.script,
+        include_str!("../fixtures/rust-action-history-v2.yaml")
+    );
+    assert_eq!(export.record_count, 2);
+    assert_eq!(export.action_count, 2);
+    assert!(export.script.contains("<redacted: active-credential>"));
+    assert!(!export.script.contains("fixture-history-secret"));
+}
+
+#[test]
+fn rust_producer_fixtures_parse_and_replay_through_rust() {
+    for source in [
+        include_str!("../fixtures/rust-user-recording-v2.yaml"),
+        include_str!("../fixtures/rust-user-recording-v2.json"),
+        include_str!("../fixtures/rust-action-history-v2.yaml"),
+    ] {
+        let document = AxnCodec::parse(source).unwrap();
+        let mut dispatcher = NoDispatch;
+        let result = AxnRunner::new(&mut dispatcher)
+            .run(
+                &document,
+                &Map::new(),
+                RunOptions {
+                    dry_run: Some(true),
+                    continue_on_error: Some(true),
+                },
+            )
+            .unwrap();
+        assert_eq!(result.trace.len(), document.actions.len());
+    }
 }
 
 #[derive(Deserialize)]

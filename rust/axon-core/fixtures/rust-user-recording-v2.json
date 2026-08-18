@@ -1,0 +1,107 @@
+{
+  "version": 2,
+  "args": [],
+  "actions": [
+    {
+      "id": "a001",
+      "tool": "type",
+      "expects": [
+        {
+          "id": "a001.value.0",
+          "kind": "value",
+          "state": {
+            "value": {
+              "contains": "grouped text"
+            }
+          },
+          "target": {
+            "app": "com.example.Parity",
+            "locator": {
+              "identifier": "query",
+              "role": "AXTextField",
+              "title": "Query"
+            },
+            "name": "query-field"
+          }
+        }
+      ],
+      "target": {
+        "app": "com.example.Parity",
+        "locator": {
+          "identifier": "query",
+          "role": "AXTextField",
+          "title": "Query"
+        },
+        "name": "query-field"
+      },
+      "value": "grouped text"
+    },
+    {
+      "id": "a002",
+      "tool": "click",
+      "requires": [
+        "a001.value.0"
+      ],
+      "expects": [
+        {
+          "id": "a002.changed.0",
+          "kind": "changed",
+          "target": {
+            "app": "com.example.Parity"
+          }
+        }
+      ],
+      "observed": [
+        {
+          "notification": "AXWindowCreated"
+        }
+      ],
+      "target": {
+        "app": "com.example.Parity",
+        "locator": {
+          "identifier": "submit",
+          "role": "AXButton",
+          "title": "Submit"
+        },
+        "name": "submit-button"
+      }
+    },
+    {
+      "id": "a003",
+      "tool": "click",
+      "target": {
+        "app": "com.example.Parity",
+        "point": {
+          "x": 42.0,
+          "y": 84.0
+        }
+      },
+      "warnings": [
+        "could not derive a canonical semantic target; recorded point fallback"
+      ]
+    },
+    {
+      "id": "a004",
+      "tool": "type",
+      "target": {
+        "app": "com.example.Parity",
+        "locator": {
+          "identifier": "secret",
+          "role": "AXSecureTextField"
+        },
+        "name": "secret-field"
+      },
+      "value": "<redacted: active-credential>",
+      "warnings": [
+        "credential value was redacted before recording"
+      ]
+    },
+    {
+      "id": "a005",
+      "tool": "scroll",
+      "app": "com.example.Parity",
+      "deltaX": 0.0,
+      "deltaY": -120.0
+    }
+  ]
+}
