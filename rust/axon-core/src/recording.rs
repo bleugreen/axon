@@ -139,7 +139,10 @@ impl<P: RecordingEvidenceProvider> UserActionRecorder<P> {
             Some(focused) if !focused.target.candidates.iter().any(|candidate| candidate.sensitive) => {
                 let target = self.target(&focused.target)?;
                 match focused.value {
-                    Some(value) => (RecordedUserAction::SetValue { target: target.clone(), value, fact_target: Some(target) }, point_fallback_warning(&target).into_iter().collect()),
+                    Some(value) => {
+                        let warnings = point_fallback_warning(&target).into_iter().collect();
+                        (RecordedUserAction::SetValue { target: target.clone(), value, fact_target: Some(target) }, warnings)
+                    }
                     None => (RecordedUserAction::TypeText { app: app.name, text }, vec!["focused element did not expose a value; recorded keyboard fallback".into()]),
                 }
             }

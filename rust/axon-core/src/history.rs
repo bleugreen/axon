@@ -1,5 +1,6 @@
 use crate::{ActionObservation, AxnAction, AxnCodec, AxnDocument, AxnError, JsonRpcRequest, JsonRpcResponse};
-use serde_json::{Map, Value};
+use serde::Deserialize;
+use serde_json::{Map, Value, json};
 use std::collections::HashMap;
 use std::fs;
 use std::io::Write;
@@ -21,6 +22,27 @@ pub struct ActionHistoryRecord {
     pub error: Option<String>,
     pub observation: Option<ActionObservation>,
 }
+
+fn invalid_params(reason: &str) -> crate::JsonRpcError {
+    crate::JsonRpcError { code: -32602, message: format!("Invalid params: {reason}"), data: Some(json!({"path":"params","reason":reason})) }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct SaveHistoryParams {
+    #[serde(default = "default_session_id")]
+    session_id: String,
+    #[serde(default)]
+    include_reads: bool,
+    #[serde(default)]
+    from: Option<String>,
+    #[serde(default)]
+    to: Option<String>,
+    #[serde(default)]
+    path: Option<PathBuf>,
+}
+
+fn default_session_id() -> String { DEFAULT_HISTORY_SESSION.to_owned() }
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct ActionHistoryContext {
@@ -70,6 +92,34 @@ impl Default for ActionHistoryStore {
 }
 
 impl ActionHistoryStore {
+    /// Decodes and executes the public `save` wire contract.
+    pub fn save(&self, params: &Map<String, Value>) -> Result<Value, crate::JsonRpcError> {
+        let params: SaveHistoryParams = serde_json::from_value(Value::Object(params.clone()))
+            .map_err(|error| invalid_params(&error.to_string()))?;
+        if params.session_id.trim().is_empty() {
+            return Err(invalid_params("sessionId must not be empty"));
+        }
+        if params.path.as_ref().is_some_and(|path| path.as_os_str().is_empty()) {
+            return Err(invalid_params("path must not be empty"));
+        }
+        let export = self.export_script(
+            &params.session_id,
+            params.include_reads,
+            params.from.as_deref(),
+            params.to.as_deref(),
+            params.path.as_deref(),
+        ).map_err(|error| crate::JsonRpcError {
+            code: -32602,
+            message: format!("Invalid params: {error}"),
+            data: Some(json!({"reason": error.to_string()})),
+        })?;
+        Ok(json!({
+            "script": export.script,
+            "actionCount": export.action_count,
+            "recordCount": export.record_count,
+        }))
+    }
+
     pub fn new(max_records_per_session: usize) -> Self {
         Self {
             state: Mutex::new(StoreState {

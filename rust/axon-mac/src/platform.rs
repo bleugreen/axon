@@ -491,12 +491,15 @@ impl PlatformBackend for MacBackend {
             Capability::Focus,
             Capability::Scroll,
             Capability::Screenshot,
+            Capability::SerializeHistory,
             Capability::ObserveGlobalInput,
         ];
         Ok(Capability::ALL
             .into_iter()
             .map(|capability| {
-                let usable = if capability == Capability::Screenshot {
+                let usable = if capability == Capability::SerializeHistory {
+                    true
+                } else if capability == Capability::Screenshot {
                     screenshot_restriction(accessibility_enabled, screen_recording_enabled)
                         .is_none()
                 } else {

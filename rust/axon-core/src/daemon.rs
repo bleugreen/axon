@@ -10,6 +10,49 @@ use crate::{
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
 
+/// Process-local state shared by every native platform router.
+#[derive(Default)]
+pub struct NativeDaemonState {
+    pub history: crate::ActionHistoryStore,
+    pub recording: DaemonRecordingOwner,
+}
+
+impl NativeDaemonState {
+    pub fn dispatch(
+        &mut self,
+        method: &str,
+        params: &Map<String, Value>,
+    ) -> Option<Result<Value, JsonRpcError>> {
+        Some(match method {
+            "save" => self.history.save(params),
+            "recording.start" => self.recording.start(params).and_then(value),
+            "recording.status" => {
+                if params.is_empty() {
+                    serde_json::to_value(self.recording.status()).map_err(internal)
+                } else {
+                    Err(invalid("params", "recording.status accepts no fields"))
+                }
+            }
+            "recording.stop" => self.recording.stop(params),
+            "editor.recordFromHere" => self.recording.record_from_here(params).and_then(value),
+            _ => return None,
+        })
+    }
+
+}
+
+fn value<T: serde::Serialize>(value: T) -> Result<Value, JsonRpcError> {
+    serde_json::to_value(value).map_err(internal)
+}
+
+fn internal(error: serde_json::Error) -> JsonRpcError {
+    JsonRpcError {
+        code: -32603,
+        message: "response serialization failed".into(),
+        data: Some(json!({"reason":error.to_string()})),
+    }
+}
+
 const INVALID_PARAMS: i64 = -32602;
 const RECORDING_CONFLICT: i64 = -32005;
 
@@ -259,5 +302,19 @@ mod tests {
         let result = owner.stop(&Map::new()).unwrap();
         assert_eq!(result["destination"]["beforeBlockId"], "block-2");
         assert!(!result["script"].as_str().unwrap().contains("doc-1"));
+    }
+
+    #[test]
+    fn native_adapter_routes_save_and_recording_with_strict_shared_schemas() {
+        let mut state = NativeDaemonState::default();
+        let unknown = state.dispatch("save", &object(json!({"extra":true}))).unwrap().unwrap_err();
+        assert_eq!(unknown.code, INVALID_PARAMS);
+
+        let started = state.dispatch("recording.start", &object(json!({"scope":{"scope":"allApplications"}}))).unwrap().unwrap();
+        assert_eq!(started["recording"], true);
+        let status = state.dispatch("recording.status", &Map::new()).unwrap().unwrap();
+        assert_eq!(status["sessionId"], "recording-0001");
+        assert!(state.dispatch("recording.status", &object(json!({"extra":true}))).unwrap().is_err());
+        assert_eq!(state.dispatch("recording.stop", &Map::new()).unwrap().unwrap()["actionCount"], 0);
     }
 }

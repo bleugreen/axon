@@ -52,7 +52,6 @@ const EXCLUDED: &[(&str, &str)] = &[
     ("navigate", "BrowserScripting"),
     ("windows", "BrowserScripting"),
     ("tabs", "BrowserScripting"),
-    ("save", "SerializeHistory"),
     ("drag", "PointerDrag"),
     ("scroll", "Scroll"),
     ("permit", "PermissionPrompt"),
@@ -93,6 +92,7 @@ pub struct Router<B> {
     snapshot: Option<Snapshot>,
     semantic_names: SemanticNameRegistry,
     observation_redaction: axon_core::ObservationRedactionContext,
+    daemon: axon_core::NativeDaemonState,
 }
 
 pub struct VisualObservation {
@@ -361,6 +361,7 @@ impl<B: PointerTargetVerifier + BackgroundPixelInput> Router<B> {
             snapshot: None,
             semantic_names: SemanticNameRegistry::default(),
             observation_redaction: Default::default(),
+            daemon: Default::default(),
         }
     }
 
@@ -381,15 +382,26 @@ impl<B: PointerTargetVerifier + BackgroundPixelInput> Router<B> {
     }
 
     pub fn request(&mut self, request: JsonRpcRequest) -> Option<JsonRpcResponse> {
-        let id = request.id?;
-        let params = request
+        let id = request.id.clone()?;
+        let context = self.daemon.history.context(&request);
+        if matches!(context.request.method.as_str(), "save" | "recording.start" | "recording.status" | "recording.stop" | "editor.recordFromHere")
+            && context.request.params.as_ref().is_some_and(|params| !params.is_object())
+        {
+            return Some(JsonRpcResponse::failure(id, JsonRpcError { code: -32602, message: "Invalid params: expected object".into(), data: Some(json!({"path":"params","reason":"expected object"})) }));
+        }
+        let params = context.request
             .params
+            .as_ref()
             .and_then(|v| v.as_object().cloned())
             .unwrap_or_default();
-        Some(match self.dispatch_tool(&request.method, &params) {
+        let outcome = self.daemon.dispatch(&context.request.method, &params)
+            .unwrap_or_else(|| self.dispatch_tool(&context.request.method, &params));
+        let response = match outcome {
             Ok(result) => JsonRpcResponse::success(id, result),
             Err(error) => JsonRpcResponse::failure(id, error),
-        })
+        };
+        self.daemon.history.record(&context.request, &response, &context.session_id, None);
+        Some(response)
     }
 
     fn dispatch_tool(
