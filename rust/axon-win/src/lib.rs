@@ -568,8 +568,20 @@ impl<
             .as_ref()
             .and_then(|v| v.as_object().cloned())
             .unwrap_or_default();
-        let outcome = self.daemon.dispatch(&context.request.method, &params)
-            .unwrap_or_else(|| self.dispatch_tool(&context.request.method, &params));
+        let outcome = if matches!(
+            context.request.method.as_str(),
+            "recording.start" | "editor.recordFromHere"
+        ) {
+            Err(capability_unavailable(
+                &context.request.method,
+                "ObserveGlobalInput",
+                "observer-unavailable",
+            ))
+        } else {
+            self.daemon
+                .dispatch(&context.request.method, &params)
+                .unwrap_or_else(|| self.dispatch_tool(&context.request.method, &params))
+        };
         let response = match outcome {
             Ok(result) => JsonRpcResponse::success(id, result),
             Err(error) => JsonRpcResponse::failure(id, error),
