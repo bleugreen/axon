@@ -177,6 +177,45 @@ impl ActionHistoryStore {
         self.record(&request, &response, session_id, observation)
     }
 
+    /// Captures the durable locator hidden behind native session-local semantic names, then crosses
+    /// the same redaction boundary as every other history field.
+    pub fn record_redacted_with_locator(
+        &self,
+        request: &JsonRpcRequest,
+        response: &JsonRpcResponse,
+        session_id: &str,
+        locator: impl Fn(&str, &str) -> Option<Map<String, Value>>,
+        redaction: &crate::ObservationRedactionContext,
+    ) -> Option<ActionHistoryRecord> {
+        let params = request.params.as_ref().and_then(Value::as_object);
+        let mut observation = ActionObservation {
+            tool: request.method.clone(),
+            app: params.and_then(|params| {
+                params.get("target").and_then(|target| target.get("app")).and_then(Value::as_str).map(str::to_owned)
+            }),
+            inputs: params.into_iter().flat_map(|params| ["value", "text", "key"].into_iter().filter_map(|key| params.get(key).and_then(Value::as_str).map(str::to_owned))).collect(),
+            settled: false,
+            ..Default::default()
+        };
+        for (key, slot) in [
+            ("target", &mut observation.target_before),
+            ("from", &mut observation.from_before),
+            ("to", &mut observation.to_before),
+        ] {
+            let Some(target) = params.and_then(|params| params.get(key)).and_then(Value::as_object) else { continue };
+            let (Some(app), Some(name)) = (target.get("app").and_then(Value::as_str), target.get("name").and_then(Value::as_str)) else { continue };
+            let Some(locator) = locator(app, name) else { continue };
+            *slot = Some(crate::ObservedElementState {
+                app: app.to_owned(),
+                role: locator.get("role").and_then(Value::as_str).unwrap_or_default().to_owned(),
+                locator: Some(locator),
+                ..Default::default()
+            });
+        }
+        let observation = (observation.target_before.is_some() || observation.from_before.is_some() || observation.to_before.is_some()).then_some(observation);
+        self.record_redacted(request, response, session_id, observation, redaction)
+    }
+
     /// Persists a request that has already crossed the shared redaction boundary.
     pub fn record(
         &self,
@@ -585,8 +624,10 @@ mod tests {
         let export = store.export_script("s", false, None, None, None).unwrap();
         assert!(!export.script.contains("user@example.com"));
         assert!(!export.script.contains("4111 1111 1111 1111"));
-        assert_eq!(export.script.matches("locator:").count(), 2);
         let document = AxnCodec::parse(&export.script).unwrap();
+        assert!(document.actions.iter().all(|action| {
+            action.params.get("target").and_then(|target| target.get("locator")).is_some()
+        }));
         assert!(!document.actions[0].expects.is_empty());
 
         let mut daemon = FreshDaemon::default();

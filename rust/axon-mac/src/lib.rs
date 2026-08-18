@@ -688,11 +688,11 @@ impl<
             Ok(result) => JsonRpcResponse::success(id, result),
             Err(error) => JsonRpcResponse::failure(id, error),
         };
-        self.daemon.history.record_redacted(
+        self.daemon.history.record_redacted_with_locator(
             &context.request,
             &response,
             &context.session_id,
-            None,
+            |app, name| self.semantic_names.durable_locator(app, name),
             &self.observation_redaction,
         );
         Some(response)

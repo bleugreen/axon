@@ -46,6 +46,7 @@ pub fn render_semantic_names(snapshot: &Snapshot, names: &[SemanticElementName])
             render(child, index, names);
         }
     }
+
     for window in &mut rendered.app.windows {
         render(&mut window.root, &mut index, &by_index);
     }
@@ -501,6 +502,25 @@ impl SemanticNameRegistry {
             records: HashMap::new(),
             replay_locators: HashMap::new(),
         }
+    }
+
+    /// Returns the durable locator behind a session-local semantic name for history export.
+    pub fn durable_locator(
+        &self,
+        app: &str,
+        name: &str,
+    ) -> Option<serde_json::Map<String, serde_json::Value>> {
+        let target = WireElementTarget {
+            app: app.to_owned(),
+            name: name.to_owned(),
+        };
+        let SemanticSelection::Selected(context) = self.select(&target) else {
+            return None;
+        };
+        serde_json::to_value(context.locator())
+            .ok()?
+            .as_object()
+            .cloned()
     }
 
     pub fn register(&mut self, snapshot: &Snapshot) -> Vec<SemanticElementName> {
