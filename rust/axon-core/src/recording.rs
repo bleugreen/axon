@@ -10,8 +10,8 @@
 //! recording is a statement about the interface rather than about one process's pointers.
 
 use crate::{
-    AxnAction, AxnArgument, AxnDocument, ExpectedFact, Locator, LocatorResolver,
-    ResolutionStatus, SemanticNameRegistry, Snapshot, TextMatcher, WireElementTarget,
+    AxnAction, AxnArgument, AxnDocument, ExpectedFact, LocatorResolver, ResolutionStatus,
+    SemanticNameRegistry, Snapshot, WireElementTarget,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
