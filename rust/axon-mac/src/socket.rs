@@ -504,6 +504,7 @@ mod tests {
                 "wait_for_value",
                 "wait_for_stability",
                 "run",
+                "save",
                 "click",
                 "type",
                 "keyboard",
