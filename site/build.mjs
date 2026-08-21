@@ -30,6 +30,7 @@ const supportingDocs = [
   ['cross-platform-internals', 'Cross-platform internals'],
   ['platform-capability-matrix', 'Platform capability census'],
 ];
+const renderedDocSlugs = new Set([...docs, ...supportingDocs].map(([slug]) => slug));
 
 const escapeHtml = (value) => String(value)
   .replaceAll('&', '&amp;')
@@ -56,7 +57,12 @@ function renderMarkdown(source, { omitSections = [] } = {}) {
         return;
       }
       const match = token.href.match(/^([^/:#]+)\.md(#[^ ]+)?$/);
-      if (match) token.href = `/docs/${match[1]}/${match[2] ?? ''}`;
+      if (match) {
+        const [, slug, fragment = ''] = match;
+        token.href = renderedDocSlugs.has(slug)
+          ? `/docs/${slug}/${fragment}`
+          : `https://github.com/bleugreen/axon/blob/main/docs/${slug}.md${fragment}`;
+      }
       if (token.href.startsWith('../')) {
         token.href = `https://github.com/bleugreen/axon/blob/main/${token.href.slice(3)}`;
       }
