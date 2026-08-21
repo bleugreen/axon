@@ -158,8 +158,20 @@ impl TapRuntime for NativeRuntime {
 
 struct CallbackState { scope: RecordingScope, queue: Arc<Queue>, secure: Mutex<bool> }
 
-unsafe extern "C" fn event_callback(_tap: *mut c_void, ty: u32, event: CGEventRef, user: *mut c_void) -> CGEventRef {
-    if matches!(ty, EVENT_TAP_DISABLED_TIMEOUT | EVENT_TAP_DISABLED_USER) { return event; }
+fn recover_disabled_tap(ty: u32, mut enable: impl FnMut()) -> bool {
+    if !matches!(ty, EVENT_TAP_DISABLED_TIMEOUT | EVENT_TAP_DISABLED_USER) {
+        return false;
+    }
+
+    // The observer session has explicit stop ownership. A user-input disable notification is not a
+    // request to stop that session, so leaving the tap disabled would make `is_recording` lie. Both
+    // disable reasons therefore recover the listen-only tap; a real stop still tears it down.
+    enable();
+    true
+}
+
+unsafe extern "C" fn event_callback(tap: *mut c_void, ty: u32, event: CGEventRef, user: *mut c_void) -> CGEventRef {
+    if recover_disabled_tap(ty, || unsafe { CGEventTapEnable(tap.cast(), true) }) { return event; }
     let state = unsafe { &*(user as *const CallbackState) };
     let secure = unsafe { IsSecureEventInputEnabled() };
     let mut previous = state.secure.lock().unwrap();
@@ -294,6 +306,21 @@ mod tests {
     #[test] fn refuses_without_accessibility_permission() { let mut value = observer(false, Arc::default()); let error = value.start(&RecordingScope::AllApplications).unwrap_err(); assert!(error.to_string().contains("Accessibility permission")); assert!(!value.is_recording()); }
     #[test] fn refuses_duplicate_start_and_stop_is_idempotent() { let stops = Arc::new(Mutex::new(0)); let mut value = observer(true, Arc::clone(&stops)); value.start(&RecordingScope::AllApplications).unwrap(); assert!(value.start(&RecordingScope::AllApplications).unwrap_err().to_string().contains("already active")); value.stop().unwrap(); value.stop().unwrap(); assert_eq!(*stops.lock().unwrap(), 1); }
     #[test] fn drop_releases_active_provider() { let stops = Arc::new(Mutex::new(0)); { let mut value = observer(true, Arc::clone(&stops)); value.start(&RecordingScope::AllApplications).unwrap(); } assert_eq!(*stops.lock().unwrap(), 1); }
+    #[test] fn callback_recovers_timeout_disabled_tap() {
+        let mut enables = 0;
+        assert!(recover_disabled_tap(EVENT_TAP_DISABLED_TIMEOUT, || enables += 1));
+        assert_eq!(enables, 1);
+    }
+    #[test] fn callback_recovers_user_disabled_tap() {
+        let mut enables = 0;
+        assert!(recover_disabled_tap(EVENT_TAP_DISABLED_USER, || enables += 1));
+        assert_eq!(enables, 1);
+    }
+    #[test] fn callback_leaves_input_events_for_capture() {
+        let mut enables = 0;
+        assert!(!recover_disabled_tap(EVENT_KEY_DOWN, || enables += 1));
+        assert_eq!(enables, 0);
+    }
     #[test] fn delayed_startup_is_cancelled_and_joined() {
         let startup = Arc::new(Mutex::new(StartupState::Initializing));
         let for_thread = Arc::clone(&startup);
