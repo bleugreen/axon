@@ -230,7 +230,7 @@ impl PipeWireFrame {
             };
             let start = self.offset + storage_row * stride;
             let source = &self.data[start..start + row];
-            for pixel in source.chunks_exact(4) {
+            for pixel in source.as_chunks::<4>().0 {
                 let rgba = match self.format {
                     PackedFormat::Bgrx => [pixel[2], pixel[1], pixel[0], 255],
                     PackedFormat::Bgra => [pixel[2], pixel[1], pixel[0], pixel[3]],
