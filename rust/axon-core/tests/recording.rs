@@ -738,8 +738,10 @@ fn secure_input_clears_pending_text_and_drops_events_until_disabled() {
 
 #[test]
 fn application_scope_filters_by_stable_bundle_identity() {
-    let wanted = app("Renamed Notes", "com.example.notes");
-    let other = app("Notes", "com.example.other");
+    let mut wanted = app("Renamed Notes", "com.example.notes");
+    wanted.process_id = None;
+    let mut other = app("Notes", "com.example.other");
+    other.process_id = None;
     let state = Rc::new(RefCell::new(FakeRecorderState {
         polls: VecDeque::from([vec![text(other, "outside"), text(wanted.clone(), "inside")]]),
         ..Default::default()
