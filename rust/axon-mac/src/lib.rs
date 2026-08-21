@@ -642,6 +642,13 @@ impl<
                 self.daemon.dispatch(method, params).expect("recording route")
             }),
             "recording.stop" => {
+                if !params.is_empty() {
+                    return Some(
+                        self.daemon
+                            .dispatch(method, params)
+                            .expect("recording route"),
+                    );
+                }
                 if let Err(error) = self.pump_recording() {
                     let _ = axon_core::GlobalInputObserver::stop(&mut self.backend);
                     self.recorder = None;
@@ -2009,6 +2016,42 @@ mod tests {
         };
         assert!(stop.result["actionCount"].as_u64().unwrap() > 0);
         assert!(stop.result["script"].as_str().unwrap().contains("Return"));
+    }
+
+    #[test]
+    fn invalid_recording_stop_preserves_native_and_daemon_session_state() {
+        let mut router = Router::new(EnumerationBackend);
+        let start = router
+            .request(JsonRpcRequest::new(
+                Some(JsonRpcId::Integer(1)),
+                "recording.start",
+                Some(json!({"scope":{"scope":"allApplications"}})),
+            ))
+            .unwrap();
+        assert!(matches!(start, JsonRpcResponse::Success(_)));
+
+        let invalid = router
+            .request(JsonRpcRequest::new(
+                Some(JsonRpcId::Integer(2)),
+                "recording.stop",
+                Some(json!({"extra":true})),
+            ))
+            .unwrap();
+        assert!(matches!(invalid, JsonRpcResponse::Failure(_)));
+        assert!(router.recorder.is_some());
+        assert!(router.daemon.recording.status().recording);
+
+        let stop = router
+            .request(JsonRpcRequest::new(
+                Some(JsonRpcId::Integer(3)),
+                "recording.stop",
+                Some(json!({})),
+            ))
+            .unwrap();
+        let JsonRpcResponse::Success(stop) = stop else {
+            panic!("valid stop must still drain and author native events")
+        };
+        assert!(stop.result["actionCount"].as_u64().unwrap() > 0);
     }
 
     #[test]
