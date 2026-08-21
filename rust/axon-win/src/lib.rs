@@ -586,11 +586,11 @@ impl<
             Ok(result) => JsonRpcResponse::success(id, result),
             Err(error) => JsonRpcResponse::failure(id, error),
         };
-        self.daemon.history.record_redacted(
+        self.daemon.history.record_redacted_with_locator(
             &context.request,
             &response,
             &context.session_id,
-            None,
+            |app, name| self.semantic_names.durable_locator(app, name),
             &self.observation_redaction,
         );
         Some(response)
@@ -1728,6 +1728,26 @@ mod tests {
         assert_eq!(primitive["target"], json!({"app":"Notepad", "name":"save"}));
         assert_eq!(primitive["from"], params["from"]);
         assert_eq!(primitive["value"], "draft");
+    }
+
+    #[test]
+    fn save_exports_durable_locators_for_semantic_click_and_type() {
+        let mut router = Router::new(backend(vec![node("Field")], Some("before")));
+        let name = router.register_snapshot(&router.backend.snapshot.clone())[0]
+            .name
+            .clone();
+        for (method, extra) in [("click", json!({})), ("type", json!({"value":"after"}))] {
+            let mut params = extra.as_object().unwrap().clone();
+            params.insert("target".into(), json!({"app":"App","name":name}));
+            router.request(request(method, Value::Object(params))).unwrap();
+        }
+
+        let export = router.daemon.history.export_script("default", false, None, None, None).unwrap();
+        let document = axon_core::AxnCodec::parse(&export.script).unwrap();
+        assert_eq!(document.actions.len(), 2);
+        assert!(document.actions.iter().all(|action| {
+            action.params["target"].get("locator").is_some()
+        }));
     }
 
     #[derive(Clone)]
