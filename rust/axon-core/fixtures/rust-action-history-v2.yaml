@@ -1,0 +1,14 @@
+version: 2
+args: []
+actions:
+- id: a001
+  tool: look
+  app: Parity
+- id: a002
+  tool: click
+  note: '<redacted: active-credential>'
+  target:
+    app: Parity
+    point:
+      x: 10
+      y: 20

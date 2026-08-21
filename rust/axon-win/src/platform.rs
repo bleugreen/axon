@@ -1579,6 +1579,7 @@ impl PlatformBackend for WindowsBackend {
             Capability::KeyboardInput,
             Capability::Screenshot,
             Capability::HitTest,
+            Capability::SerializeHistory,
         ]
         .into_iter()
         .map(|capability| {
