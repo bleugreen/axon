@@ -25,6 +25,25 @@ pub struct RecordedPoint {
     pub y: f64,
 }
 
+fn redact_input_event(event: RecordedInputEvent, context: &crate::ObservationRedactionContext) -> RecordedInputEvent {
+    let process_id = match &event {
+        RecordedInputEvent::MouseDown { evidence, .. }
+        | RecordedInputEvent::MouseUp { evidence, .. }
+        | RecordedInputEvent::Scroll { evidence, .. } => evidence.app.process_id,
+        RecordedInputEvent::KeyDown { app, .. } | RecordedInputEvent::Notification { app, .. } => app.process_id,
+        RecordedInputEvent::MouseDragged { .. } | RecordedInputEvent::SecureInputChanged { .. } => None,
+    };
+    let mut event = redact_serializable(event, context);
+    match &mut event {
+        RecordedInputEvent::MouseDown { evidence, .. }
+        | RecordedInputEvent::MouseUp { evidence, .. }
+        | RecordedInputEvent::Scroll { evidence, .. } => evidence.app.process_id = process_id,
+        RecordedInputEvent::KeyDown { app, .. } | RecordedInputEvent::Notification { app, .. } => app.process_id = process_id,
+        RecordedInputEvent::MouseDragged { .. } | RecordedInputEvent::SecureInputChanged { .. } => {}
+    }
+    event
+}
+
 impl RecordedAppIdentity {
     /// Match two identities using the strongest runtime identity both sides carry.
     pub fn matches_runtime(&self, other: &Self) -> bool {
@@ -92,7 +111,7 @@ impl UserActionRecorder {
     pub fn poll(&mut self, provider: &mut dyn RecordingEvidenceProvider, timeout: Duration) -> Result<usize, crate::BackendError> {
         let events = provider.poll(timeout)?;
         let count = events.len();
-        for event in events { self.consume(provider, redact_serializable(event, &self.redaction))?; }
+        for event in events { self.consume(provider, redact_input_event(event, &self.redaction))?; }
         Ok(count)
     }
 

@@ -5,7 +5,7 @@ use axon_core::{
 use std::{
     collections::VecDeque,
     ffi::{c_char, c_void},
-    ptr::{null, null_mut},
+    ptr::null,
     sync::{Arc, Condvar, Mutex, mpsc},
     thread::{self, JoinHandle},
     time::{Duration, SystemTime, UNIX_EPOCH},
@@ -69,7 +69,7 @@ unsafe extern "C" {
 }
 #[link(name = "Carbon", kind = "framework")]
 unsafe extern "C" { fn IsSecureEventInputEnabled() -> bool; }
-#[link(name = "ApplicationKit", kind = "framework")]
+#[link(name = "AppKit", kind = "framework")]
 unsafe extern "C" {}
 #[link(name = "objc")]
 unsafe extern "C" {
@@ -158,7 +158,7 @@ impl TapRuntime for NativeRuntime {
 
 struct CallbackState { scope: RecordingScope, queue: Arc<Queue>, secure: Mutex<bool> }
 
-unsafe extern "C" fn event_callback(tap: *mut c_void, ty: u32, event: CGEventRef, user: *mut c_void) -> CGEventRef {
+unsafe extern "C" fn event_callback(_tap: *mut c_void, ty: u32, event: CGEventRef, user: *mut c_void) -> CGEventRef {
     if matches!(ty, EVENT_TAP_DISABLED_TIMEOUT | EVENT_TAP_DISABLED_USER) { return event; }
     let state = unsafe { &*(user as *const CallbackState) };
     let secure = unsafe { IsSecureEventInputEnabled() };
