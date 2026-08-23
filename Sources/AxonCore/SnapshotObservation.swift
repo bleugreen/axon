@@ -246,7 +246,7 @@ public struct SnapshotObservationFormatter {
 
         var line = "  - \(yamlString(text))"
         if let confidence = object["confidence"]?.doubleValue, confidence < 1 {
-            line += " confidence=\(confidence)"
+            line += " confidence=\(compactConfidence(confidence))"
         }
         if let frame = object["frame"]?.objectValue {
             line += " frame=\(compactFrame(frame))"
@@ -1004,11 +1004,23 @@ public struct SnapshotObservationFormatter {
     }
 
     private func compactFrame(_ frame: [String: JSONValue]) -> String {
-        let x = frame["x"]?.scalarText ?? "?"
-        let y = frame["y"]?.scalarText ?? "?"
-        let width = frame["width"]?.scalarText ?? "?"
-        let height = frame["height"]?.scalarText ?? "?"
+        let x = compactPixel(frame["x"])
+        let y = compactPixel(frame["y"])
+        let width = compactPixel(frame["width"])
+        let height = compactPixel(frame["height"])
         return "{x:\(x),y:\(y),width:\(width),height:\(height)}"
+    }
+
+    private func compactPixel(_ value: JSONValue?) -> String {
+        guard let value = value?.doubleValue, value.isFinite else {
+            return "?"
+        }
+        return String(format: "%.0f", locale: Locale(identifier: "en_US_POSIX"), value)
+    }
+
+    private func compactConfidence(_ value: Double) -> String {
+        String(format: "%.2f", locale: Locale(identifier: "en_US_POSIX"), value)
+            .replacingOccurrences(of: #"\.?0+$"#, with: "", options: .regularExpression)
     }
 }
 
