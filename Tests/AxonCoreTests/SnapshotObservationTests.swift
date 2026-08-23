@@ -482,6 +482,71 @@ import Testing
     #expect(text.contains("⟨1 unreadable node: group[AXHostingView]⟩"))
 }
 
+@Test func screenTextRoundsFractionalGeometryOnlyInHumanReadableText() {
+    let formatter = SnapshotObservationFormatter()
+    let snapshot: JSONValue = .object([
+        "id": .string("screen-text"),
+        "app": .object(["name": .string("Example"), "processIdentifier": .int(7)]),
+        "windows": .array([]),
+        "screenText": .array([
+            .object([
+                "text": .string("Fractional"),
+                "frame": .object([
+                    "x": .double(198.88000076),
+                    "y": .double(61.6),
+                    "width": .double(90.51),
+                    "height": .double(13.668749999999978)
+                ])
+            ])
+        ])
+    ])
+
+    let observation = formatter.observation(from: snapshot, frames: true)
+    let text = formatter.text(from: observation)
+
+    #expect(text.contains("frame={x:199,y:62,width:91,height:14}"))
+    #expect(observation["screenText"]?[0]?["frame"]?["x"] == .double(198.88000076))
+    #expect(observation["screenText"]?[0]?["frame"]?["height"] == .double(13.668749999999978))
+}
+
+@Test func screenTextKeepsIntegerGeometryCompactInHumanReadableText() {
+    let observation: JSONValue = .object([
+        "format": .string("observation"),
+        "screenText": .array([
+            .object([
+                "text": .string("Integer"),
+                "frame": .object([
+                    "x": .int(12),
+                    "y": .int(34),
+                    "width": .int(56),
+                    "height": .int(78)
+                ])
+            ])
+        ])
+    ])
+
+    let text = SnapshotObservationFormatter().text(from: observation)
+
+    #expect(text.contains("frame={x:12,y:34,width:56,height:78}"))
+}
+
+@Test func screenTextFormatsConfidenceWithoutBinaryFloatNoise() {
+    let observation: JSONValue = .object([
+        "format": .string("observation"),
+        "screenText": .array([
+            .object(["text": .string("Low"), "confidence": .double(0.30000001192092896)]),
+            .object(["text": .string("High"), "confidence": .double(0.95)])
+        ])
+    ])
+
+    let text = SnapshotObservationFormatter().text(from: observation)
+
+    #expect(text.contains(#""Low" confidence=0.3"#))
+    #expect(text.contains(#""High" confidence=0.95"#))
+    #expect(!text.contains("0.30000001192092896"))
+    #expect(observation["screenText"]?[0]?["confidence"] == .double(0.30000001192092896))
+}
+
 private func treeString(in observation: JSONValue) -> String {
     guard case let .string(tree)? = observation["tree"] else {
         return ""
