@@ -1109,6 +1109,30 @@ semantics deliberately mirror the Swift tables in
 check boxes, radio buttons, and menu items, while combo boxes, text areas, and
 text fields are editable.
 
+One vocabulary names an application throughout this backend. Resolution matches
+an `AppQuery` against the running applications it enumerates: `process_id`
+against the pid, `name` case-insensitively against the display name, and
+`identifier` against the bundle identifier. That is the meaning `identifier`
+carries on Windows and Linux too, where it is likewise the stable identity the
+backend publishes in `Application.identifier`, and macOS publishes its bundle
+identifier there rather than leaving it null.
+
+A capture driven by a recorded input event queries on one key rather than all
+three, following the precedence `RecordedAppIdentity::matches_runtime` already
+defines: the process id, else the bundle identifier, else the name. A recorded
+identity is only as strong as its strongest key, so constraining the weaker
+fields alongside it cannot make the match more certain and can only strand the
+evidence for an event that was genuinely observed. Constraining all three is how
+every macOS recording once ended with zero actions.
+
+The display name is `NSRunningApplication.localizedName`, falling back to the
+application element's `AXTitle`, decided in one place in
+`rust/axon-mac/src/global_input.rs` for enumeration, capture, and the recorder
+alike. That matches `AppResolver` in `Sources/AxonCore`, which reports and
+resolves applications by localized name and bundle identifier and never consults
+AXTitle; AXTitle names windows and elements, not applications. Sharing the
+decision keeps a recorded artifact calling an application what `look` calls it.
+
 The v1 facade exposes `look`, `find`, `click`, `type`, `keyboard`, `invoke`,
 `scroll`, and `run`. `look` derives semantic names through axon-core and actions
 resolve the strict `{app,name}` target through the shared registry; ambiguous

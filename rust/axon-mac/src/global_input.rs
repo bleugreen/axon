@@ -522,18 +522,37 @@ fn app_identity(element: AXUIElementRef) -> Option<RecordedAppIdentity> {
     if app.is_null() {
         return None;
     }
-    let name = text_attribute(app, "AXTitle").unwrap_or_default();
+    let accessibility_name = text_attribute(app, "AXTitle").unwrap_or_default();
     unsafe {
         CFRelease(app);
     }
-    let (native_name, bundle_identifier) = running_application_identity(pid);
+    let (name, bundle_identifier) = application_identity(pid, accessibility_name);
     Some(RecordedAppIdentity {
-        name: native_name
-            .filter(|value| !value.is_empty())
-            .unwrap_or(name),
+        name,
         bundle_identifier,
         process_id: Some(pid as u32),
     })
+}
+
+/// How this backend names one running application: the display name a person would call it, and
+/// its bundle identifier.
+///
+/// Enumeration, capture, and the recorder all come through here, so a recorded artifact calls an
+/// application what `look` calls it. The localized name is what `AppResolver` in `Sources/AxonCore`
+/// both reports and resolves applications by; AXTitle names windows and elements there, never an
+/// application. `accessibility_name` is the `AXTitle` already read from the application element,
+/// used only as a fallback when `NSRunningApplication` has no localized name.
+pub(crate) fn application_identity(
+    pid: i32,
+    accessibility_name: String,
+) -> (String, Option<String>) {
+    let (native_name, bundle_identifier) = running_application_identity(pid);
+    (
+        native_name
+            .filter(|value| !value.is_empty())
+            .unwrap_or(accessibility_name),
+        bundle_identifier,
+    )
 }
 
 fn running_application_identity(pid: i32) -> (Option<String>, Option<String>) {

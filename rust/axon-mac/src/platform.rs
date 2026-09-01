@@ -334,6 +334,85 @@ fn capture_node(element: Owned, depth: usize, max_depth: usize, count: &mut usiz
     }
 }
 
+/// One running application as this backend identifies it.
+///
+/// These are the same three fields the recorder stamps onto every observed event as a
+/// `RecordedAppIdentity`, drawn from the same source, so a recorded artifact calls an application
+/// what `look` calls it.
+#[derive(Clone, Debug)]
+struct RunningApplication {
+    process_id: i32,
+    name: String,
+    bundle_identifier: Option<String>,
+}
+
+impl RunningApplication {
+    /// Whether this application satisfies every field the query constrains.
+    ///
+    /// `identifier` is the bundle identifier — what a caller, the Swift daemon, and the Windows and
+    /// Linux backends all mean by an application identifier, and what this backend publishes in
+    /// `Application::identifier`. An application without one cannot satisfy a query that names one.
+    fn matches(&self, query: &AppQuery) -> bool {
+        query
+            .process_id
+            .is_none_or(|wanted| wanted == self.process_id as u32)
+            && query
+                .identifier
+                .as_deref()
+                .is_none_or(|wanted| self.bundle_identifier.as_deref() == Some(wanted))
+            && query
+                .name
+                .as_deref()
+                .is_none_or(|wanted| self.name.eq_ignore_ascii_case(wanted))
+    }
+}
+
+/// The single application a query names, or why it named none or more than one.
+///
+/// Split from the live enumeration so the matching rule can be exercised against a synthetic list;
+/// the native pid walk it is normally fed cannot be staged in a test.
+fn resolve_running(
+    applications: Vec<RunningApplication>,
+    query: &AppQuery,
+) -> Result<RunningApplication, BackendError> {
+    let mut matches = applications
+        .into_iter()
+        .filter(|application| application.matches(query));
+    match (matches.next(), matches.next()) {
+        (Some(one), None) => Ok(one),
+        (None, _) => Err(op("capture", "application not found")),
+        (Some(_), Some(_)) => Err(op("capture", "application query is ambiguous")),
+    }
+}
+
+/// The query naming the application a recorded input event was observed in.
+///
+/// One key, not three, following the precedence `RecordedAppIdentity::matches_runtime` already
+/// defines: the process id, else the bundle identifier, else the name. A recorded identity is only
+/// as strong as its strongest key, so constraining the weaker fields alongside it cannot make the
+/// match more certain — it can only strand the evidence for an event that was genuinely observed
+/// the moment any one of them drifts. A deserialized artifact reaches the bundle rung on its own,
+/// because `process_id` is deliberately skipped by serde and never survives a session.
+fn recorded_app_query(app: &axon_core::RecordedAppIdentity) -> AppQuery {
+    match (app.process_id, &app.bundle_identifier) {
+        (Some(process_id), _) => AppQuery {
+            process_id: Some(process_id),
+            name: None,
+            identifier: None,
+        },
+        (None, Some(identifier)) => AppQuery {
+            process_id: None,
+            name: None,
+            identifier: Some(identifier.clone()),
+        },
+        (None, None) => AppQuery {
+            process_id: None,
+            name: Some(app.name.clone()),
+            identifier: None,
+        },
+    }
+}
+
 pub struct MacBackend {
     handles: HashMap<SnapshotHandle, Owned>,
     global_input: MacGlobalInputObserver,
@@ -348,7 +427,7 @@ impl MacBackend {
     pub fn accessibility_enabled(&self) -> bool {
         unsafe { AXIsProcessTrusted() }
     }
-    fn applications(&self) -> Vec<(i32, String)> {
+    fn applications(&self) -> Vec<RunningApplication> {
         let needed = unsafe { proc_listallpids(std::ptr::null_mut(), 0) };
         if needed <= 0 {
             return Vec::new();
@@ -378,33 +457,25 @@ impl MacBackend {
                     return None;
                 }
                 let root = Owned(root);
+                // A non-empty AXTitle is what qualifies a process as an application here. It is not
+                // what the application is then called: AXTitle names windows and elements, while an
+                // application is named the way the Swift daemon's AppResolver names one.
                 text_attribute(root.0, "AXTitle")
                     .filter(|name| !name.is_empty())
-                    .map(|name| (pid, name))
+                    .map(|accessibility_name| {
+                        let (name, bundle_identifier) =
+                            crate::global_input::application_identity(pid, accessibility_name);
+                        RunningApplication {
+                            process_id: pid,
+                            name,
+                            bundle_identifier,
+                        }
+                    })
             })
             .collect()
     }
-    fn resolve(&self, app: &AppQuery) -> Result<(i32, String), BackendError> {
-        let matches = self
-            .applications()
-            .into_iter()
-            .filter(|(pid, name)| {
-                app.process_id.is_none_or(|wanted| wanted == *pid as u32)
-                    && app
-                        .identifier
-                        .as_deref()
-                        .is_none_or(|id| id == pid.to_string())
-                    && app
-                        .name
-                        .as_deref()
-                        .is_none_or(|wanted| name.eq_ignore_ascii_case(wanted))
-            })
-            .collect::<Vec<_>>();
-        match matches.as_slice() {
-            [one] => Ok(one.clone()),
-            [] => Err(op("capture", "application not found")),
-            _ => Err(op("capture", "application query is ambiguous")),
-        }
+    fn resolve(&self, app: &AppQuery) -> Result<RunningApplication, BackendError> {
+        resolve_running(self.applications(), app)
     }
     fn element(&self, handle: &SnapshotHandle) -> Result<AXUIElementRef, BackendError> {
         self.handles
@@ -469,12 +540,7 @@ impl RecordingEvidenceProvider for MacBackend {
         &mut self,
         app: &axon_core::RecordedAppIdentity,
     ) -> Result<Option<Snapshot>, BackendError> {
-        let query = AppQuery {
-            process_id: app.process_id,
-            name: Some(app.name.clone()),
-            identifier: app.bundle_identifier.clone(),
-        };
-        PlatformBackend::capture(self, &query).map(Some)
+        PlatformBackend::capture(self, &recorded_app_query(app)).map(Some)
     }
 
     fn settle(
@@ -550,10 +616,10 @@ impl PlatformBackend for MacBackend {
         Ok(self
             .applications()
             .into_iter()
-            .map(|(pid, name)| Application {
-                process_id: Some(pid as u32),
-                name,
-                identifier: None,
+            .map(|application| Application {
+                process_id: Some(application.process_id as u32),
+                name: application.name,
+                identifier: application.bundle_identifier,
                 windows: Vec::new(),
             })
             .collect())
@@ -572,8 +638,8 @@ impl PlatformBackend for MacBackend {
                 "Accessibility permission is not granted",
             ));
         }
-        let (pid, name) = self.resolve(app)?;
-        let root = unsafe { AXUIElementCreateApplication(pid) };
+        let application = self.resolve(app)?;
+        let root = unsafe { AXUIElementCreateApplication(application.process_id) };
         if root.is_null() {
             return Err(op("capture", "AXUIElementCreateApplication returned null"));
         }
@@ -604,9 +670,9 @@ impl PlatformBackend for MacBackend {
             all_elements.extend(captured.elements);
         }
         let snapshot = Snapshot::new(Application {
-            process_id: Some(pid as u32),
-            name,
-            identifier: None,
+            process_id: Some(application.process_id as u32),
+            name: application.name,
+            identifier: application.bundle_identifier,
             windows: snapshot_windows,
         });
         self.handles = all_elements
@@ -729,7 +795,7 @@ impl PlatformBackend for MacBackend {
                 "Screen Recording permission is not granted",
             ));
         }
-        let (pid, _) = self.resolve(app)?;
+        let pid = self.resolve(app)?.process_id;
         window_capture::capture(pid)?.screenshot()
     }
     fn hit_test(&mut self, _: (f64, f64)) -> Result<Option<Node>, BackendError> {
@@ -743,7 +809,7 @@ impl VisualObservationProvider for MacBackend {
         screenshot: bool,
         screen_text: bool,
     ) -> Result<VisualObservation, BackendError> {
-        let (pid, _) = self.resolve(app)?;
+        let pid = self.resolve(app)?.process_id;
         let captured = window_capture::capture(pid)?;
         Ok(VisualObservation {
             screenshot: screenshot.then(|| captured.screenshot()).transpose()?,
@@ -756,7 +822,7 @@ impl axon_core::TextRecognitionProvider for MacBackend {
         &mut self,
         app: &AppQuery,
     ) -> Result<Vec<axon_core::RecognizedText>, BackendError> {
-        let (pid, _) = self.resolve(app)?;
+        let pid = self.resolve(app)?.process_id;
         window_capture::capture(pid)?.recognize_text()
     }
 }
@@ -812,6 +878,133 @@ mod tests {
                 .usable
         );
     }
+    fn running(process_id: i32, name: &str, bundle: Option<&str>) -> RunningApplication {
+        RunningApplication {
+            process_id,
+            name: name.into(),
+            bundle_identifier: bundle.map(str::to_owned),
+        }
+    }
+
+    fn query(process_id: Option<u32>, name: Option<&str>, identifier: Option<&str>) -> AppQuery {
+        AppQuery {
+            process_id,
+            name: name.map(str::to_owned),
+            identifier: identifier.map(str::to_owned),
+        }
+    }
+
+    /// The recorder stamps every observed event with a name, a bundle identifier, and a pid, and
+    /// `capture_snapshot` turns all three into the query that gathers that event's evidence. When
+    /// the resolver read `identifier` as a process id rendered as a string, that query matched
+    /// nothing, so every macOS recording stopped with zero actions.
+    #[test]
+    fn a_recorded_app_identity_resolves_to_the_application_it_was_observed_in() {
+        let observed = axon_core::RecordedAppIdentity {
+            name: "TextEdit".into(),
+            bundle_identifier: Some("com.apple.TextEdit".into()),
+            process_id: Some(4242),
+        };
+        let resolved = resolve_running(
+            vec![
+                running(4242, "TextEdit", Some("com.apple.TextEdit")),
+                running(5150, "Notes", Some("com.apple.Notes")),
+            ],
+            &recorded_app_query(&observed),
+        )
+        .expect("a recorded identity resolves to the application it was recorded from");
+        assert_eq!(resolved.process_id, 4242);
+        assert_eq!(
+            resolved.bundle_identifier.as_deref(),
+            Some("com.apple.TextEdit")
+        );
+    }
+
+    /// A recorded identity holds one key as strongly as it can. A display label that disagrees
+    /// between the recorder and the enumeration must not be able to strand the evidence for an
+    /// event that was genuinely observed — the failure that constraining all three fields caused.
+    #[test]
+    fn a_recorded_capture_resolves_on_its_strongest_key_despite_a_disagreeing_name() {
+        let observed = |process_id, bundle: Option<&str>| axon_core::RecordedAppIdentity {
+            name: "Wi-Fi".into(),
+            bundle_identifier: bundle.map(str::to_owned),
+            process_id,
+        };
+        let listed = || vec![running(4242, "WiFiAgent", Some("com.apple.wifi.WiFiAgent"))];
+
+        let by_pid = recorded_app_query(&observed(Some(4242), Some("com.apple.wifi.WiFiAgent")));
+        assert_eq!(
+            (by_pid.name.as_deref(), by_pid.identifier.as_deref()),
+            (None, None)
+        );
+        assert_eq!(resolve_running(listed(), &by_pid).unwrap().process_id, 4242);
+
+        // A deserialized artifact carries no pid, so the bundle identifier is the strongest key.
+        let by_bundle = recorded_app_query(&observed(None, Some("com.apple.wifi.WiFiAgent")));
+        assert_eq!(by_bundle.name, None);
+        assert_eq!(
+            resolve_running(listed(), &by_bundle).unwrap().process_id,
+            4242
+        );
+
+        // With neither, the name is all that is left to try.
+        let by_name = recorded_app_query(&observed(None, None));
+        assert_eq!(by_name.name.as_deref(), Some("Wi-Fi"));
+        assert_eq!(by_name.identifier, None);
+    }
+
+    #[test]
+    fn identifier_matches_the_bundle_identifier_rather_than_the_process_id() {
+        let applications = || vec![running(4242, "TextEdit", Some("com.apple.TextEdit"))];
+        assert!(
+            resolve_running(
+                applications(),
+                &query(None, None, Some("com.apple.TextEdit"))
+            )
+            .is_ok()
+        );
+        assert!(resolve_running(applications(), &query(None, None, Some("4242"))).is_err());
+    }
+
+    #[test]
+    fn an_application_without_a_bundle_identifier_never_satisfies_an_identifier_query() {
+        let helper = vec![running(4242, "Helper", None)];
+        assert!(resolve_running(helper.clone(), &query(None, Some("Helper"), None)).is_ok());
+        assert!(resolve_running(helper, &query(None, None, Some("com.example.Helper"))).is_err());
+    }
+
+    #[test]
+    fn resolution_separates_no_match_from_ambiguity() {
+        let shared = || {
+            vec![
+                running(1, "Shared", Some("com.example.one")),
+                running(2, "Shared", Some("com.example.two")),
+            ]
+        };
+        assert!(
+            resolve_running(shared(), &query(None, Some("Shared"), None))
+                .unwrap_err()
+                .to_string()
+                .contains("ambiguous")
+        );
+        assert!(
+            resolve_running(shared(), &query(None, Some("Missing"), None))
+                .unwrap_err()
+                .to_string()
+                .contains("not found")
+        );
+        // The bundle identifier is what tells apart two applications sharing a display name.
+        assert_eq!(
+            resolve_running(
+                shared(),
+                &query(None, Some("Shared"), Some("com.example.two"))
+            )
+            .unwrap()
+            .process_id,
+            2
+        );
+    }
+
     #[test]
     fn screenshot_capability_requires_both_native_permissions() {
         assert_eq!(
