@@ -211,19 +211,29 @@ impl DaemonRecordingOwner {
         if !params.is_empty() {
             return Err(invalid("params", "recording.stop accepts no fields"));
         }
-        let mut active = self.active.take().ok_or_else(recording_inactive)?;
+        let active = self.active.as_mut().ok_or_else(recording_inactive)?;
         for group in &mut active.groups {
             let durable = std::mem::take(group);
             *group = crate::recording::redact_serializable(durable, &self.redaction);
         }
         let document = UserRecordingTranslator::new()
-            .axn_document(&active.groups, active.arguments, &RedactionMarkerTaint)
+            .axn_document(
+                &active.groups,
+                active.arguments.clone(),
+                &RedactionMarkerTaint,
+            )
             .map_err(|error| JsonRpcError {
                 code: -32603,
                 message: "recording could not be authored".into(),
                 data: Some(json!({"reason":error.to_string()})),
             })?;
-        recording_result(active.session_id, active.destination, document)
+        let result = recording_result(
+            active.session_id.clone(),
+            active.destination.clone(),
+            document,
+        )?;
+        self.active = None;
+        Ok(result)
     }
 
     /// Clears daemon-owned state after disconnect or shutdown. Native observer cleanup belongs to
@@ -309,6 +319,26 @@ mod tests {
         assert_eq!(stopped["actionCount"], 1);
         assert!(stopped["script"].as_str().unwrap().contains("hello"));
         assert!(!owner.status().recording);
+    }
+
+    #[test]
+    fn failed_stop_keeps_recording_active_for_inspection_or_retry() {
+        let mut owner = DaemonRecordingOwner::default();
+        owner
+            .start(&object(json!({"scope":{"scope":"allApplications"}})))
+            .unwrap();
+        owner
+            .push_group(RecordedUserEventGroup::new(RecordedUserAction::Click {
+                target: json!({"app":"Notes","name":"save-button"}),
+            }))
+            .unwrap();
+
+        let error = owner.stop(&Map::new()).unwrap_err();
+
+        assert_eq!(error.message, "recording could not be authored");
+        assert!(owner.status().recording);
+        assert_eq!(owner.status().session_id.as_deref(), Some("recording-0001"));
+        assert_eq!(owner.active.as_ref().unwrap().groups.len(), 1);
     }
 
     #[test]

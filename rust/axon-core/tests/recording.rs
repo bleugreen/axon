@@ -6,12 +6,12 @@
 //! without Accessibility, a pointer, or a clock.
 
 use axon_core::{
-    ActionObservation, AxnAction, BackendError, DerivedPostconditionCompiler, GlobalInputObserver,
-    ObservedElementState, OwnedUserActionRecorder, PostconditionInput, RecordedAppIdentity,
-    RecordedFocusedEvidence, RecordedInputEvent, RecordedKeystroke, RecordedPoint,
-    RecordedSettleEvidence, RecordedTargetEvidence, RecordedUserAction, RecordedUserEventGroup,
-    RecordingEvidenceProvider, RecordingScope, RedactionMarkerTaint, Snapshot,
-    UserRecordingTranslator,
+    ActionObservation, Application, AxnAction, BackendError, DerivedPostconditionCompiler,
+    GlobalInputObserver, Node, ObservedElementState, OwnedUserActionRecorder, PostconditionInput,
+    RecordedAppIdentity, RecordedElementEvidence, RecordedFocusedEvidence, RecordedInputEvent,
+    RecordedKeystroke, RecordedPoint, RecordedSettleEvidence, RecordedTargetEvidence,
+    RecordedUserAction, RecordedUserEventGroup, RecordingEvidenceProvider, RecordingScope, Rect,
+    RedactionMarkerTaint, Snapshot, UserRecordingTranslator, Window,
 };
 use serde_json::{Value, json};
 use std::{cell::RefCell, collections::VecDeque, rc::Rc, time::Duration};
@@ -20,6 +20,7 @@ use std::{cell::RefCell, collections::VecDeque, rc::Rc, time::Duration};
 struct FakeRecorderState {
     polls: VecDeque<Vec<RecordedInputEvent>>,
     focused: VecDeque<Option<RecordedFocusedEvidence>>,
+    snapshot: Option<Snapshot>,
     settle_calls: Vec<(usize, String)>,
     stop_calls: usize,
     fail_settle: bool,
@@ -92,7 +93,7 @@ impl RecordingEvidenceProvider for FakeRecordingProvider {
         &mut self,
         _: &RecordedAppIdentity,
     ) -> Result<Option<Snapshot>, BackendError> {
-        Ok(None)
+        Ok(self.0.borrow().snapshot.clone())
     }
     fn settle(&mut self, index: usize, tool: &str) -> Result<RecordedSettleEvidence, BackendError> {
         let mut state = self.0.borrow_mut();
@@ -722,6 +723,70 @@ fn focus_that_never_moved_is_no_transition_at_all() {
     };
 
     assert!(facts(&observation, &[]).is_empty());
+}
+
+#[test]
+fn recorder_semantic_target_authors_as_replayable_axn_with_locator() {
+    let notes = app("Notes", "com.example.notes");
+    let button = Node {
+        role: "AXButton".into(),
+        title: Some("Save".into()),
+        identifier: Some("save-button".into()),
+        actions: vec!["AXPress".into()],
+        frame: Some(Rect {
+            x: 10.0,
+            y: 20.0,
+            width: 80.0,
+            height: 30.0,
+        }),
+        ..serde_json::from_value(json!({"role":"AXButton"})).unwrap()
+    };
+    let snapshot = Snapshot::new(Application {
+        name: "Notes".into(),
+        process_id: Some(42),
+        identifier: Some("com.example.notes".into()),
+        windows: vec![Window {
+            title: Some("Document".into()),
+            root: Node {
+                role: "AXWindow".into(),
+                title: Some("Document".into()),
+                children: vec![button],
+                ..serde_json::from_value(json!({"role":"AXWindow"})).unwrap()
+            },
+        }],
+    });
+    let evidence = RecordedTargetEvidence {
+        app: notes,
+        point: RecordedPoint { x: 20.0, y: 25.0 },
+        candidates: vec![RecordedElementEvidence {
+            role: "AXButton".into(),
+            identifier: Some("save-button".into()),
+            title: Some("Save".into()),
+            actions: vec!["AXPress".into()],
+            window_title: Some("Document".into()),
+            ..Default::default()
+        }],
+    };
+    let (mut recorder, state) = recorder_with(vec![
+        RecordedInputEvent::MouseDown {
+            evidence: evidence.clone(),
+            timestamp_ms: 10,
+        },
+        RecordedInputEvent::MouseUp {
+            evidence,
+            timestamp_ms: 20,
+        },
+    ]);
+    state.borrow_mut().snapshot = Some(snapshot);
+
+    recorder.poll(Duration::ZERO).unwrap();
+    let groups = recorder.finish().unwrap();
+    let document = UserRecordingTranslator::new()
+        .axn_document(&groups, Vec::new(), &RedactionMarkerTaint)
+        .expect("recorder output satisfies the replay contract");
+
+    assert_eq!(document.actions.len(), 1);
+    assert!(document.actions[0].params["target"]["locator"].is_object());
 }
 
 #[test]
