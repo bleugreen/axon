@@ -334,6 +334,66 @@ fn capture_node(element: Owned, depth: usize, max_depth: usize, count: &mut usiz
     }
 }
 
+/// One running application as this backend identifies it.
+///
+/// These are the same three fields the recorder stamps onto every observed event as a
+/// `RecordedAppIdentity`, drawn from the same source, so a query built from a recorded event can
+/// resolve here.
+#[derive(Clone, Debug)]
+pub(crate) struct RunningApplication {
+    process_id: i32,
+    name: String,
+    bundle_identifier: Option<String>,
+}
+
+impl RunningApplication {
+    /// Whether this application satisfies every field the query constrains.
+    ///
+    /// `identifier` is the bundle identifier — what a caller, the Swift daemon, and the Windows and
+    /// Linux backends all mean by an application identifier, and what this backend publishes in
+    /// `Application::identifier`. An application without one cannot satisfy a query that names one.
+    fn matches(&self, query: &AppQuery) -> bool {
+        query
+            .process_id
+            .is_none_or(|wanted| wanted == self.process_id as u32)
+            && query
+                .identifier
+                .as_deref()
+                .is_none_or(|wanted| self.bundle_identifier.as_deref() == Some(wanted))
+            && query
+                .name
+                .as_deref()
+                .is_none_or(|wanted| self.name.eq_ignore_ascii_case(wanted))
+    }
+}
+
+/// The single application a query names, or why it named none or more than one.
+///
+/// Split from the live enumeration so the matching rule can be exercised against a synthetic list;
+/// the native pid walk it is normally fed cannot be staged in a test.
+pub(crate) fn resolve_running(
+    applications: Vec<RunningApplication>,
+    query: &AppQuery,
+) -> Result<RunningApplication, BackendError> {
+    let mut matches = applications
+        .into_iter()
+        .filter(|application| application.matches(query));
+    match (matches.next(), matches.next()) {
+        (Some(one), None) => Ok(one),
+        (None, _) => Err(op("capture", "application not found")),
+        (Some(_), Some(_)) => Err(op("capture", "application query is ambiguous")),
+    }
+}
+
+/// The query naming the application a recorded input event was observed in.
+pub(crate) fn recorded_app_query(app: &axon_core::RecordedAppIdentity) -> AppQuery {
+    AppQuery {
+        process_id: app.process_id,
+        name: Some(app.name.clone()),
+        identifier: app.bundle_identifier.clone(),
+    }
+}
+
 pub struct MacBackend {
     handles: HashMap<SnapshotHandle, Owned>,
     global_input: MacGlobalInputObserver,
@@ -348,7 +408,7 @@ impl MacBackend {
     pub fn accessibility_enabled(&self) -> bool {
         unsafe { AXIsProcessTrusted() }
     }
-    fn applications(&self) -> Vec<(i32, String)> {
+    fn applications(&self) -> Vec<RunningApplication> {
         let needed = unsafe { proc_listallpids(std::ptr::null_mut(), 0) };
         if needed <= 0 {
             return Vec::new();
@@ -378,33 +438,25 @@ impl MacBackend {
                     return None;
                 }
                 let root = Owned(root);
+                // A non-empty AXTitle is what qualifies a process as an application here; the name
+                // it is then reported and matched under is the one the recorder would stamp on an
+                // event observed in it.
                 text_attribute(root.0, "AXTitle")
                     .filter(|name| !name.is_empty())
-                    .map(|name| (pid, name))
+                    .map(|accessibility_name| {
+                        let (name, bundle_identifier) =
+                            crate::global_input::application_identity(pid, accessibility_name);
+                        RunningApplication {
+                            process_id: pid,
+                            name,
+                            bundle_identifier,
+                        }
+                    })
             })
             .collect()
     }
-    fn resolve(&self, app: &AppQuery) -> Result<(i32, String), BackendError> {
-        let matches = self
-            .applications()
-            .into_iter()
-            .filter(|(pid, name)| {
-                app.process_id.is_none_or(|wanted| wanted == *pid as u32)
-                    && app
-                        .identifier
-                        .as_deref()
-                        .is_none_or(|id| id == pid.to_string())
-                    && app
-                        .name
-                        .as_deref()
-                        .is_none_or(|wanted| name.eq_ignore_ascii_case(wanted))
-            })
-            .collect::<Vec<_>>();
-        match matches.as_slice() {
-            [one] => Ok(one.clone()),
-            [] => Err(op("capture", "application not found")),
-            _ => Err(op("capture", "application query is ambiguous")),
-        }
+    fn resolve(&self, app: &AppQuery) -> Result<RunningApplication, BackendError> {
+        resolve_running(self.applications(), app)
     }
     fn element(&self, handle: &SnapshotHandle) -> Result<AXUIElementRef, BackendError> {
         self.handles
@@ -469,12 +521,7 @@ impl RecordingEvidenceProvider for MacBackend {
         &mut self,
         app: &axon_core::RecordedAppIdentity,
     ) -> Result<Option<Snapshot>, BackendError> {
-        let query = AppQuery {
-            process_id: app.process_id,
-            name: Some(app.name.clone()),
-            identifier: app.bundle_identifier.clone(),
-        };
-        PlatformBackend::capture(self, &query).map(Some)
+        PlatformBackend::capture(self, &recorded_app_query(app)).map(Some)
     }
 
     fn settle(
@@ -550,10 +597,10 @@ impl PlatformBackend for MacBackend {
         Ok(self
             .applications()
             .into_iter()
-            .map(|(pid, name)| Application {
-                process_id: Some(pid as u32),
-                name,
-                identifier: None,
+            .map(|application| Application {
+                process_id: Some(application.process_id as u32),
+                name: application.name,
+                identifier: application.bundle_identifier,
                 windows: Vec::new(),
             })
             .collect())
@@ -572,8 +619,8 @@ impl PlatformBackend for MacBackend {
                 "Accessibility permission is not granted",
             ));
         }
-        let (pid, name) = self.resolve(app)?;
-        let root = unsafe { AXUIElementCreateApplication(pid) };
+        let application = self.resolve(app)?;
+        let root = unsafe { AXUIElementCreateApplication(application.process_id) };
         if root.is_null() {
             return Err(op("capture", "AXUIElementCreateApplication returned null"));
         }
@@ -604,9 +651,9 @@ impl PlatformBackend for MacBackend {
             all_elements.extend(captured.elements);
         }
         let snapshot = Snapshot::new(Application {
-            process_id: Some(pid as u32),
-            name,
-            identifier: None,
+            process_id: Some(application.process_id as u32),
+            name: application.name,
+            identifier: application.bundle_identifier,
             windows: snapshot_windows,
         });
         self.handles = all_elements
@@ -729,7 +776,7 @@ impl PlatformBackend for MacBackend {
                 "Screen Recording permission is not granted",
             ));
         }
-        let (pid, _) = self.resolve(app)?;
+        let pid = self.resolve(app)?.process_id;
         window_capture::capture(pid)?.screenshot()
     }
     fn hit_test(&mut self, _: (f64, f64)) -> Result<Option<Node>, BackendError> {
@@ -743,7 +790,7 @@ impl VisualObservationProvider for MacBackend {
         screenshot: bool,
         screen_text: bool,
     ) -> Result<VisualObservation, BackendError> {
-        let (pid, _) = self.resolve(app)?;
+        let pid = self.resolve(app)?.process_id;
         let captured = window_capture::capture(pid)?;
         Ok(VisualObservation {
             screenshot: screenshot.then(|| captured.screenshot()).transpose()?,
@@ -756,7 +803,7 @@ impl axon_core::TextRecognitionProvider for MacBackend {
         &mut self,
         app: &AppQuery,
     ) -> Result<Vec<axon_core::RecognizedText>, BackendError> {
-        let (pid, _) = self.resolve(app)?;
+        let pid = self.resolve(app)?.process_id;
         window_capture::capture(pid)?.recognize_text()
     }
 }
