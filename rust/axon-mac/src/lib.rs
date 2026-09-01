@@ -22,9 +22,9 @@ use std::{
 pub mod socket;
 
 #[cfg(target_os = "macos")]
-mod platform;
-#[cfg(target_os = "macos")]
 mod global_input;
+#[cfg(target_os = "macos")]
+mod platform;
 #[cfg(target_os = "macos")]
 pub use platform::MacBackend;
 
@@ -619,7 +619,12 @@ impl<
                 let started = self.daemon.dispatch(method, params)?;
                 match started {
                     Ok(value) => {
-                        let scope = self.daemon.recording.status().scope.expect("active recording has scope");
+                        let scope = self
+                            .daemon
+                            .recording
+                            .status()
+                            .scope
+                            .expect("active recording has scope");
                         match axon_core::UserActionRecorder::start_with_redaction(
                             &mut self.backend,
                             scope,
@@ -639,7 +644,9 @@ impl<
                 }
             }
             "recording.status" => self.pump_recording().and_then(|_| {
-                self.daemon.dispatch(method, params).expect("recording route")
+                self.daemon
+                    .dispatch(method, params)
+                    .expect("recording route")
             }),
             "recording.stop" => {
                 if !params.is_empty() {
@@ -660,7 +667,9 @@ impl<
                             .into_iter()
                             .try_for_each(|group| self.daemon.recording.push_group(group))
                             .and_then(|_| {
-                                self.daemon.dispatch(method, params).expect("recording route")
+                                self.daemon
+                                    .dispatch(method, params)
+                                    .expect("recording route")
                             }),
                         Err(error) => {
                             self.daemon.recording.abandon();
@@ -668,7 +677,9 @@ impl<
                         }
                     }
                 } else {
-                    self.daemon.dispatch(method, params).expect("recording route")
+                    self.daemon
+                        .dispatch(method, params)
+                        .expect("recording route")
                 }
             }
             _ => return None,
@@ -678,17 +689,36 @@ impl<
     pub fn request(&mut self, request: JsonRpcRequest) -> Option<JsonRpcResponse> {
         let id = request.id.clone()?;
         let context = self.daemon.history.context(&request);
-        if matches!(context.request.method.as_str(), "save" | "recording.start" | "recording.status" | "recording.stop" | "editor.recordFromHere")
-            && context.request.params.as_ref().is_some_and(|params| !params.is_object())
+        if matches!(
+            context.request.method.as_str(),
+            "save"
+                | "recording.start"
+                | "recording.status"
+                | "recording.stop"
+                | "editor.recordFromHere"
+        ) && context
+            .request
+            .params
+            .as_ref()
+            .is_some_and(|params| !params.is_object())
         {
-            return Some(JsonRpcResponse::failure(id, JsonRpcError { code: -32602, message: "Invalid params: expected object".into(), data: Some(json!({"path":"params","reason":"expected object"})) }));
+            return Some(JsonRpcResponse::failure(
+                id,
+                JsonRpcError {
+                    code: -32602,
+                    message: "Invalid params: expected object".into(),
+                    data: Some(json!({"path":"params","reason":"expected object"})),
+                },
+            ));
         }
-        let params = context.request
+        let params = context
+            .request
             .params
             .as_ref()
             .and_then(|v| v.as_object().cloned())
             .unwrap_or_default();
-        let outcome = self.dispatch_recording(&context.request.method, &params)
+        let outcome = self
+            .dispatch_recording(&context.request.method, &params)
             .or_else(|| self.daemon.dispatch(&context.request.method, &params))
             .unwrap_or_else(|| self.dispatch_tool(&context.request.method, &params));
         let response = match outcome {
@@ -1950,7 +1980,9 @@ mod tests {
                     bundle_identifier: Some("com.example.Notes".into()),
                     process_id: None,
                 },
-                keystroke: axon_core::RecordedKeystroke::Key { key: "Return".into() },
+                keystroke: axon_core::RecordedKeystroke::Key {
+                    key: "Return".into(),
+                },
                 timestamp_ms: 1,
             }])
         }

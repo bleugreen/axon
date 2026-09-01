@@ -51,7 +51,9 @@ fn rust_recording_fixture() -> AxnDocument {
             value: "<redacted: active-credential>".into(),
             fact_target: None,
         })
-        .with_warnings(vec!["credential value was redacted before recording".into()]),
+        .with_warnings(vec![
+            "credential value was redacted before recording".into(),
+        ]),
         RecordedUserEventGroup::new(RecordedUserAction::Scroll {
             target: None,
             app: Some("com.example.Parity".into()),
@@ -79,25 +81,42 @@ fn rust_recording_v2_output_matches_producer_owned_fixtures() {
         fs::write(rust_fixture_path("rust-user-recording-v2.yaml"), &yaml).unwrap();
         fs::write(rust_fixture_path("rust-user-recording-v2.json"), &json).unwrap();
     }
-    assert_eq!(yaml, include_str!("../fixtures/rust-user-recording-v2.yaml"));
-    assert_eq!(json, include_str!("../fixtures/rust-user-recording-v2.json"));
+    assert_eq!(
+        yaml,
+        include_str!("../fixtures/rust-user-recording-v2.yaml")
+    );
+    assert_eq!(
+        json,
+        include_str!("../fixtures/rust-user-recording-v2.json")
+    );
 
     assert_eq!(document.actions.len(), 5);
     assert_eq!(document.actions[0].expects[0].id, "a001.value.0");
     assert_eq!(document.actions[1].requires, ["a001.value.0"]);
     assert_eq!(document.actions[1].expects[0].id, "a002.changed.0");
-    assert_eq!(document.actions[2].params["target"]["point"], json!({"x":42.0,"y":84.0}));
-    assert_eq!(document.actions[3].params["value"], "<redacted: active-credential>");
+    assert_eq!(
+        document.actions[2].params["target"]["point"],
+        json!({"x":42.0,"y":84.0})
+    );
+    assert_eq!(
+        document.actions[3].params["value"],
+        "<redacted: active-credential>"
+    );
     assert_eq!(document.actions[4].params["deltaY"], -120.0);
 }
 
 #[test]
 fn rust_history_v2_output_matches_producer_owned_fixture_and_range_counts() {
     let store = ActionHistoryStore::default();
-    let redaction = ObservationRedactionContext::from_active_secrets(["fixture-history-secret".into()]);
+    let redaction =
+        ObservationRedactionContext::from_active_secrets(["fixture-history-secret".into()]);
     for (id, method, params) in [
         (1, "look", json!({"app":"Parity"})),
-        (2, "click", json!({"target":{"app":"Parity","point":{"x":10,"y":20}},"note":"fixture-history-secret"})),
+        (
+            2,
+            "click",
+            json!({"target":{"app":"Parity","point":{"x":10,"y":20}},"note":"fixture-history-secret"}),
+        ),
         (3, "keyboard", json!({"app":"Parity","text":"done"})),
     ] {
         store.record_redacted(
@@ -112,7 +131,11 @@ fn rust_history_v2_output_matches_producer_owned_fixture_and_range_counts() {
         .export_script("rust-fixture", true, Some("c1"), Some("c2"), None)
         .unwrap();
     if std::env::var_os("UPDATE_RUST_EXPORT_FIXTURES").is_some() {
-        fs::write(rust_fixture_path("rust-action-history-v2.yaml"), &export.script).unwrap();
+        fs::write(
+            rust_fixture_path("rust-action-history-v2.yaml"),
+            &export.script,
+        )
+        .unwrap();
     }
     assert_eq!(
         export.script,

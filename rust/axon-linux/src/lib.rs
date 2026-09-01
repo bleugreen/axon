@@ -385,12 +385,30 @@ impl<B: PointerTargetVerifier + BackgroundPixelInput> Router<B> {
     pub fn request(&mut self, request: JsonRpcRequest) -> Option<JsonRpcResponse> {
         let id = request.id.clone()?;
         let context = self.daemon.history.context(&request);
-        if matches!(context.request.method.as_str(), "save" | "recording.start" | "recording.status" | "recording.stop" | "editor.recordFromHere")
-            && context.request.params.as_ref().is_some_and(|params| !params.is_object())
+        if matches!(
+            context.request.method.as_str(),
+            "save"
+                | "recording.start"
+                | "recording.status"
+                | "recording.stop"
+                | "editor.recordFromHere"
+        ) && context
+            .request
+            .params
+            .as_ref()
+            .is_some_and(|params| !params.is_object())
         {
-            return Some(JsonRpcResponse::failure(id, JsonRpcError { code: -32602, message: "Invalid params: expected object".into(), data: Some(json!({"path":"params","reason":"expected object"})) }));
+            return Some(JsonRpcResponse::failure(
+                id,
+                JsonRpcError {
+                    code: -32602,
+                    message: "Invalid params: expected object".into(),
+                    data: Some(json!({"path":"params","reason":"expected object"})),
+                },
+            ));
         }
-        let params = context.request
+        let params = context
+            .request
             .params
             .as_ref()
             .and_then(|v| v.as_object().cloned())
@@ -1809,7 +1827,9 @@ mod tests {
                 Some(json!({})),
             ))
             .unwrap();
-        assert!(!matches!(save, JsonRpcResponse::Failure(ref failure) if failure.error.data.as_ref().is_some_and(|data| data["reason"] == "observer-unavailable")));
+        assert!(
+            !matches!(save, JsonRpcResponse::Failure(ref failure) if failure.error.data.as_ref().is_some_and(|data| data["reason"] == "observer-unavailable"))
+        );
     }
 
     #[test]
@@ -1952,15 +1972,24 @@ mod tests {
         for (method, extra) in [("click", json!({})), ("type", json!({"value":"after"}))] {
             let mut params = extra.as_object().unwrap().clone();
             params.insert("target".into(), json!({"app":"App","name":name}));
-            router.request(request(method, Value::Object(params))).unwrap();
+            router
+                .request(request(method, Value::Object(params)))
+                .unwrap();
         }
 
-        let export = router.daemon.history.export_script("default", false, None, None, None).unwrap();
+        let export = router
+            .daemon
+            .history
+            .export_script("default", false, None, None, None)
+            .unwrap();
         let document = axon_core::AxnCodec::parse(&export.script).unwrap();
         assert_eq!(document.actions.len(), 2);
-        assert!(document.actions.iter().all(|action| {
-            action.params["target"].get("locator").is_some()
-        }));
+        assert!(
+            document
+                .actions
+                .iter()
+                .all(|action| { action.params["target"].get("locator").is_some() })
+        );
     }
 
     #[derive(Clone)]
@@ -2762,9 +2791,7 @@ mod tests {
         assert_eq!(*scrolls.borrow(), 0);
         assert_eq!(
             EXCLUDED.iter().map(|entry| entry.0).collect::<Vec<_>>(),
-            [
-                "navigate", "windows", "tabs", "drag", "scroll", "permit"
-            ]
+            ["navigate", "windows", "tabs", "drag", "scroll", "permit"]
         );
         for tool in ["click", "keyboard", "type", "invoke"] {
             assert!(!EXCLUDED.iter().any(|entry| entry.0 == tool), "{tool}");
