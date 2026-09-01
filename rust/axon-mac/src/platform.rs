@@ -905,7 +905,11 @@ mod tests {
     fn identifier_matches_the_bundle_identifier_rather_than_the_process_id() {
         let applications = || vec![running(4242, "TextEdit", Some("com.apple.TextEdit"))];
         assert!(
-            resolve_running(applications(), &query(None, None, Some("com.apple.TextEdit"))).is_ok()
+            resolve_running(
+                applications(),
+                &query(None, None, Some("com.apple.TextEdit"))
+            )
+            .is_ok()
         );
         assert!(resolve_running(applications(), &query(None, None, Some("4242"))).is_err());
     }
@@ -914,9 +918,7 @@ mod tests {
     fn an_application_without_a_bundle_identifier_never_satisfies_an_identifier_query() {
         let helper = vec![running(4242, "Helper", None)];
         assert!(resolve_running(helper.clone(), &query(None, Some("Helper"), None)).is_ok());
-        assert!(
-            resolve_running(helper, &query(None, None, Some("com.example.Helper"))).is_err()
-        );
+        assert!(resolve_running(helper, &query(None, None, Some("com.example.Helper"))).is_err());
     }
 
     #[test]
@@ -941,9 +943,12 @@ mod tests {
         );
         // The bundle identifier is what tells apart two applications sharing a display name.
         assert_eq!(
-            resolve_running(shared(), &query(None, Some("Shared"), Some("com.example.two")))
-                .unwrap()
-                .process_id,
+            resolve_running(
+                shared(),
+                &query(None, Some("Shared"), Some("com.example.two"))
+            )
+            .unwrap()
+            .process_id,
             2
         );
     }
