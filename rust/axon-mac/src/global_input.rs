@@ -537,11 +537,11 @@ fn app_identity(element: AXUIElementRef) -> Option<RecordedAppIdentity> {
 /// How this backend names one running application: the display name a person would call it, and
 /// its bundle identifier.
 ///
-/// Both the recorder stamping `RecordedAppIdentity` onto an observed event and the resolver
-/// enumerating candidates for an `AppQuery` come through here, because a capture driven by a
-/// recorded event can only resolve while the two agree on what an application is called.
-/// `accessibility_name` is the `AXTitle` already read from the application element, used when
-/// `NSRunningApplication` has no localized name.
+/// Enumeration, capture, and the recorder all come through here, so a recorded artifact calls an
+/// application what `look` calls it. The localized name is what `AppResolver` in `Sources/AxonCore`
+/// both reports and resolves applications by; AXTitle names windows and elements there, never an
+/// application. `accessibility_name` is the `AXTitle` already read from the application element,
+/// used only as a fallback when `NSRunningApplication` has no localized name.
 pub(crate) fn application_identity(
     pid: i32,
     accessibility_name: String,

@@ -337,8 +337,8 @@ fn capture_node(element: Owned, depth: usize, max_depth: usize, count: &mut usiz
 /// One running application as this backend identifies it.
 ///
 /// These are the same three fields the recorder stamps onto every observed event as a
-/// `RecordedAppIdentity`, drawn from the same source, so a query built from a recorded event can
-/// resolve here.
+/// `RecordedAppIdentity`, drawn from the same source, so a recorded artifact calls an application
+/// what `look` calls it.
 #[derive(Clone, Debug)]
 struct RunningApplication {
     process_id: i32,
@@ -386,11 +386,30 @@ fn resolve_running(
 }
 
 /// The query naming the application a recorded input event was observed in.
+///
+/// One key, not three, following the precedence `RecordedAppIdentity::matches_runtime` already
+/// defines: the process id, else the bundle identifier, else the name. A recorded identity is only
+/// as strong as its strongest key, so constraining the weaker fields alongside it cannot make the
+/// match more certain — it can only strand the evidence for an event that was genuinely observed
+/// the moment any one of them drifts. A deserialized artifact reaches the bundle rung on its own,
+/// because `process_id` is deliberately skipped by serde and never survives a session.
 fn recorded_app_query(app: &axon_core::RecordedAppIdentity) -> AppQuery {
-    AppQuery {
-        process_id: app.process_id,
-        name: Some(app.name.clone()),
-        identifier: app.bundle_identifier.clone(),
+    match (app.process_id, &app.bundle_identifier) {
+        (Some(process_id), _) => AppQuery {
+            process_id: Some(process_id),
+            name: None,
+            identifier: None,
+        },
+        (None, Some(identifier)) => AppQuery {
+            process_id: None,
+            name: None,
+            identifier: Some(identifier.clone()),
+        },
+        (None, None) => AppQuery {
+            process_id: None,
+            name: Some(app.name.clone()),
+            identifier: None,
+        },
     }
 }
 
@@ -438,9 +457,9 @@ impl MacBackend {
                     return None;
                 }
                 let root = Owned(root);
-                // A non-empty AXTitle is what qualifies a process as an application here; the name
-                // it is then reported and matched under is the one the recorder would stamp on an
-                // event observed in it.
+                // A non-empty AXTitle is what qualifies a process as an application here. It is not
+                // what the application is then called: AXTitle names windows and elements, while an
+                // application is named the way the Swift daemon's AppResolver names one.
                 text_attribute(root.0, "AXTitle")
                     .filter(|name| !name.is_empty())
                     .map(|accessibility_name| {
