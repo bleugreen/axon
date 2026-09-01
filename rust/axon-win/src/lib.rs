@@ -37,7 +37,6 @@ const EXCLUDED: &[(&str, &str)] = &[
     ("navigate", "BrowserScripting"),
     ("windows", "BrowserScripting"),
     ("tabs", "BrowserScripting"),
-    ("save", "SerializeHistory"),
     ("drag", "PointerDrag"),
     ("permit", "PermissionPrompt"),
 ];
@@ -69,6 +68,7 @@ pub struct Router<B> {
     snapshot: Option<Snapshot>,
     semantic_names: SemanticNameRegistry,
     observation_redaction: axon_core::ObservationRedactionContext,
+    daemon: axon_core::NativeDaemonState,
 }
 fn capability_unavailable(tool: &str, capability: &str, reason: &str) -> JsonRpcError {
     JsonRpcError {
@@ -327,6 +327,7 @@ impl<
             snapshot: None,
             semantic_names: SemanticNameRegistry::default(),
             observation_redaction: Default::default(),
+            daemon: Default::default(),
         }
     }
 
@@ -555,15 +556,44 @@ impl<
     }
 
     pub fn request(&mut self, request: JsonRpcRequest) -> Option<JsonRpcResponse> {
-        let id = request.id?;
-        let params = request
+        let id = request.id.clone()?;
+        let context = self.daemon.history.context(&request);
+        if matches!(context.request.method.as_str(), "save" | "recording.start" | "recording.status" | "recording.stop" | "editor.recordFromHere")
+            && context.request.params.as_ref().is_some_and(|params| !params.is_object())
+        {
+            return Some(JsonRpcResponse::failure(id, JsonRpcError { code: -32602, message: "Invalid params: expected object".into(), data: Some(json!({"path":"params","reason":"expected object"})) }));
+        }
+        let params = context.request
             .params
+            .as_ref()
             .and_then(|v| v.as_object().cloned())
             .unwrap_or_default();
-        Some(match self.dispatch_tool(&request.method, &params) {
+        let outcome = if matches!(
+            context.request.method.as_str(),
+            "recording.start" | "editor.recordFromHere"
+        ) {
+            Err(capability_unavailable(
+                &context.request.method,
+                "ObserveGlobalInput",
+                "observer-unavailable",
+            ))
+        } else {
+            self.daemon
+                .dispatch(&context.request.method, &params)
+                .unwrap_or_else(|| self.dispatch_tool(&context.request.method, &params))
+        };
+        let response = match outcome {
             Ok(result) => JsonRpcResponse::success(id, result),
             Err(error) => JsonRpcResponse::failure(id, error),
-        })
+        };
+        self.daemon.history.record_redacted_with_locator(
+            &context.request,
+            &response,
+            &context.session_id,
+            |app, name| self.semantic_names.durable_locator(app, name),
+            &self.observation_redaction,
+        );
+        Some(response)
     }
 
     fn dispatch_tool(
@@ -1573,6 +1603,35 @@ mod tests {
     use std::{cell::RefCell, rc::Rc, time::Duration};
 
     #[test]
+    fn recording_start_refuses_when_native_observer_is_unavailable() {
+        let mut router = Router::new(backend(vec![node("Save")], None));
+        let response = router
+            .request(JsonRpcRequest::new(
+                Some(JsonRpcId::Integer(1)),
+                "recording.start",
+                Some(json!({"scope":{"scope":"allApplications"}})),
+            ))
+            .unwrap();
+        let JsonRpcResponse::Failure(failure) = response else {
+            panic!("windows recording.start must not return empty success")
+        };
+        assert_eq!(failure.error.code, -32004);
+        assert_eq!(
+            failure.error.data.unwrap()["reason"],
+            "observer-unavailable"
+        );
+
+        let save = router
+            .request(JsonRpcRequest::new(
+                Some(JsonRpcId::Integer(2)),
+                "save",
+                Some(json!({})),
+            ))
+            .unwrap();
+        assert!(!matches!(save, JsonRpcResponse::Failure(ref failure) if failure.error.data.as_ref().is_some_and(|data| data["reason"] == "observer-unavailable")));
+    }
+
+    #[test]
     fn semantic_resolution_captures_selected_pid_on_first_try() {
         let mut backend = backend(vec![node("Save")], None);
         backend.snapshot.app.process_id = Some(4101);
@@ -1669,6 +1728,26 @@ mod tests {
         assert_eq!(primitive["target"], json!({"app":"Notepad", "name":"save"}));
         assert_eq!(primitive["from"], params["from"]);
         assert_eq!(primitive["value"], "draft");
+    }
+
+    #[test]
+    fn save_exports_durable_locators_for_semantic_click_and_type() {
+        let mut router = Router::new(backend(vec![node("Field")], Some("before")));
+        let name = router.register_snapshot(&router.backend.snapshot.clone())[0]
+            .name
+            .clone();
+        for (method, extra) in [("click", json!({})), ("type", json!({"value":"after"}))] {
+            let mut params = extra.as_object().unwrap().clone();
+            params.insert("target".into(), json!({"app":"App","name":name}));
+            router.request(request(method, Value::Object(params))).unwrap();
+        }
+
+        let export = router.daemon.history.export_script("default", false, None, None, None).unwrap();
+        let document = axon_core::AxnCodec::parse(&export.script).unwrap();
+        assert_eq!(document.actions.len(), 2);
+        assert!(document.actions.iter().all(|action| {
+            action.params["target"].get("locator").is_some()
+        }));
     }
 
     #[derive(Clone)]

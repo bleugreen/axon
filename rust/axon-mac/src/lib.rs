@@ -24,12 +24,13 @@ pub mod socket;
 #[cfg(target_os = "macos")]
 mod platform;
 #[cfg(target_os = "macos")]
+mod global_input;
+#[cfg(target_os = "macos")]
 pub use platform::MacBackend;
 
 /// Tools this backend does not implement at all. These are not delivery decisions: the request
 /// names something the macOS daemon has no code path for, which stays a JSON-RPC error.
 const EXCLUDED: &[(&str, &str)] = &[
-    ("save", "SerializeHistory"),
     ("drag", "PointerDrag"),
     ("permit", "PermissionPrompt"),
     ("navigate", "BrowserScripting"),
@@ -76,6 +77,8 @@ pub struct Router<B> {
     observations: HashMap<String, (Snapshot, Vec<SemanticElementName>)>,
     observation_sequence: u64,
     observation_redaction: axon_core::ObservationRedactionContext,
+    daemon: axon_core::NativeDaemonState,
+    recorder: Option<axon_core::UserActionRecorder>,
 }
 
 fn visual_observation_result(
@@ -340,7 +343,8 @@ impl<
         + TextRecognitionProvider
         + VisualObservationProvider
         + ReadableStateProvider
-        + BackgroundPixelPointer,
+        + BackgroundPixelPointer
+        + axon_core::RecordingEvidenceProvider,
 > Router<B>
 {
     /// What the backend can do, for health documents.
@@ -359,6 +363,8 @@ impl<
             observations: HashMap::new(),
             observation_sequence: 0,
             observation_redaction: Default::default(),
+            daemon: Default::default(),
+            recorder: None,
         }
     }
     fn register_snapshot(&mut self, snapshot: &Snapshot) -> Vec<axon_core::SemanticElementName> {
@@ -590,16 +596,113 @@ impl<
             .map(str::to_owned)
     }
 
+    fn pump_recording(&mut self) -> Result<(), JsonRpcError> {
+        let Some(recorder) = self.recorder.as_mut() else {
+            return Ok(());
+        };
+        recorder
+            .poll(&mut self.backend, Duration::ZERO)
+            .map_err(backend_error)?;
+        for group in recorder.take_groups() {
+            self.daemon.recording.push_group(group)?;
+        }
+        Ok(())
+    }
+
+    fn dispatch_recording(
+        &mut self,
+        method: &str,
+        params: &Map<String, Value>,
+    ) -> Option<Result<Value, JsonRpcError>> {
+        Some(match method {
+            "recording.start" | "editor.recordFromHere" => {
+                let started = self.daemon.dispatch(method, params)?;
+                match started {
+                    Ok(value) => {
+                        let scope = self.daemon.recording.status().scope.expect("active recording has scope");
+                        match axon_core::UserActionRecorder::start_with_redaction(
+                            &mut self.backend,
+                            scope,
+                            self.observation_redaction.clone(),
+                        ) {
+                            Ok(recorder) => {
+                                self.recorder = Some(recorder);
+                                Ok(value)
+                            }
+                            Err(error) => {
+                                self.daemon.recording.abandon();
+                                Err(backend_error(error))
+                            }
+                        }
+                    }
+                    Err(error) => Err(error),
+                }
+            }
+            "recording.status" => self.pump_recording().and_then(|_| {
+                self.daemon.dispatch(method, params).expect("recording route")
+            }),
+            "recording.stop" => {
+                if !params.is_empty() {
+                    return Some(
+                        self.daemon
+                            .dispatch(method, params)
+                            .expect("recording route"),
+                    );
+                }
+                if let Err(error) = self.pump_recording() {
+                    let _ = axon_core::GlobalInputObserver::stop(&mut self.backend);
+                    self.recorder = None;
+                    self.daemon.recording.abandon();
+                    Err(error)
+                } else if let Some(recorder) = self.recorder.take() {
+                    match recorder.finish(&mut self.backend) {
+                        Ok(groups) => groups
+                            .into_iter()
+                            .try_for_each(|group| self.daemon.recording.push_group(group))
+                            .and_then(|_| {
+                                self.daemon.dispatch(method, params).expect("recording route")
+                            }),
+                        Err(error) => {
+                            self.daemon.recording.abandon();
+                            Err(backend_error(error))
+                        }
+                    }
+                } else {
+                    self.daemon.dispatch(method, params).expect("recording route")
+                }
+            }
+            _ => return None,
+        })
+    }
+
     pub fn request(&mut self, request: JsonRpcRequest) -> Option<JsonRpcResponse> {
-        let id = request.id?;
-        let params = request
+        let id = request.id.clone()?;
+        let context = self.daemon.history.context(&request);
+        if matches!(context.request.method.as_str(), "save" | "recording.start" | "recording.status" | "recording.stop" | "editor.recordFromHere")
+            && context.request.params.as_ref().is_some_and(|params| !params.is_object())
+        {
+            return Some(JsonRpcResponse::failure(id, JsonRpcError { code: -32602, message: "Invalid params: expected object".into(), data: Some(json!({"path":"params","reason":"expected object"})) }));
+        }
+        let params = context.request
             .params
+            .as_ref()
             .and_then(|v| v.as_object().cloned())
             .unwrap_or_default();
-        Some(match self.dispatch_tool(&request.method, &params) {
+        let outcome = self.dispatch_recording(&context.request.method, &params)
+            .or_else(|| self.daemon.dispatch(&context.request.method, &params))
+            .unwrap_or_else(|| self.dispatch_tool(&context.request.method, &params));
+        let response = match outcome {
             Ok(result) => JsonRpcResponse::success(id, result),
             Err(error) => JsonRpcResponse::failure(id, error),
-        })
+        };
+        self.daemon.history.record_redacted_with_locator(
+            &context.request,
+            &response,
+            &context.session_id,
+            |app, name| self.semantic_names.durable_locator(app, name),
+            &self.observation_redaction,
+        );
+        Some(response)
     }
 
     fn dispatch_tool(
@@ -1394,13 +1497,15 @@ impl<
         + TextRecognitionProvider
         + VisualObservationProvider
         + ReadableStateProvider
-        + BackgroundPixelPointer,
+        + BackgroundPixelPointer
+        + axon_core::RecordingEvidenceProvider,
 > ToolDispatcher for Router<B>
 {
     fn set_observation_redaction_context(
         &mut self,
         context: axon_core::ObservationRedactionContext,
     ) {
+        self.daemon.recording.set_redaction_context(context.clone());
         self.observation_redaction = context;
     }
 
@@ -1831,6 +1936,124 @@ mod tests {
         }
     }
 
+    impl axon_core::GlobalInputObserver for EnumerationBackend {
+        fn start(&mut self, _: &axon_core::RecordingScope) -> Result<(), axon_core::BackendError> {
+            Ok(())
+        }
+        fn poll(
+            &mut self,
+            _: Duration,
+        ) -> Result<Vec<axon_core::RecordedInputEvent>, axon_core::BackendError> {
+            Ok(vec![axon_core::RecordedInputEvent::KeyDown {
+                app: axon_core::RecordedAppIdentity {
+                    name: "Notes".into(),
+                    bundle_identifier: Some("com.example.Notes".into()),
+                    process_id: None,
+                },
+                keystroke: axon_core::RecordedKeystroke::Key { key: "Return".into() },
+                timestamp_ms: 1,
+            }])
+        }
+        fn stop(&mut self) -> Result<(), axon_core::BackendError> {
+            Ok(())
+        }
+        fn is_recording(&self) -> bool {
+            true
+        }
+    }
+
+    impl axon_core::RecordingEvidenceProvider for EnumerationBackend {
+        fn read_focused(
+            &mut self,
+        ) -> Result<Option<axon_core::RecordedFocusedEvidence>, axon_core::BackendError> {
+            Ok(None)
+        }
+        fn capture_snapshot(
+            &mut self,
+            _: &axon_core::RecordedAppIdentity,
+        ) -> Result<Option<Snapshot>, axon_core::BackendError> {
+            Ok(None)
+        }
+        fn settle(
+            &mut self,
+            _: usize,
+            _: &str,
+        ) -> Result<axon_core::RecordedSettleEvidence, axon_core::BackendError> {
+            Ok(Default::default())
+        }
+    }
+
+    #[test]
+    fn recording_routes_ingest_native_events_before_stop() {
+        let mut router = Router::new(EnumerationBackend);
+        let start = router
+            .request(JsonRpcRequest::new(
+                Some(JsonRpcId::Integer(1)),
+                "recording.start",
+                Some(json!({"scope":{"scope":"allApplications"}})),
+            ))
+            .unwrap();
+        assert!(matches!(start, JsonRpcResponse::Success(_)));
+
+        let status = router
+            .request(JsonRpcRequest::new(
+                Some(JsonRpcId::Integer(2)),
+                "recording.status",
+                Some(json!({})),
+            ))
+            .unwrap();
+        assert!(matches!(status, JsonRpcResponse::Success(_)));
+
+        let stop = router
+            .request(JsonRpcRequest::new(
+                Some(JsonRpcId::Integer(3)),
+                "recording.stop",
+                Some(json!({})),
+            ))
+            .unwrap();
+        let JsonRpcResponse::Success(stop) = stop else {
+            panic!("recording.stop must author the drained native events")
+        };
+        assert!(stop.result["actionCount"].as_u64().unwrap() > 0);
+        assert!(stop.result["script"].as_str().unwrap().contains("Return"));
+    }
+
+    #[test]
+    fn invalid_recording_stop_preserves_native_and_daemon_session_state() {
+        let mut router = Router::new(EnumerationBackend);
+        let start = router
+            .request(JsonRpcRequest::new(
+                Some(JsonRpcId::Integer(1)),
+                "recording.start",
+                Some(json!({"scope":{"scope":"allApplications"}})),
+            ))
+            .unwrap();
+        assert!(matches!(start, JsonRpcResponse::Success(_)));
+
+        let invalid = router
+            .request(JsonRpcRequest::new(
+                Some(JsonRpcId::Integer(2)),
+                "recording.stop",
+                Some(json!({"extra":true})),
+            ))
+            .unwrap();
+        assert!(matches!(invalid, JsonRpcResponse::Failure(_)));
+        assert!(router.recorder.is_some());
+        assert!(router.daemon.recording.status().recording);
+
+        let stop = router
+            .request(JsonRpcRequest::new(
+                Some(JsonRpcId::Integer(3)),
+                "recording.stop",
+                Some(json!({})),
+            ))
+            .unwrap();
+        let JsonRpcResponse::Success(stop) = stop else {
+            panic!("valid stop must still drain and author native events")
+        };
+        assert!(stop.result["actionCount"].as_u64().unwrap() > 0);
+    }
+
     #[test]
     fn look_application_enumeration_matches_shared_envelope() {
         let mut router = Router::new(EnumerationBackend);
@@ -1976,7 +2199,7 @@ mod tests {
 
     #[test]
     fn excluded_tools_are_capability_errors_before_dispatch() {
-        for tool in ["save", "drag", "permit"] {
+        for tool in ["drag", "permit"] {
             let (_, capability) = EXCLUDED.iter().find(|(name, _)| *name == tool).unwrap();
             assert!(!capability.is_empty());
         }

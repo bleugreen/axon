@@ -2,6 +2,7 @@ use crate::{
     BackgroundPixelPointer, PixelDispatch, PixelDispatchError, PixelPlan, PixelTarget,
     PointerTargetVerifier, ReadableStateProvider, VisualObservation, VisualObservationProvider,
 };
+use crate::global_input::MacGlobalInputObserver;
 use serde_json::{Map, Value};
 
 #[path = "capture.rs"]
@@ -9,7 +10,8 @@ mod window_capture;
 use axon_core::{
     AppQuery, Application, BackendError, Capability, CapabilityInfo, CaptureBounds,
     ChildPageCapture, ChildPageRequest, KeyboardIntent, Node, Observation, PlatformBackend, Rect,
-    Screenshot, Snapshot, SnapshotHandle, Window,
+    RecordingEvidenceProvider, RecordedFocusedEvidence, RecordedPoint, RecordedSettleEvidence,
+    RecordedTargetEvidence, Screenshot, Snapshot, SnapshotHandle, Window,
 };
 use std::{
     collections::HashMap,
@@ -334,11 +336,13 @@ fn capture_node(element: Owned, depth: usize, max_depth: usize, count: &mut usiz
 
 pub struct MacBackend {
     handles: HashMap<SnapshotHandle, Owned>,
+    global_input: MacGlobalInputObserver,
 }
 impl MacBackend {
     pub fn new() -> Result<Self, BackendError> {
         Ok(Self {
             handles: HashMap::new(),
+            global_input: MacGlobalInputObserver::default(),
         })
     }
     pub fn accessibility_enabled(&self) -> bool {
@@ -423,7 +427,75 @@ impl MacBackend {
     }
 }
 
+impl axon_core::GlobalInputObserver for MacBackend {
+    fn start(&mut self, scope: &axon_core::RecordingScope) -> Result<(), BackendError> {
+        axon_core::GlobalInputObserver::start(&mut self.global_input, scope)
+    }
+
+    fn poll(&mut self, timeout: Duration) -> Result<Vec<axon_core::RecordedInputEvent>, BackendError> {
+        axon_core::GlobalInputObserver::poll(&mut self.global_input, timeout)
+    }
+
+    fn stop(&mut self) -> Result<(), BackendError> {
+        axon_core::GlobalInputObserver::stop(&mut self.global_input)
+    }
+
+    fn is_recording(&self) -> bool {
+        axon_core::GlobalInputObserver::is_recording(&self.global_input)
+    }
+}
+
+impl RecordingEvidenceProvider for MacBackend {
+    fn read_focused(&mut self) -> Result<Option<RecordedFocusedEvidence>, BackendError> {
+        Ok(crate::global_input::focused_evidence().map(|(app, element)| {
+            let value = element.value.clone();
+            RecordedFocusedEvidence {
+                target: RecordedTargetEvidence {
+                    app,
+                    point: RecordedPoint::default(),
+                    candidates: vec![element],
+                },
+                value,
+            }
+        }))
+    }
+
+    fn capture_snapshot(
+        &mut self,
+        app: &axon_core::RecordedAppIdentity,
+    ) -> Result<Option<Snapshot>, BackendError> {
+        let query = AppQuery {
+            process_id: app.process_id,
+            name: Some(app.name.clone()),
+            identifier: app.bundle_identifier.clone(),
+        };
+        PlatformBackend::capture(self, &query).map(Some)
+    }
+
+    fn settle(
+        &mut self,
+        _group_index: usize,
+        _tool: &str,
+    ) -> Result<RecordedSettleEvidence, BackendError> {
+        Ok(RecordedSettleEvidence::default())
+    }
+}
+
 impl PlatformBackend for MacBackend {
+    fn global_input_observer(
+        &mut self,
+    ) -> Result<&mut dyn axon_core::GlobalInputObserver, BackendError> {
+        if !self.global_input.available() {
+            return Err(BackendError::CapabilityReason {
+                capability: Capability::ObserveGlobalInput,
+                code: "accessibility-denied",
+                reason: "Accessibility permission is not granted".into(),
+                diagnostic: None,
+            });
+        }
+        Ok(&mut self.global_input)
+    }
+
     fn capabilities(&self) -> Result<Vec<CapabilityInfo>, BackendError> {
         let accessibility_enabled = self.accessibility_enabled();
         let screen_recording_enabled = window_capture::screen_capture_enabled();
@@ -437,11 +509,15 @@ impl PlatformBackend for MacBackend {
             Capability::Focus,
             Capability::Scroll,
             Capability::Screenshot,
+            Capability::SerializeHistory,
+            Capability::ObserveGlobalInput,
         ];
         Ok(Capability::ALL
             .into_iter()
             .map(|capability| {
-                let usable = if capability == Capability::Screenshot {
+                let usable = if capability == Capability::SerializeHistory {
+                    true
+                } else if capability == Capability::Screenshot {
                     screenshot_restriction(accessibility_enabled, screen_recording_enabled)
                         .is_none()
                 } else {
