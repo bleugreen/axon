@@ -171,7 +171,11 @@ impl UserActionRecorder {
                 if self.in_scope(&evidence.app) { self.flush_text(provider)?; let target = Some(self.target(provider, &evidence)?); let action = RecordedUserAction::Scroll { target, app: Some(evidence.app.name), delta_x, delta_y }; let warnings = point_fallback_warnings(&action); self.append_and_settle_with_warnings(provider, action, "scroll", warnings)?; }
             }
             RecordedInputEvent::Notification { app, notification, role, .. } => {
-                if self.in_scope(&app) { if let Some(last) = self.groups.last_mut() { last.observed.push(serde_json::json!({"notification": notification, "role": role})); } }
+                if self.in_scope(&app)
+                    && let Some(last) = self.groups.last_mut()
+                {
+                    last.observed.push(serde_json::json!({"notification": notification, "role": role}));
+                }
             }
             RecordedInputEvent::SecureInputChanged { .. } => unreachable!(),
         }
@@ -224,10 +228,10 @@ impl UserActionRecorder {
                 let Some(node) = snapshot.node(name.source_index) else { continue; };
                 if node_matches(node, candidate) && name.collision_free {
                     let wire = WireElementTarget { app: evidence.app.bundle_identifier.clone().unwrap_or_else(|| evidence.app.name.clone()), name: name.name.clone() };
-                    if let crate::SemanticSelection::Selected(context) = self.registry.select(&wire) {
-                        if LocatorResolver::resolve(context.locator(), &snapshot).status == ResolutionStatus::Unique {
-                            return Ok(serde_json::to_value(wire).expect("wire target serializes"));
-                        }
+                    if let crate::SemanticSelection::Selected(context) = self.registry.select(&wire)
+                        && LocatorResolver::resolve(context.locator(), &snapshot).status == ResolutionStatus::Unique
+                    {
+                        return Ok(serde_json::to_value(wire).expect("wire target serializes"));
                     }
                 }
             }
