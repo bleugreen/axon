@@ -920,6 +920,33 @@ mod tests {
         );
     }
 
+    /// A recorded identity holds one key as strongly as it can. A display label that disagrees
+    /// between the recorder and the enumeration must not be able to strand the evidence for an
+    /// event that was genuinely observed — the failure that constraining all three fields caused.
+    #[test]
+    fn a_recorded_capture_resolves_on_its_strongest_key_despite_a_disagreeing_name() {
+        let observed = |process_id, bundle: Option<&str>| axon_core::RecordedAppIdentity {
+            name: "Wi-Fi".into(),
+            bundle_identifier: bundle.map(str::to_owned),
+            process_id,
+        };
+        let listed = || vec![running(4242, "WiFiAgent", Some("com.apple.wifi.WiFiAgent"))];
+
+        let by_pid = recorded_app_query(&observed(Some(4242), Some("com.apple.wifi.WiFiAgent")));
+        assert_eq!((by_pid.name.as_deref(), by_pid.identifier.as_deref()), (None, None));
+        assert_eq!(resolve_running(listed(), &by_pid).unwrap().process_id, 4242);
+
+        // A deserialized artifact carries no pid, so the bundle identifier is the strongest key.
+        let by_bundle = recorded_app_query(&observed(None, Some("com.apple.wifi.WiFiAgent")));
+        assert_eq!(by_bundle.name, None);
+        assert_eq!(resolve_running(listed(), &by_bundle).unwrap().process_id, 4242);
+
+        // With neither, the name is all that is left to try.
+        let by_name = recorded_app_query(&observed(None, None));
+        assert_eq!(by_name.name.as_deref(), Some("Wi-Fi"));
+        assert_eq!(by_name.identifier, None);
+    }
+
     #[test]
     fn identifier_matches_the_bundle_identifier_rather_than_the_process_id() {
         let applications = || vec![running(4242, "TextEdit", Some("com.apple.TextEdit"))];
