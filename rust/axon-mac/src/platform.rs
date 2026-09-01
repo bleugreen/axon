@@ -340,7 +340,7 @@ fn capture_node(element: Owned, depth: usize, max_depth: usize, count: &mut usiz
 /// `RecordedAppIdentity`, drawn from the same source, so a query built from a recorded event can
 /// resolve here.
 #[derive(Clone, Debug)]
-pub(crate) struct RunningApplication {
+struct RunningApplication {
     process_id: i32,
     name: String,
     bundle_identifier: Option<String>,
@@ -371,7 +371,7 @@ impl RunningApplication {
 ///
 /// Split from the live enumeration so the matching rule can be exercised against a synthetic list;
 /// the native pid walk it is normally fed cannot be staged in a test.
-pub(crate) fn resolve_running(
+fn resolve_running(
     applications: Vec<RunningApplication>,
     query: &AppQuery,
 ) -> Result<RunningApplication, BackendError> {
@@ -386,7 +386,7 @@ pub(crate) fn resolve_running(
 }
 
 /// The query naming the application a recorded input event was observed in.
-pub(crate) fn recorded_app_query(app: &axon_core::RecordedAppIdentity) -> AppQuery {
+fn recorded_app_query(app: &axon_core::RecordedAppIdentity) -> AppQuery {
     AppQuery {
         process_id: app.process_id,
         name: Some(app.name.clone()),
