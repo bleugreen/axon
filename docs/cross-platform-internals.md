@@ -1109,6 +1109,19 @@ semantics deliberately mirror the Swift tables in
 check boxes, radio buttons, and menu items, while combo boxes, text areas, and
 text fields are editable.
 
+One vocabulary names an application throughout this backend. Resolution matches
+an `AppQuery` against the running applications it enumerates: `process_id`
+against the pid, `name` case-insensitively against the display name, and
+`identifier` against the bundle identifier. That is the meaning `identifier`
+carries on Windows and Linux too, where it is likewise the stable identity the
+backend publishes in `Application.identifier`, and macOS now publishes its bundle
+identifier there rather than leaving it null. Enumeration and the recorder both
+draw the display name and bundle identifier from one function in
+`rust/axon-mac/src/global_input.rs`, so a capture driven by an observed input
+event resolves to the application the event was seen in; while the two disagreed,
+every recorded event failed to resolve and macOS recordings ended with zero
+actions.
+
 The v1 facade exposes `look`, `find`, `click`, `type`, `keyboard`, `invoke`,
 `scroll`, and `run`. `look` derives semantic names through axon-core and actions
 resolve the strict `{app,name}` target through the shared registry; ambiguous

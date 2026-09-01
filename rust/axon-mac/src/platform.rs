@@ -859,6 +859,95 @@ mod tests {
                 .usable
         );
     }
+    fn running(process_id: i32, name: &str, bundle: Option<&str>) -> RunningApplication {
+        RunningApplication {
+            process_id,
+            name: name.into(),
+            bundle_identifier: bundle.map(str::to_owned),
+        }
+    }
+
+    fn query(process_id: Option<u32>, name: Option<&str>, identifier: Option<&str>) -> AppQuery {
+        AppQuery {
+            process_id,
+            name: name.map(str::to_owned),
+            identifier: identifier.map(str::to_owned),
+        }
+    }
+
+    /// The recorder stamps every observed event with a name, a bundle identifier, and a pid, and
+    /// `capture_snapshot` turns all three into the query that gathers that event's evidence. When
+    /// the resolver read `identifier` as a process id rendered as a string, that query matched
+    /// nothing, so every macOS recording stopped with zero actions.
+    #[test]
+    fn a_recorded_app_identity_resolves_to_the_application_it_was_observed_in() {
+        let observed = axon_core::RecordedAppIdentity {
+            name: "TextEdit".into(),
+            bundle_identifier: Some("com.apple.TextEdit".into()),
+            process_id: Some(4242),
+        };
+        let resolved = resolve_running(
+            vec![
+                running(4242, "TextEdit", Some("com.apple.TextEdit")),
+                running(5150, "Notes", Some("com.apple.Notes")),
+            ],
+            &recorded_app_query(&observed),
+        )
+        .expect("a recorded identity resolves to the application it was recorded from");
+        assert_eq!(resolved.process_id, 4242);
+        assert_eq!(
+            resolved.bundle_identifier.as_deref(),
+            Some("com.apple.TextEdit")
+        );
+    }
+
+    #[test]
+    fn identifier_matches_the_bundle_identifier_rather_than_the_process_id() {
+        let applications = || vec![running(4242, "TextEdit", Some("com.apple.TextEdit"))];
+        assert!(
+            resolve_running(applications(), &query(None, None, Some("com.apple.TextEdit"))).is_ok()
+        );
+        assert!(resolve_running(applications(), &query(None, None, Some("4242"))).is_err());
+    }
+
+    #[test]
+    fn an_application_without_a_bundle_identifier_never_satisfies_an_identifier_query() {
+        let helper = vec![running(4242, "Helper", None)];
+        assert!(resolve_running(helper.clone(), &query(None, Some("Helper"), None)).is_ok());
+        assert!(
+            resolve_running(helper, &query(None, None, Some("com.example.Helper"))).is_err()
+        );
+    }
+
+    #[test]
+    fn resolution_separates_no_match_from_ambiguity() {
+        let shared = || {
+            vec![
+                running(1, "Shared", Some("com.example.one")),
+                running(2, "Shared", Some("com.example.two")),
+            ]
+        };
+        assert!(
+            resolve_running(shared(), &query(None, Some("Shared"), None))
+                .unwrap_err()
+                .to_string()
+                .contains("ambiguous")
+        );
+        assert!(
+            resolve_running(shared(), &query(None, Some("Missing"), None))
+                .unwrap_err()
+                .to_string()
+                .contains("not found")
+        );
+        // The bundle identifier is what tells apart two applications sharing a display name.
+        assert_eq!(
+            resolve_running(shared(), &query(None, Some("Shared"), Some("com.example.two")))
+                .unwrap()
+                .process_id,
+            2
+        );
+    }
+
     #[test]
     fn screenshot_capability_requires_both_native_permissions() {
         assert_eq!(
