@@ -149,8 +149,18 @@ fn deterministic_tag(
 }
 
 const SECRET_LABELS: &[&str] = &[
-    "password", "passcode", "secret", "token", "private key", "recovery code",
-    "recovery key", "api key", "seed phrase", "credential", "access key", "auth key",
+    "password",
+    "passcode",
+    "secret",
+    "token",
+    "private key",
+    "recovery code",
+    "recovery key",
+    "api key",
+    "seed phrase",
+    "credential",
+    "access key",
+    "auth key",
 ];
 
 fn normalized_label(value: &str) -> String {
@@ -158,7 +168,9 @@ fn normalized_label(value: &str) -> String {
 }
 
 fn regex_matches(pattern: &str, value: &str) -> bool {
-    Regex::new(pattern).expect("redaction regex is valid").is_match(value)
+    Regex::new(pattern)
+        .expect("redaction regex is valid")
+        .is_match(value)
 }
 
 fn credential_pattern_matches(value: &str) -> bool {
@@ -209,7 +221,10 @@ fn contains_luhn_card(value: &str) -> bool {
             {
                 return false;
             }
-            let digits: Vec<u32> = candidate.chars().filter_map(|char| char.to_digit(10)).collect();
+            let digits: Vec<u32> = candidate
+                .chars()
+                .filter_map(|char| char.to_digit(10))
+                .collect();
             if !(13..=19).contains(&digits.len()) {
                 return false;
             }

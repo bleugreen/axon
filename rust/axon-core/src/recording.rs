@@ -13,9 +13,9 @@ use crate::{
     AxnAction, AxnArgument, AxnDocument, ExpectedFact, LocatorResolver, ResolutionStatus,
     SemanticNameRegistry, Snapshot, WireElementTarget,
 };
+use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
-use serde::de::DeserializeOwned;
 use std::time::Duration;
 
 /// A physical point in the same screen coordinates a dispatch is aimed with.
@@ -25,21 +25,30 @@ pub struct RecordedPoint {
     pub y: f64,
 }
 
-fn redact_input_event(event: RecordedInputEvent, context: &crate::ObservationRedactionContext) -> RecordedInputEvent {
-    let process_id = match &event {
-        RecordedInputEvent::MouseDown { evidence, .. }
-        | RecordedInputEvent::MouseUp { evidence, .. }
-        | RecordedInputEvent::Scroll { evidence, .. } => evidence.app.process_id,
-        RecordedInputEvent::KeyDown { app, .. } | RecordedInputEvent::Notification { app, .. } => app.process_id,
-        RecordedInputEvent::MouseDragged { .. } | RecordedInputEvent::SecureInputChanged { .. } => None,
-    };
+fn redact_input_event(
+    event: RecordedInputEvent,
+    context: &crate::ObservationRedactionContext,
+) -> RecordedInputEvent {
+    let process_id =
+        match &event {
+            RecordedInputEvent::MouseDown { evidence, .. }
+            | RecordedInputEvent::MouseUp { evidence, .. }
+            | RecordedInputEvent::Scroll { evidence, .. } => evidence.app.process_id,
+            RecordedInputEvent::KeyDown { app, .. }
+            | RecordedInputEvent::Notification { app, .. } => app.process_id,
+            RecordedInputEvent::MouseDragged { .. }
+            | RecordedInputEvent::SecureInputChanged { .. } => None,
+        };
     let mut event = redact_serializable(event, context);
     match &mut event {
         RecordedInputEvent::MouseDown { evidence, .. }
         | RecordedInputEvent::MouseUp { evidence, .. }
         | RecordedInputEvent::Scroll { evidence, .. } => evidence.app.process_id = process_id,
-        RecordedInputEvent::KeyDown { app, .. } | RecordedInputEvent::Notification { app, .. } => app.process_id = process_id,
-        RecordedInputEvent::MouseDragged { .. } | RecordedInputEvent::SecureInputChanged { .. } => {}
+        RecordedInputEvent::KeyDown { app, .. } | RecordedInputEvent::Notification { app, .. } => {
+            app.process_id = process_id
+        }
+        RecordedInputEvent::MouseDragged { .. } | RecordedInputEvent::SecureInputChanged { .. } => {
+        }
     }
     event
 }
@@ -57,21 +66,34 @@ impl RecordedAppIdentity {
     }
 }
 
-pub(crate) fn redact_serializable<T: Serialize + DeserializeOwned>(value: T, context: &crate::ObservationRedactionContext) -> T {
+pub(crate) fn redact_serializable<T: Serialize + DeserializeOwned>(
+    value: T,
+    context: &crate::ObservationRedactionContext,
+) -> T {
     let mut value = serde_json::to_value(value).expect("recorder evidence serializes");
     context.redact_value(&mut value);
     serde_json::from_value(value).expect("redacted recorder evidence preserves its shape")
 }
 
 fn point_fallback_warning(target: &Value) -> Option<String> {
-    target.get("point").map(|_| "could not derive a canonical semantic target; recorded point fallback".into())
+    target
+        .get("point")
+        .map(|_| "could not derive a canonical semantic target; recorded point fallback".into())
 }
 
 fn point_fallback_warnings(action: &RecordedUserAction) -> Vec<String> {
     match action {
-        RecordedUserAction::Click { target } => point_fallback_warning(target).into_iter().collect(),
-        RecordedUserAction::Drag { from, to, .. } => [from, to].into_iter().filter_map(point_fallback_warning).collect(),
-        RecordedUserAction::Scroll { target: Some(target), .. } => point_fallback_warning(target).into_iter().collect(),
+        RecordedUserAction::Click { target } => {
+            point_fallback_warning(target).into_iter().collect()
+        }
+        RecordedUserAction::Drag { from, to, .. } => [from, to]
+            .into_iter()
+            .filter_map(point_fallback_warning)
+            .collect(),
+        RecordedUserAction::Scroll {
+            target: Some(target),
+            ..
+        } => point_fallback_warning(target).into_iter().collect(),
         _ => Vec::new(),
     }
 }
@@ -90,11 +112,18 @@ pub struct UserActionRecorder {
 }
 
 impl UserActionRecorder {
-    pub fn start(provider: &mut dyn RecordingEvidenceProvider, scope: RecordingScope) -> Result<Self, crate::BackendError> {
+    pub fn start(
+        provider: &mut dyn RecordingEvidenceProvider,
+        scope: RecordingScope,
+    ) -> Result<Self, crate::BackendError> {
         Self::start_with_redaction(provider, scope, Default::default())
     }
 
-    pub fn start_with_redaction(provider: &mut dyn RecordingEvidenceProvider, scope: RecordingScope, redaction: crate::ObservationRedactionContext) -> Result<Self, crate::BackendError> {
+    pub fn start_with_redaction(
+        provider: &mut dyn RecordingEvidenceProvider,
+        scope: RecordingScope,
+        redaction: crate::ObservationRedactionContext,
+    ) -> Result<Self, crate::BackendError> {
         provider.start(&scope)?;
         Ok(Self {
             registry: SemanticNameRegistry::default(),
@@ -108,14 +137,23 @@ impl UserActionRecorder {
         })
     }
 
-    pub fn poll(&mut self, provider: &mut dyn RecordingEvidenceProvider, timeout: Duration) -> Result<usize, crate::BackendError> {
+    pub fn poll(
+        &mut self,
+        provider: &mut dyn RecordingEvidenceProvider,
+        timeout: Duration,
+    ) -> Result<usize, crate::BackendError> {
         let events = provider.poll(timeout)?;
         let count = events.len();
-        for event in events { self.consume(provider, redact_input_event(event, &self.redaction))?; }
+        for event in events {
+            self.consume(provider, redact_input_event(event, &self.redaction))?;
+        }
         Ok(count)
     }
 
-    pub fn finish(mut self, provider: &mut dyn RecordingEvidenceProvider) -> Result<Vec<RecordedUserEventGroup>, crate::BackendError> {
+    pub fn finish(
+        mut self,
+        provider: &mut dyn RecordingEvidenceProvider,
+    ) -> Result<Vec<RecordedUserEventGroup>, crate::BackendError> {
         let flush = self.flush_text(provider);
         let stop = provider.stop();
         flush?;
@@ -123,13 +161,19 @@ impl UserActionRecorder {
         Ok(self.groups)
     }
 
-    pub fn groups(&self) -> &[RecordedUserEventGroup] { &self.groups }
+    pub fn groups(&self) -> &[RecordedUserEventGroup] {
+        &self.groups
+    }
 
     pub fn take_groups(&mut self) -> Vec<RecordedUserEventGroup> {
         std::mem::take(&mut self.groups)
     }
 
-    fn consume(&mut self, provider: &mut dyn RecordingEvidenceProvider, event: RecordedInputEvent) -> Result<(), crate::BackendError> {
+    fn consume(
+        &mut self,
+        provider: &mut dyn RecordingEvidenceProvider,
+        event: RecordedInputEvent,
+    ) -> Result<(), crate::BackendError> {
         if let RecordedInputEvent::SecureInputChanged { active, .. } = event {
             self.secure_input = active;
             self.pending_text = None;
@@ -137,44 +181,109 @@ impl UserActionRecorder {
             self.drag_end = None;
             return Ok(());
         }
-        if self.secure_input { return Ok(()); }
+        if self.secure_input {
+            return Ok(());
+        }
         match event {
-            RecordedInputEvent::KeyDown { app, keystroke: RecordedKeystroke::Text { text }, .. } => {
-                if !self.in_scope(&app) { return Ok(()); }
+            RecordedInputEvent::KeyDown {
+                app,
+                keystroke: RecordedKeystroke::Text { text },
+                ..
+            } => {
+                if !self.in_scope(&app) {
+                    return Ok(());
+                }
                 match &mut self.pending_text {
-                    Some((pending_app, pending)) if same_app(pending_app, &app) => pending.push_str(&text),
-                    Some(_) => { self.flush_text(provider)?; self.pending_text = Some((app, text)); }
+                    Some((pending_app, pending)) if same_app(pending_app, &app) => {
+                        pending.push_str(&text)
+                    }
+                    Some(_) => {
+                        self.flush_text(provider)?;
+                        self.pending_text = Some((app, text));
+                    }
                     None => self.pending_text = Some((app, text)),
                 }
             }
-            RecordedInputEvent::KeyDown { app, keystroke: RecordedKeystroke::Key { key }, .. } => {
-                if self.in_scope(&app) { self.flush_text(provider)?; self.append_and_settle(provider, RecordedUserAction::PressKey { app: app.name, key }, "press")?; }
+            RecordedInputEvent::KeyDown {
+                app,
+                keystroke: RecordedKeystroke::Key { key },
+                ..
+            } => {
+                if self.in_scope(&app) {
+                    self.flush_text(provider)?;
+                    self.append_and_settle(
+                        provider,
+                        RecordedUserAction::PressKey { app: app.name, key },
+                        "press",
+                    )?;
+                }
             }
-            RecordedInputEvent::MouseDown { evidence, timestamp_ms } => {
-                if self.in_scope(&evidence.app) { self.flush_text(provider)?; self.mouse_down = Some((evidence, timestamp_ms)); self.drag_end = None; }
+            RecordedInputEvent::MouseDown {
+                evidence,
+                timestamp_ms,
+            } => {
+                if self.in_scope(&evidence.app) {
+                    self.flush_text(provider)?;
+                    self.mouse_down = Some((evidence, timestamp_ms));
+                    self.drag_end = None;
+                }
             }
             RecordedInputEvent::MouseDragged { at, .. } => self.drag_end = Some(at),
-            RecordedInputEvent::MouseUp { evidence, timestamp_ms } => {
-                if !self.in_scope(&evidence.app) { return Ok(()); }
+            RecordedInputEvent::MouseUp {
+                evidence,
+                timestamp_ms,
+            } => {
+                if !self.in_scope(&evidence.app) {
+                    return Ok(());
+                }
                 if let Some((down, started)) = self.mouse_down.take() {
                     let from = self.target(provider, &down)?;
                     let drag_end = self.drag_end.take();
                     let tool = if drag_end.is_some() { "drag" } else { "click" };
                     let action = if let Some(at) = drag_end {
-                        RecordedUserAction::Drag { from, to: point_target(&evidence.app, at), app: Some(evidence.app.name), duration_ms: Some(timestamp_ms.saturating_sub(started) as i64) }
-                    } else { RecordedUserAction::Click { target: from } };
+                        RecordedUserAction::Drag {
+                            from,
+                            to: point_target(&evidence.app, at),
+                            app: Some(evidence.app.name),
+                            duration_ms: Some(timestamp_ms.saturating_sub(started) as i64),
+                        }
+                    } else {
+                        RecordedUserAction::Click { target: from }
+                    };
                     let warnings = point_fallback_warnings(&action);
                     self.append_and_settle_with_warnings(provider, action, tool, warnings)?;
                 }
             }
-            RecordedInputEvent::Scroll { evidence, delta_x, delta_y, .. } => {
-                if self.in_scope(&evidence.app) { self.flush_text(provider)?; let target = Some(self.target(provider, &evidence)?); let action = RecordedUserAction::Scroll { target, app: Some(evidence.app.name), delta_x, delta_y }; let warnings = point_fallback_warnings(&action); self.append_and_settle_with_warnings(provider, action, "scroll", warnings)?; }
+            RecordedInputEvent::Scroll {
+                evidence,
+                delta_x,
+                delta_y,
+                ..
+            } => {
+                if self.in_scope(&evidence.app) {
+                    self.flush_text(provider)?;
+                    let target = Some(self.target(provider, &evidence)?);
+                    let action = RecordedUserAction::Scroll {
+                        target,
+                        app: Some(evidence.app.name),
+                        delta_x,
+                        delta_y,
+                    };
+                    let warnings = point_fallback_warnings(&action);
+                    self.append_and_settle_with_warnings(provider, action, "scroll", warnings)?;
+                }
             }
-            RecordedInputEvent::Notification { app, notification, role, .. } => {
+            RecordedInputEvent::Notification {
+                app,
+                notification,
+                role,
+                ..
+            } => {
                 if self.in_scope(&app)
                     && let Some(last) = self.groups.last_mut()
                 {
-                    last.observed.push(serde_json::json!({"notification": notification, "role": role}));
+                    last.observed
+                        .push(serde_json::json!({"notification": notification, "role": role}));
                 }
             }
             RecordedInputEvent::SecureInputChanged { .. } => unreachable!(),
@@ -182,33 +291,78 @@ impl UserActionRecorder {
         Ok(())
     }
 
-    fn flush_text(&mut self, provider: &mut dyn RecordingEvidenceProvider) -> Result<(), crate::BackendError> {
-        let Some((app, text)) = self.pending_text.take() else { return Ok(()); };
+    fn flush_text(
+        &mut self,
+        provider: &mut dyn RecordingEvidenceProvider,
+    ) -> Result<(), crate::BackendError> {
+        let Some((app, text)) = self.pending_text.take() else {
+            return Ok(());
+        };
         // Clear pending state before the provider read: Accessibility callbacks may re-enter.
         let focused = provider.read_focused()?;
         let (action, warnings) = match focused {
-            Some(focused) if !focused.target.candidates.iter().any(|candidate| candidate.sensitive) => {
+            Some(focused)
+                if !focused
+                    .target
+                    .candidates
+                    .iter()
+                    .any(|candidate| candidate.sensitive) =>
+            {
                 let target = self.target(provider, &focused.target)?;
                 match focused.value {
                     Some(value) => {
                         let warnings = point_fallback_warning(&target).into_iter().collect();
-                        (RecordedUserAction::SetValue { target: target.clone(), value, fact_target: Some(target) }, warnings)
+                        (
+                            RecordedUserAction::SetValue {
+                                target: target.clone(),
+                                value,
+                                fact_target: Some(target),
+                            },
+                            warnings,
+                        )
                     }
-                    None => (RecordedUserAction::TypeText { app: app.name, text }, vec!["focused element did not expose a value; recorded keyboard fallback".into()]),
+                    None => (
+                        RecordedUserAction::TypeText {
+                            app: app.name,
+                            text,
+                        },
+                        vec![
+                            "focused element did not expose a value; recorded keyboard fallback"
+                                .into(),
+                        ],
+                    ),
                 }
             }
-            _ => (RecordedUserAction::TypeText { app: app.name, text }, vec!["focused element unavailable or sensitive; recorded keyboard fallback".into()]),
+            _ => (
+                RecordedUserAction::TypeText {
+                    app: app.name,
+                    text,
+                },
+                vec!["focused element unavailable or sensitive; recorded keyboard fallback".into()],
+            ),
         };
         self.append_and_settle_with_warnings(provider, action, "type", warnings)
     }
 
-    fn append_and_settle(&mut self, provider: &mut dyn RecordingEvidenceProvider, action: RecordedUserAction, tool: &str) -> Result<(), crate::BackendError> {
+    fn append_and_settle(
+        &mut self,
+        provider: &mut dyn RecordingEvidenceProvider,
+        action: RecordedUserAction,
+        tool: &str,
+    ) -> Result<(), crate::BackendError> {
         self.append_and_settle_with_warnings(provider, action, tool, Vec::new())
     }
 
-    fn append_and_settle_with_warnings(&mut self, provider: &mut dyn RecordingEvidenceProvider, action: RecordedUserAction, tool: &str, warnings: Vec<String>) -> Result<(), crate::BackendError> {
+    fn append_and_settle_with_warnings(
+        &mut self,
+        provider: &mut dyn RecordingEvidenceProvider,
+        action: RecordedUserAction,
+        tool: &str,
+        warnings: Vec<String>,
+    ) -> Result<(), crate::BackendError> {
         let index = self.groups.len();
-        self.groups.push(RecordedUserEventGroup::new(action).with_warnings(warnings));
+        self.groups
+            .push(RecordedUserEventGroup::new(action).with_warnings(warnings));
         let settled = provider.settle(index, tool)?;
         self.groups[index].observed.extend(settled.observed);
         self.groups[index].observation = settled.observation;
@@ -217,19 +371,39 @@ impl UserActionRecorder {
         Ok(())
     }
 
-    fn target(&mut self, provider: &mut dyn RecordingEvidenceProvider, evidence: &RecordedTargetEvidence) -> Result<Value, crate::BackendError> {
-        if evidence.candidates.iter().any(|candidate| candidate.sensitive) {
+    fn target(
+        &mut self,
+        provider: &mut dyn RecordingEvidenceProvider,
+        evidence: &RecordedTargetEvidence,
+    ) -> Result<Value, crate::BackendError> {
+        if evidence
+            .candidates
+            .iter()
+            .any(|candidate| candidate.sensitive)
+        {
             return Ok(point_target(&evidence.app, evidence.point));
         }
-        let Some(snapshot) = provider.capture_snapshot(&evidence.app)? else { return Ok(point_target(&evidence.app, evidence.point)); };
+        let Some(snapshot) = provider.capture_snapshot(&evidence.app)? else {
+            return Ok(point_target(&evidence.app, evidence.point));
+        };
         let names = self.registry.register(&snapshot);
         for candidate in &evidence.candidates {
             for name in &names {
-                let Some(node) = snapshot.node(name.source_index) else { continue; };
+                let Some(node) = snapshot.node(name.source_index) else {
+                    continue;
+                };
                 if node_matches(node, candidate) && name.collision_free {
-                    let wire = WireElementTarget { app: evidence.app.bundle_identifier.clone().unwrap_or_else(|| evidence.app.name.clone()), name: name.name.clone() };
+                    let wire = WireElementTarget {
+                        app: evidence
+                            .app
+                            .bundle_identifier
+                            .clone()
+                            .unwrap_or_else(|| evidence.app.name.clone()),
+                        name: name.name.clone(),
+                    };
                     if let crate::SemanticSelection::Selected(context) = self.registry.select(&wire)
-                        && LocatorResolver::resolve(context.locator(), &snapshot).status == ResolutionStatus::Unique
+                        && LocatorResolver::resolve(context.locator(), &snapshot).status
+                            == ResolutionStatus::Unique
                     {
                         return Ok(serde_json::to_value(wire).expect("wire target serializes"));
                     }
@@ -240,7 +414,10 @@ impl UserActionRecorder {
     }
 
     fn in_scope(&self, app: &RecordedAppIdentity) -> bool {
-        match &self.scope { RecordingScope::AllApplications => true, RecordingScope::Application { app: wanted } => wanted.matches_runtime(app) }
+        match &self.scope {
+            RecordingScope::AllApplications => true,
+            RecordingScope::Application { app: wanted } => wanted.matches_runtime(app),
+        }
     }
 }
 
@@ -269,15 +446,32 @@ impl<P: RecordingEvidenceProvider> OwnedUserActionRecorder<P> {
     }
 }
 
-fn same_app(a: &RecordedAppIdentity, b: &RecordedAppIdentity) -> bool { a.matches_runtime(b) }
+fn same_app(a: &RecordedAppIdentity, b: &RecordedAppIdentity) -> bool {
+    a.matches_runtime(b)
+}
 
 fn node_matches(node: &crate::Node, candidate: &RecordedElementEvidence) -> bool {
     node.role == candidate.role
-        && candidate.subrole.as_ref().is_none_or(|v| node.subrole.as_ref() == Some(v))
-        && candidate.identifier.as_ref().is_none_or(|v| node.identifier.as_ref() == Some(v))
-        && candidate.title.as_ref().is_none_or(|v| node.title.as_ref() == Some(v))
-        && candidate.value.as_ref().is_none_or(|v| node.value.as_ref() == Some(v))
-        && candidate.description.as_ref().is_none_or(|v| node.description.as_ref() == Some(v))
+        && candidate
+            .subrole
+            .as_ref()
+            .is_none_or(|v| node.subrole.as_ref() == Some(v))
+        && candidate
+            .identifier
+            .as_ref()
+            .is_none_or(|v| node.identifier.as_ref() == Some(v))
+        && candidate
+            .title
+            .as_ref()
+            .is_none_or(|v| node.title.as_ref() == Some(v))
+        && candidate
+            .value
+            .as_ref()
+            .is_none_or(|v| node.value.as_ref() == Some(v))
+        && candidate
+            .description
+            .as_ref()
+            .is_none_or(|v| node.description.as_ref() == Some(v))
 }
 
 fn point_target(app: &RecordedAppIdentity, point: RecordedPoint) -> Value {

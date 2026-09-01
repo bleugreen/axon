@@ -85,7 +85,10 @@ fn recursive_gate_redacts_nested_active_secrets_patterns_and_sensitive_values() 
         "secure-role-canary",
         "secret-label-canary",
     ] {
-        assert!(!serialized.contains(canary), "raw canary survived: {canary}");
+        assert!(
+            !serialized.contains(canary),
+            "raw canary survived: {canary}"
+        );
     }
 }
 

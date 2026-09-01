@@ -1,7 +1,6 @@
 use crate::{
-    ActionObservation, AxnAction, AxnCodec, AxnDocument, AxnError,
-    DerivedPostconditionCompiler, ExpectedFact, JsonRpcRequest, JsonRpcResponse,
-    PostconditionInput, RedactionMarkerTaint,
+    ActionObservation, AxnAction, AxnCodec, AxnDocument, AxnError, DerivedPostconditionCompiler,
+    ExpectedFact, JsonRpcRequest, JsonRpcResponse, PostconditionInput, RedactionMarkerTaint,
 };
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
@@ -28,7 +27,11 @@ pub struct ActionHistoryRecord {
 }
 
 fn invalid_params(reason: &str) -> crate::JsonRpcError {
-    crate::JsonRpcError { code: -32602, message: format!("Invalid params: {reason}"), data: Some(json!({"path":"params","reason":reason})) }
+    crate::JsonRpcError {
+        code: -32602,
+        message: format!("Invalid params: {reason}"),
+        data: Some(json!({"path":"params","reason":reason})),
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -46,7 +49,9 @@ struct SaveHistoryParams {
     path: Option<PathBuf>,
 }
 
-fn default_session_id() -> String { DEFAULT_HISTORY_SESSION.to_owned() }
+fn default_session_id() -> String {
+    DEFAULT_HISTORY_SESSION.to_owned()
+}
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct ActionHistoryContext {
@@ -103,20 +108,26 @@ impl ActionHistoryStore {
         if params.session_id.trim().is_empty() {
             return Err(invalid_params("sessionId must not be empty"));
         }
-        if params.path.as_ref().is_some_and(|path| path.as_os_str().is_empty()) {
+        if params
+            .path
+            .as_ref()
+            .is_some_and(|path| path.as_os_str().is_empty())
+        {
             return Err(invalid_params("path must not be empty"));
         }
-        let export = self.export_script(
-            &params.session_id,
-            params.include_reads,
-            params.from.as_deref(),
-            params.to.as_deref(),
-            params.path.as_deref(),
-        ).map_err(|error| crate::JsonRpcError {
-            code: -32602,
-            message: format!("Invalid params: {error}"),
-            data: Some(json!({"reason": error.to_string()})),
-        })?;
+        let export = self
+            .export_script(
+                &params.session_id,
+                params.include_reads,
+                params.from.as_deref(),
+                params.to.as_deref(),
+                params.path.as_deref(),
+            )
+            .map_err(|error| crate::JsonRpcError {
+                code: -32602,
+                message: format!("Invalid params: {error}"),
+                data: Some(json!({"reason": error.to_string()})),
+            })?;
         Ok(json!({
             "script": export.script,
             "actionCount": export.action_count,
@@ -149,7 +160,10 @@ impl ActionHistoryStore {
         if let Some(params) = request.params.as_mut().and_then(Value::as_object_mut) {
             params.remove("_session");
         }
-        ActionHistoryContext { session_id, request }
+        ActionHistoryContext {
+            session_id,
+            request,
+        }
     }
 
     /// Redacts every durable field before inserting a history record.
@@ -163,14 +177,18 @@ impl ActionHistoryStore {
     ) -> Option<ActionHistoryRecord> {
         let mut request_value = serde_json::to_value(request).expect("JSON-RPC request serializes");
         redaction.redact_value(&mut request_value);
-        let request = serde_json::from_value(request_value).expect("redacted request remains valid");
+        let request =
+            serde_json::from_value(request_value).expect("redacted request remains valid");
 
-        let mut response_value = serde_json::to_value(response).expect("JSON-RPC response serializes");
+        let mut response_value =
+            serde_json::to_value(response).expect("JSON-RPC response serializes");
         redaction.redact_value(&mut response_value);
-        let response = serde_json::from_value(response_value).expect("redacted response remains valid");
+        let response =
+            serde_json::from_value(response_value).expect("redacted response remains valid");
 
         let observation = observation.map(|observation| {
-            let mut value = serde_json::to_value(observation).expect("action observation serializes");
+            let mut value =
+                serde_json::to_value(observation).expect("action observation serializes");
             redaction.redact_value(&mut value);
             serde_json::from_value(value).expect("redacted action observation remains valid")
         });
@@ -191,9 +209,20 @@ impl ActionHistoryStore {
         let mut observation = ActionObservation {
             tool: request.method.clone(),
             app: params.and_then(|params| {
-                params.get("target").and_then(|target| target.get("app")).and_then(Value::as_str).map(str::to_owned)
+                params
+                    .get("target")
+                    .and_then(|target| target.get("app"))
+                    .and_then(Value::as_str)
+                    .map(str::to_owned)
             }),
-            inputs: params.into_iter().flat_map(|params| ["value", "text", "key"].into_iter().filter_map(|key| params.get(key).and_then(Value::as_str).map(str::to_owned))).collect(),
+            inputs: params
+                .into_iter()
+                .flat_map(|params| {
+                    ["value", "text", "key"].into_iter().filter_map(|key| {
+                        params.get(key).and_then(Value::as_str).map(str::to_owned)
+                    })
+                })
+                .collect(),
             settled: false,
             ..Default::default()
         };
@@ -202,17 +231,36 @@ impl ActionHistoryStore {
             ("from", &mut observation.from_before),
             ("to", &mut observation.to_before),
         ] {
-            let Some(target) = params.and_then(|params| params.get(key)).and_then(Value::as_object) else { continue };
-            let (Some(app), Some(name)) = (target.get("app").and_then(Value::as_str), target.get("name").and_then(Value::as_str)) else { continue };
-            let Some(locator) = locator(app, name) else { continue };
+            let Some(target) = params
+                .and_then(|params| params.get(key))
+                .and_then(Value::as_object)
+            else {
+                continue;
+            };
+            let (Some(app), Some(name)) = (
+                target.get("app").and_then(Value::as_str),
+                target.get("name").and_then(Value::as_str),
+            ) else {
+                continue;
+            };
+            let Some(locator) = locator(app, name) else {
+                continue;
+            };
             *slot = Some(crate::ObservedElementState {
                 app: app.to_owned(),
-                role: locator.get("role").and_then(Value::as_str).unwrap_or_default().to_owned(),
+                role: locator
+                    .get("role")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default()
+                    .to_owned(),
                 locator: Some(locator),
                 ..Default::default()
             });
         }
-        let observation = (observation.target_before.is_some() || observation.from_before.is_some() || observation.to_before.is_some()).then_some(observation);
+        let observation = (observation.target_before.is_some()
+            || observation.from_before.is_some()
+            || observation.to_before.is_some())
+        .then_some(observation);
         self.record_redacted(request, response, session_id, observation, redaction)
     }
 
@@ -241,7 +289,9 @@ impl ActionHistoryStore {
         }
         let (success, result, error) = match response {
             JsonRpcResponse::Success(response) => (true, Some(response.result.clone()), None),
-            JsonRpcResponse::Failure(response) => (false, None, Some(response.error.message.clone())),
+            JsonRpcResponse::Failure(response) => {
+                (false, None, Some(response.error.message.clone()))
+            }
         };
 
         let mut state = self.state.lock().expect("action history mutex poisoned");
@@ -259,12 +309,17 @@ impl ActionHistoryStore {
             error,
             observation,
         };
-        let records = state.records_by_session.entry(session_id.to_owned()).or_default();
+        let records = state
+            .records_by_session
+            .entry(session_id.to_owned())
+            .or_default();
         records.push(record.clone());
         if records.len() > self.max_records_per_session {
             records.drain(..records.len() - self.max_records_per_session);
         }
-        state.last_record_id_by_session.insert(session_id.to_owned(), id);
+        state
+            .last_record_id_by_session
+            .insert(session_id.to_owned(), id);
         Some(record)
     }
 
@@ -295,7 +350,9 @@ impl ActionHistoryStore {
         let mut actions = Vec::new();
         for record in &records {
             let action_id = format!("a{:03}", actions.len() + 1);
-            if let Some(action) = history_action(record, include_reads, &action_id, &workflow_inputs) {
+            if let Some(action) =
+                history_action(record, include_reads, &action_id, &workflow_inputs)
+            {
                 actions.push(action);
             }
         }
@@ -324,14 +381,18 @@ impl ActionHistoryStore {
     ) -> Result<Vec<ActionHistoryRecord>, ActionHistoryError> {
         let records = self.records(session_id);
         let boundary = |label, id: &str| {
-            records.iter().position(|record| record.id == id).ok_or_else(||
-                ActionHistoryError::UnknownRangeBoundary {
+            records
+                .iter()
+                .position(|record| record.id == id)
+                .ok_or_else(|| ActionHistoryError::UnknownRangeBoundary {
                     label,
                     id: id.to_owned(),
-                },
-            )
+                })
         };
-        let start = from.map(|id| boundary("from", id)).transpose()?.unwrap_or(0);
+        let start = from
+            .map(|id| boundary("from", id))
+            .transpose()?
+            .unwrap_or(0);
         let end = to
             .map(|id| boundary("to", id))
             .transpose()?
@@ -350,7 +411,10 @@ impl ActionHistoryStore {
 }
 
 fn should_record(method: &str) -> bool {
-    matches!(method, "look" | "find" | "click" | "scroll" | "drag" | "invoke" | "type" | "keyboard" | "run")
+    matches!(
+        method,
+        "look" | "find" | "click" | "scroll" | "drag" | "invoke" | "type" | "keyboard" | "run"
+    )
 }
 
 fn history_action(
@@ -418,7 +482,10 @@ fn attach_replay_evidence(
 
 fn atomic_write(path: &Path, contents: &[u8]) -> Result<(), ActionHistoryError> {
     let parent = path.parent().unwrap_or_else(|| Path::new("."));
-    let file_name = path.file_name().and_then(|name| name.to_str()).unwrap_or("history.axn");
+    let file_name = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("history.axn");
     let temporary = parent.join(format!(".{file_name}.{}.tmp", std::process::id()));
     let result = (|| -> std::io::Result<()> {
         let mut file = fs::File::create(&temporary)?;
@@ -439,7 +506,7 @@ mod tests {
     use super::*;
     use crate::{
         AxnRunner, DispatchOutcome, JsonRpcId, JsonRpcSuccess, JsonRpcVersion, Locator,
-        ObservedElementState, ObservationRedactionContext, RunOptions, ToolDispatcher,
+        ObservationRedactionContext, ObservedElementState, RunOptions, ToolDispatcher,
     };
     use serde_json::json;
 
@@ -458,7 +525,10 @@ mod tests {
     #[test]
     fn context_extracts_session_without_persisting_it() {
         let store = ActionHistoryStore::default();
-        let context = store.context(&request("click", json!({"_session": "editor", "target": "button"})));
+        let context = store.context(&request(
+            "click",
+            json!({"_session": "editor", "target": "button"}),
+        ));
         assert_eq!(context.session_id, "editor");
         assert_eq!(context.request.params, Some(json!({"target": "button"})));
 
@@ -469,55 +539,139 @@ mod tests {
     #[test]
     fn records_are_monotonic_parent_linked_session_scoped_and_bounded() {
         let store = ActionHistoryStore::new(2);
-        let first = store.record(&request("click", json!({})), &success(), "a", None).unwrap();
-        let other = store.record(&request("click", json!({})), &success(), "b", None).unwrap();
-        let second = store.record(&request("type", json!({"text": "hi"})), &success(), "a", None).unwrap();
-        let third = store.record(&request("keyboard", json!({"key": "enter"})), &success(), "a", None).unwrap();
+        let first = store
+            .record(&request("click", json!({})), &success(), "a", None)
+            .unwrap();
+        let other = store
+            .record(&request("click", json!({})), &success(), "b", None)
+            .unwrap();
+        let second = store
+            .record(
+                &request("type", json!({"text": "hi"})),
+                &success(),
+                "a",
+                None,
+            )
+            .unwrap();
+        let third = store
+            .record(
+                &request("keyboard", json!({"key": "enter"})),
+                &success(),
+                "a",
+                None,
+            )
+            .unwrap();
 
-        assert_eq!((first.id.as_str(), other.id.as_str(), second.id.as_str(), third.id.as_str()), ("c1", "c2", "c3", "c4"));
+        assert_eq!(
+            (
+                first.id.as_str(),
+                other.id.as_str(),
+                second.id.as_str(),
+                third.id.as_str()
+            ),
+            ("c1", "c2", "c3", "c4")
+        );
         assert_eq!(second.parent_id.as_deref(), Some("c1"));
         assert_eq!(third.parent_id.as_deref(), Some("c3"));
-        assert_eq!(store.records("a").iter().map(|r| r.id.as_str()).collect::<Vec<_>>(), vec!["c3", "c4"]);
+        assert_eq!(
+            store
+                .records("a")
+                .iter()
+                .map(|r| r.id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["c3", "c4"]
+        );
         assert_eq!(store.records("b").len(), 1);
     }
 
     #[test]
     fn excludes_control_methods_and_strips_run_payloads() {
         let store = ActionHistoryStore::default();
-        assert!(store.record(&request("health", json!({})), &success(), "s", None).is_none());
-        assert!(store.record(&request("save", json!({})), &success(), "s", None).is_none());
-        let record = store.record(
-            &request("run", json!({"actions": [1], "args": [2], "argValues": {"x": 3}, "dryRun": true})),
-            &success(),
-            "s",
-            None,
-        ).unwrap();
-        assert_eq!(record.params, json!({"dryRun": true}).as_object().unwrap().clone());
+        assert!(
+            store
+                .record(&request("health", json!({})), &success(), "s", None)
+                .is_none()
+        );
+        assert!(
+            store
+                .record(&request("save", json!({})), &success(), "s", None)
+                .is_none()
+        );
+        let record = store
+            .record(
+                &request(
+                    "run",
+                    json!({"actions": [1], "args": [2], "argValues": {"x": 3}, "dryRun": true}),
+                ),
+                &success(),
+                "s",
+                None,
+            )
+            .unwrap();
+        assert_eq!(
+            record.params,
+            json!({"dryRun": true}).as_object().unwrap().clone()
+        );
     }
 
     #[test]
     fn export_filters_reads_counts_the_inclusive_range_and_round_trips() {
         let store = ActionHistoryStore::default();
-        let look = store.record(&request("look", json!({"app": "Notes"})), &success(), "s", None).unwrap();
-        let click = store.record(&request("click", json!({"target": {"app": "Notes", "name": "New"}})), &success(), "s", None).unwrap();
-        let find = store.record(&request("find", json!({"query": "Done"})), &success(), "s", None).unwrap();
+        let look = store
+            .record(
+                &request("look", json!({"app": "Notes"})),
+                &success(),
+                "s",
+                None,
+            )
+            .unwrap();
+        let click = store
+            .record(
+                &request("click", json!({"target": {"app": "Notes", "name": "New"}})),
+                &success(),
+                "s",
+                None,
+            )
+            .unwrap();
+        let find = store
+            .record(
+                &request("find", json!({"query": "Done"})),
+                &success(),
+                "s",
+                None,
+            )
+            .unwrap();
 
-        let actions_only = store.export_script("s", false, Some(&look.id), Some(&find.id), None).unwrap();
-        assert_eq!((actions_only.action_count, actions_only.record_count), (1, 3));
+        let actions_only = store
+            .export_script("s", false, Some(&look.id), Some(&find.id), None)
+            .unwrap();
+        assert_eq!(
+            (actions_only.action_count, actions_only.record_count),
+            (1, 3)
+        );
         let document = AxnCodec::parse(&actions_only.script).unwrap();
         assert_eq!(document.actions[0].id.as_deref(), Some("a001"));
         assert_eq!(document.actions[0].tool, "click");
 
-        let including_reads = store.export_script("s", true, Some(&look.id), Some(&click.id), None).unwrap();
-        assert_eq!((including_reads.action_count, including_reads.record_count), (2, 2));
+        let including_reads = store
+            .export_script("s", true, Some(&look.id), Some(&click.id), None)
+            .unwrap();
+        assert_eq!(
+            (including_reads.action_count, including_reads.record_count),
+            (2, 2)
+        );
         assert_eq!(AxnCodec::parse(&including_reads.script).unwrap().version, 2);
     }
 
     #[test]
     fn range_errors_are_typed() {
         let store = ActionHistoryStore::default();
-        let first = store.record(&request("click", json!({})), &success(), "s", None).unwrap();
-        let second = store.record(&request("type", json!({})), &success(), "s", None).unwrap();
+        let first = store
+            .record(&request("click", json!({})), &success(), "s", None)
+            .unwrap();
+        let second = store
+            .record(&request("type", json!({})), &success(), "s", None)
+            .unwrap();
         assert!(matches!(
             store.export_script("s", false, Some("missing"), None, None),
             Err(ActionHistoryError::UnknownRangeBoundary { label: "from", .. })
@@ -532,8 +686,14 @@ mod tests {
     fn optional_path_receives_the_same_valid_script() {
         let store = ActionHistoryStore::default();
         store.record(&request("click", json!({})), &success(), "s", None);
-        let path = std::env::temp_dir().join(format!("axon-history-{}-{}.axn", std::process::id(), std::thread::current().name().unwrap_or("test")));
-        let export = store.export_script("s", false, None, None, Some(&path)).unwrap();
+        let path = std::env::temp_dir().join(format!(
+            "axon-history-{}-{}.axn",
+            std::process::id(),
+            std::thread::current().name().unwrap_or("test")
+        ));
+        let export = store
+            .export_script("s", false, None, None, Some(&path))
+            .unwrap();
         assert_eq!(fs::read_to_string(&path).unwrap(), export.script);
         assert_eq!(AxnCodec::parse(&export.script).unwrap().actions.len(), 1);
         fs::remove_file(path).unwrap();
@@ -576,7 +736,12 @@ mod tests {
         ObservedElementState {
             app: app.into(),
             role: "AXButton".into(),
-            locator: Some(json!({"role":"AXButton","title":"Submit"}).as_object().unwrap().clone()),
+            locator: Some(
+                json!({"role":"AXButton","title":"Submit"})
+                    .as_object()
+                    .unwrap()
+                    .clone(),
+            ),
             value: value.map(str::to_owned),
             focused: Some(false),
             enabled,
@@ -609,12 +774,18 @@ mod tests {
             app: Some("Notes".into()),
             inputs: vec!["4111 1111 1111 1111".into()],
             target_before: Some(observed("Notes", Some(""), Some(true))),
-            target_after: Some(observed("Notes", Some("4111 1111 1111 1111"), Some(true)).resolving(&["4111 1111 1111 1111".into()])),
+            target_after: Some(
+                observed("Notes", Some("4111 1111 1111 1111"), Some(true))
+                    .resolving(&["4111 1111 1111 1111".into()]),
+            ),
             settled: true,
             ..Default::default()
         };
         store.record_redacted(
-            &request("type", json!({"target":{"app":"Notes","name":"Submit"},"value":"4111 1111 1111 1111"})),
+            &request(
+                "type",
+                json!({"target":{"app":"Notes","name":"Submit"},"value":"4111 1111 1111 1111"}),
+            ),
             &success(),
             "s",
             Some(type_observation),
@@ -626,13 +797,24 @@ mod tests {
         assert!(!export.script.contains("4111 1111 1111 1111"));
         let document = AxnCodec::parse(&export.script).unwrap();
         assert!(document.actions.iter().all(|action| {
-            action.params.get("target").and_then(|target| target.get("locator")).is_some()
+            action
+                .params
+                .get("target")
+                .and_then(|target| target.get("locator"))
+                .is_some()
         }));
         assert!(!document.actions[0].expects.is_empty());
 
         let mut daemon = FreshDaemon::default();
         let replay = AxnRunner::new(&mut daemon)
-            .run(&document, &Map::new(), RunOptions { dry_run: Some(false), continue_on_error: Some(false) })
+            .run(
+                &document,
+                &Map::new(),
+                RunOptions {
+                    dry_run: Some(false),
+                    continue_on_error: Some(false),
+                },
+            )
             .unwrap();
         assert!(replay.success);
         assert_eq!(daemon.registered.len(), 2);

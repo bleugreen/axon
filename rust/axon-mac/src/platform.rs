@@ -1,17 +1,17 @@
+use crate::global_input::MacGlobalInputObserver;
 use crate::{
     BackgroundPixelPointer, PixelDispatch, PixelDispatchError, PixelPlan, PixelTarget,
     PointerTargetVerifier, ReadableStateProvider, VisualObservation, VisualObservationProvider,
 };
-use crate::global_input::MacGlobalInputObserver;
 use serde_json::{Map, Value};
 
 #[path = "capture.rs"]
 mod window_capture;
 use axon_core::{
     AppQuery, Application, BackendError, Capability, CapabilityInfo, CaptureBounds,
-    ChildPageCapture, ChildPageRequest, KeyboardIntent, Node, Observation, PlatformBackend, Rect,
-    RecordingEvidenceProvider, RecordedFocusedEvidence, RecordedPoint, RecordedSettleEvidence,
-    RecordedTargetEvidence, Screenshot, Snapshot, SnapshotHandle, Window,
+    ChildPageCapture, ChildPageRequest, KeyboardIntent, Node, Observation, PlatformBackend,
+    RecordedFocusedEvidence, RecordedPoint, RecordedSettleEvidence, RecordedTargetEvidence,
+    RecordingEvidenceProvider, Rect, Screenshot, Snapshot, SnapshotHandle, Window,
 };
 use std::{
     collections::HashMap,
@@ -432,7 +432,10 @@ impl axon_core::GlobalInputObserver for MacBackend {
         axon_core::GlobalInputObserver::start(&mut self.global_input, scope)
     }
 
-    fn poll(&mut self, timeout: Duration) -> Result<Vec<axon_core::RecordedInputEvent>, BackendError> {
+    fn poll(
+        &mut self,
+        timeout: Duration,
+    ) -> Result<Vec<axon_core::RecordedInputEvent>, BackendError> {
         axon_core::GlobalInputObserver::poll(&mut self.global_input, timeout)
     }
 
@@ -447,17 +450,19 @@ impl axon_core::GlobalInputObserver for MacBackend {
 
 impl RecordingEvidenceProvider for MacBackend {
     fn read_focused(&mut self) -> Result<Option<RecordedFocusedEvidence>, BackendError> {
-        Ok(crate::global_input::focused_evidence().map(|(app, element)| {
-            let value = element.value.clone();
-            RecordedFocusedEvidence {
-                target: RecordedTargetEvidence {
-                    app,
-                    point: RecordedPoint::default(),
-                    candidates: vec![element],
-                },
-                value,
-            }
-        }))
+        Ok(
+            crate::global_input::focused_evidence().map(|(app, element)| {
+                let value = element.value.clone();
+                RecordedFocusedEvidence {
+                    target: RecordedTargetEvidence {
+                        app,
+                        point: RecordedPoint::default(),
+                        candidates: vec![element],
+                    },
+                    value,
+                }
+            }),
+        )
     }
 
     fn capture_snapshot(

@@ -38,7 +38,6 @@ impl NativeDaemonState {
             _ => return None,
         })
     }
-
 }
 
 fn value<T: serde::Serialize>(value: T) -> Result<Value, JsonRpcError> {
@@ -165,7 +164,10 @@ impl DaemonRecordingOwner {
         if let Some(destination) = &destination
             && destination.document_id.trim().is_empty()
         {
-            return Err(invalid("params.destination.documentId", "must not be empty"));
+            return Err(invalid(
+                "params.destination.documentId",
+                "must not be empty",
+            ));
         }
         self.next_session += 1;
         self.active = Some(ActiveRecording {
@@ -231,7 +233,9 @@ impl DaemonRecordingOwner {
     }
 }
 
-fn strict_params<T: for<'de> Deserialize<'de>>(params: &Map<String, Value>) -> Result<T, JsonRpcError> {
+fn strict_params<T: for<'de> Deserialize<'de>>(
+    params: &Map<String, Value>,
+) -> Result<T, JsonRpcError> {
     serde_json::from_value(Value::Object(params.clone()))
         .map_err(|error| invalid("params", &error.to_string()))
 }
@@ -288,8 +292,19 @@ mod tests {
             .start(&object(json!({"scope":{"scope":"allApplications"}})))
             .unwrap();
         assert_eq!(status.session_id.as_deref(), Some("recording-0001"));
-        assert_eq!(owner.start(&object(json!({"scope":{"scope":"allApplications"}}))).unwrap_err().data, Some(json!({"reason":"recording-active"})));
-        owner.push_group(RecordedUserEventGroup::new(RecordedUserAction::TypeText { app: "Notes".into(), text: "hello".into() })).unwrap();
+        assert_eq!(
+            owner
+                .start(&object(json!({"scope":{"scope":"allApplications"}})))
+                .unwrap_err()
+                .data,
+            Some(json!({"reason":"recording-active"}))
+        );
+        owner
+            .push_group(RecordedUserEventGroup::new(RecordedUserAction::TypeText {
+                app: "Notes".into(),
+                text: "hello".into(),
+            }))
+            .unwrap();
         let stopped = owner.stop(&Map::new()).unwrap();
         assert_eq!(stopped["actionCount"], 1);
         assert!(stopped["script"].as_str().unwrap().contains("hello"));
@@ -299,15 +314,36 @@ mod tests {
     #[test]
     fn unknown_fields_and_nonempty_editor_identity_are_rejected() {
         let mut owner = DaemonRecordingOwner::default();
-        assert_eq!(owner.start(&object(json!({"scope":{"scope":"allApplications"},"extra":true}))).unwrap_err().code, INVALID_PARAMS);
-        assert_eq!(owner.record_from_here(&object(json!({"documentId":""}))).unwrap_err().code, INVALID_PARAMS);
-        assert_eq!(owner.stop(&object(json!({"extra":true}))).unwrap_err().code, INVALID_PARAMS);
+        assert_eq!(
+            owner
+                .start(&object(
+                    json!({"scope":{"scope":"allApplications"},"extra":true})
+                ))
+                .unwrap_err()
+                .code,
+            INVALID_PARAMS
+        );
+        assert_eq!(
+            owner
+                .record_from_here(&object(json!({"documentId":""})))
+                .unwrap_err()
+                .code,
+            INVALID_PARAMS
+        );
+        assert_eq!(
+            owner.stop(&object(json!({"extra":true}))).unwrap_err().code,
+            INVALID_PARAMS
+        );
     }
 
     #[test]
     fn editor_destination_is_metadata_not_script_content() {
         let mut owner = DaemonRecordingOwner::default();
-        let status = owner.record_from_here(&object(json!({"documentId":"doc-1","beforeBlockId":"block-2"}))).unwrap();
+        let status = owner
+            .record_from_here(&object(
+                json!({"documentId":"doc-1","beforeBlockId":"block-2"}),
+            ))
+            .unwrap();
         assert_eq!(status.destination.unwrap().document_id, "doc-1");
         let result = owner.stop(&Map::new()).unwrap();
         assert_eq!(result["destination"]["beforeBlockId"], "block-2");
@@ -322,37 +358,79 @@ mod tests {
         owner.set_redaction_context(crate::ObservationRedactionContext::from_active_secrets([
             ACTIVE.to_string(),
         ]));
-        owner.start(&object(json!({"scope":{"scope":"allApplications"}}))).unwrap();
-        owner.push_group(
-            RecordedUserEventGroup::new(RecordedUserAction::TypeText {
-                app: "Notes".into(),
-                text: CARD.into(),
-            })
-            .with_observed(vec![json!({"title":"person@example.com"})])
-            .with_warnings(vec![ACTIVE.into()]),
-        ).unwrap();
+        owner
+            .start(&object(json!({"scope":{"scope":"allApplications"}})))
+            .unwrap();
+        owner
+            .push_group(
+                RecordedUserEventGroup::new(RecordedUserAction::TypeText {
+                    app: "Notes".into(),
+                    text: CARD.into(),
+                })
+                .with_observed(vec![json!({"title":"person@example.com"})])
+                .with_warnings(vec![ACTIVE.into()]),
+            )
+            .unwrap();
 
         let stopped = owner.stop(&Map::new()).unwrap();
         let response = serde_json::to_string(&stopped).unwrap();
 
-        assert!(!response.contains(CARD), "deterministic secret leaked: {response}");
-        assert!(!response.contains(ACTIVE), "active secret leaked: {response}");
-        assert!(!response.contains("person@example.com"), "observation leaked: {response}");
-        assert!(response.contains("<redacted:"), "redaction markers were lost: {response}");
-        assert!(response.contains("active-credential"), "active-secret marker was lost: {response}");
+        assert!(
+            !response.contains(CARD),
+            "deterministic secret leaked: {response}"
+        );
+        assert!(
+            !response.contains(ACTIVE),
+            "active secret leaked: {response}"
+        );
+        assert!(
+            !response.contains("person@example.com"),
+            "observation leaked: {response}"
+        );
+        assert!(
+            response.contains("<redacted:"),
+            "redaction markers were lost: {response}"
+        );
+        assert!(
+            response.contains("active-credential"),
+            "active-secret marker was lost: {response}"
+        );
     }
 
     #[test]
     fn native_adapter_routes_save_and_recording_with_strict_shared_schemas() {
         let mut state = NativeDaemonState::default();
-        let unknown = state.dispatch("save", &object(json!({"extra":true}))).unwrap().unwrap_err();
+        let unknown = state
+            .dispatch("save", &object(json!({"extra":true})))
+            .unwrap()
+            .unwrap_err();
         assert_eq!(unknown.code, INVALID_PARAMS);
 
-        let started = state.dispatch("recording.start", &object(json!({"scope":{"scope":"allApplications"}}))).unwrap().unwrap();
+        let started = state
+            .dispatch(
+                "recording.start",
+                &object(json!({"scope":{"scope":"allApplications"}})),
+            )
+            .unwrap()
+            .unwrap();
         assert_eq!(started["recording"], true);
-        let status = state.dispatch("recording.status", &Map::new()).unwrap().unwrap();
+        let status = state
+            .dispatch("recording.status", &Map::new())
+            .unwrap()
+            .unwrap();
         assert_eq!(status["sessionId"], "recording-0001");
-        assert!(state.dispatch("recording.status", &object(json!({"extra":true}))).unwrap().is_err());
-        assert_eq!(state.dispatch("recording.stop", &Map::new()).unwrap().unwrap()["actionCount"], 0);
+        assert!(
+            state
+                .dispatch("recording.status", &object(json!({"extra":true})))
+                .unwrap()
+                .is_err()
+        );
+        assert_eq!(
+            state
+                .dispatch("recording.stop", &Map::new())
+                .unwrap()
+                .unwrap()["actionCount"],
+            0
+        );
     }
 }
