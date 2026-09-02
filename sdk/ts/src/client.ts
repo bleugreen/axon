@@ -109,7 +109,7 @@ export class Axon {
   readonly version: string;
   readonly health: Health;
 
-  private constructor(readonly raw: RawAxonClient, health: Health) {
+  protected constructor(readonly raw: RawAxonClient, health: Health) {
     this.health = health;
     this.version = health.version;
   }
