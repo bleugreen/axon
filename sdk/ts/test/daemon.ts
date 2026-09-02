@@ -99,6 +99,11 @@ export const ok = (id: unknown, result: Record<string, unknown>) => ({ jsonrpc: 
 export const rpcError = (id: unknown, code: number, message: string) =>
   ({ jsonrpc: "2.0", id, error: { code, message } });
 
+/** A shared example under `schema/fixtures/`, which both implementations are checked against. */
+const fixtures = resolve(import.meta.dir, "../../../schema/fixtures");
+export const fixture = <T = Record<string, unknown>>(name: string): T =>
+  JSON.parse(readFileSync(resolve(fixtures, name), "utf8")) as T;
+
 /**
  * A healthy macOS daemon's answer to `health`, recorded from a live 0.3.6 daemon over the socket.
  *
