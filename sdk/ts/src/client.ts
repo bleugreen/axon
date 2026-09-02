@@ -54,12 +54,14 @@ export class RawAxonClient implements RawClient {
     return new RawAxonClient(this.transport, this.platform, sessionId);
   }
 
-  async request(method: string, params: Record<string, unknown> = {}): Promise<Record<string, unknown>> {
+  async request(method: string, params: object = {}): Promise<Record<string, unknown>> {
     const support = availability[method as keyof typeof availability];
     if (support && this.platform && !support[this.platform]) {
       throw new Error(`Axon tool "${method}" is not available on ${this.platform === "swift" ? "macOS" : this.platform}`);
     }
-    const tagged = this.sessionId ? { ...params, _session: this.sessionId } : params;
+    const tagged: Record<string, unknown> = this.sessionId
+      ? { ...params, _session: this.sessionId }
+      : { ...params };
     const response = await this.transport.send({
       jsonrpc: "2.0", id: this.nextId++, method, params: tagged,
     });
@@ -93,7 +95,7 @@ export class RawAxonClient implements RawClient {
   save(params: SaveParams) { return this.request("save", params); }
   click(params: ClickParams) { return this.request("click", params); }
   type(params: TypeParams) { return this.request("type", params); }
-  keyboard(params: KeyboardParams) { return this.request("keyboard", params as Record<string, unknown>); }
+  keyboard(params: KeyboardParams) { return this.request("keyboard", params as object); }
   scroll(params: ScrollParams) { return this.request("scroll", params); }
   drag(params: DragParams) { return this.request("drag", params); }
   invoke(params: InvokeParams) { return this.request("invoke", params); }
