@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { SocketTransport, defaultSocketPath } from "../src/transport.js";
+import { SocketTransport, defaultSocketPath, longRunningMethods } from "../src/transport.js";
 import { FakeDaemon, ok } from "./daemon.js";
 
 const request = (method: string, id = 1) =>
@@ -90,6 +90,15 @@ describe("limits", () => {
     } finally {
       await daemon.stop();
     }
+  });
+});
+
+describe("timeout table", () => {
+  test("matches the reference client's long-running methods", () => {
+    // Sources/AxonCore/CommandHandling.swift decides this set; the SDK mirrors it rather than
+    // inventing its own bounds.
+    expect([...longRunningMethods].sort())
+      .toEqual(["run", "wait_for_stability", "wait_for_value"]);
   });
 });
 

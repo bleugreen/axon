@@ -208,6 +208,21 @@ describe("sessions", () => {
   });
 });
 
+describe("replay debugging", () => {
+  test("dispatches the debug family under its own method namespace", async () => {
+    const { daemon, axon } = await connectTo(healthyMac(schemaProductVersion));
+    try {
+      await axon.raw.debug("create", { path: "/tmp/checkout.axn" });
+      await axon.raw.debug("setBreakpoints", { indexes: [2] });
+      expect(daemon.received.map((r) => r.method))
+        .toEqual(["health", "debug.create", "debug.setBreakpoints"]);
+      expect(daemon.last("debug.create").params).toEqual({ path: "/tmp/checkout.axn" });
+    } finally {
+      await daemon.stop();
+    }
+  });
+});
+
 describe("platform availability", () => {
   test("refuses a tool the connected platform does not advertise, before the call", async () => {
     const { daemon, axon } = await connectTo(healthyMac(schemaProductVersion));
