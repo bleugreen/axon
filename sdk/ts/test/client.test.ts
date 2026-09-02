@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { Axon, AxonRpcError } from "../src/client.js";
 import { SocketTransport } from "../src/transport.js";
 import { schemaProductVersion } from "../src/generated.js";
-import { FakeDaemon, ok, rpcError, socketHealth, type ReceivedRequest } from "./daemon.js";
+import { FakeDaemon, fixture, ok, rpcError, socketHealth, type ReceivedRequest } from "./daemon.js";
 
 type Result = Record<string, unknown>;
 type Route = (request: ReceivedRequest) => Result | undefined;
@@ -117,7 +117,7 @@ describe("errors and refusals", () => {
 
   test("returns a refusal as an ordinary result", async () => {
     const refusal = fixture<{ cases: Result[] }>("delivery/results.json").cases
-      .find((entry) => entry.refusal !== null)!;
+      .find((entry: Result) => entry.refusal !== null)!;
     const { daemon, axon } = await connectTo(socketHealth({ version: schemaProductVersion }), () => refusal);
     try {
       const result = await axon.app("Safari").click("checkout/submit");
