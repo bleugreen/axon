@@ -41,6 +41,40 @@ jobs:
       - name: Check version agreement
         run: ./scripts/check-version
 
+  sdk-typescript:
+    name: TypeScript SDK
+    # Hosted: the SDK never touches a desktop. Its tests answer a fake daemon over a Unix socket,
+    # so nothing here needs accessibility, a session, or a real Axon build.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+
+      # sdk/ts/src/generated.ts is derived from schema/tool-surface-v1.json the way that artifact
+      # is derived from ToolSurfaceSpec.swift. Without this step a schema change lands a client
+      # that silently describes the previous tool surface.
+      - name: Check generated client agreement
+        run: ./scripts/check-sdk-ts
+
+      - name: Install the SDK development toolchain
+        working-directory: sdk/ts
+        run: bun install --frozen-lockfile
+
+      - name: Typecheck the TypeScript SDK
+        working-directory: sdk/ts
+        run: bun run typecheck
+
+      - name: Run TypeScript SDK tests
+        working-directory: sdk/ts
+        run: bun test
+
+      # The package is published for Node as well as Bun, so the emitted JavaScript has to build.
+      - name: Build the TypeScript SDK
+        working-directory: sdk/ts
+        run: bun run build
+
   swift:
     name: Swift
     runs-on: [self-hosted, axon-live-mac]
