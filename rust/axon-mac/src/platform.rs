@@ -1,8 +1,8 @@
 use crate::global_input::MacGlobalInputObserver;
 use crate::{
-    core_foundation::string_value,
     BackgroundPixelPointer, PixelDispatch, PixelDispatchError, PixelPlan, PixelTarget,
     PointerTargetVerifier, ReadableStateProvider, VisualObservation, VisualObservationProvider,
+    core_foundation::string_value,
 };
 use serde_json::{Map, Value};
 

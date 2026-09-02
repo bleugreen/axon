@@ -1,8 +1,8 @@
+use crate::core_foundation::string_value;
 use axon_core::{
     BackendError, GlobalInputObserver, RecordedAppIdentity, RecordedElementEvidence,
     RecordedInputEvent, RecordedKeystroke, RecordedPoint, RecordedTargetEvidence, RecordingScope,
 };
-use crate::core_foundation::string_value;
 use std::{
     collections::VecDeque,
     ffi::{c_char, c_void},
