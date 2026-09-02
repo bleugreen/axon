@@ -975,71 +975,71 @@ export interface InvokeParams {
 }
 
 export interface RawClient {
-    /**
+  /**
    * Capture the user-authorized desktop ScreenCast source. The selected source is not associated with any application.
    */
   capture_screen(params?: CaptureScreenParams): Promise<Record<string, unknown>>;
-    /**
+  /**
    * Observe Axon's current surface: no app lists apps, app captures state, a semantic target pages children, and since returns a change check. An observation whose note is no-windows means the application is running with no window open; the tree still holds its menu bar, so open one through the application's own File > New Window item before acting.
    */
   look(params?: LookParams): Promise<Record<string, unknown>>;
-    /**
+  /**
    * Navigate the active tab of a supported browser through its application scripting dictionary and verify the URL by read-back once the tab settles.
    */
   navigate(params: NavigateParams): Promise<Record<string, unknown>>;
-    /**
+  /**
    * Enumerate browser windows authoritatively through the supported app's scripting dictionary and cross-check them against AX when available.
    */
   windows(params: WindowsParams): Promise<Record<string, unknown>>;
-    /**
+  /**
    * Enumerate browser tabs authoritatively through the supported app's scripting dictionary.
    */
   tabs(params: TabsParams): Promise<Record<string, unknown>>;
-    /**
+  /**
    * Resolve an AX locator against a fresh app snapshot.
    */
   find(params: FindParams): Promise<Record<string, unknown>>;
-    /**
+  /**
    * Poll readable accessibility state from an app-scoped semantic name until a contains, equals, or regex predicate holds, or a bounded timeout reports the last observed state.
    */
   wait_for_value(params: WaitForValueParams): Promise<Record<string, unknown>>;
-    /**
+  /**
    * Poll full app observations until the accessibility surface remains unchanged for a stability window or changes from its initial state; timeout returns the final observation.
    */
   wait_for_stability(params: WaitForStabilityParams): Promise<Record<string, unknown>>;
-    /**
+  /**
    * Ask macOS to show the Accessibility permission prompt for the running Axon daemon identity.
    */
   permit(params?: PermitParams): Promise<Record<string, unknown>>;
-    /**
+  /**
    * Run a sequence of Axon actions from inline actions, a .axn path, or a path loaded first with inline actions appended.
    */
   run(params?: RunParams): Promise<Record<string, unknown>>;
-    /**
+  /**
    * Save recent recorded Axon calls as an editable .axn action file. Read calls are omitted unless includeReads is true.
    */
   save(params?: SaveParams): Promise<Record<string, unknown>>;
-    /**
+  /**
    * Click an app-scoped semantic element name, explicit point, or text location.
    */
   click(params: ClickParams): Promise<Record<string, unknown>>;
-    /**
+  /**
    * Fill a writable field by setting AXValue directly on a target, avoiding focus and keystroke timing races.
    */
   type(params: TypeParams): Promise<Record<string, unknown>>;
-    /**
+  /**
    * Post keyboard input for shortcuts, special keys, or raw text when field-level type is not the right intent.
    */
   keyboard(params: KeyboardParams): Promise<Record<string, unknown>>;
-    /**
+  /**
    * Scroll an accessibility surface by resolving an offscreen descendant and requesting AXScrollToVisible.
    */
   scroll(params?: ScrollParams): Promise<Record<string, unknown>>;
-    /**
+  /**
    * Drag from one semantic name, explicit point, or text location to another. Pointer dispatch and verified semantic outcome are reported separately.
    */
   drag(params: DragParams): Promise<Record<string, unknown>>;
-    /**
+  /**
    * Invoke a named accessibility action on an app-scoped semantic element name.
    */
   invoke(params: InvokeParams): Promise<Record<string, unknown>>;
