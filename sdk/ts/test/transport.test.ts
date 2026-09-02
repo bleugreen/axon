@@ -77,15 +77,16 @@ describe("limits", () => {
     const daemon = await FakeDaemon.start(() => undefined);
     try {
       const transport = new SocketTransport({
-        socketPath: daemon.path, timeoutMs: 40, longTimeoutMs: 5_000,
+        socketPath: daemon.path, timeoutMs: 40, longTimeoutMs: 600,
       });
       // The short bound applies to an ordinary method and not to a waiting one.
       await expect(transport.send(request("look"))).rejects.toThrow(/timed out after 40ms/);
+
       const waiting = transport.send(request("wait_for_stability"));
-      await Bun.sleep(120);
+      await Bun.sleep(150);
       expect(daemon.received.map((r) => r.method)).toEqual(["look", "wait_for_stability"]);
-      await expect(Promise.race([waiting, Bun.sleep(20).then(() => "still waiting")]))
-        .resolves.toBe("still waiting");
+      // Well past the short bound, still waiting; it ends on the long one instead.
+      await expect(waiting).rejects.toThrow(/timed out after 600ms/);
     } finally {
       await daemon.stop();
     }

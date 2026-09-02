@@ -1,4 +1,4 @@
-import { createServer, type Server } from "node:net";
+import { createServer, type Server, type Socket } from "node:net";
 import { readFileSync, rmSync } from "node:fs";
 import { resolve } from "node:path";
 
@@ -26,6 +26,7 @@ let counter = 0;
 export class FakeDaemon {
   readonly received: ReceivedRequest[] = [];
   connections = 0;
+  private readonly open = new Set<Socket>();
 
   private constructor(readonly path: string, private readonly server: Server) {}
 
@@ -38,6 +39,8 @@ export class FakeDaemon {
 
     server.on("connection", (socket) => {
       daemon.connections += 1;
+      daemon.open.add(socket);
+      socket.on("close", () => daemon.open.delete(socket));
       let buffer = "";
       socket.on("data", (chunk) => {
         buffer += chunk.toString("utf8");
@@ -83,6 +86,8 @@ export class FakeDaemon {
   }
 
   async stop(): Promise<void> {
+    // A connection this daemon deliberately never answered would otherwise hold the close open.
+    for (const socket of this.open) socket.destroy();
     await new Promise<void>((done) => this.server.close(() => done()));
     rmSync(this.path, { force: true });
   }
