@@ -108,729 +108,729 @@ export const availability = {
 } as const;
 
 /**
-+ * Capture the user-authorized desktop ScreenCast source. The selected source is not associated with any application.
-+ */
+ * Capture the user-authorized desktop ScreenCast source. The selected source is not associated with any application.
+ */
 export interface CaptureScreenParams {
   /**
-+   * Ignore any stored restore token and request fresh portal authorization. The token is replaced only after ScreenCast Start succeeds.
-+   */
+   * Ignore any stored restore token and request fresh portal authorization. The token is replaced only after ScreenCast Start succeeds.
+   */
   reauthorize?: boolean;
 }
 
 /**
-+ * Observe Axon's current surface: no app lists apps, app captures state, a semantic target pages children, and since returns a change check. An observation whose note is no-windows means the application is running with no window open; the tree still holds its menu bar, so open one through the application's own File > New Window item before acting.
-+ */
+ * Observe Axon's current surface: no app lists apps, app captures state, a semantic target pages children, and since returns a change check. An observation whose note is no-windows means the application is running with no window open; the tree still holds its menu bar, so open one through the application's own File > New Window item before acting.
+ */
 export interface LookParams {
   /**
-+   * For no-target app lists, include all running processes. For direct semantic child requests, include all direct children.
-+   */
+   * For no-target app lists, include all running processes. For direct semantic child requests, include all direct children.
+   */
   all?: boolean;
   /**
-+   * Bundle id, pid, app name, or partial app name. Omit with target to list apps.
-+   */
+   * Bundle id, pid, app name, or partial app name. Omit with target to list apps.
+   */
   app?: string;
   /**
-+   * Nonnegative initial child depth for app observations. Use 0 to retain top-level windows only and page children by semantic target.
-+   */
+   * Nonnegative initial child depth for app observations. Use 0 to retain top-level windows only and page children by semantic target.
+   */
   childDepth?: number;
   /**
-+   * Nonnegative maximum tree depth to display for app observations, with windows at depth 0.
-+   */
+   * Nonnegative maximum tree depth to display for app observations, with windows at depth 0.
+   */
   depth?: number;
   /**
-+   * For semantic targets, return only direct children without recursively capturing descendants.
-+   */
+   * For semantic targets, return only direct children without recursively capturing descendants.
+   */
   direct?: boolean;
   /**
-+   * Output format: observation or debug. Defaults to observation; use debug only when diagnosing Axon internals.
-+   */
+   * Output format: observation or debug. Defaults to observation; use debug only when diagnosing Axon internals.
+   */
   format?: "observation" | "debug";
   /**
-+   * Include frames in observation output. Defaults to false.
-+   */
+   * Include frames in observation output. Defaults to false.
+   */
   frames?: boolean;
   /**
-+   * Nonnegative maximum children for a semantic target. Defaults to Axon's sibling page size; 0 requests all remaining children when all is true.
-+   */
+   * Nonnegative maximum children for a semantic target. Defaults to Axon's sibling page size; 0 requests all remaining children when all is true.
+   */
   limit?: number;
   /**
-+   * Zero-based, nonnegative child offset for a semantic target. Defaults to 0.
-+   */
+   * Zero-based, nonnegative child offset for a semantic target. Defaults to 0.
+   */
   offset?: number;
   /**
-+   * OCR visible text from the app window screenshot and include it as organized screenText. Defaults to false.
-+   */
+   * OCR visible text from the app window screenshot and include it as organized screenText. Defaults to false.
+   */
   screenText?: boolean;
   /**
-+   * Include a downscaled window screenshot with a full app observation. Defaults to true; since change checks and semantic-target child pages are always imageless.
-+   */
+   * Include a downscaled window screenshot with a full app observation. Defaults to true; since change checks and semantic-target child pages are always imageless.
+   */
   screenshot?: boolean;
   /**
-+   * Snapshot id from a prior look response. Returns a coarse change check instead of a tree.
-+   */
+   * Snapshot id from a prior look response. Returns a coarse change check instead of a tree.
+   */
   since?: string;
   /**
-+   * App-scoped semantic name returned by a prior look; pages that element's children.
-+   */
+   * App-scoped semantic name returned by a prior look; pages that element's children.
+   */
   target?: {
   /**
-+   * Bundle id, pid, app name, or partial app name.
-+   */
+   * Bundle id, pid, app name, or partial app name.
+   */
   app: string;
   /**
-+   * Semantic element name returned by look.
-+   */
+   * Semantic element name returned by look.
+   */
   name: string;
 };
   /**
-+   * Include the nested AX tree for app observations. Defaults to true for observation format and false for debug format.
-+   */
+   * Include the nested AX tree for app observations. Defaults to true for observation format and false for debug format.
+   */
   tree?: boolean;
 }
 
 /**
-+ * Navigate the active tab of a supported browser through its application scripting dictionary and verify the URL by read-back once the tab settles.
-+ */
+ * Navigate the active tab of a supported browser through its application scripting dictionary and verify the URL by read-back once the tab settles.
+ */
 export interface NavigateParams {
   /**
-+   * Safari or Google Chrome, by name or exact bundle identifier.
-+   */
+   * Safari or Google Chrome, by name or exact bundle identifier.
+   */
   app: string;
   /**
-+   * Absolute http or https URL, limited to 8192 bytes.
-+   */
+   * Absolute http or https URL, limited to 8192 bytes.
+   */
   url: string;
 }
 
 /**
-+ * Enumerate browser windows authoritatively through the supported app's scripting dictionary and cross-check them against AX when available.
-+ */
+ * Enumerate browser windows authoritatively through the supported app's scripting dictionary and cross-check them against AX when available.
+ */
 export interface WindowsParams {
   /**
-+   * Safari or Google Chrome, by name or exact bundle identifier.
-+   */
+   * Safari or Google Chrome, by name or exact bundle identifier.
+   */
   app: string;
 }
 
 /**
-+ * Enumerate browser tabs authoritatively through the supported app's scripting dictionary.
-+ */
+ * Enumerate browser tabs authoritatively through the supported app's scripting dictionary.
+ */
 export interface TabsParams {
   /**
-+   * Safari or Google Chrome, by name or exact bundle identifier.
-+   */
+   * Safari or Google Chrome, by name or exact bundle identifier.
+   */
   app: string;
   /**
-+   * Optional one-based window index from windows().
-+   */
+   * Optional one-based window index from windows().
+   */
   window?: number;
 }
 
 /**
-+ * Resolve an AX locator against a fresh app snapshot.
-+ */
+ * Resolve an AX locator against a fresh app snapshot.
+ */
 export interface FindParams {
   /**
-+   * Bundle id, pid, exact app name, or partial app name.
-+   */
+   * Bundle id, pid, exact app name, or partial app name.
+   */
   app: string;
   /**
-+   * AX locator with role, subrole, label, title, value, description, identifier, actions, and ancestors.
-+   */
+   * AX locator with role, subrole, label, title, value, description, identifier, actions, and ancestors.
+   */
   locator: {
   [key: string]: unknown;
 };
 }
 
 /**
-+ * Poll readable accessibility state from an app-scoped semantic name until a contains, equals, or regex predicate holds, or a bounded timeout reports the last observed state.
-+ */
+ * Poll readable accessibility state from an app-scoped semantic name until a contains, equals, or regex predicate holds, or a bounded timeout reports the last observed state.
+ */
 export interface WaitForValueParams {
   /**
-+   * Succeed when any readable field contains this text.
-+   */
+   * Succeed when any readable field contains this text.
+   */
   contains?: string;
   /**
-+   * Succeed when any readable field exactly equals this text.
-+   */
+   * Succeed when any readable field exactly equals this text.
+   */
   equals?: string;
   /**
-+   * Delay between polls. Defaults to 100 ms and is capped by the remaining timeout.
-+   */
+   * Delay between polls. Defaults to 100 ms and is capped by the remaining timeout.
+   */
   intervalMs?: number;
   /**
-+   * Succeed when any readable field matches this regular expression.
-+   */
+   * Succeed when any readable field matches this regular expression.
+   */
   matches?: string;
   /**
-+   * App-scoped semantic name target returned by look.
-+   */
+   * App-scoped semantic name target returned by look.
+   */
   target: {
   /**
-+   * Bundle id, pid, app name, or partial app name.
-+   */
+   * Bundle id, pid, app name, or partial app name.
+   */
   app: string;
   /**
-+   * Semantic element name returned by look.
-+   */
+   * Semantic element name returned by look.
+   */
   name: string;
 };
   /**
-+   * Maximum time to poll before returning a failed timeout result. Defaults to 5000 ms and is capped at 60000 ms.
-+   */
+   * Maximum time to poll before returning a failed timeout result. Defaults to 5000 ms and is capped at 60000 ms.
+   */
   timeoutMs?: number;
 }
 
 /**
-+ * Poll full app observations until the accessibility surface remains unchanged for a stability window or changes from its initial state; timeout returns the final observation.
-+ */
+ * Poll full app observations until the accessibility surface remains unchanged for a stability window or changes from its initial state; timeout returns the final observation.
+ */
 export interface WaitForStabilityParams {
   /**
-+   * Bundle id, pid, exact app name, or partial app name.
-+   */
+   * Bundle id, pid, exact app name, or partial app name.
+   */
   app: string;
   /**
-+   * stable waits for an unchanged stability window; changed waits for an observable app, tree, or focus change.
-+   */
+   * stable waits for an unchanged stability window; changed waits for an observable app, tree, or focus change.
+   */
   condition?: string;
   /**
-+   * Delay between observations. At least 10 ms and capped by the remaining timeout.
-+   */
+   * Delay between observations. At least 10 ms and capped by the remaining timeout.
+   */
   intervalMs?: number;
   /**
-+   * Required unchanged duration for the stable condition. Defaults to 300 ms and is capped at 10000 ms.
-+   */
+   * Required unchanged duration for the stable condition. Defaults to 300 ms and is capped at 10000 ms.
+   */
   stableMs?: number;
   /**
-+   * Maximum wait. Defaults to 5000 ms and is capped at 60000 ms.
-+   */
+   * Maximum wait. Defaults to 5000 ms and is capped at 60000 ms.
+   */
   timeoutMs?: number;
 }
 
 /**
-+ * Ask macOS to show the Accessibility permission prompt for the running Axon daemon identity.
-+ */
+ * Ask macOS to show the Accessibility permission prompt for the running Axon daemon identity.
+ */
 export type PermitParams = Record<string, never>;
 
 /**
-+ * Run a sequence of Axon actions from inline actions, a .axn path, or a path loaded first with inline actions appended.
-+ */
+ * Run a sequence of Axon actions from inline actions, a .axn path, or a path loaded first with inline actions appended.
+ */
 export interface RunParams {
   /**
-+   * Ordered action objects, each with a tool field and that tool's normal arguments.
-+   */
+   * Ordered action objects, each with a tool field and that tool's normal arguments.
+   */
   actions?: Array<{
   [key: string]: unknown;
 }>;
   /**
-+   * Caller-supplied .axn argument values keyed by declared arg name. Valid only for args without a declared source.
-+   */
+   * Caller-supplied .axn argument values keyed by declared arg name. Valid only for args without a declared source.
+   */
   argValues?: {
   [key: string]: unknown;
 };
   /**
-+   * Continue after an action fails. Defaults to false.
-+   */
+   * Continue after an action fails. Defaults to false.
+   */
   continueOnError?: boolean;
   /**
-+   * Trace the run without dispatching actions.
-+   */
+   * Trace the run without dispatching actions.
+   */
   dryRun?: boolean;
   /**
-+   * Write a revised copy of the .axn to this path when replay resolves through drifted locator evidence. The source file is never modified.
-+   */
+   * Write a revised copy of the .axn to this path when replay resolves through drifted locator evidence. The source file is never modified.
+   */
   healedPath?: string;
   /**
-+   * Local .axn file path for the Axon daemon to read.
-+   */
+   * Local .axn file path for the Axon daemon to read.
+   */
   path?: string;
 }
 
 /**
-+ * Save recent recorded Axon calls as an editable .axn action file. Read calls are omitted unless includeReads is true.
-+ */
+ * Save recent recorded Axon calls as an editable .axn action file. Read calls are omitted unless includeReads is true.
+ */
 export interface SaveParams {
   /**
-+   * Optional starting call id, inclusive.
-+   */
+   * Optional starting call id, inclusive.
+   */
   from?: string;
   /**
-+   * Include read/context tools such as look and find. Defaults to false.
-+   */
+   * Include read/context tools such as look and find. Defaults to false.
+   */
   includeReads?: boolean;
   /**
-+   * Optional local path to write the .axn file.
-+   */
+   * Optional local path to write the .axn file.
+   */
   path?: string;
   /**
-+   * History session to export. Defaults to the daemon's default session.
-+   */
+   * History session to export. Defaults to the daemon's default session.
+   */
   sessionId?: string;
   /**
-+   * Optional ending call id, inclusive.
-+   */
+   * Optional ending call id, inclusive.
+   */
   to?: string;
 }
 
 /**
-+ * Click an app-scoped semantic element name, explicit point, or text location.
-+ */
+ * Click an app-scoped semantic element name, explicit point, or text location.
+ */
 export interface ClickParams {
   /**
-+   * backgroundOnly (default) forbids activation, focus changes, real pointer movement, global keyboard input, and the clipboard, and returns a structured refusal instead. foregroundPermitted allows this one action to escalate; it is never inherited by later actions.
-+   */
+   * backgroundOnly (default) forbids activation, focus changes, real pointer movement, global keyboard input, and the clipboard, and returns a structured refusal instead. foregroundPermitted allows this one action to escalate; it is never inherited by later actions.
+   */
   deliveryPolicy?: string;
   /**
-+   * Target to click.
-+   */
+   * Target to click.
+   */
   target: {
   /**
-+   * Bundle id, pid, app name, or partial app name.
-+   */
+   * Bundle id, pid, app name, or partial app name.
+   */
   app: string;
   /**
-+   * Semantic element name returned by look.
-+   */
+   * Semantic element name returned by look.
+   */
   name: string;
 } | {
   /**
-+   * Application that owns this point. Required for a window or screenshot coordinate, and what binds a screen coordinate to a process instead of the shared input devices.
-+   */
+   * Application that owns this point. Required for a window or screenshot coordinate, and what binds a screen coordinate to a process instead of the shared input devices.
+   */
   app?: string;
   /**
-+   * Coordinate space. Defaults to screen. screen and window use logical points in the platform accessibility coordinate system; screenshot uses returned encoded-image pixels.
-+   */
+   * Coordinate space. Defaults to screen. screen and window use logical points in the platform accessibility coordinate system; screenshot uses returned encoded-image pixels.
+   */
   coordinateSpace?: "screen" | "window" | "screenshot";
   /**
-+   * Point target object: { point: { x, y, coordinateSpace, app } }, { app, coordinateSpace, point: { x, y } }, or { x, y, coordinateSpace }. screen and window coordinates are logical points in the platform accessibility coordinate system and are converted to native pointer coordinates for dispatch. screenshot coordinates are pixels in the returned encoded image after capture and any downscaling; Axon converts them by the encoded-image-to-window size ratios, never by assuming a fixed display scale. app and coordinateSpace may be stated on the point itself or beside it on the target object, and the most specific statement wins: the point, then the target object around it, then the top-level app parameter. window and screenshot points require an app from one of those places. Naming the app is what lets a point activate that application before it is clicked; it does not by itself qualify the coordinate for background delivery. Background delivery needs the window frame a coordinate was measured against, which only a derived point carries — from a window or screenshot conversion, or from a text location. A caller-supplied screen point therefore reaches its target through foreground delivery, activating the named app and proving it before dispatch, and refuses under backgroundOnly rather than posting into a process that may accept the events and do nothing. Raw points dispatch without element identity or occlusion verification; use a semantic name when fail-closed target validation is required.
-+   */
+   * Point target object: { point: { x, y, coordinateSpace, app } }, { app, coordinateSpace, point: { x, y } }, or { x, y, coordinateSpace }. screen and window coordinates are logical points in the platform accessibility coordinate system and are converted to native pointer coordinates for dispatch. screenshot coordinates are pixels in the returned encoded image after capture and any downscaling; Axon converts them by the encoded-image-to-window size ratios, never by assuming a fixed display scale. app and coordinateSpace may be stated on the point itself or beside it on the target object, and the most specific statement wins: the point, then the target object around it, then the top-level app parameter. window and screenshot points require an app from one of those places. Naming the app is what lets a point activate that application before it is clicked; it does not by itself qualify the coordinate for background delivery. Background delivery needs the window frame a coordinate was measured against, which only a derived point carries — from a window or screenshot conversion, or from a text location. A caller-supplied screen point therefore reaches its target through foreground delivery, activating the named app and proving it before dispatch, and refuses under backgroundOnly rather than posting into a process that may accept the events and do nothing. Raw points dispatch without element identity or occlusion verification; use a semantic name when fail-closed target validation is required.
+   */
   point: {
   /**
-+   * Application that owns this point. Required for a window or screenshot coordinate, and what binds a screen coordinate to a process instead of the shared input devices.
-+   */
+   * Application that owns this point. Required for a window or screenshot coordinate, and what binds a screen coordinate to a process instead of the shared input devices.
+   */
   app?: string;
   /**
-+   * Coordinate space. Defaults to screen. screen and window use logical points in the platform accessibility coordinate system; screenshot uses returned encoded-image pixels.
-+   */
+   * Coordinate space. Defaults to screen. screen and window use logical points in the platform accessibility coordinate system; screenshot uses returned encoded-image pixels.
+   */
   coordinateSpace?: "screen" | "window" | "screenshot";
   /**
-+   * Legacy alias for coordinateSpace.
-+   */
+   * Legacy alias for coordinateSpace.
+   */
   space?: "screen" | "window" | "screenshot";
   /**
-+   * Horizontal coordinate.
-+   */
+   * Horizontal coordinate.
+   */
   x: number;
   /**
-+   * Vertical coordinate.
-+   */
+   * Vertical coordinate.
+   */
   y: number;
 };
   /**
-+   * Legacy alias for coordinateSpace.
-+   */
+   * Legacy alias for coordinateSpace.
+   */
   space?: "screen" | "window" | "screenshot";
 } | {
   /**
-+   * Application that owns this point. Required for a window or screenshot coordinate, and what binds a screen coordinate to a process instead of the shared input devices.
-+   */
+   * Application that owns this point. Required for a window or screenshot coordinate, and what binds a screen coordinate to a process instead of the shared input devices.
+   */
   app?: string;
   /**
-+   * Coordinate space. Defaults to screen. screen and window use logical points in the platform accessibility coordinate system; screenshot uses returned encoded-image pixels.
-+   */
+   * Coordinate space. Defaults to screen. screen and window use logical points in the platform accessibility coordinate system; screenshot uses returned encoded-image pixels.
+   */
   coordinateSpace?: "screen" | "window" | "screenshot";
   /**
-+   * Legacy alias for coordinateSpace.
-+   */
+   * Legacy alias for coordinateSpace.
+   */
   space?: "screen" | "window" | "screenshot";
   /**
-+   * Horizontal coordinate.
-+   */
+   * Horizontal coordinate.
+   */
   x: number;
   /**
-+   * Vertical coordinate.
-+   */
+   * Vertical coordinate.
+   */
   y: number;
 } | {
   location: {
   /**
-+   * App containing the visible text.
-+   */
+   * App containing the visible text.
+   */
   app: string;
   /**
-+   * Text source. auto, the default, matches accessibility text first and falls back to screenshot OCR when accessibility matches nothing. ax and screenshot use only that source and never fall back.
-+   */
+   * Text source. auto, the default, matches accessibility text first and falls back to screenshot OCR when accessibility matches nothing. ax and screenshot use only that source and never fall back.
+   */
   source?: "auto" | "ax" | "screenshot";
   /**
-+   * Text to match exactly, or an exact/contains matcher object.
-+   */
+   * Text to match exactly, or an exact/contains matcher object.
+   */
   text: string | unknown | unknown;
 };
 };
 }
 
 /**
-+ * Fill a writable field by setting AXValue directly on a target, avoiding focus and keystroke timing races.
-+ */
+ * Fill a writable field by setting AXValue directly on a target, avoiding focus and keystroke timing races.
+ */
 export interface TypeParams {
   /**
-+   * backgroundOnly (default) forbids activation, focus changes, real pointer movement, global keyboard input, and the clipboard, and returns a structured refusal instead. foregroundPermitted allows this one action to escalate; it is never inherited by later actions.
-+   */
+   * backgroundOnly (default) forbids activation, focus changes, real pointer movement, global keyboard input, and the clipboard, and returns a structured refusal instead. foregroundPermitted allows this one action to escalate; it is never inherited by later actions.
+   */
   deliveryPolicy?: string;
   /**
-+   * App-scoped semantic name target for the writable field.
-+   */
+   * App-scoped semantic name target for the writable field.
+   */
   target: {
   /**
-+   * Bundle id, pid, app name, or partial app name.
-+   */
+   * Bundle id, pid, app name, or partial app name.
+   */
   app: string;
   /**
-+   * Semantic element name returned by look.
-+   */
+   * Semantic element name returned by look.
+   */
   name: string;
 };
   /**
-+   * New string value.
-+   */
+   * New string value.
+   */
   value: string;
 }
 
 /**
-+ * Post keyboard input for shortcuts, special keys, or raw text when field-level type is not the right intent.
-+ */
+ * Post keyboard input for shortcuts, special keys, or raw text when field-level type is not the right intent.
+ */
 export type KeyboardParams = unknown | unknown;
 
 /**
-+ * Scroll an accessibility surface by resolving an offscreen descendant and requesting AXScrollToVisible.
-+ */
+ * Scroll an accessibility surface by resolving an offscreen descendant and requesting AXScrollToVisible.
+ */
 export interface ScrollParams {
   /**
-+   * Optional app used to resolve a scroll surface without activating it.
-+   */
+   * Optional app used to resolve a scroll surface without activating it.
+   */
   app?: string;
   /**
-+   * backgroundOnly (default) forbids activation, focus changes, real pointer movement, global keyboard input, and the clipboard, and returns a structured refusal instead. foregroundPermitted allows this one action to escalate; it is never inherited by later actions.
-+   */
+   * backgroundOnly (default) forbids activation, focus changes, real pointer movement, global keyboard input, and the clipboard, and returns a structured refusal instead. foregroundPermitted allows this one action to escalate; it is never inherited by later actions.
+   */
   deliveryPolicy?: string;
   /**
-+   * Horizontal scroll delta in pixels. Defaults to 0.
-+   */
+   * Horizontal scroll delta in pixels. Defaults to 0.
+   */
   deltaX?: number;
   /**
-+   * Vertical scroll delta in pixels. Defaults to -120.
-+   */
+   * Vertical scroll delta in pixels. Defaults to -120.
+   */
   deltaY?: number;
   /**
-+   * Optional target to scroll or resolve into view.
-+   */
+   * Optional target to scroll or resolve into view.
+   */
   target?: {
   /**
-+   * Bundle id, pid, app name, or partial app name.
-+   */
+   * Bundle id, pid, app name, or partial app name.
+   */
   app: string;
   /**
-+   * Semantic element name returned by look.
-+   */
+   * Semantic element name returned by look.
+   */
   name: string;
 } | {
   /**
-+   * Application that owns this point. Required for a window or screenshot coordinate, and what binds a screen coordinate to a process instead of the shared input devices.
-+   */
+   * Application that owns this point. Required for a window or screenshot coordinate, and what binds a screen coordinate to a process instead of the shared input devices.
+   */
   app?: string;
   /**
-+   * Coordinate space. Defaults to screen. screen and window use logical points in the platform accessibility coordinate system; screenshot uses returned encoded-image pixels.
-+   */
+   * Coordinate space. Defaults to screen. screen and window use logical points in the platform accessibility coordinate system; screenshot uses returned encoded-image pixels.
+   */
   coordinateSpace?: "screen" | "window" | "screenshot";
   /**
-+   * Point target object: { point: { x, y, coordinateSpace, app } }, { app, coordinateSpace, point: { x, y } }, or { x, y, coordinateSpace }. screen and window coordinates are logical points in the platform accessibility coordinate system and are converted to native pointer coordinates for dispatch. screenshot coordinates are pixels in the returned encoded image after capture and any downscaling; Axon converts them by the encoded-image-to-window size ratios, never by assuming a fixed display scale. app and coordinateSpace may be stated on the point itself or beside it on the target object, and the most specific statement wins: the point, then the target object around it, then the top-level app parameter. window and screenshot points require an app from one of those places. Naming the app is what lets a point activate that application before it is clicked; it does not by itself qualify the coordinate for background delivery. Background delivery needs the window frame a coordinate was measured against, which only a derived point carries — from a window or screenshot conversion, or from a text location. A caller-supplied screen point therefore reaches its target through foreground delivery, activating the named app and proving it before dispatch, and refuses under backgroundOnly rather than posting into a process that may accept the events and do nothing. Raw points dispatch without element identity or occlusion verification; use a semantic name when fail-closed target validation is required.
-+   */
+   * Point target object: { point: { x, y, coordinateSpace, app } }, { app, coordinateSpace, point: { x, y } }, or { x, y, coordinateSpace }. screen and window coordinates are logical points in the platform accessibility coordinate system and are converted to native pointer coordinates for dispatch. screenshot coordinates are pixels in the returned encoded image after capture and any downscaling; Axon converts them by the encoded-image-to-window size ratios, never by assuming a fixed display scale. app and coordinateSpace may be stated on the point itself or beside it on the target object, and the most specific statement wins: the point, then the target object around it, then the top-level app parameter. window and screenshot points require an app from one of those places. Naming the app is what lets a point activate that application before it is clicked; it does not by itself qualify the coordinate for background delivery. Background delivery needs the window frame a coordinate was measured against, which only a derived point carries — from a window or screenshot conversion, or from a text location. A caller-supplied screen point therefore reaches its target through foreground delivery, activating the named app and proving it before dispatch, and refuses under backgroundOnly rather than posting into a process that may accept the events and do nothing. Raw points dispatch without element identity or occlusion verification; use a semantic name when fail-closed target validation is required.
+   */
   point: {
   /**
-+   * Application that owns this point. Required for a window or screenshot coordinate, and what binds a screen coordinate to a process instead of the shared input devices.
-+   */
+   * Application that owns this point. Required for a window or screenshot coordinate, and what binds a screen coordinate to a process instead of the shared input devices.
+   */
   app?: string;
   /**
-+   * Coordinate space. Defaults to screen. screen and window use logical points in the platform accessibility coordinate system; screenshot uses returned encoded-image pixels.
-+   */
+   * Coordinate space. Defaults to screen. screen and window use logical points in the platform accessibility coordinate system; screenshot uses returned encoded-image pixels.
+   */
   coordinateSpace?: "screen" | "window" | "screenshot";
   /**
-+   * Legacy alias for coordinateSpace.
-+   */
+   * Legacy alias for coordinateSpace.
+   */
   space?: "screen" | "window" | "screenshot";
   /**
-+   * Horizontal coordinate.
-+   */
+   * Horizontal coordinate.
+   */
   x: number;
   /**
-+   * Vertical coordinate.
-+   */
+   * Vertical coordinate.
+   */
   y: number;
 };
   /**
-+   * Legacy alias for coordinateSpace.
-+   */
+   * Legacy alias for coordinateSpace.
+   */
   space?: "screen" | "window" | "screenshot";
 } | {
   /**
-+   * Application that owns this point. Required for a window or screenshot coordinate, and what binds a screen coordinate to a process instead of the shared input devices.
-+   */
+   * Application that owns this point. Required for a window or screenshot coordinate, and what binds a screen coordinate to a process instead of the shared input devices.
+   */
   app?: string;
   /**
-+   * Coordinate space. Defaults to screen. screen and window use logical points in the platform accessibility coordinate system; screenshot uses returned encoded-image pixels.
-+   */
+   * Coordinate space. Defaults to screen. screen and window use logical points in the platform accessibility coordinate system; screenshot uses returned encoded-image pixels.
+   */
   coordinateSpace?: "screen" | "window" | "screenshot";
   /**
-+   * Legacy alias for coordinateSpace.
-+   */
+   * Legacy alias for coordinateSpace.
+   */
   space?: "screen" | "window" | "screenshot";
   /**
-+   * Horizontal coordinate.
-+   */
+   * Horizontal coordinate.
+   */
   x: number;
   /**
-+   * Vertical coordinate.
-+   */
+   * Vertical coordinate.
+   */
   y: number;
 } | {
   location: {
   /**
-+   * App containing the visible text.
-+   */
+   * App containing the visible text.
+   */
   app: string;
   /**
-+   * Text source. auto, the default, matches accessibility text first and falls back to screenshot OCR when accessibility matches nothing. ax and screenshot use only that source and never fall back.
-+   */
+   * Text source. auto, the default, matches accessibility text first and falls back to screenshot OCR when accessibility matches nothing. ax and screenshot use only that source and never fall back.
+   */
   source?: "auto" | "ax" | "screenshot";
   /**
-+   * Text to match exactly, or an exact/contains matcher object.
-+   */
+   * Text to match exactly, or an exact/contains matcher object.
+   */
   text: string | unknown | unknown;
 };
 };
 }
 
 /**
-+ * Drag from one semantic name, explicit point, or text location to another. Pointer dispatch and verified semantic outcome are reported separately.
-+ */
+ * Drag from one semantic name, explicit point, or text location to another. Pointer dispatch and verified semantic outcome are reported separately.
+ */
 export interface DragParams {
   /**
-+   * Application that owns the drag. Required for background delivery; also the app foregroundPermitted activates and restores.
-+   */
+   * Application that owns the drag. Required for background delivery; also the app foregroundPermitted activates and restores.
+   */
   app?: string;
   /**
-+   * backgroundOnly (default) forbids activation, focus changes, real pointer movement, global keyboard input, and the clipboard, and returns a structured refusal instead. foregroundPermitted allows this one action to escalate; it is never inherited by later actions.
-+   */
+   * backgroundOnly (default) forbids activation, focus changes, real pointer movement, global keyboard input, and the clipboard, and returns a structured refusal instead. foregroundPermitted allows this one action to escalate; it is never inherited by later actions.
+   */
   deliveryPolicy?: string;
   /**
-+   * Optional drag duration in milliseconds. The pointer path still emits threshold and intermediate drag events.
-+   */
+   * Optional drag duration in milliseconds. The pointer path still emits threshold and intermediate drag events.
+   */
   durationMs?: number;
   /**
-+   * Optional post-action facts used by run to verify semantic success. Direct drag calls without a verified postcondition report an unverified semantic outcome.
-+   */
+   * Optional post-action facts used by run to verify semantic success. Direct drag calls without a verified postcondition report an unverified semantic outcome.
+   */
   expects?: Array<{
   [key: string]: unknown;
 }>;
   /**
-+   * Starting semantic name, point, or text location.
-+   */
+   * Starting semantic name, point, or text location.
+   */
   from: {
   /**
-+   * Bundle id, pid, app name, or partial app name.
-+   */
+   * Bundle id, pid, app name, or partial app name.
+   */
   app: string;
   /**
-+   * Semantic element name returned by look.
-+   */
+   * Semantic element name returned by look.
+   */
   name: string;
 } | {
   /**
-+   * Application that owns this point. Required for a window or screenshot coordinate, and what binds a screen coordinate to a process instead of the shared input devices.
-+   */
+   * Application that owns this point. Required for a window or screenshot coordinate, and what binds a screen coordinate to a process instead of the shared input devices.
+   */
   app?: string;
   /**
-+   * Coordinate space. Defaults to screen. screen and window use logical points in the platform accessibility coordinate system; screenshot uses returned encoded-image pixels.
-+   */
+   * Coordinate space. Defaults to screen. screen and window use logical points in the platform accessibility coordinate system; screenshot uses returned encoded-image pixels.
+   */
   coordinateSpace?: "screen" | "window" | "screenshot";
   /**
-+   * Point target object: { point: { x, y, coordinateSpace, app } }, { app, coordinateSpace, point: { x, y } }, or { x, y, coordinateSpace }. screen and window coordinates are logical points in the platform accessibility coordinate system and are converted to native pointer coordinates for dispatch. screenshot coordinates are pixels in the returned encoded image after capture and any downscaling; Axon converts them by the encoded-image-to-window size ratios, never by assuming a fixed display scale. app and coordinateSpace may be stated on the point itself or beside it on the target object, and the most specific statement wins: the point, then the target object around it, then the top-level app parameter. window and screenshot points require an app from one of those places. Naming the app is what lets a point activate that application before it is clicked; it does not by itself qualify the coordinate for background delivery. Background delivery needs the window frame a coordinate was measured against, which only a derived point carries — from a window or screenshot conversion, or from a text location. A caller-supplied screen point therefore reaches its target through foreground delivery, activating the named app and proving it before dispatch, and refuses under backgroundOnly rather than posting into a process that may accept the events and do nothing. Raw points dispatch without element identity or occlusion verification; use a semantic name when fail-closed target validation is required.
-+   */
+   * Point target object: { point: { x, y, coordinateSpace, app } }, { app, coordinateSpace, point: { x, y } }, or { x, y, coordinateSpace }. screen and window coordinates are logical points in the platform accessibility coordinate system and are converted to native pointer coordinates for dispatch. screenshot coordinates are pixels in the returned encoded image after capture and any downscaling; Axon converts them by the encoded-image-to-window size ratios, never by assuming a fixed display scale. app and coordinateSpace may be stated on the point itself or beside it on the target object, and the most specific statement wins: the point, then the target object around it, then the top-level app parameter. window and screenshot points require an app from one of those places. Naming the app is what lets a point activate that application before it is clicked; it does not by itself qualify the coordinate for background delivery. Background delivery needs the window frame a coordinate was measured against, which only a derived point carries — from a window or screenshot conversion, or from a text location. A caller-supplied screen point therefore reaches its target through foreground delivery, activating the named app and proving it before dispatch, and refuses under backgroundOnly rather than posting into a process that may accept the events and do nothing. Raw points dispatch without element identity or occlusion verification; use a semantic name when fail-closed target validation is required.
+   */
   point: {
   /**
-+   * Application that owns this point. Required for a window or screenshot coordinate, and what binds a screen coordinate to a process instead of the shared input devices.
-+   */
+   * Application that owns this point. Required for a window or screenshot coordinate, and what binds a screen coordinate to a process instead of the shared input devices.
+   */
   app?: string;
   /**
-+   * Coordinate space. Defaults to screen. screen and window use logical points in the platform accessibility coordinate system; screenshot uses returned encoded-image pixels.
-+   */
+   * Coordinate space. Defaults to screen. screen and window use logical points in the platform accessibility coordinate system; screenshot uses returned encoded-image pixels.
+   */
   coordinateSpace?: "screen" | "window" | "screenshot";
   /**
-+   * Legacy alias for coordinateSpace.
-+   */
+   * Legacy alias for coordinateSpace.
+   */
   space?: "screen" | "window" | "screenshot";
   /**
-+   * Horizontal coordinate.
-+   */
+   * Horizontal coordinate.
+   */
   x: number;
   /**
-+   * Vertical coordinate.
-+   */
+   * Vertical coordinate.
+   */
   y: number;
 };
   /**
-+   * Legacy alias for coordinateSpace.
-+   */
+   * Legacy alias for coordinateSpace.
+   */
   space?: "screen" | "window" | "screenshot";
 } | {
   /**
-+   * Application that owns this point. Required for a window or screenshot coordinate, and what binds a screen coordinate to a process instead of the shared input devices.
-+   */
+   * Application that owns this point. Required for a window or screenshot coordinate, and what binds a screen coordinate to a process instead of the shared input devices.
+   */
   app?: string;
   /**
-+   * Coordinate space. Defaults to screen. screen and window use logical points in the platform accessibility coordinate system; screenshot uses returned encoded-image pixels.
-+   */
+   * Coordinate space. Defaults to screen. screen and window use logical points in the platform accessibility coordinate system; screenshot uses returned encoded-image pixels.
+   */
   coordinateSpace?: "screen" | "window" | "screenshot";
   /**
-+   * Legacy alias for coordinateSpace.
-+   */
+   * Legacy alias for coordinateSpace.
+   */
   space?: "screen" | "window" | "screenshot";
   /**
-+   * Horizontal coordinate.
-+   */
+   * Horizontal coordinate.
+   */
   x: number;
   /**
-+   * Vertical coordinate.
-+   */
+   * Vertical coordinate.
+   */
   y: number;
 } | {
   location: {
   /**
-+   * App containing the visible text.
-+   */
+   * App containing the visible text.
+   */
   app: string;
   /**
-+   * Text source. auto, the default, matches accessibility text first and falls back to screenshot OCR when accessibility matches nothing. ax and screenshot use only that source and never fall back.
-+   */
+   * Text source. auto, the default, matches accessibility text first and falls back to screenshot OCR when accessibility matches nothing. ax and screenshot use only that source and never fall back.
+   */
   source?: "auto" | "ax" | "screenshot";
   /**
-+   * Text to match exactly, or an exact/contains matcher object.
-+   */
+   * Text to match exactly, or an exact/contains matcher object.
+   */
   text: string | unknown | unknown;
 };
 };
   /**
-+   * Ending semantic name, point, or text location.
-+   */
+   * Ending semantic name, point, or text location.
+   */
   to: {
   /**
-+   * Bundle id, pid, app name, or partial app name.
-+   */
+   * Bundle id, pid, app name, or partial app name.
+   */
   app: string;
   /**
-+   * Semantic element name returned by look.
-+   */
+   * Semantic element name returned by look.
+   */
   name: string;
 } | {
   /**
-+   * Application that owns this point. Required for a window or screenshot coordinate, and what binds a screen coordinate to a process instead of the shared input devices.
-+   */
+   * Application that owns this point. Required for a window or screenshot coordinate, and what binds a screen coordinate to a process instead of the shared input devices.
+   */
   app?: string;
   /**
-+   * Coordinate space. Defaults to screen. screen and window use logical points in the platform accessibility coordinate system; screenshot uses returned encoded-image pixels.
-+   */
+   * Coordinate space. Defaults to screen. screen and window use logical points in the platform accessibility coordinate system; screenshot uses returned encoded-image pixels.
+   */
   coordinateSpace?: "screen" | "window" | "screenshot";
   /**
-+   * Point target object: { point: { x, y, coordinateSpace, app } }, { app, coordinateSpace, point: { x, y } }, or { x, y, coordinateSpace }. screen and window coordinates are logical points in the platform accessibility coordinate system and are converted to native pointer coordinates for dispatch. screenshot coordinates are pixels in the returned encoded image after capture and any downscaling; Axon converts them by the encoded-image-to-window size ratios, never by assuming a fixed display scale. app and coordinateSpace may be stated on the point itself or beside it on the target object, and the most specific statement wins: the point, then the target object around it, then the top-level app parameter. window and screenshot points require an app from one of those places. Naming the app is what lets a point activate that application before it is clicked; it does not by itself qualify the coordinate for background delivery. Background delivery needs the window frame a coordinate was measured against, which only a derived point carries — from a window or screenshot conversion, or from a text location. A caller-supplied screen point therefore reaches its target through foreground delivery, activating the named app and proving it before dispatch, and refuses under backgroundOnly rather than posting into a process that may accept the events and do nothing. Raw points dispatch without element identity or occlusion verification; use a semantic name when fail-closed target validation is required.
-+   */
+   * Point target object: { point: { x, y, coordinateSpace, app } }, { app, coordinateSpace, point: { x, y } }, or { x, y, coordinateSpace }. screen and window coordinates are logical points in the platform accessibility coordinate system and are converted to native pointer coordinates for dispatch. screenshot coordinates are pixels in the returned encoded image after capture and any downscaling; Axon converts them by the encoded-image-to-window size ratios, never by assuming a fixed display scale. app and coordinateSpace may be stated on the point itself or beside it on the target object, and the most specific statement wins: the point, then the target object around it, then the top-level app parameter. window and screenshot points require an app from one of those places. Naming the app is what lets a point activate that application before it is clicked; it does not by itself qualify the coordinate for background delivery. Background delivery needs the window frame a coordinate was measured against, which only a derived point carries — from a window or screenshot conversion, or from a text location. A caller-supplied screen point therefore reaches its target through foreground delivery, activating the named app and proving it before dispatch, and refuses under backgroundOnly rather than posting into a process that may accept the events and do nothing. Raw points dispatch without element identity or occlusion verification; use a semantic name when fail-closed target validation is required.
+   */
   point: {
   /**
-+   * Application that owns this point. Required for a window or screenshot coordinate, and what binds a screen coordinate to a process instead of the shared input devices.
-+   */
+   * Application that owns this point. Required for a window or screenshot coordinate, and what binds a screen coordinate to a process instead of the shared input devices.
+   */
   app?: string;
   /**
-+   * Coordinate space. Defaults to screen. screen and window use logical points in the platform accessibility coordinate system; screenshot uses returned encoded-image pixels.
-+   */
+   * Coordinate space. Defaults to screen. screen and window use logical points in the platform accessibility coordinate system; screenshot uses returned encoded-image pixels.
+   */
   coordinateSpace?: "screen" | "window" | "screenshot";
   /**
-+   * Legacy alias for coordinateSpace.
-+   */
+   * Legacy alias for coordinateSpace.
+   */
   space?: "screen" | "window" | "screenshot";
   /**
-+   * Horizontal coordinate.
-+   */
+   * Horizontal coordinate.
+   */
   x: number;
   /**
-+   * Vertical coordinate.
-+   */
+   * Vertical coordinate.
+   */
   y: number;
 };
   /**
-+   * Legacy alias for coordinateSpace.
-+   */
+   * Legacy alias for coordinateSpace.
+   */
   space?: "screen" | "window" | "screenshot";
 } | {
   /**
-+   * Application that owns this point. Required for a window or screenshot coordinate, and what binds a screen coordinate to a process instead of the shared input devices.
-+   */
+   * Application that owns this point. Required for a window or screenshot coordinate, and what binds a screen coordinate to a process instead of the shared input devices.
+   */
   app?: string;
   /**
-+   * Coordinate space. Defaults to screen. screen and window use logical points in the platform accessibility coordinate system; screenshot uses returned encoded-image pixels.
-+   */
+   * Coordinate space. Defaults to screen. screen and window use logical points in the platform accessibility coordinate system; screenshot uses returned encoded-image pixels.
+   */
   coordinateSpace?: "screen" | "window" | "screenshot";
   /**
-+   * Legacy alias for coordinateSpace.
-+   */
+   * Legacy alias for coordinateSpace.
+   */
   space?: "screen" | "window" | "screenshot";
   /**
-+   * Horizontal coordinate.
-+   */
+   * Horizontal coordinate.
+   */
   x: number;
   /**
-+   * Vertical coordinate.
-+   */
+   * Vertical coordinate.
+   */
   y: number;
 } | {
   location: {
   /**
-+   * App containing the visible text.
-+   */
+   * App containing the visible text.
+   */
   app: string;
   /**
-+   * Text source. auto, the default, matches accessibility text first and falls back to screenshot OCR when accessibility matches nothing. ax and screenshot use only that source and never fall back.
-+   */
+   * Text source. auto, the default, matches accessibility text first and falls back to screenshot OCR when accessibility matches nothing. ax and screenshot use only that source and never fall back.
+   */
   source?: "auto" | "ax" | "screenshot";
   /**
-+   * Text to match exactly, or an exact/contains matcher object.
-+   */
+   * Text to match exactly, or an exact/contains matcher object.
+   */
   text: string | unknown | unknown;
 };
 };
 }
 
 /**
-+ * Invoke a named accessibility action on an app-scoped semantic element name.
-+ */
+ * Invoke a named accessibility action on an app-scoped semantic element name.
+ */
 export interface InvokeParams {
   /**
-+   * backgroundOnly (default) forbids activation, focus changes, real pointer movement, global keyboard input, and the clipboard, and returns a structured refusal instead. foregroundPermitted allows this one action to escalate; it is never inherited by later actions.
-+   */
+   * backgroundOnly (default) forbids activation, focus changes, real pointer movement, global keyboard input, and the clipboard, and returns a structured refusal instead. foregroundPermitted allows this one action to escalate; it is never inherited by later actions.
+   */
   deliveryPolicy?: string;
   /**
-+   * Accessibility action name, for example AXPress or AXShowMenu.
-+   */
+   * Accessibility action name, for example AXPress or AXShowMenu.
+   */
   name: string;
   /**
-+   * App-scoped semantic name target.
-+   */
+   * App-scoped semantic name target.
+   */
   target: {
   /**
-+   * Bundle id, pid, app name, or partial app name.
-+   */
+   * Bundle id, pid, app name, or partial app name.
+   */
   app: string;
   /**
-+   * Semantic element name returned by look.
-+   */
+   * Semantic element name returned by look.
+   */
   name: string;
 };
 }
