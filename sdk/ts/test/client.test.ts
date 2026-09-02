@@ -2,7 +2,7 @@ import { describe, expect, test } from "bun:test";
 import { Axon, AxonRpcError } from "../src/client.js";
 import { SocketTransport } from "../src/transport.js";
 import { schemaProductVersion } from "../src/generated.js";
-import { FakeDaemon, fixture, healthyMac, ok, rpcError, type ReceivedRequest } from "./daemon.js";
+import { FakeDaemon, ok, rpcError, socketHealth, type ReceivedRequest } from "./daemon.js";
 
 type Result = Record<string, unknown>;
 type Route = (request: ReceivedRequest) => Result | undefined;
@@ -32,7 +32,7 @@ const snapshot = (id: string, pid = 4210): Result => ({
 
 describe("connect", () => {
   test("reports the daemon version and platform after a health handshake", async () => {
-    const { daemon, axon } = await connectTo(healthyMac(schemaProductVersion));
+    const { daemon, axon } = await connectTo(socketHealth({ version: schemaProductVersion }));
     try {
       expect(daemon.only.method).toBe("health");
       expect(axon.version).toBe(schemaProductVersion);
@@ -45,7 +45,7 @@ describe("connect", () => {
   test("warns without failing when the daemon version differs from the schema", async () => {
     const warnings: string[] = [];
     const { daemon, axon } = await connectTo(
-      healthyMac("0.0.1"), () => ({}), { warn: (message) => warnings.push(message) },
+      socketHealth({ version: "0.0.1" }), () => ({}), { warn: (message) => warnings.push(message) },
     );
     try {
       expect(axon.version).toBe("0.0.1");
@@ -57,13 +57,36 @@ describe("connect", () => {
     }
   });
 
-  test("refuses to hand back a client when the daemon is not ready", async () => {
-    const notRunning = fixture("health/macos-daemon-not-running.json");
-    const daemon = await FakeDaemon.start((received) => ok(received.id, notRunning));
+  test("refuses to hand back a client when the daemon reports itself unready", async () => {
+    const unready = socketHealth({
+      ready: false,
+      session: { interactive: true, graphical: false, reason: "no-display", detail: "No graphical session is available" },
+    });
+    const daemon = await FakeDaemon.start((received) => ok(received.id, unready));
     try {
       await expect(Axon.connect({
         transport: new SocketTransport({ socketPath: daemon.path }),
-      })).rejects.toThrow(/not ready: No daemon answered/);
+      })).rejects.toThrow(/not ready: No graphical session is available/);
+    } finally {
+      await daemon.stop();
+    }
+  });
+
+  test("names an ungranted permission at connect rather than leaving it to a later refusal", async () => {
+    const warnings: string[] = [];
+    const { daemon } = await connectTo(
+      socketHealth({
+        version: schemaProductVersion,
+        permissions: [
+          { name: "accessibility", granted: false, reason: "accessibility-not-granted" },
+          { name: "screenRecording", granted: true },
+        ],
+      }),
+      () => ({}),
+      { warn: (message) => warnings.push(message) },
+    );
+    try {
+      expect(warnings.join("\n")).toMatch(/not granted accessibility/);
     } finally {
       await daemon.stop();
     }
@@ -78,7 +101,7 @@ describe("connect", () => {
 describe("errors and refusals", () => {
   test("throws on a JSON-RPC error", async () => {
     const daemon = await FakeDaemon.start((received) => received.method === "health"
-      ? ok(received.id, healthyMac(schemaProductVersion))
+      ? ok(received.id, socketHealth({ version: schemaProductVersion }))
       : rpcError(received.id, -32602, "click requires a target"));
     try {
       const axon = await Axon.connect({
@@ -95,7 +118,7 @@ describe("errors and refusals", () => {
   test("returns a refusal as an ordinary result", async () => {
     const refusal = fixture<{ cases: Result[] }>("delivery/results.json").cases
       .find((entry) => entry.refusal !== null)!;
-    const { daemon, axon } = await connectTo(healthyMac(schemaProductVersion), () => refusal);
+    const { daemon, axon } = await connectTo(socketHealth({ version: schemaProductVersion }), () => refusal);
     try {
       const result = await axon.app("Safari").click("checkout/submit");
       expect(result.dispatchSuccess).toBe(false);
@@ -108,7 +131,7 @@ describe("errors and refusals", () => {
 
 describe("app handle state", () => {
   test("pins the observed process and reuses the last snapshot id", async () => {
-    const { daemon, axon } = await connectTo(healthyMac(schemaProductVersion), (received) =>
+    const { daemon, axon } = await connectTo(socketHealth({ version: schemaProductVersion }), (received) =>
       received.method === "look" && received.params.since === undefined
         ? snapshot("obs-safari-1", 4210)
         : { changed: true, reason: "tree", snapshotId: "obs-safari-1", currentSnapshotId: "obs-safari-2" });
@@ -135,7 +158,7 @@ describe("app handle state", () => {
   });
 
   test("asks for a snapshot before it can report what changed", async () => {
-    const { daemon, axon } = await connectTo(healthyMac(schemaProductVersion));
+    const { daemon, axon } = await connectTo(socketHealth({ version: schemaProductVersion }));
     try {
       await expect(axon.app("Safari").changedSince())
         .rejects.toThrow(/needs a snapshot id or a prior look/);
@@ -146,7 +169,7 @@ describe("app handle state", () => {
   });
 
   test("maps each wrapper onto exactly one socket call", async () => {
-    const { daemon, axon } = await connectTo(healthyMac(schemaProductVersion));
+    const { daemon, axon } = await connectTo(socketHealth({ version: schemaProductVersion }));
     try {
       const app = axon.app("Safari");
       await app.type("form/email", "ada@example.com");
@@ -180,7 +203,7 @@ describe("app handle state", () => {
 
 describe("sessions", () => {
   test("tags every call in a session and leaves untagged calls alone", async () => {
-    const { daemon, axon } = await connectTo(healthyMac(schemaProductVersion), () => ({}));
+    const { daemon, axon } = await connectTo(socketHealth({ version: schemaProductVersion }), () => ({}));
     try {
       await axon.app("Safari").click("checkout/submit");
       expect(daemon.last("click").params._session).toBeUndefined();
@@ -199,7 +222,7 @@ describe("sessions", () => {
   });
 
   test("rejects an empty session name", async () => {
-    const { daemon, axon } = await connectTo(healthyMac(schemaProductVersion));
+    const { daemon, axon } = await connectTo(socketHealth({ version: schemaProductVersion }));
     try {
       expect(() => axon.session("")).toThrow(/must not be empty/);
     } finally {
@@ -210,7 +233,7 @@ describe("sessions", () => {
 
 describe("replay debugging", () => {
   test("dispatches the debug family under its own method namespace", async () => {
-    const { daemon, axon } = await connectTo(healthyMac(schemaProductVersion));
+    const { daemon, axon } = await connectTo(socketHealth({ version: schemaProductVersion }));
     try {
       await axon.raw.debug("create", { path: "/tmp/checkout.axn" });
       await axon.raw.debug("setBreakpoints", { indexes: [2] });
@@ -225,7 +248,7 @@ describe("replay debugging", () => {
 
 describe("platform availability", () => {
   test("refuses a tool the connected platform does not advertise, before the call", async () => {
-    const { daemon, axon } = await connectTo(healthyMac(schemaProductVersion));
+    const { daemon, axon } = await connectTo(socketHealth({ version: schemaProductVersion }));
     try {
       expect(axon.supports("navigate")).toBe(true);
       expect(axon.supports("capture_screen")).toBe(false);
@@ -237,8 +260,9 @@ describe("platform availability", () => {
   });
 
   test("reads availability from the connected platform, not the host", async () => {
-    const linux = { ...fixture("health/linux-accessibility-disabled.json"), daemon: { running: true, ready: true } };
-    const { daemon, axon } = await connectTo(linux);
+    const { daemon, axon } = await connectTo(
+      socketHealth({ platform: "linux", version: schemaProductVersion }),
+    );
     try {
       expect(axon.supports("capture_screen")).toBe(true);
       expect(axon.supports("navigate")).toBe(false);
