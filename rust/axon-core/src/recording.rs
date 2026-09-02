@@ -405,7 +405,11 @@ impl UserActionRecorder {
                         && LocatorResolver::resolve(context.locator(), &snapshot).status
                             == ResolutionStatus::Unique
                     {
-                        return Ok(serde_json::to_value(wire).expect("wire target serializes"));
+                        return Ok(serde_json::json!({
+                            "app": wire.app,
+                            "name": wire.name,
+                            "locator": context.locator(),
+                        }));
                     }
                 }
             }
