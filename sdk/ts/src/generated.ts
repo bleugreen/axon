@@ -836,21 +836,21 @@ export interface InvokeParams {
 }
 
 export interface RawClient {
-  capture_screen(params?: CaptureScreenParams): Promise<Record<string, unknown>>;
-  look(params?: LookParams): Promise<Record<string, unknown>>;
-  navigate(params?: NavigateParams): Promise<Record<string, unknown>>;
-  windows(params?: WindowsParams): Promise<Record<string, unknown>>;
-  tabs(params?: TabsParams): Promise<Record<string, unknown>>;
-  find(params?: FindParams): Promise<Record<string, unknown>>;
-  wait_for_value(params?: WaitForValueParams): Promise<Record<string, unknown>>;
-  wait_for_stability(params?: WaitForStabilityParams): Promise<Record<string, unknown>>;
-  permit(params?: PermitParams): Promise<Record<string, unknown>>;
-  run(params?: RunParams): Promise<Record<string, unknown>>;
-  save(params?: SaveParams): Promise<Record<string, unknown>>;
-  click(params?: ClickParams): Promise<Record<string, unknown>>;
-  type(params?: TypeParams): Promise<Record<string, unknown>>;
-  keyboard(params?: KeyboardParams): Promise<Record<string, unknown>>;
-  scroll(params?: ScrollParams): Promise<Record<string, unknown>>;
-  drag(params?: DragParams): Promise<Record<string, unknown>>;
-  invoke(params?: InvokeParams): Promise<Record<string, unknown>>;
+  capture_screen(params: CaptureScreenParams): Promise<Record<string, unknown>>;
+  look(params: LookParams): Promise<Record<string, unknown>>;
+  navigate(params: NavigateParams): Promise<Record<string, unknown>>;
+  windows(params: WindowsParams): Promise<Record<string, unknown>>;
+  tabs(params: TabsParams): Promise<Record<string, unknown>>;
+  find(params: FindParams): Promise<Record<string, unknown>>;
+  wait_for_value(params: WaitForValueParams): Promise<Record<string, unknown>>;
+  wait_for_stability(params: WaitForStabilityParams): Promise<Record<string, unknown>>;
+  permit(params: PermitParams): Promise<Record<string, unknown>>;
+  run(params: RunParams): Promise<Record<string, unknown>>;
+  save(params: SaveParams): Promise<Record<string, unknown>>;
+  click(params: ClickParams): Promise<Record<string, unknown>>;
+  type(params: TypeParams): Promise<Record<string, unknown>>;
+  keyboard(params: KeyboardParams): Promise<Record<string, unknown>>;
+  scroll(params: ScrollParams): Promise<Record<string, unknown>>;
+  drag(params: DragParams): Promise<Record<string, unknown>>;
+  invoke(params: InvokeParams): Promise<Record<string, unknown>>;
 }
