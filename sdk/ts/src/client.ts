@@ -22,13 +22,49 @@ import {
 } from "./generated.js";
 import { SocketTransport, type JsonRpcError, type Transport } from "./transport.js";
 
-/** The health-v1 document the daemon returns from `health`. */
+/**
+ * What the daemon answers a socket `health` request with: `DaemonReport`, defined in
+ * `Sources/AxonCore/HealthStatus.swift`, whose fields are flat.
+ *
+ * This is deliberately not the `health-v1` document described by `schema/health-v1.schema.json`.
+ * That one nests a `daemon` object and adds `schemaVersion` and `registration`, and it is what the
+ * CLI's `status --json` synthesizes — including for a daemon that never answered at all. A report
+ * read off the socket can only have come from a daemon that is already serving, which is why
+ * `ready` sits at the top level here.
+ */
 export interface Health {
-  schemaVersion: string;
   version: string;
   platform: "macos" | "linux" | "windows";
-  daemon: { running: boolean; ready: boolean; reason?: string | null; detail?: string | null };
+  ready: boolean;
+  processId: number;
+  endpoint: string;
+  session: HealthSession;
+  permissions: readonly HealthPermission[];
+  capabilities: readonly HealthCapability[];
   [key: string]: unknown;
+}
+
+export interface HealthSession {
+  interactive: boolean;
+  graphical: boolean;
+  /** Absent where the platform has no session-level accessibility switch, as on macOS. */
+  accessibilityEnabled?: boolean | null;
+  reason?: string | null;
+  detail?: string | null;
+}
+
+export interface HealthPermission {
+  name: string;
+  granted: boolean;
+  reason?: string | null;
+  detail?: string | null;
+}
+
+export interface HealthCapability {
+  capability: string;
+  usable: boolean;
+  reason?: string | null;
+  restriction?: string | null;
 }
 
 /** A JSON-RPC `error`: the request never reached its tool. A refusal is not one of these. */
@@ -124,6 +160,21 @@ export interface ConnectOptions {
   warn?: (message: string) => void;
 }
 
+/**
+ * Why a daemon that answered nonetheless calls itself unready. The report carries no top-level
+ * reason, so this reads the two places one can appear: the session, then anything it was denied.
+ */
+const notReadyDetail = (health: Health): string | undefined => {
+  const session = health.session?.detail ?? health.session?.reason;
+  if (session) return session;
+  const denied = ungranted(health);
+  if (denied.length === 0) return undefined;
+  return denied.map((p) => `${p.name}: ${p.detail ?? p.reason ?? "not granted"}`).join("; ");
+};
+
+const ungranted = (health: Health): readonly HealthPermission[] =>
+  (health.permissions ?? []).filter((permission) => !permission.granted);
+
 /** A connected daemon. `connect` proves the daemon is reachable and ready before returning. */
 export class Axon {
   readonly version: string;
@@ -140,13 +191,23 @@ export class Axon {
     } catch (error) {
       throw new Error("Axon daemon is not running or could not be reached", { cause: error });
     }
-    if (!health.daemon?.ready) {
-      const detail = health.daemon?.detail ?? health.daemon?.reason;
+    if (!health.ready) {
+      const detail = notReadyDetail(health);
       throw new Error(`Axon daemon is not ready${detail ? `: ${detail}` : ""}`);
     }
+    const warn = options.warn ?? console.warn;
     if (health.version !== schemaProductVersion) {
-      (options.warn ?? console.warn)(
+      warn(
         `Axon SDK was generated for ${schemaProductVersion}, but the daemon reports ${health.version}`,
+      );
+    }
+    // A daemon that is serving still refuses every action it lacks the grant for, and that failure
+    // reads as an unexplained refusal several calls later unless it is named here.
+    const denied = ungranted(health);
+    if (denied.length > 0) {
+      warn(
+        `Axon daemon is ready but was not granted ${denied.map((p) => p.name).join(", ")}; "
+        + "actions that need it will be refused`,
       );
     }
     return new Axon(new RawAxonClient(transport, health.platform), health);
