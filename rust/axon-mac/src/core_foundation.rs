@@ -19,7 +19,6 @@ unsafe extern "C" {
     ) -> u8;
 }
 
-
 fn nul_terminated_buffer_len(maximum_encoded_size: isize) -> Option<usize> {
     usize::try_from(maximum_encoded_size).ok()?.checked_add(1)
 }
