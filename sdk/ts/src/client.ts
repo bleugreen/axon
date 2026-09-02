@@ -41,6 +41,11 @@ export class AxonRpcError extends Error {
 
 export type Facade = "swift" | "mac" | "windows" | "linux";
 
+/** `.axn` replay debugging, dispatched by the daemon's `debug.*` methods. */
+export type DebugMethod =
+  | "create" | "start" | "step" | "retry" | "continue"
+  | "resume" | "runTo" | "setBreakpoints" | "stop";
+
 /**
  * A platform can be served by more than one daemon build, and health-v1 names the operating
  * system rather than the build. macOS therefore admits any tool either macOS facade advertises;
@@ -88,8 +93,11 @@ export class RawAxonClient implements RawClient {
   health() { return this.request("health"); }
   shutdown(params: object = {}) { return this.request("shutdown", params); }
 
-  // The debug replay family is not part of the generated tool surface; it stays loosely typed.
-  debug(method: string, params: object = {}) { return this.request(`debug.${method}`, params); }
+  /**
+   * The stepping-debugger family for `.axn` replay. It is not part of the generated tool surface,
+   * so its parameters and results stay loose; only the method names are enumerated.
+   */
+  debug(method: DebugMethod, params: object = {}) { return this.request(`debug.${method}`, params); }
 
   capture_screen(params: CaptureScreenParams = {}) { return this.request("capture_screen", params); }
   look(params: LookParams = {}) { return this.request("look", params); }

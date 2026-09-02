@@ -31,7 +31,14 @@ export interface SocketTransportOptions {
   maxResponseBytes?: number;
 }
 
-const longMethods = new Set(["run", "wait_for_value", "wait_for_stability"]);
+/**
+ * The methods the daemon may hold open while it waits, which the reference Swift client
+ * (`Sources/AxonCore/CommandHandling.swift`) gives the long bound. Anything else answers promptly
+ * or is in trouble.
+ */
+export const longRunningMethods: ReadonlySet<string> =
+  new Set(["run", "wait_for_value", "wait_for_stability"]);
+
 export const defaultSocketPath = (): string => {
   if (process.env.AXON_SOCKET_PATH) return process.env.AXON_SOCKET_PATH;
   if (process.platform === "win32") return String.raw`\\.\pipe\axon-v1`;
@@ -60,7 +67,7 @@ export class SocketTransport implements Transport {
       const chunks: Buffer[] = [];
       let bytes = 0;
       let settled = false;
-      const timeoutMs = longMethods.has(request.method) ? this.longTimeoutMs : this.timeoutMs;
+      const timeoutMs = longRunningMethods.has(request.method) ? this.longTimeoutMs : this.timeoutMs;
       const finish = (error?: Error, response?: JsonRpcResponse) => {
         if (settled) return;
         settled = true;
