@@ -206,8 +206,8 @@ export class Axon {
     const denied = ungranted(health);
     if (denied.length > 0) {
       warn(
-        `Axon daemon is ready but was not granted ${denied.map((p) => p.name).join(", ")}; "
-        + "actions that need it will be refused`,
+        `Axon daemon is ready but was not granted `
+        + `${denied.map((p) => p.name).join(", ")}; actions that need it will be refused`,
       );
     }
     return new Axon(new RawAxonClient(transport, health.platform), health);
