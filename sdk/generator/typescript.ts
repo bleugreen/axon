@@ -5,7 +5,7 @@ const propertyName = (name: string) => identifier.test(name) ? name : JSON.strin
 const literal = (value: unknown) => value === null ? "null" : JSON.stringify(value);
 const pascal = (name: string) => name.split(/[^A-Za-z0-9]+/).filter(Boolean)
   .map((part) => part[0]!.toUpperCase() + part.slice(1)).join("");
-const jsdoc = (text: string, indent = "") => `${indent}/**\n+${text.split("\n").map((line) => `${indent} * ${line.replaceAll("*/", "*\\/")}`).join("\n")}\n+${indent} */`;
+const jsdoc = (text: string, indent = "") => `${indent}/**\n${text.split("\n").map((line) => `${indent} * ${line.replaceAll("*/", "*\\/")}`).join("\n")}\n${indent} */`;
 
 function schemaType(schema: JsonSchema): string {
   if (schema.const !== undefined) return literal(schema.const);
