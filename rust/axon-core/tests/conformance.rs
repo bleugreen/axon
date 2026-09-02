@@ -131,7 +131,14 @@ fn recorder_shaped_locator_omits_absent_fields_and_round_trips() {
     let locator = recorder_locator();
     let document = AxnDocument {
         version: 2,
-        arguments: Vec::new(),
+        arguments: vec![AxnArgument {
+            name: "recipient".into(),
+            kind: ArgumentType::String,
+            description: None,
+            default: None,
+            source: None,
+            unknown_fields: Map::new(),
+        }],
         actions: vec![AxnAction {
             id: Some("a001".into()),
             tool: "click".into(),
