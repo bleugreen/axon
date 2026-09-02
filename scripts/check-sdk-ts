@@ -1,0 +1,29 @@
+#!/usr/bin/env bash
+# Byte-checks the checked-in TypeScript client against the tool-surface artifact it is generated
+# from. The artifact itself is checked against ToolSurfaceSpec.swift by scripts/check-tool-surface.
+set -euo pipefail
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$ROOT"
+GENERATED="sdk/ts/src/generated.ts"
+if ! command -v bun >/dev/null 2>&1; then
+  printf 'bun is required to generate %s: https://bun.sh\n' "$GENERATED" >&2
+  exit 2
+fi
+TMP="$(mktemp "${TMPDIR:-/tmp}/generated.XXXXXX.ts")"
+trap 'rm -f "$TMP"' EXIT
+bun sdk/generate.ts "$TMP" >/dev/null
+if [[ "${1:-}" == "--write" ]]; then
+  cp "$TMP" "$GENERATED"
+  printf 'wrote %s\n' "$GENERATED"
+  exit 0
+fi
+if [[ $# -gt 0 ]]; then
+  printf 'unknown argument: %s\n' "$1" >&2
+  exit 2
+fi
+if ! cmp -s "$TMP" "$GENERATED"; then
+  printf 'SDK drift: %s does not match schema/tool-surface-v1.json\n' "$GENERATED" >&2
+  printf 'run scripts/check-sdk-ts --write to regenerate it\n' >&2
+  exit 1
+fi
+printf '%s\n' "$GENERATED"
