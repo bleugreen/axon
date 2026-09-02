@@ -143,13 +143,13 @@ pub struct Locator {
     pub description: Option<TextMatcher>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub identifier: Option<TextMatcher>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(default)]
     pub actions: Vec<String>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(default)]
     pub ancestors: Vec<AncestorLocator>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub window: Option<AncestorLocator>,
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(default)]
     pub nearby_text: Vec<TextMatcher>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub frame: Option<Rect>,
