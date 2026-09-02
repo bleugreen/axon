@@ -29,7 +29,7 @@ describe("generated client", () => {
   });
 
   test("states the product version the surface was exported at", () => {
-    expect(schemaProductVersion).toBe(surface.productVersion);
+    expect(surface.productVersion).toBe(schemaProductVersion);
   });
 
   test("resolves every schema construct to a real type", async () => {
