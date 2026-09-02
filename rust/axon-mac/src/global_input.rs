@@ -2,6 +2,7 @@ use axon_core::{
     BackendError, GlobalInputObserver, RecordedAppIdentity, RecordedElementEvidence,
     RecordedInputEvent, RecordedKeystroke, RecordedPoint, RecordedTargetEvidence, RecordingScope,
 };
+use crate::core_foundation::string_value;
 use std::{
     collections::VecDeque,
     ffi::{c_char, c_void},
@@ -93,14 +94,6 @@ unsafe extern "C" {
         text: *const c_char,
         encoding: u32,
     ) -> CFStringRef;
-    fn CFStringGetCString(
-        value: CFStringRef,
-        buffer: *mut c_char,
-        size: isize,
-        encoding: u32,
-    ) -> u8;
-    fn CFGetTypeID(value: CFTypeRef) -> usize;
-    fn CFStringGetTypeID() -> usize;
     fn CFRelease(value: CFTypeRef);
     static kCFRunLoopCommonModes: CFStringRef;
 }
@@ -636,18 +629,6 @@ fn cf_string(value: &str) -> Option<CFStringRef> {
     let value = std::ffi::CString::new(value).ok()?;
     let result = unsafe { CFStringCreateWithCString(null(), value.as_ptr(), UTF8) };
     (!result.is_null()).then_some(result)
-}
-fn string_value(value: CFTypeRef) -> Option<String> {
-    if unsafe { CFGetTypeID(value) } != unsafe { CFStringGetTypeID() } {
-        return None;
-    }
-    let mut buf = vec![0u8; 4096];
-    if unsafe { CFStringGetCString(value, buf.as_mut_ptr().cast(), buf.len() as isize, UTF8) } == 0
-    {
-        return None;
-    }
-    let end = buf.iter().position(|byte| *byte == 0)?;
-    Some(String::from_utf8_lossy(&buf[..end]).into_owned())
 }
 fn now_ms() -> u64 {
     SystemTime::now()
