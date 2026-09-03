@@ -223,11 +223,31 @@ fn rust_recording_v2_output_matches_producer_owned_fixtures() {
 
     // What a recording persists is identity and scope. State belongs to the capture, not to the
     // artifact that outlives it.
-    for state in ["value", "frame", "actions", "nearbyText"] {
-        assert!(
-            !yaml.contains(&format!("      {state}:")),
-            "{state} in a recorded locator: {yaml}"
-        );
+    let mut locators = Vec::new();
+    collect_locators(&serde_json::to_value(&document).unwrap(), &mut locators);
+    assert_eq!(locators.len(), 4, "every semantic target carries a locator");
+    for locator in locators {
+        for state in ["value", "frame", "actions", "nearbyText"] {
+            assert!(
+                locator.get(state).is_none(),
+                "{state} in a recorded locator: {locator}"
+            );
+        }
+    }
+}
+
+fn collect_locators(value: &Value, out: &mut Vec<Value>) {
+    match value {
+        Value::Object(object) => {
+            if let Some(locator) = object.get("locator") {
+                out.push(locator.clone());
+            }
+            for nested in object.values() {
+                collect_locators(nested, out);
+            }
+        }
+        Value::Array(items) => items.iter().for_each(|item| collect_locators(item, out)),
+        _ => {}
     }
 }
 
