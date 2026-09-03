@@ -382,8 +382,20 @@ impl UserActionRecorder {
         self.groups
             .push(RecordedUserEventGroup::new(action).with_warnings(warnings));
         let settled = provider.settle(index, tool)?;
-        self.groups[index].observed.extend(settled.observed);
-        self.groups[index].observation = settled.observation;
+        // A settle read taken around a secret entry is a read of the field that now holds the
+        // credential, so its evidence is discarded here rather than carried into the group. This
+        // has to be shared core's refusal and not a provider's: the value was typed moments ago
+        // and deliberately never retained, so no redaction context can recognise it, and every
+        // present and future provider would otherwise have to remember to withhold it. The settle
+        // call itself still happens, because it is the wait that lets the effect land before the
+        // next event's read.
+        if !matches!(
+            self.groups[index].action(),
+            RecordedUserAction::TypeSecret { .. }
+        ) {
+            self.groups[index].observed.extend(settled.observed);
+            self.groups[index].observation = settled.observation;
+        }
         let group = std::mem::take(&mut self.groups[index]);
         self.groups[index] = redact_serializable(group, &self.redaction);
         Ok(())
@@ -903,6 +915,13 @@ impl UserRecordingTranslator {
                 index += 1;
             }
 
+            // Total at this layer too, because authoring is a public entry point that may be
+            // handed groups this recorder did not build: nothing observed around a secret entry
+            // is emitted, and nothing about it is asserted.
+            if matches!(emitted.action(), RecordedUserAction::TypeSecret { .. }) {
+                observed.clear();
+            }
+
             let action_id = format!("a{action_number:03}");
             let mut object = action_object(emitted.action());
             object.insert("id".into(), Value::String(action_id.clone()));
@@ -924,9 +943,9 @@ impl UserRecordingTranslator {
             let mut expected_facts: Vec<Value> = Vec::new();
             // A secret entry has nothing safe to assert. What the field now holds is the
             // credential, and the recorder deliberately no longer knows it, so it cannot be
-            // excluded from a derived fact the way an ordinary typed input is. Deriving nothing
-            // leaves a valid, unverified step, which is the same outcome as any other transition
-            // with nothing safe to say.
+            // excluded from a derived fact the way an ordinary typed input is excluded through
+            // `workflow_inputs`. Deriving nothing leaves a valid, unverified step, which is the
+            // same outcome as any other transition with nothing safe to say.
             if let Some(observation) = emitted.observation.as_ref()
                 && !matches!(emitted.action(), RecordedUserAction::TypeSecret { .. })
             {
