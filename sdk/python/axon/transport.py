@@ -114,7 +114,7 @@ class SocketTransport:
         timeout = self.long_timeout_s if method in LONG_RUNNING_METHODS else self.timeout_s
         payload = (json.dumps(request) + "\n").encode("utf-8")
         line = (
-            self._over_pipe(payload, method)
+            self._over_pipe(payload)
             if self.socket_path.startswith("\\\\")
             else self._over_socket(payload, timeout, method)
         )
@@ -147,7 +147,7 @@ class SocketTransport:
         finally:
             connection.close()
 
-    def _over_pipe(self, payload: bytes, method: str) -> bytes:
+    def _over_pipe(self, payload: bytes) -> bytes:
         """
         The Windows endpoint is a named pipe, which opens as a file rather than as a socket.
 
@@ -157,7 +157,6 @@ class SocketTransport:
         dependency this package does not take. And a pipe that is already serving another client
         raises immediately instead of queueing.
         """
-        del method
         try:
             with open(self.socket_path, "r+b", buffering=0) as pipe:
                 pipe.write(payload)
