@@ -108,6 +108,9 @@ pub struct UserActionRecorder {
     mouse_down: Option<(RecordedTargetEvidence, u64)>,
     drag_end: Option<RecordedPoint>,
     secure_input: bool,
+    /// Argument names already handed to a secret burst this session, so a second burst into a
+    /// second field cannot silently reuse the first one's name.
+    secret_arguments: Vec<String>,
     redaction: crate::ObservationRedactionContext,
 }
 
@@ -133,6 +136,7 @@ impl UserActionRecorder {
             mouse_down: None,
             drag_end: None,
             secure_input: false,
+            secret_arguments: Vec::new(),
             redaction,
         })
     }
@@ -301,13 +305,27 @@ impl UserActionRecorder {
         // Clear pending state before the provider read: Accessibility callbacks may re-enter.
         let focused = provider.read_focused()?;
         let (action, warnings) = match focused {
-            Some(focused)
-                if !focused
-                    .target
-                    .candidates
-                    .iter()
-                    .any(|candidate| candidate.sensitive) =>
-            {
+            // A burst typed under a sensitive focus never becomes an artifact string. The step is
+            // kept, because the flow needs it, but it carries a declared `secret` argument
+            // reference: the characters stay in this process and replay asks whoever runs the
+            // recording for the value. No OS gate can be relied on for this — macOS secure event
+            // input masks most password fields but not all of them, and neither Windows low-level
+            // hooks nor X11 XRecord have an equivalent — so the refusal to serialize lives here.
+            Some(focused) if has_sensitive_candidate(&focused.target) => {
+                drop(text);
+                let argument = self.secret_argument_name(&focused.target);
+                (
+                    RecordedUserAction::TypeSecret {
+                        app: app.name,
+                        argument,
+                    },
+                    vec![
+                        "focused element is sensitive; recorded a secret argument reference instead of the typed text"
+                            .into(),
+                    ],
+                )
+            }
+            Some(focused) => {
                 let target = self.target(provider, &focused.target)?;
                 match focused.value {
                     Some(value) => {
@@ -333,12 +351,12 @@ impl UserActionRecorder {
                     ),
                 }
             }
-            _ => (
+            None => (
                 RecordedUserAction::TypeText {
                     app: app.name,
                     text,
                 },
-                vec!["focused element unavailable or sensitive; recorded keyboard fallback".into()],
+                vec!["focused element unavailable; recorded keyboard fallback".into()],
             ),
         };
         self.append_and_settle_with_warnings(provider, action, "type", warnings)
@@ -371,16 +389,37 @@ impl UserActionRecorder {
         Ok(())
     }
 
+    /// Names the argument a secret burst becomes.
+    ///
+    /// A password field's own label is not the secret, and it is the only handle the person
+    /// replaying the recording has for a value nothing in the artifact describes, so it names the
+    /// argument whenever it yields a usable reference name. Names are deduplicated within a
+    /// session: two bursts into two fields are two values as far as this recorder can tell.
+    fn secret_argument_name(&mut self, evidence: &RecordedTargetEvidence) -> String {
+        let base = evidence
+            .candidates
+            .iter()
+            .filter(|candidate| candidate.sensitive)
+            .flat_map(|candidate| [candidate.title.as_deref(), candidate.identifier.as_deref()])
+            .flatten()
+            .find_map(reference_name)
+            .unwrap_or_else(|| "secret".to_owned());
+        let mut name = base.clone();
+        let mut ordinal = 1;
+        while self.secret_arguments.contains(&name) {
+            ordinal += 1;
+            name = format!("{base}_{ordinal}");
+        }
+        self.secret_arguments.push(name.clone());
+        name
+    }
+
     fn target(
         &mut self,
         provider: &mut dyn RecordingEvidenceProvider,
         evidence: &RecordedTargetEvidence,
     ) -> Result<Value, crate::BackendError> {
-        if evidence
-            .candidates
-            .iter()
-            .any(|candidate| candidate.sensitive)
-        {
+        if has_sensitive_candidate(evidence) {
             return Ok(point_target(&evidence.app, evidence.point));
         }
         let Some(snapshot) = provider.capture_snapshot(&evidence.app)? else {
@@ -454,6 +493,32 @@ impl<P: RecordingEvidenceProvider> OwnedUserActionRecorder<P> {
 
 fn same_app(a: &RecordedAppIdentity, b: &RecordedAppIdentity) -> bool {
     a.matches_runtime(b)
+}
+
+fn has_sensitive_candidate(evidence: &RecordedTargetEvidence) -> bool {
+    evidence
+        .candidates
+        .iter()
+        .any(|candidate| candidate.sensitive)
+}
+
+/// The longest valid `{{reference}}` name a label yields, or nothing when none survives.
+fn reference_name(source: &str) -> Option<String> {
+    const MAXIMUM: usize = 32;
+    let mut name = String::new();
+    for character in source.chars() {
+        if character.is_ascii_alphanumeric() {
+            name.push(character.to_ascii_lowercase());
+        } else if !name.is_empty() && !name.ends_with('_') {
+            name.push('_');
+        }
+        if name.len() >= MAXIMUM {
+            break;
+        }
+    }
+    let name = name.trim_end_matches('_');
+    name.starts_with(|c: char| c.is_ascii_alphabetic())
+        .then(|| name.to_owned())
 }
 
 fn node_matches(node: &crate::Node, candidate: &RecordedElementEvidence) -> bool {
