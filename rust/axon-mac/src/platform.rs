@@ -101,6 +101,83 @@ impl ReadableStateProvider for MacBackend {
     }
 }
 
+/// The two macOS permissions this daemon answers for, read independently of each other.
+///
+/// They are independent in TCC — `kTCCServiceAccessibility` and `kTCCServiceScreenCapture` are
+/// separate rows a user toggles separately — and the health report must say so. Capabilities are
+/// free to *compose* them (a screenshot of a named application needs both on this backend, because
+/// it resolves applications through the Accessibility API); the permission fields are not, and
+/// deriving them from a composed capability is what made a denied-Accessibility daemon claim Screen
+/// Recording was ungranted while its TCC row read granted.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MacPermissions {
+    pub accessibility: bool,
+    pub screen_recording: bool,
+}
+
+impl MacPermissions {
+    pub fn read() -> Self {
+        Self {
+            accessibility: accessibility::granted(),
+            screen_recording: window_capture::screen_capture_enabled(),
+        }
+    }
+}
+
+/// The capability census, as a pure function of the two permissions.
+///
+/// Note that `screenshot` is unusable without Accessibility even though Screen Recording is what
+/// TCC gates image capture on. That is honest for *this* backend: it names the window to capture by
+/// resolving the application through the Accessibility API, so without that grant there is nothing
+/// to point `CGWindowListCreateImage` at. The Swift daemon resolves applications through NSWorkspace
+/// and so does not share the restriction; see docs/cross-platform-internals.md.
+pub fn capability_report(permissions: MacPermissions) -> Vec<CapabilityInfo> {
+    let MacPermissions {
+        accessibility: accessibility_enabled,
+        screen_recording: screen_recording_enabled,
+    } = permissions;
+    let supported = [
+        Capability::Enumerate,
+        Capability::Capture,
+        Capability::RetainedHandles,
+        Capability::Invoke,
+        Capability::ReadValue,
+        Capability::SetValue,
+        Capability::Focus,
+        Capability::Scroll,
+        Capability::Screenshot,
+        Capability::SerializeHistory,
+        Capability::ObserveGlobalInput,
+    ];
+    Capability::ALL
+        .into_iter()
+        .map(|capability| {
+            let usable = if capability == Capability::SerializeHistory {
+                true
+            } else if capability == Capability::Screenshot {
+                screenshot_restriction(accessibility_enabled, screen_recording_enabled).is_none()
+            } else {
+                supported.contains(&capability) && accessibility_enabled
+            };
+            CapabilityInfo {
+                capability,
+                usable,
+                restriction: (!usable).then(|| {
+                    if capability == Capability::Screenshot {
+                        screenshot_restriction(accessibility_enabled, screen_recording_enabled)
+                            .expect("an unusable screenshot capability has a restriction")
+                            .into()
+                    } else if supported.contains(&capability) {
+                        "Accessibility permission is not granted".into()
+                    } else {
+                        "excluded from axon-mac v1".into()
+                    }
+                }),
+            }
+        })
+        .collect()
+}
+
 fn screenshot_restriction(
     accessibility_enabled: bool,
     screen_recording_enabled: bool,
@@ -607,48 +684,6 @@ impl PlatformBackend for MacBackend {
             })
             .collect())
     }
-            Capability::Enumerate,
-            Capability::Capture,
-            Capability::RetainedHandles,
-            Capability::Invoke,
-            Capability::ReadValue,
-            Capability::SetValue,
-            Capability::Focus,
-            Capability::Scroll,
-            Capability::Screenshot,
-            Capability::SerializeHistory,
-            Capability::ObserveGlobalInput,
-        ];
-        Ok(Capability::ALL
-            .into_iter()
-            .map(|capability| {
-                let usable = if capability == Capability::SerializeHistory {
-                    true
-                } else if capability == Capability::Screenshot {
-                    screenshot_restriction(accessibility_enabled, screen_recording_enabled)
-                        .is_none()
-                } else {
-                    supported.contains(&capability) && accessibility_enabled
-                };
-                CapabilityInfo {
-                    capability,
-                    usable,
-                    restriction: (!usable).then(|| {
-                        if capability == Capability::Screenshot {
-                            screenshot_restriction(accessibility_enabled, screen_recording_enabled)
-                                .expect("an unusable screenshot capability has a restriction")
-                                .into()
-                        } else if supported.contains(&capability) {
-                            "Accessibility permission is not granted".into()
-                        } else {
-                            "excluded from axon-mac v1".into()
-                        }
-                    }),
-                }
-            })
-            .collect()
-}
-
     fn capture(&mut self, app: &AppQuery) -> Result<Snapshot, BackendError> {
         self.capture_bounded(app, CaptureBounds::default())
     }
