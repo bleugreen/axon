@@ -539,8 +539,11 @@ impl SemanticNameRegistry {
             .and_then(|id| self.records.get(id))
         {
             Some(registered) => crate::persisted_locator(context.locator(), &registered.identity)?,
-            // A locator replayed from an existing document was persisted in this shape already.
-            None => context.locator().clone(),
+            // A replay locator came from a document rather than from a capture this process took,
+            // so there is no observation to narrow its scope against. State is dropped all the
+            // same: a document authored elsewhere may carry any of the scoring fields, and saving
+            // one back out is exactly how they would re-enter an artifact.
+            None => crate::persisted_locator_shape(context.locator()),
         };
         serde_json::to_value(locator).ok()?.as_object().cloned()
     }

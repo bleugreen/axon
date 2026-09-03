@@ -208,31 +208,53 @@ pub struct Resolution {
 /// uniquely: the caller records a point fallback rather than persisting a half-pinned locator that
 /// cannot find its element again.
 pub fn persisted_locator(recorded: &Locator, captured: &Snapshot) -> Option<Locator> {
+    let scoped = persisted_locator_shape(recorded);
     let mut minimal = Locator {
+        window: None,
+        ancestors: Vec::new(),
+        ..scoped.clone()
+    };
+    if resolves_uniquely(&minimal, captured) {
+        return Some(minimal);
+    }
+    if scoped.window.is_some() {
+        minimal.window = scoped.window.clone();
+        if resolves_uniquely(&minimal, captured) {
+            return Some(minimal);
+        }
+    }
+    for depth in 1..=scoped.ancestors.len() {
+        minimal.ancestors = scoped.ancestors[scoped.ancestors.len() - depth..].to_vec();
+        if resolves_uniquely(&minimal, captured) {
+            return Some(minimal);
+        }
+    }
+    None
+}
+
+/// The half of the rule that needs no capture: state is dropped, identity and the scope already
+/// recorded are kept.
+///
+/// Which fields never survive is a property of the locator alone, so this holds wherever a locator
+/// is written down — including for a locator that arrived from an existing document rather than
+/// from an observation this process took. Narrowing scope is the other half, and that is a question
+/// about a capture: without one, recorded scope is kept rather than guessed away, because dropping
+/// a window or an ancestor that was doing real work would leave a locator that no longer resolves.
+pub fn persisted_locator_shape(recorded: &Locator) -> Locator {
+    Locator {
         role: recorded.role.clone(),
         subrole: recorded.subrole.clone(),
         title: recorded.title.clone(),
         label: recorded.label.clone(),
         description: recorded.description.clone(),
         identifier: recorded.identifier.clone(),
-        ..Locator::default()
-    };
-    if resolves_uniquely(&minimal, captured) {
-        return Some(minimal);
+        window: recorded.window.clone(),
+        ancestors: recorded.ancestors.clone(),
+        value: None,
+        actions: Vec::new(),
+        nearby_text: Vec::new(),
+        frame: None,
     }
-    if recorded.window.is_some() {
-        minimal.window = recorded.window.clone();
-        if resolves_uniquely(&minimal, captured) {
-            return Some(minimal);
-        }
-    }
-    for depth in 1..=recorded.ancestors.len() {
-        minimal.ancestors = recorded.ancestors[recorded.ancestors.len() - depth..].to_vec();
-        if resolves_uniquely(&minimal, captured) {
-            return Some(minimal);
-        }
-    }
-    None
 }
 
 fn resolves_uniquely(locator: &Locator, snapshot: &Snapshot) -> bool {
