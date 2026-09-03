@@ -1194,6 +1194,83 @@ host application's AX title (Calculator's ThemeWidget service does), so AXTitle
 alone is not an application identity and would make strict app lookup falsely
 ambiguous.
 
+### macOS Accessibility trust is per-process, and behaviour is the truthful source
+
+`AXIsProcessTrusted()` answers with a verdict HIServices resolves once per
+process and does not revisit. Measured on bglab-mac (2026-09-03) against a
+running daemon while the user toggled its Accessibility row, it is frozen in
+both directions: a daemon trusted at launch keeps reporting trusted after the
+grant is revoked, and a daemon that started untrusted keeps reporting untrusted
+after it is restored. **A re-granted daemon must be restarted.** Only a fresh
+process reports honestly.
+
+The Accessibility API itself is not confused. A process whose grant has been
+withdrawn gets `kAXErrorAPIDisabled` (-25211) from AX calls whether or not the
+cached verdict has noticed. `rust/axon-mac/src/accessibility.rs` is therefore
+the one place that answers "can this process use Accessibility right now": it
+asks the API to do a trivial piece of work and classifies the `AXError`, and
+falls back to the cached verdict only when the status does not settle the
+question. Every other module delegates to it.
+
+The classification ladder is deliberately asymmetric. `kAXErrorNoValue` and
+`kAXErrorAttributeUnsupported` mean the call was *served*, so a session with
+nothing focused does not read as denied. `kAXErrorCannotComplete` is ambiguous
+between an unresponsive target and a denial, so it defers to the cached verdict
+rather than flipping it. Only `kAXErrorAPIDisabled` makes a trusted-looking
+process denied. This matters in practice: measured in a non-interactive build
+slot with no focused application, the system-wide probe returns
+`kAXErrorCannotComplete` and the fallback preserves the process's existing
+answer instead of manufacturing a denial.
+
+Application enumeration folds the same statuses. Under a withdrawn grant every
+`AXTitle` read comes back disabled, so every process is filtered out and the
+list is empty; the folded verdict is what lets `look` refuse with the typed
+`accessibility-denied` capability error instead of the misleading
+`application not found` that an empty list otherwise produces. That path does
+not depend on a focused application, so it stays honest in any session.
+
+`axon-mac probe trust [--pid N] [--interval-ms N] [--count N]` is the
+measurement harness for this, following the `axon-win probe <name>` convention.
+It emits one JSON object per sample carrying `axIsProcessTrusted`,
+`axIsProcessTrustedWithOptions`, the raw `systemWideStatus`, the raw `pidStatus`
+from the read enumeration actually makes, and the verdict the build would act
+on. Four columns beside each other across a revoke/re-grant toggle separate
+"the verdict is cached" from "the API is disabled" without any inference.
+
+### Permissions are reported per TCC row; capabilities compose them
+
+`kTCCServiceAccessibility` and `kTCCServiceScreenCapture` are separate rows a
+user toggles separately, and the health report's `permissions` block says so:
+each `PermissionState` reports only its own grant. Capabilities are free to
+compose the two, and `screenshot` does — but deriving the `screenRecording`
+permission field back out of that composed capability made a
+denied-Accessibility daemon claim Screen Recording was ungranted while its TCC
+row read granted the whole time. `MacPermissions` in
+`rust/axon-mac/src/platform.rs` reads the two independently; `capability_report`
+is a pure function of them, and health uses both rather than deriving one from
+the other.
+
+The Rust backend's `screenshot` capability is unusable without Accessibility
+even when Screen Recording is granted, because this backend names the window to
+capture by resolving the application through the Accessibility API. The Swift
+daemon resolves applications through NSWorkspace and so does not share that
+restriction; `Tests/AxonCoreTests/HealthStatusTests.swift` and
+`schema/fixtures/health/macos-accessibility-denied.json` describe that
+implementation, not this one. Both are right about themselves. Once `axon-mac`
+becomes the shipping macOS daemon this needs a decision: either the Rust backend
+grows a non-Accessibility application resolution path, or the shared fixture
+stops claiming to describe both implementations.
+
+### Recording refuses on capability before a session exists
+
+`recording.start` and `editor.recordFromHere` ask `global_input_observer()`
+before dispatching to the daemon. That seam is the one place that knows whether
+this process can watch input, and asking first means a denied start never opens
+a recording it then has to abandon. It also matches the backend's established
+convention of refusing on capability before validating parameters. The refusal
+carries `-32004` with `kind: capability-unavailable` and the stable
+`code: accessibility-denied`, matching `look`.
+
 
 ## macOS browser Automation attribution
 
