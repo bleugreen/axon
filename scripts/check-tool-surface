@@ -11,9 +11,10 @@ GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null \
 if [[ "${1:-}" == "--write" ]]; then
   cp "$TMP" "$ARTIFACT"
   printf 'wrote %s\n' "$ARTIFACT"
-  # The generated TypeScript client is derived from this artifact, so rewriting one without the
-  # other leaves the tree internally inconsistent.
-  exec scripts/check-sdk-ts --write
+  # The generated clients are derived from this artifact, so rewriting it without them leaves the
+  # tree internally inconsistent.
+  scripts/check-sdk-ts --write
+  exec scripts/check-sdk-python --write
 fi
 if [[ $# -gt 0 ]]; then
   printf 'unknown argument: %s\n' "$1" >&2

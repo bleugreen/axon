@@ -105,6 +105,16 @@ export const fixture = <T = Record<string, unknown>>(name: string): T =>
   JSON.parse(readFileSync(resolve(fixtures, name), "utf8")) as T;
 
 /**
+ * A response recorded from a live daemon over the socket, under `sdk/fixtures/`.
+ *
+ * These live beside the generator rather than inside one SDK's tests because both SDKs' fakes
+ * replay them: a recording that only one language holds is a recording the other can drift from.
+ */
+const socketFixtures = resolve(import.meta.dir, "../../fixtures");
+export const socketFixture = <T = Record<string, unknown>>(name: string): T =>
+  JSON.parse(readFileSync(resolve(socketFixtures, name), "utf8")) as T;
+
+/**
  * A healthy macOS daemon's answer to `health`, recorded from a live 0.3.6 daemon over the socket.
  *
  * The socket returns `DaemonReport` (`Sources/AxonCore/HealthStatus.swift`), which is flat. It is
@@ -115,8 +125,6 @@ export const fixture = <T = Record<string, unknown>>(name: string): T =>
 export const socketHealth = (
   overrides: Record<string, unknown> = {},
 ): Record<string, unknown> => ({
-  ...JSON.parse(
-    readFileSync(resolve(import.meta.dir, "fixtures/socket-health-macos.json"), "utf8"),
-  ) as Record<string, unknown>,
+  ...socketFixture("socket-health-macos.json"),
   ...overrides,
 });

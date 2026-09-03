@@ -1,4 +1,4 @@
-import type { JsonSchema, ToolSurface } from "./schema.ts";
+import { branchesOf, demandsParams, type JsonSchema, type ToolSurface } from "./schema.ts";
 
 const identifier = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
 const propertyName = (name: string) => identifier.test(name) ? name : JSON.stringify(name);
@@ -6,22 +6,6 @@ const literal = (value: unknown) => value === null ? "null" : JSON.stringify(val
 const pascal = (name: string) => name.split(/[^A-Za-z0-9]+/).filter(Boolean)
   .map((part) => part[0]!.toUpperCase() + part.slice(1)).join("");
 const jsdoc = (text: string, indent = "") => `${indent}/**\n${text.split("\n").map((line) => `${indent} * ${line.replaceAll("*/", "*\\/")}`).join("\n")}\n${indent} */`;
-
-/**
- * A branch that states only `required` refines the schema around it rather than describing a
- * shape of its own: `keyboard` is one object whose `oneOf` demands either `text` or `key`.
- * Such a branch is rendered by promoting its keys to required on the enclosing object.
- */
-const isRefinement = (schema: JsonSchema): boolean =>
-  schema.required !== undefined &&
-  schema.type === undefined && schema.properties === undefined && schema.enum === undefined &&
-  schema.const === undefined && schema.items === undefined &&
-  schema.anyOf === undefined && schema.oneOf === undefined;
-
-const branchesOf = (schema: JsonSchema) => {
-  const all = schema.anyOf ?? schema.oneOf ?? [];
-  return { refinements: all.filter(isRefinement), variants: all.filter((b) => !isRefinement(b)) };
-};
 
 function objectType(schema: JsonSchema, alsoRequired: readonly string[] = []): string {
   const required = new Set([...(schema.required ?? []), ...alsoRequired]);
@@ -56,12 +40,6 @@ function schemaType(schema: JsonSchema): string {
         : objectType(schema);
     default: return "unknown";
   }
-}
-
-/** A tool needs an argument only when some property is required outright or by a refinement. */
-function demandsParams(schema: JsonSchema): boolean {
-  if ((schema.required ?? []).length > 0) return true;
-  return branchesOf(schema).refinements.some((branch) => (branch.required ?? []).length > 0);
 }
 
 /** A single object literal becomes an interface; anything else stays a type alias. */

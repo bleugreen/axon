@@ -89,8 +89,9 @@ the failure rather than answering on its own.
 ### From a program
 
 A program should not spawn a stdio facade to make one call. It talks to the daemon socket directly,
-and the recommended client for that is the SDK in `sdk/ts`, whose per-tool methods are generated
-from `schema/tool-surface-v1.json` rather than maintained by hand.
+and the recommended clients for that are the SDKs in `sdk/ts` and `sdk/python`, whose per-tool
+methods are generated from `schema/tool-surface-v1.json` by one generator rather than maintained by
+hand, so neither can describe a tool surface the other does not.
 
 ```ts
 import { Axon } from "@axon/sdk";
@@ -106,6 +107,24 @@ console.log(await app.changedSince());
 
 await session.save({ path: "checkout.axn" });
 ```
+
+```python
+from axon import Axon
+
+axon = Axon.connect()
+session = axon.session("checkout")
+app = session.app("Safari")
+
+app.look()
+app.click("checkout/submit")
+app.wait_for_value("status", contains="Done")
+print(app.changed_since())
+
+session.save(path="checkout.axn")
+```
+
+The Python client is synchronous: every call is one blocking round trip, which an asyncio program
+wraps in `asyncio.to_thread`.
 
 The protocol underneath is deliberately small, and a consumer who wants another language can
 implement it in an afternoon: connect, write one newline-terminated JSON-RPC request, read one
