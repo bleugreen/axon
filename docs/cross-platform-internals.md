@@ -115,10 +115,19 @@ should be discoverable here first.
   that decide which transitions may be asserted. A platform supplies only the
   evidence it alone can gather, and native handles never cross that boundary, so
   what a recording says about an interface is decided in one place rather than
-  per platform. No Rust backend implements the observer hook yet, which is why
-  `observeGlobalInput` stays unusable on all three and refuses with a stable
-  reason rather than a bare error. `serializeHistory` likewise waits on the
-  shared history store.
+  per platform. macOS implements the observer hook, through a listen-only
+  CGEvent tap and Accessibility reads taken at event time; Windows and Linux do
+  not, which is why `observeGlobalInput` stays unusable on those two and refuses
+  with a typed capability reason rather than a bare error.
+
+  A keystroke burst captured under a sensitive focus is never serialized. The
+  recorder keeps the step, because the flow needs it, but authors it as a
+  declared `secret` argument reference: the characters stay in the daemon
+  process and replay asks whoever runs the recording for the value. That refusal
+  lives in shared core on purpose. macOS secure event input masks most password
+  fields but not every one of them — `sensitive` is derived from the element's
+  own role — and neither Windows low-level keyboard hooks nor X11 XRecord have
+  any equivalent gate, so no platform hook may be trusted to do it.
 - WebKitGTK renderer accessibility on Linux: the same-bus peer traversal is
   proven only in `axon-spike-linux` and is not in the shipping Linux backend,
   so WebKitGTK page content is still out of reach. Chromium-family activation

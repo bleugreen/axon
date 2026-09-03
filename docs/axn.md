@@ -127,6 +127,13 @@ history records. Prefer `source: op://...` or `source: env://...` for secrets;
 literal CLI `--arg` values can still be exposed by shell history or process
 inspection before Axon receives them.
 
+A recording made against a sensitive field declares its own secret argument. The
+characters typed into a password field are never captured into the artifact: the
+step keeps its place in the flow as `text: '{{name}}'`, and the document gains a
+sourceless, defaultless `type: secret` argument named after the field, so replay
+refuses to run until whoever runs it supplies the value. Give that argument a
+`source:` once you decide where the credential should come from.
+
 ## Delivery policy
 
 Every mutating step takes the same optional `deliveryPolicy` its tool takes.
