@@ -2,7 +2,9 @@ import { describe, expect, test } from "bun:test";
 import { Axon, AxonRpcError } from "../src/client.js";
 import { SocketTransport } from "../src/transport.js";
 import { schemaProductVersion } from "../src/generated.js";
-import { FakeDaemon, fixture, ok, rpcError, socketHealth, type ReceivedRequest } from "./daemon.js";
+import {
+  FakeDaemon, fixture, ok, rpcError, socketFixture, socketHealth, type ReceivedRequest,
+} from "./daemon.js";
 
 type Result = Record<string, unknown>;
 type Route = (request: ReceivedRequest) => Result | undefined;
@@ -152,6 +154,33 @@ describe("app handle state", () => {
 
       await app.changedSince("obs-explicit");
       expect(daemon.last("look").params.since).toBe("obs-explicit");
+    } finally {
+      await daemon.stop();
+    }
+  });
+
+  test("chains a change check recorded from a live daemon", async () => {
+    // The same two recordings the Python SDK's fake replays. A handle that reads the daemon's own
+    // response correctly here reads it correctly there, and neither can drift onto a shape the
+    // other invented.
+    const look = socketFixture("socket-look-calculator-macos.json");
+    const since = socketFixture("socket-look-since-calculator-macos.json");
+    const { daemon, axon } = await connectTo(
+      socketHealth({ version: schemaProductVersion }),
+      (received) => received.params.since === undefined ? look : since,
+    );
+    try {
+      const app = axon.app("Calculator");
+      await app.look({ screenshot: false });
+      const snapshotId = (look.snapshot as Record<string, unknown>).id as string;
+      expect(app.lastSnapshotId).toBe(snapshotId);
+
+      const verdict = await app.changedSince();
+      expect(daemon.last("look").params.since).toBe(snapshotId);
+      // Two digits were pressed between these snapshots and the daemon still says unchanged: the
+      // check compares app identity and top-level window signatures, never values.
+      expect(verdict.changed).toBe(false);
+      expect(app.lastSnapshotId).toBe(since.currentSnapshotId);
     } finally {
       await daemon.stop();
     }
