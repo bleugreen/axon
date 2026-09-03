@@ -416,6 +416,66 @@ mod tests {
             fixture["result"]
         );
     }
+    /// Each permission field reports its own TCC row and nothing else.
+    ///
+    /// The (false, true) case is the regression: a daemon with Accessibility denied and Screen
+    /// Recording granted used to publish `screenRecording ungranted`, because the field was read
+    /// out of the `screenshot` capability, which composes both. The `kTCCServiceScreenCapture` row
+    /// was granted the whole time, and health said otherwise.
+    #[test]
+    fn each_permission_reports_only_its_own_grant() {
+        let states = |accessibility, screen_recording| {
+            permission_states(MacPermissions {
+                accessibility,
+                screen_recording,
+            })
+            .into_iter()
+            .map(|state| {
+                (
+                    state.permission.clone(),
+                    state.granted,
+                    state.reason.clone(),
+                )
+            })
+            .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            states(false, true),
+            vec![
+                (
+                    "accessibility".to_owned(),
+                    false,
+                    Some(reason::ACCESSIBILITY_NOT_GRANTED.to_owned())
+                ),
+                ("screenRecording".to_owned(), true, None),
+            ]
+        );
+        assert_eq!(
+            states(true, false),
+            vec![
+                ("accessibility".to_owned(), true, None),
+                (
+                    "screenRecording".to_owned(),
+                    false,
+                    Some(reason::SCREEN_RECORDING_NOT_GRANTED.to_owned())
+                ),
+            ]
+        );
+        assert_eq!(
+            states(true, true)
+                .iter()
+                .map(|(_, granted, _)| *granted)
+                .collect::<Vec<_>>(),
+            vec![true, true]
+        );
+        assert_eq!(
+            states(false, false)
+                .iter()
+                .map(|(_, granted, _)| *granted)
+                .collect::<Vec<_>>(),
+            vec![false, false]
+        );
+    }
     #[test]
     fn endpoint_defaults_to_canonical_installed_socket() {
         unsafe {
