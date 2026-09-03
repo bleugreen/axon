@@ -1,0 +1,8 @@
+{
+  "include": ["axon", "tests"],
+  "pythonVersion": "3.11",
+  "typeCheckingMode": "strict",
+  "reportMissingTypeStubs": "none",
+  "//": "An unnecessary ignore is an error so that tests/typing_cases.py asserts the presence of a type error, not merely the absence of one: a call the schema forbids must stay forbidden.",
+  "reportUnnecessaryTypeIgnoreComment": "error"
+}

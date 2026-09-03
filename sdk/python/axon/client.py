@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import warnings
 from collections.abc import Callable, Mapping, Sequence
-from typing import Any, Literal, NotRequired, Required, TypedDict, cast
+from typing import Any, Literal, Required, TypedDict, cast
 
 from ._generated import (
     AVAILABILITY,
@@ -19,7 +19,6 @@ from ._generated import (
     ClickParams,
     DragParams,
     FindParams,
-    FindParamsLocator,
     InvokeParams,
     KeyboardParams,
     LookParams,
@@ -415,7 +414,7 @@ class App:
             cast(WaitForStabilityParams, {**options, "app": self.app_selector})
         )
 
-    def find(self, locator: FindParamsLocator, **options: Any) -> dict[str, Any]:
+    def find(self, locator: Mapping[str, Any], **options: Any) -> dict[str, Any]:
         return self.raw.find(
             cast(FindParams, {**options, "app": self.app_selector, "locator": locator})
         )
@@ -451,6 +450,3 @@ class Session(Axon):
 
     def save(self, **params: Any) -> dict[str, Any]:
         return self.raw.save(cast(SaveParams, {**params, "sessionId": self.name}))
-
-
-NotRequired  # noqa: B018  (re-exported by name below for callers building params dicts)

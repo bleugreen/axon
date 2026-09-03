@@ -1,0 +1,29 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "axon-sdk"
+version = "0.3.6"
+description = "Dependency-free Python client for the Axon desktop automation daemon"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { file = "../../LICENSE" }
+# Nothing at runtime: the client speaks JSON-RPC over a stdlib socket, and its types come from
+# typing.Required and typing.NotRequired, which is what sets the 3.11 floor.
+dependencies = []
+classifiers = [
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Typing :: Typed",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "pyright>=1.1.390"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["axon"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
