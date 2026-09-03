@@ -1,5 +1,8 @@
 //! Production Unix-socket daemon and MCP stdio facade for the Rust macOS backend.
-use crate::{MacBackend, Router, parse_request};
+use crate::{
+    MacBackend, Router, parse_request,
+    platform::{MacPermissions, capability_report},
+};
 use axon_core::{
     CapabilityState, DaemonProvenance, DaemonReport, HealthPlatform, JsonRpcId, JsonRpcRequest,
     JsonRpcResponse, PermissionState, PlatformBackend, SessionHealth, ToolBackend, backend_tools,
@@ -224,6 +227,28 @@ fn write_response(stream: &mut UnixStream, response: &Value) -> io::Result<()> {
     stream.write_all(b"\n")
 }
 
+/// The permission block health publishes, as a pure function of the two permissions.
+///
+/// One `PermissionState` per TCC row, each reporting only its own row.
+fn permission_states(permissions: MacPermissions) -> Vec<PermissionState> {
+    vec![
+        if permissions.accessibility {
+            PermissionState::granted("accessibility")
+        } else {
+            PermissionState::ungranted("accessibility", reason::ACCESSIBILITY_NOT_GRANTED, None)
+        },
+        if permissions.screen_recording {
+            PermissionState::granted("screenRecording")
+        } else {
+            PermissionState::ungranted(
+                "screenRecording",
+                reason::SCREEN_RECORDING_NOT_GRANTED,
+                None,
+            )
+        },
+    ]
+}
+
 fn dispatch(
     line: &str,
     router: &mpsc::Sender<RouterRequest>,
@@ -240,31 +265,14 @@ fn dispatch(
         "health" => {
             // Health deliberately does not take the mutable router lock. A replay or wait may own
             // backend state for minutes, but status must remain a truthful liveness probe.
-            let reported = MacBackend::new()
-                .and_then(|backend| backend.capabilities())
-                .unwrap_or_default();
-            let trusted = reported
-                .iter()
-                .find(|info| info.capability == axon_core::Capability::Capture)
-                .is_some_and(|info| info.usable);
-            let screen_recording_granted = reported
-                .iter()
-                .find(|info| info.capability == axon_core::Capability::Screenshot)
-                .is_some_and(|info| info.usable);
-            let permission = if trusted {
-                PermissionState::granted("accessibility")
-            } else {
-                PermissionState::ungranted("accessibility", reason::ACCESSIBILITY_NOT_GRANTED, None)
-            };
-            let screen_recording = if screen_recording_granted {
-                PermissionState::granted("screenRecording")
-            } else {
-                PermissionState::ungranted(
-                    "screenRecording",
-                    reason::SCREEN_RECORDING_NOT_GRANTED,
-                    None,
-                )
-            };
+            //
+            // The permissions are read once, directly, and used for both the permission block and
+            // the capability census. Reading them back out of the census is what made a
+            // denied-Accessibility daemon report Screen Recording ungranted, and going through
+            // `MacBackend::new()` here meant a construction failure would silently publish an
+            // empty capability list.
+            let permissions = MacPermissions::read();
+            let reported = capability_report(permissions);
             let version = env!("CARGO_PKG_VERSION").to_owned();
             let process_id = std::process::id();
             let executable_path = std::env::current_exe()
@@ -274,7 +282,7 @@ fn dispatch(
             let report = DaemonReport {
                 version: version.clone(),
                 platform: HealthPlatform::Macos,
-                ready: trusted && session.interactive && session.graphical,
+                ready: permissions.accessibility && session.interactive && session.graphical,
                 process_id,
                 endpoint: endpoint.display().to_string(),
                 provenance: Some(DaemonProvenance {
@@ -284,7 +292,7 @@ fn dispatch(
                     version,
                 }),
                 session,
-                permissions: vec![permission, screen_recording],
+                permissions: permission_states(permissions),
                 capabilities: CapabilityState::complete(&reported),
             };
             (
