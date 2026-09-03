@@ -180,7 +180,7 @@ describe("app handle state", () => {
       // Two digits were pressed between these snapshots and the daemon still says unchanged: the
       // check compares app identity and top-level window signatures, never values.
       expect(verdict.changed).toBe(false);
-      expect(app.lastSnapshotId).toBe(since.currentSnapshotId);
+      expect(app.lastSnapshotId).toBe(since.currentSnapshotId as string);
     } finally {
       await daemon.stop();
     }
