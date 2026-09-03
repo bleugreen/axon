@@ -52,6 +52,13 @@ single ordered contract and filter its explicit platform availability; runtime h
 the authority for whether an advertised operation is currently usable. Run
 `scripts/check-tool-surface` to detect generated-artifact drift, or pass `--write` to regenerate it.
 
+The artifact has a second consumer: the client SDKs under `sdk/`, whose per-tool method signatures
+are generated from it by `sdk/generate.ts` rather than written by hand. `scripts/check-sdk-ts`
+fails the build when the committed TypeScript client no longer matches the artifact, and
+`scripts/check-tool-surface --write` regenerates both so the two never drift apart. Consumers reach
+the surface through [one of two doors](embedding.md#the-one-client-surface): MCP over stdio, or the
+daemon socket the SDKs speak.
+
 ### Capture a user-authorized Wayland source
 
 On Linux Wayland, `capture_screen(reauthorize?: false)` captures the WINDOW source selected through the desktop ScreenCast portal. It returns source type and dimensions separately from the encoded PNG and never names an app, process, title, or accessibility tree. `reauthorize: true` ignores the existing restore token and replaces it only after a successful portal Start. App-scoped screenshots remain the responsibility of `look`, which honestly refuses them on Wayland.

@@ -64,8 +64,14 @@ confirm that the binary it installed is the one that is running.
 
 ## The one client surface
 
-`<axon binary> mcp` over stdio is the canonical way to drive Axon. It is the surface every client
-uses, and it is the only one covered by compatibility expectations.
+There is one tool surface, defined once in `Sources/AxonCore/ToolSurfaceSpec.swift` and exported as
+`schema/tool-surface-v1.json`. It is reached two ways, and both are covered by compatibility
+expectations: an agent host speaks MCP over stdio, and a program speaks JSON-RPC to the daemon
+socket. Neither is a second implementation — they are two doors into the same daemon.
+
+### From an agent host
+
+`<axon binary> mcp` over stdio is the canonical way to drive Axon from an agent host.
 
 ```sh
 axon mcp                                           # macOS
@@ -79,6 +85,45 @@ axon mcp                                           # macOS
 The facade is a short-lived process that forwards to the long-lived daemon over local IPC. It is
 not a second implementation of the tool surface; if the daemon is not running, the facade reports
 the failure rather than answering on its own.
+
+### From a program
+
+A program should not spawn a stdio facade to make one call. It talks to the daemon socket directly,
+and the recommended client for that is the SDK in `sdk/ts`, whose per-tool methods are generated
+from `schema/tool-surface-v1.json` rather than maintained by hand.
+
+```ts
+import { Axon } from "@axon/sdk";
+
+const axon = await Axon.connect();
+const session = axon.session("checkout");
+const app = session.app("Safari");
+
+await app.look();
+await app.click("checkout/submit");
+await app.waitForValue("status", { contains: "Done" });
+console.log(await app.changedSince());
+
+await session.save({ path: "checkout.axn" });
+```
+
+The protocol underneath is deliberately small, and a consumer who wants another language can
+implement it in an afternoon: connect, write one newline-terminated JSON-RPC request, read one
+newline-terminated response, close. **One connection carries exactly one call.** The endpoint is
+the same local IPC the CLI uses — `AXON_SOCKET_PATH` or `/tmp/axon.sock` on macOS,
+`$XDG_RUNTIME_DIR/axon-v1.sock` on Linux, and the `axon-v1` named pipe on Windows.
+
+Two properties of the socket are worth knowing before writing against it. A JSON-RPC `error` means
+the request never reached its tool, while a refusal arrives as an ordinary successful response
+carrying `refusal` — a client that throws on refusals is reporting a policy decision as a
+malfunction. And `look` over the socket returns the raw structured snapshot with daemon-derived
+semantic names, not the compact observation the MCP facade and the CLI render; the DSL is a
+presentation the daemon owns, and a client that reimplemented it would be a second implementation
+of exactly the thing this section rules out.
+
+Any request may carry a `_session` string, which records the call under a named history session
+that `save` exports as a [`.axn` file](axn.md). That is how a script authors a replayable recording
+of what it just did.
 
 Everything else in this document is lifecycle and status. Those use local CLI-to-daemon IPC only:
 a mode-0600 Unix socket on macOS and Linux, and a DACL'd named pipe restricted to the current
@@ -266,6 +311,15 @@ tested against those same files.
 Degradation is data. A daemon that is not running, a host at a login greeter, and a denied
 Accessibility grant all produce schema-valid documents rather than transport errors, and all exit
 0. A consumer that only handles the healthy shape is misreading the contract.
+
+This document is the CLI's, and the socket's `health` method does not return it. The socket answers
+with the daemon's own `DaemonReport`, whose fields are flat: `ready`, `processId`, and `endpoint`
+sit at the top level rather than inside a `daemon` object, and there is no `schemaVersion` or
+`registration`. The difference is not an inconsistency to be reconciled. `status --json` describes
+an install, so it must be able to describe a daemon that never answered, which is why readiness is
+nested under a subject that may be absent. A report read off the socket came from a daemon that is
+already serving. A programmatic client should read the socket shape and let the SDKs do it; a tool
+that consumes `status --json` should read `health-v1`.
 
 ```json
 {
