@@ -21,6 +21,7 @@ pub mod daemon;
 mod handback;
 mod keys;
 pub mod lifecycle;
+mod recording;
 #[cfg(windows)]
 pub mod pipe;
 #[cfg(windows)]

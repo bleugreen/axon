@@ -180,7 +180,7 @@ pub fn classify_keystroke(
             .filter(|text| is_printable(text) && text.chars().count() == 1)
             .map(|text| text.to_lowercase())?,
     };
-    let mut parts = modifiers.names();
+    let mut parts: Vec<&str> = modifiers.names();
     parts.push(&base);
     Some(RecordedKeystroke::Key {
         key: parts.join("+"),
@@ -448,7 +448,7 @@ mod tests {
     fn wheel_notches_keep_their_windows_sign_and_unit() {
         assert_eq!(wheel_delta(120 << 16, false), (0.0, 120.0));
         assert_eq!(
-            wheel_delta((-240i32 as u32) & 0xFFFF_0000, false),
+            wheel_delta(u32::from(-240i16 as u16) << 16, false),
             (0.0, -240.0),
             "a wheel turned toward the user is negative"
         );
