@@ -353,19 +353,44 @@ impl RunningApplication {
     }
 }
 
+/// The refusal for a request whose Accessibility calls came back disabled.
+///
+/// Reuses the observer path's `accessibility-denied` code rather than inventing a third token. The
+/// diagnostic reports what the call observed, not what it infers about the user's timeline: the
+/// process reached an AX call at all, so its own trust check had already passed.
+fn accessibility_revoked(capability: Capability) -> BackendError {
+    BackendError::CapabilityReason {
+        capability,
+        code: "accessibility-denied",
+        reason: "Accessibility permission is not granted".into(),
+        diagnostic: Some(
+            "the Accessibility API answered kAXErrorAPIDisabled (-25211) after this process's \
+             trust check passed; the grant was withdrawn after that check"
+                .into(),
+        ),
+    }
+}
+
 /// The single application a query names, or why it named none or more than one.
 ///
 /// Split from the live enumeration so the matching rule can be exercised against a synthetic list;
-/// the native pid walk it is normally fed cannot be staged in a test.
+/// the native pid walk it is normally fed cannot be staged in a test. `access` is the verdict that
+/// walk folded: an empty list under `Denied` is a withdrawn grant, not a missing application, and
+/// saying so is the difference between a typed refusal and a misleading `application not found`.
 fn resolve_running(
     applications: Vec<RunningApplication>,
     query: &AppQuery,
+    access: AxAccess,
 ) -> Result<RunningApplication, BackendError> {
+    let enumerated_nothing = applications.is_empty();
     let mut matches = applications
         .into_iter()
         .filter(|application| application.matches(query));
     match (matches.next(), matches.next()) {
         (Some(one), None) => Ok(one),
+        (None, _) if enumerated_nothing && access == AxAccess::Denied => {
+            Err(accessibility_revoked(Capability::Capture))
+        }
         (None, _) => Err(op("capture", "application not found")),
         (Some(_), Some(_)) => Err(op("capture", "application query is ambiguous")),
     }
@@ -411,12 +436,18 @@ impl MacBackend {
         })
     }
     pub fn accessibility_enabled(&self) -> bool {
-        unsafe { AXIsProcessTrusted() }
+        accessibility::granted()
     }
-    fn applications(&self) -> Vec<RunningApplication> {
+    /// Every running application this process can see, and what the Accessibility API said while
+    /// it looked.
+    ///
+    /// Under a withdrawn grant every `AXTitle` read answers `kAXErrorAPIDisabled`, so every process
+    /// is filtered out and the list comes back empty. Folding the statuses is what lets the callers
+    /// tell that emptiness apart from a machine with no applications running.
+    fn applications(&self) -> (Vec<RunningApplication>, AxAccess) {
         let needed = unsafe { proc_listallpids(std::ptr::null_mut(), 0) };
         if needed <= 0 {
-            return Vec::new();
+            return (Vec::new(), AxAccess::Unknown);
         }
         let mut pids = vec![0i32; needed as usize];
         let returned = unsafe {
@@ -426,42 +457,47 @@ impl MacBackend {
             )
         };
         pids.truncate(returned.max(0) as usize);
-        pids.into_iter()
-            .filter_map(|pid| {
-                let mut path = vec![0u8; 4096];
-                let length =
-                    unsafe { proc_pidpath(pid, path.as_mut_ptr().cast(), path.len() as u32) };
-                if length <= 0 {
-                    return None;
-                }
-                let path = String::from_utf8_lossy(&path[..length as usize]);
-                if !path.contains(".app/Contents/MacOS/") || path.contains(".xpc/Contents/MacOS/") {
-                    return None;
-                }
-                let root = unsafe { AXUIElementCreateApplication(pid) };
-                if root.is_null() {
-                    return None;
-                }
-                let root = Owned(root);
-                // A non-empty AXTitle is what qualifies a process as an application here. It is not
-                // what the application is then called: AXTitle names windows and elements, while an
-                // application is named the way the Swift daemon's AppResolver names one.
-                text_attribute(root.0, "AXTitle")
-                    .filter(|name| !name.is_empty())
-                    .map(|accessibility_name| {
-                        let (name, bundle_identifier) =
-                            crate::global_input::application_identity(pid, accessibility_name);
-                        RunningApplication {
-                            process_id: pid,
-                            name,
-                            bundle_identifier,
-                        }
-                    })
-            })
-            .collect()
+        let mut found = Vec::new();
+        let mut access = AxAccess::Unknown;
+        for pid in pids {
+            let mut path = vec![0u8; 4096];
+            let length = unsafe { proc_pidpath(pid, path.as_mut_ptr().cast(), path.len() as u32) };
+            if length <= 0 {
+                continue;
+            }
+            let path = String::from_utf8_lossy(&path[..length as usize]);
+            if !path.contains(".app/Contents/MacOS/") || path.contains(".xpc/Contents/MacOS/") {
+                continue;
+            }
+            let root = unsafe { AXUIElementCreateApplication(pid) };
+            if root.is_null() {
+                continue;
+            }
+            let root = Owned(root);
+            // A non-empty AXTitle is what qualifies a process as an application here. It is not
+            // what the application is then called: AXTitle names windows and elements, while an
+            // application is named the way the Swift daemon's AppResolver names one.
+            let (title, status) = attribute_status(root.0, "AXTitle");
+            access = access.fold(accessibility::classify(status));
+            let Some(accessibility_name) = title
+                .and_then(|value| string_value(value.0))
+                .filter(|name| !name.is_empty())
+            else {
+                continue;
+            };
+            let (name, bundle_identifier) =
+                crate::global_input::application_identity(pid, accessibility_name);
+            found.push(RunningApplication {
+                process_id: pid,
+                name,
+                bundle_identifier,
+            });
+        }
+        (found, access)
     }
     fn resolve(&self, app: &AppQuery) -> Result<RunningApplication, BackendError> {
-        resolve_running(self.applications(), app)
+        let (applications, access) = self.applications();
+        resolve_running(applications, app, access)
     }
     fn element(&self, handle: &SnapshotHandle) -> Result<AXUIElementRef, BackendError> {
         self.handles
