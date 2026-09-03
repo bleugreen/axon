@@ -856,7 +856,14 @@ fn recorder_semantic_target_persists_identity_without_the_captured_document() {
         .expect("the click records a semantic target");
     assert_eq!(locator["role"], json!("AXTextArea"));
     assert_eq!(locator["identifier"], json!({"exact": "document"}));
-    for absent in ["value", "frame", "actions", "nearbyText", "ancestors", "window"] {
+    for absent in [
+        "value",
+        "frame",
+        "actions",
+        "nearbyText",
+        "ancestors",
+        "window",
+    ] {
         assert!(!locator.contains_key(absent), "{absent} in {locator:?}");
     }
     let rendered = serde_json::to_string(&document_axn.actions[0]).unwrap();

@@ -987,10 +987,21 @@ mod tests {
             locator.get("identifier"),
             Some(&serde_json::json!({"exact": "document"}))
         );
-        for absent in ["value", "frame", "actions", "nearbyText", "ancestors", "window"] {
+        for absent in [
+            "value",
+            "frame",
+            "actions",
+            "nearbyText",
+            "ancestors",
+            "window",
+        ] {
             assert!(!locator.contains_key(absent), "{absent} in {locator:?}");
         }
-        assert!(!serde_json::to_string(&locator).unwrap().contains("user had open"));
+        assert!(
+            !serde_json::to_string(&locator)
+                .unwrap()
+                .contains("user had open")
+        );
     }
 
     #[test]

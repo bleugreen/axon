@@ -635,7 +635,14 @@ mod tests {
 
         let serialized = serde_json::to_string(&persisted).unwrap();
         assert!(!serialized.contains(&text[..32]), "{serialized}");
-        for absent in ["value", "frame", "actions", "nearbyText", "ancestors", "window"] {
+        for absent in [
+            "value",
+            "frame",
+            "actions",
+            "nearbyText",
+            "ancestors",
+            "window",
+        ] {
             assert!(!serialized.contains(absent), "{absent} in {serialized}");
         }
     }
@@ -730,7 +737,11 @@ mod tests {
         let recorded = recorded(&capture, 1);
         let skeleton = identity_skeleton(&capture);
 
-        assert!(!serde_json::to_string(&skeleton).unwrap().contains("private notes"));
+        assert!(
+            !serde_json::to_string(&skeleton)
+                .unwrap()
+                .contains("private notes")
+        );
         assert_eq!(
             persisted_locator(&recorded, &skeleton),
             persisted_locator(&recorded, &capture),
