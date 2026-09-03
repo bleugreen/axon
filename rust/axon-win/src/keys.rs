@@ -18,6 +18,51 @@ pub fn modifier_key(modifier: Modifier) -> VirtualKey {
         Modifier::Super => vk(0x5B, true),
     }
 }
+/// The shared vocabulary's name for a Windows virtual key, or nothing when the key has no name in
+/// it and can only be described by the character it produces.
+///
+/// This is [`named_key`] run backwards, and the recorder is why it exists: a low-level hook hands
+/// over a virtual key, and a recorded `PressKey` has to spell that key the way `parse_chord` reads
+/// it back, or the artifact this daemon writes is one its own replay refuses.
+pub fn key_name(code: u16) -> Option<&'static str> {
+    const FUNCTION_KEYS: [&str; 12] = [
+        "f1", "f2", "f3", "f4", "f5", "f6", "f7", "f8", "f9", "f10", "f11", "f12",
+    ];
+    Some(match code {
+        0x0D => "return",
+        0x09 => "tab",
+        0x1B => "escape",
+        0x08 => "backspace",
+        0x2E => "delete",
+        0x2D => "insert",
+        0x20 => "space",
+        0x24 => "home",
+        0x23 => "end",
+        0x21 => "pageup",
+        0x22 => "pagedown",
+        0x26 => "up",
+        0x28 => "down",
+        0x25 => "left",
+        0x27 => "right",
+        0x70..=0x7B => FUNCTION_KEYS[(code - 0x70) as usize],
+        _ => return None,
+    })
+}
+
+/// Which modifier a virtual key is, counting the left/right pairs Windows reports from a hook.
+///
+/// A low-level hook reports `VK_LSHIFT`/`VK_RSHIFT` where `SendInput` is given the neutral
+/// `VK_SHIFT`, so the observer's side of the mapping has to accept all three spellings.
+pub fn modifier_name(code: u16) -> Option<&'static str> {
+    Some(match code {
+        0x10 | 0xA0 | 0xA1 => "shift",
+        0x11 | 0xA2 | 0xA3 => "ctrl",
+        0x12 | 0xA4 | 0xA5 => "alt",
+        0x5B | 0x5C => "super",
+        _ => return None,
+    })
+}
+
 pub fn named_key(key: NamedKey) -> VirtualKey {
     match key {
         NamedKey::Return => vk(0x0D, false),
@@ -70,5 +115,40 @@ mod tests {
         }
         assert!(!named_key(NamedKey::Return).extended);
         assert_eq!(modifier_key(Modifier::Control).code, 0x11);
+    }
+
+    /// The reverse table only earns its place if a recorded name is one this project can replay,
+    /// so every name it produces is parsed back and required to land on the key it came from.
+    #[test]
+    fn every_recorded_key_name_parses_back_to_the_same_virtual_key() {
+        for code in 0u16..=0xFF {
+            let Some(name) = key_name(code) else { continue };
+            let chord = axon_core::parse_chord(name)
+                .unwrap_or_else(|error| panic!("{name} (vk {code:#04x}): {error}"));
+            assert!(chord.modifiers.is_empty(), "{name} is not a bare key");
+            let axon_core::Key::Named(named) = chord.key else {
+                panic!("{name} did not parse as a named key");
+            };
+            assert_eq!(named_key(named).code, code, "{name} round trip");
+        }
+    }
+
+    #[test]
+    fn modifier_names_cover_the_sided_keys_a_hook_reports() {
+        for (code, expected) in [
+            (0x10, "shift"),
+            (0xA0, "shift"),
+            (0xA1, "shift"),
+            (0x11, "ctrl"),
+            (0xA3, "ctrl"),
+            (0x12, "alt"),
+            (0xA5, "alt"),
+            (0x5B, "super"),
+            (0x5C, "super"),
+        ] {
+            assert_eq!(modifier_name(code), Some(expected), "{code:#04x}");
+        }
+        assert_eq!(modifier_name(0x41), None);
+        assert_eq!(key_name(0x41), None, "a letter is described by its text");
     }
 }
