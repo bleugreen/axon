@@ -1862,6 +1862,14 @@ mod tests {
         fn capabilities(&self) -> Result<Vec<axon_core::CapabilityInfo>, axon_core::BackendError> {
             Ok(vec![])
         }
+        /// This fake records, so it must claim the observer seam. Without the override it inherits
+        /// the core default that refuses, and `recording.start`'s capability preflight would turn
+        /// every recording test here into a capability refusal.
+        fn global_input_observer(
+            &mut self,
+        ) -> Result<&mut dyn axon_core::GlobalInputObserver, axon_core::BackendError> {
+            Ok(self)
+        }
         fn enumerate_applications(
             &self,
         ) -> Result<Vec<axon_core::Application>, axon_core::BackendError> {
