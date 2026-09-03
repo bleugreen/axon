@@ -965,7 +965,7 @@ mod tests {
             bundle_identifier: Some("com.apple.TextEdit".into()),
             process_id: Some(4242),
         };
-        let resolved = resolve_running(
+        let resolved = resolve_listed(
             vec![
                 running(4242, "TextEdit", Some("com.apple.TextEdit")),
                 running(5150, "Notes", Some("com.apple.Notes")),
@@ -997,13 +997,13 @@ mod tests {
             (by_pid.name.as_deref(), by_pid.identifier.as_deref()),
             (None, None)
         );
-        assert_eq!(resolve_running(listed(), &by_pid).unwrap().process_id, 4242);
+        assert_eq!(resolve_listed(listed(), &by_pid).unwrap().process_id, 4242);
 
         // A deserialized artifact carries no pid, so the bundle identifier is the strongest key.
         let by_bundle = recorded_app_query(&observed(None, Some("com.apple.wifi.WiFiAgent")));
         assert_eq!(by_bundle.name, None);
         assert_eq!(
-            resolve_running(listed(), &by_bundle).unwrap().process_id,
+            resolve_listed(listed(), &by_bundle).unwrap().process_id,
             4242
         );
 
@@ -1017,20 +1017,20 @@ mod tests {
     fn identifier_matches_the_bundle_identifier_rather_than_the_process_id() {
         let applications = || vec![running(4242, "TextEdit", Some("com.apple.TextEdit"))];
         assert!(
-            resolve_running(
+            resolve_listed(
                 applications(),
                 &query(None, None, Some("com.apple.TextEdit"))
             )
             .is_ok()
         );
-        assert!(resolve_running(applications(), &query(None, None, Some("4242"))).is_err());
+        assert!(resolve_listed(applications(), &query(None, None, Some("4242"))).is_err());
     }
 
     #[test]
     fn an_application_without_a_bundle_identifier_never_satisfies_an_identifier_query() {
         let helper = vec![running(4242, "Helper", None)];
-        assert!(resolve_running(helper.clone(), &query(None, Some("Helper"), None)).is_ok());
-        assert!(resolve_running(helper, &query(None, None, Some("com.example.Helper"))).is_err());
+        assert!(resolve_listed(helper.clone(), &query(None, Some("Helper"), None)).is_ok());
+        assert!(resolve_listed(helper, &query(None, None, Some("com.example.Helper"))).is_err());
     }
 
     #[test]
@@ -1042,20 +1042,20 @@ mod tests {
             ]
         };
         assert!(
-            resolve_running(shared(), &query(None, Some("Shared"), None))
+            resolve_listed(shared(), &query(None, Some("Shared"), None))
                 .unwrap_err()
                 .to_string()
                 .contains("ambiguous")
         );
         assert!(
-            resolve_running(shared(), &query(None, Some("Missing"), None))
+            resolve_listed(shared(), &query(None, Some("Missing"), None))
                 .unwrap_err()
                 .to_string()
                 .contains("not found")
         );
         // The bundle identifier is what tells apart two applications sharing a display name.
         assert_eq!(
-            resolve_running(
+            resolve_listed(
                 shared(),
                 &query(None, Some("Shared"), Some("com.example.two"))
             )
