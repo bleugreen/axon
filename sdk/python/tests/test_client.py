@@ -11,7 +11,15 @@ from axon import Axon, AxonError, AxonRpcError, AxonWarning, SocketTransport
 from axon._generated import SCHEMA_PRODUCT_VERSION
 from axon.client import RawAxonClient
 
-from .daemon import FakeDaemon, ReceivedRequest, ok, rpc_error, schema_fixture, socket_health
+from .daemon import (
+    FakeDaemon,
+    ReceivedRequest,
+    ok,
+    rpc_error,
+    schema_fixture,
+    socket_fixture,
+    socket_health,
+)
 
 Result = dict[str, Any]
 Route = Callable[[ReceivedRequest], Result]
@@ -31,19 +39,6 @@ def connect_to(
         transport=SocketTransport(daemon.path), warn=warn or (lambda _: None)
     )
 
-
-def snapshot(identifier: str, pid: int = 4210) -> Result:
-    return {
-        "snapshot": {
-            "id": identifier,
-            "app": {
-                "bundleIdentifier": "com.apple.Safari",
-                "name": "Safari",
-                "processIdentifier": pid,
-            },
-            "indexedNodes": [],
-        }
-    }
 
 
 class TestConnect:
@@ -158,16 +153,51 @@ class TestErrorsAndRefusals:
         finally:
             daemon.stop()
 
+    def test_returns_an_action_that_did_not_succeed_as_an_ordinary_result(self) -> None:
+        # Recorded live: a screen-point click the daemon dispatched as background pixel input and
+        # could not verify. `success` is false and nothing was refused, and it still comes back as
+        # a result. Only a JSON-RPC error means the request never reached its tool.
+        unverified = socket_fixture("socket-click-unverified-macos.json")
+        daemon, axon = connect_to(socket_health(), lambda _: unverified)
+        try:
+            result = axon.app("Calculator").click("button:7")
+            assert result["action"]["success"] is False
+            assert result["action"]["dispatchSuccess"] is True
+            assert result["action"]["refusal"] is None
+        finally:
+            daemon.stop()
+
     def test_returns_a_refusal_as_an_ordinary_result(self) -> None:
         # A refusal is the delivery ladder declining to act, not a protocol failure. Raising here
         # would hide the reason the caller needs in order to choose foregroundPermitted.
+        #
+        # The envelope is the recorded one, because the live smoke found the delivery fields
+        # nested under `action` rather than sitting at the top level as schema/fixtures/delivery
+        # states them; the refusal payload inside it is that fixture's own. Asserting against the
+        # fixture's shape alone would agree with a client that cannot read a real refusal.
         cases: list[dict[str, Any]] = schema_fixture("delivery/results.json")["cases"]
-        refused = next(case for case in cases if case["refusal"] is not None)
-        daemon, axon = connect_to(socket_health(), lambda _: refused)
+        refusal = next(case for case in cases if case["refusal"] is not None)
+        recorded = socket_fixture("socket-click-calculator-macos.json")
+        recorded["action"] = {**recorded["action"], **{
+            key: refusal[key] for key in ("delivery", "dispatchSuccess", "refusal")
+        }, "success": False}
+
+        daemon, axon = connect_to(socket_health(), lambda _: recorded)
         try:
-            result = axon.app("Safari").click("button:Go")
-            assert result["dispatchSuccess"] is False
-            assert result["refusal"]["reason"] == refused["refusal"]["reason"]
+            result = axon.app("Calculator").click("button:7")
+            assert result["action"]["dispatchSuccess"] is False
+            assert result["action"]["refusal"]["reason"] == refusal["refusal"]["reason"]
+            assert result["action"]["refusal"]["alsoRefused"] == refusal["refusal"]["alsoRefused"]
+        finally:
+            daemon.stop()
+
+    def test_a_semantic_click_the_daemon_verified_comes_back_verbatim(self) -> None:
+        recorded = socket_fixture("socket-click-calculator-macos.json")
+        daemon, axon = connect_to(socket_health(), lambda _: recorded)
+        try:
+            assert axon.app("Calculator").click("button:7") == recorded
+            assert recorded["action"]["deliveryPolicy"] == "backgroundOnly"
+            assert recorded["action"]["delivery"] == "semantic"
         finally:
             daemon.stop()
 
@@ -185,13 +215,17 @@ class TestSessions:
             daemon.stop()
 
     def test_save_exports_the_session_it_was_taken_from(self) -> None:
-        daemon, axon = connect_to(socket_health(), lambda _: {})
+        recorded = socket_fixture("socket-save-calculator-macos.json")
+        daemon, axon = connect_to(socket_health(), lambda _: recorded)
         try:
-            axon.session("calc-demo").save(path="/tmp/calc.axn")
+            result = axon.session("calc-demo").save(path="/tmp/calc.axn")
             saved = daemon.last("save").params
             assert saved["sessionId"] == "calc-demo"
             assert saved["path"] == "/tmp/calc.axn"
             assert saved["_session"] == "calc-demo"
+            # The daemon writes the file and hands back the script; this package has no serializer.
+            assert result["script"].startswith("version: 2")
+            assert result["actionCount"] == 8
         finally:
             daemon.stop()
 
@@ -205,41 +239,48 @@ class TestSessions:
 
 
 class TestAppHandle:
-    def test_chains_the_snapshot_id_so_a_change_check_needs_no_bookkeeping(self) -> None:
+    def test_chains_the_snapshot_id_through_a_recorded_change_check(self) -> None:
+        look = socket_fixture("socket-look-calculator-macos.json")
+        since = socket_fixture("socket-look-since-calculator-macos.json")
+
         def route(received: ReceivedRequest) -> Result:
-            if "since" in received.params:
-                return {
-                    "changed": True,
-                    "reason": "windows",
-                    "snapshotId": received.params["since"],
-                    "currentSnapshotId": "snap-2",
-                }
-            return snapshot("snap-1")
+            return since if "since" in received.params else look
 
         daemon, axon = connect_to(socket_health(), route)
         try:
-            app = axon.app("Safari")
-            app.look()
-            assert app.last_snapshot_id == "snap-1"
-            first = app.changed_since()
-            assert daemon.last("look").params["since"] == "snap-1"
-            assert first["changed"] is True
-            # The response's own current id becomes the baseline for the next check.
-            assert app.last_snapshot_id == "snap-2"
+            app = axon.app("Calculator")
+            app.look(screenshot=False)
+            assert app.last_snapshot_id == look["snapshot"]["id"]
+
+            verdict = app.changed_since()
+            assert daemon.last("look").params["since"] == look["snapshot"]["id"]
+            # Two digits were pressed between these two snapshots on the machine that recorded
+            # them, and the daemon still reports unchanged: the check compares app identity and
+            # top-level window signatures, never values. The client passes that verdict through.
+            assert verdict["changed"] is False
+            assert verdict["reason"] == "unchanged"
+
+            # The verdict's own current id becomes the baseline, so a loop needs no bookkeeping.
+            assert app.last_snapshot_id == since["currentSnapshotId"]
             app.changed_since()
-            assert daemon.last("look").params["since"] == "snap-2"
+            assert daemon.last("look").params["since"] == since["currentSnapshotId"]
         finally:
             daemon.stop()
 
     def test_pins_the_process_the_first_look_observed(self) -> None:
-        daemon, axon = connect_to(socket_health(), lambda _: snapshot("snap-1", pid=4210))
+        look = socket_fixture("socket-look-calculator-macos.json")
+        pid: int = look["snapshot"]["app"]["processIdentifier"]
+        daemon, axon = connect_to(socket_health(), lambda _: look)
         try:
-            app = axon.app("Safari")
-            assert app.app_selector == "Safari"
+            app = axon.app("Calculator")
+            assert app.app_selector == "Calculator"
             app.look()
-            assert app.app_selector == "4210"
-            app.click("button:Go")
-            assert daemon.last("click").params["target"] == {"app": "4210", "name": "button:Go"}
+            assert app.app_selector == str(pid)
+            app.click("button:7")
+            assert daemon.last("click").params["target"] == {
+                "app": str(pid),
+                "name": "button:7",
+            }
         finally:
             daemon.stop()
 
