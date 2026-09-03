@@ -702,7 +702,7 @@ mod tests {
             ("Untitled", document_window(&text)),
             (
                 "Untitled",
-                json!({"role": "AXWindow", "children": [{"role": "AXTextArea", "identifier": "document", "value": "other"}]}),
+                json!({"role": "AXWindow", "title": "Untitled", "children": [{"role": "AXTextArea", "identifier": "document", "value": "other"}]}),
             ),
         ]);
         let recorded = recorded(&capture, 1);
