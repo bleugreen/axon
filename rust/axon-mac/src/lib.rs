@@ -2078,7 +2078,7 @@ mod tests {
 
     #[test]
     fn recording_routes_ingest_native_events_before_stop() {
-        let mut router = Router::new(EnumerationBackend);
+        let mut router = Router::new(EnumerationBackend::new());
         let start = router
             .request(JsonRpcRequest::new(
                 Some(JsonRpcId::Integer(1)),
@@ -2113,7 +2113,7 @@ mod tests {
 
     #[test]
     fn invalid_recording_stop_preserves_native_and_daemon_session_state() {
-        let mut router = Router::new(EnumerationBackend);
+        let mut router = Router::new(EnumerationBackend::new());
         let start = router
             .request(JsonRpcRequest::new(
                 Some(JsonRpcId::Integer(1)),
@@ -2149,7 +2149,7 @@ mod tests {
 
     #[test]
     fn look_application_enumeration_matches_shared_envelope() {
-        let mut router = Router::new(EnumerationBackend);
+        let mut router = Router::new(EnumerationBackend::new());
         let response = router
             .request(JsonRpcRequest::new(
                 Some(JsonRpcId::Integer(1)),
@@ -2236,7 +2236,7 @@ mod tests {
 
         let mut missing_name = params;
         missing_name.remove("name");
-        let error = router_error(&mut Router::new(EnumerationBackend), "invoke", missing_name);
+        let error = router_error(&mut Router::new(EnumerationBackend::new()), "invoke", missing_name);
         assert_eq!(error.code, -32602);
     }
 
@@ -2259,7 +2259,7 @@ mod tests {
             json!({"x":10,"y":20,"coordinateSpace":"screen"}),
         ] {
             let params = validated_params("click", json!({"target":target}));
-            let error = router_error(&mut Router::new(EnumerationBackend), "click", params);
+            let error = router_error(&mut Router::new(EnumerationBackend::new()), "click", params);
             assert_eq!(error.code, -32004);
             assert_eq!(error.data.as_ref().unwrap()["capability"], "point-target");
             assert_eq!(error.data.as_ref().unwrap()["reason"], "not-implemented");
@@ -2271,7 +2271,7 @@ mod tests {
         let defaulted = validated_params("scroll", json!({"target":{"app":"Notes","name":"List"}}));
         assert_eq!(defaulted["deltaX"], 0);
         assert_eq!(defaulted["deltaY"], -120);
-        let error = router_error(&mut Router::new(EnumerationBackend), "scroll", defaulted);
+        let error = router_error(&mut Router::new(EnumerationBackend::new()), "scroll", defaulted);
         assert_eq!(error.code, -32004);
         assert_eq!(
             error.data.as_ref().unwrap()["capability"],
@@ -2284,7 +2284,7 @@ mod tests {
             json!({"target":{"location":{"app":"Notes","text":"Bottom"}},"deltaX":0,"deltaY":0}),
         ] {
             let params = validated_params("scroll", arguments);
-            let error = router_error(&mut Router::new(EnumerationBackend), "scroll", params);
+            let error = router_error(&mut Router::new(EnumerationBackend::new()), "scroll", params);
             assert_eq!(error.code, -32004);
             assert_eq!(error.data.as_ref().unwrap()["reason"], "not-implemented");
         }
