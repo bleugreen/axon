@@ -2292,7 +2292,11 @@ mod tests {
 
         let mut missing_name = params;
         missing_name.remove("name");
-        let error = router_error(&mut Router::new(EnumerationBackend::new()), "invoke", missing_name);
+        let error = router_error(
+            &mut Router::new(EnumerationBackend::new()),
+            "invoke",
+            missing_name,
+        );
         assert_eq!(error.code, -32602);
     }
 
@@ -2327,7 +2331,11 @@ mod tests {
         let defaulted = validated_params("scroll", json!({"target":{"app":"Notes","name":"List"}}));
         assert_eq!(defaulted["deltaX"], 0);
         assert_eq!(defaulted["deltaY"], -120);
-        let error = router_error(&mut Router::new(EnumerationBackend::new()), "scroll", defaulted);
+        let error = router_error(
+            &mut Router::new(EnumerationBackend::new()),
+            "scroll",
+            defaulted,
+        );
         assert_eq!(error.code, -32004);
         assert_eq!(
             error.data.as_ref().unwrap()["capability"],
@@ -2340,7 +2348,11 @@ mod tests {
             json!({"target":{"location":{"app":"Notes","text":"Bottom"}},"deltaX":0,"deltaY":0}),
         ] {
             let params = validated_params("scroll", arguments);
-            let error = router_error(&mut Router::new(EnumerationBackend::new()), "scroll", params);
+            let error = router_error(
+                &mut Router::new(EnumerationBackend::new()),
+                "scroll",
+                params,
+            );
             assert_eq!(error.code, -32004);
             assert_eq!(error.data.as_ref().unwrap()["reason"], "not-implemented");
         }

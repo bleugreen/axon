@@ -5,8 +5,8 @@ use crate::{
 };
 use axon_core::{
     CapabilityState, DaemonProvenance, DaemonReport, HealthPlatform, JsonRpcId, JsonRpcRequest,
-    JsonRpcResponse, PermissionState, SessionHealth, ToolBackend, backend_tools,
-    health::reason, validate_tools_call,
+    JsonRpcResponse, PermissionState, SessionHealth, ToolBackend, backend_tools, health::reason,
+    validate_tools_call,
 };
 use serde_json::{Value, json};
 use std::{
@@ -430,9 +430,7 @@ mod tests {
                 screen_recording,
             })
             .into_iter()
-            .map(|state| {
-                (state.name, state.granted, state.reason)
-            })
+            .map(|state| (state.name, state.granted, state.reason))
             .collect::<Vec<_>>()
         };
         assert_eq!(
