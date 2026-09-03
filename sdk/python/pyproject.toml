@@ -8,7 +8,7 @@ version = "0.3.6"
 description = "Dependency-free Python client for the Axon desktop automation daemon"
 readme = "README.md"
 requires-python = ">=3.11"
-license = { file = "../../LICENSE" }
+license = { text = "MIT" }
 # Nothing at runtime: the client speaks JSON-RPC over a stdlib socket, and its types come from
 # typing.Required and typing.NotRequired, which is what sets the 3.11 floor.
 dependencies = []
