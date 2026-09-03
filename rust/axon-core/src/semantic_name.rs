@@ -482,11 +482,22 @@ struct ReplayRecord {
     process_id: Option<crate::ProcessId>,
 }
 
+/// One registration: the named elements of an observation beside the identity skeleton of the tree
+/// they were derived from.
+///
+/// The skeleton is what lets a locator be minimized after the observation is gone — uniqueness is a
+/// question about the capture, and `save` asks it at dispatch time, with no tree in hand.
+#[derive(Clone)]
+struct RegisteredSnapshot {
+    identity: Snapshot,
+    records: Vec<Record>,
+}
+
 #[derive(Clone)]
 pub struct SemanticNameRegistry {
     max_snapshots: usize,
     order: VecDeque<crate::SnapshotId>,
-    records: HashMap<crate::SnapshotId, Vec<Record>>,
+    records: HashMap<crate::SnapshotId, RegisteredSnapshot>,
     replay_locators: HashMap<WireElementTarget, Vec<ReplayRecord>>,
 }
 impl Default for SemanticNameRegistry {
@@ -505,6 +516,11 @@ impl SemanticNameRegistry {
     }
 
     /// Returns the durable locator behind a session-local semantic name for history export.
+    ///
+    /// A saved script crosses the same boundary a recording does, so it carries the persisted
+    /// shape: identity, plus the least scope that still resolved uniquely in the observation the
+    /// name came from. `None` where no scope disambiguates — an exported action names its element
+    /// rather than pinning a locator that cannot find it again.
     pub fn durable_locator(
         &self,
         app: &str,
@@ -517,10 +533,16 @@ impl SemanticNameRegistry {
         let SemanticSelection::Selected(context) = self.select(&target) else {
             return None;
         };
-        serde_json::to_value(context.locator())
-            .ok()?
-            .as_object()
-            .cloned()
+        let locator = match context
+            .recorded_snapshot_id
+            .as_ref()
+            .and_then(|id| self.records.get(id))
+        {
+            Some(registered) => crate::persisted_locator(context.locator(), &registered.identity)?,
+            // A locator replayed from an existing document was persisted in this shape already.
+            None => context.locator().clone(),
+        };
+        serde_json::to_value(locator).ok()?.as_object().cloned()
     }
 
     pub fn register(&mut self, snapshot: &Snapshot) -> Vec<SemanticElementName> {
@@ -537,8 +559,8 @@ impl SemanticNameRegistry {
             let stale: HashSet<_> = self
                 .records
                 .iter()
-                .filter(|(_, records)| {
-                    records.first().is_some_and(|record| {
+                .filter(|(_, registered)| {
+                    registered.records.first().is_some_and(|record| {
                         record.app.process_id.is_some_and(|pid| {
                             pid != replacement_pid
                                 && app_identity(&record.app) == identity
@@ -583,8 +605,9 @@ impl SemanticNameRegistry {
             let superseded: HashSet<_> = self
                 .records
                 .iter()
-                .filter(|(_, records)| {
-                    records
+                .filter(|(_, registered)| {
+                    registered
+                        .records
                         .first()
                         .is_some_and(|record| record.app.process_id == Some(process_id))
                 })
@@ -595,7 +618,13 @@ impl SemanticNameRegistry {
         }
         self.order.retain(|id| id != &snapshot.id);
         self.order.push_back(snapshot.id.clone());
-        self.records.insert(snapshot.id.clone(), records);
+        self.records.insert(
+            snapshot.id.clone(),
+            RegisteredSnapshot {
+                identity: crate::locator::identity_skeleton(snapshot),
+                records,
+            },
+        );
         while self.order.len() > self.max_snapshots {
             if let Some(id) = self.order.pop_front() {
                 self.records.remove(&id);
@@ -680,7 +709,7 @@ impl SemanticNameRegistry {
             .iter()
             .rev()
             .filter_map(|id| self.records.get(id))
-            .flatten()
+            .flat_map(|registered| &registered.records)
             .filter(|record| {
                 app_matches(&target.app, &record.app) && record.target.name == target.name
             })
