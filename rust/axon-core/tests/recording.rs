@@ -6,12 +6,13 @@
 //! without Accessibility, a pointer, or a clock.
 
 use axon_core::{
-    ActionObservation, Application, AxnAction, BackendError, DerivedPostconditionCompiler,
-    GlobalInputObserver, Node, ObservedElementState, OwnedUserActionRecorder, PostconditionInput,
-    RecordedAppIdentity, RecordedElementEvidence, RecordedFocusedEvidence, RecordedInputEvent,
-    RecordedKeystroke, RecordedPoint, RecordedSettleEvidence, RecordedTargetEvidence,
-    RecordedUserAction, RecordedUserEventGroup, RecordingEvidenceProvider, RecordingScope, Rect,
-    RedactionMarkerTaint, Snapshot, UserRecordingTranslator, Window,
+    ActionObservation, Application, ArgumentType, AxnAction, BackendError,
+    DerivedPostconditionCompiler, GlobalInputObserver, Node, ObservedElementState,
+    OwnedUserActionRecorder, PostconditionInput, RecordedAppIdentity, RecordedElementEvidence,
+    RecordedFocusedEvidence, RecordedInputEvent, RecordedKeystroke, RecordedPoint,
+    RecordedSettleEvidence, RecordedTargetEvidence, RecordedUserAction, RecordedUserEventGroup,
+    RecordingEvidenceProvider, RecordingScope, Rect, RedactionMarkerTaint, Snapshot,
+    UserRecordingTranslator, Window,
 };
 use serde_json::{Value, json};
 use std::{cell::RefCell, collections::VecDeque, rc::Rc, time::Duration};
@@ -21,6 +22,7 @@ struct FakeRecorderState {
     polls: VecDeque<Vec<RecordedInputEvent>>,
     focused: VecDeque<Option<RecordedFocusedEvidence>>,
     snapshot: Option<Snapshot>,
+    settle: Option<RecordedSettleEvidence>,
     settle_calls: Vec<(usize, String)>,
     stop_calls: usize,
     fail_settle: bool,
@@ -101,7 +103,7 @@ impl RecordingEvidenceProvider for FakeRecordingProvider {
         if state.fail_settle {
             Err(backend_error("settle"))
         } else {
-            Ok(RecordedSettleEvidence::default())
+            Ok(state.settle.clone().unwrap_or_default())
         }
     }
 }
@@ -946,6 +948,177 @@ fn recorder_appends_a_group_before_settle_can_fail() {
         "the attempted action must remain inspectable after settle failure"
     );
     assert_eq!(state.borrow().settle_calls, vec![(0, "press".into())]);
+}
+
+/// The evidence a provider reports for a focused password field: describable, but never valued.
+fn sensitive_evidence(app: RecordedAppIdentity, title: &str) -> RecordedTargetEvidence {
+    RecordedTargetEvidence {
+        app,
+        point: RecordedPoint { x: 4.0, y: 5.0 },
+        candidates: vec![RecordedElementEvidence {
+            role: "AXTextField".into(),
+            subrole: Some("AXSecureTextField".into()),
+            identifier: Some("pw-field".into()),
+            title: Some(title.into()),
+            sensitive: true,
+            ..Default::default()
+        }],
+    }
+}
+
+#[test]
+fn a_burst_typed_under_a_sensitive_focus_never_reaches_the_artifact() {
+    let notes = app("Vault", "com.example.vault");
+    let (mut recorder, state) = recorder_with(vec![text(notes.clone(), "hunter2-correct-horse")]);
+    // A provider that leaks the credential everywhere it possibly can: in the focused read, in
+    // the settle evidence it observed, and in the post-delivery state of the field itself. None
+    // of it may reach a serialized surface, and shared core must be what stops it — the value was
+    // typed moments ago and deliberately never retained, so no redaction context can recognise it.
+    let mut after = element("Vault", "AXTextField", "Master Password");
+    after.value = Some("hunter2-correct-horse".into());
+    let mut before = after.clone();
+    before.value = Some(String::new());
+    {
+        let mut state = state.borrow_mut();
+        state.focused.push_back(Some(RecordedFocusedEvidence {
+            target: sensitive_evidence(notes, "Master Password"),
+            value: Some("hunter2-correct-horse".into()),
+        }));
+        state.settle = Some(RecordedSettleEvidence {
+            observed: vec![json!({"value": "hunter2-correct-horse"})],
+            observation: Some(ActionObservation {
+                tool: "type".into(),
+                app: Some("Vault".into()),
+                target_before: Some(before),
+                target_after: Some(after),
+                settled: true,
+                ..Default::default()
+            }),
+        });
+    }
+
+    recorder.poll(Duration::ZERO).unwrap();
+    let groups = recorder.finish().unwrap();
+
+    assert_eq!(groups.len(), 1);
+    assert!(
+        matches!(&groups[0].action, Some(RecordedUserAction::TypeSecret { argument, .. }) if argument == "master_password"),
+        "expected a secret argument reference, got {:?}",
+        groups[0].action
+    );
+
+    let document = UserRecordingTranslator::new()
+        .axn_document(&groups, Vec::new(), &RedactionMarkerTaint)
+        .expect("a secret step still satisfies the replay contract");
+    let declared = document
+        .arguments
+        .iter()
+        .find(|argument| argument.name == "master_password")
+        .expect("the secret burst declares its own argument");
+    assert_eq!(declared.kind, ArgumentType::Secret);
+    assert_eq!(
+        (&declared.source, &declared.default),
+        (&None, &None),
+        "a recorded secret binds to nothing; replay must ask for it"
+    );
+    assert_eq!(
+        document.actions[0].params.get("text"),
+        Some(&json!("{{master_password}}"))
+    );
+    assert!(
+        groups[0].observation.is_none() && groups[0].observed.is_empty(),
+        "a settle read taken around a secret entry is a read of the field holding it"
+    );
+
+    // The guarantee is about every serialized surface, not only the authored step: recorder
+    // groups reach history and diagnostics too.
+    for artifact in [
+        serde_json::to_string(&groups).unwrap(),
+        serde_json::to_string(&document).unwrap(),
+        UserRecordingTranslator::new()
+            .yaml(&groups, Vec::new(), &RedactionMarkerTaint)
+            .unwrap(),
+    ] {
+        for fragment in ["hunter2", "correct-horse"] {
+            assert!(
+                !artifact.contains(fragment),
+                "a keystroke captured under a sensitive focus was serialized: {artifact}"
+            );
+        }
+    }
+}
+
+#[test]
+fn authoring_emits_nothing_observed_around_a_secret_entry() {
+    // Authoring is a public entry point and may be handed groups this recorder did not build — an
+    // older history record, another producer — so the rule holds at this layer on its own.
+    let mut after = element("Vault", "AXTextField", "Master Password");
+    after.value = Some("hunter2-correct-horse".into());
+    let groups = [RecordedUserEventGroup::new(RecordedUserAction::TypeSecret {
+        app: "Vault".into(),
+        argument: "master_password".into(),
+    })
+    .with_observed(vec![json!({"value": "hunter2-correct-horse"})])
+    .with_observation(ActionObservation {
+        tool: "type".into(),
+        app: Some("Vault".into()),
+        target_after: Some(after),
+        settled: true,
+        ..Default::default()
+    })];
+
+    let yaml = UserRecordingTranslator::new()
+        .yaml(&groups, Vec::new(), &RedactionMarkerTaint)
+        .unwrap();
+
+    assert!(
+        !yaml.contains("hunter2"),
+        "authoring emitted evidence gathered around a secret entry: {yaml}"
+    );
+    let actions = translate(&groups);
+    assert!(actions[0].params.get("observed").is_none());
+    assert!(actions[0].expects.is_empty());
+}
+
+#[test]
+fn each_sensitive_field_earns_its_own_secret_argument() {
+    let notes = app("Vault", "com.example.vault");
+    let (mut recorder, state) = recorder_with(vec![
+        text(notes.clone(), "first"),
+        RecordedInputEvent::KeyDown {
+            app: notes.clone(),
+            keystroke: RecordedKeystroke::Key { key: "Tab".into() },
+            timestamp_ms: 1,
+        },
+        text(notes.clone(), "second"),
+    ]);
+    {
+        let mut state = state.borrow_mut();
+        state.focused.push_back(Some(RecordedFocusedEvidence {
+            target: sensitive_evidence(notes.clone(), "Password"),
+            value: None,
+        }));
+        state.focused.push_back(Some(RecordedFocusedEvidence {
+            target: sensitive_evidence(notes, "Password"),
+            value: None,
+        }));
+    }
+
+    recorder.poll(Duration::ZERO).unwrap();
+    let groups = recorder.finish().unwrap();
+
+    let names: Vec<&str> = groups
+        .iter()
+        .filter_map(|group| match group.action.as_ref() {
+            Some(RecordedUserAction::TypeSecret { argument, .. }) => Some(argument.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        names,
+        vec!["password", "password_2"],
+        "two bursts are two values as far as the recorder can tell"
+    );
 }
 
 #[test]

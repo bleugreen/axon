@@ -115,10 +115,14 @@ should be discoverable here first.
   that decide which transitions may be asserted. A platform supplies only the
   evidence it alone can gather, and native handles never cross that boundary, so
   what a recording says about an interface is decided in one place rather than
-  per platform. No Rust backend implements the observer hook yet, which is why
-  `observeGlobalInput` stays unusable on all three and refuses with a stable
-  reason rather than a bare error. `serializeHistory` likewise waits on the
-  shared history store.
+  per platform. macOS implements the observer hook, through a listen-only
+  CGEvent tap and Accessibility reads taken at event time; Windows and Linux do
+  not, which is why `observeGlobalInput` stays unusable on those two and refuses
+  with a typed capability reason rather than a bare error.
+
+  A keystroke burst captured under a sensitive focus is never serialized; the
+  rule and the floor each observer owes it are the observer sensitivity contract
+  below.
 - WebKitGTK renderer accessibility on Linux: the same-bus peer traversal is
   proven only in `axon-spike-linux` and is not in the shipping Linux backend,
   so WebKitGTK page content is still out of reach. Chromium-family activation
@@ -212,6 +216,38 @@ native subscriptions, retained element handles, and caches, while short-lived
 MCP stdio facades connect locally. This is architectural parity, not a demand
 that installation and lifecycle management be identical across operating
 systems.
+
+### The observer sensitivity contract
+
+A keystroke burst captured while a sensitive element held focus is never
+serialized. Shared core keeps the step, because the flow needs it, but authors
+it as a declared sourceless `secret` argument reference: the characters stay in
+the daemon process, and replay asks whoever runs the recording for the value.
+That refusal lives in `axon-core` rather than in any backend, because no
+platform hook can be trusted to do it — neither Windows low-level keyboard hooks
+nor X11 XRecord have an OS gate of any kind, and macOS secure event input is a
+system-wide mode that a web password field may never engage.
+
+The refusal is only ever as good as the `sensitive` flag the observer sets on
+`RecordedElementEvidence`, so each platform owes a predicate at least this
+broad, and owes a unit test that a password-role element is classified sensitive
+so the floor cannot silently narrow again:
+
+| platform | at minimum |
+| --- | --- |
+| macOS | role or subrole naming "secure", or a description naming a password. The subrole is the one that matters: `NSSecureTextField` reports role `AXTextField` with subrole `AXSecureTextField`, so a role-only test misses the ordinary AppKit password field entirely. |
+| Windows | `UIA_IsPasswordPropertyId` on the element. |
+| Linux | AT-SPI `STATE_PROTECTED`, or role `ROLE_PASSWORD_TEXT`. |
+
+The same flag also withholds the element's value from the evidence, so a
+provider must never read `AXValue`, the UIA value pattern, or the AT-SPI text
+interface of an element it has just classified sensitive.
+
+An observer that additionally has an OS-level signal — macOS
+`IsSecureEventInputEnabled`, or a Windows `EVENT_OBJECT_FOCUS` watch on
+`IsPassword` — reports it as `SecureInputChanged`, which makes shared core drop
+pending state and discard events while it is active. That is in addition to the
+per-element predicate, never instead of it.
 
 ## One lifecycle vocabulary, three native mechanisms
 

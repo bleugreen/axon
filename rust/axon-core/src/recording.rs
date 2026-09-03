@@ -108,6 +108,9 @@ pub struct UserActionRecorder {
     mouse_down: Option<(RecordedTargetEvidence, u64)>,
     drag_end: Option<RecordedPoint>,
     secure_input: bool,
+    /// Argument names already handed to a secret burst this session, so a second burst into a
+    /// second field cannot silently reuse the first one's name.
+    secret_arguments: Vec<String>,
     redaction: crate::ObservationRedactionContext,
 }
 
@@ -133,6 +136,7 @@ impl UserActionRecorder {
             mouse_down: None,
             drag_end: None,
             secure_input: false,
+            secret_arguments: Vec::new(),
             redaction,
         })
     }
@@ -301,13 +305,27 @@ impl UserActionRecorder {
         // Clear pending state before the provider read: Accessibility callbacks may re-enter.
         let focused = provider.read_focused()?;
         let (action, warnings) = match focused {
-            Some(focused)
-                if !focused
-                    .target
-                    .candidates
-                    .iter()
-                    .any(|candidate| candidate.sensitive) =>
-            {
+            // A burst typed under a sensitive focus never becomes an artifact string. The step is
+            // kept, because the flow needs it, but it carries a declared `secret` argument
+            // reference: the characters stay in this process and replay asks whoever runs the
+            // recording for the value. No OS gate can be relied on for this — macOS secure event
+            // input masks most password fields but not all of them, and neither Windows low-level
+            // hooks nor X11 XRecord have an equivalent — so the refusal to serialize lives here.
+            Some(focused) if has_sensitive_candidate(&focused.target) => {
+                drop(text);
+                let argument = self.secret_argument_name(&focused.target);
+                (
+                    RecordedUserAction::TypeSecret {
+                        app: app.name,
+                        argument,
+                    },
+                    vec![
+                        "focused element is sensitive; recorded a secret argument reference instead of the typed text"
+                            .into(),
+                    ],
+                )
+            }
+            Some(focused) => {
                 let target = self.target(provider, &focused.target)?;
                 match focused.value {
                     Some(value) => {
@@ -333,12 +351,12 @@ impl UserActionRecorder {
                     ),
                 }
             }
-            _ => (
+            None => (
                 RecordedUserAction::TypeText {
                     app: app.name,
                     text,
                 },
-                vec!["focused element unavailable or sensitive; recorded keyboard fallback".into()],
+                vec!["focused element unavailable; recorded keyboard fallback".into()],
             ),
         };
         self.append_and_settle_with_warnings(provider, action, "type", warnings)
@@ -364,11 +382,48 @@ impl UserActionRecorder {
         self.groups
             .push(RecordedUserEventGroup::new(action).with_warnings(warnings));
         let settled = provider.settle(index, tool)?;
-        self.groups[index].observed.extend(settled.observed);
-        self.groups[index].observation = settled.observation;
+        // A settle read taken around a secret entry is a read of the field that now holds the
+        // credential, so its evidence is discarded here rather than carried into the group. This
+        // has to be shared core's refusal and not a provider's: the value was typed moments ago
+        // and deliberately never retained, so no redaction context can recognise it, and every
+        // present and future provider would otherwise have to remember to withhold it. The settle
+        // call itself still happens, because it is the wait that lets the effect land before the
+        // next event's read.
+        if !matches!(
+            self.groups[index].action(),
+            RecordedUserAction::TypeSecret { .. }
+        ) {
+            self.groups[index].observed.extend(settled.observed);
+            self.groups[index].observation = settled.observation;
+        }
         let group = std::mem::take(&mut self.groups[index]);
         self.groups[index] = redact_serializable(group, &self.redaction);
         Ok(())
+    }
+
+    /// Names the argument a secret burst becomes.
+    ///
+    /// A password field's own label is not the secret, and it is the only handle the person
+    /// replaying the recording has for a value nothing in the artifact describes, so it names the
+    /// argument whenever it yields a usable reference name. Names are deduplicated within a
+    /// session: two bursts into two fields are two values as far as this recorder can tell.
+    fn secret_argument_name(&mut self, evidence: &RecordedTargetEvidence) -> String {
+        let base = evidence
+            .candidates
+            .iter()
+            .filter(|candidate| candidate.sensitive)
+            .flat_map(|candidate| [candidate.title.as_deref(), candidate.identifier.as_deref()])
+            .flatten()
+            .find_map(reference_name)
+            .unwrap_or_else(|| "secret".to_owned());
+        let mut name = base.clone();
+        let mut ordinal = 1;
+        while self.secret_arguments.contains(&name) {
+            ordinal += 1;
+            name = format!("{base}_{ordinal}");
+        }
+        self.secret_arguments.push(name.clone());
+        name
     }
 
     fn target(
@@ -376,11 +431,7 @@ impl UserActionRecorder {
         provider: &mut dyn RecordingEvidenceProvider,
         evidence: &RecordedTargetEvidence,
     ) -> Result<Value, crate::BackendError> {
-        if evidence
-            .candidates
-            .iter()
-            .any(|candidate| candidate.sensitive)
-        {
+        if has_sensitive_candidate(evidence) {
             return Ok(point_target(&evidence.app, evidence.point));
         }
         let Some(snapshot) = provider.capture_snapshot(&evidence.app)? else {
@@ -454,6 +505,32 @@ impl<P: RecordingEvidenceProvider> OwnedUserActionRecorder<P> {
 
 fn same_app(a: &RecordedAppIdentity, b: &RecordedAppIdentity) -> bool {
     a.matches_runtime(b)
+}
+
+fn has_sensitive_candidate(evidence: &RecordedTargetEvidence) -> bool {
+    evidence
+        .candidates
+        .iter()
+        .any(|candidate| candidate.sensitive)
+}
+
+/// The longest valid `{{reference}}` name a label yields, or nothing when none survives.
+fn reference_name(source: &str) -> Option<String> {
+    const MAXIMUM: usize = 32;
+    let mut name = String::new();
+    for character in source.chars() {
+        if character.is_ascii_alphanumeric() {
+            name.push(character.to_ascii_lowercase());
+        } else if !name.is_empty() && !name.ends_with('_') {
+            name.push('_');
+        }
+        if name.len() >= MAXIMUM {
+            break;
+        }
+    }
+    let name = name.trim_end_matches('_');
+    name.starts_with(|c: char| c.is_ascii_alphabetic())
+        .then(|| name.to_owned())
 }
 
 fn node_matches(node: &crate::Node, candidate: &RecordedElementEvidence) -> bool {
@@ -678,6 +755,13 @@ pub enum RecordedUserAction {
         app: String,
         text: String,
     },
+    /// A text burst typed into a sensitive field, kept as a step and as a declared secret argument
+    /// reference. The characters themselves were never retained: this variant carries the name of
+    /// the argument replay must be given, and nothing else.
+    TypeSecret {
+        app: String,
+        argument: String,
+    },
     PressKey {
         app: String,
         key: String,
@@ -802,6 +886,7 @@ impl UserRecordingTranslator {
             .flat_map(input_strings)
             .collect();
         let semantic_groups = coalesced_scroll_bursts(groups);
+        let arguments = declaring_recorded_secrets(arguments, &semantic_groups);
 
         let mut actions: Vec<Value> = Vec::new();
         let mut last_value_fact_id: Option<String> = None;
@@ -830,6 +915,13 @@ impl UserRecordingTranslator {
                 index += 1;
             }
 
+            // Total at this layer too, because authoring is a public entry point that may be
+            // handed groups this recorder did not build: nothing observed around a secret entry
+            // is emitted, and nothing about it is asserted.
+            if matches!(emitted.action(), RecordedUserAction::TypeSecret { .. }) {
+                observed.clear();
+            }
+
             let action_id = format!("a{action_number:03}");
             let mut object = action_object(emitted.action());
             object.insert("id".into(), Value::String(action_id.clone()));
@@ -849,7 +941,14 @@ impl UserRecordingTranslator {
             }
 
             let mut expected_facts: Vec<Value> = Vec::new();
-            if let Some(observation) = emitted.observation.as_ref() {
+            // A secret entry has nothing safe to assert. What the field now holds is the
+            // credential, and the recorder deliberately no longer knows it, so it cannot be
+            // excluded from a derived fact the way an ordinary typed input is excluded through
+            // `workflow_inputs`. Deriving nothing leaves a valid, unverified step, which is the
+            // same outcome as any other transition with nothing safe to say.
+            if let Some(observation) = emitted.observation.as_ref()
+                && !matches!(emitted.action(), RecordedUserAction::TypeSecret { .. })
+            {
                 expected_facts.extend(
                     crate::DerivedPostconditionCompiler::new(assertion_taint).facts(
                         &crate::PostconditionInput {
@@ -938,6 +1037,36 @@ impl UserRecordingTranslator {
     }
 }
 
+/// Declares an argument for every secret burst the recording carries.
+///
+/// The declaration is deliberately sourceless and defaultless: replay resolves arguments before any
+/// action runs, so a recording of a login refuses to replay until whoever runs it supplies the
+/// credential. A name a caller already declared is left alone rather than redeclared.
+fn declaring_recorded_secrets(
+    mut arguments: Vec<AxnArgument>,
+    groups: &[RecordedUserEventGroup],
+) -> Vec<AxnArgument> {
+    for group in groups {
+        let Some(RecordedUserAction::TypeSecret { argument, .. }) = group.action.as_ref() else {
+            continue;
+        };
+        if arguments.iter().any(|declared| &declared.name == argument) {
+            continue;
+        }
+        arguments.push(AxnArgument {
+            name: argument.clone(),
+            kind: crate::ArgumentType::Secret,
+            description: Some(
+                "typed into a sensitive field; the recording never captured the value".into(),
+            ),
+            default: None,
+            source: None,
+            unknown_fields: Map::new(),
+        });
+    }
+    arguments
+}
+
 /// Rebuilds one authored action object as the typed document model, so authoring and replay share
 /// one representation instead of the recorder inventing a second document shape.
 fn into_axn_action(value: Value) -> AxnAction {
@@ -998,7 +1127,9 @@ fn tool_name(action: &RecordedUserAction) -> &'static str {
     match action {
         RecordedUserAction::Click { .. } => "click",
         RecordedUserAction::SetValue { .. } => "type",
-        RecordedUserAction::TypeText { .. } | RecordedUserAction::PressKey { .. } => "keyboard",
+        RecordedUserAction::TypeText { .. }
+        | RecordedUserAction::TypeSecret { .. }
+        | RecordedUserAction::PressKey { .. } => "keyboard",
         RecordedUserAction::Scroll { .. } => "scroll",
         RecordedUserAction::Drag { .. } => "drag",
         RecordedUserAction::PerformAction { .. } => "invoke",
@@ -1289,6 +1420,11 @@ fn action_object(action: &RecordedUserAction) -> Map<String, Value> {
             object.insert("app".into(), Value::String(app.clone()));
             object.insert("text".into(), Value::String(text.clone()));
         }
+        RecordedUserAction::TypeSecret { app, argument } => {
+            object.insert("tool".into(), Value::String("keyboard".into()));
+            object.insert("app".into(), Value::String(app.clone()));
+            object.insert("text".into(), Value::String(format!("{{{{{argument}}}}}")));
+        }
         RecordedUserAction::PressKey { app, key } => {
             object.insert("tool".into(), Value::String("keyboard".into()));
             object.insert("app".into(), Value::String(app.clone()));
@@ -1384,9 +1520,9 @@ fn app_name(action: &RecordedUserAction) -> Option<String> {
         RecordedUserAction::Click { target }
         | RecordedUserAction::SetValue { target, .. }
         | RecordedUserAction::PerformAction { target, .. } => app_name_in(target),
-        RecordedUserAction::TypeText { app, .. } | RecordedUserAction::PressKey { app, .. } => {
-            Some(app.clone())
-        }
+        RecordedUserAction::TypeText { app, .. }
+        | RecordedUserAction::TypeSecret { app, .. }
+        | RecordedUserAction::PressKey { app, .. } => Some(app.clone()),
         RecordedUserAction::Scroll { app, .. } | RecordedUserAction::Drag { app, .. } => {
             app.clone()
         }
