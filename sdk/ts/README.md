@@ -59,7 +59,10 @@ Everything else belongs to the daemon:
 - **Waiting is never client-side.** `waitForValue` and `waitForStability` are single socket calls
   that the daemon polls behind. There is no retry loop in this package.
 - **Results are the daemon's.** `look` returns the raw structured snapshot; this client does not
-  render the observation DSL that MCP and the CLI produce.
+  render the observation DSL that MCP and the CLI produce. `changedSince` likewise returns the
+  daemon's verdict unaltered, and that verdict currently compares only top-level window
+  signatures — a value change reports `changed: false`. Use `waitForValue` when you are waiting on
+  a specific element's value.
 - **A refusal is not an error.** A JSON-RPC error throws `AxonRpcError`, because the request never
   reached its tool. An action that was refused resolves normally with `refusal` on the result;
   deciding what to do about a policy refusal is the caller's job.

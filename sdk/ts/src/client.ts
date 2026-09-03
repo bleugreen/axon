@@ -264,7 +264,13 @@ export class App {
     return this.remember(await this.raw.look({ ...options, app: this.appSelector }));
   }
 
-  /** The daemon's change check against a prior snapshot, defaulting to this handle's own. */
+  /**
+   * The daemon's change check against a prior snapshot, defaulting to this handle's own.
+   *
+   * The verdict is returned unaltered, and the daemon reaches it by comparing app identity and
+   * top-level window signatures only, so a change confined to an element's value reports
+   * `changed: false`. Wait on a specific value with `waitForValue` rather than this.
+   */
   async changedSince(snapshotId = this.snapshotId): Promise<Record<string, unknown>> {
     if (!snapshotId) throw new Error("changedSince needs a snapshot id or a prior look()");
     return this.remember(await this.raw.look({ app: this.appSelector, since: snapshotId }));
