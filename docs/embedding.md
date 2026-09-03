@@ -312,6 +312,15 @@ Degradation is data. A daemon that is not running, a host at a login greeter, an
 Accessibility grant all produce schema-valid documents rather than transport errors, and all exit
 0. A consumer that only handles the healthy shape is misreading the contract.
 
+This document is the CLI's, and the socket's `health` method does not return it. The socket answers
+with the daemon's own `DaemonReport`, whose fields are flat: `ready`, `processId`, and `endpoint`
+sit at the top level rather than inside a `daemon` object, and there is no `schemaVersion` or
+`registration`. The difference is not an inconsistency to be reconciled. `status --json` describes
+an install, so it must be able to describe a daemon that never answered, which is why readiness is
+nested under a subject that may be absent. A report read off the socket came from a daemon that is
+already serving. A programmatic client should read the socket shape and let the SDKs do it; a tool
+that consumes `status --json` should read `health-v1`.
+
 ```json
 {
   "schemaVersion": "health-v1",

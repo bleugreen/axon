@@ -39,7 +39,13 @@ await session.save({ path: "checkout.axn" });
 
 `Axon.connect` calls `health` first, so a script fails at connect with a clear reason rather than
 at its first action. It warns when the daemon's version differs from the one this client was
-generated for.
+generated for, and when the daemon is serving but has not been granted a permission, since that
+otherwise surfaces much later as an unexplained refusal.
+
+`axon.health` is the daemon's own report — flat `ready`, `platform`, `version`, `processId`,
+`endpoint`, plus `session`, `permissions`, and `capabilities`. It is not the `health-v1` document
+that `axon status --json` prints; that one nests a `daemon` object because it also has to describe
+an install whose daemon never answered.
 
 ## What the client holds, and what it does not
 
