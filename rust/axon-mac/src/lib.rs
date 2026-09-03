@@ -22,6 +22,8 @@ use std::{
 pub mod socket;
 
 #[cfg(target_os = "macos")]
+mod core_foundation;
+#[cfg(target_os = "macos")]
 mod global_input;
 #[cfg(target_os = "macos")]
 mod platform;
