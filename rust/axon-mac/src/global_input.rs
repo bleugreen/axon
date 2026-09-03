@@ -1,6 +1,6 @@
 use crate::core_foundation::string_value;
 use axon_core::{
-    BackendError, GlobalInputObserver, RecordedAppIdentity, RecordedElementEvidence,
+    BackendError, Capability, GlobalInputObserver, RecordedAppIdentity, RecordedElementEvidence,
     RecordedInputEvent, RecordedKeystroke, RecordedPoint, RecordedTargetEvidence, RecordingScope,
 };
 use std::{
@@ -44,7 +44,6 @@ struct CGPoint {
 
 #[link(name = "ApplicationServices", kind = "framework")]
 unsafe extern "C" {
-    fn AXIsProcessTrusted() -> bool;
     fn AXUIElementCreateSystemWide() -> AXUIElementRef;
     fn AXUIElementCreateApplication(pid: i32) -> AXUIElementRef;
     fn AXUIElementCopyElementAtPosition(
@@ -191,7 +190,7 @@ fn cancel_startup(state: &Arc<Mutex<StartupState>>, thread: JoinHandle<()>) {
 
 impl TapRuntime for NativeRuntime {
     fn trusted(&self) -> bool {
-        unsafe { AXIsProcessTrusted() }
+        crate::accessibility::granted()
     }
     fn spawn(&self, scope: RecordingScope, queue: Arc<Queue>) -> Result<RunningTap, BackendError> {
         let startup = Arc::new(Mutex::new(StartupState::Initializing));
@@ -664,7 +663,15 @@ impl GlobalInputObserver for MacGlobalInputObserver {
             ));
         }
         if !self.runtime.trusted() {
-            return Err(operation("Accessibility permission is not granted"));
+            // Typed, not an operation failure: this is the same refusal `global_input_observer`
+            // publishes, and a recording start that reaches this point must reach the wire as a
+            // capability refusal rather than as `operation observeGlobalInput failed`.
+            return Err(BackendError::CapabilityReason {
+                capability: Capability::ObserveGlobalInput,
+                code: "accessibility-denied",
+                reason: "Accessibility permission is not granted".into(),
+                diagnostic: None,
+            });
         }
         self.running = Some(self.runtime.spawn(scope.clone(), Arc::clone(&self.queue))?);
         Ok(())
@@ -722,7 +729,15 @@ mod tests {
     fn refuses_without_accessibility_permission() {
         let mut value = observer(false, Arc::default());
         let error = value.start(&RecordingScope::AllApplications).unwrap_err();
-        assert!(error.to_string().contains("Accessibility permission"));
+        assert_eq!(
+            error,
+            BackendError::CapabilityReason {
+                capability: Capability::ObserveGlobalInput,
+                code: "accessibility-denied",
+                reason: "Accessibility permission is not granted".into(),
+                diagnostic: None,
+            }
+        );
         assert!(!value.is_recording());
     }
     #[test]

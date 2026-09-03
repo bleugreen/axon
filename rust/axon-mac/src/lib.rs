@@ -22,6 +22,11 @@ use std::{
 pub mod socket;
 
 #[cfg(target_os = "macos")]
+pub mod probe;
+
+#[cfg(target_os = "macos")]
+mod accessibility;
+#[cfg(target_os = "macos")]
 mod core_foundation;
 #[cfg(target_os = "macos")]
 mod global_input;
@@ -618,6 +623,12 @@ impl<
     ) -> Option<Result<Value, JsonRpcError>> {
         Some(match method {
             "recording.start" | "editor.recordFromHere" => {
+                // Refuse on capability before the daemon opens a session. The observer seam is the
+                // one place that knows whether this process can actually watch input, and asking
+                // it first means a denied start never creates a recording it has to abandon.
+                if let Err(error) = self.backend.global_input_observer() {
+                    return Some(Err(backend_error(error)));
+                }
                 let started = self.daemon.dispatch(method, params)?;
                 match started {
                     Ok(value) => {
@@ -1756,6 +1767,21 @@ fn backend_error(e: axon_core::BackendError) -> JsonRpcError {
             message: format!("capability {} is unavailable: {reason}", capability.key()),
             data: Some(
                 json!({"kind":"capability-unavailable","capability":capability.key(),"reason":reason,"diagnostic":diagnostic}),
+            ),
+        },
+        // Same family as `Capability`, plus the stable `code` that names *which* refusal it is.
+        // Without this arm a typed refusal would fall through to the catch-all and reach the wire
+        // as an untyped -32000, which is exactly how `accessibility-denied` used to be lost.
+        axon_core::BackendError::CapabilityReason {
+            capability,
+            code,
+            reason,
+            diagnostic,
+        } => JsonRpcError {
+            code: -32004,
+            message: format!("capability {} is unavailable: {reason}", capability.key()),
+            data: Some(
+                json!({"kind":"capability-unavailable","capability":capability.key(),"code":code,"reason":reason,"diagnostic":diagnostic}),
             ),
         },
         other => rpc_error(-32000, other.to_string()),
