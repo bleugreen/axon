@@ -246,11 +246,23 @@ mod tests {
     /// Manual: run from a terminal whose responsible process lacks the Accessibility grant.
     ///
     /// `cargo test -p axon-mac -- --ignored probe_reports_denied_without_accessibility_trust`
-    /// Left out of the CI gate because it asserts on host TCC state the build slot cannot set.
+    /// Left out of the CI gate because it asserts on host TCC state the build slot cannot set. The
+    /// first assertion guards the premise: run inside a trusted process this measures nothing, and
+    /// saying so is more useful than a verdict mismatch.
     #[test]
     #[ignore = "asserts on host Accessibility TCC state"]
     fn probe_reports_denied_without_accessibility_trust() {
-        assert_eq!(probe(), AxAccess::Denied, "status {}", system_wide_status());
+        assert!(
+            !cached_trust(),
+            "this process holds the Accessibility grant, so it cannot measure a denial; run the \
+             test from a terminal whose responsible process is not in the Accessibility list"
+        );
+        assert_eq!(
+            probe(),
+            AxAccess::Denied,
+            "system-wide status {}",
+            system_wide_status()
+        );
         assert!(!granted());
     }
 }
