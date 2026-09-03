@@ -22,6 +22,7 @@ struct FakeRecorderState {
     polls: VecDeque<Vec<RecordedInputEvent>>,
     focused: VecDeque<Option<RecordedFocusedEvidence>>,
     snapshot: Option<Snapshot>,
+    settle: Option<RecordedSettleEvidence>,
     settle_calls: Vec<(usize, String)>,
     stop_calls: usize,
     fail_settle: bool,
@@ -102,7 +103,7 @@ impl RecordingEvidenceProvider for FakeRecordingProvider {
         if state.fail_settle {
             Err(backend_error("settle"))
         } else {
-            Ok(RecordedSettleEvidence::default())
+            Ok(state.settle.clone().unwrap_or_default())
         }
     }
 }
@@ -969,14 +970,32 @@ fn sensitive_evidence(app: RecordedAppIdentity, title: &str) -> RecordedTargetEv
 fn a_burst_typed_under_a_sensitive_focus_never_reaches_the_artifact() {
     let notes = app("Vault", "com.example.vault");
     let (mut recorder, state) = recorder_with(vec![text(notes.clone(), "hunter2-correct-horse")]);
-    // A provider that leaks the field value as well: neither it nor the burst may be serialized.
-    state
-        .borrow_mut()
-        .focused
-        .push_back(Some(RecordedFocusedEvidence {
+    // A provider that leaks the credential everywhere it possibly can: in the focused read, in
+    // the settle evidence it observed, and in the post-delivery state of the field itself. None
+    // of it may reach a serialized surface, and shared core must be what stops it — the value was
+    // typed moments ago and deliberately never retained, so no redaction context can recognise it.
+    let mut after = element("Vault", "AXTextField", "Master Password");
+    after.value = Some("hunter2-correct-horse".into());
+    let mut before = after.clone();
+    before.value = Some(String::new());
+    {
+        let mut state = state.borrow_mut();
+        state.focused.push_back(Some(RecordedFocusedEvidence {
             target: sensitive_evidence(notes, "Master Password"),
             value: Some("hunter2-correct-horse".into()),
         }));
+        state.settle = Some(RecordedSettleEvidence {
+            observed: vec![json!({"value": "hunter2-correct-horse"})],
+            observation: Some(ActionObservation {
+                tool: "type".into(),
+                app: Some("Vault".into()),
+                target_before: Some(before),
+                target_after: Some(after),
+                settled: true,
+                ..Default::default()
+            }),
+        });
+    }
 
     recorder.poll(Duration::ZERO).unwrap();
     let groups = recorder.finish().unwrap();
@@ -1005,6 +1024,10 @@ fn a_burst_typed_under_a_sensitive_focus_never_reaches_the_artifact() {
     assert_eq!(
         document.actions[0].params.get("text"),
         Some(&json!("{{master_password}}"))
+    );
+    assert!(
+        groups[0].observation.is_none() && groups[0].observed.is_empty(),
+        "a settle read taken around a secret entry is a read of the field holding it"
     );
 
     // The guarantee is about every serialized surface, not only the authored step: recorder
