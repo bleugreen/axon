@@ -790,6 +790,83 @@ fn recorder_semantic_target_authors_as_replayable_axn_with_locator() {
 }
 
 #[test]
+fn recorder_semantic_target_persists_identity_without_the_captured_document() {
+    let notes = app("Notes", "com.example.notes");
+    let document = "a paragraph the user typed earlier. ".repeat(64);
+    let area = Node {
+        role: "AXTextArea".into(),
+        identifier: Some("document".into()),
+        value: Some(document.clone()),
+        editable: true,
+        actions: vec!["AXConfirm".into()],
+        frame: Some(Rect {
+            x: 0.0,
+            y: 0.0,
+            width: 600.0,
+            height: 400.0,
+        }),
+        ..serde_json::from_value(json!({"role":"AXTextArea"})).unwrap()
+    };
+    let snapshot = Snapshot::new(Application {
+        name: "Notes".into(),
+        process_id: Some(42),
+        identifier: Some("com.example.notes".into()),
+        windows: vec![Window {
+            title: Some("Untitled".into()),
+            root: Node {
+                role: "AXWindow".into(),
+                title: Some("Untitled".into()),
+                children: vec![area],
+                ..serde_json::from_value(json!({"role":"AXWindow"})).unwrap()
+            },
+        }],
+    });
+    let evidence = RecordedTargetEvidence {
+        app: notes,
+        point: RecordedPoint { x: 20.0, y: 25.0 },
+        candidates: vec![RecordedElementEvidence {
+            role: "AXTextArea".into(),
+            identifier: Some("document".into()),
+            value: Some(document.clone()),
+            actions: vec!["AXConfirm".into()],
+            window_title: Some("Untitled".into()),
+            ..Default::default()
+        }],
+    };
+    let (mut recorder, state) = recorder_with(vec![
+        RecordedInputEvent::MouseDown {
+            evidence: evidence.clone(),
+            timestamp_ms: 10,
+        },
+        RecordedInputEvent::MouseUp {
+            evidence,
+            timestamp_ms: 20,
+        },
+    ]);
+    state.borrow_mut().snapshot = Some(snapshot);
+
+    recorder.poll(Duration::ZERO).unwrap();
+    let groups = recorder.finish().unwrap();
+    let document_axn = UserRecordingTranslator::new()
+        .axn_document(&groups, Vec::new(), &RedactionMarkerTaint)
+        .expect("recorder output satisfies the replay contract");
+
+    let locator = document_axn.actions[0].params["target"]["locator"]
+        .as_object()
+        .expect("the click records a semantic target");
+    assert_eq!(locator["role"], json!("AXTextArea"));
+    assert_eq!(locator["identifier"], json!({"exact": "document"}));
+    for absent in ["value", "frame", "actions", "nearbyText", "ancestors", "window"] {
+        assert!(!locator.contains_key(absent), "{absent} in {locator:?}");
+    }
+    let rendered = serde_json::to_string(&document_axn.actions[0]).unwrap();
+    assert!(
+        !rendered.contains("a paragraph the user typed"),
+        "the recording must not carry content the user never acted on"
+    );
+}
+
+#[test]
 fn recorder_groups_text_and_reads_the_complete_value_only_when_flushed() {
     let notes = app("Notes", "com.example.notes");
     let (mut recorder, state) =

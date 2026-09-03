@@ -951,6 +951,49 @@ mod tests {
     }
 
     #[test]
+    fn saved_locators_carry_identity_without_the_captured_document() {
+        let mut registry = SemanticNameRegistry::default();
+        let document = "everything the user had open ".repeat(64);
+        let observed = snapshot(
+            "capture",
+            vec![Node {
+                role: "text".into(),
+                identifier: Some("document".into()),
+                value: Some(document.clone()),
+                editable: true,
+                actions: vec!["confirm".into()],
+                frame: Some(crate::Rect {
+                    x: 0.0,
+                    y: 0.0,
+                    width: 600.0,
+                    height: 400.0,
+                }),
+                ..empty_node()
+            }],
+        );
+        let name = registry
+            .register(&observed)
+            .into_iter()
+            .find(|name| name.role == "text")
+            .unwrap()
+            .name;
+
+        let locator = registry
+            .durable_locator("com.example.App", &name)
+            .expect("a saved action carries the durable locator behind its name");
+
+        assert_eq!(locator.get("role"), Some(&serde_json::json!("text")));
+        assert_eq!(
+            locator.get("identifier"),
+            Some(&serde_json::json!({"exact": "document"}))
+        );
+        for absent in ["value", "frame", "actions", "nearbyText", "ancestors", "window"] {
+            assert!(!locator.contains_key(absent), "{absent} in {locator:?}");
+        }
+        assert!(!serde_json::to_string(&locator).unwrap().contains("user had open"));
+    }
+
+    #[test]
     fn ambiguous_names_return_handle_free_candidate_summaries() {
         let mut registry = SemanticNameRegistry::default();
         let observed = snapshot("old", vec![button("Share", None), button("Share", None)]);
