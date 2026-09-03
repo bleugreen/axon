@@ -143,13 +143,13 @@ pub struct Locator {
     pub description: Option<TextMatcher>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub identifier: Option<TextMatcher>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub actions: Vec<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub ancestors: Vec<AncestorLocator>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub window: Option<AncestorLocator>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub nearby_text: Vec<TextMatcher>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub frame: Option<Rect>,
@@ -189,6 +189,102 @@ pub struct Resolution {
     pub confidence: Confidence,
     pub best: Option<Candidate>,
     pub candidates: Vec<Candidate>,
+}
+
+/// The locator a durable artifact keeps: identity, plus the least scope that still finds one
+/// element in the observation it was captured from.
+///
+/// A recording or a saved script outlives the interface state it was written from, so it may only
+/// claim what stays true about an element. `value` is state rather than identity — for an editable
+/// element the very action being recorded changes it, so pinning it guarantees the locator drifts
+/// on its own first replay, and it copies whatever the user had on screen into the artifact.
+/// `frame`, `actions`, and `nearbyText` describe a moment rather than an element, and score only as
+/// tie-breakers. What remains is the durable half: role, subrole, and the names an interface gives
+/// a control.
+///
+/// Scope comes back only when identity alone is not enough — the window first, then ancestors from
+/// the nearest outward — and each rung is judged by the resolver itself against `captured`, so this
+/// never invents a second definition of what a locator matches. `None` means no rung resolves
+/// uniquely: the caller records a point fallback rather than persisting a half-pinned locator that
+/// cannot find its element again.
+pub fn persisted_locator(recorded: &Locator, captured: &Snapshot) -> Option<Locator> {
+    let mut minimal = Locator {
+        role: recorded.role.clone(),
+        subrole: recorded.subrole.clone(),
+        title: recorded.title.clone(),
+        label: recorded.label.clone(),
+        description: recorded.description.clone(),
+        identifier: recorded.identifier.clone(),
+        ..Locator::default()
+    };
+    if resolves_uniquely(&minimal, captured) {
+        return Some(minimal);
+    }
+    if recorded.window.is_some() {
+        minimal.window = recorded.window.clone();
+        if resolves_uniquely(&minimal, captured) {
+            return Some(minimal);
+        }
+    }
+    for depth in 1..=recorded.ancestors.len() {
+        minimal.ancestors = recorded.ancestors[recorded.ancestors.len() - depth..].to_vec();
+        if resolves_uniquely(&minimal, captured) {
+            return Some(minimal);
+        }
+    }
+    None
+}
+
+fn resolves_uniquely(locator: &Locator, snapshot: &Snapshot) -> bool {
+    LocatorResolver::resolve(locator, snapshot).status == ResolutionStatus::Unique
+}
+
+/// An observation reduced to what a [`persisted_locator`] can match on.
+///
+/// Minimizing a locator is a question about the capture it came from, and the semantic-name
+/// registry answers that question long after the capture is gone. Retaining the observation itself
+/// would retain every element value — the document the user was editing — for as long as the name
+/// lives, which is the state a persisted locator exists to leave behind. The skeleton keeps
+/// identity, window titles, and tree shape, so the resolver returns the same candidates it would
+/// have found in the full tree for any locator restricted to those fields, and nothing more.
+pub(crate) fn identity_skeleton(snapshot: &Snapshot) -> Snapshot {
+    fn skeleton(node: &Node) -> Node {
+        Node {
+            role: node.role.clone(),
+            subrole: node.subrole.clone(),
+            title: node.title.clone(),
+            label: node.label.clone(),
+            description: node.description.clone(),
+            identifier: node.identifier.clone(),
+            children: node.children.iter().map(skeleton).collect(),
+            name: None,
+            value: None,
+            actions: Vec::new(),
+            frame: None,
+            editable: false,
+            focused: None,
+            enabled: None,
+            child_count: None,
+            truncation_reason: None,
+        }
+    }
+    Snapshot {
+        id: snapshot.id.clone(),
+        app: crate::Application {
+            name: snapshot.app.name.clone(),
+            process_id: snapshot.app.process_id,
+            identifier: snapshot.app.identifier.clone(),
+            windows: snapshot
+                .app
+                .windows
+                .iter()
+                .map(|window| crate::Window {
+                    title: window.title.clone(),
+                    root: skeleton(&window.root),
+                })
+                .collect(),
+        },
+    }
 }
 
 pub struct LocatorResolver;
