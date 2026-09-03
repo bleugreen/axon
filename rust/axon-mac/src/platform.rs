@@ -2,6 +2,7 @@ use crate::global_input::MacGlobalInputObserver;
 use crate::{
     BackgroundPixelPointer, PixelDispatch, PixelDispatchError, PixelPlan, PixelTarget,
     PointerTargetVerifier, ReadableStateProvider, VisualObservation, VisualObservationProvider,
+    accessibility::{self, AxAccess},
     core_foundation::string_value,
 };
 use serde_json::{Map, Value};
@@ -145,7 +146,6 @@ unsafe extern "C" {
         attribute: CFStringRef,
         value: CFTypeRef,
     ) -> i32;
-    fn AXIsProcessTrusted() -> bool;
     fn AXValueGetValue(value: AXValueRef, value_type: i64, output: *mut c_void) -> bool;
 }
 #[link(name = "CoreFoundation", kind = "framework")]
@@ -203,11 +203,22 @@ fn cfstr(value: &str) -> Result<Owned, BackendError> {
         .then(|| Owned(value))
         .ok_or_else(|| op("string", "CoreFoundation allocation failed"))
 }
-fn attribute(element: AXUIElementRef, name: &str) -> Option<Owned> {
-    let name = cfstr(name).ok()?;
+/// An attribute value and the raw `AXError` the read returned.
+///
+/// The status is what distinguishes "this element has no title" from "the Accessibility API is
+/// disabled for this process", and enumeration needs that distinction to refuse honestly. Every
+/// attribute read in this module goes through here so there stays exactly one FFI call site.
+fn attribute_status(element: AXUIElementRef, name: &str) -> (Option<Owned>, i32) {
+    let Ok(name) = cfstr(name) else {
+        return (None, accessibility::AX_ERROR_CANNOT_COMPLETE);
+    };
     let mut value = null();
     let status = unsafe { AXUIElementCopyAttributeValue(element, name.0, &mut value) };
-    (status == 0 && !value.is_null()).then(|| Owned(value))
+    let value = (!value.is_null()).then(|| Owned(value));
+    (value.filter(|_| status == 0), status)
+}
+fn attribute(element: AXUIElementRef, name: &str) -> Option<Owned> {
+    attribute_status(element, name).0
 }
 fn text_attribute(element: AXUIElementRef, name: &str) -> Option<String> {
     attribute(element, name).and_then(|v| string_value(v.0))
