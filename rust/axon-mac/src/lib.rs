@@ -2076,6 +2076,62 @@ mod tests {
         }
     }
 
+    /// A backend that cannot observe global input refuses `recording.start` before any session
+    /// exists, and the refusal keeps its typed shape all the way to the wire.
+    ///
+    /// Both halves are the bug. The refusal used to surface from inside
+    /// `UserActionRecorder::start_with_redaction`, after the daemon had already opened a recording
+    /// it then had to abandon; and `backend_error` had no arm for the typed variant, so a caller
+    /// saw `-32000 operation observeGlobalInput failed` with nothing to key on.
+    #[test]
+    fn recording_start_refuses_typed_when_global_input_is_unavailable() {
+        let mut router = Router::new(EnumerationBackend::without_global_input());
+        let response = router
+            .request(JsonRpcRequest::new(
+                Some(JsonRpcId::Integer(1)),
+                "recording.start",
+                Some(json!({"scope":{"scope":"allApplications"}})),
+            ))
+            .unwrap();
+        let JsonRpcResponse::Failure(failure) = response else {
+            panic!("a backend without a usable observer must refuse recording.start")
+        };
+        assert_eq!(failure.error.code, -32004);
+        let data = failure.error.data.expect("a typed refusal carries data");
+        assert_eq!(data["kind"], "capability-unavailable");
+        assert_eq!(data["capability"], "observeGlobalInput");
+        assert_eq!(data["code"], "accessibility-denied");
+
+        // Refused before dispatch: nothing was started, so nothing had to be abandoned.
+        assert!(router.recorder.is_none());
+        assert!(!router.daemon.recording.status().recording);
+    }
+
+    #[test]
+    fn a_typed_capability_refusal_reaches_the_wire_with_its_code() {
+        let error = backend_error(axon_core::BackendError::CapabilityReason {
+            capability: Capability::ObserveGlobalInput,
+            code: "accessibility-denied",
+            reason: "Accessibility permission is not granted".into(),
+            diagnostic: Some("kAXErrorAPIDisabled (-25211)".into()),
+        });
+        assert_eq!(error.code, -32004);
+        assert_eq!(
+            error.message,
+            "capability observeGlobalInput is unavailable: Accessibility permission is not granted"
+        );
+        assert_eq!(
+            error.data.unwrap(),
+            json!({
+                "kind": "capability-unavailable",
+                "capability": "observeGlobalInput",
+                "code": "accessibility-denied",
+                "reason": "Accessibility permission is not granted",
+                "diagnostic": "kAXErrorAPIDisabled (-25211)",
+            })
+        );
+    }
+
     #[test]
     fn recording_routes_ingest_native_events_before_stop() {
         let mut router = Router::new(EnumerationBackend::new());
