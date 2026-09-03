@@ -9,7 +9,7 @@ build:
 test:
 	$(SWIFT) test
 
-# VERSION is the release source; the Swift and Rust literals are derived copies that drift silently.
+# VERSION is the release source; compiled and package literals are derived copies that drift silently.
 check-version:
 	./scripts/check-version
 
