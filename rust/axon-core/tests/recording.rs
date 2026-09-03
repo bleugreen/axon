@@ -7,12 +7,12 @@
 
 use axon_core::{
     ActionObservation, Application, ArgumentType, AxnAction, BackendError,
-    DerivedPostconditionCompiler,
-    GlobalInputObserver, Node, ObservedElementState, OwnedUserActionRecorder, PostconditionInput,
-    RecordedAppIdentity, RecordedElementEvidence, RecordedFocusedEvidence, RecordedInputEvent,
-    RecordedKeystroke, RecordedPoint, RecordedSettleEvidence, RecordedTargetEvidence,
-    RecordedUserAction, RecordedUserEventGroup, RecordingEvidenceProvider, RecordingScope, Rect,
-    RedactionMarkerTaint, Snapshot, UserRecordingTranslator, Window,
+    DerivedPostconditionCompiler, GlobalInputObserver, Node, ObservedElementState,
+    OwnedUserActionRecorder, PostconditionInput, RecordedAppIdentity, RecordedElementEvidence,
+    RecordedFocusedEvidence, RecordedInputEvent, RecordedKeystroke, RecordedPoint,
+    RecordedSettleEvidence, RecordedTargetEvidence, RecordedUserAction, RecordedUserEventGroup,
+    RecordingEvidenceProvider, RecordingScope, Rect, RedactionMarkerTaint, Snapshot,
+    UserRecordingTranslator, Window,
 };
 use serde_json::{Value, json};
 use std::{cell::RefCell, collections::VecDeque, rc::Rc, time::Duration};
@@ -1039,12 +1039,10 @@ fn each_sensitive_field_earns_its_own_secret_argument() {
     ]);
     {
         let mut state = state.borrow_mut();
-        state
-            .focused
-            .push_back(Some(RecordedFocusedEvidence {
-                target: sensitive_evidence(notes.clone(), "Password"),
-                value: None,
-            }));
+        state.focused.push_back(Some(RecordedFocusedEvidence {
+            target: sensitive_evidence(notes.clone(), "Password"),
+            value: None,
+        }));
         state.focused.push_back(Some(RecordedFocusedEvidence {
             target: sensitive_evidence(notes, "Password"),
             value: None,
