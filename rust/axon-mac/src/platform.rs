@@ -590,9 +590,23 @@ impl PlatformBackend for MacBackend {
     }
 
     fn capabilities(&self) -> Result<Vec<CapabilityInfo>, BackendError> {
-        let accessibility_enabled = self.accessibility_enabled();
-        let screen_recording_enabled = window_capture::screen_capture_enabled();
-        let supported = [
+        Ok(capability_report(MacPermissions::read()))
+    }
+    fn enumerate_applications(&self) -> Result<Vec<Application>, BackendError> {
+        let (applications, access) = self.applications();
+        if applications.is_empty() && access == AxAccess::Denied {
+            return Err(accessibility_revoked(Capability::Enumerate));
+        }
+        Ok(applications
+            .into_iter()
+            .map(|application| Application {
+                process_id: Some(application.process_id as u32),
+                name: application.name,
+                identifier: application.bundle_identifier,
+                windows: Vec::new(),
+            })
+            .collect())
+    }
             Capability::Enumerate,
             Capability::Capture,
             Capability::RetainedHandles,
@@ -632,20 +646,9 @@ impl PlatformBackend for MacBackend {
                     }),
                 }
             })
-            .collect())
-    }
-    fn enumerate_applications(&self) -> Result<Vec<Application>, BackendError> {
-        Ok(self
-            .applications()
-            .into_iter()
-            .map(|application| Application {
-                process_id: Some(application.process_id as u32),
-                name: application.name,
-                identifier: application.bundle_identifier,
-                windows: Vec::new(),
-            })
-            .collect())
-    }
+            .collect()
+}
+
     fn capture(&mut self, app: &AppQuery) -> Result<Snapshot, BackendError> {
         self.capture_bounded(app, CaptureBounds::default())
     }
