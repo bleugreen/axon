@@ -1054,20 +1054,18 @@ fn authoring_emits_nothing_observed_around_a_secret_entry() {
     // older history record, another producer — so the rule holds at this layer on its own.
     let mut after = element("Vault", "AXTextField", "Master Password");
     after.value = Some("hunter2-correct-horse".into());
-    let groups = [
-        RecordedUserEventGroup::new(RecordedUserAction::TypeSecret {
-            app: "Vault".into(),
-            argument: "master_password".into(),
-        })
-        .with_observed(vec![json!({"value": "hunter2-correct-horse"})])
-        .with_observation(ActionObservation {
-            tool: "type".into(),
-            app: Some("Vault".into()),
-            target_after: Some(after),
-            settled: true,
-            ..Default::default()
-        }),
-    ];
+    let groups = [RecordedUserEventGroup::new(RecordedUserAction::TypeSecret {
+        app: "Vault".into(),
+        argument: "master_password".into(),
+    })
+    .with_observed(vec![json!({"value": "hunter2-correct-horse"})])
+    .with_observation(ActionObservation {
+        tool: "type".into(),
+        app: Some("Vault".into()),
+        target_after: Some(after),
+        settled: true,
+        ..Default::default()
+    })];
 
     let yaml = UserRecordingTranslator::new()
         .yaml(&groups, Vec::new(), &RedactionMarkerTaint)
