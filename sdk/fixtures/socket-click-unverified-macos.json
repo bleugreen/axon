@@ -1,0 +1,27 @@
+{
+  "action": {
+    "strategy": "CGEventToPid",
+    "semanticStatus": "unverified",
+    "semanticSuccess": null,
+    "deliveryPolicy": "backgroundOnly",
+    "action": "click",
+    "delivery": "pixel",
+    "message": "Click events were dispatched, but semantic outcome is unverified without a postcondition",
+    "success": false,
+    "backgroundDelivery": {
+      "targetProcessIdentifier": 52537,
+      "frontmostAppUnchanged": true,
+      "pointerUnchanged": true,
+      "pointerAsserted": true
+    },
+    "dispatchSuccess": true,
+    "target": "point:600,600[screen]",
+    "refusal": null,
+    "point": {
+      "y": 600,
+      "coordinateSpace": "screen",
+      "x": 600,
+      "app": "Calculator"
+    }
+  }
+}

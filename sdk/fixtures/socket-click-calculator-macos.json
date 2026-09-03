@@ -1,0 +1,49 @@
+{
+  "action": {
+    "message": null,
+    "success": true,
+    "targetResolution": {
+      "path": "scopedScan",
+      "status": "unique",
+      "confidence": "high",
+      "evidence": [],
+      "observedLocator": {
+        "identifier": "Seven",
+        "actions": [
+          "AXPress"
+        ],
+        "ancestors": [
+          {
+            "role": "AXWindow"
+          },
+          {
+            "role": "AXGroup",
+            "subrole": "AXHostingView"
+          },
+          {
+            "identifier": "main, SidebarNavigationSplitView",
+            "role": "AXSplitGroup"
+          },
+          {
+            "role": "AXGroup",
+            "subrole": "AXHostingView"
+          },
+          {
+            "identifier": "CalculatorKeypadView",
+            "role": "AXGroup"
+          }
+        ],
+        "role": "AXButton",
+        "description": "7"
+      },
+      "context": "path"
+    },
+    "target": "s230:0",
+    "action": "AXPress",
+    "delivery": "semantic",
+    "refusal": null,
+    "strategy": "AXAction",
+    "dispatchSuccess": true,
+    "deliveryPolicy": "backgroundOnly"
+  }
+}

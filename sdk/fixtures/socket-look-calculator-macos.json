@@ -1,0 +1,60 @@
+{
+  "snapshot": {
+    "app": {
+      "bundleIdentifier": "com.apple.calculator",
+      "processIdentifier": 52537,
+      "name": "Calculator"
+    },
+    "id": "s207",
+    "focus": {
+      "status": "none"
+    },
+    "windows": [
+      {
+        "truncationReason": null,
+        "identifier": "main",
+        "children": [],
+        "value": null,
+        "help": null,
+        "childCount": 5,
+        "actions": [
+          "AXRaise"
+        ],
+        "role": "AXWindow",
+        "enabled": null,
+        "name": "calculator",
+        "title": "Calculator",
+        "subrole": "AXStandardWindow",
+        "focused": false,
+        "description": null,
+        "frame": {
+          "width": 230,
+          "height": 408,
+          "x": 534,
+          "y": 471
+        }
+      }
+    ],
+    "indexedNodes": [
+      {
+        "name": "calculator",
+        "value": null,
+        "description": null,
+        "title": "Calculator",
+        "subrole": "AXStandardWindow",
+        "truncationReason": null,
+        "actions": [
+          "AXRaise"
+        ],
+        "frame": {
+          "width": 230,
+          "y": 471,
+          "x": 534,
+          "height": 408
+        },
+        "role": "AXWindow"
+      }
+    ],
+    "screenshot": null
+  }
+}

@@ -1,0 +1,52 @@
+{
+  "reason": "unchanged",
+  "currentSnapshotId": "s254",
+  "changed": false,
+  "current": {
+    "windows": [
+      {
+        "role": "AXWindow",
+        "subrole": "AXStandardWindow",
+        "title": "Calculator",
+        "childCount": 5,
+        "frame": {
+          "width": 230,
+          "y": 471,
+          "height": 408,
+          "x": 534
+        }
+      }
+    ],
+    "id": "s254",
+    "observationToken": 0,
+    "app": {
+      "bundleIdentifier": "com.apple.calculator",
+      "processIdentifier": 52537,
+      "name": "Calculator"
+    }
+  },
+  "snapshotId": "s207",
+  "previous": {
+    "observationToken": 0,
+    "id": "s207",
+    "app": {
+      "bundleIdentifier": "com.apple.calculator",
+      "processIdentifier": 52537,
+      "name": "Calculator"
+    },
+    "windows": [
+      {
+        "role": "AXWindow",
+        "subrole": "AXStandardWindow",
+        "title": "Calculator",
+        "childCount": 5,
+        "frame": {
+          "width": 230,
+          "y": 471,
+          "height": 408,
+          "x": 534
+        }
+      }
+    ]
+  }
+}
