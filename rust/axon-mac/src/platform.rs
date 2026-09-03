@@ -938,6 +938,15 @@ mod tests {
                 .usable
         );
     }
+    /// The matching rule under an Accessibility API that answered normally, which is what the
+    /// resolution tests below are about. Only the withdrawn-access tests pass another verdict.
+    fn resolve_listed(
+        applications: Vec<RunningApplication>,
+        query: &AppQuery,
+    ) -> Result<RunningApplication, BackendError> {
+        resolve_running(applications, query, AxAccess::Granted)
+    }
+
     fn running(process_id: i32, name: &str, bundle: Option<&str>) -> RunningApplication {
         RunningApplication {
             process_id,
@@ -1076,5 +1085,86 @@ mod tests {
             Some("Screen Recording permission is not granted")
         );
         assert_eq!(screenshot_restriction(true, true), None);
+    }
+
+    /// A daemon whose Accessibility grant is withdrawn mid-run enumerates nothing, because every
+    /// `AXTitle` read comes back disabled. Reporting that as `application not found` sends the
+    /// caller looking for an application that is running and visible on screen.
+    #[test]
+    fn withdrawn_accessibility_refuses_typed_rather_than_reporting_no_such_application() {
+        let error = resolve_running(
+            Vec::new(),
+            &query(None, Some("TextEdit"), None),
+            AxAccess::Denied,
+        )
+        .unwrap_err();
+        let BackendError::CapabilityReason {
+            capability,
+            code,
+            diagnostic,
+            ..
+        } = &error
+        else {
+            panic!("expected a typed capability refusal, got {error:?}");
+        };
+        assert_eq!(*capability, Capability::Capture);
+        assert_eq!(*code, "accessibility-denied");
+        assert!(
+            diagnostic
+                .as_deref()
+                .is_some_and(|text| text.contains("kAXErrorAPIDisabled"))
+        );
+    }
+
+    /// An inconclusive verdict must not manufacture a permission story. A machine that genuinely
+    /// has no matching application still says so.
+    #[test]
+    fn an_unknown_access_verdict_keeps_the_not_found_answer() {
+        let error = resolve_running(
+            Vec::new(),
+            &query(None, Some("TextEdit"), None),
+            AxAccess::Unknown,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("not found"), "{error:?}");
+    }
+
+    /// The composition the census makes, pinned against the permissions it composes.
+    ///
+    /// `screenshot` stays unusable without Accessibility even when Screen Recording is granted,
+    /// because this backend resolves the window to capture through the Accessibility API. The
+    /// shared Swift fixture claims the opposite for the Swift daemon, which resolves applications
+    /// through NSWorkspace; both are right about their own implementation.
+    #[test]
+    fn the_census_composes_permissions_that_the_permission_fields_report_separately() {
+        let report = capability_report(MacPermissions {
+            accessibility: false,
+            screen_recording: true,
+        });
+        let info = |capability| {
+            report
+                .iter()
+                .find(|info: &&CapabilityInfo| info.capability == capability)
+                .unwrap_or_else(|| panic!("{capability:?} is censused"))
+        };
+        let screenshot = info(Capability::Screenshot);
+        assert!(!screenshot.usable);
+        assert_eq!(
+            screenshot.restriction.as_deref(),
+            Some("Accessibility permission is not granted")
+        );
+        assert!(info(Capability::SerializeHistory).usable);
+        assert!(!info(Capability::Capture).usable);
+
+        let both = capability_report(MacPermissions {
+            accessibility: true,
+            screen_recording: true,
+        });
+        assert!(
+            both.iter()
+                .find(|info| info.capability == Capability::Screenshot)
+                .unwrap()
+                .usable
+        );
     }
 }

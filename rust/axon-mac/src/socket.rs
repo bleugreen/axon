@@ -5,7 +5,7 @@ use crate::{
 };
 use axon_core::{
     CapabilityState, DaemonProvenance, DaemonReport, HealthPlatform, JsonRpcId, JsonRpcRequest,
-    JsonRpcResponse, PermissionState, PlatformBackend, SessionHealth, ToolBackend, backend_tools,
+    JsonRpcResponse, PermissionState, SessionHealth, ToolBackend, backend_tools,
     health::reason, validate_tools_call,
 };
 use serde_json::{Value, json};
