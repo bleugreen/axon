@@ -1194,6 +1194,103 @@ host application's AX title (Calculator's ThemeWidget service does), so AXTitle
 alone is not an application identity and would make strict app lookup falsely
 ambiguous.
 
+### macOS Accessibility trust is per-process, and behaviour is the truthful source
+
+**Measured.** `AXIsProcessTrusted()` answers with a verdict HIServices resolves
+once per process and does not revisit. Measured on bglab-mac (2026-09-03)
+against a running daemon while the user toggled its Accessibility row, it is
+frozen in both directions: a daemon trusted at launch kept reporting trusted
+after the grant was revoked, and a daemon that started untrusted kept reporting
+untrusted after it was restored. In the same run, AX reads *did* fail on the
+still-trusted-looking process while its cached verdict said trusted — that is
+how `look` came to report `application not found` for an application that was
+running and visible. So the cached verdict and the API's actual behaviour
+disagree, and the cached verdict is the one that is wrong. On the build that
+made those measurements, which gated every AX call on the cached verdict, a
+re-granted daemon had to be restarted before it recovered.
+
+The design that follows from this is that behaviour, not the cached verdict, is
+the truthful source. `rust/axon-mac/src/accessibility.rs` is the one place that
+answers "can this process use Accessibility right now": it asks the API to do a
+trivial piece of work and classifies the `AXError`, falling back to the cached
+verdict only when the status does not settle the question. Every other module
+delegates to it.
+
+The classification ladder is deliberately asymmetric. `kAXErrorNoValue` and
+`kAXErrorAttributeUnsupported` mean the call was *served*, so a session with
+nothing focused does not read as denied. `kAXErrorCannotComplete` is ambiguous
+between an unresponsive target and a denial, so it defers to the cached verdict
+rather than flipping it. Only `kAXErrorAPIDisabled` (-25211) makes a
+trusted-looking process denied. That asymmetry is a safety property: in the
+granted case the probe can only answer granted or unknown, and both preserve
+whatever the cached verdict already said, so the probe cannot invent a denial.
+It earns its keep immediately — measured in a non-interactive build slot that
+*holds* the grant but has no focused application, the system-wide read returns
+`kAXErrorCannotComplete` and the fallback preserves the granted answer.
+
+Application enumeration folds the same statuses from the `AXTitle` read it makes
+on each candidate process. When that fold says denied, `look` refuses with the
+typed `accessibility-denied` capability error instead of the misleading
+`application not found` an empty list otherwise produces. This path does not
+depend on a focused application, so it is the one that stays measurable in any
+session.
+
+**Pending measurement.** Three questions are open until the live revoke/re-grant
+run on bglab-mac, and none of the code above asserts an answer to them:
+
+- Which `AXError` a withdrawn grant actually produces. The typed refusal fires
+  only on `kAXErrorAPIDisabled`; if the real status is `kAXErrorCannotComplete`,
+  the fold reads unknown and `look` keeps reporting `application not found`.
+- Whether the system-wide probe moves at all across a toggle, or is inert in the
+  same way the cached verdict is.
+- Whether a re-granted daemon now recovers without a restart. The restart
+  requirement above was measured against a build that never reached an AX call
+  once its cached verdict said no; it is not established for this one.
+
+`axon-mac probe trust [--pid N] [--interval-ms N] [--count N]` is the harness
+that answers them, following the `axon-win probe <name>` convention. It emits
+one JSON object per sample carrying `axIsProcessTrusted`,
+`axIsProcessTrustedWithOptions`, the raw `systemWideStatus`, the raw `pidStatus`
+from the read enumeration actually makes, and the verdict the build would act
+on. Those columns beside each other across a toggle separate "the verdict is
+cached" from "the API is disabled" without any inference; `pidStatus` is the one
+the typed `look` refusal depends on. Update this section with the dated result
+once the run happens.
+
+### Permissions are reported per TCC row; capabilities compose them
+
+`kTCCServiceAccessibility` and `kTCCServiceScreenCapture` are separate rows a
+user toggles separately, and the health report's `permissions` block says so:
+each `PermissionState` reports only its own grant. Capabilities are free to
+compose the two, and `screenshot` does — but deriving the `screenRecording`
+permission field back out of that composed capability made a
+denied-Accessibility daemon claim Screen Recording was ungranted while its TCC
+row read granted the whole time. `MacPermissions` in
+`rust/axon-mac/src/platform.rs` reads the two independently; `capability_report`
+is a pure function of them, and health uses both rather than deriving one from
+the other.
+
+The Rust backend's `screenshot` capability is unusable without Accessibility
+even when Screen Recording is granted, because this backend names the window to
+capture by resolving the application through the Accessibility API. The Swift
+daemon resolves applications through NSWorkspace and so does not share that
+restriction; `Tests/AxonCoreTests/HealthStatusTests.swift` and
+`schema/fixtures/health/macos-accessibility-denied.json` describe that
+implementation, not this one. Both are right about themselves. Once `axon-mac`
+becomes the shipping macOS daemon this needs a decision: either the Rust backend
+grows a non-Accessibility application resolution path, or the shared fixture
+stops claiming to describe both implementations.
+
+### Recording refuses on capability before a session exists
+
+`recording.start` and `editor.recordFromHere` ask `global_input_observer()`
+before dispatching to the daemon. That seam is the one place that knows whether
+this process can watch input, and asking first means a denied start never opens
+a recording it then has to abandon. It also matches the backend's established
+convention of refusing on capability before validating parameters. The refusal
+carries `-32004` with `kind: capability-unavailable` and the stable
+`code: accessibility-denied`, matching `look`.
+
 
 ## macOS browser Automation attribution
 

@@ -22,6 +22,11 @@ use std::{
 pub mod socket;
 
 #[cfg(target_os = "macos")]
+pub mod probe;
+
+#[cfg(target_os = "macos")]
+mod accessibility;
+#[cfg(target_os = "macos")]
 mod core_foundation;
 #[cfg(target_os = "macos")]
 mod global_input;
@@ -618,6 +623,12 @@ impl<
     ) -> Option<Result<Value, JsonRpcError>> {
         Some(match method {
             "recording.start" | "editor.recordFromHere" => {
+                // Refuse on capability before the daemon opens a session. The observer seam is the
+                // one place that knows whether this process can actually watch input, and asking
+                // it first means a denied start never creates a recording it has to abandon.
+                if let Err(error) = self.backend.global_input_observer() {
+                    return Some(Err(backend_error(error)));
+                }
                 let started = self.daemon.dispatch(method, params)?;
                 match started {
                     Ok(value) => {
@@ -1758,6 +1769,21 @@ fn backend_error(e: axon_core::BackendError) -> JsonRpcError {
                 json!({"kind":"capability-unavailable","capability":capability.key(),"reason":reason,"diagnostic":diagnostic}),
             ),
         },
+        // Same family as `Capability`, plus the stable `code` that names *which* refusal it is.
+        // Without this arm a typed refusal would fall through to the catch-all and reach the wire
+        // as an untyped -32000, which is exactly how `accessibility-denied` used to be lost.
+        axon_core::BackendError::CapabilityReason {
+            capability,
+            code,
+            reason,
+            diagnostic,
+        } => JsonRpcError {
+            code: -32004,
+            message: format!("capability {} is unavailable: {reason}", capability.key()),
+            data: Some(
+                json!({"kind":"capability-unavailable","capability":capability.key(),"code":code,"reason":reason,"diagnostic":diagnostic}),
+            ),
+        },
         other => rpc_error(-32000, other.to_string()),
     }
 }
@@ -1830,11 +1856,44 @@ mod tests {
         assert_eq!(screen_text_unavailable.unwrap()["code"], "ocr-failed");
     }
 
-    struct EnumerationBackend;
+    /// The fake this module routes against: it enumerates nothing and records synthetic events.
+    ///
+    /// `global_input` is what the observer seam answers with, so one fake covers both a backend
+    /// that can record and a backend whose Accessibility grant is denied.
+    struct EnumerationBackend {
+        global_input: bool,
+    }
+
+    impl EnumerationBackend {
+        fn new() -> Self {
+            Self { global_input: true }
+        }
+        fn without_global_input() -> Self {
+            Self {
+                global_input: false,
+            }
+        }
+    }
 
     impl PlatformBackend for EnumerationBackend {
         fn capabilities(&self) -> Result<Vec<axon_core::CapabilityInfo>, axon_core::BackendError> {
             Ok(vec![])
+        }
+        /// This fake records, so by default it must claim the observer seam. Without the override
+        /// it would inherit the core default that refuses, and `recording.start`'s capability
+        /// preflight would turn every recording test here into a capability refusal.
+        fn global_input_observer(
+            &mut self,
+        ) -> Result<&mut dyn axon_core::GlobalInputObserver, axon_core::BackendError> {
+            if !self.global_input {
+                return Err(axon_core::BackendError::CapabilityReason {
+                    capability: Capability::ObserveGlobalInput,
+                    code: "accessibility-denied",
+                    reason: "Accessibility permission is not granted".into(),
+                    diagnostic: None,
+                });
+            }
+            Ok(self)
         }
         fn enumerate_applications(
             &self,
@@ -2017,9 +2076,65 @@ mod tests {
         }
     }
 
+    /// A backend that cannot observe global input refuses `recording.start` before any session
+    /// exists, and the refusal keeps its typed shape all the way to the wire.
+    ///
+    /// Both halves are the bug. The refusal used to surface from inside
+    /// `UserActionRecorder::start_with_redaction`, after the daemon had already opened a recording
+    /// it then had to abandon; and `backend_error` had no arm for the typed variant, so a caller
+    /// saw `-32000 operation observeGlobalInput failed` with nothing to key on.
+    #[test]
+    fn recording_start_refuses_typed_when_global_input_is_unavailable() {
+        let mut router = Router::new(EnumerationBackend::without_global_input());
+        let response = router
+            .request(JsonRpcRequest::new(
+                Some(JsonRpcId::Integer(1)),
+                "recording.start",
+                Some(json!({"scope":{"scope":"allApplications"}})),
+            ))
+            .unwrap();
+        let JsonRpcResponse::Failure(failure) = response else {
+            panic!("a backend without a usable observer must refuse recording.start")
+        };
+        assert_eq!(failure.error.code, -32004);
+        let data = failure.error.data.expect("a typed refusal carries data");
+        assert_eq!(data["kind"], "capability-unavailable");
+        assert_eq!(data["capability"], "observeGlobalInput");
+        assert_eq!(data["code"], "accessibility-denied");
+
+        // Refused before dispatch: nothing was started, so nothing had to be abandoned.
+        assert!(router.recorder.is_none());
+        assert!(!router.daemon.recording.status().recording);
+    }
+
+    #[test]
+    fn a_typed_capability_refusal_reaches_the_wire_with_its_code() {
+        let error = backend_error(axon_core::BackendError::CapabilityReason {
+            capability: Capability::ObserveGlobalInput,
+            code: "accessibility-denied",
+            reason: "Accessibility permission is not granted".into(),
+            diagnostic: Some("kAXErrorAPIDisabled (-25211)".into()),
+        });
+        assert_eq!(error.code, -32004);
+        assert_eq!(
+            error.message,
+            "capability observeGlobalInput is unavailable: Accessibility permission is not granted"
+        );
+        assert_eq!(
+            error.data.unwrap(),
+            json!({
+                "kind": "capability-unavailable",
+                "capability": "observeGlobalInput",
+                "code": "accessibility-denied",
+                "reason": "Accessibility permission is not granted",
+                "diagnostic": "kAXErrorAPIDisabled (-25211)",
+            })
+        );
+    }
+
     #[test]
     fn recording_routes_ingest_native_events_before_stop() {
-        let mut router = Router::new(EnumerationBackend);
+        let mut router = Router::new(EnumerationBackend::new());
         let start = router
             .request(JsonRpcRequest::new(
                 Some(JsonRpcId::Integer(1)),
@@ -2054,7 +2169,7 @@ mod tests {
 
     #[test]
     fn invalid_recording_stop_preserves_native_and_daemon_session_state() {
-        let mut router = Router::new(EnumerationBackend);
+        let mut router = Router::new(EnumerationBackend::new());
         let start = router
             .request(JsonRpcRequest::new(
                 Some(JsonRpcId::Integer(1)),
@@ -2090,7 +2205,7 @@ mod tests {
 
     #[test]
     fn look_application_enumeration_matches_shared_envelope() {
-        let mut router = Router::new(EnumerationBackend);
+        let mut router = Router::new(EnumerationBackend::new());
         let response = router
             .request(JsonRpcRequest::new(
                 Some(JsonRpcId::Integer(1)),
@@ -2177,7 +2292,11 @@ mod tests {
 
         let mut missing_name = params;
         missing_name.remove("name");
-        let error = router_error(&mut Router::new(EnumerationBackend), "invoke", missing_name);
+        let error = router_error(
+            &mut Router::new(EnumerationBackend::new()),
+            "invoke",
+            missing_name,
+        );
         assert_eq!(error.code, -32602);
     }
 
@@ -2200,7 +2319,7 @@ mod tests {
             json!({"x":10,"y":20,"coordinateSpace":"screen"}),
         ] {
             let params = validated_params("click", json!({"target":target}));
-            let error = router_error(&mut Router::new(EnumerationBackend), "click", params);
+            let error = router_error(&mut Router::new(EnumerationBackend::new()), "click", params);
             assert_eq!(error.code, -32004);
             assert_eq!(error.data.as_ref().unwrap()["capability"], "point-target");
             assert_eq!(error.data.as_ref().unwrap()["reason"], "not-implemented");
@@ -2212,7 +2331,11 @@ mod tests {
         let defaulted = validated_params("scroll", json!({"target":{"app":"Notes","name":"List"}}));
         assert_eq!(defaulted["deltaX"], 0);
         assert_eq!(defaulted["deltaY"], -120);
-        let error = router_error(&mut Router::new(EnumerationBackend), "scroll", defaulted);
+        let error = router_error(
+            &mut Router::new(EnumerationBackend::new()),
+            "scroll",
+            defaulted,
+        );
         assert_eq!(error.code, -32004);
         assert_eq!(
             error.data.as_ref().unwrap()["capability"],
@@ -2225,7 +2348,11 @@ mod tests {
             json!({"target":{"location":{"app":"Notes","text":"Bottom"}},"deltaX":0,"deltaY":0}),
         ] {
             let params = validated_params("scroll", arguments);
-            let error = router_error(&mut Router::new(EnumerationBackend), "scroll", params);
+            let error = router_error(
+                &mut Router::new(EnumerationBackend::new()),
+                "scroll",
+                params,
+            );
             assert_eq!(error.code, -32004);
             assert_eq!(error.data.as_ref().unwrap()["reason"], "not-implemented");
         }

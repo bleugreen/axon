@@ -2,6 +2,7 @@ use crate::global_input::MacGlobalInputObserver;
 use crate::{
     BackgroundPixelPointer, PixelDispatch, PixelDispatchError, PixelPlan, PixelTarget,
     PointerTargetVerifier, ReadableStateProvider, VisualObservation, VisualObservationProvider,
+    accessibility::{self, AxAccess},
     core_foundation::string_value,
 };
 use serde_json::{Map, Value};
@@ -100,6 +101,83 @@ impl ReadableStateProvider for MacBackend {
     }
 }
 
+/// The two macOS permissions this daemon answers for, read independently of each other.
+///
+/// They are independent in TCC — `kTCCServiceAccessibility` and `kTCCServiceScreenCapture` are
+/// separate rows a user toggles separately — and the health report must say so. Capabilities are
+/// free to *compose* them (a screenshot of a named application needs both on this backend, because
+/// it resolves applications through the Accessibility API); the permission fields are not, and
+/// deriving them from a composed capability is what made a denied-Accessibility daemon claim Screen
+/// Recording was ungranted while its TCC row read granted.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MacPermissions {
+    pub accessibility: bool,
+    pub screen_recording: bool,
+}
+
+impl MacPermissions {
+    pub fn read() -> Self {
+        Self {
+            accessibility: accessibility::granted(),
+            screen_recording: window_capture::screen_capture_enabled(),
+        }
+    }
+}
+
+/// The capability census, as a pure function of the two permissions.
+///
+/// Note that `screenshot` is unusable without Accessibility even though Screen Recording is what
+/// TCC gates image capture on. That is honest for *this* backend: it names the window to capture by
+/// resolving the application through the Accessibility API, so without that grant there is nothing
+/// to point `CGWindowListCreateImage` at. The Swift daemon resolves applications through NSWorkspace
+/// and so does not share the restriction; see docs/cross-platform-internals.md.
+pub fn capability_report(permissions: MacPermissions) -> Vec<CapabilityInfo> {
+    let MacPermissions {
+        accessibility: accessibility_enabled,
+        screen_recording: screen_recording_enabled,
+    } = permissions;
+    let supported = [
+        Capability::Enumerate,
+        Capability::Capture,
+        Capability::RetainedHandles,
+        Capability::Invoke,
+        Capability::ReadValue,
+        Capability::SetValue,
+        Capability::Focus,
+        Capability::Scroll,
+        Capability::Screenshot,
+        Capability::SerializeHistory,
+        Capability::ObserveGlobalInput,
+    ];
+    Capability::ALL
+        .into_iter()
+        .map(|capability| {
+            let usable = if capability == Capability::SerializeHistory {
+                true
+            } else if capability == Capability::Screenshot {
+                screenshot_restriction(accessibility_enabled, screen_recording_enabled).is_none()
+            } else {
+                supported.contains(&capability) && accessibility_enabled
+            };
+            CapabilityInfo {
+                capability,
+                usable,
+                restriction: (!usable).then(|| {
+                    if capability == Capability::Screenshot {
+                        screenshot_restriction(accessibility_enabled, screen_recording_enabled)
+                            .expect("an unusable screenshot capability has a restriction")
+                            .into()
+                    } else if supported.contains(&capability) {
+                        "Accessibility permission is not granted".into()
+                    } else {
+                        "excluded from axon-mac v1".into()
+                    }
+                }),
+            }
+        })
+        .collect()
+}
+
 fn screenshot_restriction(
     accessibility_enabled: bool,
     screen_recording_enabled: bool,
@@ -145,7 +223,6 @@ unsafe extern "C" {
         attribute: CFStringRef,
         value: CFTypeRef,
     ) -> i32;
-    fn AXIsProcessTrusted() -> bool;
     fn AXValueGetValue(value: AXValueRef, value_type: i64, output: *mut c_void) -> bool;
 }
 #[link(name = "CoreFoundation", kind = "framework")]
@@ -203,11 +280,22 @@ fn cfstr(value: &str) -> Result<Owned, BackendError> {
         .then(|| Owned(value))
         .ok_or_else(|| op("string", "CoreFoundation allocation failed"))
 }
-fn attribute(element: AXUIElementRef, name: &str) -> Option<Owned> {
-    let name = cfstr(name).ok()?;
+/// An attribute value and the raw `AXError` the read returned.
+///
+/// The status is what distinguishes "this element has no title" from "the Accessibility API is
+/// disabled for this process", and enumeration needs that distinction to refuse honestly. Every
+/// attribute read in this module goes through here so there stays exactly one FFI call site.
+fn attribute_status(element: AXUIElementRef, name: &str) -> (Option<Owned>, i32) {
+    let Ok(name) = cfstr(name) else {
+        return (None, accessibility::AX_ERROR_CANNOT_COMPLETE);
+    };
     let mut value = null();
     let status = unsafe { AXUIElementCopyAttributeValue(element, name.0, &mut value) };
-    (status == 0 && !value.is_null()).then(|| Owned(value))
+    let value = (!value.is_null()).then(|| Owned(value));
+    (value.filter(|_| status == 0), status)
+}
+fn attribute(element: AXUIElementRef, name: &str) -> Option<Owned> {
+    attribute_status(element, name).0
 }
 fn text_attribute(element: AXUIElementRef, name: &str) -> Option<String> {
     attribute(element, name).and_then(|v| string_value(v.0))
@@ -342,19 +430,44 @@ impl RunningApplication {
     }
 }
 
+/// The refusal for a request whose Accessibility calls came back disabled.
+///
+/// Reuses the observer path's `accessibility-denied` code rather than inventing a third token. The
+/// diagnostic reports what the call observed, not what it infers about the user's timeline: the
+/// process reached an AX call at all, so its own trust check had already passed.
+fn accessibility_revoked(capability: Capability) -> BackendError {
+    BackendError::CapabilityReason {
+        capability,
+        code: "accessibility-denied",
+        reason: "Accessibility permission is not granted".into(),
+        diagnostic: Some(
+            "the Accessibility API answered kAXErrorAPIDisabled (-25211) after this process's \
+             trust check passed; the grant was withdrawn after that check"
+                .into(),
+        ),
+    }
+}
+
 /// The single application a query names, or why it named none or more than one.
 ///
 /// Split from the live enumeration so the matching rule can be exercised against a synthetic list;
-/// the native pid walk it is normally fed cannot be staged in a test.
+/// the native pid walk it is normally fed cannot be staged in a test. `access` is the verdict that
+/// walk folded: an empty list under `Denied` is a withdrawn grant, not a missing application, and
+/// saying so is the difference between a typed refusal and a misleading `application not found`.
 fn resolve_running(
     applications: Vec<RunningApplication>,
     query: &AppQuery,
+    access: AxAccess,
 ) -> Result<RunningApplication, BackendError> {
+    let enumerated_nothing = applications.is_empty();
     let mut matches = applications
         .into_iter()
         .filter(|application| application.matches(query));
     match (matches.next(), matches.next()) {
         (Some(one), None) => Ok(one),
+        (None, _) if enumerated_nothing && access == AxAccess::Denied => {
+            Err(accessibility_revoked(Capability::Capture))
+        }
         (None, _) => Err(op("capture", "application not found")),
         (Some(_), Some(_)) => Err(op("capture", "application query is ambiguous")),
     }
@@ -400,12 +513,18 @@ impl MacBackend {
         })
     }
     pub fn accessibility_enabled(&self) -> bool {
-        unsafe { AXIsProcessTrusted() }
+        accessibility::granted()
     }
-    fn applications(&self) -> Vec<RunningApplication> {
+    /// Every running application this process can see, and what the Accessibility API said while
+    /// it looked.
+    ///
+    /// Under a withdrawn grant every `AXTitle` read answers `kAXErrorAPIDisabled`, so every process
+    /// is filtered out and the list comes back empty. Folding the statuses is what lets the callers
+    /// tell that emptiness apart from a machine with no applications running.
+    fn applications(&self) -> (Vec<RunningApplication>, AxAccess) {
         let needed = unsafe { proc_listallpids(std::ptr::null_mut(), 0) };
         if needed <= 0 {
-            return Vec::new();
+            return (Vec::new(), AxAccess::Unknown);
         }
         let mut pids = vec![0i32; needed as usize];
         let returned = unsafe {
@@ -415,42 +534,47 @@ impl MacBackend {
             )
         };
         pids.truncate(returned.max(0) as usize);
-        pids.into_iter()
-            .filter_map(|pid| {
-                let mut path = vec![0u8; 4096];
-                let length =
-                    unsafe { proc_pidpath(pid, path.as_mut_ptr().cast(), path.len() as u32) };
-                if length <= 0 {
-                    return None;
-                }
-                let path = String::from_utf8_lossy(&path[..length as usize]);
-                if !path.contains(".app/Contents/MacOS/") || path.contains(".xpc/Contents/MacOS/") {
-                    return None;
-                }
-                let root = unsafe { AXUIElementCreateApplication(pid) };
-                if root.is_null() {
-                    return None;
-                }
-                let root = Owned(root);
-                // A non-empty AXTitle is what qualifies a process as an application here. It is not
-                // what the application is then called: AXTitle names windows and elements, while an
-                // application is named the way the Swift daemon's AppResolver names one.
-                text_attribute(root.0, "AXTitle")
-                    .filter(|name| !name.is_empty())
-                    .map(|accessibility_name| {
-                        let (name, bundle_identifier) =
-                            crate::global_input::application_identity(pid, accessibility_name);
-                        RunningApplication {
-                            process_id: pid,
-                            name,
-                            bundle_identifier,
-                        }
-                    })
-            })
-            .collect()
+        let mut found = Vec::new();
+        let mut access = AxAccess::Unknown;
+        for pid in pids {
+            let mut path = vec![0u8; 4096];
+            let length = unsafe { proc_pidpath(pid, path.as_mut_ptr().cast(), path.len() as u32) };
+            if length <= 0 {
+                continue;
+            }
+            let path = String::from_utf8_lossy(&path[..length as usize]);
+            if !path.contains(".app/Contents/MacOS/") || path.contains(".xpc/Contents/MacOS/") {
+                continue;
+            }
+            let root = unsafe { AXUIElementCreateApplication(pid) };
+            if root.is_null() {
+                continue;
+            }
+            let root = Owned(root);
+            // A non-empty AXTitle is what qualifies a process as an application here. It is not
+            // what the application is then called: AXTitle names windows and elements, while an
+            // application is named the way the Swift daemon's AppResolver names one.
+            let (title, status) = attribute_status(root.0, "AXTitle");
+            access = access.fold(accessibility::classify(status));
+            let Some(accessibility_name) = title
+                .and_then(|value| string_value(value.0))
+                .filter(|name| !name.is_empty())
+            else {
+                continue;
+            };
+            let (name, bundle_identifier) =
+                crate::global_input::application_identity(pid, accessibility_name);
+            found.push(RunningApplication {
+                process_id: pid,
+                name,
+                bundle_identifier,
+            });
+        }
+        (found, access)
     }
     fn resolve(&self, app: &AppQuery) -> Result<RunningApplication, BackendError> {
-        resolve_running(self.applications(), app)
+        let (applications, access) = self.applications();
+        resolve_running(applications, app, access)
     }
     fn element(&self, handle: &SnapshotHandle) -> Result<AXUIElementRef, BackendError> {
         self.handles
@@ -543,53 +667,14 @@ impl PlatformBackend for MacBackend {
     }
 
     fn capabilities(&self) -> Result<Vec<CapabilityInfo>, BackendError> {
-        let accessibility_enabled = self.accessibility_enabled();
-        let screen_recording_enabled = window_capture::screen_capture_enabled();
-        let supported = [
-            Capability::Enumerate,
-            Capability::Capture,
-            Capability::RetainedHandles,
-            Capability::Invoke,
-            Capability::ReadValue,
-            Capability::SetValue,
-            Capability::Focus,
-            Capability::Scroll,
-            Capability::Screenshot,
-            Capability::SerializeHistory,
-            Capability::ObserveGlobalInput,
-        ];
-        Ok(Capability::ALL
-            .into_iter()
-            .map(|capability| {
-                let usable = if capability == Capability::SerializeHistory {
-                    true
-                } else if capability == Capability::Screenshot {
-                    screenshot_restriction(accessibility_enabled, screen_recording_enabled)
-                        .is_none()
-                } else {
-                    supported.contains(&capability) && accessibility_enabled
-                };
-                CapabilityInfo {
-                    capability,
-                    usable,
-                    restriction: (!usable).then(|| {
-                        if capability == Capability::Screenshot {
-                            screenshot_restriction(accessibility_enabled, screen_recording_enabled)
-                                .expect("an unusable screenshot capability has a restriction")
-                                .into()
-                        } else if supported.contains(&capability) {
-                            "Accessibility permission is not granted".into()
-                        } else {
-                            "excluded from axon-mac v1".into()
-                        }
-                    }),
-                }
-            })
-            .collect())
+        Ok(capability_report(MacPermissions::read()))
     }
     fn enumerate_applications(&self) -> Result<Vec<Application>, BackendError> {
-        Ok(self
-            .applications()
+        let (applications, access) = self.applications();
+        if applications.is_empty() && access == AxAccess::Denied {
+            return Err(accessibility_revoked(Capability::Enumerate));
+        }
+        Ok(applications
             .into_iter()
             .map(|application| Application {
                 process_id: Some(application.process_id as u32),
@@ -853,6 +938,15 @@ mod tests {
                 .usable
         );
     }
+    /// The matching rule under an Accessibility API that answered normally, which is what the
+    /// resolution tests below are about. Only the withdrawn-access tests pass another verdict.
+    fn resolve_listed(
+        applications: Vec<RunningApplication>,
+        query: &AppQuery,
+    ) -> Result<RunningApplication, BackendError> {
+        resolve_running(applications, query, AxAccess::Granted)
+    }
+
     fn running(process_id: i32, name: &str, bundle: Option<&str>) -> RunningApplication {
         RunningApplication {
             process_id,
@@ -880,7 +974,7 @@ mod tests {
             bundle_identifier: Some("com.apple.TextEdit".into()),
             process_id: Some(4242),
         };
-        let resolved = resolve_running(
+        let resolved = resolve_listed(
             vec![
                 running(4242, "TextEdit", Some("com.apple.TextEdit")),
                 running(5150, "Notes", Some("com.apple.Notes")),
@@ -912,13 +1006,13 @@ mod tests {
             (by_pid.name.as_deref(), by_pid.identifier.as_deref()),
             (None, None)
         );
-        assert_eq!(resolve_running(listed(), &by_pid).unwrap().process_id, 4242);
+        assert_eq!(resolve_listed(listed(), &by_pid).unwrap().process_id, 4242);
 
         // A deserialized artifact carries no pid, so the bundle identifier is the strongest key.
         let by_bundle = recorded_app_query(&observed(None, Some("com.apple.wifi.WiFiAgent")));
         assert_eq!(by_bundle.name, None);
         assert_eq!(
-            resolve_running(listed(), &by_bundle).unwrap().process_id,
+            resolve_listed(listed(), &by_bundle).unwrap().process_id,
             4242
         );
 
@@ -932,20 +1026,20 @@ mod tests {
     fn identifier_matches_the_bundle_identifier_rather_than_the_process_id() {
         let applications = || vec![running(4242, "TextEdit", Some("com.apple.TextEdit"))];
         assert!(
-            resolve_running(
+            resolve_listed(
                 applications(),
                 &query(None, None, Some("com.apple.TextEdit"))
             )
             .is_ok()
         );
-        assert!(resolve_running(applications(), &query(None, None, Some("4242"))).is_err());
+        assert!(resolve_listed(applications(), &query(None, None, Some("4242"))).is_err());
     }
 
     #[test]
     fn an_application_without_a_bundle_identifier_never_satisfies_an_identifier_query() {
         let helper = vec![running(4242, "Helper", None)];
-        assert!(resolve_running(helper.clone(), &query(None, Some("Helper"), None)).is_ok());
-        assert!(resolve_running(helper, &query(None, None, Some("com.example.Helper"))).is_err());
+        assert!(resolve_listed(helper.clone(), &query(None, Some("Helper"), None)).is_ok());
+        assert!(resolve_listed(helper, &query(None, None, Some("com.example.Helper"))).is_err());
     }
 
     #[test]
@@ -957,20 +1051,20 @@ mod tests {
             ]
         };
         assert!(
-            resolve_running(shared(), &query(None, Some("Shared"), None))
+            resolve_listed(shared(), &query(None, Some("Shared"), None))
                 .unwrap_err()
                 .to_string()
                 .contains("ambiguous")
         );
         assert!(
-            resolve_running(shared(), &query(None, Some("Missing"), None))
+            resolve_listed(shared(), &query(None, Some("Missing"), None))
                 .unwrap_err()
                 .to_string()
                 .contains("not found")
         );
         // The bundle identifier is what tells apart two applications sharing a display name.
         assert_eq!(
-            resolve_running(
+            resolve_listed(
                 shared(),
                 &query(None, Some("Shared"), Some("com.example.two"))
             )
@@ -991,5 +1085,86 @@ mod tests {
             Some("Screen Recording permission is not granted")
         );
         assert_eq!(screenshot_restriction(true, true), None);
+    }
+
+    /// A daemon whose Accessibility grant is withdrawn mid-run enumerates nothing, because every
+    /// `AXTitle` read comes back disabled. Reporting that as `application not found` sends the
+    /// caller looking for an application that is running and visible on screen.
+    #[test]
+    fn withdrawn_accessibility_refuses_typed_rather_than_reporting_no_such_application() {
+        let error = resolve_running(
+            Vec::new(),
+            &query(None, Some("TextEdit"), None),
+            AxAccess::Denied,
+        )
+        .unwrap_err();
+        let BackendError::CapabilityReason {
+            capability,
+            code,
+            diagnostic,
+            ..
+        } = &error
+        else {
+            panic!("expected a typed capability refusal, got {error:?}");
+        };
+        assert_eq!(*capability, Capability::Capture);
+        assert_eq!(*code, "accessibility-denied");
+        assert!(
+            diagnostic
+                .as_deref()
+                .is_some_and(|text| text.contains("kAXErrorAPIDisabled"))
+        );
+    }
+
+    /// An inconclusive verdict must not manufacture a permission story. A machine that genuinely
+    /// has no matching application still says so.
+    #[test]
+    fn an_unknown_access_verdict_keeps_the_not_found_answer() {
+        let error = resolve_running(
+            Vec::new(),
+            &query(None, Some("TextEdit"), None),
+            AxAccess::Unknown,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("not found"), "{error:?}");
+    }
+
+    /// The composition the census makes, pinned against the permissions it composes.
+    ///
+    /// `screenshot` stays unusable without Accessibility even when Screen Recording is granted,
+    /// because this backend resolves the window to capture through the Accessibility API. The
+    /// shared Swift fixture claims the opposite for the Swift daemon, which resolves applications
+    /// through NSWorkspace; both are right about their own implementation.
+    #[test]
+    fn the_census_composes_permissions_that_the_permission_fields_report_separately() {
+        let report = capability_report(MacPermissions {
+            accessibility: false,
+            screen_recording: true,
+        });
+        let info = |capability| {
+            report
+                .iter()
+                .find(|info: &&CapabilityInfo| info.capability == capability)
+                .unwrap_or_else(|| panic!("{capability:?} is censused"))
+        };
+        let screenshot = info(Capability::Screenshot);
+        assert!(!screenshot.usable);
+        assert_eq!(
+            screenshot.restriction.as_deref(),
+            Some("Accessibility permission is not granted")
+        );
+        assert!(info(Capability::SerializeHistory).usable);
+        assert!(!info(Capability::Capture).usable);
+
+        let both = capability_report(MacPermissions {
+            accessibility: true,
+            screen_recording: true,
+        });
+        assert!(
+            both.iter()
+                .find(|info| info.capability == Capability::Screenshot)
+                .unwrap()
+                .usable
+        );
     }
 }
