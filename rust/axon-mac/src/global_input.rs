@@ -590,22 +590,36 @@ unsafe fn objc_string_property(object: *mut c_void, selector: &std::ffi::CStr) -
 
 fn element_evidence(element: AXUIElementRef) -> Option<RecordedElementEvidence> {
     let role = text_attribute(element, "AXRole")?;
-    let sensitive = role == "AXSecureTextField"
-        || text_attribute(element, "AXDescription")
-            .is_some_and(|v| v.to_ascii_lowercase().contains("password"));
+    let subrole = text_attribute(element, "AXSubrole");
+    let description = text_attribute(element, "AXDescription");
+    let sensitive = is_sensitive(&role, subrole.as_deref(), description.as_deref());
     Some(RecordedElementEvidence {
         role,
-        subrole: text_attribute(element, "AXSubrole"),
+        subrole,
         identifier: text_attribute(element, "AXIdentifier"),
         title: text_attribute(element, "AXTitle"),
         value: (!sensitive)
             .then(|| text_attribute(element, "AXValue"))
             .flatten(),
-        description: text_attribute(element, "AXDescription"),
+        description,
         actions: Vec::new(),
         window_title: None,
         sensitive,
     })
+}
+
+/// Whether an element holds something the recorder must never read or transcribe.
+///
+/// The subrole is the one that matters most in practice: `NSSecureTextField` reports role
+/// `AXTextField` and subrole `AXSecureTextField`, so a test on the role alone misses the ordinary
+/// AppKit password field. Secure event input is not a substitute for this check — it is a
+/// system-wide mode a web password field may never engage — and the shared recorder's refusal to
+/// serialize a sensitive burst is only as good as this predicate.
+fn is_sensitive(role: &str, subrole: Option<&str>, description: Option<&str>) -> bool {
+    let names_secure = |value: &str| value.to_lowercase().contains("secure");
+    names_secure(role)
+        || subrole.is_some_and(names_secure)
+        || description.is_some_and(|value| value.to_lowercase().contains("password"))
 }
 
 fn attribute(element: AXUIElementRef, name: &str) -> Option<AXUIElementRef> {
@@ -787,6 +801,22 @@ mod tests {
         cancel_startup(&startup, thread);
         assert!(*exited.lock().unwrap());
     }
+    #[test]
+    fn an_appkit_password_field_is_sensitive_by_its_subrole() {
+        assert!(is_sensitive("AXTextField", Some("AXSecureTextField"), None));
+        assert!(is_sensitive("AXSecureTextField", None, None));
+        assert!(is_sensitive(
+            "AXTextField",
+            Some("AXSearchField"),
+            Some("Password")
+        ));
+        assert!(!is_sensitive(
+            "AXTextField",
+            Some("AXSearchField"),
+            Some("Search")
+        ));
+    }
+
     #[test]
     fn application_scope_uses_pid_then_bundle_then_name() {
         let identity = |name: &str, bundle: Option<&str>, pid| RecordedAppIdentity {
