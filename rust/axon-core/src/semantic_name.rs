@@ -1007,6 +1007,49 @@ mod tests {
         );
     }
 
+    /// Replaying a document registers the locator it carries, and that document may have been
+    /// authored anywhere. Saving after such a replay must not copy its state back out.
+    #[test]
+    fn saved_locators_drop_state_carried_in_by_a_replayed_document() {
+        let mut registry = SemanticNameRegistry::default();
+        let target = WireElementTarget {
+            app: "com.example.App".into(),
+            name: "document-area".into(),
+        };
+        let recorded: Locator = serde_json::from_value(serde_json::json!({
+            "role": "text",
+            "identifier": {"exact": "document"},
+            "value": {"exact": "everything the user had open"},
+            "actions": ["confirm"],
+            "nearbyText": [{"contains": "Untitled"}],
+            "frame": {"x": 0.0, "y": 0.0, "width": 600.0, "height": 400.0},
+            "window": {"title": {"exact": "Untitled"}},
+            "ancestors": [{"role": "group", "title": {"exact": "Editor"}}]
+        }))
+        .unwrap();
+        registry.register_replay_locator(target, recorded);
+
+        let locator = registry
+            .durable_locator("com.example.App", "document-area")
+            .expect("a replayed target still names a durable locator");
+
+        for absent in ["value", "frame", "actions", "nearbyText"] {
+            assert!(!locator.contains_key(absent), "{absent} in {locator:?}");
+        }
+        assert!(
+            !serde_json::to_string(&locator)
+                .unwrap()
+                .contains("user had open")
+        );
+        // Scope the document already carried is kept: with no capture to test it against, dropping
+        // it could leave a locator that no longer resolves.
+        assert!(locator.contains_key("window"));
+        assert_eq!(
+            locator.get("ancestors"),
+            Some(&serde_json::json!([{"role": "group", "title": {"exact": "Editor"}}]))
+        );
+    }
+
     #[test]
     fn ambiguous_names_return_handle_free_candidate_summaries() {
         let mut registry = SemanticNameRegistry::default();
