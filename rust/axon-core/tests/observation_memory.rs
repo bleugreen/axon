@@ -132,8 +132,11 @@ fn describing_an_observation_costs_a_bounded_number_of_copies_of_it() {
     );
 
     // Describing an element legitimately costs a few times what storing it does: a draft name with
-    // its lineage, and a locator carrying the element's own text and that of its nearest
-    // ancestors. Measured at 13 copies allocated and 3 retained, flat across both sizes. The
+    // its lineage, a locator carrying the element's own text and that of its nearest ancestors,
+    // and one identity skeleton of the tree, which is what lets a persisted locator be minimized
+    // after the observation is gone. Measured at 14 copies allocated and 4 retained, flat across
+    // both sizes; the skeleton is a full copy here only because these elements carry no values,
+    // which is the bulk of a real observation and the part it drops. The
     // ceiling is set well clear of that, because what it exists to catch is off by two orders of
     // magnitude -- one copy of the whole tree per element, which is hundreds of copies here.
     let ceiling = 24;

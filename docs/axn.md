@@ -34,6 +34,36 @@ an app-scoped semantic name, `{app, name}`. A recorded action may also carry a
 not a target. Snapshot handles such as `s1:12` are session-local cache keys and
 are never accepted from `.axn` files.
 
+### What a persisted locator carries
+
+A locator written into a file outlives the capture it came from, so it claims
+only what stays true about an element: `role`, `subrole`, `identifier`, `title`,
+`label`, and `description`. State is left behind. `value` is the sharpest case —
+for an editable element the very action being recorded changes it, so a pinned
+value guarantees the locator drifts on its own first replay, and it copies
+whatever the user had on screen into the artifact. `frame`, `actions`, and
+`nearbyText` describe a moment rather than an element and only ever scored as
+tie-breakers.
+
+Scope returns only where identity is not enough. If the identity fields do not
+resolve to exactly one element in the observation being recorded, the window
+scope is added, then ancestors from the nearest outward, until the locator
+resolves uniquely; the resolver itself judges each step, so there is no second
+definition of what a locator matches. When no amount of recorded scope
+disambiguates, the action records a point fallback rather than a half-pinned
+locator that cannot find its element again — two identical siblings separated
+only by geometry are not a durable target.
+
+This is one rule with one implementation, in axon-core's locator module, and
+both producers pass through it: a live recording and `save` from an agent
+session write the same shape. Deciding scope is a question about the capture, so
+the semantic-name registry retains an identity skeleton of each registered
+observation — the tree with names and shape but no values — and answers it from
+there long after the observation itself is gone.
+
+Replay still reads a wider locator than it writes. Documents authored elsewhere
+may carry any of the scoring fields, and `find` accepts all of them.
+
 Process identity is also runtime-only. A live look records the selected process ID beside its
 semantic-name evidence, and later actions select that evidence before capturing the application
 again. This keeps coexisting instances separate and pins replay resolution to the process that was

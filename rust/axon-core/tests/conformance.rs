@@ -17,6 +17,11 @@ struct LookRequestControlsFixture {
     nonnegative: Vec<String>,
 }
 
+/// The locator shape a Rust recording writes: identity, plus the scope that disambiguated it.
+///
+/// A persisted locator never carries `value`, `frame`, `actions`, or `nearbyText` — see
+/// [`axon_core::persisted_locator`] — so a fixture that pins what this producer emits must not
+/// either. Window scope is a bare title because that is all the shared pipeline records.
 fn recorder_locator() -> Locator {
     Locator {
         role: Some("AXButton".into()),
@@ -27,15 +32,15 @@ fn recorder_locator() -> Locator {
         }),
         label: None,
         value: None,
-        description: Some(TextMatcher::Contains {
-            value: "Send".into(),
+        description: Some(TextMatcher::Exact {
+            value: "Send the order".into(),
             case_sensitive: false,
         }),
         identifier: Some(TextMatcher::Exact {
             value: "submit".into(),
             case_sensitive: false,
         }),
-        actions: vec!["AXPress".into()],
+        actions: Vec::new(),
         ancestors: vec![
             AncestorLocator {
                 role: Some("AXGroup".into()),
@@ -51,13 +56,31 @@ fn recorder_locator() -> Locator {
             },
         ],
         window: Some(AncestorLocator {
-            role: Some("AXWindow".into()),
             title: Some(TextMatcher::Exact {
                 value: "Order".into(),
                 case_sensitive: false,
             }),
             ..AncestorLocator::default()
         }),
+        nearby_text: Vec::new(),
+        frame: None,
+    }
+}
+
+/// Every locator field populated, including the scoring hints a persisted artifact drops. Rust
+/// still parses and re-emits documents authored elsewhere, so the codec owes them a round trip.
+fn full_shape_locator() -> Locator {
+    Locator {
+        value: Some(TextMatcher::Contains {
+            value: "Send".into(),
+            case_sensitive: false,
+        }),
+        label: Some(TextMatcher::Exact {
+            value: "Submit order".into(),
+            case_sensitive: false,
+        }),
+        subrole: Some("AXSubmitButton".into()),
+        actions: vec!["AXPress".into()],
         nearby_text: vec![TextMatcher::Contains {
             value: "Total".into(),
             case_sensitive: false,
@@ -68,6 +91,7 @@ fn recorder_locator() -> Locator {
             width: 96.0,
             height: 32.0,
         }),
+        ..recorder_locator()
     }
 }
 
@@ -128,7 +152,7 @@ fn rust_recording_fixture() -> AxnDocument {
 
 #[test]
 fn recorder_shaped_locator_omits_absent_fields_and_round_trips() {
-    let locator = recorder_locator();
+    let locator = full_shape_locator();
     let document = AxnDocument {
         version: 2,
         arguments: vec![AxnArgument {
@@ -196,6 +220,35 @@ fn rust_recording_v2_output_matches_producer_owned_fixtures() {
         "<redacted: active-credential>"
     );
     assert_eq!(document.actions[4].params["deltaY"], -120.0);
+
+    // What a recording persists is identity and scope. State belongs to the capture, not to the
+    // artifact that outlives it.
+    let mut locators = Vec::new();
+    collect_locators(&serde_json::to_value(&document).unwrap(), &mut locators);
+    assert_eq!(locators.len(), 4, "every semantic target carries a locator");
+    for locator in locators {
+        for state in ["value", "frame", "actions", "nearbyText"] {
+            assert!(
+                locator.get(state).is_none(),
+                "{state} in a recorded locator: {locator}"
+            );
+        }
+    }
+}
+
+fn collect_locators(value: &Value, out: &mut Vec<Value>) {
+    match value {
+        Value::Object(object) => {
+            if let Some(locator) = object.get("locator") {
+                out.push(locator.clone());
+            }
+            for nested in object.values() {
+                collect_locators(nested, out);
+            }
+        }
+        Value::Array(items) => items.iter().for_each(|item| collect_locators(item, out)),
+        _ => {}
+    }
 }
 
 #[test]
@@ -238,6 +291,88 @@ fn rust_history_v2_output_matches_producer_owned_fixture_and_range_counts() {
     assert_eq!(export.action_count, 2);
     assert!(export.script.contains("<redacted: active-credential>"));
     assert!(!export.script.contains("fixture-history-secret"));
+}
+
+/// A window holding one editable text area, with whatever the user had typed into it so far.
+fn document_capture(id: &str, text: &str) -> Snapshot {
+    Snapshot {
+        id: SnapshotId(id.into()),
+        app: Application {
+            name: "Editor".into(),
+            process_id: Some(4242),
+            identifier: Some("com.example.editor".into()),
+            windows: vec![Window {
+                title: Some("Untitled".into()),
+                root: serde_json::from_value(json!({
+                    "role": "AXWindow",
+                    "title": "Untitled",
+                    "children": [{
+                        "role": "AXTextArea",
+                        "identifier": "document",
+                        "value": text,
+                        "editable": true
+                    }]
+                }))
+                .unwrap(),
+            }],
+        },
+    }
+}
+
+/// The bench acceptance behind the persisted-locator rule: a saved `type` step replayed against
+/// the interface it was saved from must not report drift. Pinning the element's value made that
+/// impossible, because the typing the step performs is itself the change the locator would see.
+#[test]
+fn a_saved_type_step_replayed_against_its_own_effect_reports_no_drift() {
+    let capture = document_capture("capture", "before");
+    let mut registry = SemanticNameRegistry::default();
+    let name = registry
+        .register(&capture)
+        .into_iter()
+        .find(|name| name.role == "AXTextArea")
+        .unwrap()
+        .name;
+    let saved = registry
+        .durable_locator("com.example.editor", &name)
+        .expect("the saved action carries a durable locator");
+    let saved: Locator = serde_json::from_value(Value::Object(saved)).unwrap();
+
+    // Replay: the same interface, after the step being replayed has typed into it.
+    let live = document_capture("live", "before and what replay typed");
+    let resolution = LocatorResolver::resolve(&saved, &live);
+    let action = AxnAction {
+        id: Some("a001".into()),
+        tool: "type".into(),
+        requires: Vec::new(),
+        expects: Vec::new(),
+        params: Map::from_iter([(
+            "target".into(),
+            json!({"app": "com.example.editor", "name": name, "locator": saved}),
+        )]),
+    };
+    let canonical = canonical_target_resolution(&saved, &live, &resolution);
+
+    assert_eq!(canonical.status, ResolutionStatus::Unique);
+    assert_eq!(
+        healing_event(&action, 0, &canonical, &[], |_, _| true).map(|event| event.diff),
+        None,
+        "a locator that claims only identity has nothing to drift"
+    );
+
+    // The shape this replaced: the same step with the capture's value pinned halts healing on
+    // every replay, because the proposal can never verify against a document the step rewrote.
+    let pinned = Locator {
+        value: Some(TextMatcher::Exact {
+            value: "before".into(),
+            case_sensitive: false,
+        }),
+        ..saved
+    };
+    let pinned_resolution = LocatorResolver::resolve(&pinned, &live);
+    let pinned_canonical = canonical_target_resolution(&pinned, &live, &pinned_resolution);
+    let halted = healing_event(&action, 0, &pinned_canonical, &[], |_, _| false)
+        .expect("a pinned value drifts as soon as the step runs");
+    assert_eq!(halted.status, LocatorHealStatus::Halted);
 }
 
 #[test]

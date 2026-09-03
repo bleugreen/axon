@@ -10,8 +10,8 @@
 //! recording is a statement about the interface rather than about one process's pointers.
 
 use crate::{
-    AxnAction, AxnArgument, AxnDocument, ExpectedFact, LocatorResolver, ResolutionStatus,
-    SemanticNameRegistry, Snapshot, WireElementTarget,
+    AxnAction, AxnArgument, AxnDocument, ExpectedFact, SemanticNameRegistry, Snapshot,
+    WireElementTarget,
 };
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -401,14 +401,16 @@ impl UserActionRecorder {
                             .unwrap_or_else(|| evidence.app.name.clone()),
                         name: name.name.clone(),
                     };
+                    // A recording outlives the capture it was taken from, so the target keeps the
+                    // durable half of the locator and nothing about the state of this moment.
                     if let crate::SemanticSelection::Selected(context) = self.registry.select(&wire)
-                        && LocatorResolver::resolve(context.locator(), &snapshot).status
-                            == ResolutionStatus::Unique
+                        && let Some(locator) =
+                            crate::persisted_locator(context.locator(), &snapshot)
                     {
                         return Ok(serde_json::json!({
                             "app": wire.app,
                             "name": wire.name,
-                            "locator": context.locator(),
+                            "locator": locator,
                         }));
                     }
                 }

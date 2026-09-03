@@ -482,11 +482,22 @@ struct ReplayRecord {
     process_id: Option<crate::ProcessId>,
 }
 
+/// One registration: the named elements of an observation beside the identity skeleton of the tree
+/// they were derived from.
+///
+/// The skeleton is what lets a locator be minimized after the observation is gone — uniqueness is a
+/// question about the capture, and `save` asks it at dispatch time, with no tree in hand.
+#[derive(Clone)]
+struct RegisteredSnapshot {
+    identity: Snapshot,
+    records: Vec<Record>,
+}
+
 #[derive(Clone)]
 pub struct SemanticNameRegistry {
     max_snapshots: usize,
     order: VecDeque<crate::SnapshotId>,
-    records: HashMap<crate::SnapshotId, Vec<Record>>,
+    records: HashMap<crate::SnapshotId, RegisteredSnapshot>,
     replay_locators: HashMap<WireElementTarget, Vec<ReplayRecord>>,
 }
 impl Default for SemanticNameRegistry {
@@ -505,6 +516,11 @@ impl SemanticNameRegistry {
     }
 
     /// Returns the durable locator behind a session-local semantic name for history export.
+    ///
+    /// A saved script crosses the same boundary a recording does, so it carries the persisted
+    /// shape: identity, plus the least scope that still resolved uniquely in the observation the
+    /// name came from. `None` where no scope disambiguates — an exported action names its element
+    /// rather than pinning a locator that cannot find it again.
     pub fn durable_locator(
         &self,
         app: &str,
@@ -517,10 +533,19 @@ impl SemanticNameRegistry {
         let SemanticSelection::Selected(context) = self.select(&target) else {
             return None;
         };
-        serde_json::to_value(context.locator())
-            .ok()?
-            .as_object()
-            .cloned()
+        let locator = match context
+            .recorded_snapshot_id
+            .as_ref()
+            .and_then(|id| self.records.get(id))
+        {
+            Some(registered) => crate::persisted_locator(context.locator(), &registered.identity)?,
+            // A replay locator came from a document rather than from a capture this process took,
+            // so there is no observation to narrow its scope against. State is dropped all the
+            // same: a document authored elsewhere may carry any of the scoring fields, and saving
+            // one back out is exactly how they would re-enter an artifact.
+            None => crate::persisted_locator_shape(context.locator()),
+        };
+        serde_json::to_value(locator).ok()?.as_object().cloned()
     }
 
     pub fn register(&mut self, snapshot: &Snapshot) -> Vec<SemanticElementName> {
@@ -537,8 +562,8 @@ impl SemanticNameRegistry {
             let stale: HashSet<_> = self
                 .records
                 .iter()
-                .filter(|(_, records)| {
-                    records.first().is_some_and(|record| {
+                .filter(|(_, registered)| {
+                    registered.records.first().is_some_and(|record| {
                         record.app.process_id.is_some_and(|pid| {
                             pid != replacement_pid
                                 && app_identity(&record.app) == identity
@@ -583,8 +608,9 @@ impl SemanticNameRegistry {
             let superseded: HashSet<_> = self
                 .records
                 .iter()
-                .filter(|(_, records)| {
-                    records
+                .filter(|(_, registered)| {
+                    registered
+                        .records
                         .first()
                         .is_some_and(|record| record.app.process_id == Some(process_id))
                 })
@@ -595,7 +621,13 @@ impl SemanticNameRegistry {
         }
         self.order.retain(|id| id != &snapshot.id);
         self.order.push_back(snapshot.id.clone());
-        self.records.insert(snapshot.id.clone(), records);
+        self.records.insert(
+            snapshot.id.clone(),
+            RegisteredSnapshot {
+                identity: crate::locator::identity_skeleton(snapshot),
+                records,
+            },
+        );
         while self.order.len() > self.max_snapshots {
             if let Some(id) = self.order.pop_front() {
                 self.records.remove(&id);
@@ -680,7 +712,7 @@ impl SemanticNameRegistry {
             .iter()
             .rev()
             .filter_map(|id| self.records.get(id))
-            .flatten()
+            .flat_map(|registered| &registered.records)
             .filter(|record| {
                 app_matches(&target.app, &record.app) && record.target.name == target.name
             })
@@ -919,6 +951,103 @@ mod tests {
             SemanticLookup::Unique { handle, .. } => assert_eq!(handle, live.handle(2)),
             _ => panic!("recorded name did not resolve live"),
         }
+    }
+
+    #[test]
+    fn saved_locators_carry_identity_without_the_captured_document() {
+        let mut registry = SemanticNameRegistry::default();
+        let document = "everything the user had open ".repeat(64);
+        let observed = snapshot(
+            "capture",
+            vec![Node {
+                role: "text".into(),
+                identifier: Some("document".into()),
+                value: Some(document.clone()),
+                editable: true,
+                actions: vec!["confirm".into()],
+                frame: Some(crate::Rect {
+                    x: 0.0,
+                    y: 0.0,
+                    width: 600.0,
+                    height: 400.0,
+                }),
+                ..empty_node()
+            }],
+        );
+        let name = registry
+            .register(&observed)
+            .into_iter()
+            .find(|name| name.role == "text")
+            .unwrap()
+            .name;
+
+        let locator = registry
+            .durable_locator("com.example.App", &name)
+            .expect("a saved action carries the durable locator behind its name");
+
+        assert_eq!(locator.get("role"), Some(&serde_json::json!("text")));
+        assert_eq!(
+            locator.get("identifier"),
+            Some(&serde_json::json!({"exact": "document"}))
+        );
+        for absent in [
+            "value",
+            "frame",
+            "actions",
+            "nearbyText",
+            "ancestors",
+            "window",
+        ] {
+            assert!(!locator.contains_key(absent), "{absent} in {locator:?}");
+        }
+        assert!(
+            !serde_json::to_string(&locator)
+                .unwrap()
+                .contains("user had open")
+        );
+    }
+
+    /// Replaying a document registers the locator it carries, and that document may have been
+    /// authored anywhere. Saving after such a replay must not copy its state back out.
+    #[test]
+    fn saved_locators_drop_state_carried_in_by_a_replayed_document() {
+        let mut registry = SemanticNameRegistry::default();
+        let target = WireElementTarget {
+            app: "com.example.App".into(),
+            name: "document-area".into(),
+        };
+        let recorded: Locator = serde_json::from_value(serde_json::json!({
+            "role": "text",
+            "identifier": {"exact": "document"},
+            "value": {"exact": "everything the user had open"},
+            "actions": ["confirm"],
+            "nearbyText": [{"contains": "Untitled"}],
+            "frame": {"x": 0.0, "y": 0.0, "width": 600.0, "height": 400.0},
+            "window": {"title": {"exact": "Untitled"}},
+            "ancestors": [{"role": "group", "title": {"exact": "Editor"}}]
+        }))
+        .unwrap();
+        registry.register_replay_locator(target, recorded);
+
+        let locator = registry
+            .durable_locator("com.example.App", "document-area")
+            .expect("a replayed target still names a durable locator");
+
+        for absent in ["value", "frame", "actions", "nearbyText"] {
+            assert!(!locator.contains_key(absent), "{absent} in {locator:?}");
+        }
+        assert!(
+            !serde_json::to_string(&locator)
+                .unwrap()
+                .contains("user had open")
+        );
+        // Scope the document already carried is kept: with no capture to test it against, dropping
+        // it could leave a locator that no longer resolves.
+        assert!(locator.contains_key("window"));
+        assert_eq!(
+            locator.get("ancestors"),
+            Some(&serde_json::json!([{"role": "group", "title": {"exact": "Editor"}}]))
+        );
     }
 
     #[test]
