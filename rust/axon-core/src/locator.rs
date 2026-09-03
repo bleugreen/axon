@@ -525,6 +525,203 @@ fn add_scoped_match_reasons(prefix: &str, locator: &AncestorLocator, reasons: &m
     }
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{Application, SnapshotId, Window};
+    use serde_json::json;
+
+    fn tree(value: serde_json::Value) -> Node {
+        serde_json::from_value(value).expect("test node")
+    }
+
+    fn snapshot(windows: Vec<(&str, serde_json::Value)>) -> Snapshot {
+        Snapshot {
+            id: SnapshotId("capture".into()),
+            app: Application {
+                name: "App".into(),
+                process_id: None,
+                identifier: Some("com.example.App".into()),
+                windows: windows
+                    .into_iter()
+                    .map(|(title, root)| Window {
+                        title: Some(title.into()),
+                        root: tree(root),
+                    })
+                    .collect(),
+            },
+        }
+    }
+
+    /// The locator the shared pipeline derives for one node of an observation — the input
+    /// `persisted_locator` is handed in production, ancestry and all.
+    fn recorded(snapshot: &Snapshot, index: usize) -> Locator {
+        let mut contexts = Vec::new();
+        for window in &snapshot.app.windows {
+            crate::semantic_name::walk_context(
+                &window.root,
+                &[],
+                window.title.as_deref(),
+                &mut contexts,
+            );
+        }
+        let (node, ancestors, window) = &contexts[index];
+        crate::semantic_name::locator(node, ancestors, *window)
+    }
+
+    fn document_window(text: &str) -> serde_json::Value {
+        json!({
+            "role": "AXWindow",
+            "title": "Untitled",
+            "children": [{
+                "role": "AXTextArea",
+                "identifier": "document",
+                "value": text,
+                "editable": true,
+                "actions": ["AXConfirm"],
+                "frame": {"x": 0.0, "y": 0.0, "width": 600.0, "height": 400.0}
+            }]
+        })
+    }
+
+    #[test]
+    fn persisted_locator_keeps_identity_and_drops_captured_state() {
+        let text = "the whole document the user was editing".repeat(64);
+        let capture = snapshot(vec![("Untitled", document_window(&text))]);
+        let recorded = recorded(&capture, 1);
+        assert!(
+            recorded.value.is_some() && recorded.frame.is_some(),
+            "the pipeline locator is the one carrying capture state"
+        );
+
+        let persisted = persisted_locator(&recorded, &capture).expect("identity alone is unique");
+
+        assert_eq!(persisted.role.as_deref(), Some("AXTextArea"));
+        assert_eq!(
+            persisted.identifier,
+            Some(TextMatcher::Exact {
+                value: "document".into(),
+                case_sensitive: false
+            })
+        );
+        assert_eq!(persisted.value, None);
+        assert_eq!(persisted.frame, None);
+        assert!(persisted.actions.is_empty());
+        assert!(persisted.nearby_text.is_empty());
+        assert!(persisted.ancestors.is_empty());
+        assert_eq!(persisted.window, None);
+
+        let serialized = serde_json::to_string(&persisted).unwrap();
+        assert!(!serialized.contains(&text[..32]), "{serialized}");
+        for absent in ["value", "frame", "actions", "nearbyText", "ancestors", "window"] {
+            assert!(!serialized.contains(absent), "{absent} in {serialized}");
+        }
+    }
+
+    #[test]
+    fn persisted_locator_adds_the_window_when_identity_repeats_across_windows() {
+        let submit = json!({
+            "role": "AXWindow",
+            "children": [{"role": "AXButton", "title": "Submit"}]
+        });
+        let capture = snapshot(vec![("Order", submit.clone()), ("Invoice", submit)]);
+
+        let persisted = persisted_locator(&recorded(&capture, 1), &capture)
+            .expect("the window disambiguates the pair");
+
+        assert_eq!(
+            persisted.window.and_then(|window| window.title),
+            Some(TextMatcher::Exact {
+                value: "Order".into(),
+                case_sensitive: false
+            })
+        );
+        assert!(
+            persisted.ancestors.is_empty(),
+            "ancestors are not reached while the window is enough"
+        );
+    }
+
+    #[test]
+    fn persisted_locator_adds_ancestors_only_when_the_window_is_not_enough() {
+        let capture = snapshot(vec![(
+            "Settings",
+            json!({
+                "role": "AXWindow",
+                "children": [
+                    {"role": "AXGroup", "title": "Billing",
+                     "children": [{"role": "AXButton", "title": "Edit"}]},
+                    {"role": "AXGroup", "title": "Shipping",
+                     "children": [{"role": "AXButton", "title": "Edit"}]}
+                ]
+            }),
+        )]);
+
+        let persisted =
+            persisted_locator(&recorded(&capture, 2), &capture).expect("the group disambiguates");
+
+        assert_eq!(persisted.ancestors.len(), 1, "{persisted:?}");
+        assert_eq!(persisted.ancestors[0].role.as_deref(), Some("AXGroup"));
+        assert_eq!(
+            persisted.ancestors[0].title,
+            Some(TextMatcher::Exact {
+                value: "Billing".into(),
+                case_sensitive: false
+            })
+        );
+        assert_eq!(
+            LocatorResolver::resolve(&persisted, &capture).status,
+            ResolutionStatus::Unique
+        );
+    }
+
+    #[test]
+    fn persisted_locator_declines_when_no_recorded_scope_disambiguates() {
+        let capture = snapshot(vec![(
+            "Settings",
+            json!({
+                "role": "AXWindow",
+                "children": [{"role": "AXGroup", "children": [
+                    {"role": "AXButton", "title": "Edit", "frame": {"x": 0.0, "y": 0.0, "width": 10.0, "height": 10.0}},
+                    {"role": "AXButton", "title": "Edit", "frame": {"x": 40.0, "y": 0.0, "width": 10.0, "height": 10.0}}
+                ]}]
+            }),
+        )]);
+
+        assert_eq!(
+            persisted_locator(&recorded(&capture, 2), &capture),
+            None,
+            "two identical siblings are separated only by geometry, which is not durable"
+        );
+    }
+
+    #[test]
+    fn identity_skeleton_answers_uniqueness_like_the_observation_it_came_from() {
+        let text = "private notes".repeat(32);
+        let capture = snapshot(vec![
+            ("Untitled", document_window(&text)),
+            (
+                "Untitled",
+                json!({"role": "AXWindow", "children": [{"role": "AXTextArea", "identifier": "document", "value": "other"}]}),
+            ),
+        ]);
+        let recorded = recorded(&capture, 1);
+        let skeleton = identity_skeleton(&capture);
+
+        assert!(!serde_json::to_string(&skeleton).unwrap().contains("private notes"));
+        assert_eq!(
+            persisted_locator(&recorded, &skeleton),
+            persisted_locator(&recorded, &capture),
+            "the skeleton must decide scope exactly as the full observation does"
+        );
+        assert_eq!(
+            persisted_locator(&recorded, &skeleton),
+            None,
+            "two windows sharing a title leave nothing durable to pin"
+        );
+    }
+}
+
 fn window_matches(locator: &AncestorLocator, window: &crate::Window) -> bool {
     locator
         .role
