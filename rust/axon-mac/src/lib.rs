@@ -1856,18 +1856,43 @@ mod tests {
         assert_eq!(screen_text_unavailable.unwrap()["code"], "ocr-failed");
     }
 
-    struct EnumerationBackend;
+    /// The fake this module routes against: it enumerates nothing and records synthetic events.
+    ///
+    /// `global_input` is what the observer seam answers with, so one fake covers both a backend
+    /// that can record and a backend whose Accessibility grant is denied.
+    struct EnumerationBackend {
+        global_input: bool,
+    }
+
+    impl EnumerationBackend {
+        fn new() -> Self {
+            Self { global_input: true }
+        }
+        fn without_global_input() -> Self {
+            Self {
+                global_input: false,
+            }
+        }
+    }
 
     impl PlatformBackend for EnumerationBackend {
         fn capabilities(&self) -> Result<Vec<axon_core::CapabilityInfo>, axon_core::BackendError> {
             Ok(vec![])
         }
-        /// This fake records, so it must claim the observer seam. Without the override it inherits
-        /// the core default that refuses, and `recording.start`'s capability preflight would turn
-        /// every recording test here into a capability refusal.
+        /// This fake records, so by default it must claim the observer seam. Without the override
+        /// it would inherit the core default that refuses, and `recording.start`'s capability
+        /// preflight would turn every recording test here into a capability refusal.
         fn global_input_observer(
             &mut self,
         ) -> Result<&mut dyn axon_core::GlobalInputObserver, axon_core::BackendError> {
+            if !self.global_input {
+                return Err(axon_core::BackendError::CapabilityReason {
+                    capability: Capability::ObserveGlobalInput,
+                    code: "accessibility-denied",
+                    reason: "Accessibility permission is not granted".into(),
+                    diagnostic: None,
+                });
+            }
             Ok(self)
         }
         fn enumerate_applications(

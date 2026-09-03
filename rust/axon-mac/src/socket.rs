@@ -431,11 +431,7 @@ mod tests {
             })
             .into_iter()
             .map(|state| {
-                (
-                    state.permission.clone(),
-                    state.granted,
-                    state.reason.clone(),
-                )
+                (state.name, state.granted, state.reason)
             })
             .collect::<Vec<_>>()
         };
