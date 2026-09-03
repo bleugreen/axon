@@ -53,11 +53,14 @@ the authority for whether an advertised operation is currently usable. Run
 `scripts/check-tool-surface` to detect generated-artifact drift, or pass `--write` to regenerate it.
 
 The artifact has a second consumer: the client SDKs under `sdk/`, whose per-tool method signatures
-are generated from it by `sdk/generate.ts` rather than written by hand. `scripts/check-sdk-ts`
-fails the build when the committed TypeScript client no longer matches the artifact, and
-`scripts/check-tool-surface --write` regenerates both so the two never drift apart. Consumers reach
-the surface through [one of two doors](embedding.md#the-one-client-surface): MCP over stdio, or the
-daemon socket the SDKs speak.
+are generated from it by `sdk/generate.ts` rather than written by hand. One generator serves every
+language — `sdk/generator/schema.ts` holds what the artifact *means*, including which `oneOf`
+branches refine an object rather than describing one, and each language contributes only a renderer
+beside it. `scripts/check-sdk-ts` and `scripts/check-sdk-python` fail the build when a committed
+client no longer matches the artifact, and `scripts/check-tool-surface --write` regenerates the
+artifact and both clients together so none of them can drift apart. Consumers reach the surface
+through [one of two doors](embedding.md#the-one-client-surface): MCP over stdio, or the daemon
+socket the SDKs speak.
 
 ### Capture a user-authorized Wayland source
 

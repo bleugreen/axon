@@ -75,6 +75,44 @@ jobs:
         working-directory: sdk/ts
         run: bun run build
 
+  sdk-python:
+    name: Python SDK
+    # Hosted, for the same reason the TypeScript SDK is: its tests answer a fake daemon over a
+    # Unix socket, so nothing here needs accessibility, a session, or a real Axon build.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # The generator is TypeScript whatever it emits, so this runner needs Bun as well as Python.
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+
+      # The oldest interpreter the package claims, so a 3.12-only construct cannot pass unnoticed.
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Check generated client agreement
+        run: ./scripts/check-sdk-python
+
+      - name: Install the SDK development toolchain
+        run: python -m pip install --upgrade pip pytest pyright build
+
+      # Also where tests/typing_cases.py is checked: pyright asserting that the generated types
+      # still reject a call the daemon would reject.
+      - name: Typecheck the Python SDK
+        working-directory: sdk/python
+        run: pyright
+
+      - name: Run Python SDK tests
+        working-directory: sdk/python
+        run: pytest
+
+      - name: Build the Python SDK
+        working-directory: sdk/python
+        run: python -m build
+
   swift:
     name: Swift
     runs-on: [self-hosted, axon-live-mac]
