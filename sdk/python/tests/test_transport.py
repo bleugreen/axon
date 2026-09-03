@@ -29,8 +29,8 @@ def test_sends_one_newline_terminated_object_per_connection() -> None:
         first = transport.send(request("look", 1))
         second = transport.send(request("find", 2))
 
-    assert first["result"] == {"seen": "look"}
-    assert second["result"] == {"seen": "find"}
+    assert first.get("result") == {"seen": "look"}
+    assert second.get("result") == {"seen": "find"}
     # One connection per request is the daemon's contract, not an implementation detail.
     assert daemon.connections == 2
     assert [received.method for received in daemon.received] == ["look", "find"]

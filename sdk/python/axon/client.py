@@ -146,7 +146,7 @@ class RawAxonClient(RawClient):
         session_id: str | None = None,
     ) -> None:
         self.transport = transport
-        self.platform = platform
+        self.platform: Platform | None = platform
         self.session_id = session_id
         self._next_id = 1
 
@@ -427,12 +427,14 @@ class App:
         """
         snapshot = result.get("snapshot")
         if isinstance(snapshot, dict):
-            identifier = snapshot.get("id")
+            fields = cast(dict[str, Any], snapshot)
+            identifier = fields.get("id")
             if isinstance(identifier, str):
                 self._snapshot_id = identifier
-            app = snapshot.get("app")
+            app = fields.get("app")
             if isinstance(app, dict):
-                pid = app.get("processIdentifier")
+                pid = cast(dict[str, Any], app).get("processIdentifier")
+                # A bool is an int in Python, and a daemon field that is one is not a process id.
                 if isinstance(pid, int) and not isinstance(pid, bool) and pid > 0:
                     self._pinned = str(pid)
         current = result.get("currentSnapshotId")
