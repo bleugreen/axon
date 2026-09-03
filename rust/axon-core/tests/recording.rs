@@ -1049,6 +1049,40 @@ fn a_burst_typed_under_a_sensitive_focus_never_reaches_the_artifact() {
 }
 
 #[test]
+fn authoring_emits_nothing_observed_around_a_secret_entry() {
+    // Authoring is a public entry point and may be handed groups this recorder did not build — an
+    // older history record, another producer — so the rule holds at this layer on its own.
+    let mut after = element("Vault", "AXTextField", "Master Password");
+    after.value = Some("hunter2-correct-horse".into());
+    let groups = [
+        RecordedUserEventGroup::new(RecordedUserAction::TypeSecret {
+            app: "Vault".into(),
+            argument: "master_password".into(),
+        })
+        .with_observed(vec![json!({"value": "hunter2-correct-horse"})])
+        .with_observation(ActionObservation {
+            tool: "type".into(),
+            app: Some("Vault".into()),
+            target_after: Some(after),
+            settled: true,
+            ..Default::default()
+        }),
+    ];
+
+    let yaml = UserRecordingTranslator::new()
+        .yaml(&groups, Vec::new(), &RedactionMarkerTaint)
+        .unwrap();
+
+    assert!(
+        !yaml.contains("hunter2"),
+        "authoring emitted evidence gathered around a secret entry: {yaml}"
+    );
+    let actions = translate(&groups);
+    assert!(actions[0].params.get("observed").is_none());
+    assert!(actions[0].expects.is_empty());
+}
+
+#[test]
 fn each_sensitive_field_earns_its_own_secret_argument() {
     let notes = app("Vault", "com.example.vault");
     let (mut recorder, state) = recorder_with(vec![
