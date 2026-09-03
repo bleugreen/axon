@@ -17,6 +17,60 @@ struct LookRequestControlsFixture {
     nonnegative: Vec<String>,
 }
 
+fn recorder_locator() -> Locator {
+    Locator {
+        role: Some("AXButton".into()),
+        subrole: None,
+        title: Some(TextMatcher::Exact {
+            value: "Submit".into(),
+            case_sensitive: false,
+        }),
+        label: None,
+        value: None,
+        description: Some(TextMatcher::Contains {
+            value: "Send".into(),
+            case_sensitive: false,
+        }),
+        identifier: Some(TextMatcher::Exact {
+            value: "submit".into(),
+            case_sensitive: false,
+        }),
+        actions: vec!["AXPress".into()],
+        ancestors: vec![
+            AncestorLocator {
+                role: Some("AXGroup".into()),
+                title: Some(TextMatcher::Exact {
+                    value: "Checkout".into(),
+                    case_sensitive: false,
+                }),
+                ..AncestorLocator::default()
+            },
+            AncestorLocator {
+                role: Some("AXScrollArea".into()),
+                ..AncestorLocator::default()
+            },
+        ],
+        window: Some(AncestorLocator {
+            role: Some("AXWindow".into()),
+            title: Some(TextMatcher::Exact {
+                value: "Order".into(),
+                case_sensitive: false,
+            }),
+            ..AncestorLocator::default()
+        }),
+        nearby_text: vec![TextMatcher::Contains {
+            value: "Total".into(),
+            case_sensitive: false,
+        }],
+        frame: Some(Rect {
+            x: 640.0,
+            y: 420.0,
+            width: 96.0,
+            height: 32.0,
+        }),
+    }
+}
+
 fn rust_recording_fixture() -> AxnDocument {
     let semantic = json!({
         "app": "com.example.Parity",
@@ -26,7 +80,7 @@ fn rust_recording_fixture() -> AxnDocument {
     let submit = json!({
         "app": "com.example.Parity",
         "name": "submit-button",
-        "locator": {"role": "AXButton", "identifier": "submit", "title": "Submit"}
+        "locator": recorder_locator()
     });
     let groups = vec![
         RecordedUserEventGroup::new(RecordedUserAction::SetValue {
@@ -70,6 +124,45 @@ fn rust_recording_fixture() -> AxnDocument {
     UserRecordingTranslator::new()
         .axn_document(&groups, Vec::new(), &RedactionMarkerTaint)
         .unwrap()
+}
+
+#[test]
+fn recorder_shaped_locator_omits_absent_fields_and_round_trips() {
+    let locator = recorder_locator();
+    let document = AxnDocument {
+        version: 2,
+        arguments: vec![AxnArgument {
+            name: "recipient".into(),
+            kind: ArgumentType::String,
+            description: None,
+            default: None,
+            source: None,
+            unknown_fields: Map::new(),
+        }],
+        actions: vec![AxnAction {
+            id: Some("a001".into()),
+            tool: "click".into(),
+            requires: Vec::new(),
+            expects: Vec::new(),
+            params: Map::from_iter([(
+                "target".into(),
+                json!({
+                    "app": "com.example.Parity",
+                    "name": "submit-button",
+                    "locator": locator,
+                }),
+            )]),
+        }],
+        flags: Map::new(),
+    };
+
+    let yaml = AxnCodec::to_yaml(&document).unwrap();
+    assert!(!yaml.contains(": null"), "unexpected null field in {yaml}");
+    assert_eq!(AxnCodec::parse(&yaml).unwrap(), document);
+
+    let json = AxnCodec::to_json(&document).unwrap();
+    assert!(!json.contains(": null"), "unexpected null field in {json}");
+    assert_eq!(AxnCodec::parse(&json).unwrap(), document);
 }
 
 #[test]

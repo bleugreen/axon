@@ -38,9 +38,31 @@ actions:
   target:
     app: com.example.Parity
     locator:
-      identifier: submit
+      actions:
+      - AXPress
+      ancestors:
+      - role: AXGroup
+        title:
+          exact: Checkout
+      - role: AXScrollArea
+      description:
+        contains: Send
+      frame:
+        height: 32.0
+        width: 96.0
+        x: 640.0
+        y: 420.0
+      identifier:
+        exact: submit
+      nearbyText:
+      - contains: Total
       role: AXButton
-      title: Submit
+      title:
+        exact: Submit
+      window:
+        role: AXWindow
+        title:
+          exact: Order
     name: submit-button
 - id: a003
   tool: click

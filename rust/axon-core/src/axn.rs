@@ -373,11 +373,11 @@ pub struct AxnArgument {
     pub name: String,
     #[serde(rename = "type")]
     pub kind: ArgumentType,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default: Option<Value>,
-    #[serde(default)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source: Option<String>,
     #[serde(flatten)]
     pub unknown_fields: Map<String, Value>,

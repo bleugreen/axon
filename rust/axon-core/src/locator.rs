@@ -114,30 +114,44 @@ impl Serialize for TextMatcher {
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AncestorLocator {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub role: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub subrole: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub identifier: Option<TextMatcher>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title: Option<TextMatcher>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub label: Option<TextMatcher>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Locator {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub role: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub subrole: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub title: Option<TextMatcher>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub label: Option<TextMatcher>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub value: Option<TextMatcher>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<TextMatcher>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub identifier: Option<TextMatcher>,
     #[serde(default)]
     pub actions: Vec<String>,
     #[serde(default)]
     pub ancestors: Vec<AncestorLocator>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub window: Option<AncestorLocator>,
     #[serde(default)]
     pub nearby_text: Vec<TextMatcher>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub frame: Option<Rect>,
 }
 
