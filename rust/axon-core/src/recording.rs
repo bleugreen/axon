@@ -743,6 +743,13 @@ pub enum RecordedUserAction {
         app: String,
         text: String,
     },
+    /// A text burst typed into a sensitive field, kept as a step and as a declared secret argument
+    /// reference. The characters themselves were never retained: this variant carries the name of
+    /// the argument replay must be given, and nothing else.
+    TypeSecret {
+        app: String,
+        argument: String,
+    },
     PressKey {
         app: String,
         key: String,
@@ -867,6 +874,7 @@ impl UserRecordingTranslator {
             .flat_map(input_strings)
             .collect();
         let semantic_groups = coalesced_scroll_bursts(groups);
+        let arguments = declaring_recorded_secrets(arguments, &semantic_groups);
 
         let mut actions: Vec<Value> = Vec::new();
         let mut last_value_fact_id: Option<String> = None;
@@ -914,7 +922,14 @@ impl UserRecordingTranslator {
             }
 
             let mut expected_facts: Vec<Value> = Vec::new();
-            if let Some(observation) = emitted.observation.as_ref() {
+            // A secret entry has nothing safe to assert. What the field now holds is the
+            // credential, and the recorder deliberately no longer knows it, so it cannot be
+            // excluded from a derived fact the way an ordinary typed input is. Deriving nothing
+            // leaves a valid, unverified step, which is the same outcome as any other transition
+            // with nothing safe to say.
+            if let Some(observation) = emitted.observation.as_ref()
+                && !matches!(emitted.action(), RecordedUserAction::TypeSecret { .. })
+            {
                 expected_facts.extend(
                     crate::DerivedPostconditionCompiler::new(assertion_taint).facts(
                         &crate::PostconditionInput {
@@ -1003,6 +1018,36 @@ impl UserRecordingTranslator {
     }
 }
 
+/// Declares an argument for every secret burst the recording carries.
+///
+/// The declaration is deliberately sourceless and defaultless: replay resolves arguments before any
+/// action runs, so a recording of a login refuses to replay until whoever runs it supplies the
+/// credential. A name a caller already declared is left alone rather than redeclared.
+fn declaring_recorded_secrets(
+    mut arguments: Vec<AxnArgument>,
+    groups: &[RecordedUserEventGroup],
+) -> Vec<AxnArgument> {
+    for group in groups {
+        let Some(RecordedUserAction::TypeSecret { argument, .. }) = group.action.as_ref() else {
+            continue;
+        };
+        if arguments.iter().any(|declared| &declared.name == argument) {
+            continue;
+        }
+        arguments.push(AxnArgument {
+            name: argument.clone(),
+            kind: crate::ArgumentType::Secret,
+            description: Some(
+                "typed into a sensitive field; the recording never captured the value".into(),
+            ),
+            default: None,
+            source: None,
+            unknown_fields: Map::new(),
+        });
+    }
+    arguments
+}
+
 /// Rebuilds one authored action object as the typed document model, so authoring and replay share
 /// one representation instead of the recorder inventing a second document shape.
 fn into_axn_action(value: Value) -> AxnAction {
@@ -1063,7 +1108,9 @@ fn tool_name(action: &RecordedUserAction) -> &'static str {
     match action {
         RecordedUserAction::Click { .. } => "click",
         RecordedUserAction::SetValue { .. } => "type",
-        RecordedUserAction::TypeText { .. } | RecordedUserAction::PressKey { .. } => "keyboard",
+        RecordedUserAction::TypeText { .. }
+        | RecordedUserAction::TypeSecret { .. }
+        | RecordedUserAction::PressKey { .. } => "keyboard",
         RecordedUserAction::Scroll { .. } => "scroll",
         RecordedUserAction::Drag { .. } => "drag",
         RecordedUserAction::PerformAction { .. } => "invoke",
@@ -1354,6 +1401,11 @@ fn action_object(action: &RecordedUserAction) -> Map<String, Value> {
             object.insert("app".into(), Value::String(app.clone()));
             object.insert("text".into(), Value::String(text.clone()));
         }
+        RecordedUserAction::TypeSecret { app, argument } => {
+            object.insert("tool".into(), Value::String("keyboard".into()));
+            object.insert("app".into(), Value::String(app.clone()));
+            object.insert("text".into(), Value::String(format!("{{{{{argument}}}}}")));
+        }
         RecordedUserAction::PressKey { app, key } => {
             object.insert("tool".into(), Value::String("keyboard".into()));
             object.insert("app".into(), Value::String(app.clone()));
@@ -1449,9 +1501,9 @@ fn app_name(action: &RecordedUserAction) -> Option<String> {
         RecordedUserAction::Click { target }
         | RecordedUserAction::SetValue { target, .. }
         | RecordedUserAction::PerformAction { target, .. } => app_name_in(target),
-        RecordedUserAction::TypeText { app, .. } | RecordedUserAction::PressKey { app, .. } => {
-            Some(app.clone())
-        }
+        RecordedUserAction::TypeText { app, .. }
+        | RecordedUserAction::TypeSecret { app, .. }
+        | RecordedUserAction::PressKey { app, .. } => Some(app.clone()),
         RecordedUserAction::Scroll { app, .. } | RecordedUserAction::Drag { app, .. } => {
             app.clone()
         }
