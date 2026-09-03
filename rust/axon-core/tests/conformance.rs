@@ -17,6 +17,11 @@ struct LookRequestControlsFixture {
     nonnegative: Vec<String>,
 }
 
+/// The locator shape a Rust recording writes: identity, plus the scope that disambiguated it.
+///
+/// A persisted locator never carries `value`, `frame`, `actions`, or `nearbyText` — see
+/// [`axon_core::persisted_locator`] — so a fixture that pins what this producer emits must not
+/// either. Window scope is a bare title because that is all the shared pipeline records.
 fn recorder_locator() -> Locator {
     Locator {
         role: Some("AXButton".into()),
@@ -27,15 +32,15 @@ fn recorder_locator() -> Locator {
         }),
         label: None,
         value: None,
-        description: Some(TextMatcher::Contains {
-            value: "Send".into(),
+        description: Some(TextMatcher::Exact {
+            value: "Send the order".into(),
             case_sensitive: false,
         }),
         identifier: Some(TextMatcher::Exact {
             value: "submit".into(),
             case_sensitive: false,
         }),
-        actions: vec!["AXPress".into()],
+        actions: Vec::new(),
         ancestors: vec![
             AncestorLocator {
                 role: Some("AXGroup".into()),
@@ -51,13 +56,31 @@ fn recorder_locator() -> Locator {
             },
         ],
         window: Some(AncestorLocator {
-            role: Some("AXWindow".into()),
             title: Some(TextMatcher::Exact {
                 value: "Order".into(),
                 case_sensitive: false,
             }),
             ..AncestorLocator::default()
         }),
+        nearby_text: Vec::new(),
+        frame: None,
+    }
+}
+
+/// Every locator field populated, including the scoring hints a persisted artifact drops. Rust
+/// still parses and re-emits documents authored elsewhere, so the codec owes them a round trip.
+fn full_shape_locator() -> Locator {
+    Locator {
+        value: Some(TextMatcher::Contains {
+            value: "Send".into(),
+            case_sensitive: false,
+        }),
+        label: Some(TextMatcher::Exact {
+            value: "Submit order".into(),
+            case_sensitive: false,
+        }),
+        subrole: Some("AXSubmitButton".into()),
+        actions: vec!["AXPress".into()],
         nearby_text: vec![TextMatcher::Contains {
             value: "Total".into(),
             case_sensitive: false,
@@ -68,6 +91,7 @@ fn recorder_locator() -> Locator {
             width: 96.0,
             height: 32.0,
         }),
+        ..recorder_locator()
     }
 }
 
@@ -128,7 +152,7 @@ fn rust_recording_fixture() -> AxnDocument {
 
 #[test]
 fn recorder_shaped_locator_omits_absent_fields_and_round_trips() {
-    let locator = recorder_locator();
+    let locator = full_shape_locator();
     let document = AxnDocument {
         version: 2,
         arguments: vec![AxnArgument {
@@ -196,6 +220,15 @@ fn rust_recording_v2_output_matches_producer_owned_fixtures() {
         "<redacted: active-credential>"
     );
     assert_eq!(document.actions[4].params["deltaY"], -120.0);
+
+    // What a recording persists is identity and scope. State belongs to the capture, not to the
+    // artifact that outlives it.
+    for state in ["value", "frame", "actions", "nearbyText"] {
+        assert!(
+            !yaml.contains(&format!("      {state}:")),
+            "{state} in a recorded locator: {yaml}"
+        );
+    }
 }
 
 #[test]
