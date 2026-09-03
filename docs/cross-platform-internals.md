@@ -1196,46 +1196,66 @@ ambiguous.
 
 ### macOS Accessibility trust is per-process, and behaviour is the truthful source
 
-`AXIsProcessTrusted()` answers with a verdict HIServices resolves once per
-process and does not revisit. Measured on bglab-mac (2026-09-03) against a
-running daemon while the user toggled its Accessibility row, it is frozen in
-both directions: a daemon trusted at launch keeps reporting trusted after the
-grant is revoked, and a daemon that started untrusted keeps reporting untrusted
-after it is restored. **A re-granted daemon must be restarted.** Only a fresh
-process reports honestly.
+**Measured.** `AXIsProcessTrusted()` answers with a verdict HIServices resolves
+once per process and does not revisit. Measured on bglab-mac (2026-09-03)
+against a running daemon while the user toggled its Accessibility row, it is
+frozen in both directions: a daemon trusted at launch kept reporting trusted
+after the grant was revoked, and a daemon that started untrusted kept reporting
+untrusted after it was restored. In the same run, AX reads *did* fail on the
+still-trusted-looking process while its cached verdict said trusted — that is
+how `look` came to report `application not found` for an application that was
+running and visible. So the cached verdict and the API's actual behaviour
+disagree, and the cached verdict is the one that is wrong. On the build that
+made those measurements, which gated every AX call on the cached verdict, a
+re-granted daemon had to be restarted before it recovered.
 
-The Accessibility API itself is not confused. A process whose grant has been
-withdrawn gets `kAXErrorAPIDisabled` (-25211) from AX calls whether or not the
-cached verdict has noticed. `rust/axon-mac/src/accessibility.rs` is therefore
-the one place that answers "can this process use Accessibility right now": it
-asks the API to do a trivial piece of work and classifies the `AXError`, and
-falls back to the cached verdict only when the status does not settle the
-question. Every other module delegates to it.
+The design that follows from this is that behaviour, not the cached verdict, is
+the truthful source. `rust/axon-mac/src/accessibility.rs` is the one place that
+answers "can this process use Accessibility right now": it asks the API to do a
+trivial piece of work and classifies the `AXError`, falling back to the cached
+verdict only when the status does not settle the question. Every other module
+delegates to it.
 
 The classification ladder is deliberately asymmetric. `kAXErrorNoValue` and
 `kAXErrorAttributeUnsupported` mean the call was *served*, so a session with
 nothing focused does not read as denied. `kAXErrorCannotComplete` is ambiguous
 between an unresponsive target and a denial, so it defers to the cached verdict
-rather than flipping it. Only `kAXErrorAPIDisabled` makes a trusted-looking
-process denied. This matters in practice: measured in a non-interactive build
-slot with no focused application, the system-wide probe returns
-`kAXErrorCannotComplete` and the fallback preserves the process's existing
-answer instead of manufacturing a denial.
+rather than flipping it. Only `kAXErrorAPIDisabled` (-25211) makes a
+trusted-looking process denied. That asymmetry is a safety property: in the
+granted case the probe can only answer granted or unknown, and both preserve
+whatever the cached verdict already said, so the probe cannot invent a denial.
+It earns its keep immediately — measured in a non-interactive build slot that
+*holds* the grant but has no focused application, the system-wide read returns
+`kAXErrorCannotComplete` and the fallback preserves the granted answer.
 
-Application enumeration folds the same statuses. Under a withdrawn grant every
-`AXTitle` read comes back disabled, so every process is filtered out and the
-list is empty; the folded verdict is what lets `look` refuse with the typed
-`accessibility-denied` capability error instead of the misleading
-`application not found` that an empty list otherwise produces. That path does
-not depend on a focused application, so it stays honest in any session.
+Application enumeration folds the same statuses from the `AXTitle` read it makes
+on each candidate process. When that fold says denied, `look` refuses with the
+typed `accessibility-denied` capability error instead of the misleading
+`application not found` an empty list otherwise produces. This path does not
+depend on a focused application, so it is the one that stays measurable in any
+session.
 
-`axon-mac probe trust [--pid N] [--interval-ms N] [--count N]` is the
-measurement harness for this, following the `axon-win probe <name>` convention.
-It emits one JSON object per sample carrying `axIsProcessTrusted`,
+**Pending measurement.** Three questions are open until the live revoke/re-grant
+run on bglab-mac, and none of the code above asserts an answer to them:
+
+- Which `AXError` a withdrawn grant actually produces. The typed refusal fires
+  only on `kAXErrorAPIDisabled`; if the real status is `kAXErrorCannotComplete`,
+  the fold reads unknown and `look` keeps reporting `application not found`.
+- Whether the system-wide probe moves at all across a toggle, or is inert in the
+  same way the cached verdict is.
+- Whether a re-granted daemon now recovers without a restart. The restart
+  requirement above was measured against a build that never reached an AX call
+  once its cached verdict said no; it is not established for this one.
+
+`axon-mac probe trust [--pid N] [--interval-ms N] [--count N]` is the harness
+that answers them, following the `axon-win probe <name>` convention. It emits
+one JSON object per sample carrying `axIsProcessTrusted`,
 `axIsProcessTrustedWithOptions`, the raw `systemWideStatus`, the raw `pidStatus`
 from the read enumeration actually makes, and the verdict the build would act
-on. Four columns beside each other across a revoke/re-grant toggle separate
-"the verdict is cached" from "the API is disabled" without any inference.
+on. Those columns beside each other across a toggle separate "the verdict is
+cached" from "the API is disabled" without any inference; `pidStatus` is the one
+the typed `look` refusal depends on. Update this section with the dated result
+once the run happens.
 
 ### Permissions are reported per TCC row; capabilities compose them
 

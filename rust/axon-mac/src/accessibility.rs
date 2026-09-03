@@ -6,10 +6,17 @@
 //! that started untrusted keeps reporting untrusted after the user restores it. Only a fresh
 //! process is honest.
 //!
-//! The API itself is not confused. A process whose grant has been withdrawn gets
-//! `kAXErrorAPIDisabled` from AX calls whether or not the cached verdict has noticed, so behaviour
-//! is the truthful source here and the cached verdict is only the fallback for a status that does
-//! not settle the question.
+//! The API's behaviour and the cached verdict disagree, and the cached verdict is the wrong one:
+//! in the same measurement, AX reads failed on a process whose cached verdict still said trusted.
+//! Behaviour is therefore the source this module asks, and the cached verdict is only the fallback
+//! for a status that does not settle the question.
+//!
+//! Which `AXError` a withdrawn grant produces has not been measured yet — `kAXErrorAPIDisabled` is
+//! the documented meaning of "the API is off for this caller", and it is what `classify` keys on,
+//! but the live revoke/re-grant run that confirms it is still pending. That is why the ladder
+//! below is built to fail safe rather than to be right: every status it does not recognise leaves
+//! the pre-existing answer untouched. `axon-mac probe trust` is the harness that closes it.
+//! See docs/cross-platform-internals.md.
 
 use std::{
     ffi::{CString, c_char, c_void},
