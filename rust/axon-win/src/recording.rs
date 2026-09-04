@@ -49,7 +49,13 @@ pub fn is_self_delivered(extra_info: usize) -> bool {
 /// into the enrichment thread that can afford to wait on UI Automation.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RawInput {
-    Key { virtual_key: u16, up: bool },
+    Key {
+        virtual_key: u16,
+        /// Carried because `ToUnicodeEx` wants it: the layout translates the physical key, and a
+        /// zero scan code makes some layouts answer for a key that was never pressed.
+        scan_code: u32,
+        up: bool,
+    },
     Button { down: bool, point: (i32, i32) },
     Motion { point: (i32, i32) },
     Wheel {
@@ -292,6 +298,21 @@ impl RawQueue {
         self.stopped.load(Ordering::Acquire)
     }
 
+    /// Returns the queue to the state a fresh session expects.
+    ///
+    /// The queue outlives any one session because a low-level hook callback is handed no context
+    /// pointer and can only reach a static, so starting a second recording has to clear what the
+    /// first one left rather than construct a new queue.
+    pub fn reset(&self) {
+        self.events
+            .lock()
+            .expect("raw input queue is never poisoned")
+            .clear();
+        self.dropped.store(0, Ordering::Relaxed);
+        self.high_water.store(0, Ordering::Relaxed);
+        self.stopped.store(false, Ordering::Release);
+    }
+
     pub fn high_water(&self) -> usize {
         self.high_water.load(Ordering::Relaxed)
     }
@@ -471,6 +492,7 @@ mod tests {
         let event = |timestamp_ms| RawEvent {
             input: RawInput::Key {
                 virtual_key: 0x41,
+                scan_code: 0x1E,
                 up: false,
             },
             timestamp_ms,
@@ -493,6 +515,10 @@ mod tests {
             dropped_events_warning(1).contains("missing"),
             "the warning says what was lost"
         );
+
+        queue.reset();
+        assert_eq!(queue.high_water(), 0, "a second session starts clean");
+        assert!(queue.offer(event(4)));
     }
 
     #[test]
