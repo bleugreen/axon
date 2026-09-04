@@ -839,6 +839,17 @@ impl<T> ObservedInputQueue<T> {
 
 const NEVER_POISONED: &str = "the observed input queue is never poisoned";
 
+/// The value an element reports as evidence, which for a sensitive element is nothing at all.
+///
+/// `read` is a closure and not a value because the rule the observer sensitivity contract states is
+/// that the credential is *never read*, not that it is read and then dropped. Shared core also
+/// refuses to build a target from a sensitive element, but that refusal runs later: by then a
+/// provider that had already read the value would have put it in a buffer, a log line, and a
+/// redaction pass that cannot recognise it.
+pub fn evidence_value(sensitive: bool, read: impl FnOnce() -> Option<String>) -> Option<String> {
+    (!sensitive).then(read).flatten()
+}
+
 /// The warning a drop is reported as, in the one channel a provider has to annotate a recording.
 pub fn dropped_events_warning(dropped: usize) -> String {
     format!(
