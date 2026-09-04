@@ -59,11 +59,11 @@ pub enum RawInput {
     Motion {
         point: (i16, i16),
     },
-    /// One wheel notch, already resolved to the axis and direction it turned.
+    /// One wheel notch, still spelled as the button X11 reported it as. Resolving the axis and
+    /// direction is enrichment's job, so the queued event stays what the server actually said.
     Wheel {
+        button: u8,
         point: (i16, i16),
-        delta_x: f64,
-        delta_y: f64,
     },
 }
 
@@ -454,10 +454,6 @@ mod tests {
         move |modifiers| pair.get(keysym_level(modifiers).min(1)).copied()
     }
 
-    fn held(state: ModifierState) -> impl Fn(ModifierState) -> Option<u32> {
-        move |_| Some(0xFFE1_u32.max(state.shift as u32))
-    }
-
     #[test]
     fn a_plain_letter_is_text_and_shift_only_changes_its_case() {
         let layout = us_layout([u32::from(b'a'), u32::from(b'A')]);
@@ -579,7 +575,6 @@ mod tests {
             None,
             "a keysym that is neither named nor text is not recorded"
         );
-        let _ = held(ModifierState::default());
     }
 
     #[test]
