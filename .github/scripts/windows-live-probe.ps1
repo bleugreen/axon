@@ -338,8 +338,13 @@ function Invoke-RecordingAcceptance {
         Wait-BrowserTransition
     }
 
+    # `frames = $true` is load-bearing: `format_snapshot_with_redaction` strips every node's frame
+    # from a `look` response unless it is asked for, and this stage needs a screen point to post an
+    # independent click at.
     $lookRequest = @{ jsonrpc = '2.0'; id = 1; method = 'tools/call'; params = @{
-        name = 'look'; arguments = @{ app = $BrowserApp; depth = 12; screenshot = $false }
+        name = 'look'; arguments = @{
+            app = $BrowserApp; depth = 12; screenshot = $false; frames = $true
+        }
     } } | ConvertTo-Json -Compress -Depth 10
     $look = Invoke-AxonMcp -Request $lookRequest
     $captured = $look.result.structuredContent
@@ -359,20 +364,19 @@ function Invoke-RecordingAcceptance {
         throw 'the captured Edge application exposed no name to scope a recording by'
     }
 
-    # By role and label rather than by the DOM id: Chromium does not publish an element's `id` as
-    # its UI Automation AutomationId, so the first run of this stage found nothing at all. The
-    # accessible name comes from `aria-label`, which is what the page sets it for.
+    # `identifier` is the DOM id, which Chromium does publish as the UI Automation AutomationId.
+    # Note that `name` on a `look` node is the daemon's semantic name (a slug), not the accessible
+    # text -- the accessible text is `title`/`label` -- which is why the target below addresses the
+    # field by `name` while this search matches on `identifier`.
     $fields = @(Find-ProbeNodes -Root $root[0] -Predicate {
-        param($node)
-        $node.role -eq 'Edit' -and $null -ne $node.frame -and
-        ([string]$node.name -eq 'Recording note' -or [string]$node.title -eq 'Recording note')
+        param($node) $node.identifier -eq 'note' -and $null -ne $node.frame
     })
     if ($fields.Count -ne 1) {
         # The tree, not just the count. A live capture is expensive to obtain and this is the one
         # place that can say what the page actually exposed.
         $edits = @(Find-ProbeNodes -Root $root[0] -Predicate { param($node) $node.role -eq 'Edit' } |
-            ForEach-Object { @{ role = $_.role; name = $_.name; identifier = $_.identifier; frame = $_.frame } })
-        throw ("the recording page exposed $($fields.Count) Edit controls named 'Recording note' with a frame; " +
+            ForEach-Object { @{ role = $_.role; name = $_.name; title = $_.title; identifier = $_.identifier; frame = $_.frame } })
+        throw ("the recording page exposed $($fields.Count) Edit controls with automation id 'note' and a frame; " +
             "Edit controls present: $($edits | ConvertTo-Json -Compress -Depth 5)")
     }
     $frame = $fields[0].frame
