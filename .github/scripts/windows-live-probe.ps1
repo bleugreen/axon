@@ -509,18 +509,27 @@ function Invoke-RecordingAcceptance {
             } | ConvertTo-Json -Compress -Depth 10)
             $batch = $replay.result.structuredContent.batch
             Write-Note "recording acceptance replay dryRun=$dryRun : $($batch | ConvertTo-Json -Compress -Depth 30)"
-            if ($replay.result.isError -ne $false -or $batch.success -ne $true) {
-                throw "replaying the recording with dryRun=$dryRun did not succeed: $($replay | ConvertTo-Json -Compress -Depth 30)"
-            }
-            # Named per action rather than left to the batch flag, because a batch that resolved
-            # nothing and dispatched nothing can still report success under some policies.
-            foreach ($step in @($batch.trace)) {
-                if ($step.success -ne $true) {
-                    throw "recorded action $($step.actionId) failed on replay (dryRun=$dryRun): $($step | ConvertTo-Json -Compress -Depth 20)"
-                }
+            if ($replay.result.isError -ne $false) {
+                throw "replaying the recording with dryRun=$dryRun errored: $($replay | ConvertTo-Json -Compress -Depth 30)"
             }
             if (@($batch.trace).Count -lt [int]$stopped.result.actionCount) {
                 throw 'the replay executed fewer actions than the recording authored'
+            }
+            # Asserted per action, and on the right field. `success` is *goal* success, and `click`
+            # declares no postcondition -- the tool surface says so in as many words -- so demanding
+            # it here would require a guarantee this project deliberately does not make, and the
+            # foreground acceptance above asserts `dispatchSuccess` for exactly that reason. What a
+            # recording is on trial for is narrower and checkable: did the target it wrote down
+            # still resolve uniquely, and did the action reach the application.
+            foreach ($step in @($batch.trace)) {
+                $resolution = $step.targetResolution.status
+                if ($resolution -and $resolution -ne 'unique') {
+                    throw "recorded target for $($step.actionId) did not resolve uniquely on replay (dryRun=$dryRun): $($step | ConvertTo-Json -Compress -Depth 20)"
+                }
+                $delivered = if ($dryRun) { $step.success } else { $step.result.dispatchSuccess }
+                if ($delivered -ne $true) {
+                    throw "recorded action $($step.actionId) was not delivered on replay (dryRun=$dryRun): $($step | ConvertTo-Json -Compress -Depth 20)"
+                }
             }
             Wait-BrowserTransition
         }
