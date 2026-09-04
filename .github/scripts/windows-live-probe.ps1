@@ -263,6 +263,16 @@ function Remove-ProbeKeyboardResult {
     Remove-Item -LiteralPath $ResultPath, "$ResultPath.tmp" -Force -ErrorAction SilentlyContinue
 }
 
+function Get-RequestedDiagnostic {
+    <# Which diagnostic this branch asks the probe stage to run instead of the acceptance.
+
+    A seam because it reads a file, which is a machine touch however small: the recovery harness is
+    right to insist, since a stage reaching disk directly is exactly how one would reach the rest of
+    a real desktop. Empty on the standing lane, which has no marker committed. #>
+    if (-not (Test-Path -LiteralPath $DiagnosticMarkerPath)) { return '' }
+    (Get-Content -LiteralPath $DiagnosticMarkerPath -Raw).Trim()
+}
+
 function Invoke-RecordingDiagnostic {
     <# The two measurements the Windows observer's design rests on.
 
@@ -1732,10 +1742,7 @@ function Invoke-ProbeStage {
             }
         }
 
-        $requestedDiagnostic = if (Test-Path -LiteralPath $DiagnosticMarkerPath) {
-            (Get-Content -LiteralPath $DiagnosticMarkerPath -Raw).Trim()
-        }
-        else { '' }
+        $requestedDiagnostic = Get-RequestedDiagnostic
         if ($requestedDiagnostic) { Write-Note "branch requests the '$requestedDiagnostic' diagnostic" }
 
         if ($KeyboardDiagnostic -or $requestedDiagnostic -eq 'keyboard') {

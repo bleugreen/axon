@@ -61,7 +61,7 @@ $StubbedSeams = @(
     'Wait-ForProbeActivationTask', 'Unregister-ProbeActivationTask', 'Remove-ProbeActivationResult', 'Invoke-Axon', 'Invoke-AxonMcp', 'Start-ProbeBrowser',
     'Register-ProbeForegroundTask', 'Start-ProbeForegroundTask', 'Wait-ForProbeForegroundTask', 'Unregister-ProbeForegroundTask',
     'Register-ProbeKeyboardTask', 'Start-ProbeKeyboardTask', 'Wait-ForProbeKeyboardTask', 'Unregister-ProbeKeyboardTask', 'Remove-ProbeKeyboardResult',
-    'Invoke-RecordingDiagnostic', 'Register-ProbeRecordingTask', 'Wait-ForProbeRecordingTask', 'Remove-ProbeRecordingResult',
+    'Get-RequestedDiagnostic', 'Invoke-RecordingDiagnostic', 'Register-ProbeRecordingTask', 'Wait-ForProbeRecordingTask', 'Remove-ProbeRecordingResult',
     'Invoke-ProbeIndependentInput', 'Invoke-AxonRpc', 'Invoke-OneRecording', 'Invoke-RecordingAcceptance',
     'Stop-ProbeBrowser', 'Invoke-HandBackSweep', 'Invoke-KeyboardDiagnostic', 'Get-ExpectedVersion',
     'Invoke-CargoBuild', 'Copy-ProbeExecutable', 'Read-ParkState', 'Write-ParkState', 'Clear-ParkState'
@@ -645,6 +645,13 @@ function Remove-ProbeKeyboardResult {
 # than composed from the stubs beneath them, the same way `Invoke-KeyboardDiagnostic` is: what the
 # recovery scenarios exercise is what a *failing* stage leaves behind, and neither of these runs at
 # all in the branches this file rehearses.
+
+function Get-RequestedDiagnostic {
+    # Empty, so every recovery scenario rehearses the standing acceptance path rather than a
+    # diagnostic a branch happened to leave a marker for.
+    $script:Machine.Log.Add('get-requested-diagnostic')
+    ''
+}
 
 function Invoke-RecordingDiagnostic {
     param([int] $Burst)
