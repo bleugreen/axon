@@ -9,7 +9,7 @@ use axon_core::RecordedKeystroke;
 use std::{
     collections::VecDeque,
     sync::{
-        Condvar, Mutex,
+        Condvar, Mutex, OnceLock,
         atomic::{AtomicBool, AtomicUsize, Ordering},
     },
     time::Duration,
@@ -36,11 +36,29 @@ use std::{
 /// move. It is harmless here because a bare motion never becomes an action — shared core reads
 /// `MouseDragged` only between a `MouseDown` and its `MouseUp` — but it is the one delivery this
 /// tag cannot mark.
-pub const SELF_DELIVERY_TAG: usize = 0x4158_4F4E;
+const DELIVERY_MARKER: usize = 0x4158_4F4E;
 
-/// Whether an input record carries this daemon's own delivery stamp.
+/// The stamp for one process's delivery.
+///
+/// Derived from the process id, not a constant, and that is the whole difference between a working
+/// exclusion and a broken one. What must be excluded is *this* process's posts; a constant would
+/// make every `axon-win.exe` on the machine indistinguishable from this one. The live acceptance
+/// depends on exactly that distinction — the input it records is posted by a second Axon process
+/// precisely because the daemon must not be recording itself — and under a constant that helper's
+/// input would be silently dropped and the capability would look broken while working.
+pub fn delivery_tag_for(process_id: u32) -> usize {
+    DELIVERY_MARKER ^ (process_id as usize).rotate_left(usize::BITS / 2)
+}
+
+/// This process's stamp, computed once.
+pub fn self_delivery_tag() -> usize {
+    static TAG: OnceLock<usize> = OnceLock::new();
+    *TAG.get_or_init(|| delivery_tag_for(std::process::id()))
+}
+
+/// Whether an input record carries this process's own delivery stamp.
 pub fn is_self_delivered(extra_info: usize) -> bool {
-    extra_info == SELF_DELIVERY_TAG
+    extra_info == self_delivery_tag()
 }
 
 /// What a low-level hook saw, before anything has been read about the interface around it.
@@ -519,13 +537,21 @@ mod tests {
     }
 
     #[test]
-    fn only_this_daemons_own_stamp_is_treated_as_self_delivery() {
-        assert!(is_self_delivered(SELF_DELIVERY_TAG));
+    fn only_this_process_own_stamp_is_treated_as_self_delivery() {
+        assert!(is_self_delivered(self_delivery_tag()));
         assert!(!is_self_delivered(0), "ordinary hardware input");
         assert!(
             !is_self_delivered(0xDEAD_BEEF),
             "another process's injection is still the user's input as far as we are concerned"
         );
+
+        // The live acceptance stands on this: its input helper is another `axon-win.exe`, and if
+        // its stamp matched this one's the recording would drop every event it posted.
+        let ours = std::process::id();
+        let helper = ours.wrapping_add(1);
+        assert_ne!(delivery_tag_for(ours), delivery_tag_for(helper));
+        assert!(!is_self_delivered(delivery_tag_for(helper)));
+        assert_eq!(delivery_tag_for(ours), self_delivery_tag());
     }
 
     #[test]

@@ -570,7 +570,7 @@ fn key_input(key: crate::keys::VirtualKey, key_up: bool) -> INPUT {
                 wScan: (mapped & 0xff) as u16,
                 dwFlags: flags,
                 time: 0,
-                dwExtraInfo: crate::recording::SELF_DELIVERY_TAG,
+                dwExtraInfo: crate::recording::self_delivery_tag(),
             },
         },
     }
@@ -2913,7 +2913,7 @@ fn send_text(text: &str) -> Result<(), BackendError> {
                         wScan: unit,
                         dwFlags: flags,
                         time: 0,
-                        dwExtraInfo: crate::recording::SELF_DELIVERY_TAG,
+                        dwExtraInfo: crate::recording::self_delivery_tag(),
                     },
                 },
             })
@@ -2936,7 +2936,7 @@ fn send_click((x, y): (f64, f64)) -> Result<(), BackendError> {
                 mouseData: 0,
                 dwFlags: flags,
                 time: 0,
-                dwExtraInfo: crate::recording::SELF_DELIVERY_TAG,
+                dwExtraInfo: crate::recording::self_delivery_tag(),
             },
         },
     };
