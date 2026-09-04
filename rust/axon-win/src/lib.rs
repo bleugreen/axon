@@ -64,6 +64,20 @@ const NO_RECOGNIZED_TEXT_GEOMETRY: &str = "this text location resolved from reco
 const NO_FOREGROUND_TRANSACTION: &str = "this backend cannot capture the foreground, activate the \
      requested target, and prove that activation before dispatch";
 
+/// A backend whose global input observation can be brought to a stop without discarding what it
+/// saw on the way.
+///
+/// This exists because observation and enrichment are not the same clock. A backend that reads the
+/// interface behind its hook is, at any moment, some distance behind it; the events of a session's
+/// last instants only exist once observation has stopped and that backlog has been worked through.
+/// `GlobalInputObserver::stop` cannot serve both roles, because the recorder's `finish` calls it
+/// *after* the caller's last chance to poll.
+pub trait ObserverQuiescence {
+    /// Stops observing and finishes any enrichment already in flight, leaving the events it
+    /// produced available to the next `poll`. Idempotent, and harmless with no session running.
+    fn quiesce_global_input(&mut self);
+}
+
 pub struct Router<B> {
     backend: B,
     snapshot: Option<Snapshot>,
@@ -313,7 +327,8 @@ impl<
         + VisualObservationProvider
         + BackgroundPixelPointer
         + WindowsScrollProvider
-        + axon_core::RecordingEvidenceProvider,
+        + axon_core::RecordingEvidenceProvider
+        + ObserverQuiescence,
 > Router<B>
 {
     /// What the backend can do, for health documents.
@@ -406,6 +421,14 @@ impl<
                             .expect("recording route"),
                     );
                 }
+                // Quiesced before the final poll, because that poll is the last one there will
+                // be: `UserActionRecorder::finish` flushes and calls the provider's `stop`, and
+                // nothing reads from the provider afterwards. A backend enriching behind its hook
+                // has not yet produced the events of the last moment or two when this route is
+                // reached, so polling first and quiescing later would author a recording that
+                // stops short of its own ending -- and by a wide margin under a fast burst, which
+                // is exactly when a recording matters most.
+                self.backend.quiesce_global_input();
                 if let Err(error) = self.pump_recording() {
                     let _ = axon_core::GlobalInputObserver::stop(&mut self.backend);
                     self.recorder = None;
@@ -1466,7 +1489,8 @@ impl<
         + VisualObservationProvider
         + BackgroundPixelPointer
         + WindowsScrollProvider
-        + axon_core::RecordingEvidenceProvider,
+        + axon_core::RecordingEvidenceProvider
+        + ObserverQuiescence,
 > ToolDispatcher for Router<B>
 {
     fn set_observation_redaction_context(

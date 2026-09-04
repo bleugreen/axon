@@ -846,6 +846,12 @@ impl axon_core::GlobalInputObserver for WindowsBackend {
     }
 }
 
+impl crate::ObserverQuiescence for WindowsBackend {
+    fn quiesce_global_input(&mut self) {
+        self.observer().quiesce();
+    }
+}
+
 impl RecordingEvidenceProvider for WindowsBackend {
     fn read_focused(&mut self) -> Result<Option<RecordedFocusedEvidence>, BackendError> {
         self.call(Command::FocusedEvidence)
