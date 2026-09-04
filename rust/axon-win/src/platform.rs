@@ -552,6 +552,9 @@ fn key_input(key: crate::keys::VirtualKey, key_up: bool) -> INPUT {
     // zero. MAPVK_VK_TO_VSC_EX also reports the E0/E1 prefix in the high byte.
     let mapped = unsafe { MapVirtualKeyW(key.code.into(), MAPVK_VK_TO_VSC_EX) };
     let mut flags = KEYEVENTF_SCANCODE;
+    // See `recording::SELF_DELIVERY_TAG`: this stamp is how the observer tells the daemon's own
+    // delivery from a person's, without filtering every injected event and making the recording
+    // capability untestable in the process.
     let prefix = mapped >> 8;
     if key.extended || prefix == 0xE0 || prefix == 0xE1 {
         flags |= KEYEVENTF_EXTENDEDKEY;
@@ -567,7 +570,7 @@ fn key_input(key: crate::keys::VirtualKey, key_up: bool) -> INPUT {
                 wScan: (mapped & 0xff) as u16,
                 dwFlags: flags,
                 time: 0,
-                dwExtraInfo: 0,
+                dwExtraInfo: crate::recording::SELF_DELIVERY_TAG,
             },
         },
     }
@@ -713,6 +716,12 @@ pub struct WindowsBackend {
     /// and a single slot is overwritten by the target long before the prior application needs it
     /// back.
     last_foreground: std::collections::HashMap<u32, u64>,
+    /// The recording seam. Held for the process's lifetime rather than built per session, because
+    /// it owns a clone of the MTA actor's command channel and that channel is what lets it read
+    /// evidence at event time without standing up a second UI Automation client.
+    ///
+    /// `Option` only so `Drop` can release that clone before closing the channel.
+    global_input: Option<global_input::WindowsGlobalInputObserver>,
 }
 
 impl WindowsBackend {
@@ -766,20 +775,95 @@ impl WindowsBackend {
         }
         log("UIA thread readiness: complete");
         Ok(Self {
+            global_input: Some(global_input::WindowsGlobalInputObserver::new(tx.clone())),
             tx: Some(tx),
             thread: Some(thread),
             last_foreground: std::collections::HashMap::new(),
         })
     }
+
+    fn observer(&mut self) -> &mut global_input::WindowsGlobalInputObserver {
+        self.global_input
+            .as_mut()
+            .expect("the global input observer lives as long as the backend")
+    }
 }
 impl Drop for WindowsBackend {
     fn drop(&mut self) {
+        // The observer goes first, and the order is load-bearing: it holds a clone of the command
+        // sender, and closing the channel is the only thing that ends the MTA thread. A surviving
+        // clone would leave the join below waiting for a thread that has no reason to return.
+        self.global_input = None;
         // Closing the command channel makes the MTA thread drop UiaState and its
         // COM apartment before the daemon reports a clean process exit.
         self.tx.take();
         if let Some(thread) = self.thread.take() {
             let _ = thread.join();
         }
+    }
+}
+
+/// The query that finds the application a recorded event belonged to.
+///
+/// The process id leads because it is the only identity that cannot go ambiguous mid-session, and
+/// `find_window` matches on it alone when it is present. The name follows for the case where no pid
+/// was read, and matches applications the way `look` matches them.
+fn recorded_app_query(app: &RecordedAppIdentity) -> AppQuery {
+    AppQuery {
+        process_id: app.process_id,
+        name: (!app.name.is_empty()).then(|| app.name.clone()),
+        identifier: None,
+    }
+}
+
+impl axon_core::GlobalInputObserver for WindowsBackend {
+    fn start(&mut self, scope: &axon_core::RecordingScope) -> Result<(), BackendError> {
+        axon_core::GlobalInputObserver::start(self.observer(), scope)
+    }
+
+    fn poll(
+        &mut self,
+        timeout: Duration,
+    ) -> Result<Vec<axon_core::RecordedInputEvent>, BackendError> {
+        axon_core::GlobalInputObserver::poll(self.observer(), timeout)
+    }
+
+    fn stop(&mut self) -> Result<(), BackendError> {
+        axon_core::GlobalInputObserver::stop(self.observer())
+    }
+
+    fn is_recording(&self) -> bool {
+        self.global_input
+            .as_ref()
+            .is_some_and(axon_core::GlobalInputObserver::is_recording)
+    }
+}
+
+impl RecordingEvidenceProvider for WindowsBackend {
+    fn read_focused(&mut self) -> Result<Option<RecordedFocusedEvidence>, BackendError> {
+        self.call(Command::FocusedEvidence)
+    }
+
+    fn capture_snapshot(
+        &mut self,
+        app: &RecordedAppIdentity,
+    ) -> Result<Option<Snapshot>, BackendError> {
+        // A capture that fails is not a recording that fails. By the time shared core resolves a
+        // click, the window it landed in may be gone -- a menu that closed, a dialog that was
+        // dismissed -- and `None` is the seam that says so: the action is kept and authored
+        // against its point rather than taking the whole session down with it.
+        Ok(PlatformBackend::capture(self, &recorded_app_query(app)).ok())
+    }
+
+    fn settle(
+        &mut self,
+        _group_index: usize,
+        _tool: &str,
+    ) -> Result<RecordedSettleEvidence, BackendError> {
+        // Deliberately nothing, exactly as macOS answers. Waiting for an effect to land is a
+        // question with a real answer on Windows, but inventing a per-platform one here would mean
+        // two backends settling differently for reasons no shared contract describes.
+        Ok(RecordedSettleEvidence::default())
     }
 }
 fn immediate_node(e: &IUIAutomationElement) -> Result<Node, BackendError> {
@@ -1766,6 +1850,16 @@ impl UiaState {
 }
 
 impl PlatformBackend for WindowsBackend {
+    fn global_input_observer(
+        &mut self,
+    ) -> Result<&mut dyn axon_core::GlobalInputObserver, BackendError> {
+        let observer = self.observer();
+        match observer.unavailable() {
+            Some(error) => Err(error),
+            None => Ok(observer),
+        }
+    }
+
     fn capabilities(&self) -> Result<Vec<CapabilityInfo>, BackendError> {
         // `SendInput` posts to whatever desktop this process is attached to, and in session 0 or
         // off the interactive window station that desktop has no user on it. UI Automation keeps
@@ -1792,12 +1886,20 @@ impl PlatformBackend for WindowsBackend {
             Capability::Screenshot,
             Capability::HitTest,
             Capability::SerializeHistory,
+            Capability::ObserveGlobalInput,
         ]
         .into_iter()
         .map(|capability| {
+            // Observation is gated on the same session facts as delivery, for the same reason
+            // read the other way round: a low-level hook is installed against a window station's
+            // desktop, so where `SendInput` would post to a desktop nobody is at, the hook watches
+            // one nobody is typing on. It installs successfully and then never fires, which is
+            // precisely the quiet failure this list exists to make loud.
             let restriction = matches!(
                 capability,
-                Capability::PointerInput | Capability::KeyboardInput
+                Capability::PointerInput
+                    | Capability::KeyboardInput
+                    | Capability::ObserveGlobalInput
             )
             .then(|| global_input.clone())
             .flatten();
@@ -2814,7 +2916,7 @@ fn send_text(text: &str) -> Result<(), BackendError> {
                         wScan: unit,
                         dwFlags: flags,
                         time: 0,
-                        dwExtraInfo: 0,
+                        dwExtraInfo: crate::recording::SELF_DELIVERY_TAG,
                     },
                 },
             })
@@ -2837,7 +2939,7 @@ fn send_click((x, y): (f64, f64)) -> Result<(), BackendError> {
                 mouseData: 0,
                 dwFlags: flags,
                 time: 0,
-                dwExtraInfo: 0,
+                dwExtraInfo: crate::recording::SELF_DELIVERY_TAG,
             },
         },
     };
