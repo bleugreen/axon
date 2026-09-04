@@ -297,6 +297,7 @@ function Reset-Machine {
         ProbeForegroundTaskRegistered = $false
         ProbeKeyboardTaskRegistered = $false
         ProbeKeyboardPayloadRemoved = $false
+        ProbeRecordingTaskRegistered = $false
         KeyboardDiagnosticPayload = $null
         NotepadText = $null
         Processes = @()

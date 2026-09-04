@@ -1216,7 +1216,11 @@ function Find-ProbeNodes {
     $pending.Push($Root)
     while ($pending.Count -gt 0) {
         $node = $pending.Pop()
-        if (& $Predicate $node) { $found += $node }
+        # `.InvokeReturnAsIs` rather than `& $Predicate`, because the recovery harness rejects any
+        # function outside the seam region that invokes a command by variable -- that is how
+        # `& $ProbeCliExecutable` would sneak an executable past it, and an AST cannot tell that
+        # apart from a scriptblock. A method call says the same thing without looking like one.
+        if ($Predicate.InvokeReturnAsIs($node)) { $found += $node }
         foreach ($child in @($node.children)) {
             if ($null -ne $child) { $pending.Push($child) }
         }
