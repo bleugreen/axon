@@ -16,8 +16,8 @@
 //! enrichment thread, at event time.
 
 use crate::recording::{
-    BUTTON_PRESS, BUTTON_PRIMARY, BUTTON_RELEASE, KEY_PRESS, KEY_RELEASE, MOTION_NOTIFY, RawEvent,
-    RawInput, RawQueue, wheel_delta,
+    BUTTON_PRESS, BUTTON_RELEASE, CoreEvent, Decoder, KEY_PRESS, KEY_RELEASE, MOTION_NOTIFY,
+    RawEvent, RawQueue,
 };
 use axon_core::BackendError;
 use std::{
@@ -213,6 +213,7 @@ fn listen(data: &RustConnection, context: record::Context, queue: &RawQueue) {
     let Ok(stream) = data.record_enable_context(context) else {
         return;
     };
+    let mut decoder = Decoder::default();
     for reply in stream {
         let Ok(reply) = reply else { return };
         // A byte-swapped client's recorded data would need every field reversed before it meant
@@ -222,53 +223,51 @@ fn listen(data: &RustConnection, context: record::Context, queue: &RawQueue) {
         if reply.client_swapped || reply.category != FROM_SERVER {
             continue;
         }
-        decode(&reply.data, queue);
+        decode(&mut decoder, &reply.data, queue);
     }
 }
 
-/// Turns one recorded element's bytes into queued raw events.
+/// Reads one recorded element's bytes into core events and queues what they amount to.
 ///
-/// Split out from the connection so the decoding is a pure function of the bytes, which is what
-/// makes it testable without a server.
-pub fn decode(mut data: &[u8], queue: &RawQueue) {
+/// Only the parsing lives here. What an event *means* -- which button is a click, when motion
+/// matters, which events are this daemon's own -- is [`Decoder::observe`], in the half of this
+/// backend that compiles everywhere and is therefore tested everywhere.
+pub fn decode(decoder: &mut Decoder, mut data: &[u8], queue: &RawQueue) {
     while data.len() >= EVENT_BYTES {
-        // The high bit marks an event the server produced on a client's behalf with `XSendEvent`.
-        // It is never set on a device event, and masking it off is what keeps a stray one from
-        // being read as an event type nobody sent.
-        let event_type = data[0] & 0x7F;
-        let input = match event_type {
-            KEY_PRESS | KEY_RELEASE => xproto::KeyPressEvent::try_parse(data)
-                .ok()
-                .map(|(event, _)| RawInput::Key {
-                    keycode: event.detail,
-                    state: event.state.into(),
-                    up: event_type == KEY_RELEASE,
-                }),
+        // The high bit marks an event the server produced on a client's behalf through
+        // `XSendEvent`. It is never set on a device event, and masking it off is what keeps a
+        // stray one from being read as an event type nobody sent.
+        let kind = data[0] & 0x7F;
+        let event = match kind {
+            KEY_PRESS | KEY_RELEASE => {
+                xproto::KeyPressEvent::try_parse(data)
+                    .ok()
+                    .map(|(event, _)| CoreEvent {
+                        kind,
+                        detail: event.detail,
+                        point: (event.root_x, event.root_y),
+                        state: event.state.into(),
+                    })
+            }
             BUTTON_PRESS | BUTTON_RELEASE => xproto::ButtonPressEvent::try_parse(data)
                 .ok()
-                .and_then(|(event, _)| {
-                    let point = (event.root_x, event.root_y);
-                    match event.detail {
-                        BUTTON_PRIMARY => Some(RawInput::Button {
-                            down: event_type == BUTTON_PRESS,
-                            point,
-                        }),
-                        // A wheel notch is a press and a release of the same button. Only the
-                        // press is a notch; recording the release too would double every scroll.
-                        button if wheel_delta(button).is_some() && event_type == BUTTON_PRESS => {
-                            Some(RawInput::Wheel { button, point })
-                        }
-                        _ => None,
-                    }
+                .map(|(event, _)| CoreEvent {
+                    kind,
+                    detail: event.detail,
+                    point: (event.root_x, event.root_y),
+                    state: event.state.into(),
                 }),
             MOTION_NOTIFY => xproto::MotionNotifyEvent::try_parse(data)
                 .ok()
-                .map(|(event, _)| RawInput::Motion {
+                .map(|(event, _)| CoreEvent {
+                    kind,
+                    detail: event.detail,
                     point: (event.root_x, event.root_y),
+                    state: event.state.into(),
                 }),
             _ => None,
         };
-        if let Some(input) = input {
+        if let Some(input) = event.and_then(|event| decoder.observe(event)) {
             queue.offer(RawEvent {
                 input,
                 timestamp_ms: now_ms(),
