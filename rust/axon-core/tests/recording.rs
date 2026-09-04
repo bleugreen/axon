@@ -1230,3 +1230,55 @@ fn finish_stops_exactly_once_and_propagates_stop_failure() {
     assert!(error.to_string().contains("stop"));
     assert_eq!(state.borrow().stop_calls, 1);
 }
+
+/// The bounded hand-off every observing backend sits behind.
+///
+/// These belong here rather than beside one platform's hook, because the guarantee is the same
+/// wherever the events come from: a producer that must never wait, and a loss that is counted and
+/// reported instead of being swallowed.
+mod observed_input_queue {
+    use axon_core::{ObservedInputQueue, dropped_events_warning};
+    use std::time::{Duration, Instant};
+
+    #[test]
+    fn a_full_queue_drops_and_counts_rather_than_waiting() {
+        let queue: ObservedInputQueue<u64> = ObservedInputQueue::with_capacity(2);
+        assert!(queue.offer(1));
+        assert!(queue.offer(2));
+        assert!(!queue.offer(3), "the third has nowhere to go");
+
+        let batch = queue.drain(Duration::ZERO);
+        assert_eq!(batch.events, vec![1, 2]);
+        assert_eq!(batch.dropped, 1);
+        assert_eq!(batch.high_water, 2);
+
+        assert_eq!(
+            queue.drain(Duration::ZERO).dropped,
+            0,
+            "a drop is reported once, against the actions that followed it"
+        );
+        assert!(
+            dropped_events_warning(1).contains("missing"),
+            "the warning says what was lost"
+        );
+
+        queue.reset();
+        assert_eq!(queue.high_water(), 0, "a second session starts clean");
+        assert_eq!(queue.depth(), 0);
+        assert!(queue.offer(4));
+        assert_eq!(queue.depth(), 1);
+    }
+
+    #[test]
+    fn a_stopped_queue_stops_waiting() {
+        let queue: ObservedInputQueue<u64> = ObservedInputQueue::with_capacity(8);
+        queue.stop();
+        let started = Instant::now();
+        assert!(queue.drain(Duration::from_secs(30)).events.is_empty());
+        assert!(
+            started.elapsed() < Duration::from_secs(5),
+            "stop releases the enrichment thread instead of leaving it parked"
+        );
+        assert!(queue.stopped());
+    }
+}
