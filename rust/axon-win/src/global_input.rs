@@ -198,7 +198,24 @@ impl Drop for Hooks {
 /// installed it and its callbacks are delivered by that thread's message loop, so the hooks cannot
 /// be installed on the daemon's request thread — that thread is blocked on a socket, and a hook
 /// whose owner is not pumping is dropped from the chain.
-fn hook_thread(started: mpsc::SyncSender<Result<u32, BackendError>>) {
+/// `identity` is published before the hooks are installed, and that ordering is what makes a
+/// startup timeout recoverable: the caller can only end this thread by posting to it, so an id it
+/// learns *after* installation would be unavailable in exactly the case it is needed. A thread left
+/// pumping with low-level hooks installed is not a leaked thread; it is a hook on every keystroke
+/// and pointer sample on the desktop.
+fn hook_thread(
+    identity: Arc<Mutex<Option<u32>>>,
+    started: mpsc::SyncSender<Result<(), BackendError>>,
+) {
+    // Forces the thread's message queue into existence before the id is published, because
+    // `PostThreadMessageW` fails against a thread that has not yet created one.
+    let mut message = MSG::default();
+    unsafe {
+        let _ = PeekMessageW(&mut message, None, WM_USER, WM_USER, PM_NOREMOVE);
+    }
+    *identity.lock().expect("hook thread identity is never poisoned") =
+        Some(unsafe { GetCurrentThreadId() });
+
     let hooks = match Hooks::install() {
         Ok(hooks) => hooks,
         Err(error) => {
@@ -206,14 +223,7 @@ fn hook_thread(started: mpsc::SyncSender<Result<u32, BackendError>>) {
             return;
         }
     };
-    // Forces the thread's message queue into existence before anyone is told this thread's id,
-    // because `PostThreadMessageW` fails against a thread that has not yet created one and the
-    // session would then have no way to stop.
-    let mut message = MSG::default();
-    unsafe {
-        let _ = PeekMessageW(&mut message, None, WM_USER, WM_USER, PM_NOREMOVE);
-    }
-    if started.send(Ok(unsafe { GetCurrentThreadId() })).is_err() {
+    if started.send(Ok(())).is_err() {
         return;
     }
     // Blocking, not polling: this thread has nothing to do between callbacks, and `GetMessageW`
@@ -541,24 +551,7 @@ impl GlobalInputObserver for WindowsGlobalInputObserver {
         self.enriched.clear();
         BUTTON_HELD.store(false, Ordering::Relaxed);
 
-        let (started_tx, started_rx) = mpsc::sync_channel(1);
-        let hooks = thread::Builder::new()
-            .name("axon-global-input".into())
-            .spawn(move || hook_thread(started_tx))
-            .map_err(|error| operation(format!("could not create observer thread: {error}")))?;
-        let hook_thread_id = match started_rx.recv_timeout(Duration::from_secs(2)) {
-            Ok(Ok(id)) => id,
-            Ok(Err(error)) => {
-                let _ = hooks.join();
-                return Err(error);
-            }
-            Err(_) => {
-                // The thread never reported a hook. It holds no session state and its own `Drop`
-                // removes anything it did install, so it is left to finish rather than joined
-                // against a pump that may not have started.
-                return Err(operation("input hook installation timed out"));
-            }
-        };
+        let (hooks, hook_thread_id) = start_hook_thread()?;
 
         let scope = scope.clone();
         let commands = self.commands.clone();
@@ -612,6 +605,42 @@ impl GlobalInputObserver for WindowsGlobalInputObserver {
 fn stop_hook_thread(thread_id: u32) {
     unsafe {
         let _ = PostThreadMessageW(thread_id, WM_QUIT, WPARAM(0), LPARAM(0));
+    }
+}
+
+/// Brings up a pumping hook thread, or leaves nothing behind.
+fn start_hook_thread() -> Result<(JoinHandle<()>, u32), BackendError> {
+    let identity = Arc::new(Mutex::new(None));
+    let for_thread = Arc::clone(&identity);
+    let (started_tx, started_rx) = mpsc::sync_channel(1);
+    let hooks = thread::Builder::new()
+        .name("axon-global-input".into())
+        .spawn(move || hook_thread(for_thread, started_tx))
+        .map_err(|error| operation(format!("could not create observer thread: {error}")))?;
+    let published = || *identity.lock().expect("hook thread identity is never poisoned");
+    match started_rx.recv_timeout(Duration::from_secs(2)) {
+        Ok(Ok(())) => Ok((
+            hooks,
+            published().expect("a thread that installed its hooks published its id first"),
+        )),
+        Ok(Err(error)) => {
+            let _ = hooks.join();
+            Err(error)
+        }
+        Err(_) => {
+            // A thread still inside `SetWindowsHookExW` cannot be joined, but it can be told to
+            // quit: the id was published before installation began, so the quit is waiting in its
+            // queue by the time it reaches the pump. Leaving it running would leave a hook on
+            // every keystroke and pointer sample on this desktop.
+            match published() {
+                Some(thread_id) => {
+                    stop_hook_thread(thread_id);
+                    let _ = hooks.join();
+                }
+                None => return Err(operation("the observer thread never started")),
+            }
+            Err(operation("input hook installation timed out"))
+        }
     }
 }
 
@@ -676,15 +705,7 @@ pub(super) fn probe(args: &[String]) -> Result<serde_json::Value, BackendError> 
     // Stage one: hooks only, no enrichment, so the raw stream can be read exactly as the hook was
     // handed it -- including the events the observer would drop.
     raw_queue().reset();
-    let (started_tx, started_rx) = mpsc::sync_channel(1);
-    let hooks = thread::Builder::new()
-        .name("axon-global-input-probe".into())
-        .spawn(move || hook_thread(started_tx))
-        .map_err(|error| operation(format!("could not create probe hook thread: {error}")))?;
-    let hook_thread_id = match started_rx.recv_timeout(Duration::from_secs(2)) {
-        Ok(result) => result?,
-        Err(_) => return Err(operation("probe hook installation timed out")),
-    };
+    let (hooks, hook_thread_id) = start_hook_thread()?;
 
     let stamped_posted = post(true, 2);
     let unstamped_posted = post(false, 2);
