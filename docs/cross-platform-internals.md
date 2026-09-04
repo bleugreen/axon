@@ -115,10 +115,11 @@ should be discoverable here first.
   that decide which transitions may be asserted. A platform supplies only the
   evidence it alone can gather, and native handles never cross that boundary, so
   what a recording says about an interface is decided in one place rather than
-  per platform. macOS implements the observer hook, through a listen-only
-  CGEvent tap and Accessibility reads taken at event time; Windows and Linux do
-  not, which is why `observeGlobalInput` stays unusable on those two and refuses
-  with a typed capability reason rather than a bare error.
+  per platform. macOS and Windows implement the observer hook — a listen-only
+  CGEvent tap with Accessibility reads taken in the callback, and a low-level
+  hook pair feeding an enrichment thread that reads UI Automation at event time,
+  respectively. Linux does not, which is why `observeGlobalInput` stays unusable
+  there and refuses with a typed capability reason rather than a bare error.
 
   A keystroke burst captured under a sensitive focus is never serialized; the
   rule and the floor each observer owes it are the observer sensitivity contract
@@ -243,11 +244,33 @@ The same flag also withholds the element's value from the evidence, so a
 provider must never read `AXValue`, the UIA value pattern, or the AT-SPI text
 interface of an element it has just classified sensitive.
 
-An observer that additionally has an OS-level signal — macOS
-`IsSecureEventInputEnabled`, or a Windows `EVENT_OBJECT_FOCUS` watch on
-`IsPassword` — reports it as `SecureInputChanged`, which makes shared core drop
-pending state and discard events while it is active. That is in addition to the
-per-element predicate, never instead of it.
+An observer that additionally has an OS-level signal reports it as
+`SecureInputChanged`, which makes shared core drop pending state and discard
+events entirely while it is active. macOS has one: `IsSecureEventInputEnabled`
+is a real system mode, and while it is on the CGEvent tap genuinely stops being
+handed keystrokes, so saying so is describing what happened.
+
+Windows deliberately reports nothing here, and the reason generalizes. Raising
+`SecureInputChanged` is not a stronger version of the per-element predicate; it
+is a *different outcome*. `UserActionRecorder::consume` returns early for every
+event while it is active, so a burst raised this way never reaches `flush_text`,
+which is the one place that authors the declared `secret` argument. Mapping
+`UIA_IsPasswordPropertyId` onto it would therefore replace the honest shape with
+silent dropping — the outcome the recorder's own charter rejects — rather than
+add to it. Windows has no system-wide secure-input mode to report either way: a
+low-level keyboard hook keeps delivering password-field keystrokes
+unconditionally, and the per-element predicate above is the whole defence.
+
+The UAC secure desktop is not an exception to that, because it is not a mode at
+all. It is a separate desktop, and a hook installed on the interactive desktop
+simply never sees any of its input. There is nothing to detect and nothing to
+report; the events do not arrive.
+
+One gap the per-element predicate does not close on any platform: sensitivity is
+read when the burst is *flushed*, and a burst is flushed by the next event. Type
+a password and then click elsewhere, and the read that decides finds the newly
+focused element. Closing it means carrying sensitivity on the keystroke itself,
+which is a change to the shared event vocabulary rather than to any observer.
 
 ## One lifecycle vocabulary, three native mechanisms
 
@@ -328,6 +351,44 @@ events with a close conceptual fit to AX.
   elevated windows requires matching elevation or a correctly signed and
   installed UIAccess application. Capability reporting must identify this
   boundary instead of presenting inaccessible elements as missing.
+- Global input observation is two threads, and the split is forced rather than
+  chosen. `RecordedInputEvent::MouseDown` carries its evidence inside the event,
+  and shared core reads that evidence as the interface *before* the click landed;
+  but `poll` runs only on `recording.status` and `recording.stop`, so an event may
+  wait minutes. The evidence therefore has to be read at event time — and a
+  `WH_KEYBOARD_LL` / `WH_MOUSE_LL` callback cannot read it, because Windows
+  removes a hook from the chain that exceeds `LowLevelHooksTimeout` (300 ms by
+  default) while a cross-process UI Automation read may take the full 1500 ms
+  transaction timeout the backend configures. So the hook thread only stamps and
+  queues, onto a bounded queue whose overflow is reported rather than swallowed,
+  and an enrichment thread reads the interface immediately afterwards through a
+  clone of the existing MTA actor's command channel. There is one UI Automation
+  client per process and observation does not add a second.
+- The daemon must not record its own delivery, and the flag that looks like it
+  answers this does not. Every `SendInput` from every process sets
+  `LLKHF_INJECTED`, so filtering on it would discard assistive technology,
+  remote-desktop input, and the live probe's own helper — leaving the capability
+  with no way to be tested at all. Instead each record the daemon posts carries a
+  process-owned sentinel in `INPUT.dwExtraInfo`, which arrives at the hook
+  verbatim, and the observer drops exactly those. Per-event marking rather than a
+  guard held across the posting call, because the hook runs on the observer's
+  thread: an interval either releases while events are still in flight or stays
+  open long enough to swallow real input. One delivery escapes the stamp —
+  `SetCursorPos`, used to place the pointer, has no `dwExtraInfo` — and it is
+  harmless only because a bare motion never becomes an action.
+- Keystroke text comes from `ToUnicodeEx` against the *foreground* thread's
+  layout, with the modifier state rebuilt from the hook stream. Neither half is
+  incidental: reading this thread's layout would transcribe a French keyboard as
+  an American one, and `GetKeyboardState` on the hook thread answers for that
+  thread's own queue rather than the one being typed into.
+- A recorded event names its application the way `enumerate` names it: the
+  top-level window's UI Automation name. This backend has no durable application
+  identity to offer beyond that — it spells one as a process id, which cannot
+  outlive the session, and names one by a window title, which lasts only as long
+  as the window keeps it — so `bundleIdentifier` is left empty rather than minted
+  from something the rest of the daemon could not resolve. A Windows recording is
+  consequently only as replayable as its window titles are stable, and scoping a
+  session to one application matches on that same name.
 - The process must opt into per-monitor DPI awareness before interpreting UIA
   rectangles or dispatching coordinates. All conversion into shared screen,
   window, and screenshot coordinate spaces happens at the backend boundary.
