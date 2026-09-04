@@ -426,12 +426,12 @@ mod tests {
     fn a_plain_letter_is_text_and_shift_only_changes_its_case() {
         let mut modifiers = ModifierState::default();
         assert_eq!(
-            classify_keystroke(b'A'.into(), modifiers, us_layout(b'A'.into())),
+            classify_keystroke(b'A'.into(), 0x1E, modifiers, us_layout(b'A'.into())),
             Some(RecordedKeystroke::Text { text: "a".into() })
         );
         modifiers.apply(0xA0, false);
         assert_eq!(
-            classify_keystroke(b'A'.into(), modifiers, us_layout(b'A'.into())),
+            classify_keystroke(b'A'.into(), 0x1E, modifiers, us_layout(b'A'.into())),
             Some(RecordedKeystroke::Text { text: "A".into() }),
             "shift alone is case, not a chord"
         );
@@ -442,14 +442,14 @@ mod tests {
         let mut modifiers = ModifierState::default();
         modifiers.apply(0xA2, false);
         assert_eq!(
-            classify_keystroke(b'L'.into(), modifiers, us_layout(b'L'.into())),
+            classify_keystroke(b'L'.into(), 0x26, modifiers, us_layout(b'L'.into())),
             Some(RecordedKeystroke::Key {
                 key: "ctrl+l".into()
             })
         );
         modifiers.apply(0xA1, false);
         assert_eq!(
-            classify_keystroke(b'P'.into(), modifiers, us_layout(b'P'.into())),
+            classify_keystroke(b'P'.into(), 0x19, modifiers, us_layout(b'P'.into())),
             Some(RecordedKeystroke::Key {
                 key: "ctrl+shift+p".into()
             })
@@ -460,7 +460,7 @@ mod tests {
     fn a_named_key_stays_named_with_and_without_modifiers() {
         let unmodified = ModifierState::default();
         assert_eq!(
-            classify_keystroke(0x0D, unmodified, |_| None),
+            classify_keystroke(0x0D, 0x1C, unmodified, |_| None),
             Some(RecordedKeystroke::Key {
                 key: "return".into()
             }),
@@ -469,7 +469,7 @@ mod tests {
         let mut shifted = ModifierState::default();
         shifted.apply(0x10, false);
         assert_eq!(
-            classify_keystroke(0x09, shifted, |_| None),
+            classify_keystroke(0x09, 0x0F, shifted, |_| None),
             Some(RecordedKeystroke::Key {
                 key: "shift+tab".into()
             })
@@ -483,7 +483,7 @@ mod tests {
             modifiers.apply(modifier, false);
         }
         let Some(RecordedKeystroke::Key { key }) =
-            classify_keystroke(b'S'.into(), modifiers, us_layout(b'S'.into()))
+            classify_keystroke(b'S'.into(), 0x1F, modifiers, us_layout(b'S'.into()))
         else {
             panic!("a fully modified letter is a chord");
         };
@@ -498,18 +498,18 @@ mod tests {
         let modifiers = ModifierState::default();
         for virtual_key in [0x10u16, 0xA2, 0x5B, VK_CAPITAL] {
             assert_eq!(
-                classify_keystroke(virtual_key, modifiers, us_layout(b'A'.into())),
+                classify_keystroke(virtual_key, 0, modifiers, us_layout(b'A'.into())),
                 None,
                 "{virtual_key:#04x} is context, not a keystroke"
             );
         }
         assert_eq!(
-            classify_keystroke(0xFF, modifiers, |_| None),
+            classify_keystroke(0xFF, 0, modifiers, |_| None),
             None,
             "a key with neither a name nor a character is not recorded"
         );
         assert_eq!(
-            classify_keystroke(0xFF, modifiers, |_| Some("\u{1b}".into())),
+            classify_keystroke(0xFF, 0, modifiers, |_| Some("\u{1b}".into())),
             None,
             "a control character is not typed text"
         );
@@ -521,13 +521,13 @@ mod tests {
         modifiers.apply(VK_CAPITAL, false);
         modifiers.apply(VK_CAPITAL, true);
         assert_eq!(
-            classify_keystroke(b'A'.into(), modifiers, us_layout(b'A'.into())),
+            classify_keystroke(b'A'.into(), 0x1E, modifiers, us_layout(b'A'.into())),
             Some(RecordedKeystroke::Text { text: "A".into() })
         );
         assert_eq!(modifiers.key_state()[VK_CAPITAL as usize] & 0x01, 0x01);
         modifiers.apply(VK_CAPITAL, false);
         assert_eq!(
-            classify_keystroke(b'A'.into(), modifiers, us_layout(b'A'.into())),
+            classify_keystroke(b'A'.into(), 0x1E, modifiers, us_layout(b'A'.into())),
             Some(RecordedKeystroke::Text { text: "a".into() })
         );
     }
