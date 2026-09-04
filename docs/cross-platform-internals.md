@@ -347,6 +347,14 @@ events with a close conceptual fit to AX.
   broader application-accelerator intent. `SendInput`'s returned count
   proves only that Windows accepted records, never that the application consumed
   them.
+- Bench traps in the Windows live probe, each paid for once. The default ssh shell is pwsh7;
+  `scp` is broken, so files are streamed with `cat | ssh 'cmd /c more > target'`; multi-line
+  PowerShell over stdin executes line by line, so every remote body is a `.ps1` or an
+  `-EncodedCommand`. And **PowerShell variable names are case-insensitive**: a loop variable named
+  `$burst` inside a function whose parameter is `[int] $Burst` is the *same variable*, so binding
+  an object to it fails the type conversion rather than the comparison. That cost a live run whose
+  measurement had already been taken, which is why the recording diagnostic now emits its payload
+  before anything judges it.
 - A normally elevated daemon cannot freely cross integrity boundaries. Driving
   elevated windows requires matching elevation or a correctly signed and
   installed UIAccess application. Capability reporting must identify this

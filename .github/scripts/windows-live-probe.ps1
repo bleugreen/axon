@@ -445,7 +445,69 @@ function Invoke-RecordingAcceptance {
     finally {
         Remove-Item -LiteralPath $scriptPath -Force -ErrorAction SilentlyContinue
     }
-    Write-Note 'recording acceptance verified: independent input recorded, authored with semantic targets, and replayed'
+
+    # The other half of the artifact story: `save` exports a slice of live action history as a
+    # runnable script. History is routed per request by the `_session` parameter that shared core
+    # strips before persisting (`axon-core/src/history.rs`, `ActionHistoryStore::context`), so
+    # requests arriving on separate pipe connections still land in one session and no held
+    # connection is needed. It goes over the pipe rather than the MCP facade because that facade
+    # validates tool arguments strictly and `_session` is not one of them.
+    $sessionId = "axn225-acceptance-$([guid]::NewGuid().ToString('N').Substring(0, 8))"
+    $fieldName = [string]$fields[0].name
+    if ([string]::IsNullOrWhiteSpace($fieldName)) {
+        throw 'the recording page field exposed no semantic name to address it by'
+    }
+    $savedValue = 'axon saved this'
+    $typed = Invoke-AxonRpc -Method 'type' -Params @{
+        _session = $sessionId
+        target = @{ app = $BrowserApp; name = $fieldName }
+        value = $savedValue
+    }
+    if ($null -ne $typed.error -or $typed.result.success -ne $true) {
+        throw "the history-session type action failed: $($typed | ConvertTo-Json -Compress -Depth 20)"
+    }
+
+    $saved = Invoke-AxonRpc -Method 'save' -Params @{ sessionId = $sessionId }
+    if ($null -ne $saved.error) {
+        throw "save failed for session '$sessionId': $($saved | ConvertTo-Json -Compress -Depth 20)"
+    }
+    $savedScript = [string]$saved.result.script
+    Write-Note "save actionCount=$($saved.result.actionCount) recordCount=$($saved.result.recordCount)"
+    Write-Note "saved script:`n$savedScript"
+    # An empty slice is the failure this leg exists to catch. A `save` that exported nothing would
+    # satisfy every assertion phrased as "nothing wrong appeared", which is why the count is
+    # asserted before the contents are.
+    if ([int]$saved.result.actionCount -lt 1) {
+        throw 'save exported an empty slice for a session that had just performed an action'
+    }
+    if ($savedScript -notmatch [regex]::Escape($savedValue)) {
+        throw 'the saved slice does not contain the action that was performed in its session'
+    }
+    if ($savedScript -notmatch 'locator:') {
+        throw 'the saved slice carries no durable locator'
+    }
+    foreach ($stateful in @('frame:', 'nearbyText:')) {
+        if ($savedScript -match $stateful) {
+            throw "the saved locator persisted state-pinning field '$stateful'"
+        }
+    }
+
+    $savedPath = Join-Path $LiveDirectory 'recording-acceptance-saved.axn'
+    Set-Content -LiteralPath $savedPath -Encoding utf8 -Value $savedScript
+    try {
+        $replaySaved = Invoke-AxonMcp -Request (@{
+            jsonrpc = '2.0'; id = 1; method = 'tools/call'
+            params = @{ name = 'run'; arguments = @{ path = $savedPath; dryRun = $false } }
+        } | ConvertTo-Json -Compress -Depth 10)
+        Write-Note "saved-slice replay: $($replaySaved.result.structuredContent | ConvertTo-Json -Compress -Depth 30)"
+        if ($replaySaved.result.isError -ne $false) {
+            throw "replaying the saved slice failed: $($replaySaved | ConvertTo-Json -Compress -Depth 30)"
+        }
+    }
+    finally {
+        Remove-Item -LiteralPath $savedPath -Force -ErrorAction SilentlyContinue
+    }
+    Write-Note 'recording acceptance verified: independent input recorded, authored with semantic targets, replayed, saved, and replayed again'
 }
 
 function Register-ProbeRecordingTask {
