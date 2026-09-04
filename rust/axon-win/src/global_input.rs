@@ -678,8 +678,8 @@ fn start_hook_thread() -> Result<(JoinHandle<()>, u32), BackendError> {
 pub(super) fn probe(args: &[String]) -> Result<serde_json::Value, BackendError> {
     use windows::Win32::Foundation::RECT;
     use windows::Win32::UI::Input::KeyboardAndMouse::{
-        INPUT, INPUT_0, INPUT_KEYBOARD, INPUT_MOUSE, KEYBDINPUT, KEYEVENTF_KEYUP, MOUSEEVENTF_WHEEL,
-        MOUSEINPUT, SendInput, VIRTUAL_KEY,
+        INPUT, INPUT_0, INPUT_KEYBOARD, INPUT_MOUSE, KEYBDINPUT, KEYEVENTF_KEYUP,
+        MOUSEEVENTF_WHEEL, MOUSEINPUT, SendInput, VIRTUAL_KEY,
     };
     use windows::Win32::UI::WindowsAndMessaging::GetWindowRect;
 
@@ -728,7 +728,12 @@ pub(super) fn probe(args: &[String]) -> Result<serde_json::Value, BackendError> 
     };
     let post_keys = |virtual_key: u16, stamped: bool, pairs: usize| {
         let inputs: Vec<INPUT> = (0..pairs)
-            .flat_map(|_| [key(virtual_key, stamped, false), key(virtual_key, stamped, true)])
+            .flat_map(|_| {
+                [
+                    key(virtual_key, stamped, false),
+                    key(virtual_key, stamped, true),
+                ]
+            })
             .collect();
         unsafe { SendInput(&inputs, std::mem::size_of::<INPUT>() as i32) }
     };
