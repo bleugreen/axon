@@ -1144,6 +1144,183 @@ impl UiaState {
         Ok(None)
     }
 
+    /// How this backend names the application an event belongs to, plus its window's title.
+    ///
+    /// The name is read from the top-level window element, which is the same element `enumerate`
+    /// reads and therefore the same string it reports. That is the entire requirement:
+    /// `UserActionRecorder::target` writes this name into the artifact's `app` field and replay
+    /// resolves against it, so a recorded action has to call an application what `look` calls it.
+    /// axn/207 was exactly this divergence on macOS, where capture handed a bundle identifier to a
+    /// resolver comparing process ids and every recording came back with nothing in it.
+    ///
+    /// `bundle_identifier` stays `None`, and that is a statement rather than an omission: this
+    /// backend has no durable application identity to put there. It spells one as a process id,
+    /// which cannot outlive the session, and names one by its window title, which lasts only as
+    /// long as the window keeps it. Minting a third identity here would make recordings replay
+    /// against nothing else in the daemon.
+    fn recorded_identity(
+        &self,
+        element: &IUIAutomationElement,
+    ) -> Option<(RecordedAppIdentity, Option<String>)> {
+        let top_level = self
+            .host_window(element)
+            .ok()
+            .flatten()
+            .map(|window| unsafe { GetAncestor(window, GA_ROOT) })
+            .filter(|window| !window.is_invalid())
+            .and_then(|window| unsafe { self.automation.ElementFromHandle(window) }.ok())?;
+        let name = unsafe { top_level.CurrentName() }
+            .ok()
+            .map(|name| name.to_string())
+            .filter(|name| !name.is_empty())?;
+        Some((
+            RecordedAppIdentity {
+                name: name.clone(),
+                bundle_identifier: None,
+                process_id: automation_process_id(element)
+                    .or_else(|| automation_process_id(&top_level)),
+            },
+            Some(name),
+        ))
+    }
+
+    /// The evidence shared core re-resolves against a fresh snapshot, read at event time.
+    ///
+    /// Every field is produced exactly the way `capture_node` produces the matching field on a
+    /// snapshot node. That is not a matter of taste: `node_matches` in shared core compares these
+    /// for equality, so a role spelled from a different table or a name filtered by a different
+    /// rule would leave a recorded click permanently unable to resolve to a semantic target.
+    fn element_evidence(&self, element: &IUIAutomationElement) -> RecordedElementEvidence {
+        let text = |value: WinResult<BSTR>| {
+            value
+                .ok()
+                .map(|value| value.to_string())
+                .filter(|value| !value.is_empty())
+        };
+        let control = unsafe { element.CurrentControlType() }.ok();
+        // The Windows floor for the sensitivity contract shared core enforces. There is no
+        // system-wide secure-input mode to lean on here, so this property is the whole test.
+        let sensitive = unsafe { element.CurrentIsPassword() }.is_ok_and(bool::from);
+        RecordedElementEvidence {
+            role: control.map_or_else(String::new, |id| control_type_name(id.0).into()),
+            subrole: None,
+            identifier: text(unsafe { element.CurrentAutomationId() }),
+            title: text(unsafe { element.CurrentName() }),
+            // Withheld rather than read. Shared core refuses to build a target from a sensitive
+            // element, but a provider that reported the value anyway would already have put the
+            // credential into evidence before that refusal ever ran.
+            value: (!sensitive)
+                .then(|| {
+                    unsafe {
+                        element.GetCurrentPatternAs::<IUIAutomationValuePattern>(UIA_ValuePatternId)
+                    }
+                    .ok()
+                    .and_then(|pattern| unsafe { pattern.CurrentValue() }.ok())
+                    .map(|value| value.to_string())
+                })
+                .flatten(),
+            description: text(unsafe { element.CurrentHelpText() }),
+            actions: Vec::new(),
+            window_title: None,
+            sensitive,
+        }
+    }
+
+    /// The actionable ancestry around an element, nearest first and bounded.
+    fn ancestry_evidence(
+        &self,
+        element: &IUIAutomationElement,
+        window_title: Option<&str>,
+    ) -> Vec<RecordedElementEvidence> {
+        let with_window = |mut evidence: RecordedElementEvidence| {
+            evidence.window_title = window_title.map(str::to_owned);
+            evidence
+        };
+        let Ok(walker) = (unsafe { self.automation.ControlViewWalker() }) else {
+            return vec![with_window(self.element_evidence(element))];
+        };
+        let mut candidates = Vec::new();
+        let mut current = Some(element.clone());
+        for _ in 0..RECORDED_ANCESTRY {
+            let Some(node) = current else { break };
+            candidates.push(with_window(self.element_evidence(&node)));
+            current = unsafe { walker.GetParentElement(&node) }.ok();
+        }
+        candidates
+    }
+
+    fn point_evidence(
+        &self,
+        point: (f64, f64),
+    ) -> Result<Option<RecordedTargetEvidence>, BackendError> {
+        let at = RecordedPoint {
+            x: point.0,
+            y: point.1,
+        };
+        // A hit test that finds nothing is not a failed recording. The event still happened, and
+        // an evidence record carrying only its point still authors as a point target, which is
+        // what shared core falls back to anyway when no candidate resolves.
+        let Ok(element) = self.element_at(point) else {
+            return Ok(self
+                .foreground_identity()
+                .map(|app| RecordedTargetEvidence {
+                    app,
+                    point: at,
+                    candidates: Vec::new(),
+                }));
+        };
+        let Some((app, window_title)) = self.recorded_identity(&element) else {
+            return Ok(None);
+        };
+        Ok(Some(RecordedTargetEvidence {
+            candidates: self.ancestry_evidence(&element, window_title.as_deref()),
+            app,
+            point: at,
+        }))
+    }
+
+    fn focused_evidence(&self) -> Result<Option<RecordedFocusedEvidence>, BackendError> {
+        let Ok(element) = (unsafe { self.automation.GetFocusedElement() }) else {
+            return Ok(None);
+        };
+        let Some((app, window_title)) = self.recorded_identity(&element) else {
+            return Ok(None);
+        };
+        let candidates = self.ancestry_evidence(&element, window_title.as_deref());
+        Ok(Some(RecordedFocusedEvidence {
+            value: candidates.first().and_then(|nearest| nearest.value.clone()),
+            target: RecordedTargetEvidence {
+                app,
+                // The centre of the focused element, so the point fallback a sensitive or
+                // unresolvable field lands on is somewhere a replay could actually click.
+                point: unsafe { element.CurrentBoundingRectangle() }.ok().map_or_else(
+                    RecordedPoint::default,
+                    |rect| RecordedPoint {
+                        x: f64::from(rect.left + (rect.right - rect.left) / 2),
+                        y: f64::from(rect.top + (rect.bottom - rect.top) / 2),
+                    },
+                ),
+                candidates,
+            },
+        }))
+    }
+
+    fn foreground_identity(&self) -> Option<RecordedAppIdentity> {
+        let window = unsafe { GetForegroundWindow() };
+        if window.is_invalid() {
+            return None;
+        }
+        let element = unsafe { self.automation.ElementFromHandle(window) }.ok()?;
+        Some(RecordedAppIdentity {
+            name: unsafe { element.CurrentName() }
+                .ok()
+                .map(|name| name.to_string())
+                .filter(|name| !name.is_empty())?,
+            bundle_identifier: None,
+            process_id: automation_process_id(&element),
+        })
+    }
+
     /// Binds one click to one window, or names why it cannot be bound.
     ///
     /// Pure inspection throughout: the planner that calls this may discard the answer and refuse,
