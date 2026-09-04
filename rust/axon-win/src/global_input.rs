@@ -311,7 +311,7 @@ fn ask<T>(
 ///
 /// A struct rather than a bare identity because of the leak this recorder does not yet close:
 /// shared core decides whether a burst was typed into a password field at *flush* time, by which
-/// point focus may already have moved (axn/226). Closing it means carrying sensitivity on the
+/// point focus may already have moved (axn/227). Closing it means carrying sensitivity on the
 /// keystroke itself, and this is where that value would be read and attached — adding the field
 /// here and on `RecordedInputEvent::KeyDown` is then the whole change, with no second reshaping of
 /// the observer's vocabulary.

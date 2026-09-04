@@ -318,6 +318,27 @@ impl RawQueue {
     }
 }
 
+/// Whether an element holds something the recorder must never read or transcribe.
+///
+/// One property, and deliberately only one: `UIA_IsPasswordPropertyId` is the floor the observer
+/// sensitivity contract sets for this platform, and Windows offers no second signal to widen it
+/// with — no secure-input mode, no protected-state bit. It is a function rather than an inlined
+/// field read so the floor has somewhere to be stated and tested, and so widening it later is a
+/// change to one place that already has a test pointed at it.
+pub fn is_sensitive(is_password: bool) -> bool {
+    is_password
+}
+
+/// The value an element reports as evidence, which for a sensitive element is nothing at all.
+///
+/// `read` is a closure and not a value because the rule is that the credential is never read, not
+/// that it is read and then dropped. Shared core also refuses to build a target from a sensitive
+/// element, but that refusal runs later: by then a provider that had already read the value would
+/// have put it in a buffer, a log line, and a redaction pass that cannot recognise it.
+pub fn evidence_value(sensitive: bool, read: impl FnOnce() -> Option<String>) -> Option<String> {
+    (!sensitive).then(read).flatten()
+}
+
 /// The warning a drop is reported as, in the one channel a provider has to annotate a recording.
 pub fn dropped_events_warning(dropped: usize) -> String {
     format!(
@@ -474,6 +495,27 @@ mod tests {
             "a wheel turned toward the user is negative"
         );
         assert_eq!(wheel_delta(120 << 16, true), (120.0, 0.0));
+    }
+
+    #[test]
+    fn a_password_field_is_sensitive_and_its_value_is_never_even_read() {
+        assert!(is_sensitive(true), "UIA_IsPasswordPropertyId is the floor");
+        assert!(!is_sensitive(false));
+
+        let mut reads = 0;
+        assert_eq!(
+            evidence_value(true, || {
+                reads += 1;
+                Some("hunter2".into())
+            }),
+            None
+        );
+        assert_eq!(reads, 0, "a sensitive value is not read, not merely dropped");
+
+        assert_eq!(
+            evidence_value(false, || Some("draft".into())),
+            Some("draft".into())
+        );
     }
 
     #[test]

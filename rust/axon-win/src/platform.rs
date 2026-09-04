@@ -1284,25 +1284,22 @@ impl UiaState {
         let control = unsafe { element.CurrentControlType() }.ok();
         // The Windows floor for the sensitivity contract shared core enforces. There is no
         // system-wide secure-input mode to lean on here, so this property is the whole test.
-        let sensitive = unsafe { element.CurrentIsPassword() }.is_ok_and(bool::from);
+        let sensitive = crate::recording::is_sensitive(
+            unsafe { element.CurrentIsPassword() }.is_ok_and(bool::from),
+        );
         RecordedElementEvidence {
             role: control.map_or_else(String::new, |id| control_type_name(id.0).into()),
             subrole: None,
             identifier: text(unsafe { element.CurrentAutomationId() }),
             title: text(unsafe { element.CurrentName() }),
-            // Withheld rather than read. Shared core refuses to build a target from a sensitive
-            // element, but a provider that reported the value anyway would already have put the
-            // credential into evidence before that refusal ever ran.
-            value: (!sensitive)
-                .then(|| {
-                    unsafe {
-                        element.GetCurrentPatternAs::<IUIAutomationValuePattern>(UIA_ValuePatternId)
-                    }
-                    .ok()
-                    .and_then(|pattern| unsafe { pattern.CurrentValue() }.ok())
-                    .map(|value| value.to_string())
-                })
-                .flatten(),
+            value: crate::recording::evidence_value(sensitive, || {
+                unsafe {
+                    element.GetCurrentPatternAs::<IUIAutomationValuePattern>(UIA_ValuePatternId)
+                }
+                .ok()
+                .and_then(|pattern| unsafe { pattern.CurrentValue() }.ok())
+                .map(|value| value.to_string())
+            }),
             description: text(unsafe { element.CurrentHelpText() }),
             actions: Vec::new(),
             window_title: None,
