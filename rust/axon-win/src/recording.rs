@@ -87,6 +87,13 @@ pub enum RawInput {
 pub struct RawEvent {
     pub input: RawInput,
     pub timestamp_ms: u64,
+    /// The `dwExtraInfo` the hook was handed, carried rather than acted on in the callback.
+    ///
+    /// The self-delivery test could be made here and save a queue slot, but the callback is not
+    /// where a question should be answered that a diagnostic needs to see the inputs to. Carrying
+    /// it means the raw stream is what the hook actually saw, which is the thing the live
+    /// measurement has to be able to look at.
+    pub extra_info: usize,
 }
 
 /// Modifier state rebuilt from the hook stream itself.
@@ -564,6 +571,7 @@ mod tests {
                 up: false,
             },
             timestamp_ms,
+            extra_info: 0,
         };
         assert!(queue.offer(event(1)));
         assert!(queue.offer(event(2)));

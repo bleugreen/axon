@@ -97,16 +97,15 @@ static BUTTON_HELD: AtomicBool = AtomicBool::new(false);
 unsafe extern "system" fn keyboard_hook(code: i32, message: WPARAM, data: LPARAM) -> LRESULT {
     if code >= 0 {
         let event = unsafe { &*(data.0 as *const KBDLLHOOKSTRUCT) };
-        if !is_self_delivered(event.dwExtraInfo) {
-            raw_queue().offer(RawEvent {
-                input: RawInput::Key {
-                    virtual_key: event.vkCode as u16,
-                    scan_code: event.scanCode,
-                    up: matches!(message.0 as u32, WM_KEYUP | WM_SYSKEYUP),
-                },
-                timestamp_ms: now_ms(),
-            });
-        }
+        raw_queue().offer(RawEvent {
+            input: RawInput::Key {
+                virtual_key: event.vkCode as u16,
+                scan_code: event.scanCode,
+                up: matches!(message.0 as u32, WM_KEYUP | WM_SYSKEYUP),
+            },
+            timestamp_ms: now_ms(),
+            extra_info: event.dwExtraInfo,
+        });
     }
     unsafe { CallNextHookEx(None, code, message, data) }
 }
@@ -114,38 +113,37 @@ unsafe extern "system" fn keyboard_hook(code: i32, message: WPARAM, data: LPARAM
 unsafe extern "system" fn mouse_hook(code: i32, message: WPARAM, data: LPARAM) -> LRESULT {
     if code >= 0 {
         let event = unsafe { &*(data.0 as *const MSLLHOOKSTRUCT) };
-        if !is_self_delivered(event.dwExtraInfo) {
-            let point = (event.pt.x, event.pt.y);
-            let input = match message.0 as u32 {
-                WM_LBUTTONDOWN => {
-                    BUTTON_HELD.store(true, Ordering::Relaxed);
-                    Some(RawInput::Button { down: true, point })
-                }
-                WM_LBUTTONUP => {
-                    BUTTON_HELD.store(false, Ordering::Relaxed);
-                    Some(RawInput::Button { down: false, point })
-                }
-                WM_MOUSEMOVE => BUTTON_HELD
-                    .load(Ordering::Relaxed)
-                    .then_some(RawInput::Motion { point }),
-                WM_MOUSEWHEEL => Some(RawInput::Wheel {
-                    point,
-                    mouse_data: event.mouseData,
-                    horizontal: false,
-                }),
-                WM_MOUSEHWHEEL => Some(RawInput::Wheel {
-                    point,
-                    mouse_data: event.mouseData,
-                    horizontal: true,
-                }),
-                _ => None,
-            };
-            if let Some(input) = input {
-                raw_queue().offer(RawEvent {
-                    input,
-                    timestamp_ms: now_ms(),
-                });
+        let point = (event.pt.x, event.pt.y);
+        let input = match message.0 as u32 {
+            WM_LBUTTONDOWN => {
+                BUTTON_HELD.store(true, Ordering::Relaxed);
+                Some(RawInput::Button { down: true, point })
             }
+            WM_LBUTTONUP => {
+                BUTTON_HELD.store(false, Ordering::Relaxed);
+                Some(RawInput::Button { down: false, point })
+            }
+            WM_MOUSEMOVE => BUTTON_HELD
+                .load(Ordering::Relaxed)
+                .then_some(RawInput::Motion { point }),
+            WM_MOUSEWHEEL => Some(RawInput::Wheel {
+                point,
+                mouse_data: event.mouseData,
+                horizontal: false,
+            }),
+            WM_MOUSEHWHEEL => Some(RawInput::Wheel {
+                point,
+                mouse_data: event.mouseData,
+                horizontal: true,
+            }),
+            _ => None,
+        };
+        if let Some(input) = input {
+            raw_queue().offer(RawEvent {
+                input,
+                timestamp_ms: now_ms(),
+                extra_info: event.dwExtraInfo,
+            });
         }
     }
     unsafe { CallNextHookEx(None, code, message, data) }
@@ -336,6 +334,11 @@ fn enrich(
     modifiers: &mut ModifierState,
     raw: RawEvent,
 ) -> Option<RecordedInputEvent> {
+    // Where this daemon's own delivery stops being a recordable event. Made here rather than in
+    // the hook so the raw stream a diagnostic drains is what the hook was actually handed.
+    if is_self_delivered(raw.extra_info) {
+        return None;
+    }
     let timestamp_ms = raw.timestamp_ms;
     match raw.input {
         RawInput::Key {
