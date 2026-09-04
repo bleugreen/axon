@@ -275,42 +275,14 @@ fn layout_text(virtual_key: u16, scan_code: u32, modifiers: ModifierState) -> Op
 }
 
 /// The enriched events `poll` hands to shared core.
-#[derive(Default)]
-struct Enriched {
-    events: Mutex<VecDeque<RecordedInputEvent>>,
-    ready: Condvar,
-}
+///
+/// The same hand-off shape as the raw queue -- produced on one thread, drained with a timeout on
+/// another -- with no bound, because these are the product rather than the backlog. Dropping one
+/// here would lose an action that had already been read and understood.
+type Enriched = axon_core::ObservedInputQueue<RecordedInputEvent>;
 
-impl Enriched {
-    fn push(&self, event: RecordedInputEvent) {
-        self.events
-            .lock()
-            .expect("enriched queue is never poisoned")
-            .push_back(event);
-        self.ready.notify_one();
-    }
-
-    fn drain(&self, timeout: Duration) -> Vec<RecordedInputEvent> {
-        let mut events = self
-            .events
-            .lock()
-            .expect("enriched queue is never poisoned");
-        if events.is_empty() {
-            events = self
-                .ready
-                .wait_timeout(events, timeout)
-                .expect("enriched queue is never poisoned")
-                .0;
-        }
-        events.drain(..).collect()
-    }
-
-    fn clear(&self) {
-        self.events
-            .lock()
-            .expect("enriched queue is never poisoned")
-            .clear();
-    }
+fn enriched_queue() -> Enriched {
+    Enriched::with_capacity(usize::MAX)
 }
 
 /// Asks the MTA actor one question and waits for its answer.
@@ -440,14 +412,6 @@ fn point_evidence(
     .flatten()
 }
 
-/// Whether an event belongs to the session's scope.
-fn accepts(scope: &RecordingScope, app: &RecordedAppIdentity) -> bool {
-    match scope {
-        RecordingScope::AllApplications => true,
-        RecordingScope::Application { app: wanted } => wanted.matches_runtime(app),
-    }
-}
-
 /// Drains raw events and reads the interface around each one, at event time.
 fn enrichment_thread(
     scope: RecordingScope,
@@ -479,15 +443,6 @@ fn enrichment_thread(
         if raw_queue().stopped() {
             return;
         }
-    }
-}
-
-/// An identity a scoped session will accept, so an observation about the recording itself is not
-/// filtered out of the recording it is about.
-fn scope_identity(scope: &RecordingScope) -> RecordedAppIdentity {
-    match scope {
-        RecordingScope::AllApplications => RecordedAppIdentity::default(),
-        RecordingScope::Application { app } => app.clone(),
     }
 }
 
