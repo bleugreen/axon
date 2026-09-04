@@ -74,13 +74,11 @@
     },
     {
       "capability": "serializeHistory",
-      "usable": false,
-      "reason": "not-implemented"
+      "usable": true
     },
     {
       "capability": "observeGlobalInput",
-      "usable": false,
-      "reason": "not-implemented"
+      "usable": true
     }
   ]
 }
