@@ -14,10 +14,10 @@ use axon_core::{
 };
 use serde::Serialize;
 
-#[path = "capture.rs"]
-mod graphics_capture;
 #[path = "global_input.rs"]
 mod global_input;
+#[path = "capture.rs"]
+mod graphics_capture;
 #[path = "keyboard_diagnostic.rs"]
 mod keyboard_diagnostic;
 #[path = "pixel.rs"]
@@ -76,10 +76,9 @@ use windows::{
             WindowsAndMessaging::{
                 ASFW_ANY, AllowSetForegroundWindow, BringWindowToTop, GA_ROOT, GetAncestor,
                 GetForegroundWindow, GetSystemMetrics, GetWindowThreadProcessId,
-                SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN,
-                SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN, SPI_GETFOREGROUNDLOCKTIMEOUT,
-                SPI_SETFOREGROUNDLOCKTIMEOUT, SPIF_SENDCHANGE, SetForegroundWindow,
-                SwitchToThisWindow, SystemParametersInfoW,
+                SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN,
+                SPI_GETFOREGROUNDLOCKTIMEOUT, SPI_SETFOREGROUNDLOCKTIMEOUT, SPIF_SENDCHANGE,
+                SetForegroundWindow, SwitchToThisWindow, SystemParametersInfoW,
             },
         },
     },
@@ -1382,13 +1381,12 @@ impl UiaState {
                 app,
                 // The centre of the focused element, so the point fallback a sensitive or
                 // unresolvable field lands on is somewhere a replay could actually click.
-                point: unsafe { element.CurrentBoundingRectangle() }.ok().map_or_else(
-                    RecordedPoint::default,
-                    |rect| RecordedPoint {
+                point: unsafe { element.CurrentBoundingRectangle() }
+                    .ok()
+                    .map_or_else(RecordedPoint::default, |rect| RecordedPoint {
                         x: f64::from(rect.left + (rect.right - rect.left) / 2),
                         y: f64::from(rect.top + (rect.bottom - rect.top) / 2),
-                    },
-                ),
+                    }),
                 candidates,
             },
         }))

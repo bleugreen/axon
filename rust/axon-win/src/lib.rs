@@ -21,9 +21,9 @@ pub mod daemon;
 mod handback;
 mod keys;
 pub mod lifecycle;
-mod recording;
 #[cfg(windows)]
 pub mod pipe;
+mod recording;
 #[cfg(windows)]
 pub mod scheduler;
 
@@ -1841,7 +1841,9 @@ mod tests {
             panic!("a stop with an observed action authors a document")
         };
         assert_eq!(stopped.result["actionCount"], 1);
-        let script = stopped.result["script"].as_str().expect("an authored script");
+        let script = stopped.result["script"]
+            .as_str()
+            .expect("an authored script");
         assert!(script.contains("keyboard"), "{script}");
         assert!(script.contains("return"), "{script}");
         assert!(router.recorder.is_none());

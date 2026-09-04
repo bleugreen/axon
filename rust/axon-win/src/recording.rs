@@ -74,8 +74,13 @@ pub enum RawInput {
         scan_code: u32,
         up: bool,
     },
-    Button { down: bool, point: (i32, i32) },
-    Motion { point: (i32, i32) },
+    Button {
+        down: bool,
+        point: (i32, i32),
+    },
+    Motion {
+        point: (i32, i32),
+    },
     Wheel {
         point: (i32, i32),
         mouse_data: u32,
@@ -298,7 +303,10 @@ impl RawQueue {
 
     /// Takes everything queued, waiting up to `timeout` for the first event.
     pub fn drain(&self, timeout: Duration) -> RawBatch {
-        let mut events = self.events.lock().expect("raw input queue is never poisoned");
+        let mut events = self
+            .events
+            .lock()
+            .expect("raw input queue is never poisoned");
         if events.is_empty() && !self.stopped.load(Ordering::Acquire) {
             events = self
                 .ready
@@ -535,7 +543,10 @@ mod tests {
             }),
             None
         );
-        assert_eq!(reads, 0, "a sensitive value is not read, not merely dropped");
+        assert_eq!(
+            reads, 0,
+            "a sensitive value is not read, not merely dropped"
+        );
 
         assert_eq!(
             evidence_value(false, || Some("draft".into())),

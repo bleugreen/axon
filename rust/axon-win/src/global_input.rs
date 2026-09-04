@@ -158,7 +158,9 @@ struct Hooks {
 impl Hooks {
     fn install() -> Result<Self, BackendError> {
         let keyboard = unsafe { SetWindowsHookExW(WH_KEYBOARD_LL, Some(keyboard_hook), None, 0) }
-            .map_err(|error| operation(format!("WH_KEYBOARD_LL installation failed: {error}")))?;
+            .map_err(|error| {
+            operation(format!("WH_KEYBOARD_LL installation failed: {error}"))
+        })?;
         let mouse = match unsafe { SetWindowsHookExW(WH_MOUSE_LL, Some(mouse_hook), None, 0) } {
             Ok(mouse) => mouse,
             Err(error) => {
@@ -179,7 +181,10 @@ impl Hooks {
 
 impl Drop for Hooks {
     fn drop(&mut self) {
-        for hook in [self.mouse.take(), self.keyboard.take()].into_iter().flatten() {
+        for hook in [self.mouse.take(), self.keyboard.take()]
+            .into_iter()
+            .flatten()
+        {
             unsafe {
                 let _ = UnhookWindowsHookEx(hook);
             }
@@ -208,10 +213,7 @@ fn hook_thread(started: mpsc::SyncSender<Result<u32, BackendError>>) {
     unsafe {
         let _ = PeekMessageW(&mut message, None, WM_USER, WM_USER, PM_NOREMOVE);
     }
-    if started
-        .send(Ok(unsafe { GetCurrentThreadId() }))
-        .is_err()
-    {
+    if started.send(Ok(unsafe { GetCurrentThreadId() })).is_err() {
         return;
     }
     // Blocking, not polling: this thread has nothing to do between callbacks, and `GetMessageW`
