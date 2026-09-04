@@ -551,9 +551,21 @@ function Start-ProbeBrowser {
 <!doctype html><title>Axon Foreground Click Complete</title>
 <main style="min-height: 300vh"><h1>Axon Foreground Click Complete</h1></main>
 '@
+    # The recording acceptance needs something to click and something to type into, which no other
+    # probe page has: `start.html` has a link but no field, and a recording whose only action is a
+    # click never exercises the focused-value read that authors a `type` step.
+    Set-Content -LiteralPath (Join-Path $pages 'record.html') -Encoding utf8 -Value @'
+<!doctype html><title>Axon Recording Probe</title>
+<main><h1>Axon Recording Probe</h1>
+<input id="note" type="text" aria-label="Recording note" />
+<p><a href="complete.html">Continue</a></p></main>
+'@
     $url = ([uri](Join-Path $pages 'start.html')).AbsoluteUri
     $readyUrl = ([uri](Join-Path $pages 'ready.html')).AbsoluteUri
-    $browser = [pscustomobject]@{ ProcessId = 0; ProfilePath = $profile; PageUrl = $url }
+    $recordUrl = ([uri](Join-Path $pages 'record.html')).AbsoluteUri
+    $browser = [pscustomobject]@{
+        ProcessId = 0; ProfilePath = $profile; PageUrl = $url; RecordUrl = $recordUrl
+    }
     try {
         # This script is invoked through the runner's SSH relay in session 0. Starting Edge from
         # that shell creates a real process which is nevertheless unable to own a window on the
@@ -722,6 +734,59 @@ function Invoke-Axon {
     catch {
         [pscustomobject]@{ ExitCode = -1; Output = $_.Exception.Message }
     }
+}
+
+function Invoke-AxonRpc {
+    <# One socket-level JSON-RPC request through the daemon under test.
+
+    The MCP facade cannot carry this: `axon-win mcp` forwards validated `tools/call` requests only,
+    and the recording lifecycle (`recording.start`, `recording.status`, `recording.stop`) is a
+    socket method with no tool of its own. The daemon holds one router behind the pipe and serves
+    every connection from it, so a request per connection still addresses one recording session. #>
+    param(
+        [Parameter(Mandatory)][string] $Method,
+        $Params = @{},
+        [int] $TimeoutSeconds = 30
+    )
+
+    $pipe = [System.IO.Pipes.NamedPipeClientStream]::new(
+        '.', 'axon-v1', [System.IO.Pipes.PipeDirection]::InOut)
+    try {
+        $pipe.Connect($TimeoutSeconds * 1000)
+        $encoding = [Text.UTF8Encoding]::new($false)
+        $writer = [System.IO.StreamWriter]::new($pipe, $encoding)
+        $writer.AutoFlush = $true
+        $body = @{ jsonrpc = '2.0'; id = 1; method = $Method; params = $Params } |
+            ConvertTo-Json -Compress -Depth 20
+        # The daemon splits on newlines and trims, so the CRLF PowerShell writes is harmless.
+        $writer.WriteLine($body)
+        $reader = [System.IO.StreamReader]::new($pipe, $encoding)
+        $line = $reader.ReadLine()
+        if ([string]::IsNullOrWhiteSpace($line)) {
+            throw "the daemon closed the pipe without answering $Method"
+        }
+        $line | ConvertFrom-Json -Depth 100
+    }
+    finally { $pipe.Dispose() }
+}
+
+function Find-ProbeNodes {
+    <# Every node in a captured tree matching a predicate, depth first. #>
+    param(
+        [Parameter(Mandatory)] $Root,
+        [Parameter(Mandatory)][scriptblock] $Predicate
+    )
+    $found = @()
+    $pending = [Collections.Generic.Stack[object]]::new()
+    $pending.Push($Root)
+    while ($pending.Count -gt 0) {
+        $node = $pending.Pop()
+        if (& $Predicate $node) { $found += $node }
+        foreach ($child in @($node.children)) {
+            if ($null -ne $child) { $pending.Push($child) }
+        }
+    }
+    $found
 }
 
 function Invoke-AxonMcp {
