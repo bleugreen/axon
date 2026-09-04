@@ -1872,7 +1872,12 @@ mod tests {
             stopped.result["actionCount"], 1,
             "the recording lost the action its observer produced while stopping"
         );
-        assert!(stopped.result["script"].as_str().unwrap().contains("return"));
+        assert!(
+            stopped.result["script"]
+                .as_str()
+                .unwrap()
+                .contains("return")
+        );
     }
 
     /// The route this issue exists to open: a start that is allowed records real events and stops
