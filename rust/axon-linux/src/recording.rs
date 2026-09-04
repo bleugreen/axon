@@ -383,13 +383,21 @@ pub fn classify_keystroke(
 
 /// Whether an element holds something the recorder must never read or transcribe.
 ///
-/// Two signals, because AT-SPI offers two and the observer sensitivity contract sets both as the
-/// floor for this platform. `STATE_PROTECTED` is the general one a toolkit sets on any field whose
-/// contents are concealed; `ROLE_PASSWORD_TEXT` is what GTK and Qt entries report even where the
-/// state is missing. Taking either is what keeps the floor from narrowing to whichever one the
-/// toolkit in front of the user happens to publish.
-pub fn is_sensitive(protected: bool, role: &str) -> bool {
-    protected || role.trim().eq_ignore_ascii_case("password text")
+/// **`STATE_PROTECTED` is not one of the signals, because AT-SPI does not have it.** It is ATK and
+/// MSAA vocabulary; the AT-SPI state set has no member of that name, and the state that *is* called
+/// `SENSITIVE` there means the opposite of what the word suggests -- that a widget is enabled and
+/// can be interacted with. Reading either as "holds a credential" would mark almost every element
+/// sensitive or none of them.
+///
+/// What AT-SPI does have is `ROLE_PASSWORD_TEXT`, which is what GTK entries, Qt line edits, and
+/// Chromium and Firefox web content all report for a concealed field, and it is the floor. The
+/// description is tested beside it for the same reason the macOS observer tests it: a provider that
+/// spells the concealment in words rather than in the role is still telling us. The description and
+/// not the name, because on this platform an entry's `name` is usually its *label* -- and a field
+/// labelled "Password" next to the real one would otherwise be recorded as a secret.
+pub fn is_sensitive(role: &str, description: Option<&str>) -> bool {
+    role.trim().eq_ignore_ascii_case("password text")
+        || description.is_some_and(|description| description.to_lowercase().contains("password"))
 }
 
 /// How long an unmatched expectation may suppress input before it is abandoned.
@@ -733,12 +741,19 @@ mod tests {
     }
 
     #[test]
-    fn a_password_element_is_sensitive_by_either_signal() {
-        assert!(is_sensitive(true, "text"), "STATE_PROTECTED alone");
-        assert!(is_sensitive(false, "password text"), "the role alone");
-        assert!(is_sensitive(false, "Password Text"));
-        assert!(!is_sensitive(false, "entry"));
-        assert!(!is_sensitive(false, "text"));
+    fn a_password_element_is_sensitive_and_an_ordinary_one_is_not() {
+        assert!(
+            is_sensitive("password text", None),
+            "ROLE_PASSWORD_TEXT is the floor this platform can actually offer"
+        );
+        assert!(is_sensitive("Password Text", None), "however it is cased");
+        assert!(is_sensitive("entry", Some("Master Password")));
+        assert!(!is_sensitive("entry", None));
+        assert!(!is_sensitive("text", Some("Search")));
+        assert!(
+            !is_sensitive("label", None),
+            "the label beside a password field is not itself one"
+        );
     }
 
     #[test]
