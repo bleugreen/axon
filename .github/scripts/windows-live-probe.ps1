@@ -1150,25 +1150,6 @@ function Invoke-AxonRpc {
     finally { $pipe.Dispose() }
 }
 
-function Find-ProbeNodes {
-    <# Every node in a captured tree matching a predicate, depth first. #>
-    param(
-        [Parameter(Mandatory)] $Root,
-        [Parameter(Mandatory)][scriptblock] $Predicate
-    )
-    $found = @()
-    $pending = [Collections.Generic.Stack[object]]::new()
-    $pending.Push($Root)
-    while ($pending.Count -gt 0) {
-        $node = $pending.Pop()
-        if (& $Predicate $node) { $found += $node }
-        foreach ($child in @($node.children)) {
-            if ($null -ne $child) { $pending.Push($child) }
-        }
-    }
-    $found
-}
-
 function Invoke-AxonMcp {
     <# One MCP request through the daemon under test, as a parsed response. #>
     param([Parameter(Mandatory)][string] $Request)
@@ -1220,6 +1201,28 @@ function Clear-ParkState {
 }
 
 #endregion
+
+function Find-ProbeNodes {
+    <# Every node in a captured tree matching a predicate, depth first.
+
+    Outside the seam region deliberately: it reaches nothing, and the census that region feeds is
+    only worth having while "seam" keeps meaning "touches the machine". #>
+    param(
+        [Parameter(Mandatory)] $Root,
+        [Parameter(Mandatory)][scriptblock] $Predicate
+    )
+    $found = @()
+    $pending = [Collections.Generic.Stack[object]]::new()
+    $pending.Push($Root)
+    while ($pending.Count -gt 0) {
+        $node = $pending.Pop()
+        if (& $Predicate $node) { $found += $node }
+        foreach ($child in @($node.children)) {
+            if ($null -ne $child) { $pending.Push($child) }
+        }
+    }
+    $found
+}
 
 function Get-ProbeDaemonProcess {
     <# Live axon-win processes running from a directory this lane owns.
