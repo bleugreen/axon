@@ -32,6 +32,7 @@ use x11rb::{
         xproto,
     },
     rust_connection::RustConnection,
+    wrapper::ConnectionExt as _,
     x11_utils::TryParse,
 };
 
