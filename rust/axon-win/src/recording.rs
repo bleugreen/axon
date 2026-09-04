@@ -374,6 +374,18 @@ impl RawQueue {
     }
 }
 
+/// Whether a button transition should change what the observer believes about the user's hand.
+///
+/// `None` for this process's own clicks, and that is the whole point. Pointer motion only carries
+/// meaning between a press and its release, so the observer tracks whether a button is held and
+/// discards motion outside that. If a stamped mouse-up were allowed to clear that state -- posted,
+/// say, while the user happens to be mid-drag -- every real motion sample after it would be thrown
+/// away and the user's drag would be recorded truncated. Excluding our own delivery per event has
+/// to include the state later events are judged against, not only the events carrying the stamp.
+pub fn button_state_change(down: bool, self_delivered: bool) -> Option<bool> {
+    (!self_delivered).then_some(down)
+}
+
 /// Whether an element holds something the recorder must never read or transcribe.
 ///
 /// One property, and deliberately only one: `UIA_IsPasswordPropertyId` is the floor the observer
@@ -605,6 +617,24 @@ mod tests {
             evidence_value(false, || Some("draft".into())),
             Some("draft".into())
         );
+    }
+
+    #[test]
+    fn our_own_click_cannot_truncate_a_drag_the_user_is_making() {
+        // The sequence that matters: the user presses and starts dragging, this daemon posts a
+        // click of its own mid-gesture, and the user keeps dragging. Every motion in between is
+        // still the user's, and the stamped up must not be what decides otherwise.
+        let mut held = false;
+        for (down, self_delivered) in [(true, false), (true, true), (false, true)] {
+            if let Some(state) = button_state_change(down, self_delivered) {
+                held = state;
+            }
+        }
+        assert!(held, "a stamped release must not end the user's drag");
+
+        assert_eq!(button_state_change(false, false), Some(false));
+        assert_eq!(button_state_change(true, false), Some(true));
+        assert_eq!(button_state_change(true, true), None);
     }
 
     #[test]

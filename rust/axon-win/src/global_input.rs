@@ -114,13 +114,22 @@ unsafe extern "system" fn mouse_hook(code: i32, message: WPARAM, data: LPARAM) -
     if code >= 0 {
         let event = unsafe { &*(data.0 as *const MSLLHOOKSTRUCT) };
         let point = (event.pt.x, event.pt.y);
+        // Read here, but only to decide what this process's own clicks are allowed to change. The
+        // event itself is still queued whatever it says, so the raw stream a diagnostic drains
+        // remains what the hook was handed; it is `enrich` that declines to record it.
+        let self_delivered = is_self_delivered(event.dwExtraInfo);
+        let mut track = |down: bool| {
+            if let Some(held) = crate::recording::button_state_change(down, self_delivered) {
+                BUTTON_HELD.store(held, Ordering::Relaxed);
+            }
+        };
         let input = match message.0 as u32 {
             WM_LBUTTONDOWN => {
-                BUTTON_HELD.store(true, Ordering::Relaxed);
+                track(true);
                 Some(RawInput::Button { down: true, point })
             }
             WM_LBUTTONUP => {
-                BUTTON_HELD.store(false, Ordering::Relaxed);
+                track(false);
                 Some(RawInput::Button { down: false, point })
             }
             WM_MOUSEMOVE => BUTTON_HELD
@@ -538,6 +547,31 @@ impl WindowsGlobalInputObserver {
     pub fn raw_queue_pending(&self) -> usize {
         raw_queue().depth()
     }
+
+    /// Stops observing and lets enrichment finish, leaving everything already seen pollable.
+    ///
+    /// Separate from `stop`, and the separation is the difference between a complete recording and
+    /// one missing its own ending. Enrichment runs *behind* the hook by design -- the bench
+    /// measured it nearly a whole 400-event burst behind under a fast one -- so the events a
+    /// session's final moments produced do not exist yet when the last ordinary poll happens. They
+    /// come into being here, once the hooks are removed and the enrichment thread has drained what
+    /// they left. A caller polls between this and `stop`; `stop` alone would produce them and then
+    /// immediately discard them.
+    pub fn quiesce(&mut self) {
+        let Some(session) = self.session.as_mut() else {
+            return;
+        };
+        if let Some(hooks) = session.hooks.take() {
+            stop_hook_thread(session.hook_thread_id);
+            let _ = hooks.join();
+        }
+        // Stopped only once the hooks are gone, so the last events the hook queued are enriched
+        // rather than abandoned: the enrichment thread drains once more before it returns.
+        raw_queue().stop();
+        if let Some(enrichment) = session.enrichment.take() {
+            let _ = enrichment.join();
+        }
+    }
 }
 
 impl GlobalInputObserver for WindowsGlobalInputObserver {
@@ -586,18 +620,10 @@ impl GlobalInputObserver for WindowsGlobalInputObserver {
     }
 
     fn stop(&mut self) -> Result<(), BackendError> {
-        if let Some(mut session) = self.session.take() {
-            stop_hook_thread(session.hook_thread_id);
-            if let Some(hooks) = session.hooks.take() {
-                let _ = hooks.join();
-            }
-            // Stopped after the hooks are gone, so the last events the hook queued are enriched
-            // rather than abandoned: the enrichment thread drains once more before it returns.
-            raw_queue().stop();
-            if let Some(enrichment) = session.enrichment.take() {
-                let _ = enrichment.join();
-            }
-        }
+        self.quiesce();
+        self.session = None;
+        // Discarded here and not a moment sooner. `quiesce` is what makes a session's last events
+        // reachable; a caller that wants them polls between the two calls.
         self.enriched.clear();
         Ok(())
     }
