@@ -1935,6 +1935,16 @@ mod tests {
         /// Sequences actually posted, which is not the same as calls made: a revalidation failure
         /// posts nothing, and a counter of calls could not tell the two apart.
         pixel_dispatches: Rc<RefCell<usize>>,
+        /// Why this backend cannot observe global input, if it cannot.
+        ///
+        /// A code rather than a flag, because the wire contract this pins is that the *specific*
+        /// refusal survives to the caller. A boolean would let a test pass while the daemon
+        /// flattened every reason into one.
+        observer_refusal: Option<&'static str>,
+        /// Events the observer hands over on the next poll, drained as they are taken.
+        observed_input: Rc<RefCell<Vec<axon_core::RecordedInputEvent>>>,
+        observer_starts: Rc<RefCell<usize>>,
+        observer_stops: Rc<RefCell<usize>>,
     }
     impl BackgroundPixelPointer for FakeBackend {
         fn plan_pixel_click(
@@ -2023,7 +2033,64 @@ mod tests {
             })
         }
     }
+    impl axon_core::GlobalInputObserver for FakeBackend {
+        fn start(&mut self, _: &axon_core::RecordingScope) -> Result<(), BackendError> {
+            *self.observer_starts.borrow_mut() += 1;
+            Ok(())
+        }
+        fn poll(
+            &mut self,
+            _: Duration,
+        ) -> Result<Vec<axon_core::RecordedInputEvent>, BackendError> {
+            Ok(std::mem::take(&mut *self.observed_input.borrow_mut()))
+        }
+        fn stop(&mut self) -> Result<(), BackendError> {
+            *self.observer_stops.borrow_mut() += 1;
+            Ok(())
+        }
+        fn is_recording(&self) -> bool {
+            *self.observer_starts.borrow() > *self.observer_stops.borrow()
+        }
+    }
+
+    impl axon_core::RecordingEvidenceProvider for FakeBackend {
+        fn read_focused(
+            &mut self,
+        ) -> Result<Option<axon_core::RecordedFocusedEvidence>, BackendError> {
+            Ok(None)
+        }
+        fn capture_snapshot(
+            &mut self,
+            _: &axon_core::RecordedAppIdentity,
+        ) -> Result<Option<Snapshot>, BackendError> {
+            Ok(None)
+        }
+        fn settle(
+            &mut self,
+            _: usize,
+            _: &str,
+        ) -> Result<axon_core::RecordedSettleEvidence, BackendError> {
+            Ok(Default::default())
+        }
+    }
+
     impl PlatformBackend for FakeBackend {
+        /// This fake records, so by default it claims the observer seam. Without the override it
+        /// would inherit the core default that refuses, and `recording.start`'s capability
+        /// preflight would turn every recording test here into a capability refusal.
+        fn global_input_observer(
+            &mut self,
+        ) -> Result<&mut dyn axon_core::GlobalInputObserver, BackendError> {
+            match self.observer_refusal {
+                Some(code) => Err(BackendError::CapabilityReason {
+                    capability: Capability::ObserveGlobalInput,
+                    code,
+                    reason: "session 0 has no interactive window station".into(),
+                    diagnostic: None,
+                }),
+                None => Ok(self),
+            }
+        }
         fn capabilities(&self) -> Result<Vec<CapabilityInfo>, BackendError> {
             Ok(vec![
                 CapabilityInfo {
