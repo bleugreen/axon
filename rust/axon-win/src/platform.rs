@@ -2166,6 +2166,17 @@ fn probe_post_input(args: &[String]) -> Result<serde_json::Value, BackendError> 
     let x = number(1, "x")?;
     let y = number(2, "y")?;
     let text = required_probe_arg(args, 3, "text")?;
+    // Bring the target forward before aiming at it. The caller computed this point from a capture
+    // taken earlier, and anything that has come to the front since -- including this helper's own
+    // task host window -- would take the click instead. Setup, not measurement: the events posted
+    // below are still this process's, which is the whole point of running them from here.
+    let activated = probe_flag(args, "--activate")
+        .and_then(|value| value.parse::<u32>().ok())
+        .map(|process_id| {
+            let brought_forward = pixel::activate(process_id, None);
+            thread::sleep(Duration::from_millis(400));
+            brought_forward
+        });
     send_click((x, y))?;
     // The click has to land and focus has to settle before the text follows it; without this the
     // burst races the target's own handling of the click and lands wherever focus used to be.
@@ -2175,6 +2186,7 @@ fn probe_post_input(args: &[String]) -> Result<serde_json::Value, BackendError> 
         "schemaVersion": "post-input-v1",
         "processId": std::process::id(),
         "deliveryTag": format!("0x{:X}", crate::recording::self_delivery_tag()),
+        "activated": activated,
         "clicked": {"x": x, "y": y},
         "typed": text,
     }))
