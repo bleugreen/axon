@@ -365,7 +365,7 @@ fn enrich(
             if up {
                 return None;
             }
-            let keystroke = classify_keystroke(virtual_key, *modifiers, |state| {
+            let keystroke = classify_keystroke(virtual_key, scan_code, *modifiers, |state| {
                 layout_text(virtual_key, scan_code, state)
             })?;
             let context = key_context(commands)?;

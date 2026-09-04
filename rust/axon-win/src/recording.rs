@@ -118,6 +118,7 @@ pub struct ModifierState {
 }
 
 const VK_CAPITAL: u16 = 0x14;
+const VK_PACKET: u16 = 0xE7;
 
 impl ModifierState {
     /// Folds one key transition into the state. Toggles latch on the press, like the OS does.
@@ -196,9 +197,23 @@ impl ModifierState {
 /// the three characters.
 pub fn classify_keystroke(
     virtual_key: u16,
+    scan_code: u32,
     modifiers: ModifierState,
     text: impl Fn(ModifierState) -> Option<String>,
 ) -> Option<RecordedKeystroke> {
+    // Text delivered through `KEYEVENTF_UNICODE` arrives as `VK_PACKET` carrying the character
+    // itself in the scan code, because there is no key on any layout that would produce it. It has
+    // to be read here or not at all: no keyboard layout can translate `VK_PACKET`, so every such
+    // keystroke would otherwise be dropped -- and this is how assistive technology, remote desktop
+    // sessions, IME relays, and any other process typing text it did not get from a keyboard all
+    // reach an application. A recorder blind to them is blind to a whole class of real input.
+    if virtual_key == VK_PACKET {
+        return char::from_u32(scan_code)
+            .filter(|character| !character.is_control())
+            .map(|character| RecordedKeystroke::Text {
+                text: character.to_string(),
+            });
+    }
     // A modifier press is not itself a keystroke; it is context for the one that follows.
     if crate::keys::modifier_name(virtual_key).is_some() || virtual_key == VK_CAPITAL {
         return None;
