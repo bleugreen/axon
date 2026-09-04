@@ -213,8 +213,9 @@ fn hook_thread(
     unsafe {
         let _ = PeekMessageW(&mut message, None, WM_USER, WM_USER, PM_NOREMOVE);
     }
-    *identity.lock().expect("hook thread identity is never poisoned") =
-        Some(unsafe { GetCurrentThreadId() });
+    *identity
+        .lock()
+        .expect("hook thread identity is never poisoned") = Some(unsafe { GetCurrentThreadId() });
 
     let hooks = match Hooks::install() {
         Ok(hooks) => hooks,
@@ -617,7 +618,11 @@ fn start_hook_thread() -> Result<(JoinHandle<()>, u32), BackendError> {
         .name("axon-global-input".into())
         .spawn(move || hook_thread(for_thread, started_tx))
         .map_err(|error| operation(format!("could not create observer thread: {error}")))?;
-    let published = || *identity.lock().expect("hook thread identity is never poisoned");
+    let published = || {
+        *identity
+            .lock()
+            .expect("hook thread identity is never poisoned")
+    };
     match started_rx.recv_timeout(Duration::from_secs(2)) {
         Ok(Ok(())) => Ok((
             hooks,
