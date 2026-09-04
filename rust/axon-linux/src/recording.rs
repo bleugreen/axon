@@ -41,6 +41,7 @@ pub const BUTTON_WHEEL_RIGHT: u8 = 7;
 /// frame AT-SPI's `CoordType::Screen` answers in and the same one a dispatch is aimed with.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RawInput {
+    /// A key going down. Releases never reach this vocabulary: see [`Decoder::observe`].
     Key {
         keycode: u8,
         /// The modifier mask the server reported *before* the event.
@@ -50,7 +51,6 @@ pub enum RawInput {
         /// would leave the observer rebuilding it from the key stream the way the Windows one has
         /// to.
         state: u16,
-        up: bool,
     },
     Button {
         down: bool,
@@ -71,6 +71,84 @@ pub enum RawInput {
 pub struct RawEvent {
     pub input: RawInput,
     pub timestamp_ms: u64,
+}
+
+/// One recorded X11 core input event, in the four fields that decide what it means.
+///
+/// The wire bytes are parsed by `x11rb` in `xrecord.rs`; what an event *is* is decided here, so
+/// every rule below -- which button is a click, which are wheel notches, when motion matters, and
+/// which events are this daemon's own -- is exercised by the hosted suite on every platform rather
+/// than only under a display.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CoreEvent {
+    pub kind: u8,
+    /// The keycode of a key event or the button number of a button event.
+    pub detail: u8,
+    /// `root_x`/`root_y`: the position on screen, in the frame a dispatch is aimed with.
+    pub point: (i16, i16),
+    /// The modifier mask the server reported for the moment before the event.
+    pub state: u16,
+}
+
+/// Turns the recorded event stream into the events a recording is made of.
+///
+/// Stateful for one reason, and it is the reason the Windows observer keeps the same state: X11
+/// reports pointer motion continuously whenever the pointer moves at all, and queueing every
+/// sample would fill the hand-off with events shared core discards -- hiding a real drop behind
+/// noise. Motion only carries meaning between a press and its release.
+#[derive(Debug, Default)]
+pub struct Decoder {
+    held: bool,
+}
+
+impl Decoder {
+    /// What one recorded event amounts to, or nothing when it is not an event a recording carries.
+    pub fn observe(&mut self, event: CoreEvent) -> Option<RawInput> {
+        // Where this daemon's own delivery stops being a recordable event, and it happens here --
+        // in the listener, not in enrichment -- because the ledger's deadline runs on a wall
+        // clock while enrichment can be seconds behind a burst. An exclusion decided late would
+        // find its own expectations already expired.
+        //
+        // Returning before the state below is touched is not incidental. If a stamped release
+        // were allowed to clear `held` -- posted, say, while the user happens to be mid-drag --
+        // every real motion sample after it would be discarded and the user's drag would be
+        // recorded truncated. Excluding our own delivery has to include the state later events
+        // are judged against, not only the events themselves.
+        if self_delivery().claims(event.kind, event.detail) {
+            return None;
+        }
+        match event.kind {
+            KEY_PRESS => Some(RawInput::Key {
+                keycode: event.detail,
+                state: event.state,
+            }),
+            // Nothing to carry. The modifier state a later keystroke is read against travels on
+            // the event that needs it, so unlike a low-level Windows hook this observer has no
+            // state to fold a release into.
+            KEY_RELEASE => None,
+            BUTTON_PRESS | BUTTON_RELEASE => {
+                let down = event.kind == BUTTON_PRESS;
+                match event.detail {
+                    BUTTON_PRIMARY => {
+                        self.held = down;
+                        Some(RawInput::Button {
+                            down,
+                            point: event.point,
+                        })
+                    }
+                    // A wheel notch is a press and a release of the same button. Only the press is
+                    // a notch; recording the release too would double every scroll.
+                    button if down && wheel_delta(button).is_some() => Some(RawInput::Wheel {
+                        button,
+                        point: event.point,
+                    }),
+                    _ => None,
+                }
+            }
+            MOTION_NOTIFY => self.held.then_some(RawInput::Motion { point: event.point }),
+            _ => None,
+        }
+    }
 }
 
 /// The bounded hand-off from the RECORD data connection to the enrichment thread.
