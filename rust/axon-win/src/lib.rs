@@ -1810,6 +1810,71 @@ mod tests {
         );
     }
 
+    /// A recording keeps the events its observer had not finished producing when the stop arrived.
+    ///
+    /// This is the failure mode a backend that reads the interface behind its hook has and a
+    /// synchronous one does not: at the moment `recording.stop` is dispatched, the last events of
+    /// the session exist only as unenriched raw input, and the bench measured that backlog at
+    /// nearly a whole 400-event burst. Polling before observation has been brought to a stop, and
+    /// then finishing, authors a recording that stops short of its own ending -- and does so
+    /// silently, because the count is plausible and only the tail is missing.
+    #[test]
+    fn stopping_keeps_the_events_the_observer_had_not_yet_produced() {
+        let backend = backend(vec![node("Save")], None);
+        let pending = Rc::clone(&backend.pending_until_quiesce);
+        let mut router = Router::new(backend);
+
+        router
+            .request(JsonRpcRequest::new(
+                Some(JsonRpcId::Integer(1)),
+                "recording.start",
+                Some(json!({"scope":{"scope":"allApplications"}})),
+            ))
+            .unwrap();
+
+        pending
+            .borrow_mut()
+            .push(axon_core::RecordedInputEvent::KeyDown {
+                app: axon_core::RecordedAppIdentity {
+                    name: "Notepad".into(),
+                    bundle_identifier: None,
+                    process_id: None,
+                },
+                keystroke: axon_core::RecordedKeystroke::Key {
+                    key: "return".into(),
+                },
+                timestamp_ms: 11,
+            });
+
+        // A status poll cannot see it yet, which is what makes this a real backlog rather than an
+        // event the test simply queued late.
+        let status = router
+            .request(JsonRpcRequest::new(
+                Some(JsonRpcId::Integer(2)),
+                "recording.status",
+                Some(json!({})),
+            ))
+            .unwrap();
+        assert!(matches!(status, JsonRpcResponse::Success(_)));
+        assert_eq!(pending.borrow().len(), 1, "still behind");
+
+        let JsonRpcResponse::Success(stopped) = router
+            .request(JsonRpcRequest::new(
+                Some(JsonRpcId::Integer(3)),
+                "recording.stop",
+                Some(json!({})),
+            ))
+            .unwrap()
+        else {
+            panic!("a stop that quiesced its observer authors what it was still producing")
+        };
+        assert_eq!(
+            stopped.result["actionCount"], 1,
+            "the recording lost the action its observer produced while stopping"
+        );
+        assert!(stopped.result["script"].as_str().unwrap().contains("return"));
+    }
+
     /// The route this issue exists to open: a start that is allowed records real events and stops
     /// into an authored document, with the observer released exactly once on the way out.
     #[test]
@@ -2043,8 +2108,20 @@ mod tests {
         observer_refusal: Option<&'static str>,
         /// Events the observer hands over on the next poll, drained as they are taken.
         observed_input: Rc<RefCell<Vec<axon_core::RecordedInputEvent>>>,
+        /// Events this observer only surrenders once observation has been quiesced, standing in
+        /// for an enrichment thread still working through its backlog when `recording.stop`
+        /// arrives. Without a fake that can be *behind*, no route test can tell a recording that
+        /// keeps its ending from one that drops it.
+        pending_until_quiesce: Rc<RefCell<Vec<axon_core::RecordedInputEvent>>>,
         observer_starts: Rc<RefCell<usize>>,
         observer_stops: Rc<RefCell<usize>>,
+    }
+
+    impl ObserverQuiescence for FakeBackend {
+        fn quiesce_global_input(&mut self) {
+            let caught_up = std::mem::take(&mut *self.pending_until_quiesce.borrow_mut());
+            self.observed_input.borrow_mut().extend(caught_up);
+        }
     }
     impl BackgroundPixelPointer for FakeBackend {
         fn plan_pixel_click(
@@ -2380,6 +2457,7 @@ mod tests {
             pixel_dispatches: Rc::new(RefCell::new(0)),
             observer_refusal: None,
             observed_input: Rc::new(RefCell::new(vec![])),
+            pending_until_quiesce: Rc::new(RefCell::new(vec![])),
             observer_starts: Rc::new(RefCell::new(0)),
             observer_stops: Rc::new(RefCell::new(0)),
         }
