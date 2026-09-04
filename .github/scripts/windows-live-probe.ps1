@@ -281,15 +281,23 @@ function Invoke-RecordingDiagnostic {
             throw 'recording diagnostic returned no recording-diagnostic-v2 payload'
         }
 
+        # Emitted before it is judged, deliberately. A measurement that reached this machine is
+        # expensive to obtain and must survive a disagreement about what it means -- including a
+        # bug in the checks below, which is exactly how the first v2 run lost its wheel numbers.
+        Write-Note "recording diagnostic: $($payload | ConvertTo-Json -Compress -Depth 100)"
+
         # This stage asserts validity, never outcome. The point of a measurement is to be able to
         # be surprised by it, so a deep queue or an unobservable self-delivery is a finding and
         # passes; but a run that measured nothing must not be reportable as a reassuring result.
         if ([int]$payload.selfDelivery.unstampedSeenByOwnHook -lt 1) {
             throw 'the low-level hook observed none of the unstamped input posted beside it; the measurement is invalid rather than negative'
         }
-        foreach ($burst in @($payload.queueDepth.bursts)) {
-            if ($burst.measurementValid -ne $true) {
-                throw "the $($burst.path) burst produced no enriched events, so its queue depth measures nothing; the burst is not reaching the read path"
+        # `$measured`, not `$burst`: PowerShell variable names are case-insensitive, so a loop
+        # variable named `$burst` is the `[int] $Burst` parameter of this function and binding an
+        # object to it fails the conversion rather than the comparison.
+        foreach ($measured in @($payload.queueDepth.bursts)) {
+            if ($measured.measurementValid -ne $true) {
+                throw "the $($measured.path) burst produced no enriched events, so its queue depth measures nothing; the burst is not reaching the read path"
             }
         }
         $payload
@@ -1289,15 +1297,14 @@ function Invoke-ProbeStage {
             # foreground browser, because what the enrichment thread is racing is a UI Automation
             # provider answering for a live out-of-process window, not an idle desktop.
             $recording = Invoke-RecordingDiagnostic -Burst $RecordingDiagnosticBurst
-            Write-Note "recording diagnostic: $($recording | ConvertTo-Json -Compress -Depth 100)"
             Write-Note ("recording diagnostic finding: ownDeliveryIsObservable=" +
                 "$($recording.selfDelivery.ownDeliveryIsObservable) " +
                 "stampSurvivesToTheHook=$($recording.selfDelivery.stampSurvivesToTheHook)")
-            foreach ($burst in @($recording.queueDepth.bursts)) {
-                Write-Note ("recording diagnostic $($burst.path) burst: accepted=$($burst.eventsAccepted) " +
-                    "enriched=$($burst.enrichedEvents) highWater=$($burst.rawQueueHighWater)/" +
-                    "$($recording.queueDepth.rawQueueCapacity) pending=$($burst.stillPendingAfterFiveSeconds) " +
-                    "overflowReachable=$($burst.overflowReachable) elapsedMs=$($burst.elapsedMs)")
+            foreach ($measured in @($recording.queueDepth.bursts)) {
+                Write-Note ("recording diagnostic $($measured.path) burst: accepted=$($measured.eventsAccepted) " +
+                    "enriched=$($measured.enrichedEvents) highWater=$($measured.rawQueueHighWater)/" +
+                    "$($recording.queueDepth.rawQueueCapacity) pending=$($measured.stillPendingAfterFiveSeconds) " +
+                    "overflowReachable=$($measured.overflowReachable) elapsedMs=$($measured.elapsedMs)")
             }
             return
         }
