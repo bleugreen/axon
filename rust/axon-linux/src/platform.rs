@@ -91,6 +91,38 @@ const NO_WINDOW_MANAGER: &str = "this X11 session has no EWMH-capable window man
      foreground application can be neither read nor activated";
 const NO_XTEST: &str = "this X server does not provide the XTEST extension, so there is no way to \
      post synthetic input to it";
+const NO_RECORD: &str = "this X server does not provide the RECORD extension, so there is no way \
+     to observe input this daemon did not send";
+const WAYLAND_OBSERVATION: &str = "this is a Wayland session: the compositor delivers input only \
+     to the surface it is aimed at, and there is no listen-only global input protocol to ask it \
+     for the rest -- by design rather than by omission";
+const NO_POINT_LOOKUP: &str = "this X11 session has no EWMH-capable window manager, so a screen \
+     point cannot be tied back to the application that owns what is under it";
+
+/// The stable code each refusal carries on the wire, beside its prose reason.
+///
+/// A caller that only learned "unavailable" could not tell a Wayland session from an X11 one
+/// missing an extension, which are different situations with different answers -- one is permanent
+/// and one is a server option.
+const WAYLAND_RESTRICTED: &str = "wayland-restricted";
+const NO_X_DISPLAY_CODE: &str = "no-x-display";
+const NO_RECORD_CODE: &str = "no-record-extension";
+const NO_WINDOW_MANAGER_CODE: &str = "no-window-manager";
+
+/// How far out from a recorded event this backend looks for something worth naming.
+///
+/// Much shallower than a capture walk, and deliberately so: this runs once per pointer event, at
+/// event time, against providers answering across D-Bus at up to [`CALL_TIMEOUT`] each. Shared core
+/// only needs the actionable ancestry near the hit; it re-resolves whatever it is given against a
+/// full snapshot afterwards.
+const RECORDED_ANCESTRY: usize = 6;
+
+/// How far a descent through the accessibility tree towards a point may go.
+///
+/// `GetAccessibleAtPoint` answers with a direct child rather than the deepest hit, so reaching a
+/// leaf means asking repeatedly. A provider that answers with itself, or with a cycle, would
+/// otherwise loop here at event time.
+const MAX_POINT_DESCENT: usize = MAX_DEPTH;
 
 type Reply<T> = mpsc::Sender<Result<T, BackendError>>;
 enum Command {
@@ -236,6 +268,7 @@ struct SessionFacts {
     window_manager: bool,
     screenshot_windows: bool,
     xtest: bool,
+    record: bool,
 }
 
 /// Why global input cannot be delivered in this session, or `None` when it can.
@@ -266,6 +299,54 @@ fn input_restriction(facts: SessionFacts) -> Option<&'static str> {
     None
 }
 
+/// Why this session cannot observe global input, or `None` when it can.
+///
+/// Pure, and separated from the probing, for the same reason [`input_restriction`] is: a server
+/// without RECORD is something no ordinary desktop and no CI lane produces by accident, and the
+/// decision has to be tested somewhere it can be arranged.
+///
+/// Wayland outranks everything, and it is not redundant with the rest. Mutter under Wayland runs
+/// XWayland, which answers as a complete X server and does provide RECORD -- and records only what
+/// reaches XWayland's own clients. A Wayland-native application's input never appears there at all,
+/// so an observer that trusted the extension check would record a session that looks empty while
+/// the user works.
+///
+/// A window manager is deliberately *not* required. Without one a recording still captures
+/// keystrokes and clicks; what it loses is the ability to name the application under a point, which
+/// costs the click its semantic target and not the recording its existence.
+fn observation_restriction(facts: SessionFacts) -> Option<(&'static str, &'static str)> {
+    if facts.wayland {
+        return Some((WAYLAND_RESTRICTED, WAYLAND_OBSERVATION));
+    }
+    if !facts.x_display {
+        return Some((NO_X_DISPLAY_CODE, NO_X_DISPLAY));
+    }
+    if !facts.record {
+        return Some((NO_RECORD_CODE, NO_RECORD));
+    }
+    None
+}
+
+/// Why a screen point cannot be resolved to an element, or `None` when it can.
+///
+/// Not the same question as synthetic input, and the difference is XTEST: looking up what is under
+/// a point needs a display and a window manager's `_NET_CLIENT_LIST` to tie a window to a process,
+/// and needs nothing at all to post with. A session that can see but not type is a real session,
+/// and reusing [`input_restriction`] here would refuse a hit test on it for a reason that is about
+/// something else.
+fn point_lookup_restriction(facts: SessionFacts) -> Option<(&'static str, &'static str)> {
+    if facts.wayland {
+        return Some((WAYLAND_RESTRICTED, WAYLAND_SESSION));
+    }
+    if !facts.x_display {
+        return Some((NO_X_DISPLAY_CODE, NO_X_DISPLAY));
+    }
+    if !facts.window_manager {
+        return Some((NO_WINDOW_MANAGER_CODE, NO_POINT_LOOKUP));
+    }
+    None
+}
+
 /// Why an application window cannot be located and captured in this session.
 fn screenshot_provider_kind(facts: SessionFacts) -> ScreenshotProviderKind {
     if facts.wayland {
@@ -291,6 +372,7 @@ fn session_facts() -> SessionFacts {
             .as_ref()
             .is_some_and(X11Session::supports_screenshot_capture),
         xtest: x11.as_ref().is_some_and(X11Session::supports_xtest),
+        record: x11.as_ref().is_some_and(X11Session::supports_record),
     }
 }
 
