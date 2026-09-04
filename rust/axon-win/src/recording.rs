@@ -349,6 +349,14 @@ impl RawQueue {
     pub fn high_water(&self) -> usize {
         self.high_water.load(Ordering::Relaxed)
     }
+
+    /// What is waiting right now, which is what says whether enrichment ever caught up.
+    pub fn depth(&self) -> usize {
+        self.events
+            .lock()
+            .expect("raw input queue is never poisoned")
+            .len()
+    }
 }
 
 /// Whether an element holds something the recorder must never read or transcribe.

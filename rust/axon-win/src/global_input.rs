@@ -33,7 +33,7 @@ use std::{
         mpsc,
     },
     thread::{self, JoinHandle},
-    time::{Duration, SystemTime, UNIX_EPOCH},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 use windows::Win32::{
     Foundation::{LPARAM, LRESULT, WPARAM},
@@ -533,6 +533,11 @@ impl WindowsGlobalInputObserver {
     pub fn raw_queue_depth(&self) -> usize {
         raw_queue().high_water()
     }
+
+    /// What is still waiting for enrichment. Zero at the end of a burst means it caught up.
+    pub fn raw_queue_pending(&self) -> usize {
+        raw_queue().depth()
+    }
 }
 
 impl GlobalInputObserver for WindowsGlobalInputObserver {
@@ -657,34 +662,55 @@ fn start_hook_thread() -> Result<(JoinHandle<()>, u32), BackendError> {
 /// the mechanism can be deleted; if they arrive with the stamp erased, marking each event cannot
 /// work and a guard held across the posting call is the fallback.
 ///
-/// **How deep does the raw queue get under a fast burst?** Every non-self event costs the
-/// enrichment thread a UI Automation round trip against a 1500 ms transaction timeout, so this is
-/// the number that says whether the bounded queue's overflow is a real operating condition or a
-/// backstop. The burst is posted unstamped on purpose: stamped events are discarded before any
-/// read and would measure nothing.
+/// **How deep does the raw queue get under a fast burst?** Every event the observer classifies as
+/// real costs the enrichment thread a UI Automation round trip against a 1500 ms transaction
+/// timeout, so this is the number that says whether the bounded queue's overflow is an operating
+/// condition or a backstop.
+///
+/// Two bursts, because the two read paths differ by more than an order of magnitude and reporting
+/// only the cheap one would be reassuring rather than informative. A keystroke costs one identity
+/// read; a wheel event costs a hit test plus an ancestry walk with a handful of property reads at
+/// every level. Each burst reports `measurementValid`: a burst the observer classified as nothing
+/// costs no read at all, and a queue that stayed empty for that reason looks exactly like headroom
+/// while measuring nothing whatsoever. The first run of this probe made precisely that mistake
+/// (F24, which no layout resolves and `classify_keystroke` drops before any read), which is why
+/// the flag is reported rather than assumed.
 pub(super) fn probe(args: &[String]) -> Result<serde_json::Value, BackendError> {
+    use windows::Win32::Foundation::RECT;
     use windows::Win32::UI::Input::KeyboardAndMouse::{
-        INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP, SendInput, VIRTUAL_KEY,
+        INPUT, INPUT_0, INPUT_KEYBOARD, INPUT_MOUSE, KEYBDINPUT, KEYEVENTF_KEYUP, MOUSEEVENTF_WHEEL,
+        MOUSEINPUT, SendInput, VIRTUAL_KEY,
     };
+    use windows::Win32::UI::WindowsAndMessaging::GetWindowRect;
 
-    // F24: a key no layout produces and no application binds, so a burst of it changes nothing on
-    // the desktop it is measured on.
+    // F24 for the stamp test: a key no layout produces and no application binds, so posting it
+    // changes nothing on the desktop being measured. It is deliberately NOT used for the depth
+    // bursts below, for exactly the reason it is safe here.
     const SENTINEL: u16 = 0x87;
-    let burst: usize = args
-        .iter()
-        .position(|arg| arg == "--burst")
-        .and_then(|index| args.get(index + 1))
-        .map_or(Ok(200), |value| {
-            value
-                .parse()
-                .map_err(|_| operation("invalid --burst count"))
-        })?;
+    // `A` for the keystroke burst: it has to be a key the observer resolves to text, or the burst
+    // never reaches the read path whose cost is the thing in question.
+    const TYPED: u16 = 0x41;
+    let count = |name: &str, default: usize| -> Result<usize, BackendError> {
+        args.iter()
+            .position(|arg| arg == name)
+            .and_then(|index| args.get(index + 1))
+            .map_or(Ok(default), |value| {
+                value
+                    .parse()
+                    .map_err(|_| operation(format!("invalid {name} count")))
+            })
+    };
+    let burst = count("--burst", 200)?;
+    // Smaller, and not arbitrarily: a wheel event costs roughly an order of magnitude more reads
+    // than a keystroke, and a burst that takes minutes to drain would time out the relay task
+    // rather than report anything.
+    let wheel_burst = count("--wheel-burst", 40)?;
 
-    let key = |stamped: bool, up: bool| INPUT {
+    let key = |virtual_key: u16, stamped: bool, up: bool| INPUT {
         r#type: INPUT_KEYBOARD,
         Anonymous: INPUT_0 {
             ki: KEYBDINPUT {
-                wVk: VIRTUAL_KEY(SENTINEL),
+                wVk: VIRTUAL_KEY(virtual_key),
                 wScan: 0,
                 dwFlags: if up {
                     KEYEVENTF_KEYUP
@@ -700,9 +726,28 @@ pub(super) fn probe(args: &[String]) -> Result<serde_json::Value, BackendError> 
             },
         },
     };
-    let post = |stamped: bool, pairs: usize| {
+    let post_keys = |virtual_key: u16, stamped: bool, pairs: usize| {
         let inputs: Vec<INPUT> = (0..pairs)
-            .flat_map(|_| [key(stamped, false), key(stamped, true)])
+            .flat_map(|_| [key(virtual_key, stamped, false), key(virtual_key, stamped, true)])
+            .collect();
+        unsafe { SendInput(&inputs, std::mem::size_of::<INPUT>() as i32) }
+    };
+    let post = |stamped: bool, pairs: usize| post_keys(SENTINEL, stamped, pairs);
+    let post_wheel = |notches: usize| {
+        let inputs: Vec<INPUT> = (0..notches)
+            .map(|_| INPUT {
+                r#type: INPUT_MOUSE,
+                Anonymous: INPUT_0 {
+                    mi: MOUSEINPUT {
+                        dx: 0,
+                        dy: 0,
+                        mouseData: (-120i32) as u32,
+                        dwFlags: MOUSEEVENTF_WHEEL,
+                        time: 0,
+                        dwExtraInfo: 0,
+                    },
+                },
+            })
             .collect();
         unsafe { SendInput(&inputs, std::mem::size_of::<INPUT>() as i32) }
     };
@@ -745,19 +790,24 @@ pub(super) fn probe(args: &[String]) -> Result<serde_json::Value, BackendError> 
     // Stage two: the full pipeline, so the depth measured is depth under real enrichment.
     let backend = super::WindowsBackend::start()?;
     let commands = backend.command_sender();
-    let mut observer = WindowsGlobalInputObserver::new(commands);
-    observer.start(&RecordingScope::AllApplications)?;
-    let burst_started = SystemTime::now();
-    let burst_posted = post(false, burst);
-    // Long enough for the enrichment thread to work through a queue it may be well behind on.
-    thread::sleep(Duration::from_secs(5));
-    let enriched = observer.poll(Duration::ZERO)?;
-    let queue_high_water = observer.raw_queue_depth();
-    observer.stop()?;
-    let burst_elapsed_ms = burst_started.elapsed().unwrap_or_default().as_millis() as u64;
+
+    // A wheel event hit-tests wherever the pointer happens to be, so the pointer is put over the
+    // window under test first. Measured over the desktop shell it would time the wrong provider.
+    let window = super::pixel::foreground_window();
+    let mut rect = RECT::default();
+    let pointer_placed = unsafe { GetWindowRect(window, &mut rect) }.is_ok()
+        && super::pixel::set_cursor(
+            rect.left + (rect.right - rect.left) / 2,
+            rect.top + (rect.bottom - rect.top) / 2,
+        );
+
+    let typing = measure_burst(&commands, "keystroke", burst, || {
+        post_keys(TYPED, false, burst)
+    })?;
+    let wheel = measure_burst(&commands, "wheel", wheel_burst, || post_wheel(wheel_burst))?;
 
     Ok(serde_json::json!({
-        "schemaVersion": "recording-diagnostic-v1",
+        "schemaVersion": "recording-diagnostic-v2",
         "processId": std::process::id(),
         "selfDeliveryTag": format!("0x{ours:X}"),
         "selfDelivery": {
@@ -771,14 +821,44 @@ pub(super) fn probe(args: &[String]) -> Result<serde_json::Value, BackendError> 
             "stampSurvivesToTheHook": stamped_seen > 0,
         },
         "queueDepth": {
-            "burstPairsRequested": burst,
-            "burstEventsAccepted": burst_posted,
             "rawQueueCapacity": RAW_CAPACITY,
-            "rawQueueHighWater": queue_high_water,
-            "overflowReachable": queue_high_water >= RAW_CAPACITY,
-            "enrichedEvents": enriched.len(),
-            "elapsedMs": burst_elapsed_ms,
+            "pointerPlacedOverForegroundWindow": pointer_placed,
+            "bursts": [typing, wheel],
         },
+    }))
+}
+
+/// One burst through the whole pipeline, reported with enough context to be readable later.
+fn measure_burst(
+    commands: &mpsc::Sender<Command>,
+    path: &str,
+    requested: usize,
+    post: impl Fn() -> u32,
+) -> Result<serde_json::Value, BackendError> {
+    let mut observer = WindowsGlobalInputObserver::new(commands.clone());
+    observer.start(&RecordingScope::AllApplications)?;
+    let started = Instant::now();
+    let accepted = post();
+    // Long enough for the enrichment thread to work through a queue it may be well behind on,
+    // and short enough that what it has not finished shows up as pending rather than as patience.
+    thread::sleep(Duration::from_secs(5));
+    let pending = observer.raw_queue_pending();
+    let high_water = observer.raw_queue_depth();
+    let enriched = observer.poll(Duration::ZERO)?;
+    observer.stop()?;
+    Ok(serde_json::json!({
+        "path": path,
+        "requested": requested,
+        "eventsAccepted": accepted,
+        "rawQueueHighWater": high_water,
+        "overflowReachable": high_water >= RAW_CAPACITY,
+        "stillPendingAfterFiveSeconds": pending,
+        "enrichedEvents": enriched.len(),
+        // Without this the depth above cannot be read. A burst the observer classifies as nothing
+        // costs no UI Automation read at all, so a queue that stayed shallow for that reason is
+        // indistinguishable from headroom -- which is the mistake this probe's first run made.
+        "measurementValid": !enriched.is_empty(),
+        "elapsedMs": started.elapsed().as_millis() as u64,
     }))
 }
 
