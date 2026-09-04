@@ -7,13 +7,17 @@ use crate::{
 use axon_core::{
     AppQuery, Application, BackendError, Capability, CapabilityInfo, CaptureBounds,
     ChildPageCapture, ChildPageRequest, Key, KeyboardIntent, Modifier, Node, Observation,
-    PlatformBackend, RecognizedText, Rect, Screenshot, Snapshot, SnapshotHandle,
-    TextRecognitionProvider, Window,
+    PlatformBackend, RecognizedText, RecordedAppIdentity, RecordedElementEvidence,
+    RecordedFocusedEvidence, RecordedPoint, RecordedSettleEvidence, RecordedTargetEvidence,
+    RecordingEvidenceProvider, Rect, Screenshot, Snapshot, SnapshotHandle, TextRecognitionProvider,
+    Window,
 };
 use serde::Serialize;
 
 #[path = "capture.rs"]
 mod graphics_capture;
+#[path = "global_input.rs"]
+mod global_input;
 #[path = "keyboard_diagnostic.rs"]
 mod keyboard_diagnostic;
 #[path = "pixel.rs"]
@@ -70,8 +74,9 @@ use windows::{
                 SetActiveWindow, VIRTUAL_KEY, VkKeyScanExW,
             },
             WindowsAndMessaging::{
-                ASFW_ANY, AllowSetForegroundWindow, BringWindowToTop, GetForegroundWindow,
-                GetSystemMetrics, GetWindowThreadProcessId, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN,
+                ASFW_ANY, AllowSetForegroundWindow, BringWindowToTop, GA_ROOT, GetAncestor,
+                GetForegroundWindow, GetSystemMetrics, GetWindowThreadProcessId,
+                SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN,
                 SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN, SPI_GETFOREGROUNDLOCKTIMEOUT,
                 SPI_SETFOREGROUNDLOCKTIMEOUT, SPIF_SENDCHANGE, SetForegroundWindow,
                 SwitchToThisWindow, SystemParametersInfoW,
@@ -84,6 +89,14 @@ use windows::{
 const MAX_DEPTH: usize = 18;
 const MAX_CHILDREN: usize = 200;
 const MAX_NODES: usize = 2_000;
+
+/// How far out from a recorded event this backend looks for something worth naming.
+///
+/// Much shallower than a capture walk, and deliberately so: this runs once per pointer event, at
+/// event time, against providers that may take up to the 1500 ms transaction timeout to answer.
+/// Shared core only needs the actionable ancestry near the hit; it re-resolves whatever it is given
+/// against a full snapshot afterwards.
+const RECORDED_ANCESTRY: usize = 6;
 
 fn child_page_range(total: usize, offset: usize, limit: Option<usize>) -> (usize, usize) {
     let start = offset.min(total);
@@ -215,6 +228,19 @@ enum Command {
     /// Probe-only: lets `axon-win probe pixel-click` reach a class the allowlist has not yet
     /// accepted, which is how a class becomes a candidate for it in the first place.
     AllowUnverifiedPixelClasses(bool, mpsc::Sender<Result<(), BackendError>>),
+    /// Recording evidence: what the interface looked like at one screen point.
+    ///
+    /// Answered on this actor rather than on a UI Automation client of the observer's own, because
+    /// one native worker per process is the discipline this crate is built on. The observer holds a
+    /// clone of this channel and asks at event time, which is the only time the answer is true.
+    PointEvidence(
+        (f64, f64),
+        mpsc::Sender<Result<Option<RecordedTargetEvidence>, BackendError>>,
+    ),
+    /// Recording evidence: the focused element and the complete value `setValue` authoring needs.
+    FocusedEvidence(mpsc::Sender<Result<Option<RecordedFocusedEvidence>, BackendError>>),
+    /// Recording evidence: which application is frontmost, named as `enumerate` names it.
+    ForegroundIdentity(mpsc::Sender<Result<Option<RecordedAppIdentity>, BackendError>>),
 }
 
 #[derive(Debug, Serialize)]
@@ -901,6 +927,15 @@ impl UiaState {
                             .map_err(|e| operation("get InvokePattern", e))?;
                     unsafe { p.Invoke() }.map_err(|e| operation("invoke", e))
                 }));
+            }
+            Command::PointEvidence(point, tx) => {
+                let _ = tx.send(self.point_evidence(point));
+            }
+            Command::FocusedEvidence(tx) => {
+                let _ = tx.send(self.focused_evidence());
+            }
+            Command::ForegroundIdentity(tx) => {
+                let _ = tx.send(Ok(self.foreground_identity()));
             }
             Command::VerifyPointerTarget(handle, (x, y), tx) => {
                 let result = self.element(&handle).and_then(|target| {
