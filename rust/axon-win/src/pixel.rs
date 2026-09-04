@@ -119,7 +119,7 @@ mod keyboard_snapshot_tests {
 
     #[test]
     fn queue_status_keeps_current_and_changed_words_distinct() {
-        let status = classify_queue_status(((QS_KEY.0 as u32) << 16) | QS_RAWINPUT.0 as u32);
+        let status = classify_queue_status((QS_KEY.0 << 16) | QS_RAWINPUT.0);
         assert!(status.keyboard_current);
         assert!(!status.keyboard_changed);
         assert!(!status.raw_input_current);
