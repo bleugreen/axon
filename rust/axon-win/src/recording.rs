@@ -5,7 +5,7 @@
 //! Automation reads; it feeds this module raw events and forwards what it decides they mean.
 #![cfg_attr(not(windows), allow(dead_code))]
 
-use axon_core::RecordedKeystroke;
+use axon_core::{RecordedKeystroke, evidence_value};
 use std::sync::OnceLock;
 
 /// The sentinel this daemon writes into `dwExtraInfo` on every input record it posts, and the only
@@ -283,15 +283,6 @@ pub fn is_sensitive(is_password: bool) -> bool {
     is_password
 }
 
-/// The value an element reports as evidence, which for a sensitive element is nothing at all.
-///
-/// `read` is a closure and not a value because the rule is that the credential is never read, not
-/// that it is read and then dropped. Shared core also refuses to build a target from a sensitive
-/// element, but that refusal runs later: by then a provider that had already read the value would
-/// have put it in a buffer, a log line, and a redaction pass that cannot recognise it.
-pub fn evidence_value(sensitive: bool, read: impl FnOnce() -> Option<String>) -> Option<String> {
-    (!sensitive).then(read).flatten()
-}
 
 
 #[cfg(test)]
