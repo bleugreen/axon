@@ -43,7 +43,15 @@ param(
     [string] $Stage,
     [switch] $KeyboardDiagnostic,
     [ValidateRange(1, 10)]
-    [int] $KeyboardDiagnosticMaxTrials = 10
+    [int] $KeyboardDiagnosticMaxTrials = 10,
+    # Answers the two questions the Windows recording observer was designed against rather than
+    # measured on: whether this process's own SendInput reaches its own low-level hook with its
+    # dwExtraInfo stamp intact, and how deep the raw queue gets while enrichment reads UI
+    # Automation for every event of a burst. Diagnostic only -- it records nothing and asserts
+    # nothing about the recording routes.
+    [switch] $RecordingDiagnostic,
+    [ValidateRange(1, 2000)]
+    [int] $RecordingDiagnosticBurst = 200
 )
 
 $ErrorActionPreference = 'Stop'
@@ -64,6 +72,7 @@ $ProbeBrowserTaskName = 'Axon Live Probe Browser'
 $ProbeActivationTaskName = 'Axon Live Probe Prior Activation'
 $ProbeForegroundTaskName = 'Axon Live Probe Foreground Sweep'
 $ProbeKeyboardTaskName = 'Axon Live Probe Keyboard Diagnostic'
+$ProbeRecordingTaskName = 'Axon Live Probe Recording Diagnostic'
 $LiveDirectory = 'C:\ProgramData\Axon\live'
 # Outside the runner workspace on purpose: a running process locks its image on Windows, so a
 # daemon started from the checkout survives its job and breaks the next checkout (AXN-38).
@@ -239,6 +248,91 @@ function Unregister-ProbeKeyboardTask {
 }
 
 function Remove-ProbeKeyboardResult {
+    param([Parameter(Mandatory)][string] $ResultPath)
+    Remove-Item -LiteralPath $ResultPath, "$ResultPath.tmp" -Force -ErrorAction SilentlyContinue
+}
+
+function Invoke-RecordingDiagnostic {
+    <# The two measurements the Windows observer's design rests on.
+
+    Run through the same scheduled-task relay as the keyboard diagnostic and for the same reason:
+    low-level hooks and SendInput only mean anything on the interactive desktop, and an ssh session
+    lands in session 0 where every answer would be a false negative. #>
+    param([Parameter(Mandatory)][int] $Burst)
+    $resultPath = Join-Path $LiveDirectory 'recording-diagnostic.json'
+    try {
+        Remove-ProbeRecordingResult -ResultPath $resultPath
+        Register-ProbeRecordingTask -Burst $Burst -ResultPath $resultPath
+        Start-ScheduledTask -TaskName $ProbeRecordingTaskName
+        $run = Wait-ForProbeRecordingTask -ResultPath $resultPath
+        if ($run.exitCode -ne 0) { throw "recording diagnostic exited $($run.exitCode): $($run.stderr)" }
+        $payload = $run.payload
+        if ($null -eq $payload -or $payload.schemaVersion -ne 'recording-diagnostic-v1') {
+            throw 'recording diagnostic returned no recording-diagnostic-v1 payload'
+        }
+
+        # The one thing this stage does assert. Everything else it reports for a human to read,
+        # because the point of a measurement is to be surprised by it; but a hook that saw neither
+        # its own stamped input nor the unstamped input posted beside it saw nothing at all, and
+        # that is an unusable measurement rather than a finding.
+        if ([int]$payload.selfDelivery.unstampedSeenByOwnHook -lt 1) {
+            throw 'the low-level hook observed none of the unstamped input posted beside it; the measurement is invalid rather than negative'
+        }
+        $payload
+    }
+    finally {
+        Unregister-ScheduledTask -TaskName $ProbeRecordingTaskName -Confirm:$false -ErrorAction SilentlyContinue
+        Remove-ProbeRecordingResult -ResultPath $resultPath
+    }
+}
+
+function Register-ProbeRecordingTask {
+    param(
+        [Parameter(Mandatory)][int] $Burst,
+        [Parameter(Mandatory)][string] $ResultPath
+    )
+    $escapedExecutable = $ProbeCliExecutable.Replace("'", "''")
+    $escapedResultPath = $ResultPath.Replace("'", "''")
+    $escapedTemporaryPath = ("$ResultPath.tmp").Replace("'", "''")
+    $command = @"
+`$start = [System.Diagnostics.ProcessStartInfo]::new()
+`$start.FileName = '$escapedExecutable'
+`$start.Arguments = 'probe recording-diagnostic --burst $Burst'
+`$start.UseShellExecute = `$false
+`$start.RedirectStandardOutput = `$true
+`$start.RedirectStandardError = `$true
+`$process = [System.Diagnostics.Process]::Start(`$start)
+`$stdoutTask = `$process.StandardOutput.ReadToEndAsync()
+`$stderrTask = `$process.StandardError.ReadToEndAsync()
+`$process.WaitForExit()
+`$stdout = `$stdoutTask.Result
+`$stderr = `$stderrTask.Result
+`$payload = `$null
+if (`$process.ExitCode -eq 0) { `$payload = `$stdout | ConvertFrom-Json }
+@{ stdout = `$stdout; stderr = `$stderr; exitCode = `$process.ExitCode; payload = `$payload } | ConvertTo-Json -Compress -Depth 100 | Set-Content -LiteralPath '$escapedTemporaryPath' -Encoding utf8
+Move-Item -LiteralPath '$escapedTemporaryPath' -Destination '$escapedResultPath' -Force
+"@
+    $encodedCommand = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($command))
+    $action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument "-NoProfile -NonInteractive -EncodedCommand $encodedCommand"
+    $principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive
+    Register-ScheduledTask -TaskName $ProbeRecordingTaskName -Action $action -Principal $principal -Force | Out-Null
+}
+
+function Wait-ForProbeRecordingTask {
+    param([Parameter(Mandatory)][string] $ResultPath)
+    $timer = [System.Diagnostics.Stopwatch]::StartNew()
+    do {
+        if (Test-Path -LiteralPath $ResultPath) {
+            return Get-Content -LiteralPath $ResultPath -Raw | ConvertFrom-Json
+        }
+        $task = Get-ScheduledTask -TaskName $ProbeRecordingTaskName -ErrorAction SilentlyContinue
+        if ($null -eq $task) { throw 'the recording diagnostic task disappeared before reporting its result' }
+        Wait-Tick
+    } while ($timer.Elapsed.TotalSeconds -lt $ProcessDiscoveryTimeoutSeconds)
+    throw 'the recording diagnostic task did not report completion before the timeout'
+}
+
+function Remove-ProbeRecordingResult {
     param([Parameter(Mandatory)][string] $ResultPath)
     Remove-Item -LiteralPath $ResultPath, "$ResultPath.tmp" -Force -ErrorAction SilentlyContinue
 }
@@ -1167,6 +1261,21 @@ function Invoke-ProbeStage {
         if ($KeyboardDiagnostic) {
             $diagnostic = Invoke-KeyboardDiagnostic -TargetProcessId ([int]$browser.ProcessId) -MaxTrials $KeyboardDiagnosticMaxTrials
             Write-Note "keyboard diagnostic timeline: $($diagnostic | ConvertTo-Json -Compress -Depth 100)"
+            return
+        }
+
+        if ($RecordingDiagnostic) {
+            # Deliberately after the Edge setup above: the burst is measured against a real
+            # foreground browser, because what the enrichment thread is racing is a UI Automation
+            # provider answering for a live out-of-process window, not an idle desktop.
+            $recording = Invoke-RecordingDiagnostic -Burst $RecordingDiagnosticBurst
+            Write-Note "recording diagnostic: $($recording | ConvertTo-Json -Compress -Depth 100)"
+            Write-Note ("recording diagnostic finding: ownDeliveryIsObservable=" +
+                "$($recording.selfDelivery.ownDeliveryIsObservable) " +
+                "stampSurvivesToTheHook=$($recording.selfDelivery.stampSurvivesToTheHook) " +
+                "rawQueueHighWater=$($recording.queueDepth.rawQueueHighWater)/" +
+                "$($recording.queueDepth.rawQueueCapacity) " +
+                "overflowReachable=$($recording.queueDepth.overflowReachable)")
             return
         }
 
