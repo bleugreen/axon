@@ -183,7 +183,7 @@ pub fn serve(
     on_bound();
     let ready = ready_rx.recv().map_err(io::Error::other)?;
     close_pipe(handle);
-    let backend = ready.map_err(|error| io::Error::other(error))?;
+    let backend = ready.map_err(io::Error::other)?;
     let capabilities = Arc::new(backend.capabilities().unwrap_or_default());
     let router = Arc::new(Mutex::new(Router::new(backend)));
     let stopping = Arc::new(AtomicBool::new(false));
