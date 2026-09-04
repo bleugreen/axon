@@ -359,11 +359,21 @@ function Invoke-RecordingAcceptance {
         throw 'the captured Edge application exposed no name to scope a recording by'
     }
 
+    # By role and label rather than by the DOM id: Chromium does not publish an element's `id` as
+    # its UI Automation AutomationId, so the first run of this stage found nothing at all. The
+    # accessible name comes from `aria-label`, which is what the page sets it for.
     $fields = @(Find-ProbeNodes -Root $root[0] -Predicate {
-        param($node) $node.identifier -eq 'note' -and $null -ne $node.frame
+        param($node)
+        $node.role -eq 'Edit' -and $null -ne $node.frame -and
+        ([string]$node.name -eq 'Recording note' -or [string]$node.title -eq 'Recording note')
     })
     if ($fields.Count -ne 1) {
-        throw "the recording page exposed $($fields.Count) fields with automation id 'note' and a frame"
+        # The tree, not just the count. A live capture is expensive to obtain and this is the one
+        # place that can say what the page actually exposed.
+        $edits = @(Find-ProbeNodes -Root $root[0] -Predicate { param($node) $node.role -eq 'Edit' } |
+            ForEach-Object { @{ role = $_.role; name = $_.name; identifier = $_.identifier; frame = $_.frame } })
+        throw ("the recording page exposed $($fields.Count) Edit controls named 'Recording note' with a frame; " +
+            "Edit controls present: $($edits | ConvertTo-Json -Compress -Depth 5)")
     }
     $frame = $fields[0].frame
     $pointX = [int]([math]::Round($frame.x + $frame.width / 2))
