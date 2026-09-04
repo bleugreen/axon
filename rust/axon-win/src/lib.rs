@@ -1841,7 +1841,9 @@ mod tests {
             panic!("a stop with an observed action authors a document")
         };
         assert_eq!(stopped.result["actionCount"], 1);
-        assert!(stopped.result["script"].as_str().unwrap().contains("press"));
+        let script = stopped.result["script"].as_str().expect("an authored script");
+        assert!(script.contains("keyboard"), "{script}");
+        assert!(script.contains("return"), "{script}");
         assert!(router.recorder.is_none());
         assert!(!router.daemon.recording.status().recording);
         assert_eq!(*stops.borrow(), 1, "the observer is released exactly once");
