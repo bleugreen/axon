@@ -403,10 +403,10 @@ fn send_keyboard_batch(
         send_duration_micros,
         short_count_last_error,
     };
-    if std::env::var_os("AXON_KEYBOARD_DIAGNOSTICS").is_some() {
-        if let Ok(json) = serde_json::to_string(&diagnostics) {
-            eprintln!("{json}");
-        }
+    if std::env::var_os("AXON_KEYBOARD_DIAGNOSTICS").is_some()
+        && let Ok(json) = serde_json::to_string(&diagnostics)
+    {
+        eprintln!("{json}");
     }
     if returned_count != inputs.len() as u32 {
         return Err(op(
@@ -2436,10 +2436,11 @@ fn probe_foreground(args: &[String]) -> Result<serde_json::Value, BackendError> 
         let activation_accepted = backend.activate_application(&identity)?;
         thread::sleep(Duration::from_millis(250));
         let activated = pixel::process_of(pixel::foreground_window()) == Some(target_pid);
-        if activated && strategy != HandBackStrategy::NoDispatch {
-            if let Some((x, y)) = nudge {
-                pixel::set_cursor(x, y);
-            }
+        if activated
+            && strategy != HandBackStrategy::NoDispatch
+            && let Some((x, y)) = nudge
+        {
+            pixel::set_cursor(x, y);
         }
         let mut attachments = ProbeAttachments::default();
         if matches!(
