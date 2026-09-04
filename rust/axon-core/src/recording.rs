@@ -702,6 +702,151 @@ pub trait GlobalInputObserver {
     fn is_recording(&self) -> bool;
 }
 
+/// Bringing observation to a stop without discarding what it has not finished producing.
+///
+/// A backend whose observer reads its evidence *behind* the native event stream -- Windows through
+/// UI Automation, Linux through AT-SPI, both on a thread that trails the hook -- has not yet
+/// produced the events of a session's last moment when `recording.stop` arrives. Those events come
+/// into being here, once observation has been halted and the backlog worked through, and remain
+/// pollable afterwards. [`GlobalInputObserver::stop`] cannot serve both roles, because
+/// [`UserActionRecorder::finish`] calls it *after* the caller's last chance to poll.
+///
+/// A backend that enriches synchronously implements this as a no-op and loses nothing.
+pub trait ObserverQuiescence {
+    /// Stops observing and finishes any enrichment already in flight, leaving the events it
+    /// produced available to the next `poll`. Idempotent, and harmless with no session running.
+    fn quiesce_global_input(&mut self);
+}
+
+/// What one drain of an [`ObservedInputQueue`] found, including what it had to throw away to keep up.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ObservedInputBatch<T> {
+    pub events: Vec<T>,
+    /// Events the producer could not hand over since the previous drain. Never silently zero: a
+    /// recording that lost actions has to say so.
+    pub dropped: usize,
+    /// The deepest the queue has been this session, which is what says whether the enrichment
+    /// thread is keeping up or merely has not fallen behind yet.
+    pub high_water: usize,
+}
+
+/// A bounded, non-blocking hand-off from a native input callback to the thread that enriches it.
+///
+/// Generic over the raw event because every platform's is different -- a `KBDLLHOOKSTRUCT` field
+/// set on Windows, an X11 core event on Linux -- while the discipline around it is not. That
+/// discipline is the whole reason this type exists rather than a `VecDeque` behind a mutex:
+///
+/// - **The producer never waits.** A Windows low-level hook that takes longer than
+///   `LowLevelHooksTimeout` is removed from the chain without being asked; an XRecord data
+///   connection that stops reading backs up in the server. So [`Self::offer`] gives up immediately
+///   if it cannot have the lock or the queue is full.
+/// - **What it gives up is counted, never silent.** A recording that quietly lost actions is worse
+///   than one that says it did, so the drop count rides out on the next drain and becomes a warning
+///   on the recording itself.
+/// - **It outlives one session.** A native callback is often handed no context pointer and can
+///   reach only a process-global, so a second recording clears what the first left behind
+///   ([`Self::reset`]) rather than constructing a fresh queue.
+pub struct ObservedInputQueue<T> {
+    events: std::sync::Mutex<std::collections::VecDeque<T>>,
+    ready: std::sync::Condvar,
+    capacity: usize,
+    dropped: std::sync::atomic::AtomicUsize,
+    high_water: std::sync::atomic::AtomicUsize,
+    stopped: std::sync::atomic::AtomicBool,
+}
+
+impl<T> ObservedInputQueue<T> {
+    pub fn with_capacity(capacity: usize) -> Self {
+        use std::sync::atomic::{AtomicBool, AtomicUsize};
+        Self {
+            events: std::sync::Mutex::new(std::collections::VecDeque::with_capacity(
+                capacity.min(1024),
+            )),
+            ready: std::sync::Condvar::new(),
+            capacity,
+            dropped: AtomicUsize::new(0),
+            high_water: AtomicUsize::new(0),
+            stopped: AtomicBool::new(false),
+        }
+    }
+
+    /// Hands one event over if that can be done without waiting. Returns whether it was taken.
+    pub fn offer(&self, event: T) -> bool {
+        use std::sync::atomic::Ordering;
+        let Ok(mut events) = self.events.try_lock() else {
+            self.dropped.fetch_add(1, Ordering::Relaxed);
+            return false;
+        };
+        if events.len() >= self.capacity {
+            self.dropped.fetch_add(1, Ordering::Relaxed);
+            return false;
+        }
+        events.push_back(event);
+        let depth = events.len();
+        drop(events);
+        self.high_water.fetch_max(depth, Ordering::Relaxed);
+        self.ready.notify_one();
+        true
+    }
+
+    /// Takes everything queued, waiting up to `timeout` for the first event.
+    pub fn drain(&self, timeout: Duration) -> ObservedInputBatch<T> {
+        use std::sync::atomic::Ordering;
+        let mut events = self.events.lock().expect(NEVER_POISONED);
+        if events.is_empty() && !self.stopped.load(Ordering::Acquire) {
+            events = self
+                .ready
+                .wait_timeout(events, timeout)
+                .expect(NEVER_POISONED)
+                .0;
+        }
+        ObservedInputBatch {
+            events: events.drain(..).collect(),
+            dropped: self.dropped.swap(0, Ordering::Relaxed),
+            high_water: self.high_water.load(Ordering::Relaxed),
+        }
+    }
+
+    /// Wakes a waiting drain and stops future ones from waiting at all.
+    pub fn stop(&self) {
+        self.stopped
+            .store(true, std::sync::atomic::Ordering::Release);
+        self.ready.notify_all();
+    }
+
+    pub fn stopped(&self) -> bool {
+        self.stopped.load(std::sync::atomic::Ordering::Acquire)
+    }
+
+    /// Returns the queue to the state a fresh session expects.
+    pub fn reset(&self) {
+        use std::sync::atomic::Ordering;
+        self.events.lock().expect(NEVER_POISONED).clear();
+        self.dropped.store(0, Ordering::Relaxed);
+        self.high_water.store(0, Ordering::Relaxed);
+        self.stopped.store(false, Ordering::Release);
+    }
+
+    pub fn high_water(&self) -> usize {
+        self.high_water.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// What is waiting right now, which is what says whether enrichment ever caught up.
+    pub fn depth(&self) -> usize {
+        self.events.lock().expect(NEVER_POISONED).len()
+    }
+}
+
+const NEVER_POISONED: &str = "the observed input queue is never poisoned";
+
+/// The warning a drop is reported as, in the one channel a provider has to annotate a recording.
+pub fn dropped_events_warning(dropped: usize) -> String {
+    format!(
+        "the global input observer dropped {dropped} raw event(s) before this point; actions may be \
+         missing from this recording"
+    )
+}
+
 /// Bounded reads requested by shared core at semantic event boundaries.
 ///
 /// This is deliberately separate from [`GlobalInputObserver`]: passive event collection has a
