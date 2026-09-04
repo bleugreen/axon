@@ -309,6 +309,56 @@ function Invoke-RecordingDiagnostic {
     }
 }
 
+function Invoke-OneRecording {
+    <# One recording session, from `recording.start` to the authored artifact. #>
+    param(
+        [Parameter(Mandatory)] $Scope,
+        [Parameter(Mandatory)][int] $X,
+        [Parameter(Mandatory)][int] $Y,
+        [Parameter(Mandatory)][string] $Text
+    )
+    $started = Invoke-AxonRpc -Method 'recording.start' -Params @{ scope = $Scope.value }
+    if ($null -ne $started.error -or $started.result.recording -ne $true) {
+        throw "recording.start refused for scope $($Scope.label): $($started | ConvertTo-Json -Compress -Depth 20)"
+    }
+    Write-Note "recording [$($Scope.label)] started: $($started.result | ConvertTo-Json -Compress -Depth 20)"
+
+    $stopped = $null
+    try {
+        $posted = Invoke-ProbeIndependentInput -X $X -Y $Y -Text $Text
+        Write-Note "recording [$($Scope.label)] independent input: $($posted | ConvertTo-Json -Compress -Depth 20)"
+        # Checked rather than trusted: `""` inside a here-string is two literal quotes and not an
+        # escaped one, so an earlier helper command line truncated this burst at its first space
+        # and still reported success. A burst that typed one word would quietly weaken every
+        # assertion downstream of it.
+        if ([string]$posted.typed -ne $Text) {
+            throw "the independent helper typed '$($posted.typed)' rather than '$Text'"
+        }
+        # The enrichment thread reads UI Automation for every event behind the hook, so events are
+        # not necessarily authored by the time the helper's own process has exited.
+        Wait-BrowserTransition
+
+        $status = Invoke-AxonRpc -Method 'recording.status'
+        Write-Note "recording [$($Scope.label)] status: $($status.result | ConvertTo-Json -Compress -Depth 20)"
+        if ($status.result.recording -ne $true) {
+            throw 'recording.status did not report an active session while one was running'
+        }
+    }
+    finally {
+        $stopped = Invoke-AxonRpc -Method 'recording.stop'
+    }
+    if ($null -ne $stopped.error) {
+        throw "recording.stop failed for scope $($Scope.label): $($stopped | ConvertTo-Json -Compress -Depth 20)"
+    }
+    Write-Note "recording [$($Scope.label)] stopped: actionCount=$($stopped.result.actionCount)"
+    Write-Note "recording [$($Scope.label)] script:`n$([string]$stopped.result.script)"
+    [pscustomobject]@{
+        Label = $Scope.label
+        actionCount = [int]$stopped.result.actionCount
+        stopped = $stopped
+    }
+}
+
 function Invoke-RecordingAcceptance {
     <# Records real third-party input through the shipping routes, then replays what it authored.
 
@@ -384,41 +434,32 @@ function Invoke-RecordingAcceptance {
     $pointY = [int]([math]::Round($frame.y + $frame.height / 2))
     $typed = 'axon recorded this'
 
-    $started = Invoke-AxonRpc -Method 'recording.start' -Params @{
-        scope = @{ scope = 'application'; app = @{ name = $recordedAppName } }
-    }
-    if ($null -ne $started.error -or $started.result.recording -ne $true) {
-        throw "recording.start refused for '$recordedAppName': $($started | ConvertTo-Json -Compress -Depth 20)"
-    }
-    Write-Note "recording acceptance started: $($started.result | ConvertTo-Json -Compress -Depth 20)"
-
-    $stopped = $null
-    try {
-        $posted = Invoke-ProbeIndependentInput -X $pointX -Y $pointY -Text $typed
-        Write-Note "recording acceptance independent input: $($posted | ConvertTo-Json -Compress -Depth 20)"
-        if ($posted.deliveryTag -eq $started.result.sessionId) {
-            throw 'the input helper reported the daemon''s own delivery tag'
-        }
-        # The enrichment thread reads UI Automation for every event behind the hook, so the events
-        # are not necessarily authored by the time the helper's own process has exited.
-        Wait-BrowserTransition
-
-        $status = Invoke-AxonRpc -Method 'recording.status'
-        Write-Note "recording acceptance status: $($status.result | ConvertTo-Json -Compress -Depth 20)"
-        if ($status.result.recording -ne $true) {
-            throw 'recording.status did not report an active session while one was running'
-        }
-    }
-    finally {
-        $stopped = Invoke-AxonRpc -Method 'recording.stop'
+    # Recorded twice, under both scopes, and the pairing is the diagnosis rather than belt and
+    # braces. Everything from the hook to the authored artifact is common to both; the only thing
+    # `application` adds is `RecordedAppIdentity::matches_runtime` comparing the name the observer
+    # reads for an event against the name the caller scoped by. So an unscoped run that records and
+    # a scoped run that does not is an identity disagreement and nothing else -- which is the
+    # axn/207 failure shape -- while both coming back empty is the observer or the evidence path.
+    # Reading that distinction off one run is worth the second recording on a bench this slow.
+    $recordings = @()
+    foreach ($scope in @(
+            @{ label = 'allApplications'; value = @{ scope = 'allApplications' } },
+            @{ label = "application '$recordedAppName'"
+               value = @{ scope = 'application'; app = @{ name = $recordedAppName } } })) {
+        $recordings += Invoke-OneRecording -Scope $scope -X $pointX -Y $pointY -Text $typed
     }
 
-    if ($null -ne $stopped.error) {
-        throw "recording.stop failed: $($stopped | ConvertTo-Json -Compress -Depth 20)"
+    $unscoped, $scoped = $recordings
+    if ([int]$unscoped.actionCount -lt 1) {
+        throw 'the recording observed no actions from an independent process posting a click and a typed burst, with no scope filtering it'
     }
+    if ([int]$scoped.actionCount -lt 1) {
+        throw ("an unscoped recording observed $($unscoped.actionCount) actions but scoping to " +
+            "'$recordedAppName' observed none: the name the observer reads for an event and the " +
+            'name the caller scoped by disagree (the axn/207 failure shape)')
+    }
+    $stopped = $scoped.stopped
     $script = [string]$stopped.result.script
-    Write-Note "recording acceptance stopped: actionCount=$($stopped.result.actionCount)"
-    Write-Note "recording acceptance script:`n$script"
 
     if ([int]$stopped.result.actionCount -lt 1) {
         throw 'the recording observed no actions from an independent process posting a click and a typed burst'
@@ -472,12 +513,6 @@ function Invoke-RecordingAcceptance {
         throw 'the recording page field exposed no semantic name to address it by'
     }
     $savedValue = 'axon saved this'
-    # Guard the quoting rather than trust it: `""` inside a here-string is two literal quotes, not
-    # an escaped one, so an earlier version of the helper's command line truncated this burst at
-    # its first space and reported a success that had typed one word.
-    if ($posted.typed -ne $typed) {
-        throw "the independent helper typed '$($posted.typed)' rather than '$typed'"
-    }
     $typed = Invoke-AxonRpc -Method 'type' -Params @{
         _session = $sessionId
         target = @{ app = $BrowserApp; name = $fieldName }
