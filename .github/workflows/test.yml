@@ -328,6 +328,19 @@ jobs:
         working-directory: rust
         run: cargo test -p axon-win
 
+      # Clippy has to run here and not only in the macOS job, because that job cannot see this
+      # code at all: everything behind `#[cfg(windows)]` -- the whole UIA backend, the pipe
+      # transport, the global input observer -- is invisible to a lint pass on another target. A
+      # gate that cannot see the Windows-only code is not a gate for it, and it showed: five clippy
+      # errors were sitting on `main` when axn/225 first ran this by hand.
+      #
+      # `cargo fmt` is not repeated for the same reason it is not needed: rustfmt formats every
+      # file in the workspace regardless of target, so the macOS job's `--all --check` already
+      # covers these sources.
+      - name: Lint axon-win
+        working-directory: rust
+        run: cargo clippy -p axon-win --all-targets -- -D warnings
+
       # Releases build in release mode, which type-checks the same code under different lint and
       # optimization settings. Finding a release-only break at tag time is too late.
       - name: Build axon-win in release mode
