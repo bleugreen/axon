@@ -72,11 +72,7 @@ const NO_FOREGROUND_TRANSACTION: &str = "this backend cannot capture the foregro
 /// last instants only exist once observation has stopped and that backlog has been worked through.
 /// `GlobalInputObserver::stop` cannot serve both roles, because the recorder's `finish` calls it
 /// *after* the caller's last chance to poll.
-pub trait ObserverQuiescence {
-    /// Stops observing and finishes any enrichment already in flight, leaving the events it
-    /// produced available to the next `poll`. Idempotent, and harmless with no session running.
-    fn quiesce_global_input(&mut self);
-}
+pub use axon_core::ObserverQuiescence;
 
 pub struct Router<B> {
     backend: B,
