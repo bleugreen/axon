@@ -309,6 +309,145 @@ function Invoke-RecordingDiagnostic {
     }
 }
 
+function Invoke-RecordingAcceptance {
+    <# Records real third-party input through the shipping routes, then replays what it authored.
+
+    This is the acceptance for `observeGlobalInput` on Windows, and every step of it is chosen so
+    that passing means the capability works rather than that the harness agreed with itself. The
+    input comes from another process; the assertions are on the authored artifact rather than on
+    the observer's own report of itself; and the artifact is replayed against the same live page to
+    prove the targets it recorded still resolve. #>
+    param(
+        [Parameter(Mandatory)] $Browser,
+        [Parameter(Mandatory)][string] $BrowserApp
+    )
+
+    # Navigate to the one probe page carrying both a field and a link. The Ctrl+L/text/Return
+    # gesture is the one the foreground acceptance above has already proved on this desktop.
+    foreach ($call in @(
+            @{ key = 'ctrl+l' }, @{ text = $Browser.RecordUrl }, @{ key = 'Return' })) {
+        $arguments = $call + @{ deliveryPolicy = 'foregroundPermitted' }
+        $response = Invoke-AxonMcp -Request (@{
+            jsonrpc = '2.0'; id = 1; method = 'tools/call'
+            params = @{ name = 'keyboard'; arguments = $arguments }
+        } | ConvertTo-Json -Compress -Depth 10)
+        if ($response.result.isError -ne $false -or
+            $response.result.structuredContent.dispatchSuccess -ne $true) {
+            throw "recording acceptance could not navigate to the recording page: $($response | ConvertTo-Json -Compress -Depth 20)"
+        }
+        Wait-BrowserTransition
+    }
+
+    $lookRequest = @{ jsonrpc = '2.0'; id = 1; method = 'tools/call'; params = @{
+        name = 'look'; arguments = @{ app = $BrowserApp; depth = 12; screenshot = $false }
+    } } | ConvertTo-Json -Compress -Depth 10
+    $look = Invoke-AxonMcp -Request $lookRequest
+    $captured = $look.result.structuredContent
+    $root = @($captured.app.windows | ForEach-Object root | Select-Object -First 1)
+    if ($root.Count -ne 1 -or
+        ($captured | ConvertTo-Json -Compress -Depth 100) -notmatch 'Axon Recording Probe') {
+        throw 'the recording page did not load in the targeted Edge window'
+    }
+
+    # The name the daemon gives this application, read back from the capture rather than assumed.
+    # A recording is scoped by that name and writes it into the artifact's `app` field, so if this
+    # string and the observer's disagreed the session would record nothing at all -- which is
+    # exactly the shape of the macOS failure in axn/207, and worth catching here rather than as an
+    # empty artifact.
+    $recordedAppName = [string]$captured.app.name
+    if ([string]::IsNullOrWhiteSpace($recordedAppName)) {
+        throw 'the captured Edge application exposed no name to scope a recording by'
+    }
+
+    $fields = @(Find-ProbeNodes -Root $root[0] -Predicate {
+        param($node) $node.identifier -eq 'note' -and $null -ne $node.frame
+    })
+    if ($fields.Count -ne 1) {
+        throw "the recording page exposed $($fields.Count) fields with automation id 'note' and a frame"
+    }
+    $frame = $fields[0].frame
+    $pointX = [int]([math]::Round($frame.x + $frame.width / 2))
+    $pointY = [int]([math]::Round($frame.y + $frame.height / 2))
+    $typed = 'axon recorded this'
+
+    $started = Invoke-AxonRpc -Method 'recording.start' -Params @{
+        scope = @{ scope = 'application'; app = @{ name = $recordedAppName } }
+    }
+    if ($null -ne $started.error -or $started.result.recording -ne $true) {
+        throw "recording.start refused for '$recordedAppName': $($started | ConvertTo-Json -Compress -Depth 20)"
+    }
+    Write-Note "recording acceptance started: $($started.result | ConvertTo-Json -Compress -Depth 20)"
+
+    $stopped = $null
+    try {
+        $posted = Invoke-ProbeIndependentInput -X $pointX -Y $pointY -Text $typed
+        Write-Note "recording acceptance independent input: $($posted | ConvertTo-Json -Compress -Depth 20)"
+        if ($posted.deliveryTag -eq $started.result.sessionId) {
+            throw 'the input helper reported the daemon''s own delivery tag'
+        }
+        # The enrichment thread reads UI Automation for every event behind the hook, so the events
+        # are not necessarily authored by the time the helper's own process has exited.
+        Wait-BrowserTransition
+
+        $status = Invoke-AxonRpc -Method 'recording.status'
+        Write-Note "recording acceptance status: $($status.result | ConvertTo-Json -Compress -Depth 20)"
+        if ($status.result.recording -ne $true) {
+            throw 'recording.status did not report an active session while one was running'
+        }
+    }
+    finally {
+        $stopped = Invoke-AxonRpc -Method 'recording.stop'
+    }
+
+    if ($null -ne $stopped.error) {
+        throw "recording.stop failed: $($stopped | ConvertTo-Json -Compress -Depth 20)"
+    }
+    $script = [string]$stopped.result.script
+    Write-Note "recording acceptance stopped: actionCount=$($stopped.result.actionCount)"
+    Write-Note "recording acceptance script:`n$script"
+
+    if ([int]$stopped.result.actionCount -lt 1) {
+        throw 'the recording observed no actions from an independent process posting a click and a typed burst'
+    }
+    # A recording whose steps carry only points is a recording that saw the input and could not say
+    # what it hit, which is the hollow outcome the AXN-26 native-vocabulary ruling exists to refuse.
+    if ($script -notmatch 'locator:') {
+        throw 'the recording authored no semantic target with a locator'
+    }
+    # axn/213: what persists is identity, not the state of the moment. `value` and `frame` in a
+    # persisted locator would pin a recording to the instant it was taken.
+    foreach ($stateful in @('frame:', 'nearbyText:')) {
+        if ($script -match $stateful) {
+            throw "the recorded locator persisted state-pinning field '$stateful'"
+        }
+    }
+
+    $scriptPath = Join-Path $LiveDirectory 'recording-acceptance.axn'
+    Set-Content -LiteralPath $scriptPath -Encoding utf8 -Value $script
+    try {
+        foreach ($dryRun in @($true, $false)) {
+            $replay = Invoke-AxonMcp -Request (@{
+                jsonrpc = '2.0'; id = 1; method = 'tools/call'
+                params = @{ name = 'run'; arguments = @{ path = $scriptPath; dryRun = $dryRun } }
+            } | ConvertTo-Json -Compress -Depth 10)
+            Write-Note "recording acceptance replay dryRun=$dryRun : $($replay.result.structuredContent | ConvertTo-Json -Compress -Depth 30)"
+            if ($replay.result.isError -ne $false) {
+                throw "replaying the recording with dryRun=$dryRun failed: $($replay | ConvertTo-Json -Compress -Depth 30)"
+            }
+            $unresolved = @($replay.result.structuredContent.batch |
+                Where-Object { $_.resolution -and $_.resolution.status -ne 'selected' })
+            if ($unresolved.Count -gt 0) {
+                throw "the recorded targets did not resolve on replay (dryRun=$dryRun): $($unresolved | ConvertTo-Json -Compress -Depth 20)"
+            }
+            Wait-BrowserTransition
+        }
+    }
+    finally {
+        Remove-Item -LiteralPath $scriptPath -Force -ErrorAction SilentlyContinue
+    }
+    Write-Note 'recording acceptance verified: independent input recorded, authored with semantic targets, and replayed'
+}
+
 function Register-ProbeRecordingTask {
     param(
         [Parameter(Mandatory)][int] $Burst,
@@ -1612,6 +1751,8 @@ function Invoke-ProbeStage {
             throw "Edge unchanged-position scroll claimed goal success or lost dispatch evidence: $($unchanged | ConvertTo-Json -Compress -Depth 20)"
         }
         Write-Note "Edge unchanged-position response=$($unchangedAction | ConvertTo-Json -Compress -Depth 20)"
+
+        Invoke-RecordingAcceptance -Browser $browser -BrowserApp $browserApp
 
     }
     catch {
