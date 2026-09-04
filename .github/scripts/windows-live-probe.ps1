@@ -73,6 +73,7 @@ $ProbeActivationTaskName = 'Axon Live Probe Prior Activation'
 $ProbeForegroundTaskName = 'Axon Live Probe Foreground Sweep'
 $ProbeKeyboardTaskName = 'Axon Live Probe Keyboard Diagnostic'
 $ProbeRecordingTaskName = 'Axon Live Probe Recording Diagnostic'
+$ProbeInputTaskName = 'Axon Live Probe Independent Input'
 $LiveDirectory = 'C:\ProgramData\Axon\live'
 # Outside the runner workspace on purpose: a running process locks its image on Windows, so a
 # daemon started from the checkout survives its job and breaks the next checkout (AXN-38).
@@ -357,6 +358,75 @@ function Wait-ForProbeRecordingTask {
 function Remove-ProbeRecordingResult {
     param([Parameter(Mandatory)][string] $ResultPath)
     Remove-Item -LiteralPath $ResultPath, "$ResultPath.tmp" -Force -ErrorAction SilentlyContinue
+}
+
+function Invoke-ProbeIndependentInput {
+    <# Posts a click and a typed burst from a process that is not the daemon.
+
+    Independence is the whole point rather than a detail of the harness. The observer excludes
+    input this process posted, marked per event with a process-derived stamp, so input the daemon
+    itself produced could not appear in its own recording no matter how correct the recorder is.
+    A second `axon-win.exe` carries a different stamp and is therefore genuine third-party input --
+    the Windows shape of the independent helper the macOS bench acceptance needed for the same
+    reason. It goes through the scheduled-task relay because it must land on the interactive
+    desktop, like every other input this lane posts. #>
+    param(
+        [Parameter(Mandatory)][int] $X,
+        [Parameter(Mandatory)][int] $Y,
+        [Parameter(Mandatory)][string] $Text
+    )
+    $resultPath = Join-Path $LiveDirectory 'independent-input.json'
+    try {
+        Remove-Item -LiteralPath $resultPath, "$resultPath.tmp" -Force -ErrorAction SilentlyContinue
+        $escapedExecutable = $ProbeCliExecutable.Replace("'", "''")
+        $escapedResultPath = $resultPath.Replace("'", "''")
+        $escapedTemporaryPath = ("$resultPath.tmp").Replace("'", "''")
+        $escapedText = $Text.Replace("'", "''")
+        $command = @"
+`$start = [System.Diagnostics.ProcessStartInfo]::new()
+`$start.FileName = '$escapedExecutable'
+`$start.Arguments = 'probe post-input $X $Y ""$escapedText""'
+`$start.UseShellExecute = `$false
+`$start.RedirectStandardOutput = `$true
+`$start.RedirectStandardError = `$true
+`$process = [System.Diagnostics.Process]::Start(`$start)
+`$stdoutTask = `$process.StandardOutput.ReadToEndAsync()
+`$stderrTask = `$process.StandardError.ReadToEndAsync()
+`$process.WaitForExit()
+`$stdout = `$stdoutTask.Result
+`$stderr = `$stderrTask.Result
+`$payload = `$null
+if (`$process.ExitCode -eq 0) { `$payload = `$stdout | ConvertFrom-Json }
+@{ stdout = `$stdout; stderr = `$stderr; exitCode = `$process.ExitCode; payload = `$payload } | ConvertTo-Json -Compress -Depth 100 | Set-Content -LiteralPath '$escapedTemporaryPath' -Encoding utf8
+Move-Item -LiteralPath '$escapedTemporaryPath' -Destination '$escapedResultPath' -Force
+"@
+        $encodedCommand = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($command))
+        $action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument "-NoProfile -NonInteractive -EncodedCommand $encodedCommand"
+        $principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive
+        Register-ScheduledTask -TaskName $ProbeInputTaskName -Action $action -Principal $principal -Force | Out-Null
+        Start-ScheduledTask -TaskName $ProbeInputTaskName
+        $timer = [System.Diagnostics.Stopwatch]::StartNew()
+        do {
+            if (Test-Path -LiteralPath $resultPath) {
+                $run = Get-Content -LiteralPath $resultPath -Raw | ConvertFrom-Json
+                if ($run.exitCode -ne 0) {
+                    throw "independent input exited $($run.exitCode): $($run.stderr)"
+                }
+                if ($null -eq $run.payload -or $run.payload.schemaVersion -ne 'post-input-v1') {
+                    throw 'independent input returned no post-input-v1 payload'
+                }
+                return $run.payload
+            }
+            $task = Get-ScheduledTask -TaskName $ProbeInputTaskName -ErrorAction SilentlyContinue
+            if ($null -eq $task) { throw 'the independent input task disappeared before reporting' }
+            Wait-Tick
+        } while ($timer.Elapsed.TotalSeconds -lt $ProcessDiscoveryTimeoutSeconds)
+        throw 'the independent input task did not report completion before the timeout'
+    }
+    finally {
+        Unregister-ScheduledTask -TaskName $ProbeInputTaskName -Confirm:$false -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $resultPath, "$resultPath.tmp" -Force -ErrorAction SilentlyContinue
+    }
 }
 
 function Register-ProbeForegroundTask {
