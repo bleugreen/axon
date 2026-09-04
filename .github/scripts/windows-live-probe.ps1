@@ -505,7 +505,15 @@ function Invoke-RecordingAcceptance {
         foreach ($dryRun in @($true, $false)) {
             $replay = Invoke-AxonMcp -Request (@{
                 jsonrpc = '2.0'; id = 1; method = 'tools/call'
-                params = @{ name = 'run'; arguments = @{ path = $scriptPath; dryRun = $dryRun } }
+                # `continueOnError` for the same reason the per-action assertion below reads
+                # `dispatchSuccess`: a `click` declares no postcondition, so the runner scores it
+                # as unsuccessful and, left to itself, stops the batch there. Every recorded
+                # artifact containing a click would then replay exactly one action. The batch is
+                # allowed to finish and each action is judged on its own evidence instead.
+                params = @{
+                    name = 'run'
+                    arguments = @{ path = $scriptPath; dryRun = $dryRun; continueOnError = $true }
+                }
             } | ConvertTo-Json -Compress -Depth 10)
             $batch = $replay.result.structuredContent.batch
             Write-Note "recording acceptance replay dryRun=$dryRun : $($batch | ConvertTo-Json -Compress -Depth 30)"
