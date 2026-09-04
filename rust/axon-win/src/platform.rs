@@ -787,6 +787,14 @@ impl WindowsBackend {
             .as_mut()
             .expect("the global input observer lives as long as the backend")
     }
+
+    /// Probe-only: a channel to the MTA actor for a diagnostic that owns its own observer.
+    fn command_sender(&self) -> mpsc::Sender<Command> {
+        self.tx
+            .as_ref()
+            .expect("UIA command channel is available until backend drop")
+            .clone()
+    }
 }
 impl Drop for WindowsBackend {
     fn drop(&mut self) {
@@ -2119,6 +2127,8 @@ impl IntegrationProbe {
             "pixel-click" => return probe_pixel_click(args),
             "foreground" => return probe_foreground(args),
             "keyboard-diagnostic" => return keyboard_diagnostic::run(args),
+            "recording-diagnostic" => return global_input::probe(args),
+            "post-input" => return probe_post_input(args),
             _ => {}
         }
         let _com = ComApartment::mta()?;
@@ -2141,6 +2151,35 @@ impl IntegrationProbe {
             other => Err(op("probe", format!("unknown probe {other:?}"))),
         }
     }
+}
+
+/// Probe-only: posts real input from a process that is not the daemon.
+///
+/// The live recording acceptance needs input the daemon did not produce, because the daemon
+/// excludes exactly what it produced. That exclusion is per process, so a second `axon-win.exe`
+/// running this is a genuinely independent source — the Windows shape of the independent helper
+/// the macOS bench acceptance needed for the same reason.
+fn probe_post_input(args: &[String]) -> Result<serde_json::Value, BackendError> {
+    let number = |index: usize, name: &str| -> Result<f64, BackendError> {
+        required_probe_arg(args, index, name)?
+            .parse()
+            .map_err(|_| op("probe", format!("{name} is not a number")))
+    };
+    let x = number(1, "x")?;
+    let y = number(2, "y")?;
+    let text = required_probe_arg(args, 3, "text")?;
+    send_click((x, y))?;
+    // The click has to land and focus has to settle before the text follows it; without this the
+    // burst races the target's own handling of the click and lands wherever focus used to be.
+    thread::sleep(Duration::from_millis(400));
+    send_text(text)?;
+    Ok(serde_json::json!({
+        "schemaVersion": "post-input-v1",
+        "processId": std::process::id(),
+        "deliveryTag": format!("0x{:X}", crate::recording::self_delivery_tag()),
+        "clicked": {"x": x, "y": y},
+        "typed": text,
+    }))
 }
 
 fn required_probe_arg<'a>(

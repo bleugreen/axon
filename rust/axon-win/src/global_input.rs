@@ -613,6 +613,147 @@ fn stop_hook_thread(thread_id: u32) {
     }
 }
 
+/// Probe-only: measures the two things this design was otherwise assuming.
+///
+/// **Does this process's own `SendInput` reach its own low-level hook, and does the `dwExtraInfo`
+/// stamp survive the trip?** The whole self-delivery exclusion exists only if the first is true,
+/// and only *works* if the second is. If the events never arrive there is nothing to exclude and
+/// the mechanism can be deleted; if they arrive with the stamp erased, marking each event cannot
+/// work and a guard held across the posting call is the fallback.
+///
+/// **How deep does the raw queue get under a fast burst?** Every non-self event costs the
+/// enrichment thread a UI Automation round trip against a 1500 ms transaction timeout, so this is
+/// the number that says whether the bounded queue's overflow is a real operating condition or a
+/// backstop. The burst is posted unstamped on purpose: stamped events are discarded before any
+/// read and would measure nothing.
+pub(super) fn probe(args: &[String]) -> Result<serde_json::Value, BackendError> {
+    use windows::Win32::UI::Input::KeyboardAndMouse::{
+        INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP, SendInput, VIRTUAL_KEY,
+    };
+
+    // F24: a key no layout produces and no application binds, so a burst of it changes nothing on
+    // the desktop it is measured on.
+    const SENTINEL: u16 = 0x87;
+    let burst: usize = args
+        .iter()
+        .position(|arg| arg == "--burst")
+        .and_then(|index| args.get(index + 1))
+        .map_or(Ok(200), |value| {
+            value
+                .parse()
+                .map_err(|_| operation("invalid --burst count"))
+        })?;
+
+    let key = |stamped: bool, up: bool| INPUT {
+        r#type: INPUT_KEYBOARD,
+        Anonymous: INPUT_0 {
+            ki: KEYBDINPUT {
+                wVk: VIRTUAL_KEY(SENTINEL),
+                wScan: 0,
+                dwFlags: if up {
+                    KEYEVENTF_KEYUP
+                } else {
+                    Default::default()
+                },
+                time: 0,
+                dwExtraInfo: if stamped {
+                    crate::recording::self_delivery_tag()
+                } else {
+                    0
+                },
+            },
+        },
+    };
+    let post = |stamped: bool, pairs: usize| {
+        let inputs: Vec<INPUT> = (0..pairs)
+            .flat_map(|_| [key(stamped, false), key(stamped, true)])
+            .collect();
+        unsafe { SendInput(&inputs, std::mem::size_of::<INPUT>() as i32) }
+    };
+
+    // Stage one: hooks only, no enrichment, so the raw stream can be read exactly as the hook was
+    // handed it -- including the events the observer would drop.
+    raw_queue().reset();
+    let (started_tx, started_rx) = mpsc::sync_channel(1);
+    let hooks = thread::Builder::new()
+        .name("axon-global-input-probe".into())
+        .spawn(move || hook_thread(started_tx))
+        .map_err(|error| operation(format!("could not create probe hook thread: {error}")))?;
+    let hook_thread_id = match started_rx.recv_timeout(Duration::from_secs(2)) {
+        Ok(result) => result?,
+        Err(_) => return Err(operation("probe hook installation timed out")),
+    };
+
+    let stamped_posted = post(true, 2);
+    let unstamped_posted = post(false, 2);
+    thread::sleep(Duration::from_millis(300));
+    let seen = raw_queue().drain(Duration::ZERO);
+    stop_hook_thread(hook_thread_id);
+    let _ = hooks.join();
+
+    let ours = crate::recording::self_delivery_tag();
+    let sentinel_events: Vec<&RawEvent> = seen
+        .events
+        .iter()
+        .filter(|event| {
+            matches!(
+                event.input,
+                RawInput::Key {
+                    virtual_key: SENTINEL,
+                    ..
+                }
+            )
+        })
+        .collect();
+    let stamped_seen = sentinel_events
+        .iter()
+        .filter(|event| event.extra_info == ours)
+        .count();
+    let unstamped_seen = sentinel_events
+        .iter()
+        .filter(|event| event.extra_info == 0)
+        .count();
+
+    // Stage two: the full pipeline, so the depth measured is depth under real enrichment.
+    let backend = super::WindowsBackend::start()?;
+    let commands = backend.command_sender();
+    let mut observer = WindowsGlobalInputObserver::new(commands);
+    observer.start(&RecordingScope::AllApplications)?;
+    let burst_started = SystemTime::now();
+    let burst_posted = post(false, burst);
+    // Long enough for the enrichment thread to work through a queue it may be well behind on.
+    thread::sleep(Duration::from_secs(5));
+    let enriched = observer.poll(Duration::ZERO)?;
+    let queue_high_water = observer.raw_queue_depth();
+    observer.stop()?;
+    let burst_elapsed_ms = burst_started.elapsed().unwrap_or_default().as_millis() as u64;
+
+    Ok(serde_json::json!({
+        "schemaVersion": "recording-diagnostic-v1",
+        "processId": std::process::id(),
+        "selfDeliveryTag": format!("0x{ours:X}"),
+        "selfDelivery": {
+            "stampedPosted": stamped_posted,
+            "stampedSeenByOwnHook": stamped_seen,
+            "unstampedPosted": unstamped_posted,
+            "unstampedSeenByOwnHook": unstamped_seen,
+            // The two findings the design turns on, named rather than left to be inferred from
+            // counts by whoever reads this later.
+            "ownDeliveryIsObservable": stamped_seen > 0,
+            "stampSurvivesToTheHook": stamped_seen > 0,
+        },
+        "queueDepth": {
+            "burstPairsRequested": burst,
+            "burstEventsAccepted": burst_posted,
+            "rawQueueCapacity": RAW_CAPACITY,
+            "rawQueueHighWater": queue_high_water,
+            "overflowReachable": queue_high_water >= RAW_CAPACITY,
+            "enrichedEvents": enriched.len(),
+            "elapsedMs": burst_elapsed_ms,
+        },
+    }))
+}
+
 impl Drop for WindowsGlobalInputObserver {
     fn drop(&mut self) {
         let _ = self.stop();
