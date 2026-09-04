@@ -12,6 +12,7 @@ use crate::{
     keys::{self, Keysym},
     pixel::SendVariant,
     platform::{capability, operation},
+    recording::ModifierMasks,
 };
 use axon_core::{BackendError, Capability, KeyboardIntent, Rect, Screenshot};
 use image::{DynamicImage, ImageFormat, RgbaImage, imageops::FilterType};
@@ -725,6 +726,19 @@ impl X11Session {
         Ok(())
     }
 
+    /// The live layout and the modifier bits that go with it, for an observer reading events back.
+    ///
+    /// Read once when a recording session starts rather than per keystroke: it is two server round
+    /// trips, and the enrichment thread that consumes it is already the slow half of the observer.
+    /// The cost of that choice is that a layout switched *during* a recording is not noticed, which
+    /// is worth stating because it is a real thing a user can do and the recording would transcribe
+    /// the rest of the session against the layout it started with.
+    pub fn keyboard(&self) -> Result<Keyboard, BackendError> {
+        let mapping = self.keyboard_mapping()?;
+        let masks = self.modifier_mapping()?.masks(&mapping);
+        Ok(Keyboard { mapping, masks })
+    }
+
     /// Which modifier bit each keycode carries, as the server currently reports it.
     fn modifier_mapping(&self) -> Result<ModifierMapping, BackendError> {
         let reply = self
@@ -871,6 +885,61 @@ impl ModifierMapping {
             .position(|codes| codes.contains(&keycode))
             .map_or(0, |modifier| 1u16 << modifier)
     }
+
+    /// Which bit of an event's `state` mask each named modifier occupies on this server.
+    ///
+    /// Shift, Lock and Control have fixed positions in the core protocol. Alt, Super and the third
+    /// level do not: they live on whichever of `Mod1`..`Mod5` the session assigned them, so the
+    /// only way to read a chord correctly is to look up the keys that set each bit. Anything this
+    /// mapping does not place keeps its conventional bit, which is what an ordinary desktop uses.
+    fn masks(&self, layout: &KeyboardMapping) -> ModifierMasks {
+        let mut masks = ModifierMasks::CONVENTIONAL;
+        if self.per_modifier == 0 {
+            return masks;
+        }
+        let mut found = ModifierMasks::default();
+        for (modifier, keycodes) in self.keycodes.chunks(self.per_modifier).enumerate() {
+            // The first three chunks are Shift, Lock and Control by definition, and a server is
+            // free to list unrelated keys after them; only the rest is worth interpreting.
+            if modifier < 3 {
+                continue;
+            }
+            let bit = 1u16 << modifier;
+            for keysym in keycodes
+                .iter()
+                .filter_map(|keycode| layout.keysym_at(*keycode, 0))
+            {
+                match keysym {
+                    // Alt_L, Alt_R, Meta_L, Meta_R.
+                    0xFFE9 | 0xFFEA | 0xFFE7 | 0xFFE8 => found.alt |= bit,
+                    // Super_L, Super_R, Hyper_L, Hyper_R.
+                    0xFFEB | 0xFFEC | 0xFFED | 0xFFEE => found.super_key |= bit,
+                    // ISO_Level3_Shift and Mode_switch, which select a keysym level rather than
+                    // naming a chord.
+                    0xFE03 | 0xFF7E => found.level3 |= bit,
+                    _ => {}
+                }
+            }
+        }
+        for (placed, conventional) in [
+            (found.alt, &mut masks.alt),
+            (found.super_key, &mut masks.super_key),
+            (found.level3, &mut masks.level3),
+        ] {
+            if placed != 0 {
+                *conventional = placed;
+            }
+        }
+        masks
+    }
+}
+
+/// The live keyboard, in the two readings an observer needs: what each keycode types, and which
+/// bit of an event's modifier mask each named modifier occupies.
+#[derive(Clone, Debug, Default)]
+pub struct Keyboard {
+    pub mapping: KeyboardMapping,
+    pub masks: ModifierMasks,
 }
 
 /// One keystroke resolved against the live layout: the key to press, and the modifier keys held
@@ -882,13 +951,36 @@ struct Stroke {
 }
 
 /// The layout the user is actually typing on, as the server currently reports it.
-struct KeyboardMapping {
+#[derive(Clone, Debug, Default)]
+pub struct KeyboardMapping {
     first: u8,
     per_keycode: usize,
     keysyms: Vec<u32>,
 }
 
 impl KeyboardMapping {
+    /// The keysym a keycode produces at one modifier level, which is the direction observation
+    /// reads the layout in.
+    ///
+    /// [`Self::locate`] is the same table read the other way for synthesis. Both are needed and
+    /// neither derives the other: a keysym may sit on several keycodes, and a keycode produces a
+    /// different keysym at every level.
+    pub fn keysym_at(&self, keycode: u8, level: usize) -> Option<Keysym> {
+        let index = usize::from(keycode.checked_sub(self.first)?);
+        let levels = self
+            .keysyms
+            .chunks(self.per_keycode.max(1))
+            .nth(index)
+            .filter(|_| self.per_keycode > 0)?;
+        // A layout that leaves a level empty means "the same as the level below", which is how a
+        // key with one keysym types the same character shifted. `NoSymbol` is zero.
+        levels
+            .get(level)
+            .copied()
+            .filter(|keysym| *keysym != 0)
+            .or_else(|| levels.first().copied().filter(|keysym| *keysym != 0))
+    }
+
     /// Resolves one keystroke, or explains which key this layout does not have.
     fn stroke(&self, keysym: Keysym, modifiers: &[Keysym]) -> Result<Stroke, BackendError> {
         let missing = |keysym: Keysym| {
