@@ -1282,3 +1282,24 @@ mod observed_input_queue {
         assert!(queue.stopped());
     }
 }
+
+/// The other half of the observer sensitivity contract: a credential is never *read*, not read and
+/// then dropped. By the time shared core refuses to build a target from a sensitive element, a
+/// provider that had already read the value would have put it in a buffer, a log line, and a
+/// redaction pass that cannot recognise it.
+#[test]
+fn a_sensitive_value_is_never_even_read() {
+    let mut reads = 0;
+    assert_eq!(
+        axon_core::evidence_value(true, || {
+            reads += 1;
+            Some("hunter2".into())
+        }),
+        None
+    );
+    assert_eq!(reads, 0, "a sensitive value is not read, not merely dropped");
+    assert_eq!(
+        axon_core::evidence_value(false, || Some("draft".into())),
+        Some("draft".into())
+    );
+}
