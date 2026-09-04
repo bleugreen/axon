@@ -277,16 +277,20 @@ function Invoke-RecordingDiagnostic {
         $run = Wait-ForProbeRecordingTask -ResultPath $resultPath
         if ($run.exitCode -ne 0) { throw "recording diagnostic exited $($run.exitCode): $($run.stderr)" }
         $payload = $run.payload
-        if ($null -eq $payload -or $payload.schemaVersion -ne 'recording-diagnostic-v1') {
-            throw 'recording diagnostic returned no recording-diagnostic-v1 payload'
+        if ($null -eq $payload -or $payload.schemaVersion -ne 'recording-diagnostic-v2') {
+            throw 'recording diagnostic returned no recording-diagnostic-v2 payload'
         }
 
-        # The one thing this stage does assert. Everything else it reports for a human to read,
-        # because the point of a measurement is to be surprised by it; but a hook that saw neither
-        # its own stamped input nor the unstamped input posted beside it saw nothing at all, and
-        # that is an unusable measurement rather than a finding.
+        # This stage asserts validity, never outcome. The point of a measurement is to be able to
+        # be surprised by it, so a deep queue or an unobservable self-delivery is a finding and
+        # passes; but a run that measured nothing must not be reportable as a reassuring result.
         if ([int]$payload.selfDelivery.unstampedSeenByOwnHook -lt 1) {
             throw 'the low-level hook observed none of the unstamped input posted beside it; the measurement is invalid rather than negative'
+        }
+        foreach ($burst in @($payload.queueDepth.bursts)) {
+            if ($burst.measurementValid -ne $true) {
+                throw "the $($burst.path) burst produced no enriched events, so its queue depth measures nothing; the burst is not reaching the read path"
+            }
         }
         $payload
     }
@@ -1288,10 +1292,13 @@ function Invoke-ProbeStage {
             Write-Note "recording diagnostic: $($recording | ConvertTo-Json -Compress -Depth 100)"
             Write-Note ("recording diagnostic finding: ownDeliveryIsObservable=" +
                 "$($recording.selfDelivery.ownDeliveryIsObservable) " +
-                "stampSurvivesToTheHook=$($recording.selfDelivery.stampSurvivesToTheHook) " +
-                "rawQueueHighWater=$($recording.queueDepth.rawQueueHighWater)/" +
-                "$($recording.queueDepth.rawQueueCapacity) " +
-                "overflowReachable=$($recording.queueDepth.overflowReachable)")
+                "stampSurvivesToTheHook=$($recording.selfDelivery.stampSurvivesToTheHook)")
+            foreach ($burst in @($recording.queueDepth.bursts)) {
+                Write-Note ("recording diagnostic $($burst.path) burst: accepted=$($burst.eventsAccepted) " +
+                    "enriched=$($burst.enrichedEvents) highWater=$($burst.rawQueueHighWater)/" +
+                    "$($recording.queueDepth.rawQueueCapacity) pending=$($burst.stillPendingAfterFiveSeconds) " +
+                    "overflowReachable=$($burst.overflowReachable) elapsedMs=$($burst.elapsedMs)")
+            }
             return
         }
 
