@@ -70,6 +70,7 @@ pub struct Router<B> {
     semantic_names: SemanticNameRegistry,
     observation_redaction: axon_core::ObservationRedactionContext,
     daemon: axon_core::NativeDaemonState,
+    recorder: Option<axon_core::UserActionRecorder>,
 }
 fn capability_unavailable(tool: &str, capability: &str, reason: &str) -> JsonRpcError {
     JsonRpcError {
@@ -329,7 +330,109 @@ impl<
             semantic_names: SemanticNameRegistry::default(),
             observation_redaction: Default::default(),
             daemon: Default::default(),
+            recorder: None,
         }
+    }
+
+    /// Drains whatever the observer has seen into the daemon's recording session.
+    ///
+    /// Called on `recording.status` and `recording.stop` and nowhere else, which is why the
+    /// observer reads its evidence at event time rather than here: an event may have been waiting
+    /// since long before this call, and the interface it describes has moved on.
+    fn pump_recording(&mut self) -> Result<(), JsonRpcError> {
+        let Some(recorder) = self.recorder.as_mut() else {
+            return Ok(());
+        };
+        recorder
+            .poll(&mut self.backend, Duration::ZERO)
+            .map_err(backend_error)?;
+        for group in recorder.take_groups() {
+            self.daemon.recording.push_group(group)?;
+        }
+        Ok(())
+    }
+
+    fn dispatch_recording(
+        &mut self,
+        method: &str,
+        params: &Map<String, Value>,
+    ) -> Option<Result<Value, JsonRpcError>> {
+        Some(match method {
+            "recording.start" | "editor.recordFromHere" => {
+                // Refuse on capability before the daemon opens a session. The observer seam is the
+                // one place that knows whether this process can actually watch input, and asking
+                // it first means a denied start never creates a recording it has to abandon.
+                if let Err(error) = self.backend.global_input_observer() {
+                    return Some(Err(backend_error(error)));
+                }
+                let started = self.daemon.dispatch(method, params)?;
+                match started {
+                    Ok(value) => {
+                        let scope = self
+                            .daemon
+                            .recording
+                            .status()
+                            .scope
+                            .expect("active recording has scope");
+                        match axon_core::UserActionRecorder::start_with_redaction(
+                            &mut self.backend,
+                            scope,
+                            self.observation_redaction.clone(),
+                        ) {
+                            Ok(recorder) => {
+                                self.recorder = Some(recorder);
+                                Ok(value)
+                            }
+                            Err(error) => {
+                                self.daemon.recording.abandon();
+                                Err(backend_error(error))
+                            }
+                        }
+                    }
+                    Err(error) => Err(error),
+                }
+            }
+            "recording.status" => self.pump_recording().and_then(|_| {
+                self.daemon
+                    .dispatch(method, params)
+                    .expect("recording route")
+            }),
+            "recording.stop" => {
+                if !params.is_empty() {
+                    return Some(
+                        self.daemon
+                            .dispatch(method, params)
+                            .expect("recording route"),
+                    );
+                }
+                if let Err(error) = self.pump_recording() {
+                    let _ = axon_core::GlobalInputObserver::stop(&mut self.backend);
+                    self.recorder = None;
+                    self.daemon.recording.abandon();
+                    Err(error)
+                } else if let Some(recorder) = self.recorder.take() {
+                    match recorder.finish(&mut self.backend) {
+                        Ok(groups) => groups
+                            .into_iter()
+                            .try_for_each(|group| self.daemon.recording.push_group(group))
+                            .and_then(|_| {
+                                self.daemon
+                                    .dispatch(method, params)
+                                    .expect("recording route")
+                            }),
+                        Err(error) => {
+                            self.daemon.recording.abandon();
+                            Err(backend_error(error))
+                        }
+                    }
+                } else {
+                    self.daemon
+                        .dispatch(method, params)
+                        .expect("recording route")
+                }
+            }
+            _ => return None,
+        })
     }
 
     fn register_snapshot(&mut self, snapshot: &Snapshot) -> Vec<axon_core::SemanticElementName> {
@@ -587,20 +690,10 @@ impl<
             .as_ref()
             .and_then(|v| v.as_object().cloned())
             .unwrap_or_default();
-        let outcome = if matches!(
-            context.request.method.as_str(),
-            "recording.start" | "editor.recordFromHere"
-        ) {
-            Err(capability_unavailable(
-                &context.request.method,
-                "ObserveGlobalInput",
-                "observer-unavailable",
-            ))
-        } else {
-            self.daemon
-                .dispatch(&context.request.method, &params)
-                .unwrap_or_else(|| self.dispatch_tool(&context.request.method, &params))
-        };
+        let outcome = self
+            .dispatch_recording(&context.request.method, &params)
+            .or_else(|| self.daemon.dispatch(&context.request.method, &params))
+            .unwrap_or_else(|| self.dispatch_tool(&context.request.method, &params));
         let response = match outcome {
             Ok(result) => JsonRpcResponse::success(id, result),
             Err(error) => JsonRpcResponse::failure(id, error),
@@ -1602,7 +1695,35 @@ fn rpc_error(code: i64, message: impl Into<String>) -> JsonRpcError {
     }
 }
 fn backend_error(e: axon_core::BackendError) -> JsonRpcError {
-    rpc_error(-32000, e.to_string())
+    match e {
+        axon_core::BackendError::Capability {
+            capability,
+            reason,
+            diagnostic,
+        } => JsonRpcError {
+            code: -32004,
+            message: format!("capability {} is unavailable: {reason}", capability.key()),
+            data: Some(
+                json!({"kind":"capability-unavailable","capability":capability.key(),"reason":reason,"diagnostic":diagnostic}),
+            ),
+        },
+        // Same family as `Capability`, plus the stable `code` that names *which* refusal it is.
+        // Without this arm a typed refusal would fall through to the catch-all and reach the wire
+        // as an untyped -32000, which is how macOS lost `accessibility-denied` (axn/220).
+        axon_core::BackendError::CapabilityReason {
+            capability,
+            code,
+            reason,
+            diagnostic,
+        } => JsonRpcError {
+            code: -32004,
+            message: format!("capability {} is unavailable: {reason}", capability.key()),
+            data: Some(
+                json!({"kind":"capability-unavailable","capability":capability.key(),"code":code,"reason":reason,"diagnostic":diagnostic}),
+            ),
+        },
+        other => rpc_error(-32000, other.to_string()),
+    }
 }
 fn internal_error(e: serde_json::Error) -> JsonRpcError {
     rpc_error(-32603, e.to_string())

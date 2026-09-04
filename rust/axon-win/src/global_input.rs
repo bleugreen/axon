@@ -22,8 +22,8 @@ use crate::recording::{
     is_self_delivered, wheel_delta,
 };
 use axon_core::{
-    BackendError, Capability, GlobalInputObserver, RecordedAppIdentity, RecordedFocusedEvidence,
-    RecordedInputEvent, RecordedPoint, RecordedTargetEvidence, RecordingScope,
+    BackendError, Capability, GlobalInputObserver, RecordedAppIdentity, RecordedInputEvent,
+    RecordedPoint, RecordedTargetEvidence, RecordingScope,
 };
 use std::{
     collections::VecDeque,
@@ -509,8 +509,13 @@ impl WindowsGlobalInputObserver {
         })
     }
 
-    pub fn read_focused(&self) -> Option<RecordedFocusedEvidence> {
-        ask(&self.commands, Command::FocusedEvidence).flatten()
+    /// The deepest the raw queue has been this session.
+    ///
+    /// Reported by the live diagnostic rather than by the daemon: whether enrichment can fall
+    /// behind a fast burst is a question about a real machine under a real UI Automation provider,
+    /// and this is the number that answers it.
+    pub fn raw_queue_depth(&self) -> usize {
+        raw_queue().high_water()
     }
 }
 
