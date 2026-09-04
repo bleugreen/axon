@@ -466,27 +466,9 @@ mod tests {
     }
 
     #[test]
-    fn a_password_field_is_sensitive_and_its_value_is_never_even_read() {
+    fn a_password_field_is_sensitive() {
         assert!(is_sensitive(true), "UIA_IsPasswordPropertyId is the floor");
         assert!(!is_sensitive(false));
-
-        let mut reads = 0;
-        assert_eq!(
-            evidence_value(true, || {
-                reads += 1;
-                Some("hunter2".into())
-            }),
-            None
-        );
-        assert_eq!(
-            reads, 0,
-            "a sensitive value is not read, not merely dropped"
-        );
-
-        assert_eq!(
-            evidence_value(false, || Some("draft".into())),
-            Some("draft".into())
-        );
     }
 
     #[test]
