@@ -472,6 +472,12 @@ function Invoke-RecordingAcceptance {
         throw 'the recording page field exposed no semantic name to address it by'
     }
     $savedValue = 'axon saved this'
+    # Guard the quoting rather than trust it: `""` inside a here-string is two literal quotes, not
+    # an escaped one, so an earlier version of the helper's command line truncated this burst at
+    # its first space and reported a success that had typed one word.
+    if ($posted.typed -ne $typed) {
+        throw "the independent helper typed '$($posted.typed)' rather than '$typed'"
+    }
     $typed = Invoke-AxonRpc -Method 'type' -Params @{
         _session = $sessionId
         target = @{ app = $BrowserApp; name = $fieldName }
@@ -600,7 +606,7 @@ function Invoke-ProbeIndependentInput {
         $command = @"
 `$start = [System.Diagnostics.ProcessStartInfo]::new()
 `$start.FileName = '$escapedExecutable'
-`$start.Arguments = 'probe post-input $X $Y ""$escapedText""'
+`$start.Arguments = 'probe post-input $X $Y "$escapedText"'
 `$start.UseShellExecute = `$false
 `$start.RedirectStandardOutput = `$true
 `$start.RedirectStandardError = `$true
