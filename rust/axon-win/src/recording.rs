@@ -515,6 +515,36 @@ mod tests {
         );
     }
 
+    /// Unicode-injected text has no key behind it, so the layout can say nothing about it and the
+    /// character has to be read straight out of the scan code. Every process that types text it did
+    /// not get from a keyboard reaches an application this way.
+    #[test]
+    fn unicode_injected_text_is_read_from_the_packet_rather_than_the_layout() {
+        let modifiers = ModifierState::default();
+        assert_eq!(
+            classify_keystroke(0xE7, u32::from('\u{e9}'), modifiers, |_| None),
+            Some(RecordedKeystroke::Text { text: "é".into() }),
+            "a layout that knows nothing about this key must not be consulted"
+        );
+        assert_eq!(
+            classify_keystroke(0xE7, u32::from(' '), modifiers, |_| None),
+            Some(RecordedKeystroke::Text { text: " ".into() })
+        );
+        assert_eq!(
+            classify_keystroke(0xE7, u32::from('\u{1b}'), modifiers, |_| None),
+            None,
+            "a control character is not typed text however it arrived"
+        );
+        // A chord cannot be spelled over a packet: there is no key to name, and the modifier state
+        // belongs to whatever the injecting process was doing rather than to this character.
+        let mut chorded = ModifierState::default();
+        chorded.apply(0xA2, false);
+        assert_eq!(
+            classify_keystroke(0xE7, u32::from('a'), chorded, |_| None),
+            Some(RecordedKeystroke::Text { text: "a".into() })
+        );
+    }
+
     #[test]
     fn caps_lock_latches_on_the_press_and_survives_its_release() {
         let mut modifiers = ModifierState::default();

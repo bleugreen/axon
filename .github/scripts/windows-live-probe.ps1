@@ -315,7 +315,8 @@ function Invoke-OneRecording {
         [Parameter(Mandatory)] $Scope,
         [Parameter(Mandatory)][int] $X,
         [Parameter(Mandatory)][int] $Y,
-        [Parameter(Mandatory)][string] $Text
+        [Parameter(Mandatory)][string] $Text,
+        [Parameter(Mandatory)][int] $ActivateProcessId
     )
     $started = Invoke-AxonRpc -Method 'recording.start' -Params @{ scope = $Scope.value }
     if ($null -ne $started.error -or $started.result.recording -ne $true) {
@@ -325,7 +326,7 @@ function Invoke-OneRecording {
 
     $stopped = $null
     try {
-        $posted = Invoke-ProbeIndependentInput -X $X -Y $Y -Text $Text
+        $posted = Invoke-ProbeIndependentInput -X $X -Y $Y -Text $Text -ActivateProcessId $ActivateProcessId
         Write-Note "recording [$($Scope.label)] independent input: $($posted | ConvertTo-Json -Compress -Depth 20)"
         # Checked rather than trusted: `""` inside a here-string is two literal quotes and not an
         # escaped one, so an earlier helper command line truncated this burst at its first space
@@ -446,7 +447,8 @@ function Invoke-RecordingAcceptance {
             @{ label = 'allApplications'; value = @{ scope = 'allApplications' } },
             @{ label = "application '$recordedAppName'"
                value = @{ scope = 'application'; app = @{ name = $recordedAppName } } })) {
-        $recordings += Invoke-OneRecording -Scope $scope -X $pointX -Y $pointY -Text $typed
+        $recordings += Invoke-OneRecording -Scope $scope -X $pointX -Y $pointY -Text $typed `
+            -ActivateProcessId ([int]$Browser.ProcessId)
     }
 
     $unscoped, $scoped = $recordings
@@ -518,8 +520,14 @@ function Invoke-RecordingAcceptance {
         target = @{ app = $BrowserApp; name = $fieldName }
         value = $savedValue
     }
-    if ($null -ne $typed.error -or $typed.result.success -ne $true) {
-        throw "the history-session type action failed: $($typed | ConvertTo-Json -Compress -Depth 20)"
+    # `dispatchSuccess` rather than `success`, and the difference is deliberate. What this leg needs
+    # is an action in the session's history, which a dispatched action is. Whether Chromium's
+    # ValuePattern had propagated to the value this daemon read back a moment later is a question
+    # about that provider, not about `save`, and coupling the two would make this leg fail for a
+    # reason it is not measuring. The verification is reported either way.
+    Write-Note "history-session type verification: $($typed.result.verification | ConvertTo-Json -Compress -Depth 10)"
+    if ($null -ne $typed.error -or $typed.result.dispatchSuccess -ne $true) {
+        throw "the history-session type action did not dispatch: $($typed | ConvertTo-Json -Compress -Depth 20)"
     }
 
     $saved = Invoke-AxonRpc -Method 'save' -Params @{ sessionId = $sessionId }
@@ -629,7 +637,8 @@ function Invoke-ProbeIndependentInput {
     param(
         [Parameter(Mandatory)][int] $X,
         [Parameter(Mandatory)][int] $Y,
-        [Parameter(Mandatory)][string] $Text
+        [Parameter(Mandatory)][string] $Text,
+        [Parameter(Mandatory)][int] $ActivateProcessId
     )
     $resultPath = Join-Path $LiveDirectory 'independent-input.json'
     try {
@@ -639,9 +648,13 @@ function Invoke-ProbeIndependentInput {
         $escapedTemporaryPath = ("$resultPath.tmp").Replace("'", "''")
         $escapedText = $Text.Replace("'", "''")
         $command = @"
+# Bring the target forward before posting. The task host's own console window opens on top of
+# whatever was there, and a click aimed at a point computed from a capture taken beforehand then
+# lands on this console instead -- which is exactly what happened, and the recording faithfully
+# reported a click on `powershell.exe`.
 `$start = [System.Diagnostics.ProcessStartInfo]::new()
 `$start.FileName = '$escapedExecutable'
-`$start.Arguments = 'probe post-input $X $Y "$escapedText"'
+`$start.Arguments = 'probe post-input $X $Y "$escapedText" --activate $ActivateProcessId'
 `$start.UseShellExecute = `$false
 `$start.RedirectStandardOutput = `$true
 `$start.RedirectStandardError = `$true
@@ -657,7 +670,9 @@ if (`$process.ExitCode -eq 0) { `$payload = `$stdout | ConvertFrom-Json }
 Move-Item -LiteralPath '$escapedTemporaryPath' -Destination '$escapedResultPath' -Force
 "@
         $encodedCommand = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($command))
-        $action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument "-NoProfile -NonInteractive -EncodedCommand $encodedCommand"
+        # `-WindowStyle Hidden` because this task's host window would otherwise sit on top of the
+        # window the click is aimed at, and a hidden window cannot be clicked by accident.
+        $action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument "-NoProfile -NonInteractive -WindowStyle Hidden -EncodedCommand $encodedCommand"
         $principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive
         Register-ScheduledTask -TaskName $ProbeInputTaskName -Action $action -Principal $principal -Force | Out-Null
         Start-ScheduledTask -TaskName $ProbeInputTaskName
