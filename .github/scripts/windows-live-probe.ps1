@@ -87,6 +87,16 @@ $BuildDirectory = Join-Path $RepositoryRoot 'rust\target\debug'
 # in scope.
 $ProbeRoots = @($LiveDirectory, $BuildDirectory, 'C:\actions-runner-axon\_work')
 
+# How a branch asks the probe stage for a diagnostic instead of the standing acceptance.
+#
+# The SSH forced command on this machine passes exactly one thing -- the stage name, from a fixed
+# allowlist of four (.github/scripts/windows-live-relay.cmd) -- so a switch on this script's
+# parameter block cannot be reached from a workflow_dispatch. A committed marker can be: it travels
+# with the branch, it is reviewable in the diff, and deleting it is what makes the acceptance run
+# on a merging head unaffected by any measurement that came before. A file rather than an
+# environment variable because the relay runs as the desktop user and inherits nothing from the job.
+$DiagnosticMarkerPath = Join-Path $RepositoryRoot '.github\scripts\live-diagnostics.txt'
+
 # Named rather than inline so scripts/test-windows-live-recovery.ps1 can shrink them; every one of
 # them bounds a wait on a machine, and a scenario that has to sit through the real bound would be a
 # scenario nobody adds.
@@ -1258,13 +1268,19 @@ function Invoke-ProbeStage {
             }
         }
 
-        if ($KeyboardDiagnostic) {
+        $requestedDiagnostic = if (Test-Path -LiteralPath $DiagnosticMarkerPath) {
+            (Get-Content -LiteralPath $DiagnosticMarkerPath -Raw).Trim()
+        }
+        else { '' }
+        if ($requestedDiagnostic) { Write-Note "branch requests the '$requestedDiagnostic' diagnostic" }
+
+        if ($KeyboardDiagnostic -or $requestedDiagnostic -eq 'keyboard') {
             $diagnostic = Invoke-KeyboardDiagnostic -TargetProcessId ([int]$browser.ProcessId) -MaxTrials $KeyboardDiagnosticMaxTrials
             Write-Note "keyboard diagnostic timeline: $($diagnostic | ConvertTo-Json -Compress -Depth 100)"
             return
         }
 
-        if ($RecordingDiagnostic) {
+        if ($RecordingDiagnostic -or $requestedDiagnostic -eq 'recording') {
             # Deliberately after the Edge setup above: the burst is measured against a real
             # foreground browser, because what the enrichment thread is racing is a UI Automation
             # provider answering for a live out-of-process window, not an idle desktop.
