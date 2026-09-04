@@ -64,14 +64,6 @@ const NO_RECOGNIZED_TEXT_GEOMETRY: &str = "this text location resolved from reco
 const NO_FOREGROUND_TRANSACTION: &str = "this backend cannot capture the foreground, activate the \
      requested target, and prove that activation before dispatch";
 
-/// A backend whose global input observation can be brought to a stop without discarding what it
-/// saw on the way.
-///
-/// This exists because observation and enrichment are not the same clock. A backend that reads the
-/// interface behind its hook is, at any moment, some distance behind it; the events of a session's
-/// last instants only exist once observation has stopped and that backlog has been worked through.
-/// `GlobalInputObserver::stop` cannot serve both roles, because the recorder's `finish` calls it
-/// *after* the caller's last chance to poll.
 pub use axon_core::ObserverQuiescence;
 
 pub struct Router<B> {
