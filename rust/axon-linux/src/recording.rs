@@ -443,3 +443,309 @@ pub fn self_delivery() -> &'static SelfDelivery {
     static LEDGER: OnceLock<SelfDelivery> = OnceLock::new();
     LEDGER.get_or_init(SelfDelivery::new)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A US layout stub standing in for `GetKeyboardMapping`: two keysyms per keycode, the
+    /// unshifted one and the shifted one, in the order the protocol reports them.
+    fn us_layout(pair: [u32; 2]) -> impl Fn(ModifierState) -> Option<u32> {
+        move |modifiers| pair.get(keysym_level(modifiers).min(1)).copied()
+    }
+
+    fn held(state: ModifierState) -> impl Fn(ModifierState) -> Option<u32> {
+        move |_| Some(0xFFE1_u32.max(state.shift as u32))
+    }
+
+    #[test]
+    fn a_plain_letter_is_text_and_shift_only_changes_its_case() {
+        let layout = us_layout([u32::from(b'a'), u32::from(b'A')]);
+        assert_eq!(
+            classify_keystroke(ModifierState::default(), &layout),
+            Some(RecordedKeystroke::Text { text: "a".into() })
+        );
+        let shifted = ModifierState {
+            shift: true,
+            ..Default::default()
+        };
+        assert_eq!(
+            classify_keystroke(shifted, &layout),
+            Some(RecordedKeystroke::Text { text: "A".into() }),
+            "shift alone is case, not a chord"
+        );
+    }
+
+    #[test]
+    fn a_control_chord_is_named_by_its_unmodified_base_key() {
+        let layout = us_layout([u32::from(b'l'), u32::from(b'L')]);
+        let control = ModifierState {
+            control: true,
+            ..Default::default()
+        };
+        assert_eq!(
+            classify_keystroke(control, &layout),
+            Some(RecordedKeystroke::Key {
+                key: "ctrl+l".into()
+            })
+        );
+
+        let layout = us_layout([u32::from(b'p'), u32::from(b'P')]);
+        let both = ModifierState {
+            control: true,
+            shift: true,
+            ..Default::default()
+        };
+        assert_eq!(
+            classify_keystroke(both, &layout),
+            Some(RecordedKeystroke::Key {
+                key: "ctrl+shift+p".into()
+            }),
+            "the base key is the one the layout produces unmodified, not the shifted glyph"
+        );
+    }
+
+    #[test]
+    fn every_recorded_chord_is_one_this_project_can_replay() {
+        let layout = us_layout([u32::from(b's'), u32::from(b'S')]);
+        let all = ModifierState {
+            shift: true,
+            control: true,
+            alt: true,
+            super_key: true,
+            ..Default::default()
+        };
+        let Some(RecordedKeystroke::Key { key }) = classify_keystroke(all, &layout) else {
+            panic!("a fully modified letter is a chord");
+        };
+        assert_eq!(key, "super+ctrl+alt+shift+s");
+        let chord = axon_core::parse_chord(&key).expect("a recorded chord parses back");
+        assert_eq!(chord.key, axon_core::Key::Character('s'));
+        assert_eq!(chord.modifiers.len(), 4);
+    }
+
+    /// Every name this observer can produce has to survive the round trip a replay makes, because
+    /// replay parses the recorded string and synthesizes it through `keys::keysym_for`.
+    #[test]
+    fn every_named_key_this_observer_produces_replays_through_the_same_table() {
+        for keysym in (0xFF00_u32..=0xFFFF).chain([0x0100_0041]) {
+            let Some(name) = named_key(keysym) else {
+                continue;
+            };
+            let chord = axon_core::parse_chord(name)
+                .unwrap_or_else(|error| panic!("{keysym:#06x} recorded as {name}: {error}"));
+            let axon_core::Key::Named(key) = chord.key else {
+                panic!("{name} is a named key, not a character");
+            };
+            assert_eq!(
+                crate::keys::keysym_for(axon_core::Key::Named(key)),
+                match keysym {
+                    // The keypad twins resolve to their main-block keysym, which is the one this
+                    // project synthesizes; that they are not identical is the point of naming both.
+                    0xFF8D => 0xFF0D,
+                    0xFF9F => 0xFFFF,
+                    0xFF9E => 0xFF63,
+                    0xFF95 => 0xFF50,
+                    0xFF9C => 0xFF57,
+                    0xFF9A => 0xFF55,
+                    0xFF9B => 0xFF56,
+                    0xFF97 => 0xFF52,
+                    0xFF99 => 0xFF54,
+                    0xFF96 => 0xFF51,
+                    0xFF98 => 0xFF53,
+                    other => other,
+                },
+                "{name} does not synthesize back to the keysym it was recorded from"
+            );
+        }
+    }
+
+    #[test]
+    fn modifiers_are_context_and_an_unmapped_key_is_nothing() {
+        for keysym in [0xFFE1, 0xFFE3, 0xFFE9, 0xFFEB, 0xFFE5, 0xFE03, 0xFF7F] {
+            assert_eq!(
+                classify_keystroke(ModifierState::default(), |_| Some(keysym)),
+                None,
+                "{keysym:#06x} is context, not a keystroke"
+            );
+        }
+        assert_eq!(
+            classify_keystroke(ModifierState::default(), |_| None),
+            None,
+            "a keycode the layout has nothing for is not recorded"
+        );
+        assert_eq!(
+            classify_keystroke(ModifierState::default(), |_| Some(0xFF6A)),
+            None,
+            "a keysym that is neither named nor text is not recorded"
+        );
+        let _ = held(ModifierState::default());
+    }
+
+    #[test]
+    fn unicode_and_keypad_keysyms_resolve_to_the_characters_they_type() {
+        assert_eq!(keysym_text(0x0100_00E9).as_deref(), Some("\u{e9}"));
+        assert_eq!(keysym_text(0xE9).as_deref(), Some("\u{e9}"), "Latin-1");
+        assert_eq!(keysym_text(0x20).as_deref(), Some(" "));
+        assert_eq!(keysym_text(0xFFB7).as_deref(), Some("7"), "KP_7");
+        assert_eq!(keysym_text(0xFFAB).as_deref(), Some("+"), "KP_Add");
+        assert_eq!(keysym_text(0xFF0D), None, "Return types no text");
+        assert_eq!(keysym_text(0x0100_0009), None, "a control character is not typed text");
+    }
+
+    #[test]
+    fn caps_lock_selects_the_shifted_level_and_shift_takes_it_back() {
+        let lock = ModifierState {
+            lock: true,
+            ..Default::default()
+        };
+        assert_eq!(keysym_level(lock), 1);
+        assert_eq!(
+            keysym_level(ModifierState { shift: true, ..lock }),
+            0,
+            "shift while caps lock is on types lower case"
+        );
+        assert_eq!(
+            keysym_level(ModifierState {
+                level3: true,
+                ..Default::default()
+            }),
+            2,
+            "AltGr is a second pair of levels, not a chord"
+        );
+        assert!(
+            !ModifierState {
+                level3: true,
+                shift: true,
+                ..Default::default()
+            }
+            .chorded()
+        );
+    }
+
+    #[test]
+    fn modifier_bits_are_read_from_the_server_rather_than_assumed() {
+        // A session that puts Super on Mod3 instead of Mod4. Under the conventional masks the same
+        // event reads as no modifier at all, and every chord would be recorded under a wrong name.
+        let rearranged = ModifierMasks {
+            super_key: 1 << 5,
+            ..ModifierMasks::CONVENTIONAL
+        };
+        let state = ModifierState::from_mask(1 << 5, rearranged);
+        assert!(state.super_key);
+        assert!(
+            !ModifierState::from_mask(1 << 5, ModifierMasks::CONVENTIONAL).super_key,
+            "this is the reading the mapping exists to correct"
+        );
+        assert_eq!(state.names(), vec!["super"]);
+        // A mask a server did not publish at all must never match, however the bits fall.
+        let missing = ModifierMasks {
+            level3: 0,
+            ..ModifierMasks::CONVENTIONAL
+        };
+        assert!(!ModifierState::from_mask(u16::MAX, missing).level3);
+    }
+
+    #[test]
+    fn wheel_notches_keep_one_sign_convention_across_platforms() {
+        assert_eq!(wheel_delta(BUTTON_WHEEL_UP), Some((0.0, 1.0)));
+        assert_eq!(wheel_delta(BUTTON_WHEEL_DOWN), Some((0.0, -1.0)));
+        assert_eq!(wheel_delta(BUTTON_WHEEL_RIGHT), Some((1.0, 0.0)));
+        assert_eq!(wheel_delta(BUTTON_WHEEL_LEFT), Some((-1.0, 0.0)));
+        assert_eq!(
+            wheel_delta(BUTTON_PRIMARY),
+            None,
+            "an ordinary button is a click, not a scroll"
+        );
+    }
+
+    #[test]
+    fn a_password_element_is_sensitive_by_either_signal_and_its_value_is_never_even_read() {
+        assert!(is_sensitive(true, "text"), "STATE_PROTECTED alone");
+        assert!(is_sensitive(false, "password text"), "the role alone");
+        assert!(is_sensitive(false, "Password Text"));
+        assert!(!is_sensitive(false, "entry"));
+        assert!(!is_sensitive(false, "text"));
+
+        let mut reads = 0;
+        assert_eq!(
+            axon_core::evidence_value(is_sensitive(false, "password text"), || {
+                reads += 1;
+                Some("hunter2".into())
+            }),
+            None
+        );
+        assert_eq!(reads, 0, "a sensitive value is not read, not merely dropped");
+    }
+
+    #[test]
+    fn the_ledger_excludes_our_own_delivery_once_each_and_leaves_the_users_alone() {
+        let ledger = SelfDelivery::new();
+        assert!(
+            !ledger.claims(KEY_PRESS, 38),
+            "nothing is excluded while no session is observing"
+        );
+        ledger.expect(KEY_PRESS, 38);
+        assert_eq!(ledger.outstanding(), 0, "a disarmed ledger records nothing");
+
+        ledger.arm();
+        // One click, as `X11Session::click` posts it.
+        ledger.expect(MOTION_NOTIFY, 0);
+        ledger.expect(BUTTON_PRESS, BUTTON_PRIMARY);
+        ledger.expect(BUTTON_RELEASE, BUTTON_PRIMARY);
+        assert_eq!(ledger.outstanding(), 3);
+
+        assert!(ledger.claims(MOTION_NOTIFY, 0));
+        assert!(ledger.claims(BUTTON_PRESS, BUTTON_PRIMARY));
+        assert!(ledger.claims(BUTTON_RELEASE, BUTTON_PRIMARY));
+        assert!(
+            !ledger.claims(BUTTON_PRESS, BUTTON_PRIMARY),
+            "a user click that follows ours is the user's"
+        );
+        assert_eq!(ledger.outstanding(), 0);
+
+        ledger.expect(KEY_PRESS, 38);
+        assert!(
+            !ledger.claims(KEY_PRESS, 39),
+            "a different key is not the one we injected"
+        );
+        assert!(
+            !ledger.claims(KEY_RELEASE, 38),
+            "a release is not the press we registered"
+        );
+        assert!(ledger.claims(KEY_PRESS, 38));
+
+        ledger.disarm();
+        ledger.expect(KEY_PRESS, 38);
+        assert!(!ledger.claims(KEY_PRESS, 38));
+    }
+
+    #[test]
+    fn an_expectation_that_never_arrived_stops_suppressing_input() {
+        let ledger = SelfDelivery::new();
+        ledger.arm();
+        let injected = Instant::now();
+        // A dispatch that errored, or a keycode this server has no key for: the event the ledger is
+        // waiting on will never be generated, and without a deadline it would eat the next thing
+        // the user really typed.
+        ledger.expect_at(KEY_PRESS, 38, injected);
+        assert!(!ledger.claims_at(KEY_PRESS, 38, injected + EXPECTATION_LIFETIME));
+        assert_eq!(
+            ledger.outstanding(),
+            1,
+            "expired but not yet swept, which is why matching checks the deadline too"
+        );
+        ledger.expect_at(KEY_PRESS, 39, injected + EXPECTATION_LIFETIME);
+        assert_eq!(ledger.outstanding(), 1, "the sweep runs on the next injection");
+    }
+
+    #[test]
+    fn a_flood_of_failed_injections_cannot_grow_the_ledger_without_bound() {
+        let ledger = SelfDelivery::new();
+        ledger.arm();
+        for _ in 0..(MAX_EXPECTATIONS * 2) {
+            ledger.expect(KEY_PRESS, 38);
+        }
+        assert_eq!(ledger.outstanding(), MAX_EXPECTATIONS);
+    }
+}
