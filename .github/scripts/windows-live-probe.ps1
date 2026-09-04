@@ -442,11 +442,21 @@ function Invoke-RecordingAcceptance {
     # a scoped run that does not is an identity disagreement and nothing else -- which is the
     # axn/207 failure shape -- while both coming back empty is the observer or the evidence path.
     # Reading that distinction off one run is worth the second recording on a bench this slow.
+    $fieldName = [string]$fields[0].name
+    if ([string]::IsNullOrWhiteSpace($fieldName)) {
+        throw 'the recording page field exposed no semantic name to address it by'
+    }
     $recordings = @()
     foreach ($scope in @(
             @{ label = 'allApplications'; value = @{ scope = 'allApplications' } },
             @{ label = "application '$recordedAppName'"
                value = @{ scope = 'application'; app = @{ name = $recordedAppName } } })) {
+        # Empty the field first. Each recording types into it, and a second burst landing in a
+        # field that still holds the first one's text is recorded faithfully as the interleaving
+        # the caret actually produced -- which is correct behaviour and an unreadable artifact.
+        [void](Invoke-AxonRpc -Method 'type' -Params @{
+            target = @{ app = $BrowserApp; name = $fieldName }; value = ''
+        })
         $recordings += Invoke-OneRecording -Scope $scope -X $pointX -Y $pointY -Text $typed `
             -ActivateProcessId ([int]$Browser.ProcessId)
     }
@@ -479,22 +489,38 @@ function Invoke-RecordingAcceptance {
         }
     }
 
+    # A recorded artifact carries no delivery policy, deliberately: what a recording says is what
+    # the user did, and how a replay is allowed to deliver it is the replaying caller's decision.
+    # `AxnAction` flattens unrecognised keys into each action's dispatch params, so supplying it
+    # here is that decision being made rather than the artifact being doctored. Without it the live
+    # replay is refused -- correctly -- because a click on a `Chrome_WidgetWin_1` window has no
+    # probe-verified background rung, and this leg would then pass while nothing was delivered.
+    $replayable = ($script -split "`n" | ForEach-Object {
+        $_
+        if ($_ -match '^\s+tool:') { '  deliveryPolicy: foregroundPermitted' }
+    }) -join "`n"
     $scriptPath = Join-Path $LiveDirectory 'recording-acceptance.axn'
-    Set-Content -LiteralPath $scriptPath -Encoding utf8 -Value $script
+    Set-Content -LiteralPath $scriptPath -Encoding utf8 -Value $replayable
     try {
         foreach ($dryRun in @($true, $false)) {
             $replay = Invoke-AxonMcp -Request (@{
                 jsonrpc = '2.0'; id = 1; method = 'tools/call'
                 params = @{ name = 'run'; arguments = @{ path = $scriptPath; dryRun = $dryRun } }
             } | ConvertTo-Json -Compress -Depth 10)
-            Write-Note "recording acceptance replay dryRun=$dryRun : $($replay.result.structuredContent | ConvertTo-Json -Compress -Depth 30)"
-            if ($replay.result.isError -ne $false) {
-                throw "replaying the recording with dryRun=$dryRun failed: $($replay | ConvertTo-Json -Compress -Depth 30)"
+            $batch = $replay.result.structuredContent.batch
+            Write-Note "recording acceptance replay dryRun=$dryRun : $($batch | ConvertTo-Json -Compress -Depth 30)"
+            if ($replay.result.isError -ne $false -or $batch.success -ne $true) {
+                throw "replaying the recording with dryRun=$dryRun did not succeed: $($replay | ConvertTo-Json -Compress -Depth 30)"
             }
-            $unresolved = @($replay.result.structuredContent.batch |
-                Where-Object { $_.resolution -and $_.resolution.status -ne 'selected' })
-            if ($unresolved.Count -gt 0) {
-                throw "the recorded targets did not resolve on replay (dryRun=$dryRun): $($unresolved | ConvertTo-Json -Compress -Depth 20)"
+            # Named per action rather than left to the batch flag, because a batch that resolved
+            # nothing and dispatched nothing can still report success under some policies.
+            foreach ($step in @($batch.trace)) {
+                if ($step.success -ne $true) {
+                    throw "recorded action $($step.actionId) failed on replay (dryRun=$dryRun): $($step | ConvertTo-Json -Compress -Depth 20)"
+                }
+            }
+            if (@($batch.trace).Count -lt [int]$stopped.result.actionCount) {
+                throw 'the replay executed fewer actions than the recording authored'
             }
             Wait-BrowserTransition
         }
@@ -510,10 +536,6 @@ function Invoke-RecordingAcceptance {
     # connection is needed. It goes over the pipe rather than the MCP facade because that facade
     # validates tool arguments strictly and `_session` is not one of them.
     $sessionId = "axn225-acceptance-$([guid]::NewGuid().ToString('N').Substring(0, 8))"
-    $fieldName = [string]$fields[0].name
-    if ([string]::IsNullOrWhiteSpace($fieldName)) {
-        throw 'the recording page field exposed no semantic name to address it by'
-    }
     $savedValue = 'axon saved this'
     $typed = Invoke-AxonRpc -Method 'type' -Params @{
         _session = $sessionId
