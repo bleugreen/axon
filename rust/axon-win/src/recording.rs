@@ -5,7 +5,7 @@
 //! Automation reads; it feeds this module raw events and forwards what it decides they mean.
 #![cfg_attr(not(windows), allow(dead_code))]
 
-use axon_core::{RecordedKeystroke, evidence_value};
+use axon_core::RecordedKeystroke;
 use std::sync::OnceLock;
 
 /// The sentinel this daemon writes into `dwExtraInfo` on every input record it posts, and the only
