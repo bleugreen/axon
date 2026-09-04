@@ -176,23 +176,14 @@ pub fn serve(
         let _ = ready_tx.send(started);
     });
 
-    let mut on_bound = Some(on_bound);
-    let backend = loop {
-        let handle = create_pipe(&mut security)?;
-        if let Some(on_bound) = on_bound.take() {
-            on_bound();
-        }
-        match ready_rx.recv().map_err(io::Error::other)? {
-            Ok(backend) => {
-                close_pipe(handle);
-                break backend;
-            }
-            Err(error) => {
-                close_pipe(handle);
-                return Err(io::Error::other(error).into());
-            }
-        }
-    };
+    // One bind, then one answer. The pipe is created before the backend is waited on so a client
+    // that connects during a slow UI Automation startup finds an endpoint rather than nothing, and
+    // it is closed either way: the serving loop below creates its own instances.
+    let handle = create_pipe(&mut security)?;
+    on_bound();
+    let ready = ready_rx.recv().map_err(io::Error::other)?;
+    close_pipe(handle);
+    let backend = ready.map_err(io::Error::other)?;
     let capabilities = Arc::new(backend.capabilities().unwrap_or_default());
     let router = Arc::new(Mutex::new(Router::new(backend)));
     let stopping = Arc::new(AtomicBool::new(false));

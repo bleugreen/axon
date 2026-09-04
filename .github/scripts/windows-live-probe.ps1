@@ -43,7 +43,15 @@ param(
     [string] $Stage,
     [switch] $KeyboardDiagnostic,
     [ValidateRange(1, 10)]
-    [int] $KeyboardDiagnosticMaxTrials = 10
+    [int] $KeyboardDiagnosticMaxTrials = 10,
+    # Answers the two questions the Windows recording observer was designed against rather than
+    # measured on: whether this process's own SendInput reaches its own low-level hook with its
+    # dwExtraInfo stamp intact, and how deep the raw queue gets while enrichment reads UI
+    # Automation for every event of a burst. Diagnostic only -- it records nothing and asserts
+    # nothing about the recording routes.
+    [switch] $RecordingDiagnostic,
+    [ValidateRange(1, 2000)]
+    [int] $RecordingDiagnosticBurst = 200
 )
 
 $ErrorActionPreference = 'Stop'
@@ -64,6 +72,8 @@ $ProbeBrowserTaskName = 'Axon Live Probe Browser'
 $ProbeActivationTaskName = 'Axon Live Probe Prior Activation'
 $ProbeForegroundTaskName = 'Axon Live Probe Foreground Sweep'
 $ProbeKeyboardTaskName = 'Axon Live Probe Keyboard Diagnostic'
+$ProbeRecordingTaskName = 'Axon Live Probe Recording Diagnostic'
+$ProbeInputTaskName = 'Axon Live Probe Independent Input'
 $LiveDirectory = 'C:\ProgramData\Axon\live'
 # Outside the runner workspace on purpose: a running process locks its image on Windows, so a
 # daemon started from the checkout survives its job and breaks the next checkout (AXN-38).
@@ -77,6 +87,16 @@ $BuildDirectory = Join-Path $RepositoryRoot 'rust\target\debug'
 # workspace is named literally as well as derived, so a daemon leaked by an older checkout is still
 # in scope.
 $ProbeRoots = @($LiveDirectory, $BuildDirectory, 'C:\actions-runner-axon\_work')
+
+# How a branch asks the probe stage for a diagnostic instead of the standing acceptance.
+#
+# The SSH forced command on this machine passes exactly one thing -- the stage name, from a fixed
+# allowlist of four (.github/scripts/windows-live-relay.cmd) -- so a switch on this script's
+# parameter block cannot be reached from a workflow_dispatch. A committed marker can be: it travels
+# with the branch, it is reviewable in the diff, and deleting it is what makes the acceptance run
+# on a merging head unaffected by any measurement that came before. A file rather than an
+# environment variable because the relay runs as the desktop user and inherits nothing from the job.
+$DiagnosticMarkerPath = Join-Path $RepositoryRoot '.github\scripts\live-diagnostics.txt'
 
 # Named rather than inline so scripts/test-windows-live-recovery.ps1 can shrink them; every one of
 # them bounds a wait on a machine, and a scenario that has to sit through the real bound would be a
@@ -241,6 +261,492 @@ function Unregister-ProbeKeyboardTask {
 function Remove-ProbeKeyboardResult {
     param([Parameter(Mandatory)][string] $ResultPath)
     Remove-Item -LiteralPath $ResultPath, "$ResultPath.tmp" -Force -ErrorAction SilentlyContinue
+}
+
+function Get-RequestedDiagnostic {
+    <# Which diagnostic this branch asks the probe stage to run instead of the acceptance.
+
+    A seam because it reads a file, which is a machine touch however small: the recovery harness is
+    right to insist, since a stage reaching disk directly is exactly how one would reach the rest of
+    a real desktop. Empty on the standing lane, which has no marker committed. #>
+    if (-not (Test-Path -LiteralPath $DiagnosticMarkerPath)) { return '' }
+    (Get-Content -LiteralPath $DiagnosticMarkerPath -Raw).Trim()
+}
+
+function Invoke-RecordingDiagnostic {
+    <# The two measurements the Windows observer's design rests on.
+
+    Run through the same scheduled-task relay as the keyboard diagnostic and for the same reason:
+    low-level hooks and SendInput only mean anything on the interactive desktop, and an ssh session
+    lands in session 0 where every answer would be a false negative. #>
+    param([Parameter(Mandatory)][int] $Burst)
+    $resultPath = Join-Path $LiveDirectory 'recording-diagnostic.json'
+    try {
+        Remove-ProbeRecordingResult -ResultPath $resultPath
+        Register-ProbeRecordingTask -Burst $Burst -ResultPath $resultPath
+        Start-ScheduledTask -TaskName $ProbeRecordingTaskName
+        $run = Wait-ForProbeRecordingTask -ResultPath $resultPath
+        if ($run.exitCode -ne 0) { throw "recording diagnostic exited $($run.exitCode): $($run.stderr)" }
+        $payload = $run.payload
+        if ($null -eq $payload -or $payload.schemaVersion -ne 'recording-diagnostic-v2') {
+            throw 'recording diagnostic returned no recording-diagnostic-v2 payload'
+        }
+
+        # Emitted before it is judged, deliberately. A measurement that reached this machine is
+        # expensive to obtain and must survive a disagreement about what it means -- including a
+        # bug in the checks below, which is exactly how the first v2 run lost its wheel numbers.
+        Write-Note "recording diagnostic: $($payload | ConvertTo-Json -Compress -Depth 100)"
+
+        # This stage asserts validity, never outcome. The point of a measurement is to be able to
+        # be surprised by it, so a deep queue or an unobservable self-delivery is a finding and
+        # passes; but a run that measured nothing must not be reportable as a reassuring result.
+        if ([int]$payload.selfDelivery.unstampedSeenByOwnHook -lt 1) {
+            throw 'the low-level hook observed none of the unstamped input posted beside it; the measurement is invalid rather than negative'
+        }
+        # `$measured`, not `$burst`: PowerShell variable names are case-insensitive, so a loop
+        # variable named `$burst` is the `[int] $Burst` parameter of this function and binding an
+        # object to it fails the conversion rather than the comparison.
+        foreach ($measured in @($payload.queueDepth.bursts)) {
+            if ($measured.measurementValid -ne $true) {
+                throw "the $($measured.path) burst produced no enriched events, so its queue depth measures nothing; the burst is not reaching the read path"
+            }
+        }
+        $payload
+    }
+    finally {
+        Unregister-ScheduledTask -TaskName $ProbeRecordingTaskName -Confirm:$false -ErrorAction SilentlyContinue
+        Remove-ProbeRecordingResult -ResultPath $resultPath
+    }
+}
+
+function Invoke-OneRecording {
+    <# One recording session, from `recording.start` to the authored artifact. #>
+    param(
+        [Parameter(Mandatory)] $Scope,
+        [Parameter(Mandatory)][int] $X,
+        [Parameter(Mandatory)][int] $Y,
+        [Parameter(Mandatory)][string] $Text,
+        [Parameter(Mandatory)][int] $ActivateProcessId
+    )
+    $started = Invoke-AxonRpc -Method 'recording.start' -Params @{ scope = $Scope.value }
+    if ($null -ne $started.error -or $started.result.recording -ne $true) {
+        throw "recording.start refused for scope $($Scope.label): $($started | ConvertTo-Json -Compress -Depth 20)"
+    }
+    Write-Note "recording [$($Scope.label)] started: $($started.result | ConvertTo-Json -Compress -Depth 20)"
+
+    $stopped = $null
+    try {
+        $posted = Invoke-ProbeIndependentInput -X $X -Y $Y -Text $Text -ActivateProcessId $ActivateProcessId
+        Write-Note "recording [$($Scope.label)] independent input: $($posted | ConvertTo-Json -Compress -Depth 20)"
+        # Checked rather than trusted: `""` inside a here-string is two literal quotes and not an
+        # escaped one, so an earlier helper command line truncated this burst at its first space
+        # and still reported success. A burst that typed one word would quietly weaken every
+        # assertion downstream of it.
+        if ([string]$posted.typed -ne $Text) {
+            throw "the independent helper typed '$($posted.typed)' rather than '$Text'"
+        }
+        # The enrichment thread reads UI Automation for every event behind the hook, so events are
+        # not necessarily authored by the time the helper's own process has exited.
+        Wait-BrowserTransition
+
+        $status = Invoke-AxonRpc -Method 'recording.status'
+        Write-Note "recording [$($Scope.label)] status: $($status.result | ConvertTo-Json -Compress -Depth 20)"
+        if ($status.result.recording -ne $true) {
+            throw 'recording.status did not report an active session while one was running'
+        }
+    }
+    finally {
+        $stopped = Invoke-AxonRpc -Method 'recording.stop'
+    }
+    if ($null -ne $stopped.error) {
+        throw "recording.stop failed for scope $($Scope.label): $($stopped | ConvertTo-Json -Compress -Depth 20)"
+    }
+    Write-Note "recording [$($Scope.label)] stopped: actionCount=$($stopped.result.actionCount)"
+    Write-Note "recording [$($Scope.label)] script:`n$([string]$stopped.result.script)"
+    [pscustomobject]@{
+        Label = $Scope.label
+        actionCount = [int]$stopped.result.actionCount
+        stopped = $stopped
+    }
+}
+
+function Invoke-RecordingAcceptance {
+    <# Records real third-party input through the shipping routes, then replays what it authored.
+
+    This is the acceptance for `observeGlobalInput` on Windows, and every step of it is chosen so
+    that passing means the capability works rather than that the harness agreed with itself. The
+    input comes from another process; the assertions are on the authored artifact rather than on
+    the observer's own report of itself; and the artifact is replayed against the same live page to
+    prove the targets it recorded still resolve. #>
+    param(
+        [Parameter(Mandatory)] $Browser,
+        [Parameter(Mandatory)][string] $BrowserApp
+    )
+
+    # Navigate to the one probe page carrying both a field and a link. The Ctrl+L/text/Return
+    # gesture is the one the foreground acceptance above has already proved on this desktop.
+    foreach ($call in @(
+            @{ key = 'ctrl+l' }, @{ text = $Browser.RecordUrl }, @{ key = 'Return' })) {
+        $arguments = $call + @{ deliveryPolicy = 'foregroundPermitted' }
+        $response = Invoke-AxonMcp -Request (@{
+            jsonrpc = '2.0'; id = 1; method = 'tools/call'
+            params = @{ name = 'keyboard'; arguments = $arguments }
+        } | ConvertTo-Json -Compress -Depth 10)
+        if ($response.result.isError -ne $false -or
+            $response.result.structuredContent.dispatchSuccess -ne $true) {
+            throw "recording acceptance could not navigate to the recording page: $($response | ConvertTo-Json -Compress -Depth 20)"
+        }
+        Wait-BrowserTransition
+    }
+
+    # `frames = $true` is load-bearing: `format_snapshot_with_redaction` strips every node's frame
+    # from a `look` response unless it is asked for, and this stage needs a screen point to post an
+    # independent click at.
+    $lookRequest = @{ jsonrpc = '2.0'; id = 1; method = 'tools/call'; params = @{
+        name = 'look'; arguments = @{
+            app = $BrowserApp; depth = 12; screenshot = $false; frames = $true
+        }
+    } } | ConvertTo-Json -Compress -Depth 10
+    $look = Invoke-AxonMcp -Request $lookRequest
+    $captured = $look.result.structuredContent
+    $root = @($captured.app.windows | ForEach-Object root | Select-Object -First 1)
+    if ($root.Count -ne 1 -or
+        ($captured | ConvertTo-Json -Compress -Depth 100) -notmatch 'Axon Recording Probe') {
+        throw 'the recording page did not load in the targeted Edge window'
+    }
+
+    # The name the daemon gives this application, read back from the capture rather than assumed.
+    # A recording is scoped by that name and writes it into the artifact's `app` field, so if this
+    # string and the observer's disagreed the session would record nothing at all -- which is
+    # exactly the shape of the macOS failure in axn/207, and worth catching here rather than as an
+    # empty artifact.
+    $recordedAppName = [string]$captured.app.name
+    if ([string]::IsNullOrWhiteSpace($recordedAppName)) {
+        throw 'the captured Edge application exposed no name to scope a recording by'
+    }
+
+    # `identifier` is the DOM id, which Chromium does publish as the UI Automation AutomationId.
+    # Note that `name` on a `look` node is the daemon's semantic name (a slug), not the accessible
+    # text -- the accessible text is `title`/`label` -- which is why the target below addresses the
+    # field by `name` while this search matches on `identifier`.
+    $fields = @(Find-ProbeNodes -Root $root[0] -Predicate {
+        param($node) $node.identifier -eq 'note' -and $null -ne $node.frame
+    })
+    if ($fields.Count -ne 1) {
+        # The tree, not just the count. A live capture is expensive to obtain and this is the one
+        # place that can say what the page actually exposed.
+        $edits = @(Find-ProbeNodes -Root $root[0] -Predicate { param($node) $node.role -eq 'Edit' } |
+            ForEach-Object { @{ role = $_.role; name = $_.name; title = $_.title; identifier = $_.identifier; frame = $_.frame } })
+        throw ("the recording page exposed $($fields.Count) Edit controls with automation id 'note' and a frame; " +
+            "Edit controls present: $($edits | ConvertTo-Json -Compress -Depth 5)")
+    }
+    $frame = $fields[0].frame
+    $pointX = [int]([math]::Round($frame.x + $frame.width / 2))
+    $pointY = [int]([math]::Round($frame.y + $frame.height / 2))
+    $typed = 'axon recorded this'
+
+    # Recorded twice, under both scopes, and the pairing is the diagnosis rather than belt and
+    # braces. Everything from the hook to the authored artifact is common to both; the only thing
+    # `application` adds is `RecordedAppIdentity::matches_runtime` comparing the name the observer
+    # reads for an event against the name the caller scoped by. So an unscoped run that records and
+    # a scoped run that does not is an identity disagreement and nothing else -- which is the
+    # axn/207 failure shape -- while both coming back empty is the observer or the evidence path.
+    # Reading that distinction off one run is worth the second recording on a bench this slow.
+    $fieldName = [string]$fields[0].name
+    if ([string]::IsNullOrWhiteSpace($fieldName)) {
+        throw 'the recording page field exposed no semantic name to address it by'
+    }
+    $recordings = @()
+    foreach ($scope in @(
+            @{ label = 'allApplications'; value = @{ scope = 'allApplications' } },
+            @{ label = "application '$recordedAppName'"
+               value = @{ scope = 'application'; app = @{ name = $recordedAppName } } })) {
+        # Empty the field first. Each recording types into it, and a second burst landing in a
+        # field that still holds the first one's text is recorded faithfully as the interleaving
+        # the caret actually produced -- which is correct behaviour and an unreadable artifact.
+        [void](Invoke-AxonRpc -Method 'type' -Params @{
+            target = @{ app = $BrowserApp; name = $fieldName }; value = ''
+        })
+        $recordings += Invoke-OneRecording -Scope $scope -X $pointX -Y $pointY -Text $typed `
+            -ActivateProcessId ([int]$Browser.ProcessId)
+    }
+
+    $unscoped, $scoped = $recordings
+    if ([int]$unscoped.actionCount -lt 1) {
+        throw 'the recording observed no actions from an independent process posting a click and a typed burst, with no scope filtering it'
+    }
+    if ([int]$scoped.actionCount -lt 1) {
+        throw ("an unscoped recording observed $($unscoped.actionCount) actions but scoping to " +
+            "'$recordedAppName' observed none: the name the observer reads for an event and the " +
+            'name the caller scoped by disagree (the axn/207 failure shape)')
+    }
+    $stopped = $scoped.stopped
+    $script = [string]$stopped.result.script
+
+    if ([int]$stopped.result.actionCount -lt 1) {
+        throw 'the recording observed no actions from an independent process posting a click and a typed burst'
+    }
+    # A recording whose steps carry only points is a recording that saw the input and could not say
+    # what it hit, which is the hollow outcome the AXN-26 native-vocabulary ruling exists to refuse.
+    if ($script -notmatch 'locator:') {
+        throw 'the recording authored no semantic target with a locator'
+    }
+    # axn/213: what persists is identity, not the state of the moment. `value` and `frame` in a
+    # persisted locator would pin a recording to the instant it was taken.
+    foreach ($stateful in @('frame:', 'nearbyText:')) {
+        if ($script -match $stateful) {
+            throw "the recorded locator persisted state-pinning field '$stateful'"
+        }
+    }
+
+    # A recorded artifact carries no delivery policy, deliberately: what a recording says is what
+    # the user did, and how a replay is allowed to deliver it is the replaying caller's decision.
+    # `AxnAction` flattens unrecognised keys into each action's dispatch params, so supplying it
+    # here is that decision being made rather than the artifact being doctored. Without it the live
+    # replay is refused -- correctly -- because a click on a `Chrome_WidgetWin_1` window has no
+    # probe-verified background rung, and this leg would then pass while nothing was delivered.
+    $replayable = ($script -split "`n" | ForEach-Object {
+        $_
+        if ($_ -match '^\s+tool:') { '  deliveryPolicy: foregroundPermitted' }
+    }) -join "`n"
+    $scriptPath = Join-Path $LiveDirectory 'recording-acceptance.axn'
+    Set-Content -LiteralPath $scriptPath -Encoding utf8 -Value $replayable
+    try {
+        foreach ($dryRun in @($true, $false)) {
+            $replay = Invoke-AxonMcp -Request (@{
+                jsonrpc = '2.0'; id = 1; method = 'tools/call'
+                # `continueOnError` for the same reason the per-action assertion below reads
+                # `dispatchSuccess`: a `click` declares no postcondition, so the runner scores it
+                # as unsuccessful and, left to itself, stops the batch there. Every recorded
+                # artifact containing a click would then replay exactly one action. The batch is
+                # allowed to finish and each action is judged on its own evidence instead.
+                params = @{
+                    name = 'run'
+                    arguments = @{ path = $scriptPath; dryRun = $dryRun; continueOnError = $true }
+                }
+            } | ConvertTo-Json -Compress -Depth 10)
+            $batch = $replay.result.structuredContent.batch
+            Write-Note "recording acceptance replay dryRun=$dryRun : $($batch | ConvertTo-Json -Compress -Depth 30)"
+            if ($replay.result.isError -ne $false) {
+                throw "replaying the recording with dryRun=$dryRun errored: $($replay | ConvertTo-Json -Compress -Depth 30)"
+            }
+            if (@($batch.trace).Count -lt [int]$stopped.result.actionCount) {
+                throw 'the replay executed fewer actions than the recording authored'
+            }
+            # Asserted per action, and on the right field. `success` is *goal* success, and `click`
+            # declares no postcondition -- the tool surface says so in as many words -- so demanding
+            # it here would require a guarantee this project deliberately does not make, and the
+            # foreground acceptance above asserts `dispatchSuccess` for exactly that reason. What a
+            # recording is on trial for is narrower and checkable: did the target it wrote down
+            # still resolve uniquely, and did the action reach the application.
+            foreach ($step in @($batch.trace)) {
+                $resolution = $step.targetResolution.status
+                if ($resolution -and $resolution -ne 'unique') {
+                    throw "recorded target for $($step.actionId) did not resolve uniquely on replay (dryRun=$dryRun): $($step | ConvertTo-Json -Compress -Depth 20)"
+                }
+                $delivered = if ($dryRun) { $step.success } else { $step.result.dispatchSuccess }
+                if ($delivered -ne $true) {
+                    throw "recorded action $($step.actionId) was not delivered on replay (dryRun=$dryRun): $($step | ConvertTo-Json -Compress -Depth 20)"
+                }
+            }
+            Wait-BrowserTransition
+        }
+    }
+    finally {
+        Remove-Item -LiteralPath $scriptPath -Force -ErrorAction SilentlyContinue
+    }
+
+    # The other half of the artifact story: `save` exports a slice of live action history as a
+    # runnable script. History is routed per request by the `_session` parameter that shared core
+    # strips before persisting (`axon-core/src/history.rs`, `ActionHistoryStore::context`), so
+    # requests arriving on separate pipe connections still land in one session and no held
+    # connection is needed. It goes over the pipe rather than the MCP facade because that facade
+    # validates tool arguments strictly and `_session` is not one of them.
+    $sessionId = "axn225-acceptance-$([guid]::NewGuid().ToString('N').Substring(0, 8))"
+    $savedValue = 'axon saved this'
+    $typed = Invoke-AxonRpc -Method 'type' -Params @{
+        _session = $sessionId
+        target = @{ app = $BrowserApp; name = $fieldName }
+        value = $savedValue
+    }
+    # `dispatchSuccess` rather than `success`, and the difference is deliberate. What this leg needs
+    # is an action in the session's history, which a dispatched action is. Whether Chromium's
+    # ValuePattern had propagated to the value this daemon read back a moment later is a question
+    # about that provider, not about `save`, and coupling the two would make this leg fail for a
+    # reason it is not measuring. The verification is reported either way.
+    Write-Note "history-session type verification: $($typed.result.verification | ConvertTo-Json -Compress -Depth 10)"
+    if ($null -ne $typed.error -or $typed.result.dispatchSuccess -ne $true) {
+        throw "the history-session type action did not dispatch: $($typed | ConvertTo-Json -Compress -Depth 20)"
+    }
+
+    $saved = Invoke-AxonRpc -Method 'save' -Params @{ sessionId = $sessionId }
+    if ($null -ne $saved.error) {
+        throw "save failed for session '$sessionId': $($saved | ConvertTo-Json -Compress -Depth 20)"
+    }
+    $savedScript = [string]$saved.result.script
+    Write-Note "save actionCount=$($saved.result.actionCount) recordCount=$($saved.result.recordCount)"
+    Write-Note "saved script:`n$savedScript"
+    # An empty slice is the failure this leg exists to catch. A `save` that exported nothing would
+    # satisfy every assertion phrased as "nothing wrong appeared", which is why the count is
+    # asserted before the contents are.
+    if ([int]$saved.result.actionCount -lt 1) {
+        throw 'save exported an empty slice for a session that had just performed an action'
+    }
+    if ($savedScript -notmatch [regex]::Escape($savedValue)) {
+        throw 'the saved slice does not contain the action that was performed in its session'
+    }
+    if ($savedScript -notmatch 'locator:') {
+        throw 'the saved slice carries no durable locator'
+    }
+    foreach ($stateful in @('frame:', 'nearbyText:')) {
+        if ($savedScript -match $stateful) {
+            throw "the saved locator persisted state-pinning field '$stateful'"
+        }
+    }
+
+    $savedPath = Join-Path $LiveDirectory 'recording-acceptance-saved.axn'
+    Set-Content -LiteralPath $savedPath -Encoding utf8 -Value $savedScript
+    try {
+        $replaySaved = Invoke-AxonMcp -Request (@{
+            jsonrpc = '2.0'; id = 1; method = 'tools/call'
+            params = @{ name = 'run'; arguments = @{ path = $savedPath; dryRun = $false } }
+        } | ConvertTo-Json -Compress -Depth 10)
+        Write-Note "saved-slice replay: $($replaySaved.result.structuredContent | ConvertTo-Json -Compress -Depth 30)"
+        if ($replaySaved.result.isError -ne $false) {
+            throw "replaying the saved slice failed: $($replaySaved | ConvertTo-Json -Compress -Depth 30)"
+        }
+    }
+    finally {
+        Remove-Item -LiteralPath $savedPath -Force -ErrorAction SilentlyContinue
+    }
+    Write-Note 'recording acceptance verified: independent input recorded, authored with semantic targets, replayed, saved, and replayed again'
+}
+
+function Register-ProbeRecordingTask {
+    param(
+        [Parameter(Mandatory)][int] $Burst,
+        [Parameter(Mandatory)][string] $ResultPath
+    )
+    $escapedExecutable = $ProbeCliExecutable.Replace("'", "''")
+    $escapedResultPath = $ResultPath.Replace("'", "''")
+    $escapedTemporaryPath = ("$ResultPath.tmp").Replace("'", "''")
+    $command = @"
+`$start = [System.Diagnostics.ProcessStartInfo]::new()
+`$start.FileName = '$escapedExecutable'
+`$start.Arguments = 'probe recording-diagnostic --burst $Burst'
+`$start.UseShellExecute = `$false
+`$start.RedirectStandardOutput = `$true
+`$start.RedirectStandardError = `$true
+`$process = [System.Diagnostics.Process]::Start(`$start)
+`$stdoutTask = `$process.StandardOutput.ReadToEndAsync()
+`$stderrTask = `$process.StandardError.ReadToEndAsync()
+`$process.WaitForExit()
+`$stdout = `$stdoutTask.Result
+`$stderr = `$stderrTask.Result
+`$payload = `$null
+if (`$process.ExitCode -eq 0) { `$payload = `$stdout | ConvertFrom-Json }
+@{ stdout = `$stdout; stderr = `$stderr; exitCode = `$process.ExitCode; payload = `$payload } | ConvertTo-Json -Compress -Depth 100 | Set-Content -LiteralPath '$escapedTemporaryPath' -Encoding utf8
+Move-Item -LiteralPath '$escapedTemporaryPath' -Destination '$escapedResultPath' -Force
+"@
+    $encodedCommand = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($command))
+    $action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument "-NoProfile -NonInteractive -EncodedCommand $encodedCommand"
+    $principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive
+    Register-ScheduledTask -TaskName $ProbeRecordingTaskName -Action $action -Principal $principal -Force | Out-Null
+}
+
+function Wait-ForProbeRecordingTask {
+    param([Parameter(Mandatory)][string] $ResultPath)
+    $timer = [System.Diagnostics.Stopwatch]::StartNew()
+    do {
+        if (Test-Path -LiteralPath $ResultPath) {
+            return Get-Content -LiteralPath $ResultPath -Raw | ConvertFrom-Json
+        }
+        $task = Get-ScheduledTask -TaskName $ProbeRecordingTaskName -ErrorAction SilentlyContinue
+        if ($null -eq $task) { throw 'the recording diagnostic task disappeared before reporting its result' }
+        Wait-Tick
+    } while ($timer.Elapsed.TotalSeconds -lt $ProcessDiscoveryTimeoutSeconds)
+    throw 'the recording diagnostic task did not report completion before the timeout'
+}
+
+function Remove-ProbeRecordingResult {
+    param([Parameter(Mandatory)][string] $ResultPath)
+    Remove-Item -LiteralPath $ResultPath, "$ResultPath.tmp" -Force -ErrorAction SilentlyContinue
+}
+
+function Invoke-ProbeIndependentInput {
+    <# Posts a click and a typed burst from a process that is not the daemon.
+
+    Independence is the whole point rather than a detail of the harness. The observer excludes
+    input this process posted, marked per event with a process-derived stamp, so input the daemon
+    itself produced could not appear in its own recording no matter how correct the recorder is.
+    A second `axon-win.exe` carries a different stamp and is therefore genuine third-party input --
+    the Windows shape of the independent helper the macOS bench acceptance needed for the same
+    reason. It goes through the scheduled-task relay because it must land on the interactive
+    desktop, like every other input this lane posts. #>
+    param(
+        [Parameter(Mandatory)][int] $X,
+        [Parameter(Mandatory)][int] $Y,
+        [Parameter(Mandatory)][string] $Text,
+        [Parameter(Mandatory)][int] $ActivateProcessId
+    )
+    $resultPath = Join-Path $LiveDirectory 'independent-input.json'
+    try {
+        Remove-Item -LiteralPath $resultPath, "$resultPath.tmp" -Force -ErrorAction SilentlyContinue
+        $escapedExecutable = $ProbeCliExecutable.Replace("'", "''")
+        $escapedResultPath = $resultPath.Replace("'", "''")
+        $escapedTemporaryPath = ("$resultPath.tmp").Replace("'", "''")
+        $escapedText = $Text.Replace("'", "''")
+        $command = @"
+# Bring the target forward before posting. The task host's own console window opens on top of
+# whatever was there, and a click aimed at a point computed from a capture taken beforehand then
+# lands on this console instead -- which is exactly what happened, and the recording faithfully
+# reported a click on `powershell.exe`.
+`$start = [System.Diagnostics.ProcessStartInfo]::new()
+`$start.FileName = '$escapedExecutable'
+`$start.Arguments = 'probe post-input $X $Y "$escapedText" --activate $ActivateProcessId'
+`$start.UseShellExecute = `$false
+`$start.RedirectStandardOutput = `$true
+`$start.RedirectStandardError = `$true
+`$process = [System.Diagnostics.Process]::Start(`$start)
+`$stdoutTask = `$process.StandardOutput.ReadToEndAsync()
+`$stderrTask = `$process.StandardError.ReadToEndAsync()
+`$process.WaitForExit()
+`$stdout = `$stdoutTask.Result
+`$stderr = `$stderrTask.Result
+`$payload = `$null
+if (`$process.ExitCode -eq 0) { `$payload = `$stdout | ConvertFrom-Json }
+@{ stdout = `$stdout; stderr = `$stderr; exitCode = `$process.ExitCode; payload = `$payload } | ConvertTo-Json -Compress -Depth 100 | Set-Content -LiteralPath '$escapedTemporaryPath' -Encoding utf8
+Move-Item -LiteralPath '$escapedTemporaryPath' -Destination '$escapedResultPath' -Force
+"@
+        $encodedCommand = [Convert]::ToBase64String([Text.Encoding]::Unicode.GetBytes($command))
+        # `-WindowStyle Hidden` because this task's host window would otherwise sit on top of the
+        # window the click is aimed at, and a hidden window cannot be clicked by accident.
+        $action = New-ScheduledTaskAction -Execute 'powershell.exe' -Argument "-NoProfile -NonInteractive -WindowStyle Hidden -EncodedCommand $encodedCommand"
+        $principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive
+        Register-ScheduledTask -TaskName $ProbeInputTaskName -Action $action -Principal $principal -Force | Out-Null
+        Start-ScheduledTask -TaskName $ProbeInputTaskName
+        $timer = [System.Diagnostics.Stopwatch]::StartNew()
+        do {
+            if (Test-Path -LiteralPath $resultPath) {
+                $run = Get-Content -LiteralPath $resultPath -Raw | ConvertFrom-Json
+                if ($run.exitCode -ne 0) {
+                    throw "independent input exited $($run.exitCode): $($run.stderr)"
+                }
+                if ($null -eq $run.payload -or $run.payload.schemaVersion -ne 'post-input-v1') {
+                    throw 'independent input returned no post-input-v1 payload'
+                }
+                return $run.payload
+            }
+            $task = Get-ScheduledTask -TaskName $ProbeInputTaskName -ErrorAction SilentlyContinue
+            if ($null -eq $task) { throw 'the independent input task disappeared before reporting' }
+            Wait-Tick
+        } while ($timer.Elapsed.TotalSeconds -lt $ProcessDiscoveryTimeoutSeconds)
+        throw 'the independent input task did not report completion before the timeout'
+    }
+    finally {
+        Unregister-ScheduledTask -TaskName $ProbeInputTaskName -Confirm:$false -ErrorAction SilentlyContinue
+        Remove-Item -LiteralPath $resultPath, "$resultPath.tmp" -Force -ErrorAction SilentlyContinue
+    }
 }
 
 function Register-ProbeForegroundTask {
@@ -435,9 +941,21 @@ function Start-ProbeBrowser {
 <!doctype html><title>Axon Foreground Click Complete</title>
 <main style="min-height: 300vh"><h1>Axon Foreground Click Complete</h1></main>
 '@
+    # The recording acceptance needs something to click and something to type into, which no other
+    # probe page has: `start.html` has a link but no field, and a recording whose only action is a
+    # click never exercises the focused-value read that authors a `type` step.
+    Set-Content -LiteralPath (Join-Path $pages 'record.html') -Encoding utf8 -Value @'
+<!doctype html><title>Axon Recording Probe</title>
+<main><h1>Axon Recording Probe</h1>
+<input id="note" type="text" aria-label="Recording note" />
+<p><a href="complete.html">Continue</a></p></main>
+'@
     $url = ([uri](Join-Path $pages 'start.html')).AbsoluteUri
     $readyUrl = ([uri](Join-Path $pages 'ready.html')).AbsoluteUri
-    $browser = [pscustomobject]@{ ProcessId = 0; ProfilePath = $profile; PageUrl = $url }
+    $recordUrl = ([uri](Join-Path $pages 'record.html')).AbsoluteUri
+    $browser = [pscustomobject]@{
+        ProcessId = 0; ProfilePath = $profile; PageUrl = $url; RecordUrl = $recordUrl
+    }
     try {
         # This script is invoked through the runner's SSH relay in session 0. Starting Edge from
         # that shell creates a real process which is nevertheless unable to own a window on the
@@ -608,6 +1126,40 @@ function Invoke-Axon {
     }
 }
 
+function Invoke-AxonRpc {
+    <# One socket-level JSON-RPC request through the daemon under test.
+
+    The MCP facade cannot carry this: `axon-win mcp` forwards validated `tools/call` requests only,
+    and the recording lifecycle (`recording.start`, `recording.status`, `recording.stop`) is a
+    socket method with no tool of its own. The daemon holds one router behind the pipe and serves
+    every connection from it, so a request per connection still addresses one recording session. #>
+    param(
+        [Parameter(Mandatory)][string] $Method,
+        $Params = @{},
+        [int] $TimeoutSeconds = 30
+    )
+
+    $pipe = [System.IO.Pipes.NamedPipeClientStream]::new(
+        '.', 'axon-v1', [System.IO.Pipes.PipeDirection]::InOut)
+    try {
+        $pipe.Connect($TimeoutSeconds * 1000)
+        $encoding = [Text.UTF8Encoding]::new($false)
+        $writer = [System.IO.StreamWriter]::new($pipe, $encoding)
+        $writer.AutoFlush = $true
+        $body = @{ jsonrpc = '2.0'; id = 1; method = $Method; params = $Params } |
+            ConvertTo-Json -Compress -Depth 20
+        # The daemon splits on newlines and trims, so the CRLF PowerShell writes is harmless.
+        $writer.WriteLine($body)
+        $reader = [System.IO.StreamReader]::new($pipe, $encoding)
+        $line = $reader.ReadLine()
+        if ([string]::IsNullOrWhiteSpace($line)) {
+            throw "the daemon closed the pipe without answering $Method"
+        }
+        $line | ConvertFrom-Json -Depth 100
+    }
+    finally { $pipe.Dispose() }
+}
+
 function Invoke-AxonMcp {
     <# One MCP request through the daemon under test, as a parsed response. #>
     param([Parameter(Mandatory)][string] $Request)
@@ -659,6 +1211,32 @@ function Clear-ParkState {
 }
 
 #endregion
+
+function Find-ProbeNodes {
+    <# Every node in a captured tree matching a predicate, depth first.
+
+    Outside the seam region deliberately: it reaches nothing, and the census that region feeds is
+    only worth having while "seam" keeps meaning "touches the machine". #>
+    param(
+        [Parameter(Mandatory)] $Root,
+        [Parameter(Mandatory)][scriptblock] $Predicate
+    )
+    $found = @()
+    $pending = [Collections.Generic.Stack[object]]::new()
+    $pending.Push($Root)
+    while ($pending.Count -gt 0) {
+        $node = $pending.Pop()
+        # `.InvokeReturnAsIs` rather than `& $Predicate`, because the recovery harness rejects any
+        # function outside the seam region that invokes a command by variable -- that is how
+        # `& $ProbeCliExecutable` would sneak an executable past it, and an AST cannot tell that
+        # apart from a scriptblock. A method call says the same thing without looking like one.
+        if ($Predicate.InvokeReturnAsIs($node)) { $found += $node }
+        foreach ($child in @($node.children)) {
+            if ($null -ne $child) { $pending.Push($child) }
+        }
+    }
+    $found
+}
 
 function Get-ProbeDaemonProcess {
     <# Live axon-win processes running from a directory this lane owns.
@@ -1164,9 +1742,29 @@ function Invoke-ProbeStage {
             }
         }
 
-        if ($KeyboardDiagnostic) {
+        $requestedDiagnostic = Get-RequestedDiagnostic
+        if ($requestedDiagnostic) { Write-Note "branch requests the '$requestedDiagnostic' diagnostic" }
+
+        if ($KeyboardDiagnostic -or $requestedDiagnostic -eq 'keyboard') {
             $diagnostic = Invoke-KeyboardDiagnostic -TargetProcessId ([int]$browser.ProcessId) -MaxTrials $KeyboardDiagnosticMaxTrials
             Write-Note "keyboard diagnostic timeline: $($diagnostic | ConvertTo-Json -Compress -Depth 100)"
+            return
+        }
+
+        if ($RecordingDiagnostic -or $requestedDiagnostic -eq 'recording') {
+            # Deliberately after the Edge setup above: the burst is measured against a real
+            # foreground browser, because what the enrichment thread is racing is a UI Automation
+            # provider answering for a live out-of-process window, not an idle desktop.
+            $recording = Invoke-RecordingDiagnostic -Burst $RecordingDiagnosticBurst
+            Write-Note ("recording diagnostic finding: ownDeliveryIsObservable=" +
+                "$($recording.selfDelivery.ownDeliveryIsObservable) " +
+                "stampSurvivesToTheHook=$($recording.selfDelivery.stampSurvivesToTheHook)")
+            foreach ($measured in @($recording.queueDepth.bursts)) {
+                Write-Note ("recording diagnostic $($measured.path) burst: accepted=$($measured.eventsAccepted) " +
+                    "enriched=$($measured.enrichedEvents) highWater=$($measured.rawQueueHighWater)/" +
+                    "$($recording.queueDepth.rawQueueCapacity) pending=$($measured.stillPendingAfterFiveSeconds) " +
+                    "overflowReachable=$($measured.overflowReachable) elapsedMs=$($measured.elapsedMs)")
+            }
             return
         }
 
@@ -1338,6 +1936,8 @@ function Invoke-ProbeStage {
             throw "Edge unchanged-position scroll claimed goal success or lost dispatch evidence: $($unchanged | ConvertTo-Json -Compress -Depth 20)"
         }
         Write-Note "Edge unchanged-position response=$($unchangedAction | ConvertTo-Json -Compress -Depth 20)"
+
+        Invoke-RecordingAcceptance -Browser $browser -BrowserApp $browserApp
 
     }
     catch {

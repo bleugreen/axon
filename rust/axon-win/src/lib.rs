@@ -23,6 +23,7 @@ mod keys;
 pub mod lifecycle;
 #[cfg(windows)]
 pub mod pipe;
+mod recording;
 #[cfg(windows)]
 pub mod scheduler;
 
@@ -63,12 +64,27 @@ const NO_RECOGNIZED_TEXT_GEOMETRY: &str = "this text location resolved from reco
 const NO_FOREGROUND_TRANSACTION: &str = "this backend cannot capture the foreground, activate the \
      requested target, and prove that activation before dispatch";
 
+/// A backend whose global input observation can be brought to a stop without discarding what it
+/// saw on the way.
+///
+/// This exists because observation and enrichment are not the same clock. A backend that reads the
+/// interface behind its hook is, at any moment, some distance behind it; the events of a session's
+/// last instants only exist once observation has stopped and that backlog has been worked through.
+/// `GlobalInputObserver::stop` cannot serve both roles, because the recorder's `finish` calls it
+/// *after* the caller's last chance to poll.
+pub trait ObserverQuiescence {
+    /// Stops observing and finishes any enrichment already in flight, leaving the events it
+    /// produced available to the next `poll`. Idempotent, and harmless with no session running.
+    fn quiesce_global_input(&mut self);
+}
+
 pub struct Router<B> {
     backend: B,
     snapshot: Option<Snapshot>,
     semantic_names: SemanticNameRegistry,
     observation_redaction: axon_core::ObservationRedactionContext,
     daemon: axon_core::NativeDaemonState,
+    recorder: Option<axon_core::UserActionRecorder>,
 }
 fn capability_unavailable(tool: &str, capability: &str, reason: &str) -> JsonRpcError {
     JsonRpcError {
@@ -310,7 +326,9 @@ impl<
         + TextRecognitionProvider
         + VisualObservationProvider
         + BackgroundPixelPointer
-        + WindowsScrollProvider,
+        + WindowsScrollProvider
+        + axon_core::RecordingEvidenceProvider
+        + ObserverQuiescence,
 > Router<B>
 {
     /// What the backend can do, for health documents.
@@ -328,7 +346,117 @@ impl<
             semantic_names: SemanticNameRegistry::default(),
             observation_redaction: Default::default(),
             daemon: Default::default(),
+            recorder: None,
         }
+    }
+
+    /// Drains whatever the observer has seen into the daemon's recording session.
+    ///
+    /// Called on `recording.status` and `recording.stop` and nowhere else, which is why the
+    /// observer reads its evidence at event time rather than here: an event may have been waiting
+    /// since long before this call, and the interface it describes has moved on.
+    fn pump_recording(&mut self) -> Result<(), JsonRpcError> {
+        let Some(recorder) = self.recorder.as_mut() else {
+            return Ok(());
+        };
+        recorder
+            .poll(&mut self.backend, Duration::ZERO)
+            .map_err(backend_error)?;
+        for group in recorder.take_groups() {
+            self.daemon.recording.push_group(group)?;
+        }
+        Ok(())
+    }
+
+    fn dispatch_recording(
+        &mut self,
+        method: &str,
+        params: &Map<String, Value>,
+    ) -> Option<Result<Value, JsonRpcError>> {
+        Some(match method {
+            "recording.start" | "editor.recordFromHere" => {
+                // Refuse on capability before the daemon opens a session. The observer seam is the
+                // one place that knows whether this process can actually watch input, and asking
+                // it first means a denied start never creates a recording it has to abandon.
+                if let Err(error) = self.backend.global_input_observer() {
+                    return Some(Err(backend_error(error)));
+                }
+                let started = self.daemon.dispatch(method, params)?;
+                match started {
+                    Ok(value) => {
+                        let scope = self
+                            .daemon
+                            .recording
+                            .status()
+                            .scope
+                            .expect("active recording has scope");
+                        match axon_core::UserActionRecorder::start_with_redaction(
+                            &mut self.backend,
+                            scope,
+                            self.observation_redaction.clone(),
+                        ) {
+                            Ok(recorder) => {
+                                self.recorder = Some(recorder);
+                                Ok(value)
+                            }
+                            Err(error) => {
+                                self.daemon.recording.abandon();
+                                Err(backend_error(error))
+                            }
+                        }
+                    }
+                    Err(error) => Err(error),
+                }
+            }
+            "recording.status" => self.pump_recording().and_then(|_| {
+                self.daemon
+                    .dispatch(method, params)
+                    .expect("recording route")
+            }),
+            "recording.stop" => {
+                if !params.is_empty() {
+                    return Some(
+                        self.daemon
+                            .dispatch(method, params)
+                            .expect("recording route"),
+                    );
+                }
+                // Quiesced before the final poll, because that poll is the last one there will
+                // be: `UserActionRecorder::finish` flushes and calls the provider's `stop`, and
+                // nothing reads from the provider afterwards. A backend enriching behind its hook
+                // has not yet produced the events of the last moment or two when this route is
+                // reached, so polling first and quiescing later would author a recording that
+                // stops short of its own ending -- and by a wide margin under a fast burst, which
+                // is exactly when a recording matters most.
+                self.backend.quiesce_global_input();
+                if let Err(error) = self.pump_recording() {
+                    let _ = axon_core::GlobalInputObserver::stop(&mut self.backend);
+                    self.recorder = None;
+                    self.daemon.recording.abandon();
+                    Err(error)
+                } else if let Some(recorder) = self.recorder.take() {
+                    match recorder.finish(&mut self.backend) {
+                        Ok(groups) => groups
+                            .into_iter()
+                            .try_for_each(|group| self.daemon.recording.push_group(group))
+                            .and_then(|_| {
+                                self.daemon
+                                    .dispatch(method, params)
+                                    .expect("recording route")
+                            }),
+                        Err(error) => {
+                            self.daemon.recording.abandon();
+                            Err(backend_error(error))
+                        }
+                    }
+                } else {
+                    self.daemon
+                        .dispatch(method, params)
+                        .expect("recording route")
+                }
+            }
+            _ => return None,
+        })
     }
 
     fn register_snapshot(&mut self, snapshot: &Snapshot) -> Vec<axon_core::SemanticElementName> {
@@ -586,20 +714,10 @@ impl<
             .as_ref()
             .and_then(|v| v.as_object().cloned())
             .unwrap_or_default();
-        let outcome = if matches!(
-            context.request.method.as_str(),
-            "recording.start" | "editor.recordFromHere"
-        ) {
-            Err(capability_unavailable(
-                &context.request.method,
-                "ObserveGlobalInput",
-                "observer-unavailable",
-            ))
-        } else {
-            self.daemon
-                .dispatch(&context.request.method, &params)
-                .unwrap_or_else(|| self.dispatch_tool(&context.request.method, &params))
-        };
+        let outcome = self
+            .dispatch_recording(&context.request.method, &params)
+            .or_else(|| self.daemon.dispatch(&context.request.method, &params))
+            .unwrap_or_else(|| self.dispatch_tool(&context.request.method, &params));
         let response = match outcome {
             Ok(result) => JsonRpcResponse::success(id, result),
             Err(error) => JsonRpcResponse::failure(id, error),
@@ -1370,7 +1488,9 @@ impl<
         + TextRecognitionProvider
         + VisualObservationProvider
         + BackgroundPixelPointer
-        + WindowsScrollProvider,
+        + WindowsScrollProvider
+        + axon_core::RecordingEvidenceProvider
+        + ObserverQuiescence,
 > ToolDispatcher for Router<B>
 {
     fn set_observation_redaction_context(
@@ -1601,7 +1721,35 @@ fn rpc_error(code: i64, message: impl Into<String>) -> JsonRpcError {
     }
 }
 fn backend_error(e: axon_core::BackendError) -> JsonRpcError {
-    rpc_error(-32000, e.to_string())
+    match e {
+        axon_core::BackendError::Capability {
+            capability,
+            reason,
+            diagnostic,
+        } => JsonRpcError {
+            code: -32004,
+            message: format!("capability {} is unavailable: {reason}", capability.key()),
+            data: Some(
+                json!({"kind":"capability-unavailable","capability":capability.key(),"reason":reason,"diagnostic":diagnostic}),
+            ),
+        },
+        // Same family as `Capability`, plus the stable `code` that names *which* refusal it is.
+        // Without this arm a typed refusal would fall through to the catch-all and reach the wire
+        // as an untyped -32000, which is how macOS lost `accessibility-denied` (axn/220).
+        axon_core::BackendError::CapabilityReason {
+            capability,
+            code,
+            reason,
+            diagnostic,
+        } => JsonRpcError {
+            code: -32004,
+            message: format!("capability {} is unavailable: {reason}", capability.key()),
+            data: Some(
+                json!({"kind":"capability-unavailable","capability":capability.key(),"code":code,"reason":reason,"diagnostic":diagnostic}),
+            ),
+        },
+        other => rpc_error(-32000, other.to_string()),
+    }
 }
 fn internal_error(e: serde_json::Error) -> JsonRpcError {
     rpc_error(-32603, e.to_string())
@@ -1622,7 +1770,11 @@ mod tests {
 
     #[test]
     fn recording_start_refuses_when_native_observer_is_unavailable() {
-        let mut router = Router::new(backend(vec![node("Save")], None));
+        let mut backend = backend(vec![node("Save")], None);
+        backend.observer_refusal = Some("session-not-interactive");
+        let starts = Rc::clone(&backend.observer_starts);
+        let mut router = Router::new(backend);
+
         let response = router
             .request(JsonRpcRequest::new(
                 Some(JsonRpcId::Integer(1)),
@@ -1634,10 +1786,17 @@ mod tests {
             panic!("windows recording.start must not return empty success")
         };
         assert_eq!(failure.error.code, -32004);
-        assert_eq!(
-            failure.error.data.unwrap()["reason"],
-            "observer-unavailable"
-        );
+        let data = failure.error.data.expect("a typed refusal carries data");
+        // The whole point of the typed shape: which refusal it is survives to the wire. A caller
+        // that only learned "unavailable" could not tell a session-0 daemon from a denied grant.
+        assert_eq!(data["kind"], "capability-unavailable");
+        assert_eq!(data["capability"], "observeGlobalInput");
+        assert_eq!(data["code"], "session-not-interactive");
+
+        // Refused before dispatch: nothing was started, so nothing had to be abandoned.
+        assert_eq!(*starts.borrow(), 0);
+        assert!(router.recorder.is_none());
+        assert!(!router.daemon.recording.status().recording);
 
         let save = router
             .request(JsonRpcRequest::new(
@@ -1647,8 +1806,143 @@ mod tests {
             ))
             .unwrap();
         assert!(
-            !matches!(save, JsonRpcResponse::Failure(ref failure) if failure.error.data.as_ref().is_some_and(|data| data["reason"] == "observer-unavailable"))
+            !matches!(save, JsonRpcResponse::Failure(ref failure) if failure.error.data.as_ref().is_some_and(|data| data["kind"] == "capability-unavailable"))
         );
+    }
+
+    /// A recording keeps the events its observer had not finished producing when the stop arrived.
+    ///
+    /// This is the failure mode a backend that reads the interface behind its hook has and a
+    /// synchronous one does not: at the moment `recording.stop` is dispatched, the last events of
+    /// the session exist only as unenriched raw input, and the bench measured that backlog at
+    /// nearly a whole 400-event burst. Polling before observation has been brought to a stop, and
+    /// then finishing, authors a recording that stops short of its own ending -- and does so
+    /// silently, because the count is plausible and only the tail is missing.
+    #[test]
+    fn stopping_keeps_the_events_the_observer_had_not_yet_produced() {
+        let backend = backend(vec![node("Save")], None);
+        let pending = Rc::clone(&backend.pending_until_quiesce);
+        let mut router = Router::new(backend);
+
+        router
+            .request(JsonRpcRequest::new(
+                Some(JsonRpcId::Integer(1)),
+                "recording.start",
+                Some(json!({"scope":{"scope":"allApplications"}})),
+            ))
+            .unwrap();
+
+        pending
+            .borrow_mut()
+            .push(axon_core::RecordedInputEvent::KeyDown {
+                app: axon_core::RecordedAppIdentity {
+                    name: "Notepad".into(),
+                    bundle_identifier: None,
+                    process_id: None,
+                },
+                keystroke: axon_core::RecordedKeystroke::Key {
+                    key: "return".into(),
+                },
+                timestamp_ms: 11,
+            });
+
+        // A status poll cannot see it yet, which is what makes this a real backlog rather than an
+        // event the test simply queued late.
+        let status = router
+            .request(JsonRpcRequest::new(
+                Some(JsonRpcId::Integer(2)),
+                "recording.status",
+                Some(json!({})),
+            ))
+            .unwrap();
+        assert!(matches!(status, JsonRpcResponse::Success(_)));
+        assert_eq!(pending.borrow().len(), 1, "still behind");
+
+        let JsonRpcResponse::Success(stopped) = router
+            .request(JsonRpcRequest::new(
+                Some(JsonRpcId::Integer(3)),
+                "recording.stop",
+                Some(json!({})),
+            ))
+            .unwrap()
+        else {
+            panic!("a stop that quiesced its observer authors what it was still producing")
+        };
+        assert_eq!(
+            stopped.result["actionCount"], 1,
+            "the recording lost the action its observer produced while stopping"
+        );
+        assert!(
+            stopped.result["script"]
+                .as_str()
+                .unwrap()
+                .contains("return")
+        );
+    }
+
+    /// The route this issue exists to open: a start that is allowed records real events and stops
+    /// into an authored document, with the observer released exactly once on the way out.
+    #[test]
+    fn recording_records_observed_input_and_stops_into_an_authored_document() {
+        let backend = backend(vec![node("Save")], None);
+        let observed = Rc::clone(&backend.observed_input);
+        let starts = Rc::clone(&backend.observer_starts);
+        let stops = Rc::clone(&backend.observer_stops);
+        let mut router = Router::new(backend);
+
+        let started = router
+            .request(JsonRpcRequest::new(
+                Some(JsonRpcId::Integer(1)),
+                "recording.start",
+                Some(json!({"scope":{"scope":"allApplications"}})),
+            ))
+            .unwrap();
+        assert!(matches!(started, JsonRpcResponse::Success(_)));
+        assert_eq!(*starts.borrow(), 1);
+        assert!(router.daemon.recording.status().recording);
+
+        observed
+            .borrow_mut()
+            .push(axon_core::RecordedInputEvent::KeyDown {
+                app: axon_core::RecordedAppIdentity {
+                    name: "Notepad".into(),
+                    bundle_identifier: None,
+                    process_id: None,
+                },
+                keystroke: axon_core::RecordedKeystroke::Key {
+                    key: "return".into(),
+                },
+                timestamp_ms: 7,
+            });
+
+        let status = router
+            .request(JsonRpcRequest::new(
+                Some(JsonRpcId::Integer(2)),
+                "recording.status",
+                Some(json!({})),
+            ))
+            .unwrap();
+        assert!(matches!(status, JsonRpcResponse::Success(_)));
+
+        let JsonRpcResponse::Success(stopped) = router
+            .request(JsonRpcRequest::new(
+                Some(JsonRpcId::Integer(3)),
+                "recording.stop",
+                Some(json!({})),
+            ))
+            .unwrap()
+        else {
+            panic!("a stop with an observed action authors a document")
+        };
+        assert_eq!(stopped.result["actionCount"], 1);
+        let script = stopped.result["script"]
+            .as_str()
+            .expect("an authored script");
+        assert!(script.contains("keyboard"), "{script}");
+        assert!(script.contains("return"), "{script}");
+        assert!(router.recorder.is_none());
+        assert!(!router.daemon.recording.status().recording);
+        assert_eq!(*stops.borrow(), 1, "the observer is released exactly once");
     }
 
     #[test]
@@ -1811,6 +2105,28 @@ mod tests {
         /// Sequences actually posted, which is not the same as calls made: a revalidation failure
         /// posts nothing, and a counter of calls could not tell the two apart.
         pixel_dispatches: Rc<RefCell<usize>>,
+        /// Why this backend cannot observe global input, if it cannot.
+        ///
+        /// A code rather than a flag, because the wire contract this pins is that the *specific*
+        /// refusal survives to the caller. A boolean would let a test pass while the daemon
+        /// flattened every reason into one.
+        observer_refusal: Option<&'static str>,
+        /// Events the observer hands over on the next poll, drained as they are taken.
+        observed_input: Rc<RefCell<Vec<axon_core::RecordedInputEvent>>>,
+        /// Events this observer only surrenders once observation has been quiesced, standing in
+        /// for an enrichment thread still working through its backlog when `recording.stop`
+        /// arrives. Without a fake that can be *behind*, no route test can tell a recording that
+        /// keeps its ending from one that drops it.
+        pending_until_quiesce: Rc<RefCell<Vec<axon_core::RecordedInputEvent>>>,
+        observer_starts: Rc<RefCell<usize>>,
+        observer_stops: Rc<RefCell<usize>>,
+    }
+
+    impl ObserverQuiescence for FakeBackend {
+        fn quiesce_global_input(&mut self) {
+            let caught_up = std::mem::take(&mut *self.pending_until_quiesce.borrow_mut());
+            self.observed_input.borrow_mut().extend(caught_up);
+        }
     }
     impl BackgroundPixelPointer for FakeBackend {
         fn plan_pixel_click(
@@ -1899,7 +2215,64 @@ mod tests {
             })
         }
     }
+    impl axon_core::GlobalInputObserver for FakeBackend {
+        fn start(&mut self, _: &axon_core::RecordingScope) -> Result<(), BackendError> {
+            *self.observer_starts.borrow_mut() += 1;
+            Ok(())
+        }
+        fn poll(
+            &mut self,
+            _: Duration,
+        ) -> Result<Vec<axon_core::RecordedInputEvent>, BackendError> {
+            Ok(std::mem::take(&mut *self.observed_input.borrow_mut()))
+        }
+        fn stop(&mut self) -> Result<(), BackendError> {
+            *self.observer_stops.borrow_mut() += 1;
+            Ok(())
+        }
+        fn is_recording(&self) -> bool {
+            *self.observer_starts.borrow() > *self.observer_stops.borrow()
+        }
+    }
+
+    impl axon_core::RecordingEvidenceProvider for FakeBackend {
+        fn read_focused(
+            &mut self,
+        ) -> Result<Option<axon_core::RecordedFocusedEvidence>, BackendError> {
+            Ok(None)
+        }
+        fn capture_snapshot(
+            &mut self,
+            _: &axon_core::RecordedAppIdentity,
+        ) -> Result<Option<Snapshot>, BackendError> {
+            Ok(None)
+        }
+        fn settle(
+            &mut self,
+            _: usize,
+            _: &str,
+        ) -> Result<axon_core::RecordedSettleEvidence, BackendError> {
+            Ok(Default::default())
+        }
+    }
+
     impl PlatformBackend for FakeBackend {
+        /// This fake records, so by default it claims the observer seam. Without the override it
+        /// would inherit the core default that refuses, and `recording.start`'s capability
+        /// preflight would turn every recording test here into a capability refusal.
+        fn global_input_observer(
+            &mut self,
+        ) -> Result<&mut dyn axon_core::GlobalInputObserver, BackendError> {
+            match self.observer_refusal {
+                Some(code) => Err(BackendError::CapabilityReason {
+                    capability: Capability::ObserveGlobalInput,
+                    code,
+                    reason: "session 0 has no interactive window station".into(),
+                    diagnostic: None,
+                }),
+                None => Ok(self),
+            }
+        }
         fn capabilities(&self) -> Result<Vec<CapabilityInfo>, BackendError> {
             Ok(vec![
                 CapabilityInfo {
@@ -2087,6 +2460,11 @@ mod tests {
                 pointer_unchanged: true,
             }))),
             pixel_dispatches: Rc::new(RefCell::new(0)),
+            observer_refusal: None,
+            observed_input: Rc::new(RefCell::new(vec![])),
+            pending_until_quiesce: Rc::new(RefCell::new(vec![])),
+            observer_starts: Rc::new(RefCell::new(0)),
+            observer_stops: Rc::new(RefCell::new(0)),
         }
     }
 

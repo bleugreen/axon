@@ -61,6 +61,8 @@ $StubbedSeams = @(
     'Wait-ForProbeActivationTask', 'Unregister-ProbeActivationTask', 'Remove-ProbeActivationResult', 'Invoke-Axon', 'Invoke-AxonMcp', 'Start-ProbeBrowser',
     'Register-ProbeForegroundTask', 'Start-ProbeForegroundTask', 'Wait-ForProbeForegroundTask', 'Unregister-ProbeForegroundTask',
     'Register-ProbeKeyboardTask', 'Start-ProbeKeyboardTask', 'Wait-ForProbeKeyboardTask', 'Unregister-ProbeKeyboardTask', 'Remove-ProbeKeyboardResult',
+    'Get-RequestedDiagnostic', 'Invoke-RecordingDiagnostic', 'Register-ProbeRecordingTask', 'Wait-ForProbeRecordingTask', 'Remove-ProbeRecordingResult',
+    'Invoke-ProbeIndependentInput', 'Invoke-AxonRpc', 'Invoke-OneRecording', 'Invoke-RecordingAcceptance',
     'Stop-ProbeBrowser', 'Invoke-HandBackSweep', 'Invoke-KeyboardDiagnostic', 'Get-ExpectedVersion',
     'Invoke-CargoBuild', 'Copy-ProbeExecutable', 'Read-ParkState', 'Write-ParkState', 'Clear-ParkState'
 )
@@ -295,6 +297,7 @@ function Reset-Machine {
         ProbeForegroundTaskRegistered = $false
         ProbeKeyboardTaskRegistered = $false
         ProbeKeyboardPayloadRemoved = $false
+        ProbeRecordingTaskRegistered = $false
         KeyboardDiagnosticPayload = $null
         NotepadText = $null
         Processes = @()
@@ -634,6 +637,71 @@ function Remove-ProbeKeyboardResult {
     param([string] $ResultPath)
     $script:Machine.Log.Add("remove-probe-keyboard-result $ResultPath")
     $script:Machine.ProbeKeyboardPayloadRemoved = $true
+}
+
+# The recording seams. Every one of them either registers a scheduled task, opens the daemon's
+# named pipe, or writes a file, so a scenario that reached the real ones would drive somebody's
+# desktop from a pull-request job. The recording diagnostic and acceptance are stubbed whole rather
+# than composed from the stubs beneath them, the same way `Invoke-KeyboardDiagnostic` is: what the
+# recovery scenarios exercise is what a *failing* stage leaves behind, and neither of these runs at
+# all in the branches this file rehearses.
+
+function Get-RequestedDiagnostic {
+    # Empty, so every recovery scenario rehearses the standing acceptance path rather than a
+    # diagnostic a branch happened to leave a marker for.
+    $script:Machine.Log.Add('get-requested-diagnostic')
+    ''
+}
+
+function Invoke-RecordingDiagnostic {
+    param([int] $Burst)
+    $script:Machine.Log.Add("invoke-recording-diagnostic $Burst")
+    [pscustomobject]@{ schemaVersion = 'recording-diagnostic-v2' }
+}
+
+function Register-ProbeRecordingTask {
+    param([int] $Burst, [string] $ResultPath)
+    $script:Machine.Log.Add('register-probe-recording-task')
+    $script:Machine.ProbeRecordingTaskRegistered = $true
+}
+
+function Wait-ForProbeRecordingTask {
+    param([string] $ResultPath)
+    $script:Machine.Log.Add('wait-probe-recording-task')
+    [pscustomobject]@{ exitCode = 0; stdout = '{}'; stderr = ''; payload = $null }
+}
+
+function Remove-ProbeRecordingResult {
+    param([string] $ResultPath)
+    $script:Machine.Log.Add('remove-probe-recording-result')
+}
+
+function Invoke-ProbeIndependentInput {
+    param([int] $X, [int] $Y, [string] $Text, [int] $ActivateProcessId)
+    $script:Machine.Log.Add("invoke-probe-independent-input $X $Y")
+    [pscustomobject]@{
+        schemaVersion = 'post-input-v1'
+        typed = $Text
+        activated = $true
+        deliveryTag = '0x0'
+    }
+}
+
+function Invoke-AxonRpc {
+    param([string] $Method, $Params = @{}, [int] $TimeoutSeconds = 30)
+    $script:Machine.Log.Add("axon-rpc $Method")
+    [pscustomobject]@{ result = [pscustomobject]@{ recording = $false } }
+}
+
+function Invoke-OneRecording {
+    param($Scope, [int] $X, [int] $Y, [string] $Text, [int] $ActivateProcessId)
+    $script:Machine.Log.Add("invoke-one-recording $($Scope.label)")
+    [pscustomobject]@{ Label = $Scope.label; actionCount = 0; stopped = $null }
+}
+
+function Invoke-RecordingAcceptance {
+    param($Browser, [string] $BrowserApp)
+    $script:Machine.Log.Add('invoke-recording-acceptance')
 }
 
 function Invoke-Axon {

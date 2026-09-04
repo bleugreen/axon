@@ -7,11 +7,15 @@ use crate::{
 use axon_core::{
     AppQuery, Application, BackendError, Capability, CapabilityInfo, CaptureBounds,
     ChildPageCapture, ChildPageRequest, Key, KeyboardIntent, Modifier, Node, Observation,
-    PlatformBackend, RecognizedText, Rect, Screenshot, Snapshot, SnapshotHandle,
-    TextRecognitionProvider, Window,
+    PlatformBackend, RecognizedText, RecordedAppIdentity, RecordedElementEvidence,
+    RecordedFocusedEvidence, RecordedPoint, RecordedSettleEvidence, RecordedTargetEvidence,
+    RecordingEvidenceProvider, Rect, Screenshot, Snapshot, SnapshotHandle, TextRecognitionProvider,
+    Window,
 };
 use serde::Serialize;
 
+#[path = "global_input.rs"]
+mod global_input;
 #[path = "capture.rs"]
 mod graphics_capture;
 #[path = "keyboard_diagnostic.rs"]
@@ -70,11 +74,11 @@ use windows::{
                 SetActiveWindow, VIRTUAL_KEY, VkKeyScanExW,
             },
             WindowsAndMessaging::{
-                ASFW_ANY, AllowSetForegroundWindow, BringWindowToTop, GetForegroundWindow,
-                GetSystemMetrics, GetWindowThreadProcessId, SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN,
-                SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN, SPI_GETFOREGROUNDLOCKTIMEOUT,
-                SPI_SETFOREGROUNDLOCKTIMEOUT, SPIF_SENDCHANGE, SetForegroundWindow,
-                SwitchToThisWindow, SystemParametersInfoW,
+                ASFW_ANY, AllowSetForegroundWindow, BringWindowToTop, GA_ROOT, GetAncestor,
+                GetForegroundWindow, GetSystemMetrics, GetWindowThreadProcessId,
+                SM_CXVIRTUALSCREEN, SM_CYVIRTUALSCREEN, SM_XVIRTUALSCREEN, SM_YVIRTUALSCREEN,
+                SPI_GETFOREGROUNDLOCKTIMEOUT, SPI_SETFOREGROUNDLOCKTIMEOUT, SPIF_SENDCHANGE,
+                SetForegroundWindow, SwitchToThisWindow, SystemParametersInfoW,
             },
         },
     },
@@ -84,6 +88,14 @@ use windows::{
 const MAX_DEPTH: usize = 18;
 const MAX_CHILDREN: usize = 200;
 const MAX_NODES: usize = 2_000;
+
+/// How far out from a recorded event this backend looks for something worth naming.
+///
+/// Much shallower than a capture walk, and deliberately so: this runs once per pointer event, at
+/// event time, against providers that may take up to the 1500 ms transaction timeout to answer.
+/// Shared core only needs the actionable ancestry near the hit; it re-resolves whatever it is given
+/// against a full snapshot afterwards.
+const RECORDED_ANCESTRY: usize = 6;
 
 fn child_page_range(total: usize, offset: usize, limit: Option<usize>) -> (usize, usize) {
     let start = offset.min(total);
@@ -215,6 +227,19 @@ enum Command {
     /// Probe-only: lets `axon-win probe pixel-click` reach a class the allowlist has not yet
     /// accepted, which is how a class becomes a candidate for it in the first place.
     AllowUnverifiedPixelClasses(bool, mpsc::Sender<Result<(), BackendError>>),
+    /// Recording evidence: what the interface looked like at one screen point.
+    ///
+    /// Answered on this actor rather than on a UI Automation client of the observer's own, because
+    /// one native worker per process is the discipline this crate is built on. The observer holds a
+    /// clone of this channel and asks at event time, which is the only time the answer is true.
+    PointEvidence(
+        (f64, f64),
+        mpsc::Sender<Result<Option<RecordedTargetEvidence>, BackendError>>,
+    ),
+    /// Recording evidence: the focused element and the complete value `setValue` authoring needs.
+    FocusedEvidence(mpsc::Sender<Result<Option<RecordedFocusedEvidence>, BackendError>>),
+    /// Recording evidence: which application is frontmost, named as `enumerate` names it.
+    ForegroundIdentity(mpsc::Sender<Result<Option<RecordedAppIdentity>, BackendError>>),
 }
 
 #[derive(Debug, Serialize)]
@@ -378,10 +403,10 @@ fn send_keyboard_batch(
         send_duration_micros,
         short_count_last_error,
     };
-    if std::env::var_os("AXON_KEYBOARD_DIAGNOSTICS").is_some() {
-        if let Ok(json) = serde_json::to_string(&diagnostics) {
-            eprintln!("{json}");
-        }
+    if std::env::var_os("AXON_KEYBOARD_DIAGNOSTICS").is_some()
+        && let Ok(json) = serde_json::to_string(&diagnostics)
+    {
+        eprintln!("{json}");
     }
     if returned_count != inputs.len() as u32 {
         return Err(op(
@@ -526,6 +551,9 @@ fn key_input(key: crate::keys::VirtualKey, key_up: bool) -> INPUT {
     // zero. MAPVK_VK_TO_VSC_EX also reports the E0/E1 prefix in the high byte.
     let mapped = unsafe { MapVirtualKeyW(key.code.into(), MAPVK_VK_TO_VSC_EX) };
     let mut flags = KEYEVENTF_SCANCODE;
+    // See `recording::SELF_DELIVERY_TAG`: this stamp is how the observer tells the daemon's own
+    // delivery from a person's, without filtering every injected event and making the recording
+    // capability untestable in the process.
     let prefix = mapped >> 8;
     if key.extended || prefix == 0xE0 || prefix == 0xE1 {
         flags |= KEYEVENTF_EXTENDEDKEY;
@@ -541,7 +569,7 @@ fn key_input(key: crate::keys::VirtualKey, key_up: bool) -> INPUT {
                 wScan: (mapped & 0xff) as u16,
                 dwFlags: flags,
                 time: 0,
-                dwExtraInfo: 0,
+                dwExtraInfo: crate::recording::self_delivery_tag(),
             },
         },
     }
@@ -687,6 +715,12 @@ pub struct WindowsBackend {
     /// and a single slot is overwritten by the target long before the prior application needs it
     /// back.
     last_foreground: std::collections::HashMap<u32, u64>,
+    /// The recording seam. Held for the process's lifetime rather than built per session, because
+    /// it owns a clone of the MTA actor's command channel and that channel is what lets it read
+    /// evidence at event time without standing up a second UI Automation client.
+    ///
+    /// `Option` only so `Drop` can release that clone before closing the channel.
+    global_input: Option<global_input::WindowsGlobalInputObserver>,
 }
 
 impl WindowsBackend {
@@ -740,20 +774,109 @@ impl WindowsBackend {
         }
         log("UIA thread readiness: complete");
         Ok(Self {
+            global_input: Some(global_input::WindowsGlobalInputObserver::new(tx.clone())),
             tx: Some(tx),
             thread: Some(thread),
             last_foreground: std::collections::HashMap::new(),
         })
     }
+
+    fn observer(&mut self) -> &mut global_input::WindowsGlobalInputObserver {
+        self.global_input
+            .as_mut()
+            .expect("the global input observer lives as long as the backend")
+    }
+
+    /// Probe-only: a channel to the MTA actor for a diagnostic that owns its own observer.
+    fn command_sender(&self) -> mpsc::Sender<Command> {
+        self.tx
+            .as_ref()
+            .expect("UIA command channel is available until backend drop")
+            .clone()
+    }
 }
 impl Drop for WindowsBackend {
     fn drop(&mut self) {
+        // The observer goes first, and the order is load-bearing: it holds a clone of the command
+        // sender, and closing the channel is the only thing that ends the MTA thread. A surviving
+        // clone would leave the join below waiting for a thread that has no reason to return.
+        self.global_input = None;
         // Closing the command channel makes the MTA thread drop UiaState and its
         // COM apartment before the daemon reports a clean process exit.
         self.tx.take();
         if let Some(thread) = self.thread.take() {
             let _ = thread.join();
         }
+    }
+}
+
+/// The query that finds the application a recorded event belonged to.
+///
+/// The process id leads because it is the only identity that cannot go ambiguous mid-session, and
+/// `find_window` matches on it alone when it is present. The name follows for the case where no pid
+/// was read, and matches applications the way `look` matches them.
+fn recorded_app_query(app: &RecordedAppIdentity) -> AppQuery {
+    AppQuery {
+        process_id: app.process_id,
+        name: (!app.name.is_empty()).then(|| app.name.clone()),
+        identifier: None,
+    }
+}
+
+impl axon_core::GlobalInputObserver for WindowsBackend {
+    fn start(&mut self, scope: &axon_core::RecordingScope) -> Result<(), BackendError> {
+        axon_core::GlobalInputObserver::start(self.observer(), scope)
+    }
+
+    fn poll(
+        &mut self,
+        timeout: Duration,
+    ) -> Result<Vec<axon_core::RecordedInputEvent>, BackendError> {
+        axon_core::GlobalInputObserver::poll(self.observer(), timeout)
+    }
+
+    fn stop(&mut self) -> Result<(), BackendError> {
+        axon_core::GlobalInputObserver::stop(self.observer())
+    }
+
+    fn is_recording(&self) -> bool {
+        self.global_input
+            .as_ref()
+            .is_some_and(axon_core::GlobalInputObserver::is_recording)
+    }
+}
+
+impl crate::ObserverQuiescence for WindowsBackend {
+    fn quiesce_global_input(&mut self) {
+        self.observer().quiesce();
+    }
+}
+
+impl RecordingEvidenceProvider for WindowsBackend {
+    fn read_focused(&mut self) -> Result<Option<RecordedFocusedEvidence>, BackendError> {
+        self.call(Command::FocusedEvidence)
+    }
+
+    fn capture_snapshot(
+        &mut self,
+        app: &RecordedAppIdentity,
+    ) -> Result<Option<Snapshot>, BackendError> {
+        // A capture that fails is not a recording that fails. By the time shared core resolves a
+        // click, the window it landed in may be gone -- a menu that closed, a dialog that was
+        // dismissed -- and `None` is the seam that says so: the action is kept and authored
+        // against its point rather than taking the whole session down with it.
+        Ok(PlatformBackend::capture(self, &recorded_app_query(app)).ok())
+    }
+
+    fn settle(
+        &mut self,
+        _group_index: usize,
+        _tool: &str,
+    ) -> Result<RecordedSettleEvidence, BackendError> {
+        // Deliberately nothing, exactly as macOS answers. Waiting for an effect to land is a
+        // question with a real answer on Windows, but inventing a per-platform one here would mean
+        // two backends settling differently for reasons no shared contract describes.
+        Ok(RecordedSettleEvidence::default())
     }
 }
 fn immediate_node(e: &IUIAutomationElement) -> Result<Node, BackendError> {
@@ -901,6 +1024,15 @@ impl UiaState {
                             .map_err(|e| operation("get InvokePattern", e))?;
                     unsafe { p.Invoke() }.map_err(|e| operation("invoke", e))
                 }));
+            }
+            Command::PointEvidence(point, tx) => {
+                let _ = tx.send(self.point_evidence(point));
+            }
+            Command::FocusedEvidence(tx) => {
+                let _ = tx.send(self.focused_evidence());
+            }
+            Command::ForegroundIdentity(tx) => {
+                let _ = tx.send(Ok(self.foreground_identity()));
             }
             Command::VerifyPointerTarget(handle, (x, y), tx) => {
                 let result = self.element(&handle).and_then(|target| {
@@ -1107,6 +1239,179 @@ impl UiaState {
             current = unsafe { walker.GetParentElement(&node) }.ok();
         }
         Ok(None)
+    }
+
+    /// How this backend names the application an event belongs to, plus its window's title.
+    ///
+    /// The name is read from the top-level window element, which is the same element `enumerate`
+    /// reads and therefore the same string it reports. That is the entire requirement:
+    /// `UserActionRecorder::target` writes this name into the artifact's `app` field and replay
+    /// resolves against it, so a recorded action has to call an application what `look` calls it.
+    /// axn/207 was exactly this divergence on macOS, where capture handed a bundle identifier to a
+    /// resolver comparing process ids and every recording came back with nothing in it.
+    ///
+    /// `bundle_identifier` stays `None`, and that is a statement rather than an omission: this
+    /// backend has no durable application identity to put there. It spells one as a process id,
+    /// which cannot outlive the session, and names one by its window title, which lasts only as
+    /// long as the window keeps it. Minting a third identity here would make recordings replay
+    /// against nothing else in the daemon.
+    fn recorded_identity(
+        &self,
+        element: &IUIAutomationElement,
+    ) -> Option<(RecordedAppIdentity, Option<String>)> {
+        let top_level = self
+            .host_window(element)
+            .ok()
+            .flatten()
+            .map(|window| unsafe { GetAncestor(window, GA_ROOT) })
+            .filter(|window| !window.is_invalid())
+            .and_then(|window| unsafe { self.automation.ElementFromHandle(window) }.ok())?;
+        let name = unsafe { top_level.CurrentName() }
+            .ok()
+            .map(|name| name.to_string())
+            .filter(|name| !name.is_empty())?;
+        Some((
+            RecordedAppIdentity {
+                name: name.clone(),
+                bundle_identifier: None,
+                process_id: automation_process_id(element)
+                    .or_else(|| automation_process_id(&top_level)),
+            },
+            Some(name),
+        ))
+    }
+
+    /// The evidence shared core re-resolves against a fresh snapshot, read at event time.
+    ///
+    /// Every field is produced exactly the way `capture_node` produces the matching field on a
+    /// snapshot node. That is not a matter of taste: `node_matches` in shared core compares these
+    /// for equality, so a role spelled from a different table or a name filtered by a different
+    /// rule would leave a recorded click permanently unable to resolve to a semantic target.
+    fn element_evidence(&self, element: &IUIAutomationElement) -> RecordedElementEvidence {
+        let text = |value: WinResult<BSTR>| {
+            value
+                .ok()
+                .map(|value| value.to_string())
+                .filter(|value| !value.is_empty())
+        };
+        let control = unsafe { element.CurrentControlType() }.ok();
+        // The Windows floor for the sensitivity contract shared core enforces. There is no
+        // system-wide secure-input mode to lean on here, so this property is the whole test.
+        let sensitive = crate::recording::is_sensitive(
+            unsafe { element.CurrentIsPassword() }.is_ok_and(bool::from),
+        );
+        RecordedElementEvidence {
+            role: control.map_or_else(String::new, |id| control_type_name(id.0).into()),
+            subrole: None,
+            identifier: text(unsafe { element.CurrentAutomationId() }),
+            title: text(unsafe { element.CurrentName() }),
+            value: crate::recording::evidence_value(sensitive, || {
+                unsafe {
+                    element.GetCurrentPatternAs::<IUIAutomationValuePattern>(UIA_ValuePatternId)
+                }
+                .ok()
+                .and_then(|pattern| unsafe { pattern.CurrentValue() }.ok())
+                .map(|value| value.to_string())
+            }),
+            description: text(unsafe { element.CurrentHelpText() }),
+            actions: Vec::new(),
+            window_title: None,
+            sensitive,
+        }
+    }
+
+    /// The actionable ancestry around an element, nearest first and bounded.
+    fn ancestry_evidence(
+        &self,
+        element: &IUIAutomationElement,
+        window_title: Option<&str>,
+    ) -> Vec<RecordedElementEvidence> {
+        let with_window = |mut evidence: RecordedElementEvidence| {
+            evidence.window_title = window_title.map(str::to_owned);
+            evidence
+        };
+        let Ok(walker) = (unsafe { self.automation.ControlViewWalker() }) else {
+            return vec![with_window(self.element_evidence(element))];
+        };
+        let mut candidates = Vec::new();
+        let mut current = Some(element.clone());
+        for _ in 0..RECORDED_ANCESTRY {
+            let Some(node) = current else { break };
+            candidates.push(with_window(self.element_evidence(&node)));
+            current = unsafe { walker.GetParentElement(&node) }.ok();
+        }
+        candidates
+    }
+
+    fn point_evidence(
+        &self,
+        point: (f64, f64),
+    ) -> Result<Option<RecordedTargetEvidence>, BackendError> {
+        let at = RecordedPoint {
+            x: point.0,
+            y: point.1,
+        };
+        // A hit test that finds nothing is not a failed recording. The event still happened, and
+        // an evidence record carrying only its point still authors as a point target, which is
+        // what shared core falls back to anyway when no candidate resolves.
+        let Ok(element) = self.element_at(point) else {
+            return Ok(self
+                .foreground_identity()
+                .map(|app| RecordedTargetEvidence {
+                    app,
+                    point: at,
+                    candidates: Vec::new(),
+                }));
+        };
+        let Some((app, window_title)) = self.recorded_identity(&element) else {
+            return Ok(None);
+        };
+        Ok(Some(RecordedTargetEvidence {
+            candidates: self.ancestry_evidence(&element, window_title.as_deref()),
+            app,
+            point: at,
+        }))
+    }
+
+    fn focused_evidence(&self) -> Result<Option<RecordedFocusedEvidence>, BackendError> {
+        let Ok(element) = (unsafe { self.automation.GetFocusedElement() }) else {
+            return Ok(None);
+        };
+        let Some((app, window_title)) = self.recorded_identity(&element) else {
+            return Ok(None);
+        };
+        let candidates = self.ancestry_evidence(&element, window_title.as_deref());
+        Ok(Some(RecordedFocusedEvidence {
+            value: candidates.first().and_then(|nearest| nearest.value.clone()),
+            target: RecordedTargetEvidence {
+                app,
+                // The centre of the focused element, so the point fallback a sensitive or
+                // unresolvable field lands on is somewhere a replay could actually click.
+                point: unsafe { element.CurrentBoundingRectangle() }
+                    .ok()
+                    .map_or_else(RecordedPoint::default, |rect| RecordedPoint {
+                        x: f64::from(rect.left + (rect.right - rect.left) / 2),
+                        y: f64::from(rect.top + (rect.bottom - rect.top) / 2),
+                    }),
+                candidates,
+            },
+        }))
+    }
+
+    fn foreground_identity(&self) -> Option<RecordedAppIdentity> {
+        let window = unsafe { GetForegroundWindow() };
+        if window.is_invalid() {
+            return None;
+        }
+        let element = unsafe { self.automation.ElementFromHandle(window) }.ok()?;
+        Some(RecordedAppIdentity {
+            name: unsafe { element.CurrentName() }
+                .ok()
+                .map(|name| name.to_string())
+                .filter(|name| !name.is_empty())?,
+            bundle_identifier: None,
+            process_id: automation_process_id(&element),
+        })
     }
 
     /// Binds one click to one window, or names why it cannot be bound.
@@ -1554,6 +1859,16 @@ impl UiaState {
 }
 
 impl PlatformBackend for WindowsBackend {
+    fn global_input_observer(
+        &mut self,
+    ) -> Result<&mut dyn axon_core::GlobalInputObserver, BackendError> {
+        let observer = self.observer();
+        match observer.unavailable() {
+            Some(error) => Err(error),
+            None => Ok(observer),
+        }
+    }
+
     fn capabilities(&self) -> Result<Vec<CapabilityInfo>, BackendError> {
         // `SendInput` posts to whatever desktop this process is attached to, and in session 0 or
         // off the interactive window station that desktop has no user on it. UI Automation keeps
@@ -1580,12 +1895,20 @@ impl PlatformBackend for WindowsBackend {
             Capability::Screenshot,
             Capability::HitTest,
             Capability::SerializeHistory,
+            Capability::ObserveGlobalInput,
         ]
         .into_iter()
         .map(|capability| {
+            // Observation is gated on the same session facts as delivery, for the same reason
+            // read the other way round: a low-level hook is installed against a window station's
+            // desktop, so where `SendInput` would post to a desktop nobody is at, the hook watches
+            // one nobody is typing on. It installs successfully and then never fires, which is
+            // precisely the quiet failure this list exists to make loud.
             let restriction = matches!(
                 capability,
-                Capability::PointerInput | Capability::KeyboardInput
+                Capability::PointerInput
+                    | Capability::KeyboardInput
+                    | Capability::ObserveGlobalInput
             )
             .then(|| global_input.clone())
             .flatten();
@@ -1808,6 +2131,8 @@ impl IntegrationProbe {
             "pixel-click" => return probe_pixel_click(args),
             "foreground" => return probe_foreground(args),
             "keyboard-diagnostic" => return keyboard_diagnostic::run(args),
+            "recording-diagnostic" => return global_input::probe(args),
+            "post-input" => return probe_post_input(args),
             _ => {}
         }
         let _com = ComApartment::mta()?;
@@ -1830,6 +2155,47 @@ impl IntegrationProbe {
             other => Err(op("probe", format!("unknown probe {other:?}"))),
         }
     }
+}
+
+/// Probe-only: posts real input from a process that is not the daemon.
+///
+/// The live recording acceptance needs input the daemon did not produce, because the daemon
+/// excludes exactly what it produced. That exclusion is per process, so a second `axon-win.exe`
+/// running this is a genuinely independent source — the Windows shape of the independent helper
+/// the macOS bench acceptance needed for the same reason.
+fn probe_post_input(args: &[String]) -> Result<serde_json::Value, BackendError> {
+    let number = |index: usize, name: &str| -> Result<f64, BackendError> {
+        required_probe_arg(args, index, name)?
+            .parse()
+            .map_err(|_| op("probe", format!("{name} is not a number")))
+    };
+    let x = number(1, "x")?;
+    let y = number(2, "y")?;
+    let text = required_probe_arg(args, 3, "text")?;
+    // Bring the target forward before aiming at it. The caller computed this point from a capture
+    // taken earlier, and anything that has come to the front since -- including this helper's own
+    // task host window -- would take the click instead. Setup, not measurement: the events posted
+    // below are still this process's, which is the whole point of running them from here.
+    let activated = probe_flag(args, "--activate")
+        .and_then(|value| value.parse::<u32>().ok())
+        .map(|process_id| {
+            let brought_forward = pixel::activate(process_id, None);
+            thread::sleep(Duration::from_millis(400));
+            brought_forward
+        });
+    send_click((x, y))?;
+    // The click has to land and focus has to settle before the text follows it; without this the
+    // burst races the target's own handling of the click and lands wherever focus used to be.
+    thread::sleep(Duration::from_millis(400));
+    send_text(text)?;
+    Ok(serde_json::json!({
+        "schemaVersion": "post-input-v1",
+        "processId": std::process::id(),
+        "deliveryTag": format!("0x{:X}", crate::recording::self_delivery_tag()),
+        "activated": activated,
+        "clicked": {"x": x, "y": y},
+        "typed": text,
+    }))
 }
 
 fn required_probe_arg<'a>(
@@ -2088,10 +2454,11 @@ fn probe_foreground(args: &[String]) -> Result<serde_json::Value, BackendError> 
         let activation_accepted = backend.activate_application(&identity)?;
         thread::sleep(Duration::from_millis(250));
         let activated = pixel::process_of(pixel::foreground_window()) == Some(target_pid);
-        if activated && strategy != HandBackStrategy::NoDispatch {
-            if let Some((x, y)) = nudge {
-                pixel::set_cursor(x, y);
-            }
+        if activated
+            && strategy != HandBackStrategy::NoDispatch
+            && let Some((x, y)) = nudge
+        {
+            pixel::set_cursor(x, y);
         }
         let mut attachments = ProbeAttachments::default();
         if matches!(
@@ -2602,7 +2969,7 @@ fn send_text(text: &str) -> Result<(), BackendError> {
                         wScan: unit,
                         dwFlags: flags,
                         time: 0,
-                        dwExtraInfo: 0,
+                        dwExtraInfo: crate::recording::self_delivery_tag(),
                     },
                 },
             })
@@ -2625,7 +2992,7 @@ fn send_click((x, y): (f64, f64)) -> Result<(), BackendError> {
                 mouseData: 0,
                 dwFlags: flags,
                 time: 0,
-                dwExtraInfo: 0,
+                dwExtraInfo: crate::recording::self_delivery_tag(),
             },
         },
     };
