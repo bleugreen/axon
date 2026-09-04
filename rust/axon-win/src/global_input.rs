@@ -118,7 +118,7 @@ unsafe extern "system" fn mouse_hook(code: i32, message: WPARAM, data: LPARAM) -
         // event itself is still queued whatever it says, so the raw stream a diagnostic drains
         // remains what the hook was handed; it is `enrich` that declines to record it.
         let self_delivered = is_self_delivered(event.dwExtraInfo);
-        let mut track = |down: bool| {
+        let track = |down: bool| {
             if let Some(held) = crate::recording::button_state_change(down, self_delivered) {
                 BUTTON_HELD.store(held, Ordering::Relaxed);
             }
