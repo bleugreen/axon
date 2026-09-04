@@ -471,10 +471,7 @@ impl UserActionRecorder {
     }
 
     fn in_scope(&self, app: &RecordedAppIdentity) -> bool {
-        match &self.scope {
-            RecordingScope::AllApplications => true,
-            RecordingScope::Application { app: wanted } => wanted.matches_runtime(app),
-        }
+        self.scope.accepts(app)
     }
 }
 
@@ -684,6 +681,30 @@ pub enum RecordingScope {
     AllApplications,
     /// One application; events outside it are discarded and its notifications are observed.
     Application { app: RecordedAppIdentity },
+}
+
+impl RecordingScope {
+    /// Whether an event belonging to this application belongs to the session.
+    ///
+    /// Asked by shared core when it consumes an event and by every observer before it produces
+    /// one, which is why it is stated here rather than once per platform: a backend that scoped
+    /// differently from the recorder would silently record a different session than the one the
+    /// caller asked for.
+    pub fn accepts(&self, app: &RecordedAppIdentity) -> bool {
+        match self {
+            Self::AllApplications => true,
+            Self::Application { app: wanted } => wanted.matches_runtime(app),
+        }
+    }
+
+    /// An identity this scope accepts, so an observation *about* a recording is not filtered out of
+    /// the recording it is about -- a dropped-event warning above all.
+    pub fn identity(&self) -> RecordedAppIdentity {
+        match self {
+            Self::AllApplications => RecordedAppIdentity::default(),
+            Self::Application { app } => app.clone(),
+        }
+    }
 }
 
 /// The native seam a platform implements to feed the shared recorder.
