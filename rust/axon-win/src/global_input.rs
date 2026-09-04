@@ -25,9 +25,8 @@ use axon_core::{
     RecordedPoint, RecordedTargetEvidence, RecordingScope, dropped_events_warning,
 };
 use std::{
-    collections::VecDeque,
     sync::{
-        Arc, Condvar, Mutex, OnceLock,
+        Arc, Mutex, OnceLock,
         atomic::{AtomicBool, Ordering},
         mpsc,
     },
@@ -349,7 +348,7 @@ fn enrich(
                 layout_text(virtual_key, scan_code, state)
             })?;
             let context = key_context(commands)?;
-            accepts(scope, &context.app).then_some(RecordedInputEvent::KeyDown {
+            scope.accepts(&context.app).then_some(RecordedInputEvent::KeyDown {
                 app: context.app,
                 keystroke,
                 timestamp_ms,
@@ -357,7 +356,7 @@ fn enrich(
         }
         RawInput::Button { down, point } => {
             let evidence = point_evidence(commands, point)?;
-            if !accepts(scope, &evidence.app) {
+            if !scope.accepts(&evidence.app) {
                 return None;
             }
             Some(if down {
@@ -388,7 +387,7 @@ fn enrich(
             horizontal,
         } => {
             let evidence = point_evidence(commands, point)?;
-            if !accepts(scope, &evidence.app) {
+            if !scope.accepts(&evidence.app) {
                 return None;
             }
             let (delta_x, delta_y) = wheel_delta(mouse_data, horizontal);
@@ -428,8 +427,8 @@ fn enrichment_thread(
             // before any action was recorded; the notification is what the artifact keeps, so a
             // recording read a week later still admits the gap.
             eprintln!("axon-win: {warning}");
-            enriched.push(RecordedInputEvent::Notification {
-                app: scope_identity(&scope),
+            enriched.offer(RecordedInputEvent::Notification {
+                app: scope.identity(),
                 notification: warning,
                 role: None,
                 timestamp_ms: now_ms(),
@@ -437,7 +436,7 @@ fn enrichment_thread(
         }
         for raw in batch.events {
             if let Some(event) = enrich(&scope, &commands, &mut modifiers, raw) {
-                enriched.push(event);
+                enriched.offer(event);
             }
         }
         if raw_queue().stopped() {
@@ -465,7 +464,7 @@ impl WindowsGlobalInputObserver {
     pub fn new(commands: mpsc::Sender<Command>) -> Self {
         Self {
             commands,
-            enriched: Arc::new(Enriched::default()),
+            enriched: Arc::new(enriched_queue()),
             session: None,
         }
     }
@@ -542,7 +541,7 @@ impl GlobalInputObserver for WindowsGlobalInputObserver {
             return Err(error);
         }
         raw_queue().reset();
-        self.enriched.clear();
+        self.enriched.reset();
         BUTTON_HELD.store(false, Ordering::Relaxed);
 
         let (hooks, hook_thread_id) = start_hook_thread()?;
@@ -570,7 +569,7 @@ impl GlobalInputObserver for WindowsGlobalInputObserver {
         if self.session.is_none() {
             return Err(operation("no global input observer session is active"));
         }
-        Ok(self.enriched.drain(timeout))
+        Ok(self.enriched.drain(timeout).events)
     }
 
     fn stop(&mut self) -> Result<(), BackendError> {
@@ -578,7 +577,7 @@ impl GlobalInputObserver for WindowsGlobalInputObserver {
         self.session = None;
         // Discarded here and not a moment sooner. `quiesce` is what makes a session's last events
         // reachable; a caller that wants them polls between the two calls.
-        self.enriched.clear();
+        self.enriched.reset();
         Ok(())
     }
 
