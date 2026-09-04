@@ -312,7 +312,8 @@ impl<
         + TextRecognitionProvider
         + VisualObservationProvider
         + BackgroundPixelPointer
-        + WindowsScrollProvider,
+        + WindowsScrollProvider
+        + axon_core::RecordingEvidenceProvider,
 > Router<B>
 {
     /// What the backend can do, for health documents.
@@ -1464,7 +1465,8 @@ impl<
         + TextRecognitionProvider
         + VisualObservationProvider
         + BackgroundPixelPointer
-        + WindowsScrollProvider,
+        + WindowsScrollProvider
+        + axon_core::RecordingEvidenceProvider,
 > ToolDispatcher for Router<B>
 {
     fn set_observation_redaction_context(
