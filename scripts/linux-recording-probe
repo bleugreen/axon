@@ -1,0 +1,93 @@
+#!/usr/bin/env bash
+# A real record -> stop -> run -> save -> replay round trip through the Linux daemon, on X11.
+#
+# WHY THIS IS A SCRIPT AND NOT A WORKFLOW STEP. Recording on Linux needs an X11 desktop with
+# applications on the accessibility bus. The project's live.yml Linux runner is bglab-ub, a GNOME
+# Wayland session, which can only ever prove the refusal -- and does, in the "Refuse global input
+# honestly under Wayland" step. The desktop that can prove the round trip is fedora (Xfce/X11,
+# toolkit accessibility on, Chromium on the bus), which is not a live.yml runner. So this lane is
+# relayed: someone with the machine runs this script and posts its output on the issue.
+#
+#   ./scripts/linux-recording-probe [--daemon path/to/axon-linux]
+#
+# It builds the daemon if none is given, brings up its own browser page, and cleans up after itself.
+#
+# THE ONE THING THAT MUST NOT BE SIMPLIFIED. The input being recorded is posted by xdotool, a
+# separate process, and never by the daemon's own click and keyboard tools. The daemon excludes its
+# own synthetic input from what it records -- otherwise every action an agent took during a
+# recording would come back as the user's -- so a probe that drove the daemon's own tools would
+# record nothing and look exactly like a broken observer. If xdotool is missing, this refuses to
+# run rather than falling back.
+
+set -euo pipefail
+
+daemon=""
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --daemon) daemon="$2"; shift 2 ;;
+    -h|--help) sed -n '2,21p' "$0"; exit 0 ;;
+    *) echo "unknown argument: $1" >&2; exit 2 ;;
+  esac
+done
+
+root="$(cd "$(dirname "$0")/.." && pwd)"
+ask="$root/scripts/axon-socket-request"
+
+fail() { echo "FAILED: $*" >&2; exit 1; }
+note() { printf '\n=== %s\n' "$*"; }
+
+for tool in jq xdotool; do
+  command -v "$tool" >/dev/null 2>&1 || fail "$tool is required; read the header of this script"
+done
+[ -n "${DISPLAY:-}" ] || fail "DISPLAY is not set; this probe needs an X11 session"
+[ -z "${WAYLAND_DISPLAY:-}" ] || fail "this is a Wayland session; the refusal lane covers that"
+
+if [ -z "$daemon" ]; then
+  note "building the daemon"
+  (cd "$root/rust" && cargo build -p axon-linux)
+  daemon="$root/rust/target/debug/axon-linux"
+fi
+[ -x "$daemon" ] || fail "no daemon at $daemon"
+
+# A page with two elements worth recording against: something to click and something to type into.
+# A local file rather than a network page, so the probe does not depend on anything being reachable.
+page="$(mktemp -d)/recording-probe.html"
+cat > "$page" <<'HTML'
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><title>Axon Recording Probe</title></head>
+<body style="font-family: sans-serif; padding: 40px">
+  <h1>Axon Recording Probe</h1>
+  <button id="press" style="font-size: 20px; padding: 12px 24px">Press me</button>
+  <p><label for="note">Recording note</label></p>
+  <input id="note" aria-label="Recording note" style="font-size: 20px; width: 320px">
+</body></html>
+HTML
+
+browser=""
+for candidate in chromium chromium-browser google-chrome; do
+  if command -v "$candidate" >/dev/null 2>&1; then browser="$candidate"; break; fi
+done
+[ -n "$browser" ] || fail "no Chromium-family browser found; GTK4 reports zeroed AT-SPI extents on X11, so this probe wants Chromium or a GTK3 application"
+
+profile="$(mktemp -d)"
+"$browser" --user-data-dir="$profile" --no-first-run --no-default-browser-check \
+  --force-renderer-accessibility --new-window "file://$page" >/dev/null 2>&1 &
+browser_pid=$!
+
+log="$(mktemp)"
+"$daemon" serve >"$log" 2>&1 &
+daemon_pid=$!
+
+cleanup() {
+  "$daemon" shutdown >/dev/null 2>&1 || true
+  for _ in $(seq 1 40); do
+    kill -0 "$daemon_pid" 2>/dev/null || break
+    sleep 0.25
+  done
+  kill -9 "$daemon_pid" >/dev/null 2>&1 || true
+  kill "$browser_pid" >/dev/null 2>&1 || true
+  rm -rf "$profile"
+}
+trap cleanup EXIT
+
+mcp() { printf '%s\n' "$1" | "$daemon" mcp; }
