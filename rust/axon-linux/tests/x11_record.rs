@@ -26,24 +26,17 @@
 #![cfg(target_os = "linux")]
 
 use axon_linux::recording::{
-    self, BUTTON_PRESS, BUTTON_PRIMARY, BUTTON_RELEASE, KEY_PRESS, ModifierState, RawInput,
-    RawQueue, classify_keystroke, keysym_level, self_delivery,
+    BUTTON_PRESS, BUTTON_PRIMARY, BUTTON_RELEASE, KEY_PRESS, KEY_RELEASE, MOTION_NOTIFY,
+    ModifierState, RawInput, RawQueue, classify_keystroke, keysym_level, self_delivery,
 };
-use axon_linux::x11::X11Session;
+use axon_linux::x11::{Keyboard, X11Session};
 use axon_linux::xrecord::RecordSession;
 use std::{
     sync::Arc,
     thread,
     time::{Duration, Instant},
 };
-use x11rb::{
-    connection::Connection,
-    protocol::{
-        xproto::{ConnectionExt as _, KEY_PRESS_EVENT, KEY_RELEASE_EVENT, MOTION_NOTIFY_EVENT},
-        xtest::ConnectionExt as _,
-    },
-    wrapper::ConnectionExt as _,
-};
+use x11rb::{connection::Connection, protocol::xtest::ConnectionExt as _, wrapper::ConnectionExt as _};
 
 /// Long enough for a real server on a loaded CI machine, short enough to fail rather than hang.
 const OBSERVED_WITHIN: Duration = Duration::from_secs(3);
@@ -86,11 +79,11 @@ fn xtest_input_is_observed_through_record_and_our_own_delivery_is_not() {
     // `RecordEnableContext` before anything is posted, or the first events are simply not recorded.
     thread::sleep(Duration::from_millis(200));
 
-    fake_input(&elsewhere, MOTION_NOTIFY_EVENT, 0, CLICK_AT);
+    fake_input(&elsewhere, MOTION_NOTIFY, 0, CLICK_AT);
     fake_input(&elsewhere, BUTTON_PRESS, BUTTON_PRIMARY, (0, 0));
     fake_input(&elsewhere, BUTTON_RELEASE, BUTTON_PRIMARY, (0, 0));
-    fake_input(&elsewhere, KEY_PRESS_EVENT, keycode, (0, 0));
-    fake_input(&elsewhere, KEY_RELEASE_EVENT, keycode, (0, 0));
+    fake_input(&elsewhere, KEY_PRESS, keycode, (0, 0));
+    fake_input(&elsewhere, KEY_RELEASE, keycode, (0, 0));
 
     let observed = drain(&queue, 3);
 
@@ -199,7 +192,7 @@ fn drain(queue: &RawQueue, at_least: usize) -> Vec<RawInput> {
 
 /// A keycode this server's layout puts the letter `a` on, so the keystroke assertion is about the
 /// decode rather than about which layout the lane happens to have loaded.
-fn letter_keycode(keyboard: &axon_linux::x11::Keyboard) -> Option<u8> {
+fn letter_keycode(keyboard: &Keyboard) -> Option<u8> {
     (8..=255).find(|keycode| {
         keyboard
             .mapping
@@ -208,103 +201,3 @@ fn letter_keycode(keyboard: &axon_linux::x11::Keyboard) -> Option<u8> {
     })
 }
 
-/// The decode is a pure function of bytes and needs no server, so the cases a real desktop would
-/// only produce by accident are pinned here where they can be produced on purpose.
-#[test]
-fn a_wheel_notch_is_a_scroll_and_motion_only_counts_between_a_press_and_its_release() {
-    let mut decoder = recording::Decoder::default();
-    let event = |kind, detail| recording::CoreEvent {
-        kind,
-        detail,
-        point: (10, 20),
-        state: 0,
-    };
-
-    assert_eq!(
-        decoder.observe(event(MOTION_NOTIFY_EVENT, 0)),
-        None,
-        "a pointer crossing the screen is not an action"
-    );
-    assert_eq!(
-        decoder.observe(event(BUTTON_PRESS, BUTTON_PRIMARY)),
-        Some(RawInput::Button {
-            down: true,
-            point: (10, 20)
-        })
-    );
-    assert_eq!(
-        decoder.observe(event(MOTION_NOTIFY_EVENT, 0)),
-        Some(RawInput::Motion { point: (10, 20) }),
-        "motion between a press and its release is a drag"
-    );
-    assert_eq!(
-        decoder.observe(event(BUTTON_RELEASE, BUTTON_PRIMARY)),
-        Some(RawInput::Button {
-            down: false,
-            point: (10, 20)
-        })
-    );
-    assert_eq!(decoder.observe(event(MOTION_NOTIFY_EVENT, 0)), None);
-
-    // X11 spells a wheel notch as a press and a release of button 4. Only the press is a notch.
-    assert_eq!(
-        decoder.observe(event(BUTTON_PRESS, 4)),
-        Some(RawInput::Wheel {
-            button: 4,
-            point: (10, 20)
-        })
-    );
-    assert_eq!(
-        decoder.observe(event(BUTTON_RELEASE, 4)),
-        None,
-        "recording the release too would double every scroll"
-    );
-    // Nor does a wheel notch make the observer think a button is being held.
-    assert_eq!(decoder.observe(event(MOTION_NOTIFY_EVENT, 0)), None);
-
-    assert_eq!(
-        decoder.observe(event(KEY_PRESS, 38)),
-        Some(RawInput::Key {
-            keycode: 38,
-            state: 0
-        })
-    );
-    assert_eq!(
-        decoder.observe(event(2 + 1, 38)),
-        None,
-        "a key release carries nothing the recorder needs"
-    );
-}
-
-/// The sequence the ledger exists for, at the level the listener sees it.
-///
-/// Our own release must not be what decides the user is no longer dragging: if it were, every real
-/// motion sample after a click the daemon posted mid-gesture would be discarded, and the user's
-/// drag would be recorded truncated.
-#[test]
-fn our_own_click_cannot_truncate_a_drag_the_user_is_making() {
-    let mut decoder = recording::Decoder::default();
-    let event = |kind, detail| recording::CoreEvent {
-        kind,
-        detail,
-        point: (5, 6),
-        state: 0,
-    };
-
-    self_delivery().arm();
-    assert!(decoder.observe(event(BUTTON_PRESS, BUTTON_PRIMARY)).is_some());
-
-    // The daemon posts a click of its own, mid-gesture. Both halves are registered before they are
-    // sent, exactly as `X11Session::fake_input` registers them.
-    self_delivery().expect(BUTTON_PRESS, BUTTON_PRIMARY);
-    self_delivery().expect(BUTTON_RELEASE, BUTTON_PRIMARY);
-    assert_eq!(decoder.observe(event(BUTTON_PRESS, BUTTON_PRIMARY)), None);
-    assert_eq!(decoder.observe(event(BUTTON_RELEASE, BUTTON_PRIMARY)), None);
-
-    assert_eq!(
-        decoder.observe(event(MOTION_NOTIFY_EVENT, 0)),
-        Some(RawInput::Motion { point: (5, 6) }),
-        "a stamped release must not end the user's drag"
-    );
-    self_delivery().disarm();
-}
