@@ -261,7 +261,9 @@ pub fn decode(decoder: &mut Decoder, mut data: &[u8], queue: &RawQueue) {
                 .ok()
                 .map(|(event, _)| CoreEvent {
                     kind,
-                    detail: event.detail,
+                    // `Normal` or `Hint` rather than a keycode, and the ledger ignores it for
+                    // exactly that reason: there is nothing here to match an injection against.
+                    detail: event.detail.into(),
                     point: (event.root_x, event.root_y),
                     state: event.state.into(),
                 }),
