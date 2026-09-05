@@ -13,6 +13,7 @@ failing a release over that would be a false alarm; a file whose bytes differ is
 Usage:
     scripts/verify-published-sdk [--wait SECONDS] pypi WHEEL SDIST
     scripts/verify-published-sdk [--wait SECONDS] npm TARBALL
+    scripts/verify-published-sdk --self-test
 
 --wait keeps asking until the version appears, which is what an upload needs: a registry accepts a
 upload before it serves it. Contradicted contents fail immediately rather than being waited on.
@@ -42,16 +43,29 @@ ROOT = Path(__file__).resolve().parent.parent
 USER_AGENT = "axon-release-verifier (+https://github.com/bleugreen/axon)"
 
 
+class PublicationUnknown(Exception):
+    """The registry would not say whether this version exists."""
+
+
 def fetch(url: str) -> bytes | None:
-    """The body, or None when the registry says there is nothing there yet."""
+    """The body, or None when the registry says there is nothing published there.
+
+    Only 404 means absent. Every other refusal -- a 403 from a CDN, a 429 from rate limiting, a
+    5xx, a connection that never opened -- means the registry declined to answer, and answering
+    "not published" on its behalf would let a release upload without ever having established that
+    the version was free. Not knowing is its own outcome, and it fails the release rather than
+    resolving itself into the convenient one.
+    """
     request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
     try:
         with urllib.request.urlopen(request, timeout=60) as response:
             return response.read()
     except urllib.error.HTTPError as error:
-        if error.code in (403, 404):
+        if error.code == 404:
             return None
-        raise
+        raise PublicationUnknown(f"{url} answered HTTP {error.code} {error.reason}") from error
+    except urllib.error.URLError as error:
+        raise PublicationUnknown(f"{url} could not be reached: {error.reason}") from error
 
 
 def contents(archive: bytes, kind: str) -> dict[str, str]:
