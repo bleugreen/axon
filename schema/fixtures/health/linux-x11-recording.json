@@ -1,0 +1,93 @@
+{
+  "schemaVersion": "health-v1",
+  "version": "0.1.7",
+  "platform": "linux",
+  "daemon": {
+    "running": true,
+    "ready": true,
+    "endpoint": "/run/user/1000/axon-v1.sock",
+    "processId": 2317
+  },
+  "registration": {
+    "registered": true,
+    "mechanism": "systemdUser",
+    "path": "/opt/axon/0.1.7/axon-linux"
+  },
+  "session": {
+    "interactive": true,
+    "graphical": true,
+    "detail": "x11"
+  },
+  "permissions": [
+    {
+      "name": "accessibilityBus",
+      "granted": true
+    }
+  ],
+  "capabilities": [
+    {
+      "capability": "enumerate",
+      "usable": true
+    },
+    {
+      "capability": "capture",
+      "usable": true
+    },
+    {
+      "capability": "retainedHandles",
+      "usable": true
+    },
+    {
+      "capability": "observeChanges",
+      "usable": false,
+      "reason": "not-implemented",
+      "restriction": "AT-SPI event observation is not implemented"
+    },
+    {
+      "capability": "invoke",
+      "usable": true
+    },
+    {
+      "capability": "readValue",
+      "usable": true
+    },
+    {
+      "capability": "setValue",
+      "usable": true
+    },
+    {
+      "capability": "focus",
+      "usable": true
+    },
+    {
+      "capability": "scroll",
+      "usable": false,
+      "reason": "not-implemented",
+      "restriction": "AT-SPI has no portable delta-scroll operation"
+    },
+    {
+      "capability": "pointerInput",
+      "usable": true
+    },
+    {
+      "capability": "keyboardInput",
+      "usable": true
+    },
+    {
+      "capability": "screenshot",
+      "usable": true
+    },
+    {
+      "capability": "hitTest",
+      "usable": true
+    },
+    {
+      "capability": "serializeHistory",
+      "usable": true
+    },
+    {
+      "capability": "observeGlobalInput",
+      "usable": true
+    }
+  ]
+}
