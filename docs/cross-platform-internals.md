@@ -238,7 +238,21 @@ so the floor cannot silently narrow again:
 | --- | --- |
 | macOS | role or subrole naming "secure", or a description naming a password. The subrole is the one that matters: `NSSecureTextField` reports role `AXTextField` with subrole `AXSecureTextField`, so a role-only test misses the ordinary AppKit password field entirely. |
 | Windows | `UIA_IsPasswordPropertyId` on the element. |
-| Linux | AT-SPI `STATE_PROTECTED`, or role `ROLE_PASSWORD_TEXT`. |
+| Linux | role `ROLE_PASSWORD_TEXT`, or a description naming a password. |
+
+The Linux row named `STATE_PROTECTED` until axn/229 tried to implement it. **AT-SPI has
+no such state.** `STATE_PROTECTED` is ATK and MSAA vocabulary; the AT-SPI state set has
+no member of that name, and the state AT-SPI does spell `SENSITIVE` means the opposite
+of what the word suggests here — it marks a widget as enabled and interactive, so
+reading it as "holds a credential" would have marked nearly every element sensitive.
+
+That leaves Linux with a narrower floor than the other two platforms, because AT-SPI
+offers no general "this field is concealed" state to stand behind the role, and a
+toolkit that conceals a field without reporting `ROLE_PASSWORD_TEXT` is not caught. The
+description is tested beside the role for the same reason macOS tests it, and
+deliberately not the *name*: on this platform an entry's AT-SPI name is usually its
+label, so testing the name would classify the ordinary field beside a "Password" label
+as a secret and silently drop what the user typed into it.
 
 The same flag also withholds the element's value from the evidence, so a
 provider must never read `AXValue`, the UIA value pattern, or the AT-SPI text
@@ -266,11 +280,30 @@ all. It is a separate desktop, and a hook installed on the interactive desktop
 simply never sees any of its input. There is nothing to detect and nothing to
 report; the events do not arrive.
 
+Linux reports nothing here either, and for a third reason again: there is no
+system-wide secure-input mode on X11 to report, and an XRecord client is handed
+keystrokes unconditionally whatever has focus.
+
 One gap the per-element predicate does not close on any platform: sensitivity is
 read when the burst is *flushed*, and a burst is flushed by the next event. Type
 a password and then click elsewhere, and the read that decides finds the newly
 focused element. Closing it means carrying sensitivity on the keystroke itself,
 which is a change to the shared event vocabulary rather than to any observer.
+
+A fourth platform difference matters for the same predicate. macOS and Windows
+each have a direct query for the focused element — `AXFocusedUIElement`,
+`GetFocusedElement`. **AT-SPI has neither.** The only mechanisms the accessibility
+bus offers are the focus event an assistive technology subscribes to, which the
+Linux backend's command actor cannot service while it is answering commands, and
+asking objects whether they say they are focused. So Linux finds focus by a
+bounded depth-first search from the active window, pruned by what a provider says
+is on screen, under the same node and depth limits a capture walk uses. A search
+that finds nothing reports the focused element as unavailable, which is the same
+`None` the other two platforms report when their query fails — and shared core
+treats that as a keyboard fallback, so a burst whose focus could not be read is
+serialized. That is the cost of the missing query, and it is why the search is
+pruned conservatively: a subtree whose state could not be read at all is descended
+into rather than skipped.
 
 ## One lifecycle vocabulary, three native mechanisms
 
