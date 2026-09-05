@@ -11,7 +11,7 @@ use std::{
     collections::VecDeque,
     sync::{
         Mutex, OnceLock,
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
     time::{Duration, Instant},
 };
@@ -430,9 +430,18 @@ const EXPECTATION_LIFETIME: Duration = Duration::from_secs(2);
 /// without bound between drains.
 const MAX_EXPECTATIONS: usize = 256;
 
+/// Names one registered expectation, so the site that registered it can take it back.
+///
+/// An identity and not a `(kind, detail)` pair, because those are not unique: a keyboard sequence
+/// registers a press and a release for the same keycode, and a retracted failure that matched by
+/// shape could remove the expectation belonging to an injection that did go out.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ExpectationId(u64);
+
 /// One event this daemon is about to put into the server's input stream.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct Expectation {
+    id: ExpectationId,
     kind: u8,
     detail: u8,
     expires: Instant,
@@ -464,6 +473,7 @@ pub struct SelfDelivery {
     /// Whether anything is observing. Kept as an atomic so the dispatch path pays one relaxed load
     /// rather than a lock on every synthetic event when no recording is running.
     armed: AtomicBool,
+    next_id: AtomicU64,
     expectations: Mutex<VecDeque<Expectation>>,
 }
 
@@ -471,6 +481,7 @@ impl SelfDelivery {
     const fn new() -> Self {
         Self {
             armed: AtomicBool::new(false),
+            next_id: AtomicU64::new(0),
             expectations: Mutex::new(VecDeque::new()),
         }
     }
@@ -487,24 +498,46 @@ impl SelfDelivery {
     }
 
     /// Records that this daemon is about to inject one event. Called before the request is sent.
-    pub fn expect(&self, kind: u8, detail: u8) {
-        self.expect_at(kind, detail, Instant::now());
+    ///
+    /// Returns the expectation's identity so a caller whose request then failed can take it back
+    /// with [`Self::cancel`]. `None` means nothing was recorded, because nothing is observing.
+    pub fn expect(&self, kind: u8, detail: u8) -> Option<ExpectationId> {
+        self.expect_at(kind, detail, Instant::now())
     }
 
-    fn expect_at(&self, kind: u8, detail: u8, now: Instant) {
+    fn expect_at(&self, kind: u8, detail: u8, now: Instant) -> Option<ExpectationId> {
         if !self.armed.load(Ordering::Acquire) {
-            return;
+            return None;
         }
+        let id = ExpectationId(self.next_id.fetch_add(1, Ordering::Relaxed));
         let mut expectations = self.expectations.lock().expect(NEVER_POISONED);
         expectations.retain(|pending| pending.expires > now);
         if expectations.len() >= MAX_EXPECTATIONS {
             expectations.pop_front();
         }
         expectations.push_back(Expectation {
+            id,
             kind,
             detail,
             expires: now + EXPECTATION_LIFETIME,
         });
+        Some(id)
+    }
+
+    /// Takes back an expectation for an injection that never happened.
+    ///
+    /// The deadline above is a backstop for what cannot be known — an event the server dropped, an
+    /// asynchronous X error — and it is deliberately generous. A request that failed *at the call
+    /// site* is not that case: it is known immediately, and leaving its expectation to expire would
+    /// let a failed dispatch discard the next genuine thing the user did with the same key or
+    /// button for the whole of that interval. A partially delivered keyboard sequence makes it
+    /// worse, because each failed press or release leaves its own suppressor behind.
+    pub fn cancel(&self, expectation: Option<ExpectationId>) {
+        let Some(id) = expectation else { return };
+        let mut expectations = self.expectations.lock().expect(NEVER_POISONED);
+        if let Some(index) = expectations.iter().position(|pending| pending.id == id) {
+            expectations.remove(index);
+        }
     }
 
     /// Whether this event is one this daemon just asked for, consuming the expectation if so.
