@@ -93,9 +93,12 @@ require_("version", version);
 require_("license", "MIT");
 require_("type", "module");
 require_("types", "./dist/index.d.ts");
-require_("exports..types", "./dist/index.d.ts");
-require_("exports..import", "./dist/index.js");
 require_("engines.node", ">=20");
+
+// The subpath is literally ".", so it cannot be reached by splitting a dotted path.
+const root = manifest.exports?.["."];
+if (root?.types !== "./dist/index.d.ts") failures.push(`exports["."].types is ${JSON.stringify(root?.types)}`);
+if (root?.import !== "./dist/index.js") failures.push(`exports["."].import is ${JSON.stringify(root?.import)}`);
 require_("publishConfig.access", "public");
 require_("publishConfig.provenance", true);
 
