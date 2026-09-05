@@ -95,7 +95,7 @@ describe("connect", () => {
   });
 
   test("explains an unreachable daemon rather than surfacing a socket error", async () => {
-    await expect(Axon.connect({ socketPath: "/tmp/axon-sdk-test-absent.sock" }))
+    await expect(Axon.connect({ socketPath: "/tmp/axon-ts-test-absent.sock" }))
       .rejects.toThrow(/daemon is not running or could not be reached/);
   });
 });

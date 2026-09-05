@@ -32,7 +32,7 @@ export class FakeDaemon {
 
   static async start(responder: Responder): Promise<FakeDaemon> {
     // Short path: a Unix socket address is capped near 100 bytes, well under a typical TMPDIR.
-    const path = `/tmp/axon-sdk-test-${process.pid}-${counter++}.sock`;
+    const path = `/tmp/axon-ts-test-${process.pid}-${counter++}.sock`;
     rmSync(path, { force: true });
     const server = createServer();
     const daemon = new FakeDaemon(path, server);

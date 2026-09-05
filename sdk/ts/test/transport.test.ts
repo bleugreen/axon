@@ -26,8 +26,8 @@ describe("socket framing", () => {
   });
 
   test("rejects when nothing is listening, naming the endpoint", async () => {
-    const transport = new SocketTransport({ socketPath: "/tmp/axon-sdk-test-absent.sock" });
-    await expect(transport.send(request("health"))).rejects.toThrow(/axon-sdk-test-absent\.sock/);
+    const transport = new SocketTransport({ socketPath: "/tmp/axon-ts-test-absent.sock" });
+    await expect(transport.send(request("health"))).rejects.toThrow(/axon-ts-test-absent\.sock/);
   });
 
   test("rejects a connection closed before a complete response", async () => {
