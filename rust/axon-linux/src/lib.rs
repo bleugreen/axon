@@ -2175,6 +2175,69 @@ mod tests {
         window_rects: Rc<RefCell<std::collections::HashMap<u32, Rect>>>,
         /// The window a visual observation reports it was taken from.
         source_window: Rc<RefCell<Option<SourceWindow>>>,
+        /// Why this fake's observer refuses to start, or `None` when it can.
+        ///
+        /// A code rather than a flag, because the wire contract this pins is that the *specific*
+        /// refusal survives to the caller. A boolean would let a test pass while the daemon
+        /// flattened every reason into one.
+        observer_refusal: Option<&'static str>,
+        /// Events the observer hands over on the next poll, drained as they are taken.
+        observed_input: Rc<RefCell<Vec<axon_core::RecordedInputEvent>>>,
+        /// Events this observer only surrenders once observation has been quiesced, standing in
+        /// for an enrichment thread still working through its backlog when `recording.stop`
+        /// arrives. Without a fake that can be *behind*, no route test can tell a recording that
+        /// keeps its ending from one that drops it.
+        pending_until_quiesce: Rc<RefCell<Vec<axon_core::RecordedInputEvent>>>,
+        observer_starts: Rc<RefCell<usize>>,
+        observer_stops: Rc<RefCell<usize>>,
+    }
+
+    impl axon_core::ObserverQuiescence for FakeBackend {
+        fn quiesce_global_input(&mut self) {
+            let caught_up = std::mem::take(&mut *self.pending_until_quiesce.borrow_mut());
+            self.observed_input.borrow_mut().extend(caught_up);
+        }
+    }
+
+    impl axon_core::GlobalInputObserver for FakeBackend {
+        fn start(&mut self, _: &axon_core::RecordingScope) -> Result<(), BackendError> {
+            *self.observer_starts.borrow_mut() += 1;
+            Ok(())
+        }
+        fn poll(
+            &mut self,
+            _: Duration,
+        ) -> Result<Vec<axon_core::RecordedInputEvent>, BackendError> {
+            Ok(std::mem::take(&mut *self.observed_input.borrow_mut()))
+        }
+        fn stop(&mut self) -> Result<(), BackendError> {
+            *self.observer_stops.borrow_mut() += 1;
+            Ok(())
+        }
+        fn is_recording(&self) -> bool {
+            *self.observer_starts.borrow() > *self.observer_stops.borrow()
+        }
+    }
+
+    impl axon_core::RecordingEvidenceProvider for FakeBackend {
+        fn read_focused(
+            &mut self,
+        ) -> Result<Option<axon_core::RecordedFocusedEvidence>, BackendError> {
+            Ok(None)
+        }
+        fn capture_snapshot(
+            &mut self,
+            _: &axon_core::RecordedAppIdentity,
+        ) -> Result<Option<Snapshot>, BackendError> {
+            Ok(Some(self.snapshot.clone()))
+        }
+        fn settle(
+            &mut self,
+            _: usize,
+            _: &str,
+        ) -> Result<axon_core::RecordedSettleEvidence, BackendError> {
+            Ok(Default::default())
+        }
     }
     /// One planning request the router made: the application identity it bound against, and the
     /// element and point when the action had one.
@@ -2477,6 +2540,11 @@ mod tests {
             recognized_text: Rc::new(RefCell::new(vec![])),
             window_rects: Rc::new(RefCell::new(std::collections::HashMap::new())),
             source_window: Rc::new(RefCell::new(None)),
+            observer_refusal: None,
+            observed_input: Rc::new(RefCell::new(vec![])),
+            pending_until_quiesce: Rc::new(RefCell::new(vec![])),
+            observer_starts: Rc::new(RefCell::new(0)),
+            observer_stops: Rc::new(RefCell::new(0)),
             planned: Rc::new(RefCell::new(vec![])),
             pixel_dispatches: Rc::new(RefCell::new(vec![])),
         }
