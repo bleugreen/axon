@@ -91,3 +91,82 @@ cleanup() {
 trap cleanup EXIT
 
 mcp() { printf '%s\n' "$1" | "$daemon" mcp; }
+
+note "the session as the daemon reports it"
+"$daemon" status --json | jq '{
+  session,
+  observeGlobalInput: (.capabilities[] | select(.capability == "observeGlobalInput")),
+  hitTest: (.capabilities[] | select(.capability == "hitTest"))
+}'
+"$daemon" status --json \
+  | jq -e '.capabilities[] | select(.capability == "observeGlobalInput") | .usable' >/dev/null \
+  || fail "this session reports it cannot observe global input; the reason is above"
+
+note "waiting for the probe page on the accessibility bus"
+app=""
+for _ in $(seq 1 60); do
+  look="$(mcp '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"look","arguments":{"app":"Axon Recording Probe","frames":true}}}')"
+  if printf '%s' "$look" | jq -e '
+    .result.isError == false
+    and ([.result.structuredContent.app.windows[]?.root | .. | objects | select(.role == "push button" and (.label? // .name?) == "Press me")] | length == 1)
+    and ([.result.structuredContent.app.windows[]?.root | .. | objects | select(.role == "entry" and (.label? // "") == "Recording note")] | length == 1)
+  ' >/dev/null 2>&1; then
+    app="$(printf '%s' "$look" | jq -r '.result.structuredContent.app.name')"
+    break
+  fi
+  sleep 0.5
+done
+[ -n "$app" ] || { printf '%s\n' "$look" | jq '.' | head -60; fail "the probe page never published a button and an entry; --force-renderer-accessibility and the toolkit-accessibility setting are the usual causes"; }
+echo "the daemon calls this application: $app"
+
+# The centres of the two elements, in screen coordinates. `look` strips frames unless asked, which
+# is why `frames: true` is above: without them there is no point to aim at.
+centre() {
+  printf '%s' "$look" | jq -r --arg role "$1" --arg label "$2" '
+    [.result.structuredContent.app.windows[]?.root | .. | objects
+     | select(.role == $role and ((.label? // .name?) == $label)) | .frame][0]
+    | if . == null then "" else "\(.x + .width / 2) \(.y + .height / 2)" end'
+}
+button_at="$(centre 'push button' 'Press me')"
+entry_at="$(centre entry 'Recording note')"
+[ -n "$button_at" ] && [ -n "$entry_at" ] || fail "the page published no frames to aim at; GTK4 on X11 reports zeroed extents, which is why this probe targets Chromium"
+
+note "recording, with the input coming from xdotool rather than from the daemon"
+for scope in allApplications application; do
+  case "$scope" in
+    allApplications) scope_params='{"scope":"allApplications"}' ;;
+    application) scope_params="$(jq -cn --arg app "$app" '{"scope":"application","app":{"name":$app}}')" ;;
+  esac
+
+  started="$("$ask" "$(jq -cn --argjson scope "$scope_params" '{"jsonrpc":"2.0","id":1,"method":"recording.start","params":{"scope":$scope}}')")"
+  printf '%s' "$started" | jq -e '.result.sessionId' >/dev/null \
+    || { printf '%s\n' "$started"; fail "recording.start refused for scope $scope"; }
+
+  # A separate process, and the whole point of the lane. `--clearmodifiers` so a stuck modifier on
+  # the desktop does not turn the typed burst into a chord.
+  xdotool mousemove ${button_at%% *} ${button_at##* } click 1
+  sleep 0.4
+  xdotool mousemove ${entry_at%% *} ${entry_at##* } click 1
+  sleep 0.4
+  xdotool type --clearmodifiers --delay 40 'axon recorded this'
+  sleep 0.6
+
+  status="$("$ask" '{"jsonrpc":"2.0","id":2,"method":"recording.status","params":{}}')"
+  printf '%s' "$status" | jq -e '.result.recording == true' >/dev/null || fail "the session stopped on its own"
+
+  stopped="$("$ask" '{"jsonrpc":"2.0","id":3,"method":"recording.stop","params":{}}')"
+  printf '%s' "$stopped" | jq '{actionCount: .result.actionCount, script: .result.script}'
+  count="$(printf '%s' "$stopped" | jq -r '.result.actionCount // 0')"
+  [ "$count" -ge 2 ] || fail "scope $scope recorded $count actions; the click and the typed burst should both be there"
+
+  script="$(printf '%s' "$stopped" | jq -r '.result.script')"
+  printf '%s' "$script" | grep -q 'locator' || fail "scope $scope recorded no semantic target, only points"
+  # axn/213's shape: identity only. A recorded locator that carried the value or the frame would be
+  # describing the moment rather than the element.
+  printf '%s' "$script" | grep -Eq '^\s+(frame|nearbyText):' && fail "a recorded locator carried state, not identity"
+
+  if [ "$scope" = application ]; then
+    printf '%s' "$script" > /tmp/axon-linux-recording.axn
+  fi
+done
+echo "both scopes recorded the same flow, which is what tells an identity disagreement apart from a broken observer"
