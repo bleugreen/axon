@@ -283,8 +283,6 @@ pub fn is_sensitive(is_password: bool) -> bool {
     is_password
 }
 
-
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -506,5 +504,4 @@ mod tests {
         assert!(!is_self_delivered(delivery_tag_for(helper)));
         assert_eq!(delivery_tag_for(ours), self_delivery_tag());
     }
-
 }

@@ -352,4 +352,3 @@ impl Drop for LinuxGlobalInputObserver {
         let _ = self.stop();
     }
 }
-

@@ -1297,7 +1297,10 @@ fn a_sensitive_value_is_never_even_read() {
         }),
         None
     );
-    assert_eq!(reads, 0, "a sensitive value is not read, not merely dropped");
+    assert_eq!(
+        reads, 0,
+        "a sensitive value is not read, not merely dropped"
+    );
     assert_eq!(
         axon_core::evidence_value(false, || Some("draft".into())),
         Some("draft".into())
