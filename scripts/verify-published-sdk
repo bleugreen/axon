@@ -152,6 +152,12 @@ def main(argv: list[str]) -> int:
         cwd=ROOT, check=True, capture_output=True, text=True,
     ).stdout.strip()
 
+    artifacts = [Path(argument) for argument in argv[1:]]
+    missing = [str(artifact) for artifact in artifacts if not artifact.is_file()]
+    if missing:
+        print(f"no such artifact: {', '.join(missing)}", file=sys.stderr)
+        return 1
+
     match argv:
         case ["pypi", wheel, sdist]:
             return verify_pypi(version, Path(wheel), Path(sdist))
