@@ -179,14 +179,13 @@ note "replaying what was recorded"
 # instead is what the recording is actually about: every action dispatched, and every recorded
 # target resolved to exactly one element.
 run_recorded() {
-  local mode="$1"
-  jq -cn --arg script "$(cat /tmp/axon-linux-recording.axn)" --argjson dry "$2" \
+  jq -cn --arg script "$(cat /tmp/axon-linux-recording.axn)" --argjson dry "$1" \
     '{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"run","arguments":{"script":$script,"dryRun":$dry,"continueOnError":true}}}' \
     | "$daemon" mcp
 }
 
 for dry in true false; do
-  replayed="$(run_recorded "$dry" "$dry")"
+  replayed="$(run_recorded "$dry")"
   printf '%s' "$replayed" | jq --argjson dry "$dry" '{dryRun: $dry, actions: [.result.structuredContent.actions[]? | {id, tool, dispatchSuccess, resolution: .resolution.status}]}'
   printf '%s' "$replayed" | jq -e '
     (.result.structuredContent.actions | length) >= 2
