@@ -12,11 +12,15 @@
 # Usage:
 #   scripts/check-sdk-python-package                 build in a temporary directory and check
 #   scripts/check-sdk-python-package dist/sdk-python keep the checked artifacts here
+#
+# PYTHON selects the interpreter that builds and that creates the empty environment; it defaults to
+# python3 and needs the `build` frontend installed.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
+PYTHON="${PYTHON:-python3}"
 VERSION="$(./scripts/check-version)"
 PACKAGE_DIR="sdk/python"
 WHEEL="axon_cmd-$VERSION-py3-none-any.whl"
@@ -39,9 +43,9 @@ else
 fi
 
 printf 'building axon-cmd %s\n' "$VERSION"
-python3 -m build --outdir "$OUT" "$PACKAGE_DIR" > "$WORK/build.log" 2>&1 || {
+"$PYTHON" -m build --outdir "$OUT" "$PACKAGE_DIR" > "$WORK/build.log" 2>&1 || {
   cat "$WORK/build.log" >&2
-  printf 'build failed; `python3 -m pip install build` provides the frontend\n' >&2
+  printf 'build failed; `%s -m pip install build` provides the frontend\n' "$PYTHON" >&2
   exit 1
 }
 
@@ -79,7 +83,7 @@ compare_manifest() {
   printf 'axon_cmd-%s.dist-info/RECORD\n' "$VERSION"
   printf 'axon_cmd-%s.dist-info/WHEEL\n' "$VERSION"
 } | sort > "$WORK/wheel.expected"
-python3 -c 'import sys, zipfile; print("\n".join(sorted(zipfile.ZipFile(sys.argv[1]).namelist())))' \
+"$PYTHON" -c 'import sys, zipfile; print("\n".join(sorted(zipfile.ZipFile(sys.argv[1]).namelist())))' \
   "$OUT/$WHEEL" > "$WORK/wheel.actual"
 compare_manifest "$WHEEL" "$WORK/wheel.expected" "$WORK/wheel.actual"
 
@@ -93,7 +97,7 @@ tar -tzf "$OUT/$SDIST" | sed 's|/$||' | sort > "$WORK/sdist.actual"
 compare_manifest "$SDIST" "$WORK/sdist.expected" "$WORK/sdist.actual"
 
 # What the index will display and what a resolver will act on.
-python3 - "$OUT/$WHEEL" "$VERSION" <<'PYTHON'
+"$PYTHON" - "$OUT/$WHEEL" "$VERSION" <<'PYTHON_METADATA'
 import email
 import sys
 import zipfile
@@ -148,19 +152,19 @@ if failures:
     raise SystemExit(1)
 
 print(f"metadata: {metadata['Name']} {metadata['Version']}, no runtime dependencies")
-PYTHON
+PYTHON_METADATA
 
 # An empty interpreter, the wheel, and nothing else. --no-index is what makes this a check of the
 # artifact rather than of the network.
 VENV="$WORK/venv"
-python3 -m venv "$VENV"
+"$PYTHON" -m venv "$VENV"
 "$VENV/bin/python" -m pip install --quiet --disable-pip-version-check --no-index "$OUT/$WHEEL"
 
 # Run from a directory that is not the checkout: with the repository as the working directory,
 # `from axon_cmd import Axon` resolves against sdk/python and proves nothing about the install.
 (
   cd "$WORK"
-  "$VENV/bin/python" - "$VENV" "$VERSION" <<'PYTHON'
+  "$VENV/bin/python" - "$VENV" "$VERSION" <<'PYTHON_IMPORT'
 import importlib.metadata
 import sys
 from pathlib import Path
@@ -190,7 +194,7 @@ else:
     raise SystemExit("installing axon-cmd provided a top-level `axon` package")
 
 print(f"clean install: from axon_cmd import Axon -> {Axon.__name__}, {SocketTransport.__name__}")
-PYTHON
+PYTHON_IMPORT
 )
 
 printf 'axon-cmd %s: wheel and sdist inspected, wheel installs and imports clean\n' "$VERSION"
