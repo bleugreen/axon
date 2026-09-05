@@ -8,8 +8,8 @@ from typing import Any
 
 import pytest
 
-from axon.errors import AxonTimeoutError, AxonTransportError
-from axon.transport import (
+from axon_cmd.errors import AxonTimeoutError, AxonTransportError
+from axon_cmd.transport import (
     LONG_RUNNING_METHODS,
     JsonRpcRequest,
     SocketTransport,

@@ -9,7 +9,7 @@ requirement survived into Python, not a suppression of one.
 
 from __future__ import annotations
 
-from axon._generated import ClickParams, KeyboardParams, NavigateParams, SaveParams
+from axon_cmd._generated import ClickParams, KeyboardParams, NavigateParams, SaveParams
 
 # keyboard is one object whose oneOf demands either text or key.
 text: KeyboardParams = {"text": "hello"}
