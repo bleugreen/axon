@@ -2765,6 +2765,128 @@ mod tests {
         );
     }
 
+    /// Observation asks for different facts than delivery does, and the difference is not cosmetic:
+    /// a session with no window manager and no XTEST can still record everything the user types.
+    #[test]
+    fn observation_needs_a_display_and_record_and_nothing_else_x11_offers() {
+        assert_eq!(observation_restriction(USABLE), None);
+        assert_eq!(
+            observation_restriction(SessionFacts {
+                window_manager: false,
+                xtest: false,
+                ..USABLE
+            }),
+            None,
+            "a session that cannot post input can still watch it"
+        );
+        assert_eq!(
+            observation_restriction(SessionFacts {
+                x_display: false,
+                ..USABLE
+            }),
+            Some((reason::NO_X_DISPLAY, NO_X_DISPLAY))
+        );
+        // The Xvfb lane checks this against a real server rather than trusting the read; here the
+        // decision itself is pinned, because a build of X without RECORD is something no ordinary
+        // desktop produces by accident.
+        assert_eq!(
+            observation_restriction(SessionFacts {
+                record: false,
+                ..USABLE
+            }),
+            Some((reason::NO_RECORD_EXTENSION, NO_RECORD))
+        );
+    }
+
+    /// Wayland outranks every X11 fact, and for observation it is not the same refusal as for
+    /// delivery: XWayland provides RECORD and records only its own clients, so a session that
+    /// checked the extension alone would record a desktop that looks empty while the user works.
+    #[test]
+    fn wayland_withholds_observation_however_complete_the_x11_session_looks() {
+        let (code, restriction) = observation_restriction(SessionFacts {
+            wayland: true,
+            ..USABLE
+        })
+        .expect("a Wayland session cannot observe global input");
+        assert_eq!(code, reason::WAYLAND_RESTRICTED);
+        assert!(restriction.contains("listen-only"), "{restriction}");
+
+        // And the wire shape a caller actually receives, which is the half axn/220 exists for: the
+        // specific code survives rather than flattening into "unavailable".
+        let BackendError::CapabilityReason {
+            capability, code, ..
+        } = observation_refusal(code, restriction)
+        else {
+            panic!("a refusal from this seam is always typed")
+        };
+        assert_eq!(capability, Capability::ObserveGlobalInput);
+        assert_eq!(code, reason::WAYLAND_RESTRICTED);
+    }
+
+    /// Naming what is under a point needs a display and nothing else. It reads the client's own
+    /// `_NET_WM_PID`, not the window manager's client list, so a bare X session can still answer.
+    #[test]
+    fn a_point_can_be_named_without_a_window_manager_or_xtest() {
+        assert_eq!(point_lookup_restriction(USABLE), None);
+        assert_eq!(
+            point_lookup_restriction(SessionFacts {
+                window_manager: false,
+                screenshot_windows: false,
+                xtest: false,
+                ..USABLE
+            }),
+            None
+        );
+        assert_eq!(
+            point_lookup_restriction(SessionFacts {
+                wayland: true,
+                ..USABLE
+            })
+            .map(|(code, _)| code),
+            Some(reason::WAYLAND_RESTRICTED)
+        );
+        assert_eq!(
+            point_lookup_restriction(SessionFacts {
+                x_display: false,
+                ..USABLE
+            })
+            .map(|(code, _)| code),
+            Some(reason::NO_X_DISPLAY)
+        );
+    }
+
+    /// Every reason this backend publishes has to survive the health document's own classification,
+    /// or a session fact arrives at a caller spelled `not-implemented` -- which says the build is
+    /// missing the feature rather than that the machine is.
+    #[test]
+    fn every_session_restriction_classifies_as_the_code_it_is_published_with() {
+        let restrictions = [
+            observation_restriction(SessionFacts {
+                wayland: true,
+                ..USABLE
+            }),
+            observation_restriction(SessionFacts {
+                x_display: false,
+                ..USABLE
+            }),
+            observation_restriction(SessionFacts {
+                record: false,
+                ..USABLE
+            }),
+            point_lookup_restriction(SessionFacts {
+                wayland: true,
+                ..USABLE
+            }),
+        ];
+        for (code, restriction) in restrictions.into_iter().flatten() {
+            assert_eq!(
+                axon_core::classify_health_restriction(restriction),
+                code,
+                "{restriction:?} is published as {code} but health reads it differently"
+            );
+        }
+    }
+
     #[test]
     fn reports_wayland_restrictions_explicitly() {
         let unavailable = [
