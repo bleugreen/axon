@@ -102,8 +102,22 @@ pub struct Decoder {
 }
 
 impl Decoder {
-    /// What one recorded event amounts to, or nothing when it is not an event a recording carries.
+    /// What one recorded event amounts to, against this process's own delivery ledger.
     pub fn observe(&mut self, event: CoreEvent) -> Option<RawInput> {
+        self.observe_against(self_delivery(), event)
+    }
+
+    /// The same decision against a ledger named explicitly.
+    ///
+    /// The ledger is a process-global in the running daemon, because the dispatch path that injects
+    /// and the listener that observes are on opposite sides of the backend with no shared owner.
+    /// Taking it as an argument here is what keeps a test from having to reach for that global and
+    /// race every other test that does.
+    pub fn observe_against(
+        &mut self,
+        self_delivery: &SelfDelivery,
+        event: CoreEvent,
+    ) -> Option<RawInput> {
         // Where this daemon's own delivery stops being a recordable event, and it happens here --
         // in the listener, not in enrichment -- because the ledger's deadline runs on a wall
         // clock while enrichment can be seconds behind a burst. An exclusion decided late would
@@ -114,7 +128,7 @@ impl Decoder {
         // every real motion sample after it would be discarded and the user's drag would be
         // recorded truncated. Excluding our own delivery has to include the state later events
         // are judged against, not only the events themselves.
-        if self_delivery().claims(event.kind, event.detail) {
+        if self_delivery.claims(event.kind, event.detail) {
             return None;
         }
         match event.kind {
