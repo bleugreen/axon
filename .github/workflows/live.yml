@@ -673,12 +673,9 @@ jobs:
           # start a recording here and capture a desktop that looks empty while the user works.
           # It is also the reason this row exists at all -- there is no listen-only global input
           # protocol on Wayland to fall back to, by design rather than by omission.
-          started="$(jq -cn '{"jsonrpc":"2.0","id":1,"method":"recording.start","params":{"scope":{"scope":"allApplications"}}}' | "$daemon" serve-once 2>/dev/null || true)"
-          if [ -z "$started" ]; then
-            # `recording.*` is a socket method rather than an MCP tool, so it is asked for over the
-            # socket the daemon is already serving.
-            started="$(../scripts/axon-socket-request "$daemon" '{"jsonrpc":"2.0","id":1,"method":"recording.start","params":{"scope":{"scope":"allApplications"}}}')"
-          fi
+          # `recording.*` is a socket method rather than an MCP tool, so it is asked for over the
+          # socket this daemon is already serving.
+          started="$(../scripts/axon-socket-request '{"jsonrpc":"2.0","id":1,"method":"recording.start","params":{"scope":{"scope":"allApplications"}}}')"
           printf '%s\n' "$started"
           # A transport error, not an action result: the capability is absent rather than declined.
           printf '%s' "$started" | jq -e '.error.code == -32004' >/dev/null
@@ -690,7 +687,7 @@ jobs:
           printf '%s' "$started" | jq -e '.error.data.reason | test("listen-only")' >/dev/null
 
           # A refused start must leave no session behind to abandon.
-          status="$(../scripts/axon-socket-request "$daemon" '{"jsonrpc":"2.0","id":2,"method":"recording.status","params":{}}')"
+          status="$(../scripts/axon-socket-request '{"jsonrpc":"2.0","id":2,"method":"recording.status","params":{}}')"
           printf '%s' "$status" | jq -e '.result.recording == false' >/dev/null
 
           # And the same fact in the published health document, so the census, the refusal, and the
