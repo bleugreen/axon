@@ -513,6 +513,69 @@ The backend must expect differences among desktop environments, widget
 toolkits, compositors, and application accessibility implementations rather
 than equating “Linux” with one uniform tree.
 
+### Recording: RECORD for the events, AT-SPI for what they hit
+
+Global input observation reads the X11 core input stream through the RECORD
+extension, added as a feature of the `x11rb` this crate already depends on rather
+than as a new crate or a new system library. RECORD and not XInput2, and the
+reason is the modifier state: a core `KeyPressEvent` carries the modifiers held
+when it was generated, where an XI2 raw event omits them by design and would leave
+the observer rebuilding that state from the key stream. The protocol asks for two
+connections and gets them — one to create and later disable the context, one
+blocked in `RecordEnableContext` on a listener thread that must keep reading,
+because a recording client which stops draining backs the stream up in the server.
+
+Evidence is read on a second thread, not on the listener and not at `poll` time.
+That is the same constraint Windows has for the same reason: a `MouseDown` carries
+its evidence inside the event and shared core reads it as a picture of the
+interface *before* the click landed, but `poll` happens only on `recording.status`
+and `recording.stop`, so an event can wait minutes. The enrichment thread holds a
+clone of the AT-SPI actor's command sender and asks it at event time. There is one
+accessibility-bus connection per process and this does not open a second.
+
+Which application an event belongs to is answered by X11, not by AT-SPI. The
+accessibility bus exposes no stacking order and no foreground, so choosing between
+two applications whose windows both cover a point would be a guess there; the
+enrichment thread reads `_NET_WM_PID` off the window under the point and hands the
+actor a process it has already established. From there the actor descends with
+`Component.GetAccessibleAtPoint`, which answers with a direct child rather than the
+deepest hit, so reaching a leaf means asking repeatedly. Screen coordinates are
+asked for first, since that is the frame the event arrived in, and a provider that
+answers only in window coordinates is asked again relative to its own frame rather
+than being written off.
+
+**Excluding this daemon's own delivery has no per-event channel to use.** Windows
+stamps `INPUT.dwExtraInfo` and reads it straight back off the hook. A core X11
+event has no equivalent field, and an XTEST-injected event is by design
+indistinguishable from a real one once the server has it — that is the whole point
+of the extension, and it is why `xdotool` output reaches `xev`. Refusing all
+synthetic input instead would discard assistive technology, remote-desktop
+sessions, and any live probe's own helper, leaving the capability untestable.
+
+So the exclusion is made by *order*. Every synthetic event this daemon posts goes
+through one function, `X11Session::fake_input`, which registers what it is about to
+inject before the request is sent; the listener drops the first matching event
+while that expectation is outstanding. Registration precedes the request, so an
+expectation is always in place before the server can generate the event, and the
+match is made on the listener thread rather than during enrichment because the
+expectation deadline runs on a wall clock while enrichment can be seconds behind a
+burst. What this cannot separate is a genuine user event of the identical kind and
+keycode arriving inside one server round trip of ours: the counts stay right and
+the attribution of two identical events swaps. A held-open time bracket has the
+same failure across a far wider window and in both directions, which is why it is
+not one.
+
+Two limitations are vocabulary rather than runtime, and both are stated where they
+are felt: AT-SPI has no focused-element query (see the observer sensitivity
+contract above), and it has no durable application identity. This backend spells an
+application as an AT-SPI identity — a unique bus name and a per-session object path
+— and names one by whatever the toolkit publishes. A recording therefore carries
+the application *name*, with `bundleIdentifier` left empty rather than minting a
+third identity that would resolve against nothing else in the daemon. The same
+per-session identity reaches persisted locators through ordinary capture, so a
+Linux recording replays reliably within its session and is subject to axn/208 on
+the replay side beyond it.
+
 - The backend opens the accessibility bus itself and addresses every object by
   explicit destination on that single connection. `atspi`'s
   `AccessibilityConnection` is deliberately not used, and `atspi-connection` is
