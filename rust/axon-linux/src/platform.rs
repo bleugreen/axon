@@ -23,8 +23,11 @@ use atspi::{
 };
 use axon_core::{
     AppQuery, Application, BackendError, Capability, CapabilityInfo, CaptureBounds,
-    ChildPageCapture, ChildPageRequest, KeyboardIntent, Node, Observation, PlatformBackend, Rect,
-    Screenshot, Snapshot, SnapshotHandle, Window,
+    ChildPageCapture, ChildPageRequest, GlobalInputObserver, KeyboardIntent, Node, Observation,
+    ObserverQuiescence, PlatformBackend, RecordedAppIdentity, RecordedElementEvidence,
+    RecordedFocusedEvidence, RecordedInputEvent, RecordedPoint, RecordedSettleEvidence,
+    RecordedTargetEvidence, RecordingEvidenceProvider, RecordingScope, Rect, Screenshot, Snapshot,
+    SnapshotHandle, Window,
 };
 use std::{
     collections::{HashMap, HashSet},
@@ -137,6 +140,23 @@ enum Command {
     Set(SnapshotHandle, String, Reply<()>),
     Focus(SnapshotHandle, Reply<()>),
     Toolkit(String, Reply<Option<pixel::Toolkit>>),
+    /// Recording evidence: what the interface looked like at one screen point.
+    ///
+    /// Answered on this actor rather than on an accessibility-bus connection of the observer's
+    /// own, because one native worker per process is the discipline this crate is built on. The
+    /// observer holds a clone of this channel and asks at event time, which is the only time the
+    /// answer is true.
+    ///
+    /// The process comes with the point because AT-SPI cannot supply it: the bus exposes no
+    /// stacking order, so choosing between two applications whose windows both cover a point would
+    /// be a guess here. X11 answers it as a fact, and the observer asks X11 first.
+    PointEvidence(u32, (f64, f64), Reply<Option<RecordedTargetEvidence>>),
+    /// Recording evidence: the focused element and the complete value `setValue` authoring needs.
+    FocusedEvidence(u32, Reply<Option<RecordedFocusedEvidence>>),
+    /// Recording evidence: the application a process owns, named as `enumerate` names it.
+    RecordedIdentity(u32, Reply<Option<RecordedAppIdentity>>),
+    /// The deepest element at a screen point, for `hitTest`.
+    Hit(u32, (f64, f64), Reply<Option<Node>>),
     Extents(SnapshotHandle, Reply<Option<Rect>>),
 }
 
@@ -1244,6 +1264,18 @@ impl Actor {
                 }
                 Command::Extents(h, r) => {
                     let _ = r.send(self.extents(&h).await);
+                }
+                Command::PointEvidence(pid, point, r) => {
+                    let _ = r.send(self.point_evidence(pid, point).await);
+                }
+                Command::FocusedEvidence(pid, r) => {
+                    let _ = r.send(self.focused_evidence(pid).await);
+                }
+                Command::RecordedIdentity(pid, r) => {
+                    let _ = r.send(self.recorded_identity(pid).await);
+                }
+                Command::Hit(pid, point, r) => {
+                    let _ = r.send(self.hit(pid, point).await);
                 }
             }
         }
