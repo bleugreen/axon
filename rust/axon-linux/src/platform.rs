@@ -437,9 +437,51 @@ pub struct LinuxBackend {
     input: InputSession,
     screenshot: ScreenshotProvider,
     screen_capture: Option<ScreenCaptureProvider>,
+    /// A connection kept for asking the X server about the session rather than acting on it: what
+    /// process owns what is under a point.
+    ///
+    /// Its own connection because its availability is its own question. A session can answer that
+    /// and still refuse synthetic input, so borrowing the delivery provider's connection would
+    /// refuse a hit test for a reason that has nothing to do with hit testing.
+    lookup: Option<Box<X11Session>>,
+    /// Why this session cannot observe global input, or `None` when it can. Decided once from the
+    /// same facts every other provider is chosen from, so the capability census, the preflight,
+    /// and a `recording.start` that reached the observer cannot disagree.
+    observation: Option<(&'static str, &'static str)>,
+    /// Why a screen point cannot be resolved to an element, or `None` when it can.
+    point_lookup: Option<(&'static str, &'static str)>,
+    /// The recording seam. Held for the process's lifetime rather than built per session, because
+    /// it owns a clone of the AT-SPI actor's command channel and that channel is what lets it read
+    /// evidence at event time without opening a second accessibility-bus connection.
+    ///
+    /// `Option` only so `Drop` can release that clone before closing the channel.
+    global_input: Option<global_input::LinuxGlobalInputObserver>,
     /// AT-SPI identity to process id, read on demand and refreshed when stale or missed.
     identities: Vec<AppIdentity>,
     identities_read: Option<Instant>,
+}
+
+/// The typed refusal a caller is owed when this session cannot observe global input.
+///
+/// A `CapabilityReason` rather than a bare `Capability`, so the specific reason survives to the
+/// wire as `data.code`: a caller that only learned "unavailable" could not tell a Wayland session,
+/// where the answer is permanent, from an X server started without RECORD, where it is an option.
+fn observation_refusal(code: &'static str, reason: &'static str) -> BackendError {
+    BackendError::CapabilityReason {
+        capability: Capability::ObserveGlobalInput,
+        code,
+        reason: reason.into(),
+        diagnostic: None,
+    }
+}
+
+fn point_lookup_refusal(code: &'static str, reason: &'static str) -> BackendError {
+    BackendError::CapabilityReason {
+        capability: Capability::HitTest,
+        code,
+        reason: reason.into(),
+        diagnostic: None,
+    }
 }
 
 impl LinuxBackend {
@@ -476,7 +518,16 @@ impl LinuxBackend {
         // Missing desktop mechanisms are ordinary states: semantic capture runs on AT-SPI alone.
         // Probe once so input and screenshot provider selection cannot disagree about the session.
         let facts = session_facts();
+        let point_lookup = point_lookup_restriction(facts);
         Ok(Self {
+            global_input: Some(global_input::LinuxGlobalInputObserver::new(tx.clone())),
+            lookup: point_lookup
+                .is_none()
+                .then(X11Session::connect)
+                .flatten()
+                .map(Box::new),
+            observation: observation_restriction(facts),
+            point_lookup,
             tx,
             input: input_session(facts),
             screenshot: screenshot_provider(facts),
@@ -539,6 +590,24 @@ impl LinuxBackend {
             InputSession::Available(_) => None,
             InputSession::Unavailable(reason) => Some(reason),
         }
+    }
+
+    fn observer(&mut self) -> &mut global_input::LinuxGlobalInputObserver {
+        self.global_input
+            .as_mut()
+            .expect("the global input observer lives as long as the backend")
+    }
+
+    /// Which process owns whatever is under a screen point, or the reason this session cannot say.
+    pub(crate) fn process_at(&self, point: (f64, f64)) -> Result<Option<u32>, BackendError> {
+        if let Some((code, reason)) = self.point_lookup {
+            return Err(point_lookup_refusal(code, reason));
+        }
+        let session = self
+            .lookup
+            .as_ref()
+            .ok_or_else(|| point_lookup_refusal(NO_X_DISPLAY_CODE, NO_X_DISPLAY))?;
+        session.process_at((coordinate(point.0), coordinate(point.1)))
     }
 
     fn read_identities(&mut self) -> Result<(), BackendError> {
