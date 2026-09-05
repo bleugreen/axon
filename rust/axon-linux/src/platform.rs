@@ -2137,13 +2137,13 @@ impl Actor {
             return evidence;
         };
         evidence.role = timeout("role", proxy.get_role_name()).await.unwrap_or_default();
-        // The same mapping `node` uses, so evidence and capture describe an element with the same
-        // words: AT-SPI has one name where this project has both a title and a label.
+        // `title` and not `label`, because that is where `node` puts an AT-SPI name when it builds
+        // the snapshot this evidence will be matched against, and `node_matches` compares the two
+        // field by field. Splitting the one name AT-SPI publishes across both would match nothing.
         let name = timeout("name", proxy.name())
             .await
             .ok()
             .filter(|name| !name.is_empty());
-        evidence.label = name.clone();
         evidence.title = name;
         evidence.description = timeout("description", proxy.description())
             .await

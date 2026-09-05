@@ -21,7 +21,7 @@ use crate::recording::{
     ModifierState, RawEvent, RawInput, RawQueue, classify_keystroke, keysym_level, self_delivery,
     wheel_delta,
 };
-use crate::x11::Keyboard;
+use crate::x11::{Keyboard, X11Session};
 use crate::xrecord::RecordSession;
 use axon_core::{
     BackendError, GlobalInputObserver, RecordedAppIdentity, RecordedInputEvent, RecordedPoint,
@@ -78,12 +78,28 @@ fn ask<T>(
     rx.recv().ok()?.ok()
 }
 
+/// Which process owns what is under a screen point, or which owns the foreground.
+///
+/// X11 answers both and AT-SPI answers neither: the accessibility bus exposes no stacking order
+/// and no foreground, so an application resolved there would be a guess. The enrichment thread
+/// therefore keeps a connection of its own -- it runs on its own thread and cannot borrow the
+/// backend's -- and asks the actor about a process it has already established.
+fn process_at(lookup: Option<&X11Session>, point: (i16, i16)) -> Option<u32> {
+    lookup?.process_at(point).ok().flatten()
+}
+
+fn frontmost_process(lookup: Option<&X11Session>) -> Option<u32> {
+    lookup?.active_window_pid().ok().flatten()
+}
+
 fn point_evidence(
     commands: &mpsc::Sender<Command>,
+    lookup: Option<&X11Session>,
     point: (i16, i16),
 ) -> Option<RecordedTargetEvidence> {
+    let pid = process_at(lookup, point)?;
     ask(commands, |tx| {
-        Command::PointEvidence((f64::from(point.0), f64::from(point.1)), tx)
+        Command::PointEvidence(pid, (f64::from(point.0), f64::from(point.1)), tx)
     })
     .flatten()
 }
@@ -103,8 +119,12 @@ struct KeyContext {
     app: RecordedAppIdentity,
 }
 
-fn key_context(commands: &mpsc::Sender<Command>) -> Option<KeyContext> {
-    ask(commands, Command::ForegroundIdentity)
+fn key_context(
+    commands: &mpsc::Sender<Command>,
+    lookup: Option<&X11Session>,
+) -> Option<KeyContext> {
+    let pid = frontmost_process(lookup)?;
+    ask(commands, |tx| Command::RecordedIdentity(pid, tx))
         .flatten()
         .map(|app| KeyContext { app })
 }
@@ -113,6 +133,7 @@ fn key_context(commands: &mpsc::Sender<Command>) -> Option<KeyContext> {
 fn enrich(
     scope: &RecordingScope,
     commands: &mpsc::Sender<Command>,
+    lookup: Option<&X11Session>,
     keyboard: &Keyboard,
     raw: RawEvent,
 ) -> Option<RecordedInputEvent> {
@@ -123,7 +144,7 @@ fn enrich(
             let keystroke = classify_keystroke(modifiers, |level| {
                 keyboard.mapping.keysym_at(keycode, keysym_level(level))
             })?;
-            let context = key_context(commands)?;
+            let context = key_context(commands, lookup)?;
             scope
                 .accepts(&context.app)
                 .then_some(RecordedInputEvent::KeyDown {
@@ -133,7 +154,7 @@ fn enrich(
                 })
         }
         RawInput::Button { down, point } => {
-            let evidence = point_evidence(commands, point)?;
+            let evidence = point_evidence(commands, lookup, point)?;
             if !scope.accepts(&evidence.app) {
                 return None;
             }
@@ -161,7 +182,7 @@ fn enrich(
         }),
         RawInput::Wheel { button, point } => {
             let (delta_x, delta_y) = wheel_delta(button)?;
-            let evidence = point_evidence(commands, point)?;
+            let evidence = point_evidence(commands, lookup, point)?;
             if !scope.accepts(&evidence.app) {
                 return None;
             }
@@ -183,6 +204,7 @@ fn enrichment_thread(
     raw: Arc<RawQueue>,
     enriched: Arc<Enriched>,
 ) {
+    let lookup = X11Session::connect();
     loop {
         let batch = raw.drain(DRAIN_INTERVAL);
         if batch.dropped > 0 {
@@ -200,7 +222,7 @@ fn enrichment_thread(
             });
         }
         for event in batch.events {
-            if let Some(event) = enrich(&scope, &commands, &keyboard, event) {
+            if let Some(event) = enrich(&scope, &commands, lookup.as_ref(), &keyboard, event) {
                 enriched.offer(event);
             }
         }
