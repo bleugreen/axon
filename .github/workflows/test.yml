@@ -52,6 +52,13 @@ jobs:
       - name: Set up Bun
         uses: oven-sh/setup-bun@v2
 
+      # The oldest runtime the package's `engines` claims, so the clean-consumer import below
+      # proves the claim rather than restating it.
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
       # sdk/ts/src/generated.ts is derived from schema/tool-surface-v1.json the way that artifact
       # is derived from ToolSurfaceSpec.swift. Without this step a schema change lands a client
       # that silently describes the previous tool surface.
@@ -70,10 +77,12 @@ jobs:
         working-directory: sdk/ts
         run: bun test
 
-      # The package is published for Node as well as Bun, so the emitted JavaScript has to build.
-      - name: Build the TypeScript SDK
-        working-directory: sdk/ts
-        run: bun run build
+      # axon-cmd is published for Node as well as Bun, so the emitted JavaScript has to build --
+      # and what a release would upload is worth checking on every pull request rather than at tag
+      # time. This packs the tarball, asserts its contents and manifest against the tracked sources,
+      # and installs it into an empty consumer with --offline, so no step here reaches a registry.
+      - name: Build and inspect the npm package
+        run: ./scripts/check-sdk-ts-package
 
   sdk-python:
     name: Python SDK
@@ -109,9 +118,12 @@ jobs:
         working-directory: sdk/python
         run: pytest
 
-      - name: Build the Python SDK
-        working-directory: sdk/python
-        run: python -m build
+      # The release's own packaging step, run here so a packaging regression surfaces on the pull
+      # request that causes it. It builds the wheel and sdist, asserts their contents against the
+      # tracked sources and their metadata against what an index will display, then installs the
+      # wheel into an empty virtual environment with --no-index and imports it.
+      - name: Build and inspect the Python package
+        run: ./scripts/check-sdk-python-package
 
   swift:
     name: Swift
