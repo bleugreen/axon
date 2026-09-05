@@ -1657,7 +1657,13 @@ impl<
     }
 }
 
-impl<B: PointerTargetVerifier + BackgroundPixelInput> ToolDispatcher for Router<B> {
+impl<
+    B: PointerTargetVerifier
+        + BackgroundPixelInput
+        + axon_core::RecordingEvidenceProvider
+        + axon_core::ObserverQuiescence,
+> ToolDispatcher for Router<B>
+{
     fn set_observation_redaction_context(
         &mut self,
         context: axon_core::ObservationRedactionContext,
