@@ -1854,6 +1854,387 @@ impl Actor {
             Err(operation("focus", "provider rejected focus"))
         }
     }
+
+    // -- recording evidence and point lookup ---------------------------------------------------
+
+    /// The application a process owns, together with the identity a recording names it by.
+    ///
+    /// The name and not a bus address, because `UserActionRecorder::target` writes
+    /// `bundle_identifier.unwrap_or(name)` into the artifact's `app` field and replay resolves an
+    /// `AppQuery` against it. A recorded action has to call an application what `look` calls it;
+    /// axn/207 was exactly this divergence on macOS, where capture handed a resolver comparing
+    /// process ids a bundle identifier and every recording came back with nothing in it.
+    ///
+    /// `bundle_identifier` stays `None`, and that is a statement rather than an omission: this
+    /// backend has no durable application identity to put there. It spells one as an AT-SPI
+    /// identity, which is a unique bus name and a per-session object path, and names one by
+    /// whatever the toolkit publishes as the application name. Minting a third here would produce
+    /// artifacts that resolve against nothing else in the daemon.
+    async fn recorded_application(
+        &self,
+        pid: u32,
+    ) -> Result<Option<(ObjectRefOwned, RecordedAppIdentity)>, BackendError> {
+        let query = AppQuery {
+            process_id: Some(pid),
+            name: None,
+            identifier: None,
+        };
+        Ok(self.select(&query).await?.map(|(object, name)| {
+            let app = RecordedAppIdentity {
+                name,
+                bundle_identifier: None,
+                process_id: Some(pid),
+            };
+            (object, app)
+        }))
+    }
+
+    async fn recorded_identity(
+        &self,
+        pid: u32,
+    ) -> Result<Option<RecordedAppIdentity>, BackendError> {
+        Ok(self.recorded_application(pid).await?.map(|(_, app)| app))
+    }
+
+    async fn state_of(&self, object: &ObjectRefOwned) -> Option<atspi::StateSet> {
+        let proxy = timeout(
+            "accessible proxy",
+            object.as_accessible_proxy(&self.connection),
+        )
+        .await
+        .ok()?;
+        timeout("state", proxy.get_state()).await.ok()
+    }
+
+    async fn name_of(&self, object: &ObjectRefOwned) -> Option<String> {
+        let proxy = timeout(
+            "accessible proxy",
+            object.as_accessible_proxy(&self.connection),
+        )
+        .await
+        .ok()?;
+        timeout("name", proxy.name())
+            .await
+            .ok()
+            .filter(|name| !name.is_empty())
+    }
+
+    /// The centre of an element on screen, for the point a recording falls back to.
+    async fn centre_of(&self, object: &ObjectRefOwned) -> Option<RecordedPoint> {
+        let proxy = timeout(
+            "accessible proxy",
+            object.as_accessible_proxy(&self.connection),
+        )
+        .await
+        .ok()?;
+        let component = timeout(
+            "component interface",
+            timeout("interfaces", proxy.proxies()).await.ok()?.component(),
+        )
+        .await
+        .ok()?;
+        let (x, y, width, height) = timeout("extents", component.get_extents(CoordType::Screen))
+            .await
+            .ok()?;
+        (width > 0 && height > 0).then(|| RecordedPoint {
+            x: f64::from(x) + f64::from(width) / 2.0,
+            y: f64::from(y) + f64::from(height) / 2.0,
+        })
+    }
+
+    /// One element, described in the portable terms a recording is made of.
+    ///
+    /// Native references never cross this boundary: everything here is a string a fresh capture of
+    /// the same interface could be matched against, which is what lets a recorded target be
+    /// re-resolved later against a tree this one knows nothing about.
+    async fn element_evidence(
+        &self,
+        object: &ObjectRefOwned,
+        window_title: Option<&str>,
+    ) -> RecordedElementEvidence {
+        let mut evidence = RecordedElementEvidence {
+            identifier: Some(identity(object)),
+            window_title: window_title.map(str::to_owned),
+            ..Default::default()
+        };
+        let Ok(proxy) = timeout(
+            "accessible proxy",
+            object.as_accessible_proxy(&self.connection),
+        )
+        .await
+        else {
+            return evidence;
+        };
+        evidence.role = timeout("role", proxy.get_role_name()).await.unwrap_or_default();
+        // The same mapping `node` uses, so evidence and capture describe an element with the same
+        // words: AT-SPI has one name where this project has both a title and a label.
+        let name = timeout("name", proxy.name())
+            .await
+            .ok()
+            .filter(|name| !name.is_empty());
+        evidence.label = name.clone();
+        evidence.title = name;
+        evidence.description = timeout("description", proxy.description())
+            .await
+            .ok()
+            .filter(|description| !description.is_empty());
+        evidence.sensitive =
+            crate::recording::is_sensitive(&evidence.role, evidence.description.as_deref());
+        let Ok(proxies) = timeout("interfaces", proxy.proxies()).await else {
+            return evidence;
+        };
+        if let Ok(action) = timeout("action interface", proxies.action()).await {
+            evidence.actions = timeout("actions", action.get_actions())
+                .await
+                .map(|actions| actions.into_iter().map(|action| action.name).collect())
+                .unwrap_or_default();
+        }
+        // Read only after the element has been classified, and skipped entirely when it is
+        // sensitive. The rule the observer sensitivity contract states is that a credential is
+        // never *read*, not that it is read and then dropped -- see `axon_core::evidence_value`,
+        // which states the same rule where the read is synchronous.
+        if !evidence.sensitive
+            && let Ok(text) = timeout("text interface", proxies.text()).await
+        {
+            evidence.value = timeout("text", text.get_text(0, -1)).await.ok();
+        }
+        evidence
+    }
+
+    /// The ancestry a recording carries, nearest first, capped at [`RECORDED_ANCESTRY`].
+    async fn ancestry_evidence(
+        &self,
+        chain: &[ObjectRefOwned],
+        window_title: Option<&str>,
+    ) -> Vec<RecordedElementEvidence> {
+        let mut candidates = Vec::new();
+        for object in chain.iter().rev().take(RECORDED_ANCESTRY) {
+            candidates.push(self.element_evidence(object, window_title).await);
+        }
+        candidates
+    }
+
+    /// The application's top-level windows, the one that says it is active first.
+    ///
+    /// Ordering rather than filtering: an application whose provider sets `STATE_ACTIVE` on nothing
+    /// still has windows worth looking in, and a search that insisted on the state would find
+    /// nothing at all there.
+    async fn frames(&self, root: &ObjectRefOwned) -> Vec<ObjectRefOwned> {
+        let (frames, _) = published(self.children(root).await.unwrap_or_default());
+        let mut ordered: Vec<ObjectRefOwned> = Vec::with_capacity(frames.len());
+        for frame in frames {
+            let active = self
+                .state_of(&frame)
+                .await
+                .is_some_and(|state| state.contains(State::Active));
+            if active {
+                ordered.insert(0, frame);
+            } else {
+                ordered.push(frame);
+            }
+        }
+        ordered
+    }
+
+    /// The chain from a top-level window down to the deepest element at a screen point.
+    ///
+    /// Window first and leaf last, because shared core resolves the nearest *actionable* ancestor
+    /// and needs what is above the leaf to do it.
+    ///
+    /// `GetAccessibleAtPoint` answers with a direct child rather than the deepest hit, so reaching
+    /// a leaf means asking repeatedly until the provider stops descending. Screen coordinates are
+    /// asked for first because that is the frame the event arrived in; a provider that answers only
+    /// in window coordinates -- the AT-SPI proxies' own documentation warns that some do -- is
+    /// asked again relative to the window it is in rather than being written off.
+    async fn point_chain(&self, root: &ObjectRefOwned, point: (f64, f64)) -> Vec<ObjectRefOwned> {
+        let x = point.0.round() as i32;
+        let y = point.1.round() as i32;
+        for frame in self.frames(root).await {
+            let mut chain = vec![frame.clone()];
+            let mut current = frame;
+            for _ in 0..MAX_POINT_DESCENT {
+                let Some(child) = self.child_at_point(&current, x, y).await else {
+                    break;
+                };
+                if child.path_as_str() == current.path_as_str() {
+                    break;
+                }
+                chain.push(child.clone());
+                current = child;
+            }
+            // A window that answered with nothing is one the point is not in, which is the
+            // ordinary case for every window of the application except one.
+            if chain.len() > 1 {
+                return chain;
+            }
+        }
+        Vec::new()
+    }
+
+    async fn child_at_point(
+        &self,
+        object: &ObjectRefOwned,
+        x: i32,
+        y: i32,
+    ) -> Option<ObjectRefOwned> {
+        let proxy = timeout(
+            "accessible proxy",
+            object.as_accessible_proxy(&self.connection),
+        )
+        .await
+        .ok()?;
+        let component = timeout(
+            "component interface",
+            timeout("interfaces", proxy.proxies()).await.ok()?.component(),
+        )
+        .await
+        .ok()?;
+        let answered = timeout(
+            "point lookup",
+            component.get_accessible_at_point(x, y, CoordType::Screen),
+        )
+        .await
+        .ok()
+        .filter(|child| !child.is_null());
+        if answered.is_some() {
+            return answered;
+        }
+        let (origin_x, origin_y, _, _) = timeout("extents", component.get_extents(CoordType::Screen))
+            .await
+            .ok()?;
+        timeout(
+            "point lookup",
+            component.get_accessible_at_point(x - origin_x, y - origin_y, CoordType::Window),
+        )
+        .await
+        .ok()
+        .filter(|child| !child.is_null())
+    }
+
+    /// The chain from a top-level window down to whatever holds focus, window first.
+    ///
+    /// **AT-SPI has no query for the focused element.** There is no equivalent of macOS's
+    /// `AXFocusedUIElement` or of UI Automation's `GetFocusedElement`; the only mechanisms the bus
+    /// offers are the focus *event* an assistive technology subscribes to, which this backend's
+    /// actor cannot service while it is answering commands, and asking objects whether they say
+    /// they are focused. So this searches, depth first, from the active window outwards.
+    ///
+    /// Bounded by the same node and depth limits a capture walk uses, because it is the same kind
+    /// of walk over the same trees, and pruned by what a provider says is on screen: a subtree
+    /// nobody can see holds nothing the user just typed into.
+    async fn focus_chain(&self, root: &ObjectRefOwned) -> Vec<ObjectRefOwned> {
+        let mut budget = MAX_NODES;
+        let mut stack: Vec<Vec<ObjectRefOwned>> = self
+            .frames(root)
+            .await
+            .into_iter()
+            .rev()
+            .map(|frame| vec![frame])
+            .collect();
+        while let Some(chain) = stack.pop() {
+            if budget == 0 {
+                break;
+            }
+            budget -= 1;
+            let Some(object) = chain.last() else { continue };
+            let state = self.state_of(object).await;
+            if state
+                .as_ref()
+                .is_some_and(|state| state.contains(State::Focused))
+            {
+                return chain;
+            }
+            // Pruned only on a positive statement that this subtree is off screen. A provider that
+            // answered nothing at all is descended into rather than written off, because losing a
+            // subtree here means transcribing a password as plain text further up.
+            if state.as_ref().is_some_and(|state| {
+                !state.contains(State::Showing) && !state.contains(State::Visible)
+            }) {
+                continue;
+            }
+            if chain.len() >= MAX_DEPTH {
+                continue;
+            }
+            let (children, _) = published(self.children(object).await.unwrap_or_default());
+            for child in children.into_iter().rev() {
+                let mut next = chain.clone();
+                next.push(child);
+                stack.push(next);
+            }
+        }
+        Vec::new()
+    }
+
+    async fn point_evidence(
+        &self,
+        pid: u32,
+        point: (f64, f64),
+    ) -> Result<Option<RecordedTargetEvidence>, BackendError> {
+        let Some((root, app)) = self.recorded_application(pid).await? else {
+            return Ok(None);
+        };
+        let chain = self.point_chain(&root, point).await;
+        let window_title = match chain.first() {
+            Some(frame) => self.name_of(frame).await,
+            None => None,
+        };
+        // A lookup that found nothing is not a failed recording. The event still happened, and an
+        // evidence record carrying only its application and point still authors as a point target,
+        // which is what shared core falls back to anyway when no candidate resolves.
+        Ok(Some(RecordedTargetEvidence {
+            candidates: self.ancestry_evidence(&chain, window_title.as_deref()).await,
+            app,
+            point: RecordedPoint {
+                x: point.0,
+                y: point.1,
+            },
+        }))
+    }
+
+    async fn focused_evidence(
+        &self,
+        pid: u32,
+    ) -> Result<Option<RecordedFocusedEvidence>, BackendError> {
+        let Some((root, app)) = self.recorded_application(pid).await? else {
+            return Ok(None);
+        };
+        let chain = self.focus_chain(&root).await;
+        let Some(focused) = chain.last().cloned() else {
+            return Ok(None);
+        };
+        let window_title = match chain.first() {
+            Some(frame) => self.name_of(frame).await,
+            None => None,
+        };
+        let candidates = self.ancestry_evidence(&chain, window_title.as_deref()).await;
+        Ok(Some(RecordedFocusedEvidence {
+            value: candidates.first().and_then(|nearest| nearest.value.clone()),
+            target: RecordedTargetEvidence {
+                app,
+                // The centre of the focused element, so the point fallback a sensitive or
+                // unresolvable field lands on is somewhere a replay could actually click.
+                point: self.centre_of(&focused).await.unwrap_or_default(),
+                candidates,
+            },
+        }))
+    }
+
+    async fn hit(&self, pid: u32, point: (f64, f64)) -> Result<Option<Node>, BackendError> {
+        let Some((root, _)) = self.recorded_application(pid).await? else {
+            return Ok(None);
+        };
+        let chain = self.point_chain(&root, point).await;
+        let Some(deepest) = chain.last().cloned() else {
+            return Ok(None);
+        };
+        // Depth zero: the element under the point, not the tree beneath it. A caller wanting that
+        // asks `look` for the application, which is the walk built for it.
+        let mut remaining = 1;
+        let mut refs = Vec::new();
+        self.node(deepest, 0, 0, &mut remaining, &mut refs)
+            .await
+            .map(Some)
+    }
 }
 async fn timeout<T, E>(
     name: &str,
