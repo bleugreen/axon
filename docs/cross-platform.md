@@ -71,7 +71,9 @@ Semantic access uses AT-SPI. X11 window screenshots use direct X11 capture witho
 
 External MCP clients should launch the resolved absolute form of `~/.local/lib/axon/current/axon-linux mcp`; the installer prints ready-to-run registration commands. The installer atomically repoints this symlink on upgrade while systemd continues to name the immutable versioned executable.
 
-Across Linux backends, delta scrolling, drag, change observation, and session recording are not yet available. Chromium-family apps also require the desktop accessibility switch to be enabled before they appear on the AT-SPI bus.
+Session recording works on X11 and is refused on Wayland. It reads the input stream through the X11 RECORD extension and describes what each event hit through AT-SPI, so it needs an X session whose server provides RECORD; a Wayland session refuses `recording.start` with `wayland-restricted`, because Wayland delivers input only to the surface it is aimed at and offers no listen-only global input protocol to ask for the rest. Input this daemon posts itself is excluded from what it records.
+
+Across Linux backends, delta scrolling, drag, and change observation are not yet available. Chromium-family apps also require the desktop accessibility switch to be enabled before they appear on the AT-SPI bus.
 
 For the exact status of the running service, use:
 
