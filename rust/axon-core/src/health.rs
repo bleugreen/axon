@@ -59,6 +59,9 @@ pub mod reason {
     pub const NO_WINDOW_MANAGER: &str = "no-window-manager";
     /// The X server does not provide the XTEST extension, so synthetic input cannot be posted.
     pub const NO_XTEST: &str = "no-xtest";
+    /// The X server does not provide the RECORD extension, so input this daemon did not send
+    /// cannot be observed. Like `no-xtest`, a server option rather than a build limitation.
+    pub const NO_RECORD_EXTENSION: &str = "no-record-extension";
     pub const NOT_IMPLEMENTED: &str = "not-implemented";
     /// The state could not be determined and no more specific code applies.
     pub const UNKNOWN: &str = "unknown";
@@ -340,6 +343,8 @@ fn classify_restriction(restriction: &str) -> &'static str {
         reason::NO_WINDOW_MANAGER
     } else if lowered.contains("xtest") {
         reason::NO_XTEST
+    } else if lowered.contains("record extension") {
+        reason::NO_RECORD_EXTENSION
     } else if lowered.contains("no x display") {
         reason::NO_X_DISPLAY
     } else {

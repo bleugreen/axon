@@ -30,7 +30,7 @@ use axon_core::{
     ObserverQuiescence, PlatformBackend, RecordedAppIdentity, RecordedElementEvidence,
     RecordedFocusedEvidence, RecordedInputEvent, RecordedPoint, RecordedSettleEvidence,
     RecordedTargetEvidence, RecordingEvidenceProvider, RecordingScope, Rect, Screenshot, Snapshot,
-    SnapshotHandle, Window,
+    SnapshotHandle, Window, reason,
 };
 use std::{
     collections::{HashMap, HashSet},
@@ -102,18 +102,6 @@ const NO_RECORD: &str = "this X server does not provide the RECORD extension, so
 const WAYLAND_OBSERVATION: &str = "this is a Wayland session: the compositor delivers input only \
      to the surface it is aimed at, and there is no listen-only global input protocol to ask it \
      for the rest -- by design rather than by omission";
-const NO_POINT_LOOKUP: &str = "this X11 session has no EWMH-capable window manager, so a screen \
-     point cannot be tied back to the application that owns what is under it";
-
-/// The stable code each refusal carries on the wire, beside its prose reason.
-///
-/// A caller that only learned "unavailable" could not tell a Wayland session from an X11 one
-/// missing an extension, which are different situations with different answers -- one is permanent
-/// and one is a server option.
-const WAYLAND_RESTRICTED: &str = "wayland-restricted";
-const NO_X_DISPLAY_CODE: &str = "no-x-display";
-const NO_RECORD_CODE: &str = "no-record-extension";
-const NO_WINDOW_MANAGER_CODE: &str = "no-window-manager";
 
 /// How far out from a recorded event this backend looks for something worth naming.
 ///
@@ -339,33 +327,32 @@ fn input_restriction(facts: SessionFacts) -> Option<&'static str> {
 /// costs the click its semantic target and not the recording its existence.
 fn observation_restriction(facts: SessionFacts) -> Option<(&'static str, &'static str)> {
     if facts.wayland {
-        return Some((WAYLAND_RESTRICTED, WAYLAND_OBSERVATION));
+        return Some((reason::WAYLAND_RESTRICTED, WAYLAND_OBSERVATION));
     }
     if !facts.x_display {
-        return Some((NO_X_DISPLAY_CODE, NO_X_DISPLAY));
+        return Some((reason::NO_X_DISPLAY, NO_X_DISPLAY));
     }
     if !facts.record {
-        return Some((NO_RECORD_CODE, NO_RECORD));
+        return Some((reason::NO_RECORD_EXTENSION, NO_RECORD));
     }
     None
 }
 
 /// Why a screen point cannot be resolved to an element, or `None` when it can.
 ///
-/// Not the same question as synthetic input, and the difference is XTEST: looking up what is under
-/// a point needs a display and a window manager's `_NET_CLIENT_LIST` to tie a window to a process,
-/// and needs nothing at all to post with. A session that can see but not type is a real session,
-/// and reusing [`input_restriction`] here would refuse a hit test on it for a reason that is about
-/// something else.
+/// Not the same question as synthetic input, and the difference is XTEST: naming what is under a
+/// point reads the window tree and needs nothing to post with. A session that can see but not type
+/// is a real session, and reusing [`input_restriction`] here would refuse a hit test on it for a
+/// reason that is about something else.
+///
+/// No window manager is required either. The process is read from the client's own `_NET_WM_PID`,
+/// which an application sets on itself, rather than from the manager's `_NET_CLIENT_LIST`.
 fn point_lookup_restriction(facts: SessionFacts) -> Option<(&'static str, &'static str)> {
     if facts.wayland {
-        return Some((WAYLAND_RESTRICTED, WAYLAND_SESSION));
+        return Some((reason::WAYLAND_RESTRICTED, WAYLAND_SESSION));
     }
     if !facts.x_display {
-        return Some((NO_X_DISPLAY_CODE, NO_X_DISPLAY));
-    }
-    if !facts.window_manager {
-        return Some((NO_WINDOW_MANAGER_CODE, NO_POINT_LOOKUP));
+        return Some((reason::NO_X_DISPLAY, NO_X_DISPLAY));
     }
     None
 }
@@ -609,7 +596,7 @@ impl LinuxBackend {
         let session = self
             .lookup
             .as_ref()
-            .ok_or_else(|| point_lookup_refusal(NO_X_DISPLAY_CODE, NO_X_DISPLAY))?;
+            .ok_or_else(|| point_lookup_refusal(reason::NO_X_DISPLAY, NO_X_DISPLAY))?;
         session.process_at((coordinate(point.0), coordinate(point.1)))
     }
 
@@ -882,7 +869,7 @@ impl GlobalInputObserver for LinuxBackend {
         let keyboard = self
             .lookup
             .as_ref()
-            .ok_or_else(|| observation_refusal(NO_X_DISPLAY_CODE, NO_X_DISPLAY))?
+            .ok_or_else(|| observation_refusal(reason::NO_X_DISPLAY, NO_X_DISPLAY))?
             .keyboard_layout()?;
         self.observer().start(scope, keyboard)
     }
