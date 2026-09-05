@@ -169,6 +169,108 @@ job's ability to sign. The configuration it reads:
 Windows release signing is mandatory: missing signing configuration or an invalid or untimestamped
 signature fails the release job.
 
+## The SDK packages
+
+The two daemon clients are published together under one name, `axon-cmd`: the wheel and sdist built
+from `sdk/python` go to PyPI, and the tarball built from `sdk/ts` goes to npm. They are part of the
+Axon release rather than a lifecycle of their own — same `VERSION`, same commit, same workflow run
+— because `Axon.connect()` compares the daemon's version against the one its generated client was
+built from, and a client released on its own schedule would make that comparison meaningless.
+
+The `Build SDK packages` job runs on every release, publishing or not. It builds both packages and
+hands each to its packaging check, which asserts the artifact's contents against the tracked
+sources, asserts the metadata an index will display, and installs the artifact into an empty
+environment to prove it imports. A dry run therefore exercises everything a real release does up to
+the moment of upload. The same two checks run on every pull request, so a packaging regression is
+found by the change that causes it; neither reaches a registry.
+
+What those jobs inspect is what the publish jobs upload. The checks take an output directory, the
+release points them at one, and the publish jobs upload those files rather than rebuilding — so no
+artifact is published that was not inspected.
+
+### Trusted publishing
+
+Neither registry credential exists in this repository. Each publish job presents a GitHub OIDC
+token and receives a short-lived, workflow-scoped upload token in return, the same arrangement the
+Windows signing job has with Azure. `id-token: write` is granted per job rather than workflow-wide,
+and the workflow's default permission is now read.
+
+| Registry | Publisher identity |
+| --- | --- |
+| PyPI | project `axon-cmd`, repository `bleugreen/axon`, workflow `release.yml`, environment `pypi` |
+| npm | package `axon-cmd`, organization/user `bleugreen`, repository `axon`, workflow `release.yml`, environment `npm` |
+
+Those values are matched exactly and case-sensitively at publish time, and neither registry
+validates them when they are saved. Renaming the workflow file or an environment silently revokes
+the ability to publish until the registry-side configuration is updated to match.
+
+Both uploads carry provenance. PyPI receives PEP 740 attestations signed with the same identity
+that authorized the upload; npm generates provenance automatically for a trusted publish from a
+public repository, and `publishConfig` in `sdk/ts/package.json` pins public access and provenance
+so a publish by any other route cannot quietly drop either.
+
+### Retrying a release
+
+A published version is immutable on both registries: it can never be overwritten, only matched or
+contradicted. So a release re-run after a partial failure asks a better question than "does this
+version exist" — `scripts/verify-published-sdk` asks whether what the registry serves is what this
+build produced, comparing file by file inside each artifact rather than byte by byte over the
+archive, since two archives with identical contents can still differ in gzip framing and recorded
+timestamps.
+
+Its three answers drive the release:
+
+- **Not published yet.** Upload.
+- **Published, contents match.** Skip the upload; that work is already done.
+- **Published, contents differ.** Stop. Publishing again cannot fix it, so the release is either
+  being re-run from the wrong commit or genuinely needs a new `VERSION`.
+
+The same check runs again after each upload, because a registry accepts an upload before it serves
+it, and once more from the release job before the GitHub release is created. That last one is the
+completion gate: the release is not cut while either registry is missing its package.
+
+### One-time setup
+
+PyPI and npm differ on whether a package name can be brought into existence by a workflow, and that
+difference decides the order of operations for each.
+
+**PyPI** supports a *pending* trusted publisher, registered under the account's Publishing page
+rather than a project's, which creates the project on first use. No manual upload is needed. The
+form takes:
+
+| Field | Value |
+| --- | --- |
+| PyPI Project Name | `axon-cmd` |
+| Owner | `bleugreen` |
+| Repository name | `axon` |
+| Workflow name | `release.yml` |
+| Environment name | `pypi` |
+
+A pending publisher reserves nothing. If another account registers `axon-cmd` before the first
+publish lands, the pending publisher is invalidated and the name is gone.
+
+**npm** has no equivalent: a trusted publisher is configured in an existing package's settings, so
+`axon-cmd` has to exist on npm before automated publishing can work at all. A maintainer publishes
+once by hand, then fills in Trusted Publisher under the package's settings:
+
+| Field | Value |
+| --- | --- |
+| Organization or user | `bleugreen` |
+| Repository | `axon` |
+| Workflow filename | `release.yml` |
+| Environment name | `npm` |
+| Allowed actions | `npm publish` (the release job publishes directly rather than staging) |
+
+Afterwards, set Settings → Publishing access to require two-factor authentication and disallow
+tokens. Trusted publishing keeps working, because it is not token authentication, and the manual
+credential that bootstrapped the package stops being a way in.
+
+Both environments, `pypi` and `npm`, must exist in the repository's GitHub settings. They carry no
+secrets — the only credential either job has is the OIDC token GitHub mints for it — but the
+environment name is part of the identity each registry checks, so a missing or renamed environment
+is a publish failure rather than a warning. They are also where a required reviewer would go if a
+release should pause for approval before it uploads.
+
 ## Homebrew Cask
 
 The intended tap command is:

@@ -7,9 +7,9 @@ from typing import Any
 
 import pytest
 
-from axon import Axon, AxonError, AxonRpcError, AxonWarning, SocketTransport
-from axon._generated import SCHEMA_PRODUCT_VERSION
-from axon.client import RawAxonClient
+from axon_cmd import Axon, AxonError, AxonRpcError, AxonWarning, SocketTransport
+from axon_cmd._generated import SCHEMA_PRODUCT_VERSION
+from axon_cmd.client import RawAxonClient
 
 from .daemon import (
     FakeDaemon,

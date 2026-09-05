@@ -11,12 +11,12 @@ from typing import Any
 
 import pytest
 
-from axon._generated import AVAILABILITY, SCHEMA_PRODUCT_VERSION, RawClient
-from axon.client import RawAxonClient
+from axon_cmd._generated import AVAILABILITY, SCHEMA_PRODUCT_VERSION, RawClient
+from axon_cmd.client import RawAxonClient
 
 ROOT = Path(__file__).resolve().parents[3]
 SCHEMA_PATH = ROOT / "schema" / "tool-surface-v1.json"
-GENERATED_PATH = ROOT / "sdk" / "python" / "axon" / "_generated.py"
+GENERATED_PATH = ROOT / "sdk" / "python" / "axon_cmd" / "_generated.py"
 
 SURFACE: dict[str, Any] = json.loads(SCHEMA_PATH.read_text(encoding="utf-8"))
 TOOLS: list[dict[str, Any]] = SURFACE["tools"]

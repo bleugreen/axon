@@ -18,7 +18,7 @@ const renderers: Record<Language, (surface: ReturnType<typeof parseToolSurface>)
 /** Where each language's client is committed, and so what its drift check compares against. */
 export const outputPaths: Record<Language, string> = {
   typescript: resolve(root, "sdk/ts/src/generated.ts"),
-  python: resolve(root, "sdk/python/axon/_generated.py"),
+  python: resolve(root, "sdk/python/axon_cmd/_generated.py"),
 };
 
 /** Retained for the TypeScript tests that name their own output before the language split. */

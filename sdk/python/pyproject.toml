@@ -1,29 +1,58 @@
 [build-system]
-requires = ["hatchling"]
+# Floored rather than unpinned: the SPDX `license` string below is PEP 639 metadata, which older
+# hatchling releases reject outright.
+requires = ["hatchling>=1.27"]
 build-backend = "hatchling.build"
 
 [project]
-name = "axon-sdk"
+name = "axon-cmd"
 version = "0.3.6"
-description = "Dependency-free Python client for the Axon desktop automation daemon"
+description = "Programmatic Python and TypeScript clients for sending commands to a local Axon daemon."
 readme = "README.md"
 requires-python = ">=3.11"
-license = { text = "MIT" }
+# An SPDX expression rather than a bundled file. The licence text lives once, at the repository
+# root, and `Repository` below is how a consumer reaches it; PEP 639 also forbids a `License ::`
+# classifier alongside this field.
+license = "MIT"
+keywords = ["accessibility", "automation", "axon", "desktop", "gui", "rpc", "ui"]
 # Nothing at runtime: the client speaks JSON-RPC over a stdlib socket, and its types come from
 # typing.Required and typing.NotRequired, which is what sets the 3.11 floor.
 dependencies = []
 classifiers = [
+  "Development Status :: 4 - Beta",
+  "Intended Audience :: Developers",
+  "Operating System :: MacOS",
+  "Operating System :: Microsoft :: Windows",
+  "Operating System :: POSIX :: Linux",
   "Programming Language :: Python :: 3.11",
   "Programming Language :: Python :: 3.12",
   "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
+  "Topic :: Software Development :: Testing",
   "Typing :: Typed",
 ]
+
+[project.urls]
+Homepage = "https://axn.dev"
+Repository = "https://github.com/bleugreen/axon"
+Issues = "https://github.com/bleugreen/axon/issues"
+Documentation = "https://github.com/bleugreen/axon/blob/main/docs/embedding.md"
 
 [project.optional-dependencies]
 dev = ["pytest>=8", "pyright>=1.1.390"]
 
 [tool.hatch.build.targets.wheel]
-packages = ["axon"]
+packages = ["axon_cmd"]
+
+# The tests read sdk/fixtures and schema/fixtures, which are repository paths rather than package
+# data, so they cannot run from an unpacked sdist. Shipping them would ship something that cannot
+# work: the sdist carries the client, its metadata, and its README.
+#
+# Hatchling force-includes the nearest .gitignore into every sdist, and it walks up to find one.
+# The `sdk/python/.gitignore` beside this file is therefore load-bearing: without it a published
+# sdist would carry the whole repository's ignore list, and `ignore-vcs` does not suppress it.
+[tool.hatch.build.targets.sdist]
+include = ["axon_cmd", "README.md"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

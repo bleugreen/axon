@@ -1,5 +1,5 @@
 {
-  "name": "@axon/sdk-generator",
+  "name": "axon-cmd-generator",
   "private": true,
   "type": "module",
   "description": "Generates per-language Axon clients from schema/tool-surface-v1.json"

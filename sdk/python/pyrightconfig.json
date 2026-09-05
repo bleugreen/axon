@@ -1,5 +1,5 @@
 {
-  "include": ["axon", "tests"],
+  "include": ["axon_cmd", "tests"],
   "pythonVersion": "3.11",
   "typeCheckingMode": "strict",
   "reportMissingTypeStubs": "none",

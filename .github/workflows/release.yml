@@ -1,9 +1,16 @@
-# A release is one product version built natively on three platforms and published together.
+# A release is one product version built natively on three platforms, published together with the
+# two SDKs that speak to it.
 #
 # The tag is the release identity and must agree with the checked-in VERSION file; a tag that
 # disagrees is rejected rather than quietly producing artifacts named after something else.
 # Publishing is a separate job that runs only after all three native builds succeed, so a release
-# can never exist with two of its three targets missing.
+# can never exist with two of its three targets missing. The SDKs are held to the same rule: they
+# carry the same VERSION, they are built from the same commit, and the GitHub release is not cut
+# until PyPI and npm both serve them.
+#
+# Every upload here is authenticated by a short-lived identity rather than a stored credential:
+# GitHub OIDC to Azure for Windows signing, to PyPI for the wheel, and to npm for the tarball. The
+# `id-token: write` permission that mints those identities is granted per job, never workflow-wide.
 name: Release
 
 on:
@@ -17,8 +24,10 @@ on:
     tags:
       - "v*"
 
+# Read by default. Only the job that creates the GitHub release needs to write, and only the jobs
+# that authenticate to an external service need to mint an identity token.
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   version:
@@ -317,24 +326,248 @@ jobs:
             dist/axon-linux-${{ needs.version.outputs.version }}-linux-x86_64.tar.gz.sha256
           if-no-files-found: error
 
-  publish:
-    name: Publish release
-    needs: [version, macos, windows, linux]
+  # The SDKs are part of the release rather than a lifecycle of their own: same VERSION, same
+  # commit, same run. This job builds and inspects both packages and publishes nothing, so a dry
+  # run exercises the entire path a real release takes right up to the moment of upload.
+  sdks:
+    name: Build SDK packages
+    needs: version
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
 
+      - uses: oven-sh/setup-bun@v2
+
+      # The floors the two packages claim, so the clean-consumer installs below prove the claims
+      # rather than restating them. The npm publish job runs a newer Node on purpose; that one is
+      # the publisher's requirement, not the package's.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install the Python build frontend
+        run: python -m pip install --upgrade build
+
+      # Each script asserts what its artifact contains, asserts the metadata an index will display,
+      # and proves the artifact installs and imports in an empty environment. Passing an output
+      # directory keeps the inspected files, and those exact files are what the publish jobs upload:
+      # nothing is rebuilt between inspection and publication.
+      - name: Build and inspect the Python package
+        run: ./scripts/check-sdk-python-package dist/sdk-python
+
+      - name: Build and inspect the npm package
+        run: ./scripts/check-sdk-ts-package dist/sdk-ts
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sdk-python
+          path: dist/sdk-python
+          if-no-files-found: error
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: sdk-ts
+          path: dist/sdk-ts
+          if-no-files-found: error
+
+  # PyPI trusted publishing: the job proves who it is with a GitHub OIDC token and PyPI mints a
+  # short-lived upload token in exchange. No API token is stored in this repository, and
+  # `id-token: write` is scoped to this job so no other job can mint that identity. The `pypi`
+  # environment is part of the identity PyPI checks, so removing or renaming it revokes this job's
+  # ability to publish.
+  publish-pypi:
+    name: Publish axon-cmd to PyPI
+    needs: [version, macos, windows, linux, sdks]
+    if: needs.version.outputs.publish == 'true'
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
       - uses: actions/download-artifact@v4
         with:
-          path: artifacts
+          name: sdk-python
+          path: dist
+
+      # A release that failed after PyPI accepted the upload must be re-runnable. A published
+      # version is immutable, so the question is not whether the version exists but whether what it
+      # holds is what this build produced: matching contents mean the work is already done, and
+      # differing contents are a hard stop that publishing again could not fix.
+      - name: Decide whether PyPI still needs this version
+        id: state
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          # `set +e` on purpose: the runner invokes this shell with -e, and the whole point of this
+          # step is to read an exit status that is deliberately non-zero.
+          set +e
+          ./scripts/verify-published-sdk pypi \
+            "dist/axon_cmd-$VERSION-py3-none-any.whl" \
+            "dist/axon_cmd-$VERSION.tar.gz"
+          STATUS=$?
+          set -e
+          case "$STATUS" in
+            0) echo "upload=false" >> "$GITHUB_OUTPUT" ;;
+            10) echo "upload=true" >> "$GITHUB_OUTPUT" ;;
+            *) exit "$STATUS" ;;
+          esac
+
+      - name: Publish to PyPI
+        if: steps.state.outputs.upload == 'true'
+        uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          packages-dir: dist
+          # PEP 740 attestations, signed with the same trusted-publisher identity that authorizes
+          # the upload.
+          attestations: true
+          # The decision above already established that this version is absent. The only way a file
+          # can exist by the time the upload lands is a concurrent run, and the verification below
+          # is what decides whether that outcome is acceptable.
+          skip-existing: true
+
+      # Accepting an upload is not the same as serving it. The release may not proceed until the
+      # index actually returns these files with these contents.
+      - name: Verify PyPI serves what was built
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          ./scripts/verify-published-sdk --wait 300 pypi \
+            "dist/axon_cmd-$VERSION-py3-none-any.whl" \
+            "dist/axon_cmd-$VERSION.tar.gz"
+
+  # npm trusted publishing, on the same terms: an OIDC identity scoped to this workflow file and
+  # the `npm` environment, exchanged by the npm CLI for a short-lived publish token. No
+  # NODE_AUTH_TOKEN is set, and none exists to leak.
+  publish-npm:
+    name: Publish axon-cmd to npm
+    needs: [version, macos, windows, linux, sdks]
+    if: needs.version.outputs.publish == 'true'
+    runs-on: ubuntu-latest
+    environment: npm
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+
+      # The publisher's floor, not the package's: trusted publishing needs npm 11.5.1 on Node
+      # 22.14, while axon-cmd itself supports Node 20 and is tested there. Caching is off because a
+      # release must not resolve anything it did not build in this run.
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          registry-url: "https://registry.npmjs.org"
+          package-manager-cache: false
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: sdk-ts
+          path: dist
+
+      # An npm too old to speak OIDC does not say so: it falls back to token authentication and
+      # fails with an unauthenticated error that points nowhere near the cause.
+      - name: Check the publisher can speak OIDC
+        run: |
+          set -euo pipefail
+          NPM_VERSION="$(npm --version)"
+          echo "node $(node --version), npm $NPM_VERSION"
+          REQUIRED="11.5.1"
+          # Compared without `head`, which short-circuits and fails the pipeline on EPIPE under
+          # pipefail even when the comparison itself succeeded.
+          ORDERED="$(printf '%s\n%s\n' "$REQUIRED" "$NPM_VERSION" | sort -V)"
+          if [[ "${ORDERED%%$'\n'*}" != "$REQUIRED" ]]; then
+            echo "::error::npm $NPM_VERSION cannot use trusted publishing; $REQUIRED or newer is required"
+            exit 1
+          fi
+
+      - name: Decide whether npm still needs this version
+        id: state
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          # `set +e` on purpose: the runner invokes this shell with -e, and the whole point of this
+          # step is to read an exit status that is deliberately non-zero.
+          set +e
+          ./scripts/verify-published-sdk npm "dist/axon-cmd-$VERSION.tgz"
+          STATUS=$?
+          set -e
+          case "$STATUS" in
+            0) echo "upload=false" >> "$GITHUB_OUTPUT" ;;
+            10) echo "upload=true" >> "$GITHUB_OUTPUT" ;;
+            *) exit "$STATUS" ;;
+          esac
+
+      # The tarball is the one the sdks job inspected, so what reaches the registry is what was
+      # checked. npm generates provenance automatically for a trusted publish from a public
+      # repository, and the package's own publishConfig pins public access and provenance so a
+      # publish by any other route cannot quietly drop either.
+      - name: Publish to npm
+        if: steps.state.outputs.upload == 'true'
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: npm publish "dist/axon-cmd-$VERSION.tgz"
+
+      - name: Verify npm serves what was built
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: ./scripts/verify-published-sdk --wait 300 npm "dist/axon-cmd-$VERSION.tgz"
+
+  publish:
+    name: Publish release
+    needs: [version, macos, windows, linux, sdks, publish-pypi, publish-npm]
+    # The two registry jobs are skipped on a dry run, and a skipped dependency would otherwise skip
+    # this job with them. What must not be tolerated is a dependency that failed.
+    if: ${{ !cancelled() && !failure() }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      # Named one at a time rather than swept up together: the SDK artifacts are downloaded too,
+      # and they belong on PyPI and npm rather than attached to the GitHub release as a second
+      # copy that could be mistaken for the authoritative one.
+      - uses: actions/download-artifact@v4
+        with:
+          name: macos
+          path: release
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: windows
+          path: release
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: linux
+          path: release
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: sdk-python
+          path: sdk-artifacts/python
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: sdk-ts
+          path: sdk-artifacts/ts
 
       - name: Verify every target is present with a checksum
         env:
           VERSION: ${{ needs.version.outputs.version }}
         run: |
           set -euo pipefail
-          mkdir -p release
-          find artifacts -type f -exec mv {} release/ \;
           MISSING=0
           for NAME in \
             "Axon-$VERSION-macos-aarch64.zip" \
@@ -350,6 +583,21 @@ jobs:
           # Re-verify rather than trust the producing job: the checksum a consumer will use has to
           # match the bytes that actually reach the release.
           sha256sum -c ./*.sha256
+
+      # The last gate before the release becomes visible. Both SDKs are part of this version, so a
+      # release that announced itself while either registry lacked it would be announcing something
+      # that does not exist. Asked here independently of the publish jobs, because the point is to
+      # confirm the outcome rather than to trust the step that produced it.
+      - name: Verify both SDKs are published
+        if: needs.version.outputs.publish == 'true'
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          ./scripts/verify-published-sdk pypi \
+            "sdk-artifacts/python/axon_cmd-$VERSION-py3-none-any.whl" \
+            "sdk-artifacts/python/axon_cmd-$VERSION.tar.gz"
+          ./scripts/verify-published-sdk npm "sdk-artifacts/ts/axon-cmd-$VERSION.tgz"
 
       - name: Publish GitHub release
         if: needs.version.outputs.publish == 'true'

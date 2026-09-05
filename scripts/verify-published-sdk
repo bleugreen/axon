@@ -1,0 +1,308 @@
+#!/usr/bin/env python3
+"""Answer whether a registry already serves this exact axon-cmd release.
+
+A published version is immutable on both PyPI and npm: it can never be overwritten, only matched or
+contradicted. So a release that is being re-run after a partial failure needs to tell three cases
+apart -- not published yet, published from these bytes, published from different bytes -- and only
+the first should lead to an upload.
+
+The comparison is per file inside each artifact rather than over the archive as a whole. Two
+archives carrying identical contents can still differ in gzip framing or recorded timestamps, and
+failing a release over that would be a false alarm; a file whose bytes differ is the real thing.
+
+Usage:
+    scripts/verify-published-sdk [--wait SECONDS] pypi WHEEL SDIST
+    scripts/verify-published-sdk [--wait SECONDS] npm TARBALL
+    scripts/verify-published-sdk --self-test
+
+--wait keeps asking until the version appears, which is what an upload needs: a registry accepts a
+upload before it serves it. Contradicted contents fail immediately rather than being waited on.
+
+Exit status:
+    0   the registry serves this version and its contents match the given artifacts
+    10  the registry does not serve this version yet
+    1   the registry serves this version with different contents, or the check itself failed
+"""
+
+from __future__ import annotations
+
+import hashlib
+import io
+import json
+import subprocess
+import sys
+import tarfile
+import time
+import urllib.error
+import urllib.request
+import zipfile
+from pathlib import Path
+
+NOT_PUBLISHED = 10
+ROOT = Path(__file__).resolve().parent.parent
+USER_AGENT = "axon-release-verifier (+https://github.com/bleugreen/axon)"
+
+
+class PublicationUnknown(Exception):
+    """The registry would not say whether this version exists."""
+
+
+def fetch(url: str) -> bytes | None:
+    """The body, or None when the registry says there is nothing published there.
+
+    Only 404 means absent. Every other refusal -- a 403 from a CDN, a 429 from rate limiting, a
+    5xx, a connection that never opened -- means the registry declined to answer, and answering
+    "not published" on its behalf would let a release upload without ever having established that
+    the version was free. Not knowing is its own outcome, and it fails the release rather than
+    resolving itself into the convenient one.
+    """
+    request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+    try:
+        with urllib.request.urlopen(request, timeout=60) as response:
+            return response.read()
+    except urllib.error.HTTPError as error:
+        if error.code == 404:
+            return None
+        raise PublicationUnknown(f"{url} answered HTTP {error.code} {error.reason}") from error
+    except urllib.error.URLError as error:
+        raise PublicationUnknown(f"{url} could not be reached: {error.reason}") from error
+
+
+def contents(archive: bytes, kind: str) -> dict[str, str]:
+    """Every regular file in the archive, mapped to the SHA-256 of its bytes."""
+    if kind == "zip":
+        with zipfile.ZipFile(io.BytesIO(archive)) as zipped:
+            return {
+                name: hashlib.sha256(zipped.read(name)).hexdigest()
+                for name in sorted(zipped.namelist())
+                if not name.endswith("/")
+            }
+    with tarfile.open(fileobj=io.BytesIO(archive), mode="r:gz") as tarred:
+        found: dict[str, str] = {}
+        for member in tarred.getmembers():
+            if not member.isfile():
+                continue
+            extracted = tarred.extractfile(member)
+            if extracted is None:
+                continue
+            found[member.name] = hashlib.sha256(extracted.read()).hexdigest()
+        return dict(sorted(found.items()))
+
+
+def compare(label: str, local: bytes, remote: bytes, kind: str) -> list[str]:
+    """How the published artifact differs from the one just built, if at all."""
+    ours, theirs = contents(local, kind), contents(remote, kind)
+    differences = [f"{label}: {name} is published with different bytes" for name in sorted(ours)
+                   if name in theirs and ours[name] != theirs[name]]
+    differences += [f"{label}: {name} is missing from the published artifact"
+                    for name in sorted(set(ours) - set(theirs))]
+    differences += [f"{label}: {name} is in the published artifact but not in this build"
+                    for name in sorted(set(theirs) - set(ours))]
+    return differences
+
+
+def verify_pypi(version: str, wheel: Path, sdist: Path) -> int:
+    body = fetch(f"https://pypi.org/pypi/axon-cmd/{version}/json")
+    if body is None:
+        print(f"PyPI does not serve axon-cmd {version} yet")
+        return NOT_PUBLISHED
+
+    published = {entry["filename"]: entry for entry in json.loads(body)["urls"]}
+    differences: list[str] = []
+    for artifact, kind in ((wheel, "zip"), (sdist, "tar")):
+        entry = published.get(artifact.name)
+        if entry is None:
+            differences.append(
+                f"PyPI serves axon-cmd {version} but not {artifact.name}; "
+                f"it has {sorted(published)}"
+            )
+            continue
+        remote = fetch(entry["url"])
+        if remote is None:
+            differences.append(f"PyPI listed {artifact.name} but would not serve it")
+            continue
+        # The recorded digest is what a resolver checks, so a mismatch here means the index is
+        # inconsistent with itself rather than with us.
+        digest = hashlib.sha256(remote).hexdigest()
+        if digest != entry["digests"]["sha256"]:
+            differences.append(f"PyPI served {artifact.name} with a body its own digest rejects")
+            continue
+        differences += compare(artifact.name, artifact.read_bytes(), remote, kind)
+
+    return report(f"PyPI serves axon-cmd {version}", differences)
+
+
+def verify_npm(version: str, tarball: Path) -> int:
+    body = fetch(f"https://registry.npmjs.org/axon-cmd/{version}")
+    if body is None:
+        print(f"npm does not serve axon-cmd {version} yet")
+        return NOT_PUBLISHED
+
+    document = json.loads(body)
+    remote = fetch(document["dist"]["tarball"])
+    if remote is None:
+        print("npm listed the version but would not serve its tarball", file=sys.stderr)
+        return 1
+
+    differences = compare(tarball.name, tarball.read_bytes(), remote, "tar")
+    return report(f"npm serves axon-cmd {version}", differences)
+
+
+def report(headline: str, differences: list[str]) -> int:
+    if differences:
+        print(f"{headline}, but not what this build produced:", file=sys.stderr)
+        for difference in differences:
+            print(f"  {difference}", file=sys.stderr)
+        print(
+            "A published version is immutable, so this cannot be corrected by publishing again. "
+            "Either the release is being re-run from a different commit, in which case run it "
+            "from the tagged one, or the version genuinely changed and needs a new VERSION.",
+            file=sys.stderr,
+        )
+        return 1
+    print(f"{headline}, matching this build file for file")
+    return 0
+
+
+POLL_SECONDS = 15
+
+
+def _tar(entries: dict[str, bytes], mtime: int = 0) -> bytes:
+    buffer = io.BytesIO()
+    with tarfile.open(fileobj=buffer, mode="w:gz") as archive:
+        for name, payload in entries.items():
+            info = tarfile.TarInfo(name)
+            info.size, info.mtime = len(payload), mtime
+            archive.addfile(info, io.BytesIO(payload))
+    return buffer.getvalue()
+
+
+def _zip(entries: dict[str, bytes]) -> bytes:
+    buffer = io.BytesIO()
+    with zipfile.ZipFile(buffer, "w") as archive:
+        for name, payload in entries.items():
+            archive.writestr(name, payload)
+    return buffer.getvalue()
+
+
+def _fetch_under(behaviour: object) -> object:
+    """What fetch does when the transport behaves this way: a value, or the exception raised."""
+    original = urllib.request.urlopen
+    urllib.request.urlopen = behaviour  # type: ignore[assignment]
+    try:
+        return fetch("https://example.invalid/probe")
+    except Exception as error:  # noqa: BLE001 - identifying what is raised is the point
+        return error
+    finally:
+        urllib.request.urlopen = original  # type: ignore[assignment]
+
+
+def self_test() -> int:
+    """Exercise the decisions that otherwise only ever run against a live registry mid-release.
+
+    The status mapping decides whether a release uploads, and the content comparison decides
+    whether a re-run proceeds. Neither is reachable from an ordinary test run, and both are worst
+    discovered wrong while a release is half finished.
+    """
+    failures: list[str] = []
+
+    def check(label: str, actual: object, expected: object) -> None:
+        if actual != expected:
+            failures.append(f"{label}: got {actual!r}, expected {expected!r}")
+
+    def raising(error: Exception):
+        def behaviour(*_args: object, **_kwargs: object) -> object:
+            raise error
+        return behaviour
+
+    def http(code: int) -> urllib.error.HTTPError:
+        return urllib.error.HTTPError("https://example.invalid/probe", code, "refused", {}, None)
+
+    # Absent is one status and one status only.
+    check("404", _fetch_under(raising(http(404))), None)
+    check("200", _fetch_under(lambda *_a, **_k: io.BytesIO(b"body")), b"body")
+
+    # A registry that will not answer must not be read as a registry with nothing to say. 403 in
+    # particular once mapped to "absent" here, which would have let a release upload against a
+    # version whose state was never established.
+    for code in (401, 403, 429, 500, 503):
+        outcome = _fetch_under(raising(http(code)))
+        if not isinstance(outcome, PublicationUnknown):
+            failures.append(f"HTTP {code}: got {outcome!r}, expected PublicationUnknown")
+    unreachable = _fetch_under(raising(urllib.error.URLError("connection refused")))
+    if not isinstance(unreachable, PublicationUnknown):
+        failures.append(f"unreachable host: got {unreachable!r}, expected PublicationUnknown")
+
+    # Identical contents must match across archives that are not byte-identical, or every retry
+    # after a toolchain update would fail a release for no reason.
+    payload = {"package/index.js": b"export const a = 1;\n", "package/package.json": b"{}\n"}
+    check("same contents, different framing", compare("t", _tar(payload), _tar(payload, 1), "tar"), [])
+    check("same contents, zip", compare("w", _zip(payload), _zip(payload), "zip"), [])
+
+    # And a difference that matters must be named rather than tolerated.
+    changed = {**payload, "package/index.js": b"export const a = 2;\n"}
+    check("one changed file", compare("t", _tar(changed), _tar(payload), "tar"),
+          ["t: package/index.js is published with different bytes"])
+    check("file absent upstream", compare("t", _tar({**payload, "package/new.js": b""}), _tar(payload), "tar"),
+          ["t: package/new.js is missing from the published artifact"])
+    check("file only upstream", compare("t", _tar(payload), _tar({**payload, "package/old.js": b""}), "tar"),
+          ["t: package/old.js is in the published artifact but not in this build"])
+
+    if failures:
+        for failure in failures:
+            print(f"self-test: {failure}", file=sys.stderr)
+        return 1
+    print("self-test: status mapping and content comparison behave")
+    return 0
+
+
+def main(argv: list[str]) -> int:
+    if argv == ["--self-test"]:
+        return self_test()
+
+    wait = 0.0
+    if argv[:1] == ["--wait"]:
+        if len(argv) < 2:
+            print("--wait needs a number of seconds", file=sys.stderr)
+            return 1
+        wait, argv = float(argv[1]), argv[2:]
+
+    version = subprocess.run(
+        [str(ROOT / "scripts" / "check-version")],
+        cwd=ROOT, check=True, capture_output=True, text=True,
+    ).stdout.strip()
+
+    artifacts = [Path(argument) for argument in argv[1:]]
+    missing = [str(artifact) for artifact in artifacts if not artifact.is_file()]
+    if missing:
+        print(f"no such artifact: {', '.join(missing)}", file=sys.stderr)
+        return 1
+
+    match argv:
+        case ["pypi", wheel, sdist]:
+            check = lambda: verify_pypi(version, Path(wheel), Path(sdist))  # noqa: E731
+        case ["npm", tarball]:
+            check = lambda: verify_npm(version, Path(tarball))  # noqa: E731
+        case _:
+            print(__doc__, file=sys.stderr)
+            return 1
+
+    deadline = time.monotonic() + wait
+    while True:
+        try:
+            status = check()
+        except PublicationUnknown as unknown:
+            print(f"cannot establish what the registry holds: {unknown}", file=sys.stderr)
+            return 1
+        if status != NOT_PUBLISHED or time.monotonic() >= deadline:
+            if status == NOT_PUBLISHED and wait > 0:
+                print(
+                    f"waited {wait:.0f}s and the registry still does not serve axon-cmd {version}",
+                    file=sys.stderr,
+                )
+            return status
+        time.sleep(POLL_SECONDS)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv[1:]))

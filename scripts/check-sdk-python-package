@@ -1,0 +1,203 @@
+#!/usr/bin/env bash
+# Builds the axon-cmd wheel and sdist, asserts what they contain and claim, and proves that the
+# wheel installs and imports in an empty environment.
+#
+# Nothing here reaches a package index. The manifests are derived from the tracked source rather
+# than transcribed, so a file that appears in an artifact without appearing in the repository fails
+# the check, and so does a tracked module that never reaches the wheel.
+#
+# With an output directory, the inspected artifacts are left there. That is how the release builds
+# and publishes the same bytes rather than rebuilding after inspection.
+#
+# Usage:
+#   scripts/check-sdk-python-package                 build in a temporary directory and check
+#   scripts/check-sdk-python-package dist/sdk-python keep the checked artifacts here
+#
+# PYTHON selects the interpreter that builds and that creates the empty environment; it defaults to
+# python3 and needs the `build` frontend installed.
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$ROOT"
+
+PYTHON="${PYTHON:-python3}"
+VERSION="$(./scripts/check-version)"
+PACKAGE_DIR="sdk/python"
+WHEEL="axon_cmd-$VERSION-py3-none-any.whl"
+SDIST="axon_cmd-$VERSION.tar.gz"
+
+if [[ $# -gt 1 ]]; then
+  printf 'usage: %s [OUTPUT_DIR]\n' "$0" >&2
+  exit 2
+fi
+
+WORK="$(mktemp -d "${TMPDIR:-/tmp}/axon-cmd-python.XXXXXX")"
+trap 'rm -rf "$WORK"' EXIT
+
+if [[ $# -eq 1 ]]; then
+  OUT="$(cd "$ROOT" && mkdir -p "$1" && cd "$1" && pwd)"
+  rm -f "$OUT/$WHEEL" "$OUT/$SDIST"
+else
+  OUT="$WORK/dist"
+  mkdir -p "$OUT"
+fi
+
+printf 'building axon-cmd %s\n' "$VERSION"
+"$PYTHON" -m build --outdir "$OUT" "$PACKAGE_DIR" > "$WORK/build.log" 2>&1 || {
+  cat "$WORK/build.log" >&2
+  printf 'build failed; `%s -m pip install build` provides the frontend\n' "$PYTHON" >&2
+  exit 1
+}
+
+for artifact in "$WHEEL" "$SDIST"; do
+  if [[ ! -f "$OUT/$artifact" ]]; then
+    printf 'build did not produce %s\n' "$artifact" >&2
+    printf 'the artifact names encode VERSION, so a build that names something else is drift\n' >&2
+    exit 1
+  fi
+done
+
+# Tracked package sources, which are exactly what both artifacts must carry. `git ls-files` also
+# keeps build leftovers such as __pycache__ out of the expectation, so an artifact that picked one
+# up fails rather than being compared against itself.
+git ls-files "$PACKAGE_DIR/axon_cmd" | sed "s|^$PACKAGE_DIR/||" | sort > "$WORK/package-files"
+if [[ ! -s "$WORK/package-files" ]]; then
+  printf 'no tracked files under %s/axon_cmd\n' "$PACKAGE_DIR" >&2
+  exit 1
+fi
+
+compare_manifest() {
+  local label="$1" expected="$2" actual="$3"
+  if ! diff -u "$expected" "$actual" > "$WORK/manifest.diff"; then
+    printf 'unexpected contents in %s (-expected +actual):\n' "$label" >&2
+    cat "$WORK/manifest.diff" >&2
+    exit 1
+  fi
+  printf '%s: %s files\n' "$label" "$(wc -l < "$actual" | tr -d ' ')"
+}
+
+# The wheel carries the package and its metadata directory, and nothing else.
+{
+  cat "$WORK/package-files"
+  printf 'axon_cmd-%s.dist-info/METADATA\n' "$VERSION"
+  printf 'axon_cmd-%s.dist-info/RECORD\n' "$VERSION"
+  printf 'axon_cmd-%s.dist-info/WHEEL\n' "$VERSION"
+} | sort > "$WORK/wheel.expected"
+"$PYTHON" -c 'import sys, zipfile; print("\n".join(sorted(zipfile.ZipFile(sys.argv[1]).namelist())))' \
+  "$OUT/$WHEEL" > "$WORK/wheel.actual"
+compare_manifest "$WHEEL" "$WORK/wheel.expected" "$WORK/wheel.actual"
+
+# The sdist adds the files a rebuild needs. `.gitignore` is there because hatchling force-includes
+# the nearest one; sdk/python carries its own so a release does not ship the repository's.
+{
+  cat "$WORK/package-files"
+  printf '.gitignore\nPKG-INFO\nREADME.md\npyproject.toml\n'
+} | sed "s|^|axon_cmd-$VERSION/|" | sort > "$WORK/sdist.expected"
+tar -tzf "$OUT/$SDIST" | sed 's|/$||' | sort > "$WORK/sdist.actual"
+compare_manifest "$SDIST" "$WORK/sdist.expected" "$WORK/sdist.actual"
+
+# What the index will display and what a resolver will act on.
+"$PYTHON" - "$OUT/$WHEEL" "$VERSION" <<'PYTHON_METADATA'
+import email
+import sys
+import zipfile
+
+wheel, version = sys.argv[1], sys.argv[2]
+with zipfile.ZipFile(wheel) as archive:
+    name = next(n for n in archive.namelist() if n.endswith(".dist-info/METADATA"))
+    metadata = email.message_from_bytes(archive.read(name))
+
+failures: list[str] = []
+
+
+def require(field: str, expected: str) -> None:
+    actual = metadata.get(field)
+    if actual != expected:
+        failures.append(f"{field} is {actual!r}, expected {expected!r}")
+
+
+require("Name", "axon-cmd")
+require("Version", version)
+require("License-Expression", "MIT")
+require("Requires-Python", ">=3.11")
+
+if not metadata.get("Summary"):
+    failures.append("Summary is empty")
+if metadata.get("Description-Content-Type") != "text/markdown":
+    failures.append("the README is not carried as markdown")
+if not metadata.get_payload().strip():
+    failures.append("the long description is empty, so the project page would be blank")
+
+urls = dict(
+    entry.split(", ", 1) for entry in metadata.get_all("Project-URL", [])
+)
+for label in ("Homepage", "Repository", "Issues", "Documentation"):
+    if label not in urls:
+        failures.append(f"Project-URL {label} is missing")
+
+# npm and PyPI both refuse to install what they cannot resolve, so a runtime dependency added here
+# without intent is a dependency every consumer inherits. The client speaks the socket with the
+# standard library alone.
+runtime = [
+    dependency
+    for dependency in metadata.get_all("Requires-Dist", [])
+    if "extra ==" not in dependency
+]
+if runtime:
+    failures.append(f"unexpected runtime dependencies: {runtime}")
+
+if failures:
+    for failure in failures:
+        print(f"metadata: {failure}", file=sys.stderr)
+    raise SystemExit(1)
+
+print(f"metadata: {metadata['Name']} {metadata['Version']}, no runtime dependencies")
+PYTHON_METADATA
+
+# An empty interpreter, the wheel, and nothing else. --no-index is what makes this a check of the
+# artifact rather than of the network.
+VENV="$WORK/venv"
+"$PYTHON" -m venv "$VENV"
+"$VENV/bin/python" -m pip install --quiet --disable-pip-version-check --no-index "$OUT/$WHEEL"
+
+# Run from a directory that is not the checkout: with the repository as the working directory,
+# `from axon_cmd import Axon` resolves against sdk/python and proves nothing about the install.
+(
+  cd "$WORK"
+  "$VENV/bin/python" - "$VENV" "$VERSION" <<'PYTHON_IMPORT'
+import importlib.metadata
+import sys
+from pathlib import Path
+
+venv, version = Path(sys.argv[1]).resolve(), sys.argv[2]
+
+import axon_cmd
+from axon_cmd import Axon, SocketTransport, SCHEMA_PRODUCT_VERSION
+
+resolved = Path(axon_cmd.__file__).resolve()
+if venv not in resolved.parents:
+    raise SystemExit(f"axon_cmd resolved to {resolved}, which is not the installed copy")
+
+installed = importlib.metadata.version("axon-cmd")
+if installed != version:
+    raise SystemExit(f"installed axon-cmd is {installed}, expected {version}")
+if SCHEMA_PRODUCT_VERSION != version:
+    raise SystemExit(f"the generated client states {SCHEMA_PRODUCT_VERSION}, expected {version}")
+
+# The rename exists because `axon` on PyPI belongs to an unrelated project. A compatibility package
+# would reinstate exactly the collision this distribution was renamed to escape.
+try:
+    import axon  # noqa: F401
+except ImportError:
+    pass
+else:
+    raise SystemExit("installing axon-cmd provided a top-level `axon` package")
+
+print(f"clean install: from axon_cmd import Axon -> {Axon.__name__}, {SocketTransport.__name__}")
+PYTHON_IMPORT
+)
+
+printf 'axon-cmd %s: wheel and sdist inspected, wheel installs and imports clean\n' "$VERSION"
+if [[ $# -eq 1 ]]; then
+  printf '%s\n%s\n' "$OUT/$WHEEL" "$OUT/$SDIST"
+fi
