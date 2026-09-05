@@ -839,11 +839,19 @@ impl X11Session {
     /// Registered *before* the request is sent, so the expectation is already in place by the time
     /// the server can generate the event. See [`crate::recording::SelfDelivery`] for what that
     /// ordering does and does not guarantee.
+    ///
+    /// And taken back the moment the request is refused. A rejected injection produces no event to
+    /// consume its expectation, so leaving it to expire would let a failed dispatch discard the
+    /// next genuine key or click the user made — which is a recording quietly losing the user's
+    /// input because of a fault somewhere else entirely.
     fn fake_input(&self, kind: u8, detail: u8, x: i16, y: i16) -> Result<(), BackendError> {
-        crate::recording::self_delivery().expect(kind, detail);
+        let expectation = crate::recording::self_delivery().expect(kind, detail);
         self.connection
             .xtest_fake_input(kind, detail, x11rb::CURRENT_TIME, self.root, x, y, 0)
-            .map_err(|error| operation("post synthetic input", error))?;
+            .map_err(|error| {
+                crate::recording::self_delivery().cancel(expectation);
+                operation("post synthetic input", error)
+            })?;
         Ok(())
     }
 

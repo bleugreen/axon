@@ -856,6 +856,53 @@ mod tests {
         assert!(!ledger.claims(KEY_PRESS, 38));
     }
 
+    /// A dispatch that failed at the call site must not cost the user their next keystroke.
+    ///
+    /// The deadline below is a backstop for what cannot be known. A refused request is known
+    /// immediately, and the two must not be confused: leaving a rejected injection to expire would
+    /// discard the next genuine event of the same shape for the whole of that interval.
+    #[test]
+    fn a_rejected_injection_cannot_suppress_the_next_thing_the_user_does() {
+        let ledger = SelfDelivery::new();
+        ledger.arm();
+
+        let rejected = ledger.expect(KEY_PRESS, 38);
+        ledger.cancel(rejected);
+        assert_eq!(ledger.outstanding(), 0);
+        assert!(
+            !ledger.claims(KEY_PRESS, 38),
+            "the user's next press is the user's"
+        );
+
+        // A keyboard sequence that got half way out: the press was accepted and the release was
+        // refused. Cancellation is by identity precisely so the retraction cannot reach across to
+        // the half that did go, which a `(kind, detail)` match could not have told apart.
+        let sent = ledger.expect(BUTTON_PRESS, BUTTON_PRIMARY);
+        let refused = ledger.expect(BUTTON_PRESS, BUTTON_PRIMARY);
+        ledger.cancel(refused);
+        assert_eq!(ledger.outstanding(), 1);
+        assert!(
+            ledger.claims(BUTTON_PRESS, BUTTON_PRIMARY),
+            "the injection that was accepted is still ours"
+        );
+        assert!(
+            !ledger.claims(BUTTON_PRESS, BUTTON_PRIMARY),
+            "and only that one; the refused half suppresses nothing"
+        );
+
+        // Cancelling twice, or cancelling one already consumed, disturbs nothing.
+        ledger.cancel(sent);
+        ledger.cancel(refused);
+        ledger.cancel(None);
+        assert_eq!(ledger.outstanding(), 0);
+
+        // A disarmed ledger records nothing, so there is nothing to take back and saying so is not
+        // an error either.
+        ledger.disarm();
+        ledger.cancel(ledger.expect(KEY_PRESS, 38));
+        assert_eq!(ledger.outstanding(), 0);
+    }
+
     #[test]
     fn an_expectation_that_never_arrived_stops_suppressing_input() {
         let ledger = SelfDelivery::new();
