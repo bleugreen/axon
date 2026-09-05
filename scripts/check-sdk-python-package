@@ -75,7 +75,7 @@ compare_manifest() {
 # The wheel carries the package and its metadata directory, and nothing else.
 {
   cat "$WORK/package-files"
-  printf 'axon_cmd-%s.dist-info/METADATA\n' "$VERSION"</dev/null
+  printf 'axon_cmd-%s.dist-info/METADATA\n' "$VERSION"
   printf 'axon_cmd-%s.dist-info/RECORD\n' "$VERSION"
   printf 'axon_cmd-%s.dist-info/WHEEL\n' "$VERSION"
 } | sort > "$WORK/wheel.expected"
