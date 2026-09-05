@@ -7,6 +7,9 @@ use crate::{
     screencast::{CaptureError, INTERACTIVE_TIMEOUT, ScreenCapture, ScreenCastActor},
     x11::{X11Session, coordinate},
 };
+
+#[path = "global_input.rs"]
+mod global_input;
 use atspi::{
     CoordType, ObjectRefOwned, State,
     proxy::{
@@ -819,9 +822,6 @@ impl PlatformBackend for LinuxBackend {
         };
         self.ask(|r| Command::Hit(pid, point, r))
     }
-    fn unused_hit_test(&mut self, _: (f64, f64)) -> Result<Option<Node>, BackendError> {
-        Err(capability(Capability::HitTest, "not implemented"))
-    }
     fn supports_foreground_transaction(&self) -> bool {
         matches!(self.input, InputSession::Available(_))
     }
@@ -869,6 +869,89 @@ impl PlatformBackend for LinuxBackend {
         Ok(true)
     }
 }
+impl GlobalInputObserver for LinuxBackend {
+    fn start(&mut self, scope: &RecordingScope) -> Result<(), BackendError> {
+        // Refused here as well as at the route's preflight, because shared core's
+        // `UserActionRecorder::start_with_redaction` calls this method directly and a session that
+        // cannot observe must not get as far as opening a recording it would have to abandon.
+        if let Some((code, reason)) = self.observation {
+            return Err(observation_refusal(code, reason));
+        }
+        // Read here, on the backend, because it already holds a connection to the display. The
+        // observer would otherwise open one of its own beside the two RECORD needs.
+        let keyboard = self
+            .lookup
+            .as_ref()
+            .ok_or_else(|| observation_refusal(NO_X_DISPLAY_CODE, NO_X_DISPLAY))?
+            .keyboard_layout()?;
+        self.observer().start(scope, keyboard)
+    }
+
+    fn poll(&mut self, timeout: Duration) -> Result<Vec<RecordedInputEvent>, BackendError> {
+        self.observer().poll(timeout)
+    }
+
+    fn stop(&mut self) -> Result<(), BackendError> {
+        self.observer().stop()
+    }
+
+    fn is_recording(&self) -> bool {
+        self.global_input
+            .as_ref()
+            .is_some_and(global_input::LinuxGlobalInputObserver::is_recording)
+    }
+}
+
+impl ObserverQuiescence for LinuxBackend {
+    fn quiesce_global_input(&mut self) {
+        self.observer().quiesce();
+    }
+}
+
+/// How a recorded application is asked for again, when core needs a fresh capture of it.
+///
+/// The process id leads because it is the only identity that cannot go ambiguous mid-session, and
+/// `select` matches on it alone when it is present. The name follows for the case where no pid was
+/// read, and matches applications the way `look` matches them.
+fn recorded_app_query(app: &RecordedAppIdentity) -> AppQuery {
+    AppQuery {
+        process_id: app.process_id,
+        name: (!app.name.is_empty()).then(|| app.name.clone()),
+        identifier: None,
+    }
+}
+
+impl RecordingEvidenceProvider for LinuxBackend {
+    fn read_focused(&mut self) -> Result<Option<RecordedFocusedEvidence>, BackendError> {
+        let Some(pid) = self
+            .lookup
+            .as_ref()
+            .and_then(|session| session.active_window_pid().ok().flatten())
+        else {
+            return Ok(None);
+        };
+        self.ask(|r| Command::FocusedEvidence(pid, r))
+    }
+
+    fn capture_snapshot(
+        &mut self,
+        app: &RecordedAppIdentity,
+    ) -> Result<Option<Snapshot>, BackendError> {
+        // A capture that fails is not a recording that fails. By the time shared core resolves a
+        // click, the window it landed in may be gone -- a menu that closed, a dialog that was
+        // dismissed -- and `None` is the seam that says so: the action is kept and authored
+        // against its point rather than taking the whole session down with it.
+        Ok(PlatformBackend::capture(self, &recorded_app_query(app)).ok())
+    }
+
+    fn settle(&mut self, _: usize, _: &str) -> Result<RecordedSettleEvidence, BackendError> {
+        // A no-op, exactly as it is on macOS and Windows. Shared core calls this to preserve
+        // ordering around an appended group; inventing a per-platform settle observation is a
+        // separate decision from making a platform record at all, and this issue does not take it.
+        Ok(RecordedSettleEvidence::default())
+    }
+}
+
 impl PointerTargetVerifier for LinuxBackend {
     /// Whether the resolved element still reports a rectangle covering the point the caller is
     /// about to be clicked at.
