@@ -4,7 +4,7 @@
 set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
-GENERATED="sdk/python/axon/_generated.py"
+GENERATED="sdk/python/axon_cmd/_generated.py"
 if ! command -v bun >/dev/null 2>&1; then
   printf 'bun is required to generate %s: https://bun.sh\n' "$GENERATED" >&2
   exit 2

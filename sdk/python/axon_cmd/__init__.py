@@ -1,11 +1,11 @@
 """
 A dependency-free Python client for the Axon desktop automation daemon.
 
-``axon._generated`` is written by ``sdk/generate.ts`` from ``schema/tool-surface-v1.json``, the
+``axon_cmd._generated`` is written by ``sdk/generate.ts`` from ``schema/tool-surface-v1.json``, the
 same artifact the TypeScript client is generated from, so the two SDKs cannot describe different
 tool surfaces. Everything else in the package is hand-written.
 
-    from axon import Axon
+    from axon_cmd import Axon
 
     axon = Axon.connect()
     calculator = axon.app("Calculator")
