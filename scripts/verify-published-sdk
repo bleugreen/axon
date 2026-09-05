@@ -1,0 +1,166 @@
+#!/usr/bin/env python3
+"""Answer whether a registry already serves this exact axon-cmd release.
+
+A published version is immutable on both PyPI and npm: it can never be overwritten, only matched or
+contradicted. So a release that is being re-run after a partial failure needs to tell three cases
+apart -- not published yet, published from these bytes, published from different bytes -- and only
+the first should lead to an upload.
+
+The comparison is per file inside each artifact rather than over the archive as a whole. Two
+archives carrying identical contents can still differ in gzip framing or recorded timestamps, and
+failing a release over that would be a false alarm; a file whose bytes differ is the real thing.
+
+Usage:
+    scripts/verify-published-sdk pypi WHEEL SDIST
+    scripts/verify-published-sdk npm TARBALL
+
+Exit status:
+    0   the registry serves this version and its contents match the given artifacts
+    10  the registry does not serve this version yet
+    1   the registry serves this version with different contents, or the check itself failed
+"""
+
+from __future__ import annotations
+
+import hashlib
+import io
+import json
+import subprocess
+import sys
+import tarfile
+import urllib.error
+import urllib.request
+import zipfile
+from pathlib import Path
+
+NOT_PUBLISHED = 10
+ROOT = Path(__file__).resolve().parent.parent
+USER_AGENT = "axon-release-verifier (+https://github.com/bleugreen/axon)"
+
+
+def fetch(url: str) -> bytes | None:
+    """The body, or None when the registry says there is nothing there yet."""
+    request = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
+    try:
+        with urllib.request.urlopen(request, timeout=60) as response:
+            return response.read()
+    except urllib.error.HTTPError as error:
+        if error.code in (403, 404):
+            return None
+        raise
+
+
+def contents(archive: bytes, kind: str) -> dict[str, str]:
+    """Every regular file in the archive, mapped to the SHA-256 of its bytes."""
+    if kind == "zip":
+        with zipfile.ZipFile(io.BytesIO(archive)) as zipped:
+            return {
+                name: hashlib.sha256(zipped.read(name)).hexdigest()
+                for name in sorted(zipped.namelist())
+                if not name.endswith("/")
+            }
+    with tarfile.open(fileobj=io.BytesIO(archive), mode="r:gz") as tarred:
+        found: dict[str, str] = {}
+        for member in tarred.getmembers():
+            if not member.isfile():
+                continue
+            extracted = tarred.extractfile(member)
+            if extracted is None:
+                continue
+            found[member.name] = hashlib.sha256(extracted.read()).hexdigest()
+        return dict(sorted(found.items()))
+
+
+def compare(label: str, local: bytes, remote: bytes, kind: str) -> list[str]:
+    """How the published artifact differs from the one just built, if at all."""
+    ours, theirs = contents(local, kind), contents(remote, kind)
+    differences = [f"{label}: {name} is published with different bytes" for name in sorted(ours)
+                   if name in theirs and ours[name] != theirs[name]]
+    differences += [f"{label}: {name} is missing from the published artifact"
+                    for name in sorted(set(ours) - set(theirs))]
+    differences += [f"{label}: {name} is in the published artifact but not in this build"
+                    for name in sorted(set(theirs) - set(ours))]
+    return differences
+
+
+def verify_pypi(version: str, wheel: Path, sdist: Path) -> int:
+    body = fetch(f"https://pypi.org/pypi/axon-cmd/{version}/json")
+    if body is None:
+        print(f"PyPI does not serve axon-cmd {version} yet")
+        return NOT_PUBLISHED
+
+    published = {entry["filename"]: entry for entry in json.loads(body)["urls"]}
+    differences: list[str] = []
+    for artifact, kind in ((wheel, "zip"), (sdist, "tar")):
+        entry = published.get(artifact.name)
+        if entry is None:
+            differences.append(
+                f"PyPI serves axon-cmd {version} but not {artifact.name}; "
+                f"it has {sorted(published)}"
+            )
+            continue
+        remote = fetch(entry["url"])
+        if remote is None:
+            differences.append(f"PyPI listed {artifact.name} but would not serve it")
+            continue
+        # The recorded digest is what a resolver checks, so a mismatch here means the index is
+        # inconsistent with itself rather than with us.
+        digest = hashlib.sha256(remote).hexdigest()
+        if digest != entry["digests"]["sha256"]:
+            differences.append(f"PyPI served {artifact.name} with a body its own digest rejects")
+            continue
+        differences += compare(artifact.name, artifact.read_bytes(), remote, kind)
+
+    return report(f"PyPI serves axon-cmd {version}", differences)
+
+
+def verify_npm(version: str, tarball: Path) -> int:
+    body = fetch(f"https://registry.npmjs.org/axon-cmd/{version}")
+    if body is None:
+        print(f"npm does not serve axon-cmd {version} yet")
+        return NOT_PUBLISHED
+
+    document = json.loads(body)
+    remote = fetch(document["dist"]["tarball"])
+    if remote is None:
+        print("npm listed the version but would not serve its tarball", file=sys.stderr)
+        return 1
+
+    differences = compare(tarball.name, tarball.read_bytes(), remote, "tar")
+    return report(f"npm serves axon-cmd {version}", differences)
+
+
+def report(headline: str, differences: list[str]) -> int:
+    if differences:
+        print(f"{headline}, but not what this build produced:", file=sys.stderr)
+        for difference in differences:
+            print(f"  {difference}", file=sys.stderr)
+        print(
+            "A published version is immutable, so this cannot be corrected by publishing again. "
+            "Either the release is being re-run from a different commit, in which case run it "
+            "from the tagged one, or the version genuinely changed and needs a new VERSION.",
+            file=sys.stderr,
+        )
+        return 1
+    print(f"{headline}, matching this build file for file")
+    return 0
+
+
+def main(argv: list[str]) -> int:
+    version = subprocess.run(
+        [str(ROOT / "scripts" / "check-version")],
+        cwd=ROOT, check=True, capture_output=True, text=True,
+    ).stdout.strip()
+
+    match argv:
+        case ["pypi", wheel, sdist]:
+            return verify_pypi(version, Path(wheel), Path(sdist))
+        case ["npm", tarball]:
+            return verify_npm(version, Path(tarball))
+        case _:
+            print(__doc__, file=sys.stderr)
+            return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv[1:]))
