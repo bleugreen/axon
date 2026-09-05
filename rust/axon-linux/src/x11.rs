@@ -957,10 +957,10 @@ impl ModifierMapping {
                 .filter_map(|keycode| layout.keysym_at(*keycode, 0))
             {
                 match keysym {
-                    // Alt_L, Alt_R, Meta_L, Meta_R.
-                    0xFFE9 | 0xFFEA | 0xFFE7 | 0xFFE8 => found.alt |= bit,
+                    // Meta_L, Meta_R, Alt_L, Alt_R.
+                    0xFFE7..=0xFFEA => found.alt |= bit,
                     // Super_L, Super_R, Hyper_L, Hyper_R.
-                    0xFFEB | 0xFFEC | 0xFFED | 0xFFEE => found.super_key |= bit,
+                    0xFFEB..=0xFFEE => found.super_key |= bit,
                     // ISO_Level3_Shift and Mode_switch, which select a keysym level rather than
                     // naming a chord.
                     0xFE03 | 0xFF7E => found.level3 |= bit,
