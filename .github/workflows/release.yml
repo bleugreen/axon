@@ -409,11 +409,14 @@ jobs:
         env:
           VERSION: ${{ needs.version.outputs.version }}
         run: |
-          set -uo pipefail
+          # `set +e` on purpose: the runner invokes this shell with -e, and the whole point of this
+          # step is to read an exit status that is deliberately non-zero.
+          set +e
           ./scripts/verify-published-sdk pypi \
             "dist/axon_cmd-$VERSION-py3-none-any.whl" \
             "dist/axon_cmd-$VERSION.tar.gz"
           STATUS=$?
+          set -e
           case "$STATUS" in
             0) echo "upload=false" >> "$GITHUB_OUTPUT" ;;
             10) echo "upload=true" >> "$GITHUB_OUTPUT" ;;
@@ -480,7 +483,10 @@ jobs:
           NPM_VERSION="$(npm --version)"
           echo "node $(node --version), npm $NPM_VERSION"
           REQUIRED="11.5.1"
-          if [[ "$(printf '%s\n%s\n' "$REQUIRED" "$NPM_VERSION" | sort -V | head -1)" != "$REQUIRED" ]]; then
+          # Compared without `head`, which short-circuits and fails the pipeline on EPIPE under
+          # pipefail even when the comparison itself succeeded.
+          ORDERED="$(printf '%s\n%s\n' "$REQUIRED" "$NPM_VERSION" | sort -V)"
+          if [[ "${ORDERED%%$'\n'*}" != "$REQUIRED" ]]; then
             echo "::error::npm $NPM_VERSION cannot use trusted publishing; $REQUIRED or newer is required"
             exit 1
           fi
@@ -490,9 +496,12 @@ jobs:
         env:
           VERSION: ${{ needs.version.outputs.version }}
         run: |
-          set -uo pipefail
+          # `set +e` on purpose: the runner invokes this shell with -e, and the whole point of this
+          # step is to read an exit status that is deliberately non-zero.
+          set +e
           ./scripts/verify-published-sdk npm "dist/axon-cmd-$VERSION.tgz"
           STATUS=$?
+          set -e
           case "$STATUS" in
             0) echo "upload=false" >> "$GITHUB_OUTPUT" ;;
             10) echo "upload=true" >> "$GITHUB_OUTPUT" ;;
