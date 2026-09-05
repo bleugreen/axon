@@ -423,6 +423,14 @@ fn screenshot_provider(facts: SessionFacts) -> ScreenshotProvider {
 }
 
 pub struct LinuxBackend {
+    /// The recording seam. Held for the process's lifetime rather than built per session, because
+    /// it owns a clone of the AT-SPI actor's command channel and that channel is what lets it read
+    /// evidence at event time without opening a second accessibility-bus connection.
+    ///
+    /// Declared before `tx`, and that ordering is the whole reason it is an `Option`: fields drop
+    /// in declaration order, so this releases its threads and its clone of the channel while the
+    /// actor is still there to answer, rather than after the channel has closed underneath it.
+    global_input: Option<global_input::LinuxGlobalInputObserver>,
     tx: mpsc::Sender<Command>,
     input: InputSession,
     screenshot: ScreenshotProvider,
@@ -440,12 +448,6 @@ pub struct LinuxBackend {
     observation: Option<(&'static str, &'static str)>,
     /// Why a screen point cannot be resolved to an element, or `None` when it can.
     point_lookup: Option<(&'static str, &'static str)>,
-    /// The recording seam. Held for the process's lifetime rather than built per session, because
-    /// it owns a clone of the AT-SPI actor's command channel and that channel is what lets it read
-    /// evidence at event time without opening a second accessibility-bus connection.
-    ///
-    /// `Option` only so `Drop` can release that clone before closing the channel.
-    global_input: Option<global_input::LinuxGlobalInputObserver>,
     /// AT-SPI identity to process id, read on demand and refreshed when stale or missed.
     identities: Vec<AppIdentity>,
     identities_read: Option<Instant>,
