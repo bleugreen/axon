@@ -405,16 +405,22 @@ jobs:
       # those paths. OCR additionally renders a fixed X11 label and crosses production Tesseract
       # plus foreground click. `--ignored` sweeps every hermetic desktop test together.
       #
-      # This runs for pull requests, unlike the live lane. It has to: the project's only real Linux
-      # desktop is a GNOME Wayland session, which is the worst possible place to verify X11
-      # activation and is asserted to refuse instead.
+      # This runs for pull requests, unlike the live lane, and it is the only lane that proves the
+      # X11 conversations at all on a pull request. The project has two real Linux desktops and
+      # neither can stand in for it: bglab-ub is a GNOME Wayland session, which is the worst
+      # possible place to verify X11 activation and is asserted to refuse instead, and fedora is an
+      # Xfce/X11 desktop that is not a live.yml runner, so evidence from it is relayed by hand
+      # rather than gated on.
       - name: Run the hermetic desktop tests
         working-directory: rust
         env:
           DISPLAY: ":99"
         run: |
           set -euo pipefail
-          Xvfb :99 -screen 0 1280x1024x24 &
+          # `+extension RECORD` is explicit rather than assumed. Global input observation reads the
+          # input stream through RECORD, and an Xvfb built or started without it would fail the
+          # observation test for a reason that has nothing to do with this project's code.
+          Xvfb :99 -screen 0 1280x1024x24 +extension RECORD &
           xvfb_pid=$!
           trap 'kill "$xvfb_pid" 2>/dev/null || true' EXIT
           for _ in $(seq 1 100); do
@@ -422,6 +428,12 @@ jobs:
             sleep 0.1
           done
           xdpyinfo -display :99 >/dev/null
+          # Reported before the tests run, so a lane that goes red on observation says whether the
+          # server offered the extension at all rather than leaving that to be guessed from a
+          # failed assertion.
+          echo "::group::X extensions on :99"
+          xdpyinfo -display :99 | sed -n '/number of extensions/,/^default screen number/p'
+          echo "::endgroup::"
           cargo test -p axon-linux -- --ignored --test-threads=1
 
       - name: Build axon-linux in release mode
